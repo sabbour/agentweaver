@@ -23,7 +23,7 @@ export function classify(paths, full = false) {
     }
   }
   // Broker browser tests need the exact candidate's built web client.
-  if (result.dotnet) result.web = true;
+  if (result.dotnet || result.node) result.web = true;
   return result;
 }
 

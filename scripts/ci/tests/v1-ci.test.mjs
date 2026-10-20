@@ -29,6 +29,7 @@ test('source, lockfile, Docker, browser and harness changes select all dependent
   assert.equal(classify(['scripts/harness-shared/run-p1.mjs']).node, true);
   assert.equal(classify(['scripts/release/validate.mjs']).images, true);
   assert.equal(classify(['deploy/k8s/profiles/events-and-sessions/render.mjs']).node, true);
+  assert.equal(classify(['scripts/release/validate.mjs']).web, true);
 });
 
 test('matrix includes every suite and exactly four unique Broker shards', () => {
@@ -53,7 +54,7 @@ test('discovered methods and theory cases are partitioned once, deterministicall
 
 test('TRX receipts reject zero execution, missing counters and failures while preserving explicit opt-in skips', () => {
   verifyTrx('<Counters total="2" executed="2" passed="2" failed="0" />');
-  verifyTrx('<Counters total="3" executed="2" passed="2" failed="0" notExecuted="1" />');
+  verifyTrx('<Counters total="3" executed="2" passed="2" failed="0" notExecuted="0" /><UnitTestResult outcome="NotExecuted" />');
   for (const xml of ['', '<Counters total="0" executed="0" passed="0" failed="0" />',
     '<Counters total="2" executed="1" passed="1" failed="0" />',
     '<Counters total="2" executed="2" passed="1" failed="1" />']) {
@@ -74,10 +75,16 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.ok(jobs.images.steps.some((step) => step.name === 'Run pinned native prompt-capacity tests in an isolated AMD64 container'));
   assert.ok(jobs.node.steps.some((step) => step.name === 'Validate release composition'));
   assert.ok(jobs.node.steps.some((step) => step.name === 'Test controlled P1 API, MCP, and UI journeys'));
+  assert.deepEqual(jobs.node.needs, ['changes', 'web']);
+  assert.ok(jobs.node.steps.some((step) => step.with?.name === 'v1-web-dist'));
+  assert.ok(jobs.node.steps.some((step) => step.run?.includes('dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --locked-mode')));
+  assert.ok(jobs.node.steps.some((step) => step.run?.includes('dotnet restore apps/web/host/Agentweaver.Web.Host.csproj --locked-mode')));
   assert.match(workflow, /org.opencontainers.image.revision/);
   assert.match(workflow, /io.agentweaver.source-tree/);
   assert.ok(jobs.dotnet.steps.some((step) => step.run?.includes('install --with-deps chromium')));
   assert.ok(jobs.dotnet.steps.some((step) => step.with?.path === '~/.cache/ms-playwright'));
+  assert.ok(jobs.dotnet.steps.some((step) => step.if === 'matrix.shard > 0' &&
+    step.run === 'npm ci --prefix apps/web --no-audit --no-fund'));
   assert.match(jobs.coverage.if, /!= 'pull_request'/);
   assert.ok(jobs.coverage.steps.some((step) => step.run === 'node scripts/coverage/dotnet.mjs --combine'));
 });

@@ -72,8 +72,12 @@ candidate. `v1-docs-ci.yml` remains the separate documentation check.
 Changed-path detection skips expensive .NET, Web, image, and tooling suites
 for documentation/metadata-only PRs. Unrelated workflow edits do not run those
 suites. Unknown paths and edits to `v1-ci.yml` or CI helpers select everything.
-.NET inputs select Web validation too: Broker browser tests consume the exact
-candidate's built Web artifact. Service/package/test, lockfile and deployment
+.NET and Node tooling inputs select Web validation too: Broker browser and
+Linux release-container tests consume the exact candidate's built Web
+artifact. The tooling job restores its AgentHost/Web Host publish dependencies.
+Broker shards also install locked Web dependencies for Vite-backed browser
+fixtures; the built artifact alone does not replace their development server.
+Service/package/test, lockfile and deployment
 inputs select image checks, including source receipts and isolated native
 prompt-capacity verification; no images are published by this workflow.
 

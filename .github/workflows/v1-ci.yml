@@ -376,7 +376,7 @@ jobs:
 
   node:
     name: v1 release and P1 contracts
-    needs: changes
+    needs: [changes, web]
     if: ${{ !cancelled() && needs.changes.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
@@ -393,6 +393,27 @@ jobs:
           RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           RELEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
         run: npm run release:validate -- --ci
+      - uses: actions/setup-dotnet@v4
+        if: needs.changes.outputs.node == 'true'
+        with:
+          global-json-file: global.json
+      - name: Cache NuGet packages for executable tooling fixtures
+        if: needs.changes.outputs.node == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: v1-nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', '**/packages.lock.json', '**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.Config') }}
+          restore-keys: v1-nuget-${{ runner.os }}-${{ runner.arch }}-
+      - name: Restore dependencies required by Linux collector and Web image contracts
+        if: needs.changes.outputs.node == 'true'
+        run: |
+          dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --locked-mode
+          dotnet restore apps/web/host/Agentweaver.Web.Host.csproj --locked-mode
+      - uses: actions/download-artifact@v4
+        if: needs.changes.outputs.node == 'true'
+        with:
+          name: v1-web-dist
+          path: apps/web/dist/
       - name: Preload pinned ASP.NET runtime image for release validator
         if: ${{ !cancelled() && needs.changes.outputs.node == 'true' }}
         run: docker pull --platform linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4
@@ -491,6 +512,16 @@ jobs:
         with:
           name: v1-web-dist
           path: apps/web/dist/
+      - name: Cache npm downloads for Broker Vite fixtures
+        if: matrix.shard > 0
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: v1-npm-${{ runner.os }}-${{ hashFiles('apps/web/package-lock.json') }}
+          restore-keys: v1-npm-${{ runner.os }}-
+      - name: Install locked dependencies for Broker Vite fixtures
+        if: matrix.shard > 0
+        run: npm ci --prefix apps/web --no-audit --no-fund
       - name: Cache Playwright browsers
         if: matrix.shard > 0
         uses: actions/cache@v4
