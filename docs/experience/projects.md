@@ -52,7 +52,7 @@ Open `/projects/:projectId`. The **Dashboard** shows:
   needed**, or **Archived**. The main action opens the next setup step.
 - Quick actions: **Open Orchestrations** and **Open Memories**.
 - Summary tiles: **Recent runs** opened in this browser, **Needs input**,
-  **Agents**, and **Skills** with the configuration revision.
+  **Agents**, and **Skills** enabled in this project.
 - **Recent runs in this browser** for this project.
 - A **Team** summary with a link to **Agents**.
 
@@ -68,7 +68,7 @@ link or a notification.
 1. Open **Orchestrations** for the project.
 2. Find the run under **In progress** or **Finished**.
 3. Select **Open**.
-4. If the run page asks, complete
+4. The app signs in to the run silently. If that fails, complete
    [run sign-in](./onboarding-auth.md#open-an-existing-run).
 
 **Orchestrations** lists the runs you opened in this browser for this project.

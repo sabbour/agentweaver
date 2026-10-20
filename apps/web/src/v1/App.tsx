@@ -88,7 +88,7 @@ import { rememberRun } from './recentRuns';
 import { DecisionList } from './DecisionView';
 import { NewChatComposer } from './NewChatComposer';
 import { PlatformComponentsTable } from './PlatformComponentsTable';
-import { runState } from './runState';
+import { isRunFinished, runState } from './runState';
 import { DashboardPage } from './DashboardPage';
 import { OverviewPage } from './OverviewPage';
 import { OrchestrationsPage } from './OrchestrationsPage';
@@ -106,7 +106,7 @@ function isSameBinding(
   return actual?.projectId === expected?.projectId && actual?.runId === expected?.runId;
 }
 
-/** Run page tabs in display order. Chat is first, matching the 0.x run page. */
+/** Run page tabs in display order. Chat is first, matching the 0.x run page. */
 const RUN_TAB_VALUES = ['chat', 'topology', 'approvals', 'activity', 'changes', 'usage', 'selection'] as const;
 /** URL-backed views available on the run page. */
 type RunTab = typeof RUN_TAB_VALUES[number];
@@ -368,7 +368,7 @@ function ProjectRepoAppConnectionPanel() {
       stopPopupMonitor();
       setNotice({
         intent: 'info',
-        text: 'GitHub returned to Agentweaver. Checking the connection status with the Identity Broker.',
+        text: 'GitHub returned to Agentweaver. Checking the connection status.',
       });
       setBusy(false);
       void loadConnection();
@@ -418,7 +418,7 @@ function ProjectRepoAppConnectionPanel() {
       setBusy(false);
       setNotice({
         intent: 'warning',
-        text: 'GitHub authorization timed out before the Identity Broker could start it. Start the connection again.',
+        text: 'GitHub authorization timed out before it started. Start the connection again.',
       });
     }, REPO_APP_POPUP_TIMEOUT_MS);
     popupMonitorRef.current = window.setInterval(() => {
@@ -431,7 +431,7 @@ function ProjectRepoAppConnectionPanel() {
         setBusy(false);
         setNotice({
           intent: 'warning',
-          text: 'The GitHub popup closed before the Identity Broker completed the request. Start the connection again.',
+          text: 'The GitHub popup closed before the request finished. Start the connection again.',
         });
       }
     }, REPO_APP_POPUP_POLL_INTERVAL_MS);
@@ -584,7 +584,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       );
       if (activeScope.current !== scope || loadGeneration.current !== generation) return;
       if (result.projectId !== projectId)
-        throw new Error('Projects & Config returned configuration for a different project.');
+        throw new Error('The server returned configuration for a different project.');
       setVersioned(result);
       setEditor(JSON.stringify(result.configuration, null, 2));
       setConfigurationDraft(result.configuration);
@@ -630,7 +630,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       );
       if (activeScope.current !== scope) return false;
       if (updated.projectId !== projectId)
-        throw new Error('Projects & Config returned an update for a different project.');
+        throw new Error('The server returned an update for a different project.');
       setVersioned(updated);
       setEditor(JSON.stringify(updated.configuration, null, 2));
       setConfigurationDraft(updated.configuration);
@@ -932,7 +932,7 @@ function assertKnowledgeTransferBundleScope(
 /** Lists, edits, versions, and transfers knowledge records within a selected project agent. */
 function KnowledgePage() {
   const { projectId = '' } = useParams();
-  const { session, apiCall, authorize } = useAuth();
+  const { session, apiCall, authorize, ensureSession } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [runId, setRunId] = useState(searchParams.get('runId') ?? '');
   const [agentId, setAgentId] = useState(searchParams.get('agentId') ?? '');
@@ -996,6 +996,7 @@ function KnowledgePage() {
     return options;
   }, [knowledgeConfiguration.data, searchParams]);
   const correctlyScoped = isSameBinding(session?.binding, binding);
+  const silentBind = useSilentRunSession(binding, correctlyScoped, ensureSession);
   const requestScope = JSON.stringify([
     session?.accessToken ?? null,
     projectId,
@@ -1109,7 +1110,7 @@ function KnowledgePage() {
       ), binding);
       if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
-      setNotice(`Knowledge owner returned ${result.status}; persisted trust and revision state are shown after refresh.`);
+      setNotice(`Record created (${result.status}). The list shows its saved state.`);
       setNoticeScope(scope);
       closeRevisionHistory();
       await load(true);
@@ -1134,7 +1135,7 @@ function KnowledgePage() {
         ), binding);
       if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
-      setNotice(`Knowledge owner returned ${result.status}; proposal trust and delivery state remain owner-authoritative.`);
+      setNotice(`Proposal updated (${result.status}). The list shows its current state.`);
       setNoticeScope(scope);
       closeRevisionHistory();
       await load(true);
@@ -1171,7 +1172,7 @@ function KnowledgePage() {
       ), binding);
       if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
-      setNotice(`Knowledge owner returned ${result.status}; the resulting record state is not inferred locally.`);
+      setNotice(`Record archived (${result.status}). The list shows its current state.`);
       setNoticeScope(scope);
       closeCorrection();
       closeRevisionHistory();
@@ -1225,7 +1226,7 @@ function KnowledgePage() {
       ), binding);
       if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
-      setNotice(`Knowledge owner returned ${result.status}; the corrected record is shown after refresh.`);
+      setNotice(`Correction saved (${result.status}). The list shows the corrected record.`);
       setNoticeScope(scope);
       closeCorrection();
       closeRevisionHistory();
@@ -1255,7 +1256,7 @@ function KnowledgePage() {
       ), binding);
       if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
-      setNotice(`Knowledge owner returned ${result.status}; the Decision trust state is shown after refresh.`);
+      setNotice(`Decision approved (${result.status}). The list shows its trust state.`);
       setNoticeScope(scope);
       closeRevisionHistory();
       await load(true);
@@ -1301,7 +1302,7 @@ function KnowledgePage() {
       ), binding);
       if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
-      setNotice(`Knowledge owner returned ${result.status}; the superseding Decision link is shown after refresh.`);
+      setNotice(`Decision replaced (${result.status}). The list shows the new link.`);
       setNoticeScope(scope);
       closeRevisionHistory();
       await load(true);
@@ -1374,7 +1375,7 @@ function KnowledgePage() {
       ), binding);
       if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
-      setNotice(`Knowledge owner returned ${result.status}; the restored revision is shown after refresh.`);
+      setNotice(`Revision restored (${result.status}). The list shows the restored record.`);
       setNoticeScope(scope);
       closeRevisionHistory();
       closeCorrection();
@@ -1444,7 +1445,7 @@ function KnowledgePage() {
       ), binding);
       if (activeScope.current !== scope) return;
       assertKnowledgeRecordsInScope(result.records, projectId, agentId.trim());
-      setNotice(`Knowledge owner returned ${result.records.length} imported record(s); persisted state is shown after refresh.`);
+      setNotice(`Imported ${result.records.length} record(s). The list shows their saved state.`);
       setNoticeScope(scope);
       setImportConfirmed(false);
       setTransferText('');
@@ -1499,12 +1500,12 @@ function KnowledgePage() {
             <Button appearance="primary" type="submit" disabled={!runId.trim() || !agentId.trim()}>Show memories</Button>
           </form>
         )}
-        {binding && !correctlyScoped && (
+        {binding && !correctlyScoped && (silentBind === 'failed' ? (
           <div className="v1-scope-action">
-            <p className="v1-muted">You need to sign in again to read this run's memories.</p>
+            <p className="v1-muted">Each run needs its own sign-in. Sign in again to read this run's memories.</p>
             <Button appearance="primary" onClick={() => void authorize(binding)}>Sign in for this project and run</Button>
           </div>
-        )}
+        ) : <Loading label="Opening this run's memories…" />)}
       </Panel>
       {binding && correctlyScoped && agentId.trim() && (
         <>
@@ -1831,7 +1832,7 @@ function eventSummary(event: SessionEventEnvelope): string {
   const payload = event.payload;
   if (event.kind === 'turn') {
     const role = typeof payload.role === 'string' ? payload.role : 'turn';
-    return `${role} content is retained as an opaque journal object reference; the Gateway does not return that object content.`;
+    return `${role} content is stored separately. This page cannot show it.`;
   }
   if (event.kind === 'toolCall') {
     const name = typeof payload.toolName === 'string' ? payload.toolName : 'Tool call';
@@ -1930,11 +1931,17 @@ interface PendingMessage {
   status: string;
 }
 
-/** Renders run chat, sends owner messages, and reconciles pending messages with journal updates. */
+/**
+ * Renders run chat. Messages go to `targetSessionId`: the coordinator unless the user
+ * selected another active session in the run tree. The v1 message API delivers between
+ * sessions in a run, so the page sends through another active session (the coordinator
+ * when it is not the recipient). Pending messages show until the journal reports them.
+ */
 function ChatView({
   projectId,
   runId,
   nodes,
+  targetSessionId,
   journalEvents,
   apiCall,
   snapshotBusy,
@@ -1942,31 +1949,27 @@ function ChatView({
   projectId: string;
   runId: string;
   nodes: SessionTreeNode[];
+  targetSessionId: string;
   journalEvents: SessionEventEnvelope[];
   apiCall: AuthReturn['apiCall'];
   snapshotBusy: boolean;
 }) {
   const activeNodes = useMemo(() => nodes.filter((node) => node.lifecycle === 'active'), [nodes]);
-  const [selectedFromSession, setSelectedFromSession] = useState('');
-  const [selectedToSession, setSelectedToSession] = useState('');
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
-  const fromSession = activeNodes.some((node) => node.identity.sessionId === selectedFromSession)
-    ? selectedFromSession
-    : activeNodes[0]?.identity.sessionId ?? '';
-  const toSession = activeNodes.some((node) =>
-    node.identity.sessionId === selectedToSession && selectedToSession !== fromSession)
-    ? selectedToSession
-    : activeNodes.find((node) => node.identity.sessionId !== fromSession)?.identity.sessionId ?? '';
-  const sessionLabel = (node: SessionTreeNode) => `${node.kind} · ${node.identity.sessionId}`;
+  const target = activeNodes.find((node) => node.identity.sessionId === targetSessionId);
+  const sender = activeNodes.find((node) => node.kind === 'coordinator' && node !== target) ??
+    activeNodes.find((node) => node !== target);
+  const targetName = target ? sessionName(target) : 'Coordinator';
 
   const send = async (text: string, idempotencyKey: string) => {
+    if (!target || !sender) return;
     setNotice(null);
     const result = await apiCall((token, tenantSelector) => gatewayClient.sendMessage(
-      token, projectId, runId, fromSession, toSession, text, idempotencyKey, 'immediate', tenantSelector,
+      token, projectId, runId, sender.identity.sessionId, target.identity.sessionId, text, idempotencyKey, 'immediate', tenantSelector,
     ), { projectId, runId });
-    setPending((items) => [...items, { id: result.ownerMessageId, from: fromSession, to: toSession, text, status: result.status }]);
-    setNotice('Message accepted. It appears in the activity list when the agent receives it.');
+    setPending((items) => [...items, { id: result.ownerMessageId, from: sender.identity.sessionId, to: targetName, text, status: result.status }]);
+    setNotice('Message sent. It shows in the activity list when the agent receives it.');
   };
 
   return (
@@ -1975,30 +1978,17 @@ function ChatView({
       <Panel title="Activity" description="Events from this run, oldest first. Message text is not stored in the event list.">
         <JournalList events={journalEvents} />
       </Panel>
-      <Panel title="Send a message" description="Send a message from one session in this run to another.">
-        {activeNodes.length < 2 ? (
-          <p className="v1-muted">You can send a message when the run has at least two active sessions.</p>
+      <Panel title={`Message the ${targetName.toLowerCase()}`} description="Choose another session in the run tree to message it instead.">
+        {!target || !sender ? (
+          <p className="v1-muted">You can send a message when the run has another active session.</p>
         ) : (
-          <NewChatComposer onSubmit={send} blocked={snapshotBusy || !fromSession || !toSession || fromSession === toSession}>
-            <div className="v1-inline-form">
-              <Field label="From">
-                <select className="v1-select" value={fromSession} onChange={(event) => setSelectedFromSession(event.target.value)}>
-                  {activeNodes.map((node) => <option key={node.identity.sessionId} value={node.identity.sessionId}>{sessionLabel(node)}</option>)}
-                </select>
-              </Field>
-              <Field label="To">
-                <select className="v1-select" value={toSession} onChange={(event) => setSelectedToSession(event.target.value)}>
-                  {activeNodes.map((node) => <option key={node.identity.sessionId} value={node.identity.sessionId}>{sessionLabel(node)}</option>)}
-                </select>
-              </Field>
-            </div>
-          </NewChatComposer>
+          <NewChatComposer onSubmit={send} blocked={snapshotBusy} />
         )}
         {pending.length > 0 && (
           <ol className="v1-chat-list" aria-label="Messages sent from this page">
             {pending.map((message) => (
               <li key={message.id}>
-                <div><Badge appearance="outline">{message.status}</Badge><span>{message.from} → {message.to}</span></div>
+                <div><Badge appearance="outline">{message.status}</Badge><span>To {message.to}</span></div>
                 <p>{message.text}</p>
                 <code>Shown from this page only. Reloading clears it.</code>
               </li>
@@ -2031,7 +2021,7 @@ function SelectionView({ selection }: { selection: EffectiveRunSelection | null 
 
 /** Displays run-level and per-agent usage, preserving missing measurements as unavailable. */
 function UsageView({ usage }: { usage: UsageRunTotals | null }) {
-  if (!usage) return <p className="v1-muted">No usage totals were returned by Events & Sessions.</p>;
+  if (!usage) return <p className="v1-muted">No usage was reported for this run.</p>;
   const measurement = (value: number | null | undefined) => value == null ? 'not reported' : String(value);
   return (
     <div className="v1-stack">
@@ -2158,7 +2148,7 @@ function RunGitHubAppPanel({
       popupRef.current = null;
       setNotice({
         intent: 'info',
-        text: 'GitHub returned to Agentweaver. Refreshing repository access with the Identity Broker.',
+        text: 'GitHub returned to Agentweaver. Refreshing repository access.',
       });
       void loadConnection().then((next) => {
         if (next?.state === 'connected' && next.connectionId === appConnectionId)
@@ -2166,7 +2156,7 @@ function RunGitHubAppPanel({
         else
           setNotice({
             intent: 'warning',
-            text: 'The installation callback was received, but the Identity Broker did not confirm the configured connection.',
+            text: 'The installation callback was received, but the connection was not confirmed.',
           });
       });
     };
@@ -2216,7 +2206,7 @@ function RunGitHubAppPanel({
       const repository = repositories.find(
         (candidate) => repoAppRepositoryKey(candidate) === selectedRepository,
       );
-      if (!repository) throw new Error('Select a repository returned by the Identity Broker.');
+      if (!repository) throw new Error('Select a repository from the list.');
       // The Broker-issued code represents the selected installation/repository; do not send
       // the user's repository list or a client-constructed identifier to the Gateway.
       const selection = await repoAppBrokerClient.createRepositorySelection(
@@ -2332,11 +2322,13 @@ function RunGitHubAppPanel({
 function RunPage() {
   const { projectId = '', runId = '' } = useParams();
   const binding = useMemo(() => ({ projectId, runId }), [projectId, runId]);
-  const { session, apiCall, authorize, authorizationContext } = useAuth();
+  const { session, apiCall, authorize, ensureSession, authorizationContext } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('view');
   const tab: RunTab = isRunTab(requestedTab) ? requestedTab : 'chat';
   const authorized = isSameBinding(session?.binding, binding);
+  const silentBind = useSilentRunSession(binding, authorized, ensureSession);
+  const now = useTickingNow(authorized);
   const snapshotScope = useMemo(() => ({
     projectId,
     runId,
@@ -2407,7 +2399,7 @@ function RunPage() {
         setSelection(null);
         nextErrors.selection = selectionResult.status === 'rejected'
           ? errorMessage(selectionResult.reason)
-          : 'Projects & Config returned a selection for a different run.';
+          : 'The run settings belong to a different run.';
       }
       if (usageResult.status === 'fulfilled' &&
           usageResult.value.projectId === projectId && usageResult.value.runId === runId)
@@ -2416,7 +2408,7 @@ function RunPage() {
         setUsage(null);
         nextErrors.usage = usageResult.status === 'rejected'
           ? errorMessage(usageResult.reason)
-          : 'Events & Sessions returned usage for a different run.';
+          : 'The usage totals belong to a different run.';
       }
       setSnapshotErrors(nextErrors);
       setLoadedSnapshotScope(scope);
@@ -2432,7 +2424,7 @@ function RunPage() {
       setDecisions({});
       setSelection(null);
       setUsage(null);
-      setSnapshotErrors({ run: 'The Orchestrator returned a snapshot for a different project or run.' });
+      setSnapshotErrors({ run: 'The service returned a different run. Refresh to try again.' });
       setLoadedSnapshotScope(scope);
       setSnapshotBusy(false);
       return;
@@ -2448,7 +2440,7 @@ function RunPage() {
       setSelection(null);
       nextErrors.selection = selectionResult.status === 'rejected'
         ? errorMessage(selectionResult.reason)
-        : 'Projects & Config returned a selection for a different run.';
+        : 'The run settings belong to a different run.';
     }
     if (usageResult.status === 'fulfilled' &&
         usageResult.value.projectId === projectId && usageResult.value.runId === runId)
@@ -2457,7 +2449,7 @@ function RunPage() {
       setUsage(null);
       nextErrors.usage = usageResult.status === 'rejected'
         ? errorMessage(usageResult.reason)
-        : 'Events & Sessions returned usage for a different run.';
+        : 'The usage totals belong to a different run.';
     }
 
     try {
@@ -2472,7 +2464,7 @@ function RunPage() {
       if (nextTree.rootSessionId !== currentRun.rootSessionId ||
           nextTree.nodes.some((node) =>
             node.identity.projectId !== projectId || node.identity.runId !== runId)) {
-        throw new Error('The Orchestrator returned a session tree outside this exact run.');
+        throw new Error('The session tree belongs to a different run.');
       }
       setTree(nextTree);
       const sessionResults = await Promise.allSettled(nextTree.nodes.map((node) =>
@@ -2496,7 +2488,7 @@ function RunPage() {
         } else {
           nextErrors[`session:${sessionId}`] = result.status === 'rejected'
             ? errorMessage(result.reason)
-            : 'The Orchestrator returned status for a different session.';
+            : 'The status belongs to a different session.';
         }
       });
       setStatuses(nextStatuses);
@@ -2549,11 +2541,13 @@ function RunPage() {
   if (!authorized) {
     return (
       <>
-        <PageHeading title="Run" description={`Project ${projectId} · run ${runId}`} />
-        <Panel title="Run-bound sign-in">
-          <p>This page needs a Broker access token bound to this exact project and run. The Broker validates the active grant; a different token is not reused.</p>
-          <Button appearance="primary" onClick={() => void authorize(binding)}>Sign in for this project and run</Button>
-        </Panel>
+        <PageHeading title="Orchestration" description={`Run ${runId}`} page="Orchestrations" />
+        {silentBind === 'failed' ? (
+          <Panel title="Sign in to open this run">
+            <p>Each run needs its own sign-in. Sign in again to open this run.</p>
+            <Button appearance="primary" onClick={() => void authorize(binding)}>Sign in for this project and run</Button>
+          </Panel>
+        ) : <Loading label="Opening this run…" />}
       </>
     );
   }
@@ -2603,29 +2597,51 @@ function RunPage() {
     }
   };
 
+  const rootNode = currentTree?.nodes.find((node) => node.identity.sessionId === currentTree.rootSessionId);
+  const startedAt = rootNode ? Date.parse(rootNode.createdAt) : Number.NaN;
+  const finished = isRunFinished(currentRunStatus?.executionState);
+  const streamLabel = journal.connected ? 'Live' : journal.loading ? 'Connecting' : 'Reconnecting';
+  const chatTarget = nodeById.get(selectedSession)?.lifecycle === 'active'
+    ? selectedSession
+    : currentTree?.rootSessionId ?? '';
+  // Only the settings and usage tabs read these snapshots, so their errors show in those tabs.
+  const { selection: selectionError, usage: usageError, ...pageErrors } = currentSnapshotErrors;
+
   return (
     <>
       <PageHeading
-        title="Run"
-        description={`Run ${runId}`}
+        title="Orchestration"
+        description={Number.isNaN(startedAt) ? `Run ${runId}` : `Run ${runId} · Started ${new Date(startedAt).toLocaleString()}`}
         page="Orchestrations"
         actions={<Button appearance="secondary" aria-label="Refresh run" icon={<ArrowClockwiseRegular />} disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh</Button>}
       />
       {currentSnapshotMessage && <MessageBar intent="info"><MessageBarBody>{currentSnapshotMessage}</MessageBarBody></MessageBar>}
-      {Object.entries(currentSnapshotErrors).map(([key, message]) => (
+      {Object.entries(pageErrors).map(([key, message]) => (
         <ErrorNotice key={key} code={key}>{message}</ErrorNotice>
       ))}
       {(snapshotBusy || !snapshotIsCurrent) && !currentRunStatus && <Loading />}
       {currentRunStatus && (
         <>
-          <div className="v1-actions">
+          <div className="v1-run-strip" aria-label="Run progress">
             <Badge appearance="tint" color={runState(currentRunStatus.executionState).color}>{runState(currentRunStatus.executionState).label}</Badge>
+            <span className="v1-run-chip">{nodes.length === 1 ? '1 session' : `${nodes.length} sessions`}</span>
+            {!finished && !Number.isNaN(startedAt) && <span className="v1-run-chip">{formatElapsed(now - startedAt)} elapsed</span>}
+            {pendingDecisionCount > 0 && <span className="v1-run-chip v1-run-chip-strong">{pendingDecisionCount} waiting for you</span>}
+            <span className="v1-run-chip" role="status">{streamLabel}</span>
             <details>
               <summary>Run details</summary>
               <SnapshotDetail runStatus={currentRunStatus} />
               <p className="v1-muted">This status describes the run, not the health of the computers running it.</p>
             </details>
           </div>
+          <div className="v1-run-body">
+            <RunTree
+              tree={currentTree}
+              statuses={currentStatuses}
+              selectedSession={selectedSession}
+              onSelect={setSelectedSession}
+            />
+            <section className="v1-run-pane" aria-label="Selected session">
           <div className="v1-run-tabs">
             <TabList
               selectedValue={tab}
@@ -2675,7 +2691,7 @@ function RunPage() {
               )}
             </div>
           )}
-          {tab === 'chat' && <ChatView key={`${projectId}/${runId}/${session?.accessToken ?? ''}`} projectId={projectId} runId={runId} nodes={nodes} journalEvents={journal.events} apiCall={apiCall} snapshotBusy={snapshotBusy} />}
+          {tab === 'chat' && <ChatView key={`${projectId}/${runId}/${session?.accessToken ?? ''}`} projectId={projectId} runId={runId} nodes={nodes} targetSessionId={chatTarget} journalEvents={journal.events} apiCall={apiCall} snapshotBusy={snapshotBusy} />}
           {tab === 'approvals' && (
             <DecisionList projectId={projectId} runId={runId} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
           )}
@@ -2691,7 +2707,10 @@ function RunPage() {
           )}
           {tab === 'selection' && (
             <div className="v1-stack">
-              <Panel title="Run settings"><SelectionView selection={currentSelection} /></Panel>
+              <Panel title="Run settings">
+                {selectionError && <ErrorNotice code="selection">{selectionError}</ErrorNotice>}
+                <SelectionView selection={currentSelection} />
+              </Panel>
             </div>
           )}
           {tab === 'changes' && (
@@ -2708,10 +2727,137 @@ function RunPage() {
               )}
             </div>
           )}
-          {tab === 'usage' && <Panel title="Usage"><UsageView usage={currentUsage} /></Panel>}
+          {tab === 'usage' && (
+            <Panel title="Usage">
+              {usageError && <ErrorNotice code="usage">{usageError}</ErrorNotice>}
+              <UsageView usage={currentUsage} />
+            </Panel>
+          )}
+            </section>
+          </div>
         </>
       )}
     </>
+  );
+}
+
+/** Kind names shown in the run tree and chat, matching the 0.x run tree. */
+const SESSION_KIND_LABELS: Record<SessionTreeNode['kind'], string> = {
+  coordinator: 'Coordinator',
+  childWork: 'Agent',
+  scribe: 'Scribe',
+  operatorChat: 'Chat',
+  childRun: 'Child run',
+};
+
+/** Short display name for one session. */
+function sessionName(node: SessionTreeNode): string {
+  return SESSION_KIND_LABELS[node.kind] ?? node.kind;
+}
+
+/** Formats a duration in the 0.x elapsed style, for example "1h 4m" or "42s". */
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+  return `${seconds}s`;
+}
+
+/** Current time that updates every second while `enabled`, for elapsed counters. */
+function useTickingNow(enabled: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [enabled]);
+  return now;
+}
+
+/**
+ * Gets a session for this exact run without a prompt, once per binding.
+ * Returns 'pending' while the attempt runs and 'failed' when the user must sign in.
+ */
+function useSilentRunSession(
+  binding: RunBinding | null,
+  authorized: boolean,
+  ensureSession: AuthReturn['ensureSession'],
+): 'pending' | 'failed' {
+  const key = binding ? `${binding.projectId}/${binding.runId}` : '';
+  const [failedKey, setFailedKey] = useState<string | null>(null);
+  useEffect(() => {
+    // A held session activates at once; a new one is requested once, and concurrent calls share it.
+    if (!binding || authorized || failedKey === key) return;
+    void ensureSession(binding).then((ok) => {
+      if (!ok) setFailedKey(key);
+    });
+  }, [authorized, binding, ensureSession, failedKey, key]);
+  // Leaving the run makes the unbound session active again for project pages.
+  useEffect(() => () => { void ensureSession(null); }, [ensureSession]);
+  return failedKey === key ? 'failed' : 'pending';
+}
+
+/** The 0.x run tree rail: every session in tree order, with its state and selection. */
+function RunTree({ tree, statuses, selectedSession, onSelect }: {
+  tree: SessionTreeSnapshot | null;
+  statuses: Record<string, SessionStatusSnapshot>;
+  selectedSession: string;
+  onSelect: (sessionId: string) => void;
+}) {
+  const ordered = useMemo(() => {
+    if (!tree) return [];
+    const children = new Map<string, SessionTreeNode[]>();
+    for (const node of tree.nodes) {
+      const parent = node.parentSessionId ?? '';
+      children.set(parent, [...(children.get(parent) ?? []), node]);
+    }
+    const rows: { node: SessionTreeNode; depth: number }[] = [];
+    const visit = (node: SessionTreeNode, depth: number) => {
+      rows.push({ node, depth });
+      for (const child of children.get(node.identity.sessionId) ?? []) visit(child, depth + 1);
+    };
+    const root = tree.nodes.find((node) => node.identity.sessionId === tree.rootSessionId);
+    if (root) visit(root, 0);
+    // Sessions whose parent is missing from the snapshot still appear, at the top level.
+    for (const node of tree.nodes)
+      if (!rows.some((row) => row.node === node)) rows.push({ node, depth: 0 });
+    return rows;
+  }, [tree]);
+  const stateText = (node: SessionTreeNode) => {
+    const status = statuses[node.identity.sessionId];
+    if (status && status.blockers.length > 0) return 'Needs input';
+    if (node.lifecycle !== 'active') return node.lifecycle === 'completed' ? 'Done' : node.lifecycle === 'cancelled' ? 'Cancelled' : 'Archived';
+    return status?.activity === 'busy' ? 'Working' : status?.activity === 'idle' ? 'Idle' : 'Status unknown';
+  };
+  return (
+    <aside className="v1-run-tree" aria-label="Run tree">
+      <div className="v1-run-tree-header">
+        <h2>Run tree</h2>
+        <span className="v1-muted">{ordered.length === 1 ? '1 session' : `${ordered.length} sessions`}</span>
+      </div>
+      {ordered.length === 0 ? (
+        <p className="v1-muted">The coordinator has not started any sessions yet.</p>
+      ) : (
+        <ol>
+          {ordered.map(({ node, depth }) => (
+            <li key={node.identity.sessionId}>
+              <button
+                type="button"
+                className="v1-run-tree-item"
+                style={{ paddingLeft: `calc(var(--spacingHorizontalS) + ${depth * 14}px)` }}
+                aria-current={node.identity.sessionId === selectedSession ? 'true' : undefined}
+                onClick={() => onSelect(node.identity.sessionId)}
+              >
+                <span>{sessionName(node)} · {stateText(node)}</span>
+                <span>{node.identity.sessionId}</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </aside>
   );
 }
 
@@ -2835,7 +2981,7 @@ function RepoAppPopupCallbackPage() {
   const [message] = useState(() => {
     const opener = window.opener;
     return window.__AGENTWEAVER_REPO_APP_CALLBACK__ === true && opener && opener !== window
-      ? 'The callback is notifying its opener. Only the opener’s Identity Broker status check can confirm the connection.'
+      ? 'The callback is notifying its opener. The original window confirms the connection.'
       : 'The Broker callback was received, but no tracked account window is available. Connection status is unverified; return to account settings and refresh status.';
   });
 

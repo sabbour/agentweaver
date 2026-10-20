@@ -95,7 +95,8 @@ describe('DashboardPage', () => {
     expect(summary.textContent).toContain('Recent runs3');
     expect(summary.textContent).toContain('Needs input1');
     expect(summary.textContent).toContain('1 working when last opened');
-    expect(summary.textContent).toContain('Configuration revision 12');
+    expect(summary.textContent).toContain('Enabled in this project');
+    expect(summary.textContent).not.toContain('Configuration revision');
     expect(screen.getByText('Ada')).toBeTruthy();
   });
 

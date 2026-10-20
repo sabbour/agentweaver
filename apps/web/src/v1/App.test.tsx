@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   binding: null as { projectId: string; runId: string } | null,
   consent: null as BrokerConsentPrompt | null,
   authProvider: vi.fn(),
+  ensureSession: vi.fn(),
   tenantSelector: 'tenant-1',
   completeRemoteMcpOAuthCallback: vi.fn(),
   listProjects: vi.fn(),
@@ -38,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   getSessionTree: vi.fn(),
   getSessionStatus: vi.fn(),
   getDecisions: vi.fn(),
+  sendMessage: vi.fn(),
   searchKnowledge: vi.fn(),
   createKnowledgeRecord: vi.fn(),
   updateKnowledgeRecord: vi.fn(),
@@ -80,6 +82,7 @@ vi.mock('./api', () => ({
     getSessionTree: mocks.getSessionTree,
     getSessionStatus: mocks.getSessionStatus,
     getDecisions: mocks.getDecisions,
+    sendMessage: mocks.sendMessage,
     searchKnowledge: mocks.searchKnowledge,
     createKnowledgeRecord: mocks.createKnowledgeRecord,
     updateKnowledgeRecord: mocks.updateKnowledgeRecord,
@@ -149,6 +152,7 @@ vi.mock('./AuthContext', () => {
     apiCall: <T,>(operation: (token: string, tenantSelector: string | null) => Promise<T>) =>
       operation('broker-token', mocks.tenantSelector),
     authorize: async () => {},
+    ensureSession: (binding: unknown) => mocks.ensureSession(binding),
     signOut: () => {},
     authorizationContext: { tenantId: 'tenant-1' },
     busy: false,
@@ -378,6 +382,8 @@ describe('v1 web project scoping', () => {
     window.name = '';
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ = undefined;
     mocks.authProvider.mockClear();
+    mocks.ensureSession.mockReset();
+    mocks.ensureSession.mockResolvedValue(false);
     mocks.binding = null;
     clearRecentRuns();
     mocks.consent = null;
@@ -423,6 +429,7 @@ describe('v1 web project scoping', () => {
     mocks.getSessionTree.mockReset();
     mocks.getSessionStatus.mockReset();
     mocks.getDecisions.mockReset();
+    mocks.sendMessage.mockReset();
     mocks.searchKnowledge.mockReset();
     mocks.createKnowledgeRecord.mockReset();
     mocks.updateKnowledgeRecord.mockReset();
@@ -1095,7 +1102,7 @@ describe('v1 web project scoping', () => {
       expect(signal?.aborted).toBe(true);
       expect(popup.closed).toBe(true);
       expect(screen.getByText(
-        'GitHub authorization timed out before the Identity Broker could start it. Start the connection again.',
+        'GitHub authorization timed out before it started. Start the connection again.',
       )).toBeTruthy();
       expect((screen.getByRole(
         'button',
@@ -1215,6 +1222,74 @@ describe('v1 web project scoping', () => {
     render(<App />);
 
     expect(screen.queryByRole('button', { name: /Run chat/ })).toBeNull();
+  });
+
+  it('gets the run sign-in silently when a run opens without one', async () => {
+    window.history.replaceState({}, '', '/projects/p1/runs/r1');
+    mocks.ensureSession.mockImplementation(() => new Promise(() => {}));
+    render(<App />);
+
+    expect(await screen.findByText('Opening this run…')).toBeTruthy();
+    expect(mocks.ensureSession).toHaveBeenCalledWith({ projectId: 'p1', runId: 'r1' });
+    expect(screen.queryByRole('button', { name: 'Sign in for this project and run' })).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'Orchestration' })).toBeTruthy();
+  });
+
+  it('shows the run sign-in button only after the silent attempt fails', async () => {
+    window.history.replaceState({}, '', '/projects/p1/runs/r1');
+    render(<App />);
+
+    expect(await screen.findByRole('button', { name: 'Sign in for this project and run' })).toBeTruthy();
+    expect(mocks.ensureSession).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Broker|grant/i)).toBeNull();
+  });
+
+  it('shows the run tree and run panel with no alerts on the main path', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat');
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Orchestration' })).toBeTruthy();
+    await screen.findByRole('complementary', { name: 'Run tree' });
+    await screen.findByRole('tab', { name: 'Chat' });
+    for (const view of ['Chat', 'Activity', 'Run settings', 'Usage']) {
+      const tab = screen.queryByRole('tab', { name: view });
+      if (!tab) continue;
+      fireEvent.click(tab);
+      await waitFor(() => expect(tab.getAttribute('aria-selected')).toBe('true'));
+    }
+    await waitFor(() => expect(mocks.getRunUsage).toHaveBeenCalled());
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
+    expect(screen.queryByText(/different run/)).toBeNull();
+  });
+
+  it('sends chat to the coordinator by default without a sender form', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const tree = sessionTreeSnapshot('p1', 'r1');
+    mocks.getSessionTree.mockResolvedValue({
+      ...tree,
+      nodes: [...tree.nodes, {
+        ...tree.nodes[0],
+        identity: { projectId: 'p1', runId: 'r1', sessionId: 's2' },
+        kind: 'worker' as const,
+        parentSessionId: 's1',
+      }],
+    });
+    mocks.sendMessage.mockResolvedValue({ ownerMessageId: 'm1', status: 'accepted' });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat');
+    render(<App />);
+
+    await screen.findByText('Message the coordinator');
+    expect(screen.queryByLabelText(/^From/)).toBeNull();
+    expect(screen.queryByLabelText(/^To/)).toBeNull();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Status?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalled());
+    const [, projectId, runId, sender, recipient, text] = mocks.sendMessage.mock.calls[0];
+    expect([projectId, runId, sender, recipient, text]).toEqual(['p1', 'r1', 's2', 's1', 'Status?']);
   });
 
   it('lists runs opened in this browser in Orchestrations and opens one on Chat', async () => {
@@ -1739,7 +1814,7 @@ describe('v1 web project scoping', () => {
     await screen.findByText('model-meter');
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh run' }));
-    await screen.findByText('No usage totals were returned by Events & Sessions.');
+    await screen.findByText('No usage was reported for this run.');
     expect(screen.queryByText('model-meter')).toBeNull();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Run settings' }));
@@ -2199,7 +2274,7 @@ describe('v1 web project scoping', () => {
     expect(screen.queryByRole('heading', { name: 'foreign-record' })).toBeNull();
   });
 
-  it('rejects import input larger than the Gateway 1 MiB limit before submission', async () => {
+  it('rejects import input larger than the 1 MiB limit before submission', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     mocks.searchKnowledge.mockResolvedValue(knowledgePage([]));
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');

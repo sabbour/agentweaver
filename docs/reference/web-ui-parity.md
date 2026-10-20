@@ -71,15 +71,15 @@ surface. It does not approve that work.
 | Overview | Projects, recent runs in this browser, and items that need input in the run you have open. | G2, G3 | Chief of Staff A2 Priorities |
 | Sessions and **Sessions +** | Hidden. The **+** is not shown disabled. Old links explain the gap. | G1, G2 | Chief of Staff A1 retained text thread |
 | Start task | Not shown. | G1 | Chief of Staff A1 |
-| Projects gallery | 0.x tiles with state, revision, and your access: **Can edit**, **Can view**, or **No access**. | None | — |
+| Projects gallery | 0.x tiles with state and your access: **Can edit**, **Can view**, or **No access**. | None | — |
 | Create blank project | Dialog with a project name. | None | — |
 | Create from GitHub | Dialog creates the project, then saves `sourceControl.repository` with GitHub App sign-in. Without access to the new project, the repository is not saved and a note says so. | Owner grant on create | — |
 | Dashboard status card | Readiness from the saved configuration: repository, model, credential, and team. | Health endpoint for a live status | — |
 | Dashboard metrics and Activity charts | Not shown. No invented numbers. | G3 | #1924, #1926 usage and spend |
 | Dashboard quick actions | Links to Orchestrations, Agents, Skills, Memories, and Settings. | None | — |
 | Orchestrations | Runs opened in this browser, with a state summary and **Refresh**. Empty state: "Runs you open appear here." | G2 | — |
-| Run page | Tabs: Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. | G1 for cancel | #1930 suspend and resume; #2113, #2115 export and fork; #2116 evaluations |
-| Run Chat | Journal and a composer that sends to a chosen session. Retries reuse one idempotency key. | None | — |
+| Run page | 0.x **Orchestration** two-pane layout: status strip (state, sessions, elapsed time, live update state), **Run tree**, and a session panel with tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. The run token is requested silently; **Sign in for this project and run** appears only when that fails. | G1 for cancel | #1930 suspend and resume; #2113, #2115 export and fork; #2116 evaluations |
+| Run Chat | Journal and a composer that messages the coordinator by default, or the session selected in the run tree. No From/To form. Retries reuse one idempotency key. | Direct user-to-coordinator messages | — |
 | Run Approvals | Shared decision view. It rereads each gate before acting. | None | #1911 decision revise and supersede |
 | Run Changes | GitHub App repository access for the run. | None | #1917 produced files |
 | Run settings | Model, revisions, and allowed implementations per platform component. | None | — |

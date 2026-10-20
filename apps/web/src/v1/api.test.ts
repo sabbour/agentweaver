@@ -414,6 +414,8 @@ describe('Gateway API client', () => {
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer broker-token');
     expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
     expect(init?.credentials).toBe('omit');
+    // window.fetch throws "Illegal invocation" unless it is called on the global object.
+    expect(fetcher.mock.contexts[0]).toBe(globalThis);
   });
 
   it('keeps Repo App authorization at the Gateway root and stores its callback cookie', async () => {

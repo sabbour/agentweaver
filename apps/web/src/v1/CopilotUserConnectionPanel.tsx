@@ -63,7 +63,7 @@ function receiptForProject(
       value.connectionId !== connectionId ||
       value.scope !== 'project' ||
       value.scopeId !== projectId) {
-    throw new Error('The Gateway returned a connection outside this project or the expected connection.');
+    throw new Error('The server returned a connection outside this project or the expected connection.');
   }
   return value;
 }
@@ -75,7 +75,7 @@ function copilotCallbackUri(): string {
   }
   const gatewayUrl = new URL(gatewayBaseUrl, window.location.origin);
   if (gatewayUrl.origin !== window.location.origin) {
-    throw new Error('GitHub Copilot connection requires the Gateway on this same origin for its nonce cookie.');
+    throw new Error('The GitHub Copilot connection must use the same site as this app.');
   }
   return new URL(COPILOT_CALLBACK_PATH, window.location.origin).toString();
 }
@@ -346,7 +346,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
       if (!isCopilotConnectionBegin(result.begin) ||
           result.begin.connection.scope !== 'project' ||
           result.begin.connection.scopeId !== attempt.projectId) {
-        throw new Error('The Gateway returned a connection outside this project.');
+        throw new Error('The server returned a connection outside this project.');
       }
       const state = expectedCopilotCallbackState(result.begin.authorizationUri, callbackUri);
       if (popup.closed) {

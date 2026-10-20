@@ -40,14 +40,16 @@ You don't type a run ID. Open a run from a link or a notification, or select
 **Open** next to a run in **Recent runs in this browser** on **Overview**, the
 project **Dashboard**, or **Orchestrations**.
 
-1. Open the run.
-2. If the run page asks, select **Sign in for this project and run**.
-3. Complete the Broker flow.
+1. Open the run. The page shows **Opening this run…** while the app signs in
+   to the run silently.
+2. If the silent sign-in fails, select **Sign in for this project and run**
+   and complete the sign-in.
 
-The Broker validates current authority for that project and run. The app
-does not reuse a token bound to another run. The **Memories** page uses the
-same run sign-in and button when you choose a run that your current sign-in
-doesn't cover.
+The Broker validates current authority for that project and run. Each run has
+its own sign-in; the app keeps your project sign-in and does not reuse a token
+bound to another run. When you leave the run page, the app switches back to
+your project sign-in. The **Memories** page uses the same run sign-in when you
+choose a run that your current sign-in doesn't cover.
 
 **Expected result:** The run page loads only when your sign-in matches the
 project and run in the address. The page then reads owner snapshots,
@@ -76,7 +78,7 @@ roles. If the Broker needs your input, the app shows the sign-in card.
 | Declined consent, invalid state, or unmatched callback | Start sign-in again. The app rejects callbacks without the matching transaction. |
 | `401` on an API call | The app attempts one token refresh when a refresh token exists. If it fails, sign in again. |
 | `403` or ambiguous tenant context | Use an identity with current owner-granted access. The app does not guess a tenant. |
-| **Sign in for this project and run** prompt | Authorize the project and run shown by the page. |
+| **Sign in for this project and run** button | The silent run sign-in failed. Select the button to sign in to the project and run shown by the page. |
 
 ## Requests
 

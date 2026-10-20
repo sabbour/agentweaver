@@ -38,8 +38,8 @@ const useStyles = makeStyles({
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   empty: { padding: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 },
-  trigger: { position: 'relative' },
-  badge: { position: 'absolute', top: '2px', right: '2px' },
+  trigger: { position: 'relative', display: 'inline-flex', flexShrink: 0 },
+  badge: { position: 'absolute', top: '2px', right: '2px', pointerEvents: 'none' },
   surface: {
     width: '360px',
     maxWidth: 'calc(100vw - 24px)',
@@ -76,41 +76,45 @@ export function AttentionList({ attention, onNavigate }: { attention: RunAttenti
   );
 }
 
-/** 0.x notification bell, fed by the bound run's pending items. */
+/**
+ * 0.x notification bell, fed by the bound run's pending items. The count badge sits
+ * outside the icon-only button: button content would give it a text-button minimum
+ * width and squeeze the brand in the rail header.
+ */
 export function AttentionBell({ attention }: { attention: RunAttention }) {
   const styles = useStyles();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const count = attention.items.length;
   return (
-    <Popover open={open} onOpenChange={(_, data) => setOpen(data.open)} positioning="below-end">
-      <PopoverTrigger disableButtonEnhancement>
-        <Tooltip content="Notifications" relationship="label">
-          <Button
-            appearance="subtle"
-            icon={<Alert24Regular />}
-            aria-label={count > 0 ? `Notifications, ${count} need${count === 1 ? 's' : ''} your input` : 'Notifications'}
-            data-testid="notification-bell"
-            className={styles.trigger}
-          >
-            {count > 0 && <CounterBadge count={count} size="small" color="danger" className={styles.badge} />}
-          </Button>
-        </Tooltip>
-      </PopoverTrigger>
-      <PopoverSurface className={styles.surface}>
-        <Text weight="semibold" size={400}>Notifications</Text>
-        <div className={styles.scroll}>
-          <AttentionList attention={attention} onNavigate={() => setOpen(false)} />
-        </div>
-        {attention.binding && (
-          <Button appearance="subtle" onClick={() => {
-            setOpen(false);
-            navigate(`/projects/${encodeURIComponent(attention.binding!.projectId)}/runs/${encodeURIComponent(attention.binding!.runId)}`);
-          }}>
-            Open run
-          </Button>
-        )}
-      </PopoverSurface>
-    </Popover>
+    <span className={styles.trigger}>
+      <Popover open={open} onOpenChange={(_, data) => setOpen(data.open)} positioning="below-end">
+        <PopoverTrigger disableButtonEnhancement>
+          <Tooltip content="Notifications" relationship="label">
+            <Button
+              appearance="subtle"
+              icon={<Alert24Regular />}
+              aria-label={count > 0 ? `Notifications, ${count} need${count === 1 ? 's' : ''} your input` : 'Notifications'}
+              data-testid="notification-bell"
+            />
+          </Tooltip>
+        </PopoverTrigger>
+        <PopoverSurface className={styles.surface}>
+          <Text weight="semibold" size={400}>Notifications</Text>
+          <div className={styles.scroll}>
+            <AttentionList attention={attention} onNavigate={() => setOpen(false)} />
+          </div>
+          {attention.binding && (
+            <Button appearance="subtle" onClick={() => {
+              setOpen(false);
+              navigate(`/projects/${encodeURIComponent(attention.binding!.projectId)}/runs/${encodeURIComponent(attention.binding!.runId)}`);
+            }}>
+              Open run
+            </Button>
+          )}
+        </PopoverSurface>
+      </Popover>
+      {count > 0 && <CounterBadge count={count} size="small" color="danger" className={styles.badge} aria-hidden />}
+    </span>
   );
 }

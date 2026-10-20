@@ -148,7 +148,9 @@ owner contract's body key where defined. Path segments are encoded separately.
 
 The run page polls owner snapshots and replays the committed journal before
 following SSE. `mergeOrderedEvents` deduplicates by `eventId` and orders by
-`position`, then event ID. See [events](./events.md).
+`position`, then event ID. A cleanly closed stream reconnects with backoff and
+no error; `useRunJournal` reports an error only after three transient failures
+in a row. See [events](./events.md).
 
 ## Authentication flow
 
@@ -161,6 +163,11 @@ following SSE. `mergeOrderedEvents` deduplicates by `eventId` and orders by
    session storage.
 7. API calls use a matching session. A recoverable `401` triggers one refresh
    attempt.
+8. `AuthContext` keeps one session per binding. `ensureSession(binding)`
+   activates a held session or requests a run-bound token with `prompt=none`.
+   It returns `false` when the Broker needs user input, and the run page then
+   shows **Sign in for this project and run**. Leaving the run page calls
+   `ensureSession(null)` to switch back to the project session.
 
 Callback handlers check the expected origin, popup, state, and transaction
 binding. The HTML bootstrap removes callback query values before assets load.

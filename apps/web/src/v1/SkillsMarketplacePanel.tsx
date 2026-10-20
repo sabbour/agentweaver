@@ -155,7 +155,7 @@ function validateSource(
       !Number.isSafeInteger(source.revision) || source.revision < 1 ||
       source.state !== expectedState ||
       (previousRevision !== undefined && source.revision <= previousRevision)) {
-    throw new Error('Projects & Config returned an invalid marketplace source response.');
+    throw new Error('The server returned an invalid marketplace source response.');
   }
 }
 
@@ -167,7 +167,7 @@ async function listMarketplaceSources(
   const result = await actions.listSources(projectId);
   if (!Array.isArray(result) || result.some((source) =>
     !source || typeof source.sourceId !== 'string' || !Number.isSafeInteger(source.revision))) {
-    throw new Error('Projects & Config returned an invalid marketplace source list.');
+    throw new Error('The server returned an invalid marketplace source list.');
   }
   return result;
 }
@@ -241,7 +241,7 @@ function validateSkillInventoryPage(result: SkillContentInventoryPage): void {
         !nullableString(revision.revokedByActorId) ||
         !nullableString(revision.revokedAt) ||
         (revision.revokedAt !== null && !Number.isFinite(Date.parse(revision.revokedAt))))) {
-    throw new Error('Projects & Config returned an invalid skill inventory.');
+    throw new Error('The server returned an invalid skill inventory.');
   }
 }
 
@@ -648,7 +648,7 @@ export function SkillsMarketplacePanel({
           result.page !== page ||
           !Number.isSafeInteger(result.total) ||
           !Array.isArray(result.candidates)) {
-        throw new Error('Projects & Config returned browse results for a different source revision or page.');
+        throw new Error('The server returned browse results for a different source revision or page.');
       }
       setBrowsePage(result);
       setBrowseResultQuery(query);
@@ -848,7 +848,7 @@ export function SkillsMarketplacePanel({
       if (result.projectId !== scope ||
           !Number.isSafeInteger(result.revision) ||
           result.revision <= currentConfigurationRevision) {
-        throw new Error('Projects & Config returned an assignment for a different project or configuration revision.');
+        throw new Error('The server returned an assignment for a different project or configuration revision.');
       }
       const savedAssignment = result.configuration.skills.find((item) =>
         item.skillId === importReceipt.skillId);
@@ -860,7 +860,7 @@ export function SkillsMarketplacePanel({
           !savedAssignment.agentIds ||
           savedAssignment.agentIds.length !== selectedAgentIds.length ||
           selectedAgentIds.some((agentId) => !savedAssignment.agentIds?.includes(agentId))) {
-        throw new Error('Projects & Config returned a revision without the requested skill assignment.');
+        throw new Error('The server returned a revision without the requested skill assignment.');
       }
       setAssignmentSnapshot({
         projectId: scope,
@@ -1173,7 +1173,7 @@ export function SkillsMarketplacePanel({
         {skillInventoryPage && (
           <div className="v1-stack" aria-label="Project skill inventory">
             <p className="v1-muted">
-              Configuration revision {skillInventoryPage.configurationRevision} · page {currentSkillInventory?.cursors.length ?? 1} · {skillInventoryPage.pageSize} revisions per page
+              Page {currentSkillInventory?.cursors.length ?? 1}
             </p>
             <div className="v1-stack">
               <h4>Current project assignments</h4>

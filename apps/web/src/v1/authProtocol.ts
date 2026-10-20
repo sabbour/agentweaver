@@ -145,7 +145,7 @@ export function parseAuthorizationResult(
   const state = url.searchParams.get('state');
   if (!code && !error) return undefined;
   if (state !== expectedState)
-    throw new Error('The Identity Broker returned an authorization response with an invalid state.');
+    throw new Error('The sign-in response has an invalid state.');
   if (error) return { error, description: url.searchParams.get('error_description') ?? undefined };
   return { code: code!, state: state! };
 }
@@ -317,7 +317,7 @@ async function readTokenResponse(response: Response): Promise<BrokerTokenRespons
       ? result.error_description
       : typeof result.error === 'string'
         ? result.error
-        : `Identity Broker token exchange failed with HTTP ${response.status}.`;
+        : `Sign-in failed with HTTP ${response.status}.`;
     throw new Error(description);
   }
   return result as unknown as BrokerTokenResponse;

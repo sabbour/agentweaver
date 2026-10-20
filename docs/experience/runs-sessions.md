@@ -11,18 +11,21 @@ owner-reported tree. The browser does not create or schedule runs.
 - Sign in with a Broker token bound to that project and run.
 
 Open the run from **Overview**, the project **Dashboard**, or
-**Orchestrations**. If the page asks, select
-**Sign in for this project and run**. You don't type a run ID.
+**Orchestrations**. The app signs in to the run silently. You don't type a run
+ID. If the silent sign-in fails, select **Sign in for this project and run**.
 
 ## Inspect an existing run
 
-The run page shows the run state badge and **Run details** with the
-Orchestrator's current owner state. The page reads owner snapshots again five
-seconds after each polling pass. Select **Refresh** for an immediate read.
+The **Orchestration** page uses the 0.x two-pane layout. A status strip shows
+the run state, the session count, the elapsed time, and the live update state
+(**Live** or **Reconnecting**). **Run details** expands the owner state. The
+**Run tree** pane lists the sessions; select one to open it in the session
+panel. The page reads owner snapshots again five seconds after each polling
+pass. Select **Refresh** for an immediate read.
 
 | Tab | What you can read or do |
 | --- | --- |
-| **Chat** | Read the run's **Activity** and send a message between two active sessions. This tab opens by default. |
+| **Chat** | Read the run's **Activity** and message the coordinator, or the session you select in the run tree. This tab opens by default. |
 | **Topology** | Inspect the root and child sessions in an interactive graph. Select a node to read activity, lifecycle, blockers, and detach state. |
 | **Approvals** | Answer questions and approve or reject pending outcome, plan, or step approvals. The tab label shows the number of pending decisions. |
 | **Activity** | Read committed events, execution state, lifecycle, and blockers. |
@@ -48,12 +51,17 @@ In **Changes**, use **GitHub App repository access** to
 
 ## Send a message
 
-**Prerequisites:** The session tree contains at least two active sessions.
+**Prerequisites:** The run tree contains at least two active sessions.
 
-1. Open **Chat**.
-2. Under **Send a message**, choose different **From** and **To** sessions.
+1. Open **Chat**. **Message the coordinator** is selected by default.
+2. To message another session, select it in the **Run tree**.
 3. Enter a message.
 4. Select **Send**, or press Ctrl+Enter.
+
+The service accepts messages only between sessions of the run. The app sends
+the message from another active session: the coordinator, or the first active
+session when you message the coordinator. Direct messages from you to the
+coordinator need a service API that doesn't exist yet.
 
 **Expected result:** The page shows **Message accepted.** and lists the
 message under the composer. The list is local to the page; reloading clears
@@ -102,9 +110,11 @@ owner reports it. These controls do not stop a pod or infer AgentHost health.
 ## Read activity and usage
 
 The app replays available journal pages before following the live event stream.
-It deduplicates events by event ID and orders them by owner position. The stream
-reconnects from its cursor after retryable failures. Scope mismatches and
-nonretryable client errors stop the stream.
+It deduplicates events by event ID and orders them by owner position. When the
+stream closes or a retryable failure occurs, it reconnects from its cursor with
+backoff, and the status strip shows **Reconnecting**. The page shows an error
+only after three failures in a row. Scope mismatches and nonretryable client
+errors stop the stream and show an error at once.
 
 The **Usage** tab preserves missing measurements as **not reported**. A
 partially priced usage summary does not mean that unpriced usage cost zero.

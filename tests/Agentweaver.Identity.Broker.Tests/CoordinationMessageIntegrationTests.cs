@@ -5604,7 +5604,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 await page.GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).ClickAsync();
                 if (await WaitForConsentPromptOrTokenAsync(page, reverseProxy))
                     await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
-                await page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" }).WaitForAsync();
+                var outcomeDecision = page.GetByRole(AriaRole.Article, new() { Name = "Confirm the outcome", Exact = true });
+                var runSignIn = page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" });
+                // The run page first asks for the run sign-in silently; the button shows only when that fails.
+                await runSignIn.Or(outcomeDecision).First.WaitForAsync();
                 var browserToken = reverseProxy.BrokerAccessToken
                     ?? throw new InvalidOperationException("The browser did not redeem a Broker access token.");
                 var browserSubject = SingleClaim(
@@ -5617,8 +5620,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         await grantAuthority.HasActiveRunBindingAsync(browserSubject, projectId, runId),
                         "The subject in the browser's Broker token must have the active run grant.");
                 }
-                await page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" }).ClickAsync();
-                var outcomeDecision = page.GetByRole(AriaRole.Article, new() { Name = "Confirm the outcome", Exact = true });
+                if (await runSignIn.IsVisibleAsync())
+                    await runSignIn.ClickAsync();
                 await outcomeDecision.GetByText("Confirm the outcome this run should deliver.").WaitForAsync();
                 await outcomeDecision.GetByText($"request {outcomeGateRequestId}").WaitForAsync();
             }

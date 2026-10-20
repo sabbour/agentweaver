@@ -189,7 +189,7 @@ export function DashboardPage() {
               <Link to={`${base}/skills`} className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Skills</Text>
                 <Text className={styles.summaryValue}>{enabledSkills}</Text>
-                <Text className={styles.summaryMeta}>Configuration revision {configuration.data.revision}</Text>
+                <Text className={styles.summaryMeta}>Enabled in this project</Text>
               </Link>
             </div>
           </section>

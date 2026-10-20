@@ -5,7 +5,7 @@
  * activity feed need the metrics contract (gap G3) and are not shown. This page
  * is the planned home for Chief of Staff priorities.
  */
-import { Badge, Button, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -198,8 +198,7 @@ export function OverviewPage() {
                       <span className={styles.iconBubble}><FolderRegular /></span>
                       <Text className={styles.projectName}>{project.name}</Text>
                     </div>
-                    <span className={styles.stat}><ClockRegular />Updated {new Date(project.updatedAt).toLocaleString()}</span>
-                    <div><Badge appearance="outline" size="small">Configuration revision {project.configurationRevision}</Badge></div>
+                    <span className={styles.stat}><ClockRegular />Updated {new Date(project.updatedAt).toLocaleString()}</span>
                   </Link>
                 ))}
               </div>

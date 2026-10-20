@@ -78,7 +78,7 @@ function problemMessage(problem: Record<string, unknown>, status: number): strin
   const detail = typeof problem.detail === 'string' ? problem.detail : undefined;
   const title = typeof problem.title === 'string' ? problem.title : undefined;
   const code = typeof problem.code === 'string' ? problem.code : undefined;
-  return detail ?? title ?? code ?? `Gateway request failed with HTTP ${status}.`;
+  return detail ?? title ?? code ?? `The request failed with HTTP ${status}.`;
 }
 
 /** Encodes each path segment independently so identifiers cannot alter route structure. */
@@ -116,7 +116,7 @@ export class AgentweaverGatewayClient {
     tenantSelector?: string | null,
   ): Promise<T> {
     if (!token) {
-      throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in through the Identity Broker to continue.');
+      throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
     }
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
@@ -1022,7 +1022,9 @@ export class AgentweaverGatewayClient {
     });
     if (tenantSelector !== undefined && tenantSelector !== null)
       headers.set('X-Agentweaver-Tenant', tenantSelector);
-    const response = await this.fetcher(
+    // Browsers reject window.fetch called with any receiver other than the global object.
+    const response = await this.fetcher.call(
+      globalThis,
       `${this.baseUrl}/projects/${encodeSegments(projectId, 'runs', runId, 'events', 'live')}${query}`,
       {
         headers,
@@ -1042,7 +1044,7 @@ export class AgentweaverGatewayClient {
       }
       throw new GatewayError(response.status, body, problemMessage(body, response.status));
     }
-    if (!response.body) throw new Error('The Gateway SSE response has no readable body.');
+    if (!response.body) throw new Error('The live update stream has no readable body.');
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
