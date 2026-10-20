@@ -179,6 +179,13 @@ during this invocation can authorize a write. Cleanup revokes the setup grants
 and archives the project only if no run selection was accepted. An accepted
 selection is retained as `retainedPending` with its grants still active.
 
+An indeterminate privileged command is not retried automatically. Its
+allowlisted product code, kubectl exit code, and fixed stderr/process
+classes are retained in `observations.fixtureSetup.commandFailures`;
+raw command output is not retained. Use the invocation-bound read-only
+query described in [Troubleshoot Agentweaver](../../docs/guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
+before retrying setup or cleanup. The same shared behavior applies to MCP.
+
 Supply an `executionIntent: "execute"` JSON manifest with the direct Environment
 identity metadata, pinned provider/runtime/storage/source/image receipts, and
 `deploymentEvidence` paths named `publicationPath`, `manifestPath`,

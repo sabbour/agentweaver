@@ -383,6 +383,13 @@ test('P1 CLI fails closed when privileged setup has no verified receipt', async 
       invocationId: '00000000-0000-4000-8000-000000000323',
       setup: null,
       setupAttempted: true,
+      commandFailures: [{
+        operationKind: 'setup',
+        productErrorCode: 'forbidden',
+        kubectlExitCode: 1,
+        processErrorClass: null,
+        stderrClass: 'product-code',
+      }],
     };
     setupError.p1SetupCleanup = async () => ({
       invocationId: setupError.p1SetupState.invocationId,
@@ -405,7 +412,14 @@ test('P1 CLI fails closed when privileged setup has no verified receipt', async 
     assert.equal(result.surfaceStatus, 'failed');
     assert.equal(result.fullP1Status, 'failed');
     assert.equal(result.observations.fixtureSetup.cleanup.state, 'indeterminate');
+    assert.equal(result.observations.fixtureSetup.commandFailures[0].productErrorCode, 'forbidden');
+    assert.equal(result.observations.fixtureSetup.commandFailures[0].kubectlExitCode, 1);
+    assert.match(result.observations.fixtureSetup.diagnosis.command, /--invocation-id 00000000-0000-4000-8000-000000000323$/);
     assert.match(result.failure.message, /reconcile the invocation before retrying/);
+    const persisted = (await readFile(outputPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const receipt = persisted.find(record => record.kind === 'p1-acceptance-result');
+    assert.deepEqual(receipt.observations.fixtureSetup.commandFailures,
+      result.observations.fixtureSetup.commandFailures);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
