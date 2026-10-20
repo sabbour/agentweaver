@@ -478,6 +478,34 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ConcurrentAzureByokReplaysCommitOneImmutableCharge()
+    {
+        var receipt = AzureByokReceipt();
+        var (first, _, _) = AzureConsumer(1.25m, 5.75m);
+        var (second, _, _) = AzureConsumer(1.25m, 5.75m);
+        var results = await Task.WhenAll(
+            first.AppendAsync(receipt, _ => Task.CompletedTask, default),
+            second.AppendAsync(receipt, _ => Task.CompletedTask, default));
+        Assert.Single(results, result => !result.IsDuplicate);
+        Assert.Equal(results[0].Accounting, results[1].Accounting);
+        var conflicting = receipt.Usage with
+        {
+            Measurement = receipt.Usage.Measurement with { InputTokens = 18 }
+        };
+        await Assert.ThrowsAnyAsync<Exception>(() => first.AppendAsync(receipt with
+        {
+            Usage = conflicting,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, conflicting)
+        }, _ => Task.CompletedTask, default));
+        var evidence = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", new(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD", null,
+            [receipt.Usage.A2AMessageId!.Value.ToString("D")]));
+        Assert.Equal(1, evidence.AccountingCursor);
+        Assert.Equal(1, evidence.Run.PricedEvents);
+        Assert.Single(evidence.Dispatches[0].Receipts);
+    }
+
+    [Fact]
     public async Task NonAzureByokUsageStaysUnpricedEvenWithAnAzureRateCard()
     {
         var (consumer, _, _) = AzureConsumer(1.25m, 5.75m);
