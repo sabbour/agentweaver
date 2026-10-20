@@ -1,4 +1,39 @@
 /** JSON contracts exchanged by the v1 browser, Gateway, and resource owners. */
+/** Interactive run input persisted before the existing Broker run-binding redirect. */
+export interface CreateProjectRunRequest {
+  firstMessage: string;
+  expectedProjectConfigRevision: number;
+  title?: string;
+  workflowId?: string;
+}
+
+/** Stable run and root identities used to resume a new chat after a reload. */
+export interface CreateProjectRunResponse {
+  runId: string;
+  rootSessionId: string;
+  state: 'awaiting_binding';
+  binding: { projectId: string; runId: string };
+}
+
+/** Receipt for idempotent first-message delivery to the accepted root. */
+export interface StartProjectRunResponse {
+  runId: string;
+  rootSessionId: string;
+  state: 'started';
+}
+
+/** Optional human-readable explanation saved with a cancellation. */
+export interface CancelProjectRunRequest {
+  reason?: string;
+}
+
+/** Durable cancellation receipt returned unchanged on an identical retry. */
+export interface CancelProjectRunResponse {
+  runId: string;
+  state: 'cancelled';
+  cancelledAt: string;
+}
+
 /** Problem details returned for failed Gateway requests. */
 export interface Problem {
   type?: string;

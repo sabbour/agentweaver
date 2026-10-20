@@ -49,6 +49,9 @@ internal static partial class GatewayOpenApi
             ["readSourceControlMergeIntent"] = C(null, "SourceControlMergeIntentView", "200"),
             ["executeSourceControlMergeIntent"] = C(null, "SourceControlMergeExecutionView", "200"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
+            ["createProjectRun"] = C("CreateProjectRunRequest", "CreateProjectRunResponse", "201"),
+            ["startProjectRun"] = C(null, "StartProjectRunResponse", "200"),
+            ["cancelProjectRun"] = C("CancelProjectRunRequest", "CancelProjectRunResponse", "200"),
             ["proposeOutcome"] = C("ProposeCoordinatorOutcomeRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readRunStatus"] = C(null, "OwnerRunStatus", "200"),
             ["recoverRun"] = C("RecoverRunExecutionRequest", "RunExecutionTransitionResult", "200"),
@@ -195,6 +198,8 @@ internal static partial class GatewayOpenApi
             }).ToArray();
 
         if (route.OperationId is
+            "createProjectRun" or
+            "cancelProjectRun" or
             "createKnowledgeRecord" or
             "updateKnowledgeRecord" or
             "restoreKnowledgeRecord" or
@@ -746,6 +751,21 @@ internal static partial class GatewayOpenApi
             ("layer", Nullable(Enum("l3L4", "l7")))),
 
         ["AcceptRootRequest"] = Obj(["sessionId"], ("sessionId", Str())),
+        // The message limit is UTF-8 bytes at the owner, not a JavaScript character count.
+        ["CreateProjectRunRequest"] = Obj(["firstMessage", "expectedProjectConfigRevision"],
+            ("firstMessage", new { type = "string", minLength = 1, maxLength = 32768 }),
+            ("expectedProjectConfigRevision", new { type = "integer", minimum = 1 }),
+            ("title", new { type = "string", minLength = 1, maxLength = 256 }),
+            ("workflowId", new { type = "string", minLength = 1, maxLength = 256 })),
+        ["ProjectRunBinding"] = Obj(["projectId", "runId"], ("projectId", Str()), ("runId", Str())),
+        ["CreateProjectRunResponse"] = Obj(["runId", "rootSessionId", "state", "binding"],
+            ("runId", Str()), ("rootSessionId", Str()), ("state", Enum("awaiting_binding")),
+            ("binding", Ref("ProjectRunBinding"))),
+        ["StartProjectRunResponse"] = Obj(["runId", "rootSessionId", "state"],
+            ("runId", Str()), ("rootSessionId", Str()), ("state", Enum("started"))),
+        ["CancelProjectRunRequest"] = Obj([], ("reason", new { type = "string", maxLength = 2048 })),
+        ["CancelProjectRunResponse"] = Obj(["runId", "state", "cancelledAt"],
+            ("runId", Str()), ("state", Enum("cancelled")), ("cancelledAt", Str())),
         ["ProposeCoordinatorOutcomeRequest"] = Obj(["expectedStateVersion", "idempotencyKey", "requestId", "specification"],
             ("expectedStateVersion", Int()), ("idempotencyKey", Str()), ("requestId", Str()),
             ("specification", Ref("CoordinatorOutcomeSpecification"))),
