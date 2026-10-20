@@ -244,7 +244,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         AriaRole.Button,
                         new() { Name = "Connect GitHub Repo App" }).ClickAsync());
                 await page.GetByText(
-                    "GitHub returned to Agentweaver. Checking the connection status with the Identity Broker.")
+                    "GitHub returned to Agentweaver. Checking the connection status.")
                     .WaitForAsync();
                 await page.GetByText("Connected as connected-user").WaitForAsync();
 
