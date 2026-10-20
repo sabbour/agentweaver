@@ -382,7 +382,7 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
     private async Task<TestCaller> SeedOwnerAsync()
     {
         var suffix = Guid.NewGuid().ToString("N");
-        var projectId = "endpoint-" + suffix;
+        var projectId = suffix;
         var tenantId = "tenant-" + suffix;
         var subject = "owner-" + suffix;
         var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
