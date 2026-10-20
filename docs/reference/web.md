@@ -30,8 +30,20 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/SkillsMarketplacePanel.tsx` | Marketplace sources, local upload, inventory, import, and assignment. |
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
 | `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP connection status, sign-in, refresh, and disconnect in project settings. |
-| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, and persona menu filled with Gateway projects and the Broker session. Shows **Run chat** only for a session bound to a run. |
-| `src/v1/ConfigurationFields.tsx` | Readable model, reasoning, credential, per-task model, and provider fields for project configuration. |
+| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. |
+| `src/v1/OverviewPage.tsx` | Cross-project home: projects, recent runs in this browser, and items that need input. |
+| `src/v1/DashboardPage.tsx` | Project dashboard: readiness from configuration, team and skills summaries, and quick actions. |
+| `src/v1/OrchestrationsPage.tsx` | Project run list with a status summary. |
+| `src/v1/RunList.tsx`, `src/v1/runListData.ts`, `src/v1/recentRuns.ts` | Shared run list and its data source. Today the source is the runs opened in this browser, per tenant, cleared on sign-out. |
+| `src/v1/DecisionView.tsx`, `src/v1/decisionTitles.ts` | Shared decision view that rereads a gate before it approves or rejects. |
+| `src/v1/AttentionList.tsx`, `src/v1/runAttention.ts` | Items that need input, for Overview and the notification bell. |
+| `src/v1/runState.ts` | State words for runs: Needs input, Open, Working, Done, and Unavailable. |
+| `src/v1/NewChatComposer.tsx` | Message composer with a stable idempotency key per draft. The run Chat tab uses it. |
+| `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
+| `src/v1/AgentsView.tsx` | Agents roster, filters, and the charter drawer. |
+| `src/v1/ProjectSettingsSections.tsx`, `src/v1/settingsSections.ts`, `src/v1/projectReadiness.ts` | Project settings rail, General, Access, Repository, Run limits, and Danger zone sections. |
+| `src/v1/ProjectMembers.tsx` | Access > Members on the project role-assignment API. Only tenant administrators see add and remove. |
+| `src/v1/ConfigurationFields.tsx` | Readable model, reasoning, credential, per-task model, and platform component implementation fields for project configuration. |
 | `src/v1/modelCredential.ts` | Save check that requires a new credential after the default model changes. |
 | `src/v1/ConfigurationHistory.tsx` | Read-only view of one earlier configuration revision. |
 | `host/Program.cs` | Static files, runtime settings, callback headers, SPA fallback, and health routes. |
@@ -47,17 +59,18 @@ data hooks are not mounted.
 
 | Browser route | Handler |
 | --- | --- |
-| `/` | Redirect to `/projects`. |
+| `/` | Redirect to `/overview`. |
+| `/overview` | `OverviewPage`. |
 | `/projects` | `ProjectsPage`. |
-| `/projects/:projectId` | `ProjectOverviewPage`. |
-| `/projects/:projectId/settings` | `ProjectConfigurationPage`. |
+| `/projects/:projectId` | `DashboardPage`. |
+| `/projects/:projectId/settings` | `ProjectConfigurationPage`; `section` selects `general`, `access`, `repository`, `models`, `components`, `limits`, `connections`, `history`, `danger`, or `advanced`. Missing or unknown values open `general`. |
 | `/projects/:projectId/skills` | `ProjectConfigurationPage` on its Skills section. |
 | `/projects/:projectId/team` | `ProjectConfigurationPage` on its Agents section. |
-| `/projects/:projectId/orchestrations` | `ProjectOverviewPage` with the exact-run opener. |
+| `/projects/:projectId/orchestrations` | `OrchestrationsPage`. |
 | `/projects/:projectId/knowledge`, `/projects/:projectId/memories` | `KnowledgePage`; `runId` and `agentId` query values prefill scope. |
 | `/projects/:projectId/team/:agentName/memory` | Redirect to Memories with `agentId` prefilled. |
 | `/settings` | Account settings: clear the session and manage the Repo App account. |
-| `/projects/:projectId/runs/:runId` | `RunPage`; `view` selects `topology`, `chat`, `approvals`, `activity`, `selection`, or `usage`. |
+| `/projects/:projectId/runs/:runId` | `RunPage`; `view` selects `chat`, `topology`, `approvals`, `activity`, `changes`, `usage`, or `selection` (**Run settings**). Missing or unknown values open `chat`. |
 | `/projects/:projectId/orchestrations/:runId` | Redirect to the corresponding run route. |
 | `/auth/callback` | Broker callback handling; popup callbacks bypass the main route tree. |
 | `/auth/github/copilot-app/callback` | Copilot popup callback, handled before the main route tree. |
@@ -65,7 +78,7 @@ data hooks are not mounted.
 | `/auth/remote-mcp/oauth/callback` | Remote MCP OAuth popup callback, handled before the main route tree. |
 | `/console` | Redirect to `/assistant`. |
 | `/projects/:projectId/sessions` | Redirect to `/sessions`. |
-| `/overview`, `/sessions`, `/assistant`, `/platform-settings`, `/observability/*`, `/projects/:projectId/team/cast`, and the project `board`, `flow`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
+| `/sessions`, `/assistant`, `/platform-settings`, `/observability/*`, `/projects/:projectId/team/cast`, and the project `board`, `flow`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
 | Other paths | `UnavailablePage` with **Page not found**. |
 
 The production host serves `index.html` for client routes. Missing `/assets`

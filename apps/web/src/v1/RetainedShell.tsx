@@ -1,17 +1,22 @@
-import { Avatar, Button, MessageBar, MessageBarBody, Popover, PopoverSurface, PopoverTrigger } from '@fluentui/react-components';
+import { Avatar, Badge, Button, MessageBar, MessageBarBody, Popover, PopoverSurface, PopoverTrigger } from '@fluentui/react-components';
 import { PersonRegular, SignOutRegular } from '@fluentui/react-icons';
 import { useEffect, useState, type ReactNode } from 'react';
-import { useLocation, useMatch, useNavigate } from 'react-router-dom';
+import { useLocation, useMatch } from 'react-router-dom';
 import { LeftNavView } from '../components/shell/LeftNav';
 import { ProjectSwitcherView } from '../components/shell/ProjectSwitcher';
 import { resolveActiveKey } from '../components/shell/navConfig';
 import { PageContainer } from '../components/ui/PageContainer';
+import { AttentionBell } from './AttentionList';
 import { useAuth } from './AuthContext';
+import { useRunAttention } from './runAttention';
 import { gatewayClient } from './api';
 import type { ProjectSummary } from './contracts';
 import packageInfo from '../../package.json';
 
-/** Keeps the incumbent persona menu without requesting legacy identity APIs. */
+/**
+ * Keeps the 0.x persona menu without requesting legacy identity APIs. The 0.x
+ * status dot polls a legacy health route, so the menu shows only the version.
+ */
 function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
   const { signOut } = useAuth();
   return (
@@ -23,8 +28,8 @@ function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
       </PopoverTrigger>
       <PopoverSurface className="v1-stack">
         <strong>Signed in</strong>
-        <p className="v1-muted">Your sign-in stays in this tab. Account connections are in Settings.</p>
-        <Button appearance="subtle" icon={<SignOutRegular />} onClick={signOut}>Clear session</Button>
+        <Button appearance="subtle" icon={<SignOutRegular />} onClick={signOut}>Sign out</Button>
+        <Badge appearance="tint" color="warning" title="Agentweaver is alpha software under active development.">v{packageInfo.version}</Badge>
       </PopoverSurface>
     </Popover>
   );
@@ -33,8 +38,8 @@ function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
 /** Adapts Gateway data to the existing rail; no monolith API consumers are mounted. */
 export function RetainedShell({ children }: { children: ReactNode }) {
   const location = useLocation();
-  const navigate = useNavigate();
   const { session, apiCall } = useAuth();
+  const attention = useRunAttention();
   const match = useMatch('/projects/:projectId/*');
   const projectId = match?.params.projectId;
   const [directory, setDirectory] = useState<{
@@ -63,7 +68,7 @@ export function RetainedShell({ children }: { children: ReactNode }) {
   return (
     <div className="aw-app-shell">
       <LeftNavView
-        visibleGlobalKeys={['projects']}
+        visibleGlobalKeys={['overview', 'projects']}
         visibleProjectKeys={['dashboard', 'orchestrations', 'agents', 'skills', 'memories']}
         showNewSession={false}
         projectId={projectId}
@@ -83,15 +88,7 @@ export function RetainedShell({ children }: { children: ReactNode }) {
           />
         )}
         identity={(collapsed) => <BrokerIdentity collapsed={collapsed} />}
-        sessionAction={session?.binding ? (
-          <Button appearance="subtle"
-            onClick={() => {
-              if (session.binding) navigate(`/projects/${encodeURIComponent(session.binding.projectId)}/runs/${encodeURIComponent(session.binding.runId)}?view=chat`);
-            }}>
-            Run chat
-          </Button>
-        ) : undefined}
-        onNewSession={() => navigate(projectId ? `/projects/${encodeURIComponent(projectId)}/orchestrations` : '/assistant')}
+        notifications={<AttentionBell attention={attention} />}
       />
       <div className="aw-shell-canvas">
         <main className="aw-shell-content" aria-label="Main content">

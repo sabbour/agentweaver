@@ -18,14 +18,16 @@ function reasoning(value: string): ReasoningEffort | null {
 
 /**
  * Readable settings preserve every unedited field. Changing the default model clears a saved
- * credential pin; returning to the saved model restores it.
+ * credential pin; returning to the saved model restores it. `part` limits the output to the
+ * model fields or the platform component implementation fields; omit it to show both.
  */
-export function ConfigurationFields({ configuration, onChange, readOnly = false, savedSelection }: {
+export function ConfigurationFields({ configuration, onChange, readOnly = false, savedSelection, part }: {
   configuration: ProjectConfiguration;
   onChange: (configuration: ProjectConfiguration) => void;
   readOnly?: boolean;
   /** Owner-saved default selection; omit for read-only history. */
   savedSelection?: ModelSelectionSettings | null;
+  part?: 'models' | 'components';
 }) {
   const setModelReference = (reference: string) => {
     if (!reference && !configuration.modelSelection) return;
@@ -55,6 +57,7 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
   };
   return (
     <div className="v1-stack">
+      {part !== 'components' && <>
       <PageSection title="Model defaults" description="Use an existing model reference. Available choices are not listed by this version. Saved changes apply to future runs.">
         <div className="v1-inline-form">
           <Field label="Default model reference">
@@ -107,9 +110,10 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
           </div>;
         })}
       </PageSection>
-      <PageSection title="Providers" description="Edit saved provider IDs. Available provider choices are not listed by this version.">
+      </>}
+      {part !== 'models' && <PageSection title="Platform component implementations" description="Choose which implementation a platform component uses in this project. Enter saved implementation IDs; this version does not list the choices.">
         {configuration.providerOverrides.map((provider, index) => (
-          <Field key={`${provider.seam}-${index}`} label={`${provider.seam} provider`}>
+          <Field key={`${provider.seam}-${index}`} label={`${provider.seam} implementation`}>
             <Input value={provider.providerId} readOnly={readOnly}
               onChange={(_, data) => onChange({
                 ...configuration,
@@ -117,9 +121,9 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
               })} />
           </Field>
         ))}
-        {configuration.providerOverrides.length === 0 && <p className="v1-muted">No project provider overrides. Platform choices apply.</p>}
+        {configuration.providerOverrides.length === 0 && <p className="v1-muted">No project choices. Platform defaults apply.</p>}
         {configuration.orderedProviderOverrides.map((provider, index) => (
-          <Field key={`${provider.seam}-${index}`} label={`${provider.seam} provider order`} hint="Separate provider IDs with commas, in priority order.">
+          <Field key={`${provider.seam}-${index}`} label={`${provider.seam} implementation order`} hint="Separate implementation IDs with commas, in priority order.">
             <Input value={provider.providerIds.join(', ')} readOnly={readOnly}
               onChange={(_, data) => onChange({
                 ...configuration,
@@ -128,7 +132,7 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
               })} />
           </Field>
         ))}
-      </PageSection>
+      </PageSection>}
     </div>
   );
 }

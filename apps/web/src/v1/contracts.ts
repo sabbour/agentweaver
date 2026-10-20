@@ -1060,3 +1060,24 @@ export interface BrokerTokenResponse {
   refresh_token?: string;
   scope?: string;
 }
+
+/** Project role a tenant administrator can assign. */
+export type ProjectRole = 'owner' | 'contributor' | 'viewer' | 'orchestrator';
+
+/** One active project role assignment (`listProjectRoleAssignments`). */
+export interface ProjectRoleAssignment {
+  assignmentId: string;
+  /** Member subject under the caller's issuer. */
+  principalId: string;
+  role: ProjectRole;
+  /** Concurrency token for revoke (`expectedRevision`). */
+  revision: number;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** Response of `GET /projects/{projectId}/role-assignments`. */
+export interface ProjectRoleAssignmentList {
+  projectId: string;
+  assignments: ProjectRoleAssignment[];
+}

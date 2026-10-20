@@ -50,6 +50,9 @@ const mocks = vi.hoisted(() => ({
   rejectKnowledgeProposal: vi.fn(),
   replayEvents: vi.fn(),
   streamEvents: vi.fn(),
+  getAuthorizationContext: vi.fn(),
+  listProjectRoleAssignments: vi.fn(),
+  createProject: vi.fn(),
 }));
 
 vi.mock('./api', () => ({
@@ -89,6 +92,9 @@ vi.mock('./api', () => ({
     rejectKnowledgeProposal: mocks.rejectKnowledgeProposal,
     replayEvents: mocks.replayEvents,
     streamEvents: mocks.streamEvents,
+    getAuthorizationContext: mocks.getAuthorizationContext,
+    listProjectRoleAssignments: mocks.listProjectRoleAssignments,
+    createProject: mocks.createProject,
   },
   GatewayError: class GatewayError extends Error {
     status: number;
@@ -144,6 +150,7 @@ vi.mock('./AuthContext', () => {
       operation('broker-token', mocks.tenantSelector),
     authorize: async () => {},
     signOut: () => {},
+    authorizationContext: { tenantId: 'tenant-1' },
     busy: false,
     restoringSession: false,
     consent: null,
@@ -171,6 +178,7 @@ vi.mock('./config', async (importOriginal) => {
 
 import App from './App';
 import { GatewayError } from './api';
+import { clearRecentRuns, rememberRun } from './recentRuns';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -366,17 +374,19 @@ function knowledgeTransferBundle(projectId = 'p1', agentId = 'a1') {
 
 describe('v1 web project scoping', () => {
   beforeEach(() => {
-    window.history.replaceState({}, '', '/projects/p1/settings');
+    window.history.replaceState({}, '', '/projects/p1/settings?section=connections');
     window.name = '';
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ = undefined;
     mocks.authProvider.mockClear();
     mocks.binding = null;
+    clearRecentRuns();
     mocks.consent = null;
     mocks.tenantSelector = 'tenant-1';
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
     mocks.listProjects.mockReset().mockResolvedValue([]);
-    mocks.getProject.mockReset();
-    mocks.getProjectConfiguration.mockReset();
+    mocks.createProject.mockReset();
+    mocks.getProject.mockReset().mockImplementation(async (_token: string, projectId: string) => projectSummary(projectId, 'Fixture project'));
+    mocks.getProjectConfiguration.mockReset().mockImplementation(async (_token: string, projectId: string) => projectConfiguration(projectId, 1));
     mocks.updateProjectConfiguration.mockReset();
     mocks.listMarketplaceSources.mockReset().mockResolvedValue([]);
     mocks.createMarketplaceSource.mockReset();
@@ -425,6 +435,21 @@ describe('v1 web project scoping', () => {
     mocks.rejectKnowledgeProposal.mockReset();
     mocks.replayEvents.mockReset();
     mocks.replayEvents.mockResolvedValue({ events: [], hasMore: false, nextCursor: null });
+    mocks.getAuthorizationContext.mockReset().mockResolvedValue({
+      contractVersion: 1,
+      issuer: 'https://broker.test',
+      actorId: 'user-1',
+      tenantId: 'tenant-1',
+      membershipRevision: 1,
+      boundProjectId: null,
+      boundRunId: null,
+      effectiveAuthority: [{
+        resourceType: 'project',
+        resourceId: 'p1',
+        permissions: [{ permission: 'readProjects', roleRevision: 1 }, { permission: 'writeProjects', roleRevision: 1 }],
+      }],
+    });
+    mocks.listProjectRoleAssignments.mockReset().mockResolvedValue({ projectId: 'p1', assignments: [] });
     mocks.streamEvents.mockReset();
     mocks.streamEvents.mockImplementation(() => {
       throw new Error('The event stream is not used by this test.');
@@ -437,11 +462,49 @@ describe('v1 web project scoping', () => {
     render(<App />);
     const gallery = await screen.findByRole('list', { name: 'Projects' });
     expect(within(gallery).getByText('Fixture project')).toBeTruthy();
-    expect(within(gallery).getByText('Role unavailable')).toBeTruthy();
+    expect(await within(gallery).findByText('Can edit')).toBeTruthy();
     expect(screen.queryByLabelText('Project name')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     expect(await screen.findByRole('dialog')).toBeTruthy();
     expect(screen.getByLabelText('Project name')).toBeTruthy();
+  });
+
+  it('creates a project from a GitHub repository and saves the repository in its configuration', async () => {
+    mocks.createProject.mockResolvedValue(projectSummary('p9', 'From GitHub'));
+    mocks.updateProjectConfiguration.mockImplementation(async (_token: string, projectId: string, revision: number) =>
+      projectConfiguration(projectId, revision + 1));
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+    const submit = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'not a repo' } });
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'https://github.com/octo/agentweaver.git' } });
+    fireEvent.click(submit);
+
+    await screen.findByText('Project From GitHub was created. It uses octo/agentweaver.');
+    expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
+      'broker-token', 'p9', 1,
+      expect.objectContaining({ sourceControl: expect.objectContaining({ repository: { owner: 'octo', name: 'agentweaver' }, authMode: 'githubApp' }) }),
+      'tenant-1',
+    );
+  });
+
+  it('keeps a new project when its repository cannot be saved yet', async () => {
+    mocks.createProject.mockResolvedValue(projectSummary('p9', 'No access yet'));
+    mocks.getProjectConfiguration.mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'No access yet' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }));
+
+    await screen.findByText(/The repository was not saved\. Add it in Settings > Repository after you have access\./);
+    expect(mocks.updateProjectConfiguration).not.toHaveBeenCalled();
   });
 
   it('uses the retained collapse control and hides unsupported navigation', async () => {
@@ -1107,10 +1170,10 @@ describe('v1 web project scoping', () => {
       expect(closePopup).toHaveBeenCalledOnce();
       expect(popup.closed).toBe(true);
 
-      navigate('/projects/p1/settings');
+      navigate('/projects/p1/settings?section=connections');
       await waitFor(() => expect(statusRequests).toBe(2));
       navigate('/projects');
-      navigate('/projects/p1/settings');
+      navigate('/projects/p1/settings?section=connections');
       await screen.findByText('No GitHub Repo App connection is available for this identity.');
       expect(statusRequests).toBe(3);
 
@@ -1146,25 +1209,26 @@ describe('v1 web project scoping', () => {
     }
   });
 
-  it('hides Run chat until a session has an exact run binding', () => {
-    window.history.replaceState({}, '', '/projects?preset=1');
+  it('does not show a Run chat shortcut in the shell', () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    window.history.replaceState({}, '', '/projects');
     render(<App />);
 
     expect(screen.queryByRole('button', { name: /Run chat/ })).toBeNull();
   });
 
-  it('opens the exact bound run directly on Chat from the shell', async () => {
+  it('lists runs opened in this browser in Orchestrations and opens one on Chat', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
-    window.history.replaceState({}, '', '/projects');
+    rememberRun('tenant-1', { projectId: 'p1', runId: 'r1', executionState: 'running' });
+    window.history.replaceState({}, '', '/projects/p1/orchestrations');
     render(<App />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run chat' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open run r1' }));
 
     const chatTab = await screen.findByRole('tab', { name: 'Chat' });
     await waitFor(() => expect(chatTab.getAttribute('aria-selected')).toBe('true'));
     expect(window.location.pathname).toBe('/projects/p1/runs/r1');
-    expect(new URLSearchParams(window.location.search).get('view')).toBe('chat');
   });
 
   it('opens the Chat tab from the view query and preserves other query parameters', async () => {
@@ -1253,7 +1317,7 @@ describe('v1 web project scoping', () => {
     } as unknown as Window;
     const openPopup = vi.spyOn(window, 'open').mockReturnValue(popup);
     mocks.beginRepoAppInstallationSetup.mockResolvedValue(undefined);
-    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=selection');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
     render(<App />);
 
     await screen.findByRole('heading', { name: 'GitHub App repository access' });
@@ -1344,7 +1408,7 @@ describe('v1 web project scoping', () => {
       isPrivate: true,
       pinnedAt: '2026-10-08T00:00:00Z',
     });
-    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=selection');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
     render(<App />);
 
     await screen.findByRole('button', { name: 'Install GitHub App for this run' });
@@ -1374,7 +1438,7 @@ describe('v1 web project scoping', () => {
     };
     mocks.getRunSelection.mockResolvedValue(selection);
     mocks.getRepoAppStatus.mockRejectedValue(new Error('Identity Broker owner unavailable'));
-    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=selection');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
     render(<App />);
 
     expect(await screen.findByText(
@@ -1387,19 +1451,19 @@ describe('v1 web project scoping', () => {
     )).toBeNull();
   });
 
-  it('defaults invalid run view queries to Topology while preserving other query parameters', async () => {
+  it('defaults invalid run view queries to Chat while preserving other query parameters', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
     window.history.replaceState({}, '', '/projects/p1/runs/r1?view=unsupported&source=notification');
     render(<App />);
 
-    await screen.findByRole('tab', { name: 'Topology' });
+    await screen.findByRole('tab', { name: 'Chat' });
     await waitFor(() => {
       const params = new URLSearchParams(window.location.search);
-      expect(params.get('view')).toBe('topology');
+      expect(params.get('view')).toBe('chat');
       expect(params.get('source')).toBe('notification');
     });
-    expect(screen.getByRole('tab', { name: 'Topology' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('hides the previous project and ignores a stale project response after navigation', async () => {
@@ -1457,16 +1521,17 @@ describe('v1 web project scoping', () => {
       configuration,
     }));
 
+    window.history.replaceState({}, '', '/projects/p1/settings?section=advanced');
     render(<App />);
     await waitFor(() => expect(mocks.getProjectConfiguration).toHaveBeenCalledWith('broker-token', 'p1', 'tenant-1'));
 
     act(() => {
-      window.history.pushState({}, '', '/projects/p2/settings');
+      window.history.pushState({}, '', '/projects/p2/settings?section=advanced');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
 
-    await screen.findByRole('heading', { name: 'Revision 2' });
-    const editor = screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement;
+    await screen.findByText('Revision 2');
+    const editor = screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement;
     expect(editor.value).toContain('"projectMarker": "p2"');
 
     await act(async () => {
@@ -1474,8 +1539,10 @@ describe('v1 web project scoping', () => {
       await oldProjectLoad.promise;
     });
 
-    expect((screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement).value)
+    expect((screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement).value)
       .toContain('"projectMarker": "p2"');
+    const shown = screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement;
+    fireEvent.change(shown, { target: { value: JSON.stringify(JSON.parse(shown.value)) } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
     expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
@@ -1665,8 +1732,8 @@ describe('v1 web project scoping', () => {
 
     window.history.replaceState({}, '', '/projects/p1/runs/r1');
     render(<App />);
-    await screen.findByRole('tab', { name: 'Selection' });
-    fireEvent.click(screen.getByRole('tab', { name: 'Selection' }));
+    await screen.findByRole('tab', { name: 'Run settings' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Run settings' }));
     await screen.findByText('selected-model');
     fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
     await screen.findByText('model-meter');
@@ -1675,8 +1742,8 @@ describe('v1 web project scoping', () => {
     await screen.findByText('No usage totals were returned by Events & Sessions.');
     expect(screen.queryByText('model-meter')).toBeNull();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Selection' }));
-    await screen.findByText('No accepted run-selection snapshot was returned by Projects & Config.');
+    fireEvent.click(screen.getByRole('tab', { name: 'Run settings' }));
+    await screen.findByText('The service returned no settings for this run.');
     expect(screen.queryByText('selected-model')).toBeNull();
   });
 
@@ -2021,7 +2088,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.click(screen.getByRole('button', { name: 'Export scoped Knowledge' }));
     await screen.findByLabelText('Exported Knowledge bundle');
 
@@ -2054,7 +2121,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.click(screen.getByRole('button', { name: 'Export scoped Knowledge' }));
     await screen.findByText('Knowledge transfer bundle is outside the exact project, run, and agent scope.');
     expect(screen.queryByLabelText('Exported Knowledge bundle')).toBeNull();
@@ -2070,7 +2137,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.change(screen.getByLabelText('Versioned Knowledge bundle JSON'), {
       target: { value: JSON.stringify(knowledgeTransferBundle()) },
     });
@@ -2099,7 +2166,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.change(screen.getByLabelText('Versioned Knowledge bundle JSON'), {
       target: { value: JSON.stringify(knowledgeTransferBundle('p2', 'a1')) },
     });
@@ -2120,7 +2187,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.change(screen.getByLabelText('Versioned Knowledge bundle JSON'), {
       target: { value: JSON.stringify(knowledgeTransferBundle()) },
     });
@@ -2138,7 +2205,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.change(screen.getByLabelText('Versioned Knowledge bundle JSON'), {
       target: { value: `${JSON.stringify(knowledgeTransferBundle())}${' '.repeat(1024 * 1024 + 1)}` },
     });

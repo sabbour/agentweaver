@@ -1,7 +1,8 @@
 # Skills and marketplace
 
-Use **Skills and marketplace** in project settings to import validated skill
-content and assign an exact revision to agents in the project's current cast.
+Use the project's **Skills** page to import validated skill content and assign
+a skill revision to agents in the project's current cast. Open it from the
+project navigation, or go to `/projects/:projectId/skills`.
 An active marketplace source means that the source is configured; it does not
 confirm GitHub availability.
 
@@ -11,7 +12,7 @@ not proof of deployment.
 
 ## Prerequisites
 
-- Sign in and open the project's settings page.
+- Sign in and open the project's **Skills** page.
 - Have current project Owner or tenant administrator authority for the
   marketplace and inventory operations.
 - For marketplace imports, provide a public GitHub repository.

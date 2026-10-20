@@ -45,7 +45,7 @@ describe('readable project configuration', () => {
     const configuration = fixture();
     const onChange = vi.fn();
     render(<ConfigurationFields configuration={configuration} onChange={onChange} />);
-    fireEvent.change(screen.getByLabelText('memory provider'), { target: { value: 'other' } });
+    fireEvent.change(screen.getByLabelText('memory implementation'), { target: { value: 'other' } });
     expect(onChange).toHaveBeenCalledWith({
       ...configuration, providerOverrides: [{ seam: 'memory', providerId: 'other' }],
     });

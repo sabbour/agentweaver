@@ -129,6 +129,25 @@
   outline: 2px solid var(--colorStrokeFocus2);
 }
 
+.v1-settings-rail a[aria-current='page'] {
+  color: var(--colorNeutralForeground1);
+  font-weight: var(--fontWeightSemibold);
+  background: var(--colorNeutralBackground1Selected);
+}
+
+.v1-settings-rail a.v1-settings-rail__danger {
+  color: var(--colorPaletteRedForeground1);
+}
+
+.v1-permission-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacingVerticalS);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .v1-settings-pane {
   flex: 1;
   min-width: 0;
@@ -490,3 +509,14 @@
     gap: 2px;
   }
 }
+
+/* Data tables (members, platform components): 0.x list density, theme tokens only. */
+.v1-table-wrap { overflow-x: auto; }
+.v1-table { width: 100%; border-collapse: collapse; font-size: var(--fontSizeBase300); }
+.v1-table caption { text-align: start; font-weight: var(--fontWeightSemibold); padding-block-end: var(--spacingVerticalS); }
+.v1-table th, .v1-table td { text-align: start; vertical-align: top; padding: var(--spacingVerticalS) var(--spacingHorizontalM); border-block-end: 1px solid var(--colorNeutralStroke2); }
+.v1-table thead th { color: var(--colorNeutralForeground3); font-weight: var(--fontWeightRegular); }
+.v1-table tbody th { font-weight: var(--fontWeightSemibold); }
+.v1-implementation-list { margin: 0; padding-inline-start: var(--spacingHorizontalL); display: grid; gap: var(--spacingVerticalXS); }
+.v1-composer { gap: var(--spacingVerticalS); }
+.v1-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

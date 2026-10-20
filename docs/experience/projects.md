@@ -1,66 +1,99 @@
 # Projects
 
-Use this page to list projects visible to your current identity, create a
-project, or open an existing run. Project access and configuration are owned
-by Projects & Config; the app does not grant access or create runs.
+Use this page to browse projects visible to your current identity, create a
+project, and use a project's **Dashboard** and **Orchestrations** pages.
+Project access and configuration are owned by Projects & Config. The app
+does not grant access or create runs.
 
 ## Choose a project
 
 **Prerequisites:** Sign in through the Identity Broker. Your current identity
 and role assignments determine which projects are visible.
 
-1. Open `/projects`.
-2. Read the **Visible projects** list.
-3. Select a project name.
+1. Select **Projects** in the navigation rail, or open `/projects`.
+2. Find the project tile.
+3. Select the tile or its **Open** button.
 
-Each project row shows its stable project ID, project revision, configuration
-revision, and lifecycle state. Select **Refresh** to reload the list. The
-overview shows the current project state and links to
-[Configuration](./configuration.md) and [Knowledge](./knowledge.md).
+Each tile shows the project name, project ID, state, revision, and your
+access. Access is **Can edit**, **Can view**, or **No access**. The app reads it
+from your current authorization context. **Overview** also lists up to six
+recently updated active projects under **Recent projects**.
 
-**Expected result:** The selected project's overview displays the lifecycle,
-record revision, and configuration revision returned by the owner.
+**Expected result:** The project's **Dashboard** opens.
 
 ## Create a project
 
 **Prerequisites:** Sign in with an identity allowed to create a project in the
 current tenant.
 
-1. On `/projects`, enter a name in **Project name**. The field accepts up to
-   120 characters.
-2. Select **Create project**.
-3. Read the returned project ID and refresh the visible project list.
+1. On **Projects**, select **Create project**.
+2. In **Project name**, enter up to 120 characters.
+3. In **Start from**, choose **Blank project** or **GitHub repository**.
+4. For **GitHub repository**, enter the repository as `owner/name` or as its
+   `github.com` address.
+5. Select **Create project**.
 
-**Expected result:** The owner returns a project summary and the app displays
-the new project ID. Project creation does not assign an Owner. If the project
-is not visible afterward, a tenant administrator must grant current access.
-The browser does not provide role-management controls.
+For **GitHub repository**, the app creates the project and then saves the
+repository in the project configuration with **GitHub App** sign-in. Saving the
+repository needs access to the new project. If you don't have access yet, the
+project is still created, and a note says to add the repository in
+**Settings > Repository** later.
+
+**Expected result:** A message confirms the new project, and the project list
+refreshes. Creating a project does not make you its owner. If you can't open
+the project afterward, ask a tenant administrator for access.
+
+## Read the project Dashboard
+
+Open `/projects/:projectId`. The **Dashboard** shows:
+
+- A readiness card based on the saved configuration. It checks the default
+  model, repository, team, and skills. Its status is **Ready**, **Setup
+  needed**, or **Archived**. The main action opens the next setup step.
+- Quick actions: **Open Orchestrations** and **Open Memories**.
+- Summary tiles: **Recent runs** opened in this browser, **Needs input**,
+  **Agents**, and **Skills** with the configuration revision.
+- **Recent runs in this browser** for this project.
+- A **Team** summary with a link to **Agents**.
+
+Select **Refresh** to reload the project and its configuration. The Dashboard
+shows only real configuration and browser run data. Run metrics and activity
+charts need a future metrics API (gap G3).
 
 ## Open an existing run
 
-**Prerequisites:** Open the project overview and obtain the exact ID of an
-existing run.
+**Prerequisites:** You opened the run once in this browser, for example from a
+link or a notification.
 
-1. Enter the run ID in **Exact run ID**.
-2. Select **Open run**.
-3. Complete [run-bound sign-in](./onboarding-auth.md#open-an-existing-run).
+1. Open **Orchestrations** for the project.
+2. Find the run under **In progress** or **Finished**.
+3. Select **Open**.
+4. If the run page asks, complete
+   [run sign-in](./onboarding-auth.md#open-an-existing-run).
 
-The app navigates to `/projects/:projectId/runs/:runId`. This action does not
-create a run or enumerate run history. See [Runs and sessions](./runs-sessions.md)
-for the data the run page reads.
+**Orchestrations** lists the runs you opened in this browser for this project.
+A status summary shows how many runs are in each state. Each row shows the
+state when you last opened the run and when you opened it. Select **Remove** to
+take a run off the list. Removing doesn't change the run. Select **Refresh** to
+reload the list. When the list is empty, it shows **Runs you open appear
+here.** Signing out clears the list.
+
+You don't type a run ID. A full run list needs a future service API (gap G2).
+See [Runs and sessions](./runs-sessions.md) for the data the run page reads.
 
 ## Understand project states and errors
 
 - A loading indicator appears while a project request is pending.
-- An empty list means the owner returned no projects for the current identity
-  and role assignments.
-- Failed requests show the HTTP status and structured error code when present.
+- An empty gallery shows **No projects yet**. The owner returned no projects
+  for the current identity and role assignments.
+- Failed requests show the error message and structured error code when present.
 - The app rejects a project response that does not match the route's project ID.
 - Project access and configuration access are separate owner checks. Listing a
   project does not grant permission to change it.
 
-The v1 browser has no controls for project deletion, a kanban board, repository
-cloning, or automatic project setup.
+You can rename, archive, and restore a project in
+[Project settings](./configuration.md). The v1 browser has no controls for
+project deletion, a kanban board, or repository cloning.
 
 ## Requests
 
@@ -72,8 +105,10 @@ confirm deployment.
 | --- | --- | --- |
 | List or refresh | `GET /api/v1/projects` | Returns projects visible to the current caller. |
 | Create | `POST /api/v1/projects` with `{ "name": "..." }` | Creates a project in the selected tenant; it does not grant project roles. |
-| Read overview | `GET /api/v1/projects/{projectId}` | Returns the project summary. |
-| Open run | Browser navigation only | The run page then reads its own APIs. |
+| Read the project | `GET /api/v1/projects/{projectId}` | Returns the project summary. |
+| Read configuration | `GET /api/v1/projects/{projectId}/configuration` | Returns the configuration that the Dashboard readiness card uses. |
+| Save the GitHub repository | `PUT /api/v1/projects/{projectId}/configuration` | Saves the repository for a project created from a GitHub repository. |
+| Open a run | Browser navigation only | The run page then reads its own APIs. The recent-runs list is stored only in this browser. |
 
 The app includes the tenant selector only when its current authorization
 context confirms one. See the

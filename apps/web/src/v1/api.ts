@@ -26,6 +26,9 @@ import type {
   OwnerRunStatus,
   ProjectAuthorizationContextResponse,
   ProjectConfiguration,
+  ProjectRole,
+  ProjectRoleAssignment,
+  ProjectRoleAssignmentList,
   SkillAssignmentRequest,
   SkillContentCandidateRequest,
   SkillContentInventoryPage,
@@ -190,6 +193,72 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId)}`,
       {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Lists active role assignments. TenantAdmin or the project Owner only; returns 403 otherwise. */
+  async listProjectRoleAssignments(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectRoleAssignmentList> {
+    const result = await this.request<ProjectRoleAssignmentList>(
+      token, `/projects/${encodeSegments(projectId)}/role-assignments`, {}, this.baseUrl, tenantSelector,
+    );
+    if (result?.projectId !== projectId || !Array.isArray(result.assignments))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned role assignments for a different project.');
+    return result;
+  }
+
+  /** Assigns a role to a member. TenantAdmin only; 409 `role_assignment_exists` for duplicates. */
+  assignProjectRole(
+    token: string,
+    projectId: string,
+    request: { principalId: string; role: ProjectRole },
+    tenantSelector?: string | null,
+  ): Promise<ProjectRoleAssignment> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId)}/role-assignments`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Revokes one assignment at its current revision. TenantAdmin only. */
+  revokeProjectRoleAssignment(
+    token: string,
+    projectId: string,
+    assignmentId: string,
+    expectedRevision: number,
+    tenantSelector?: string | null,
+  ): Promise<unknown> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId)}/role-assignments/${encodeSegments(assignmentId)}?expectedRevision=${expectedRevision}`,
+      { method: 'DELETE' },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Renames or archives a project. The owner rejects the write when
+   * `expectedRevision` is stale, so callers must send the revision they displayed.
+   */
+  updateProject(
+    token: string,
+    projectId: string,
+    request: { expectedRevision: number; name: string; state: ProjectSummary['state'] },
+    tenantSelector?: string | null,
+  ): Promise<ProjectSummary> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId)}`,
+      { method: 'PATCH', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
     );

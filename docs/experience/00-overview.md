@@ -12,7 +12,7 @@ checked-in web implementation; it does not confirm that a service is deployed.
 | Identity Broker | The OAuth service that signs you in and issues access tokens after checking current grants. |
 | Owner | The service responsible for validating an operation and storing its authoritative state. |
 | Project | The workspace scope for project configuration and access. |
-| Run | An existing execution identified within one project. The browser does not create or schedule runs. |
+| Run | An existing execution within one project. The browser does not create or schedule runs yet. |
 | Session | A node in a run's owner-reported session tree. |
 | Run-bound token | A Broker token authorized for one exact project and run pair. |
 
@@ -28,47 +28,55 @@ and the authorization checks behind Agentweaver scopes.
 ## What you can do
 
 1. [Sign in](./onboarding-auth.md) through the Identity Broker.
-2. [Choose or create a project](./projects.md).
-3. [Edit project configuration](./configuration.md), [manage skills](./skills.md),
+2. Start on **Overview**. It shows your projects, the runs you opened in this
+   browser, and the items that need your input.
+3. [Choose or create a project](./projects.md).
+4. [Edit project settings](./configuration.md), [manage skills](./skills.md),
    and [connect accounts](./connections.md).
-4. Open a run by its exact ID.
-5. [Inspect sessions and respond to requests](./runs-sessions.md).
-6. [Review Knowledge](./knowledge.md) for an exact project, run, and agent.
+5. Open a run from **Recent runs in this browser**.
+6. [Inspect sessions and respond to requests](./runs-sessions.md).
+7. [Review memories](./knowledge.md) for a run and an agent.
 
-The browser has no run-creation or scheduling form. It needs accepted owner
-state for an existing run before it can display that run.
+You don't type a run ID. A run appears in **Recent runs in this browser** after
+you open it once in this browser, for example from a link or a notification.
+The browser can't start a new chat or run yet. That needs a service API that
+doesn't exist yet (gap G1). A full run list also needs a future service API
+(gap G2).
 
 ## Browser routes
 
 | Route | What you can do |
 | --- | --- |
-| `/projects` | List projects visible to your current identity and create a project. |
-| `/projects/:projectId` | Read project lifecycle and revision details, then open an existing run by ID. |
-| `/projects/:projectId/orchestrations` | Open an existing run by its exact ID. |
-| `/projects/:projectId/settings` | Edit configuration, view earlier revisions, manage connections, and use Skills and marketplace. |
+| `/` | Opens `/overview`. |
+| `/overview` | Read a summary of your projects, **Recent runs in this browser**, and **Needs attention**. |
+| `/projects` | Browse project tiles and create a project. |
+| `/projects/:projectId` | Read the project **Dashboard**: setup readiness, recent runs, team, and quick actions. |
+| `/projects/:projectId/orchestrations` | Read this project's runs from this browser, grouped by state, and open a run. |
+| `/projects/:projectId/team` | Review the project's agents and edit an agent's charter. |
 | `/projects/:projectId/skills` | Browse, preview, import, and assign Skills. |
-| `/projects/:projectId/team` | Review the project's agents. |
-| `/projects/:projectId/memories` | Search, write, review, version, and transfer exact-scope records. `/knowledge` opens the same page. |
-| `/settings` | Clear the session and manage the Repo App account. |
-| `/projects/:projectId/runs/:runId` | Inspect Topology, Chat, Outcomes & approvals, Activity, Selection, and Usage. |
+| `/projects/:projectId/memories` | Search, write, review, version, and transfer memories for a run and an agent. `/knowledge` opens the same page. |
+| `/projects/:projectId/settings?section=<key>` | Edit project settings by section. |
+| `/settings` | Sign out and manage the GitHub Repo App account. |
+| `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. |
 
-The run page's `view` query parameter accepts `topology`, `chat`, `approvals`,
-`activity`, `selection`, or `usage`. An invalid value selects `topology`. The
-older `/projects/:projectId/orchestrations/:runId` route redirects to the run
-route.
+The run page's `view` query parameter accepts `chat`, `topology`,
+`approvals`, `activity`, `changes`, `usage`, or `selection` (**Run settings**).
+**Chat** opens by default and for an unknown `view` value. The older
+`/projects/:projectId/orchestrations/:runId` route redirects to the run route.
 
-Navigation hides 0.x destinations that have no v1 API, such as Board, Flow,
-Workspace, Workflows, Observability, Diagnostics, Heartbeat, Cluster, Assistant,
-and Platform settings. Their old addresses open one **Not available in this
-version** page that explains why and links back. Unknown addresses show **Page
-not found**.
+Navigation hides 0.x destinations that have no v1 API: Board, Flow,
+Workspace, Workflows, Observability, Diagnostics, Heartbeat, Cluster,
+Assistant, Platform settings, and Sessions. Their old addresses open one
+**Not available in this version** page that explains why and links back.
+Unknown addresses show **Page not found**.
 
-The shell shows **Run chat** only when your current Broker session is bound to
-an exact project and run. Otherwise, the control is hidden.
+The shell has a notification bell. It lists the questions and approvals that
+need your input in the run you have open. Select an item to open that run's
+**Approvals** tab.
 
 ## Model defaults
 
-In **Project settings > General**, set the default model reference and
+In **Project settings > Models**, set the default model reference and
 reasoning effort. If the saved default uses a credential, the form also shows
 **Model credential ID** and **Model credential version**. A credential belongs
 to one model. When you change the default model, the form clears the saved
@@ -85,9 +93,9 @@ Knowledge views request a token bound to the exact project and run. The app
 reads current tenant context from `GET /api/v1/authorization/context`; it does
 not infer a tenant from an ID in the browser URL.
 
-Creating a project does not assign an Owner. A tenant administrator grants
-project access through the owner authority. Browser controls do not grant
-permissions.
+Creating a project does not make you its owner. A tenant administrator grants
+project access. In **Project settings > Access**, a tenant administrator can
+add and remove project members when the service supports role changes.
 
 ## Read state before you act
 

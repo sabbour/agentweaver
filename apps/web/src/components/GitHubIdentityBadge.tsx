@@ -18,7 +18,7 @@ import {
 import { ChevronDownRegular, PersonRegular, SignOutRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { clearSessionAuth } from '../config';
-import type { AuthSessionResponse, ProjectAccessOverview, ProjectCopilotConnection } from '../api/types';
+import type { AuthSessionResponse, ProjectCopilotConnection } from '../api/types';
 import type { ReactNode } from 'react';
 
 const useStyles = makeStyles({
@@ -145,19 +145,6 @@ function connectionStatus(connection: ProjectCopilotConnection | null): string {
   return 'Not connected';
 }
 
-function repositoryStatus(access: ProjectAccessOverview | null): string {
-  return access?.effective_github_login
-    ? `Repository access: @${access.effective_github_login}`
-    : 'Repository access: not connected';
-}
-
-function formatProjectAccessStatusError(err: unknown): string {
-  if (err instanceof ApiError && err.status === 404) {
-    return 'Repository access status is unavailable because this deployment did not return a project access snapshot.';
-  }
-  return formatApiErrorMessage(err, 'Could not load the repository access status.');
-}
-
 function formatProjectCopilotStatusError(err: unknown): string {
   if (err instanceof ApiError) {
     switch (parseApiBody(err.body).error) {
@@ -179,8 +166,9 @@ export interface GitHubIdentityBadgeProps {
 }
 
 /**
- * Loads and renders the GitHub identity associated with the supplied account or connection
- * through the API. The effect tracks loading and failures; props control the target and display.
+ * Loads and renders the signed-in GitHub identity and, when a project is supplied, that
+ * project's Copilot model-provider connection through the API. The effects track loading and
+ * failures; props control the target and display.
  */
 export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHubIdentityBadgeProps) {
   const styles = useStyles();
@@ -189,8 +177,6 @@ export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHub
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [connection, setConnection] = useState<ProjectCopilotConnection | null>(null);
   const [connectionLoading, setConnectionLoading] = useState(false);
-  const [access, setAccess] = useState<ProjectAccessOverview | null>(null);
-  const [accessError, setAccessError] = useState<string | null>(null);
   const [copilotConnectionError, setCopilotConnectionError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
 
@@ -217,29 +203,20 @@ export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHub
     queueMicrotask(() => {
       if (!active) return;
       setConnectionLoading(true);
-      setAccessError(null);
       setCopilotConnectionError(null);
-      void Promise.allSettled([
-        apiClient.getProjectCopilotConnection(projectId),
-        apiClient.getProjectAccessOverview(projectId),
-      ]).then(([connectionResult, accessResult]) => {
-        if (!active) return;
-        if (connectionResult.status === 'fulfilled') {
-          setConnection(connectionResult.value);
-        } else {
+      void apiClient.getProjectCopilotConnection(projectId)
+        .then((nextConnection) => {
+          if (!active) return;
+          setConnection(nextConnection);
+        })
+        .catch((err: unknown) => {
+          if (!active) return;
           setConnection(null);
-          setCopilotConnectionError(formatProjectCopilotStatusError(connectionResult.reason));
-        }
-
-        if (accessResult.status === 'fulfilled') {
-          setAccess(accessResult.value);
-        } else {
-          setAccess(null);
-          setAccessError(formatProjectAccessStatusError(accessResult.reason));
-        }
-      }).finally(() => {
-        if (active) setConnectionLoading(false);
-      });
+          setCopilotConnectionError(formatProjectCopilotStatusError(err));
+        })
+        .finally(() => {
+          if (active) setConnectionLoading(false);
+        });
     });
 
     return () => {
@@ -313,15 +290,6 @@ export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHub
           {projectId && (
             <>
               <Divider />
-              <div className={styles.section}>
-                <Text weight="semibold">Repository access</Text>
-                {connectionLoading && <Spinner label="Loading repository access status" size="extra-tiny" />}
-                {!connectionLoading && (
-                  <Text size={200} className={styles.secondary}>
-                    {accessError ?? repositoryStatus(access)}
-                  </Text>
-                )}
-              </div>
               <div className={styles.section}>
                 <Text weight="semibold">Model provider</Text>
                 {connectionLoading && <Spinner label="Loading model provider status" size="extra-tiny" />}

@@ -7,18 +7,15 @@ import '@xyflow/react/dist/style.css';
 import { ReactFlow, Background, Controls, MiniMap } from '@xyflow/react';
 import '../components/shell/shell.css';
 import './styles.css';
-import { FluentProvider, Button, Badge, Field, Input, Textarea, Spinner, TabList, Tab, MessageBar, MessageBarBody } from '@fluentui/react-components';
+import { FluentProvider, Button, Badge, Field, Input, Textarea, TabList, Tab, MessageBar, MessageBarBody, Radio, RadioGroup, Text } from '@fluentui/react-components';
 import {
   AddRegular,
-  BookToolbox24Regular,
+  ArrowClockwiseRegular,
   Brain24Regular,
   Chat24Regular,
   Flowchart24Regular,
-  Settings24Regular,
 } from '@fluentui/react-icons';
-import { ApprovalGate } from '../components/ui/agentic';
 import { agentweaverLightTheme } from '../theme';
-import { PageHeader } from '../components/ui/PageHeader';
 import { PageSection } from '../components/ui/PageSection';
 import { Tile, TileGrid } from '../components/ui/TileGrid';
 import { AppDialog } from '../components/ui/AppDialog';
@@ -42,7 +39,7 @@ import {
   useParams,
   useSearchParams,
 } from 'react-router-dom';
-import type { FormEvent, ReactNode } from 'react';
+import type { FormEvent } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AuthProvider, useAuth } from './AuthContext';
 import { ConsentScreen } from './ConsentScreen';
@@ -64,7 +61,6 @@ import {
   REPO_APP_CALLBACK_MESSAGE_TYPE,
   REPO_APP_CALLBACK_PATH,
   repoAppBrokerClient,
-  RepoAppBrokerError,
 } from './repoApp';
 import type { RepoAppConnectionStatus, RepoAppRepository } from './repoApp';
 import type {
@@ -76,7 +72,6 @@ import type {
   ProjectConfiguration,
   ProjectSummary,
   SessionEventEnvelope,
-  SessionStatusBlocker,
   SessionStatusSnapshot,
   SessionTreeNode,
   SessionTreeSnapshot,
@@ -87,22 +82,21 @@ import type {
 } from './contracts';
 import type { RunBinding } from './authProtocol';
 import { useRunJournal } from './useRunJournal';
-
-/** Formats Gateway and unexpected failures for display in page-level notices. */
-function errorMessage(error: unknown): string {
-  if (error instanceof GatewayError) {
-    const code = error.code ? ` (${error.code})` : '';
-    return `HTTP ${error.status}${code}: ${error.message}`;
-  }
-  return error instanceof Error ? error.message : 'The request failed unexpectedly.';
-}
-
-/** Extracts a stable API error code when an action needs code-specific handling. */
-function errorCode(error: unknown): string | undefined {
-  return error instanceof GatewayError || error instanceof RepoAppBrokerError
-    ? error.code
-    : undefined;
-}
+import { errorCode, errorMessage } from './errors';
+import { ErrorNotice, Loading, PageHeading, Panel } from './pageParts';
+import { rememberRun } from './recentRuns';
+import { DecisionList } from './DecisionView';
+import { NewChatComposer } from './NewChatComposer';
+import { PlatformComponentsTable } from './PlatformComponentsTable';
+import { runState } from './runState';
+import { DashboardPage } from './DashboardPage';
+import { OverviewPage } from './OverviewPage';
+import { OrchestrationsPage } from './OrchestrationsPage';
+import { AgentsView } from './AgentsView';
+import { accessSummary, permissionsForProject, useAuthorizationContext, useProjectConfiguration, useProjectSummary } from './projectData';
+import { useBrowserRunList } from './runListData';
+import { CONFIGURATION_SECTIONS, SETTINGS_SECTIONS, settingsSection } from './settingsSections';
+import { AccessSection, DangerZoneSection, GeneralSection, RepositoryFields, RunLimitsFields } from './ProjectSettingsSections';
 
 /** Checks that a callback or response still refers to the selected project/run pair. */
 function isSameBinding(
@@ -112,7 +106,8 @@ function isSameBinding(
   return actual?.projectId === expected?.projectId && actual?.runId === expected?.runId;
 }
 
-const RUN_TAB_VALUES = ['topology', 'chat', 'approvals', 'activity', 'selection', 'usage'] as const;
+/** Run page tabs in display order. Chat is first, matching the 0.x run page. */
+const RUN_TAB_VALUES = ['chat', 'topology', 'approvals', 'activity', 'changes', 'usage', 'selection'] as const;
 /** URL-backed views available on the run page. */
 type RunTab = typeof RUN_TAB_VALUES[number];
 /** Maximum lifetime for a GitHub App setup popup. */
@@ -123,23 +118,6 @@ const REPO_APP_POPUP_POLL_INTERVAL_MS = 500;
 /** Narrows the URL's view query to a supported run tab. */
 function isRunTab(value: string | null): value is RunTab {
   return value !== null && RUN_TAB_VALUES.includes(value as RunTab);
-}
-
-/** Accessible error banner shared by authentication and data pages. */
-function ErrorNotice({ children, code }: { children: ReactNode; code?: string }) {
-  return (
-    <MessageBar intent="error" role="alert">
-      <MessageBarBody>
-        {code && <strong>{code}: </strong>}
-        {children}
-      </MessageBarBody>
-    </MessageBar>
-  );
-}
-
-/** Shared loading indicator for route content awaiting Gateway data. */
-function Loading({ label = 'Loading from the Gateway…' }: { label?: string }) {
-  return <div className="v1-loading"><Spinner label={label} /></div>;
 }
 
 /** Starts Broker authorization and explains how the Web session is restored. */
@@ -157,36 +135,35 @@ function SignInScreen() {
         >
           {busy ? 'Signing in…' : 'Sign in'}
         </Button>}
-      note="Your sign-in stays in this tab. After a reload, Agentweaver tries to restore it once. If it cannot, sign in again."
     />
   );
 }
 
-/** Standard page title, optional description, and aligned page actions. */
-function PageHeading({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
-  const { projectId } = useParams();
-  return <PageHeader title={title} description={description} actions={<>
-    {projectId && <Badge appearance="outline" title="The current API does not return role names.">Role unavailable</Badge>}
-    {actions}
-  </>} />;
+/** Splits `owner/name` or a github.com URL into repository parts, or returns null. */
+function parseRepository(value: string): { owner: string; name: string } | null {
+  const match = value.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').match(/^([\w.-]+)\/([\w.-]+)\/?$/);
+  return match ? { owner: match[1], name: match[2] } : null;
 }
 
-/** Standard titled content panel with an optional action area. */
-function Panel({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
-  return <PageSection title={title} actions={actions}>{children}</PageSection>;
-}
-
-/** Lists the owner's projects and handles project creation and navigation. */
+/**
+ * Lists the owner's projects and creates new ones. "GitHub repository" creates
+ * the project, then saves the repository in its configuration. That second
+ * write needs access to the new project, so a caller without a grant gets the
+ * project without the repository and a note to add it later.
+ */
 function ProjectsPage() {
   const { apiCall } = useAuth();
   const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectName, setProjectName] = useState('');
+  const [startFrom, setStartFrom] = useState<'blank' | 'github'>('blank');
+  const [repositoryInput, setRepositoryInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const authorization = useAuthorizationContext();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -208,9 +185,12 @@ function ProjectsPage() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  const repository = startFrom === 'github' ? parseRepository(repositoryInput) : null;
+  const createDisabled = busy || !projectName.trim() || (startFrom === 'github' && !repository);
+
   const create = async (event: FormEvent) => {
     event.preventDefault();
-    if (!projectName.trim()) return;
+    if (createDisabled) return;
     setBusy(true);
     setError(null);
     try {
@@ -218,8 +198,25 @@ function ProjectsPage() {
         (token, tenantSelector) => gatewayClient.createProject(token, projectName.trim(), tenantSelector),
         null,
       );
+      let message = `Project ${created.name} was created.`;
+      if (repository) {
+        try {
+          await apiCall(async (token, tenantSelector) => {
+            const current = await gatewayClient.getProjectConfiguration(token, created.projectId, tenantSelector);
+            const sourceControl = { ...(current.configuration.sourceControl ?? {}), repository, authMode: 'githubApp' as const };
+            return gatewayClient.updateProjectConfiguration(
+              token, created.projectId, current.revision, { ...current.configuration, sourceControl }, tenantSelector,
+            );
+          }, null);
+          message += ` It uses ${repository.owner}/${repository.name}.`;
+        } catch {
+          message += ` The repository was not saved. Add it in Settings > Repository after you have access.`;
+        }
+      }
       setProjectName('');
-      setNotice(`Project ${created.name} was created. A tenant administrator must grant access before you can open it.`);
+      setRepositoryInput('');
+      setStartFrom('blank');
+      setNotice(message);
       setCreateOpen(false);
       await load();
     } catch (reason) {
@@ -248,7 +245,7 @@ function ProjectsPage() {
                   primary={project.name}
                   secondary={project.projectId}
                   badges={<Badge appearance="tint" size="small" color={project.state === 'active' ? 'success' : 'subtle'}>{project.state}</Badge>}
-                  meta={<><Badge appearance="outline" size="small">Revision {project.revision}</Badge><Badge appearance="outline" size="small" title="The current API does not return role names.">Role unavailable</Badge></>}
+                  meta={<><Badge appearance="outline" size="small">Revision {project.revision}</Badge>{authorization.data && <Badge appearance="outline" size="small">{accessSummary(permissionsForProject(authorization.data, project.projectId))}</Badge>}</>}
                   actions={<Button appearance="primary" size="small" onClick={() => navigate(`/projects/${encodeURIComponent(project.projectId)}`)}>Open</Button>}
                   actionsAlwaysVisible
                   onClick={() => navigate(`/projects/${encodeURIComponent(project.projectId)}`)}
@@ -262,107 +259,29 @@ function ProjectsPage() {
             <Field label="Project name">
               <Input value={projectName} onChange={(_, data) => setProjectName(data.value)} maxLength={120} />
             </Field>
-            <Button appearance="primary" type="submit" disabled={busy || !projectName.trim()}>
+            <Field label="Start from">
+              <RadioGroup layout="horizontal" value={startFrom} onChange={(_, data) => setStartFrom(data.value as 'blank' | 'github')}>
+                <Radio value="blank" label="Blank project" />
+                <Radio value="github" label="GitHub repository" />
+              </RadioGroup>
+            </Field>
+            {startFrom === 'github' && (
+              <Field
+                label="Repository"
+                hint="For example, octo/agentweaver or its github.com address."
+                validationState={repositoryInput.trim() && !repository ? 'error' : 'none'}
+                validationMessage={repositoryInput.trim() && !repository ? 'Enter the repository as owner/name.' : undefined}
+              >
+                <Input value={repositoryInput} onChange={(_, data) => setRepositoryInput(data.value)} />
+              </Field>
+            )}
+            <Button appearance="primary" type="submit" disabled={createDisabled}>
               {busy ? 'Creating…' : 'Create project'}
             </Button>
-            <p className="v1-muted">Project creation does not assign an Owner. Ask a tenant administrator to grant current access if the project is not visible afterward.</p>
+            <p className="v1-muted">Creating a project does not make you its owner. If you can't open it afterward, ask a tenant administrator for access.</p>
             <Button appearance="transparent" onClick={() => setCreateOpen(false)}>Cancel</Button>
           </form>
       </AppDialog>
-    </>
-  );
-}
-
-/** Loads and displays one project's current Gateway-backed overview. */
-function ProjectOverviewPage({ runs = false }: { runs?: boolean }) {
-  const { projectId = '' } = useParams();
-  const { session, apiCall } = useAuth();
-  const [project, setProject] = useState<ProjectSummary | null>(null);
-  const [runId, setRunId] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<unknown>(null);
-  const [resultScope, setResultScope] = useState<string | null>(null);
-  const [projectScope, setProjectScope] = useState<string | null>(null);
-  const [errorScope, setErrorScope] = useState<string | null>(null);
-  const requestScope = JSON.stringify([session?.accessToken ?? null, projectId]);
-
-  useEffect(() => {
-    let active = true;
-    const scope = requestScope;
-    const timer = window.setTimeout(() => {
-      if (!active) return;
-      setLoading(true);
-      setError(null);
-      setErrorScope(null);
-      void apiCall(
-        (token, tenantSelector) => gatewayClient.getProject(token, projectId, tenantSelector),
-        null,
-      )
-        .then((result) => {
-          if (!active) return;
-          if (result.projectId !== projectId)
-            throw new Error('Projects & Config returned a project outside this exact route.');
-          setProject(result);
-          setProjectScope(scope);
-          setResultScope(scope);
-        })
-        .catch((reason: unknown) => {
-          if (!active) return;
-          setError(reason);
-          setErrorScope(scope);
-          setResultScope(scope);
-        })
-        .finally(() => { if (active) setLoading(false); });
-    }, 0);
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [apiCall, projectId, requestScope]);
-
-  const currentProject = projectScope === requestScope ? project : null;
-  const currentError = errorScope === requestScope ? error : null;
-  const currentLoading = loading || resultScope !== requestScope;
-
-  return (
-    <>
-      <PageHeading title={runs ? 'Orchestrations' : 'Dashboard'} description={currentProject?.name ?? `Project ${projectId}`} />
-      {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
-      {currentLoading ? <Loading /> : currentProject && (
-        <div className="v1-columns">
-          <Panel title="Project state">
-            <dl className="v1-detail-list">
-              <div><dt>Lifecycle</dt><dd>{currentProject.state}</dd></div>
-              <div><dt>Revision</dt><dd>{currentProject.revision}</dd></div>
-              <div><dt>Configuration revision</dt><dd>{currentProject.configurationRevision}</dd></div>
-            </dl>
-            <div className="v1-actions v1-project-actions">
-              <Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/settings`}><Settings24Regular /> Configuration</Link>
-              <Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/knowledge`}><BookToolbox24Regular /> Knowledge</Link>
-            </div>
-          </Panel>
-          <Panel title="Open an existing run">
-            <form className="v1-form" onSubmit={(event) => { event.preventDefault(); }}>
-              <Field label="Exact run ID">
-                <Input value={runId} onChange={(_, data) => setRunId(data.value)} />
-              </Field>
-              <Button
-                appearance="primary"
-                disabled={!runId.trim()}
-                onClick={() => {
-                  if (runId.trim()) window.location.assign(`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId.trim())}`);
-                }}
-              >
-                Open run
-              </Button>
-              <p className="v1-muted">
-                Run creation and scheduling are not exposed by this Gateway contract. Enter an existing run ID;
-                the page reads owner snapshots, committed journal events, and usage only.
-              </p>
-            </form>
-          </Panel>
-        </div>
-      )}
     </>
   );
 }
@@ -631,6 +550,9 @@ function ProjectRepoAppConnectionPanel() {
 function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | 'skills' | 'agents' }) {
   const { projectId = '' } = useParams();
   const { session, apiCall } = useAuth();
+  const [searchParams] = useSearchParams();
+  const section = settingsSection(searchParams.get('section'));
+  const project = useProjectSummary(view === 'settings' ? projectId : '');
   const [versioned, setVersioned] = useState<VersionedProjectConfiguration | null>(null);
   const [editor, setEditor] = useState('');
   const [configurationDraft, setConfigurationDraft] = useState<ProjectConfiguration | null>(null);
@@ -689,22 +611,11 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     };
   }, [load, requestScope]);
 
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
+  /** Saves a full configuration document against the loaded revision. Resolves true on success. */
+  const persist = async (configuration: ProjectConfiguration): Promise<boolean> => {
     const scope = requestScope;
-    if (!versioned || loadedScope !== scope || versioned.projectId !== projectId || skillAssignmentPending) return;
-    let configuration: ProjectConfiguration;
-    try {
-      const parsed: unknown = JSON.parse(editor);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-        throw new Error('Configuration must be a JSON object.');
-      configuration = parsed as ProjectConfiguration;
-    } catch (reason) {
-      setError(reason);
-      setErrorScope(scope);
-      return;
-    }
-    if (needsModelCredential(configuration, versioned.configuration.modelSelection)) return;
+    if (!versioned || loadedScope !== scope || versioned.projectId !== projectId || skillAssignmentPending) return false;
+    if (needsModelCredential(configuration, versioned.configuration.modelSelection)) return false;
     setSavingScope(scope);
     setError(null);
     setErrorScope(null);
@@ -717,22 +628,40 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
         ),
         null,
       );
-      if (activeScope.current !== scope) return;
+      if (activeScope.current !== scope) return false;
       if (updated.projectId !== projectId)
         throw new Error('Projects & Config returned an update for a different project.');
       setVersioned(updated);
       setEditor(JSON.stringify(updated.configuration, null, 2));
       setConfigurationDraft(updated.configuration);
-      setNotice(`Configuration revision ${updated.revision} saved. Existing accepted runs retain their immutable selections.`);
+      setNotice(`Configuration revision ${updated.revision} saved. Runs that already started keep their settings.`);
       setNoticeScope(scope);
+      return true;
     } catch (reason) {
-      if (activeScope.current !== scope) return;
+      if (activeScope.current !== scope) return false;
       setError(reason);
       setErrorScope(scope);
+      return false;
     } finally {
       if (activeScope.current === scope)
         setSavingScope(null);
     }
+  };
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    let configuration: ProjectConfiguration;
+    try {
+      const parsed: unknown = JSON.parse(editor);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        throw new Error('Configuration must be a JSON object.');
+      configuration = parsed as ProjectConfiguration;
+    } catch (reason) {
+      setError(reason);
+      setErrorScope(requestScope);
+      return;
+    }
+    await persist(configuration);
   };
 
   const currentError = errorScope === requestScope ? error : null;
@@ -812,96 +741,127 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
         ? 'Save or reload the edited project configuration before assigning a skill.'
         : null;
 
-  return (
+  const busy = savingScope === requestScope || skillAssignmentPending;
+  const draftInSync = Boolean(configurationDraft && editor === JSON.stringify(configurationDraft, null, 2));
+  const fieldProps = configurationDraft ? {
+    configuration: configurationDraft,
+    readOnly: busy || !draftInSync,
+    onChange: (next: ProjectConfiguration) => { setConfigurationDraft(next); setEditor(JSON.stringify(next, null, 2)); },
+  } : null;
+  const saveDisabled = busy || !editor.trim()
+    || Boolean(currentConfiguration && editor === JSON.stringify(currentConfiguration.configuration, null, 2))
+    || Boolean(configurationDraft && draftInSync && currentConfiguration
+      && needsModelCredential(configurationDraft, currentConfiguration.configuration.modelSelection));
+  const statusMessages = (
     <>
-      <PageHeading title={view === 'skills' ? 'Skills' : view === 'agents' ? 'Agents' : 'Project settings'} description={view === 'settings' ? 'Manage project configuration, account connections, and skills.' : 'Manage the team and skills for this project.'} />
-      <div className={view === 'settings' ? 'v1-settings-layout' : 'v1-stack'}>
-      {view === 'settings' && (
-        <nav className="v1-settings-rail" aria-label="Settings sections">
-          <a href="#general">General</a>
-          <a href="#history">History</a>
-          <a href="#connections">Connections</a>
-          <Link to={`/projects/${encodeURIComponent(projectId)}/skills`}>Skills</Link>
-        </nav>
-      )}
-      <div className="v1-stack v1-settings-pane">
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="success"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
-      {currentLoading ? <Loading /> : currentConfiguration && (
-        <>
-          {view === 'agents' && (
-            <TileGrid aria-label="Agents">
-              {currentConfiguration.configuration.agentCharters.map((agent) => (
-                <Tile key={agent.agentId} primary={agent.name} secondary={agent.role}
-                  meta={currentConfiguration.configuration.casting.some((item) => item.agentId === agent.agentId) ? 'In the team' : 'Not in the team'}
-                  actions={<Link to={`/projects/${encodeURIComponent(projectId)}/memories?agentId=${encodeURIComponent(agent.agentId)}`}>Memories</Link>}
-                  actionsAlwaysVisible />
-              ))}
-              {currentConfiguration.configuration.agentCharters.length === 0 && <EmptyState title="No agents yet" description="Add agent charters and team assignments in Project settings." />}
-            </TileGrid>
+    </>
+  );
+
+  if (view === 'agents') return (
+    <>
+      <PageHeading title="Agents" description="The cast working on this project." page="Agents" />
+      {statusMessages}
+      {currentLoading ? <Loading label="Loading agents" /> : currentConfiguration && (
+        <AgentsView projectId={projectId} configuration={currentConfiguration.configuration} readOnly={busy} onSave={persist} />
+      )}
+    </>
+  );
+
+  if (view === 'skills') return (
+    <>
+      <PageHeading title="Skills" description="Reusable instructions your agents can use. Browse a marketplace, preview a skill, then import and assign it." page="Skills" />
+      {statusMessages}
+      {currentLoading ? <Loading label="Loading skills" /> : currentConfiguration && (
+        <SkillsMarketplacePanel
+          projectId={projectId}
+          configurationRevision={currentConfiguration.revision}
+          assignments={currentConfiguration.configuration.skills}
+          agents={skillAgents}
+          actions={session ? skillActions : null}
+          assignmentDisabledReason={assignmentDisabledReason}
+          onAssignmentPendingChange={setSkillAssignmentPending}
+          onConfigurationChanged={(updated) => {
+            if (activeScope.current !== requestScope || updated.projectId !== projectId) return;
+            setVersioned(updated);
+            setEditor(JSON.stringify(updated.configuration, null, 2));
+            setConfigurationDraft(updated.configuration);
+            setError(null);
+            setErrorScope(null);
+          }}
+        />
+      )}
+    </>
+  );
+
+  const base = `/projects/${encodeURIComponent(projectId)}/settings`;
+  return (
+    <>
+      <PageHeading title="Project settings" description="Configure how this project runs." page="Settings" />
+      <div className="v1-settings-layout">
+        <nav className="v1-settings-rail" aria-label="Settings sections">
+          {SETTINGS_SECTIONS.map((item) => (
+            <Link key={item.key} to={`${base}?section=${item.key}`}
+              className={item.key === 'danger' ? 'v1-settings-rail__danger' : undefined}
+              aria-current={item.key === section ? 'page' : undefined}>
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+        <div className="v1-stack v1-settings-pane">
+          {statusMessages}
+          {section === 'general' && (project.data
+            ? <GeneralSection key={project.data.revision} project={project.data} onUpdated={project.replace} />
+            : project.error != null ? <ErrorNotice code={errorCode(project.error)}>{errorMessage(project.error)}</ErrorNotice> : <Loading />)}
+          {section === 'access' && <AccessSection projectId={projectId} />}
+          {section === 'danger' && (project.data
+            ? <DangerZoneSection project={project.data} onUpdated={project.replace} />
+            : project.error != null ? <ErrorNotice code={errorCode(project.error)}>{errorMessage(project.error)}</ErrorNotice> : <Loading />)}
+          {section === 'connections' && (
+            <>
+              <PageSection title="Connections" description="Connect the accounts and tools this project needs." />
+              <ProjectRepoAppConnectionPanel />
+              <CopilotUserConnectionPanel projectId={projectId} />
+              <RemoteMcpConnectionPanel key={requestScope} projectId={projectId} configurationRevision={currentConfiguration?.revision ?? null} />
+            </>
           )}
-          {view === 'settings' && <section id="general"><Panel title={`Revision ${currentConfiguration.revision}`}>
+          {section === 'history' && (currentLoading ? <Loading /> : currentConfiguration && (
+            <ConfigurationHistory key={`${requestScope}/${currentConfiguration.revision}`}
+              projectId={projectId} currentRevision={currentConfiguration.revision} />
+          ))}
+          {CONFIGURATION_SECTIONS.has(section) && (currentLoading ? <Loading /> : currentConfiguration && fieldProps && (
             <form className="v1-form" onSubmit={(event) => void save(event)}>
-              {configurationDraft && <ConfigurationFields configuration={configurationDraft}
-                savedSelection={currentConfiguration.configuration.modelSelection}
-                readOnly={skillAssignmentPending || savingScope === requestScope || editor !== JSON.stringify(configurationDraft, null, 2)}
-                onChange={(next) => { setConfigurationDraft(next); setEditor(JSON.stringify(next, null, 2)); }} />}
-              <details>
-              <summary>Advanced: edit configuration JSON</summary>
-              <p className="v1-muted">The complete document preserves other settings and saved references. After changing JSON, save or reload before using the readable fields.</p>
-              <Field label="Typed ProjectConfiguration JSON" hint="Keep the complete document to preserve other settings and saved connection references. Do not enter passwords or tokens.">
-                <Textarea
-                  className="v1-json-editor"
-                  value={editor}
-                  onChange={(_, data) => {
-                    if (!skillAssignmentPending) setEditor(data.value);
-                  }}
-                  readOnly={skillAssignmentPending}
-                  resize="vertical"
-                  rows={24}
-                  spellCheck={false}
-                />
-              </Field>
-              </details>
+              {section === 'repository' && <RepositoryFields {...fieldProps} />}
+              {section === 'models' && <ConfigurationFields {...fieldProps} part="models" savedSelection={currentConfiguration.configuration.modelSelection} />}
+              {section === 'components' && <ConfigurationFields {...fieldProps} part="components" savedSelection={currentConfiguration.configuration.modelSelection} />}
+              {section === 'limits' && <RunLimitsFields {...fieldProps} />}
+              {section === 'advanced' && (
+                <PageSection title="Advanced" description="Edit the full configuration as JSON. Keep every field to preserve other settings and saved references. Do not enter passwords or tokens.">
+                  <Field label="Configuration JSON">
+                    <Textarea
+                      className="v1-json-editor"
+                      value={editor}
+                      onChange={(_, data) => { if (!skillAssignmentPending) setEditor(data.value); }}
+                      readOnly={skillAssignmentPending}
+                      resize="vertical"
+                      rows={24}
+                      spellCheck={false}
+                    />
+                  </Field>
+                  {!draftInSync && <p className="v1-muted">Save or reload before you use the other sections.</p>}
+                </PageSection>
+              )}
               <div className="v1-actions">
-                <Button appearance="primary" type="submit" disabled={savingScope === requestScope || skillAssignmentPending || !editor.trim()
-                  || Boolean(configurationDraft && editor === JSON.stringify(configurationDraft, null, 2)
-                    && needsModelCredential(configurationDraft, currentConfiguration.configuration.modelSelection))}>
+                <Button appearance="primary" type="submit" disabled={saveDisabled}>
                   {savingScope === requestScope ? 'Saving…' : 'Save changes'}
                 </Button>
-                <Button appearance="secondary" type="button" disabled={savingScope === requestScope || skillAssignmentPending} onClick={() => void load()}>Reload owner revision</Button>
+                <Button appearance="secondary" type="button" disabled={busy} onClick={() => void load()}>Reload</Button>
+                <Text size={200}>Revision {currentConfiguration.revision}</Text>
               </div>
             </form>
-          </Panel></section>}
-          {view === 'settings' && <section id="history"><ConfigurationHistory
-            key={`${requestScope}/${currentConfiguration.revision}`}
-            projectId={projectId} currentRevision={currentConfiguration.revision} /></section>}
-          {view === 'skills' && <section id="skills"><SkillsMarketplacePanel
-            projectId={projectId}
-            configurationRevision={currentConfiguration.revision}
-            assignments={currentConfiguration.configuration.skills}
-            agents={skillAgents}
-            actions={session ? skillActions : null}
-            assignmentDisabledReason={assignmentDisabledReason}
-            onAssignmentPendingChange={setSkillAssignmentPending}
-            onConfigurationChanged={(updated) => {
-              if (activeScope.current !== requestScope || updated.projectId !== projectId) return;
-              setVersioned(updated);
-              setEditor(JSON.stringify(updated.configuration, null, 2));
-              setConfigurationDraft(updated.configuration);
-              setError(null);
-              setErrorScope(null);
-            }}
-          /></section>}
-        </>
-      )}
-      {view === 'settings' && <section id="connections" className="v1-stack">
-        <PageSection title="Connections" description="Connect the accounts and tools this project needs." />
-        <ProjectRepoAppConnectionPanel />
-        <CopilotUserConnectionPanel projectId={projectId} />
-        <RemoteMcpConnectionPanel key={requestScope} projectId={projectId} configurationRevision={currentConfiguration?.revision ?? null} />
-      </section>}
-      </div>
+          ))}
+        </div>
       </div>
     </>
   );
@@ -1018,6 +978,23 @@ function KnowledgePage() {
     () => runId.trim() ? { projectId, runId: runId.trim() } : null,
     [projectId, runId],
   );
+  const recentRuns = useBrowserRunList(projectId);
+  const knowledgeConfiguration = useProjectConfiguration(projectId);
+  /** Recent runs in this browser, plus the run from the URL so a deep link keeps its choice. */
+  const runOptions = useMemo(() => {
+    const options = recentRuns.items.map((item) => ({ value: item.runId, label: `${item.runId} · ${runState(item.executionState).label}` }));
+    const current = searchParams.get('runId');
+    if (current && !options.some((option) => option.value === current)) options.unshift({ value: current, label: current });
+    return options;
+  }, [recentRuns.items, searchParams]);
+  /** Agents from the project configuration, plus the agent from the URL (for example, a session opened from Topology). */
+  const agentOptions = useMemo(() => {
+    const options = (knowledgeConfiguration.data?.configuration.agentCharters ?? [])
+      .map((agent) => ({ value: agent.agentId, label: `${agent.name} · ${agent.role}` }));
+    const current = searchParams.get('agentId');
+    if (current && !options.some((option) => option.value === current)) options.unshift({ value: current, label: current });
+    return options;
+  }, [knowledgeConfiguration.data, searchParams]);
   const correctlyScoped = isSameBinding(session?.binding, binding);
   const requestScope = JSON.stringify([
     session?.accessToken ?? null,
@@ -1498,36 +1475,49 @@ function KnowledgePage() {
 
   return (
     <>
-      <PageHeading title="Memories" description="Search and manage memories and decisions for a project, run, and agent." />
+      <PageHeading title="Memories" description="What your agents remember and decide. Choose a run and an agent to see their records." page="Memories" />
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="info"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
-      <Panel title="Knowledge scope">
-        <form className="v1-form v1-inline-form" onSubmit={setScope}>
-          <Field label="Exact run ID"><Input value={runId} onChange={(_, data) => setRunId(data.value)} /></Field>
-          <Field label="Exact agent ID"><Input value={agentId} onChange={(_, data) => setAgentId(data.value)} /></Field>
-          <Button appearance="primary" type="submit" disabled={!runId.trim() || !agentId.trim()}>Apply scope</Button>
-        </form>
+      <Panel title="Show memories for">
+        {runOptions.length === 0 ? (
+          <EmptyState title="No runs yet" description="Memories belong to a run. Open a run from Orchestrations, then come back here."
+            action={<Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/orchestrations`}>Open Orchestrations</Link>} />
+        ) : (
+          <form className="v1-form v1-inline-form" onSubmit={setScope}>
+            <Field label="Run">
+              <select className="v1-select" value={runId} onChange={(event) => setRunId(event.target.value)}>
+                <option value="">Choose a run</option>
+                {runOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Agent">
+              <select className="v1-select" value={agentId} onChange={(event) => setAgentId(event.target.value)}>
+                <option value="">Choose an agent</option>
+                {agentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </Field>
+            <Button appearance="primary" type="submit" disabled={!runId.trim() || !agentId.trim()}>Show memories</Button>
+          </form>
+        )}
         {binding && !correctlyScoped && (
           <div className="v1-scope-action">
-            <p className="v1-muted">A run-bound Broker token is required for this exact pair. No project or run identity is inferred from another token.</p>
-            <Button appearance="primary" onClick={() => void authorize(binding)}>Sign in for this project and run</Button>
+            <p className="v1-muted">You need to sign in again to read this run's memories.</p>
+            <Button appearance="primary" onClick={() => void authorize(binding)}>Sign in for this run</Button>
           </div>
         )}
       </Panel>
       {binding && correctlyScoped && agentId.trim() && (
         <>
-          <Panel title="Search Knowledge" actions={<Button appearance="subtle" onClick={() => void load()}>Refresh</Button>}>
+          <TabList selectedValue={kind} onTabSelect={(_, data) => { setPage(1); setKind(String(data.value)); }} aria-label="Memory kind">
+            <Tab value="">All</Tab>
+            <Tab value="memory">Memories</Tab>
+            <Tab value="decision">Decisions</Tab>
+            <Tab value="proposal">Proposals</Tab>
+            <Tab value="sessionContext">Session context</Tab>
+          </TabList>
+          <Panel title="Search" actions={<Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => void load()}>Refresh</Button>}>
             <form className="v1-form v1-inline-form" onSubmit={(event) => { event.preventDefault(); void load(); }}>
               <Field label="Search text"><Input value={query} onChange={(_, data) => { setPage(1); setQuery(data.value); }} /></Field>
-              <Field label="Kind">
-                <select className="v1-select" aria-label="Search Knowledge kind" value={kind} onChange={(event) => { setPage(1); setKind(event.target.value); }}>
-                  <option value="">All kinds</option>
-                  <option value="memory">Memory</option>
-                  <option value="proposal">Proposal</option>
-                  <option value="decision">Decision</option>
-                  <option value="sessionContext">Session context</option>
-                </select>
-              </Field>
               <label className="v1-checkbox"><input type="checkbox" checked={includeInactive} onChange={(event) => { setPage(1); setIncludeInactive(event.target.checked); }} /> Include inactive records</label>
               <Button appearance="secondary" type="submit">Search</Button>
             </form>
@@ -1553,7 +1543,7 @@ function KnowledgePage() {
                 Next page
               </Button>
             </div>
-            {loading || recordsScope !== requestScope ? <Loading /> : currentRecords.length === 0 ? <p className="v1-muted">No matching Knowledge records.</p> : (
+            {loading || recordsScope !== requestScope ? <Loading /> : currentRecords.length === 0 ? <p className="v1-muted">No matching records.</p> : (
               <div className="v1-record-list">
                 {currentRecords.map((record) => (
                   <article className="v1-record" key={record.recordId}>
@@ -1959,10 +1949,7 @@ function ChatView({
   const activeNodes = useMemo(() => nodes.filter((node) => node.lifecycle === 'active'), [nodes]);
   const [selectedFromSession, setSelectedFromSession] = useState('');
   const [selectedToSession, setSelectedToSession] = useState('');
-  const [text, setText] = useState('');
   const [pending, setPending] = useState<PendingMessage[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const fromSession = activeNodes.some((node) => node.identity.sessionId === selectedFromSession)
     ? selectedFromSession
@@ -1971,81 +1958,49 @@ function ChatView({
     node.identity.sessionId === selectedToSession && selectedToSession !== fromSession)
     ? selectedToSession
     : activeNodes.find((node) => node.identity.sessionId !== fromSession)?.identity.sessionId ?? '';
+  const sessionLabel = (node: SessionTreeNode) => `${node.kind} · ${node.identity.sessionId}`;
 
-  const send = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!fromSession || !toSession || fromSession === toSession || !text.trim()) return;
-    setBusy(true);
-    setError(null);
+  const send = async (text: string, idempotencyKey: string) => {
     setNotice(null);
-    try {
-      const idempotencyKey = crypto.randomUUID();
-      const result = await apiCall((token, tenantSelector) => gatewayClient.sendMessage(
-        token, projectId, runId, fromSession, toSession, text.trim(), idempotencyKey, 'immediate', tenantSelector,
-      ), { projectId, runId });
-      setPending((items) => [...items, {
-        id: result.ownerMessageId,
-        from: fromSession,
-        to: toSession,
-        text: text.trim(),
-        status: result.status,
-      }]);
-      setText('');
-      setNotice(`The owner accepted message ${result.ownerMessageId}. This receipt does not prove delivery or run completion.`);
-    } catch (reason) {
-      setError(reason);
-    } finally {
-      setBusy(false);
-    }
+    const result = await apiCall((token, tenantSelector) => gatewayClient.sendMessage(
+      token, projectId, runId, fromSession, toSession, text, idempotencyKey, 'immediate', tenantSelector,
+    ), { projectId, runId });
+    setPending((items) => [...items, { id: result.ownerMessageId, from: fromSession, to: toSession, text, status: result.status }]);
+    setNotice('Message accepted. It appears in the activity list when the agent receives it.');
   };
 
   return (
     <div className="v1-stack">
-      {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
       {notice && <MessageBar intent="info"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
-      <Panel title="Run journal activity">
-        <p className="v1-muted">
-          The Gateway journal exposes ordered event DTOs and opaque object references. It has no object-content read route;
-          this view does not invent or recover missing transcript text.
-        </p>
+      <Panel title="Activity" description="Events from this run, oldest first. Message text is not stored in the event list.">
         <JournalList events={journalEvents} />
       </Panel>
-      <Panel title="Addressed message">
-        <p className="v1-muted">
-          This sends an immediate owner message between existing sessions. It does not create a session, schedule a child, or
-          treat acceptance as delivery. Message text below is only held in this browser after the owner accepts it.
-        </p>
+      <Panel title="Send a message" description="Send a message from one session in this run to another.">
         {activeNodes.length < 2 ? (
-          <p className="v1-muted">At least two existing active sessions are required to send a message. Creating or scheduling one is not available through this view.</p>
+          <p className="v1-muted">You can send a message when the run has at least two active sessions.</p>
         ) : (
-          <form className="v1-form" onSubmit={(event) => void send(event)}>
+          <NewChatComposer onSubmit={send} blocked={snapshotBusy || !fromSession || !toSession || fromSession === toSession}>
             <div className="v1-inline-form">
-              <Field label="From session">
+              <Field label="From">
                 <select className="v1-select" value={fromSession} onChange={(event) => setSelectedFromSession(event.target.value)}>
-                  {activeNodes.map((node) => <option key={node.identity.sessionId} value={node.identity.sessionId}>{node.kind} · {node.identity.sessionId}</option>)}
+                  {activeNodes.map((node) => <option key={node.identity.sessionId} value={node.identity.sessionId}>{sessionLabel(node)}</option>)}
                 </select>
               </Field>
-              <Field label="To session">
+              <Field label="To">
                 <select className="v1-select" value={toSession} onChange={(event) => setSelectedToSession(event.target.value)}>
-                  {activeNodes.map((node) => <option key={node.identity.sessionId} value={node.identity.sessionId}>{node.kind} · {node.identity.sessionId}</option>)}
+                  {activeNodes.map((node) => <option key={node.identity.sessionId} value={node.identity.sessionId}>{sessionLabel(node)}</option>)}
                 </select>
               </Field>
             </div>
-            <Field label="Message">
-              <Textarea value={text} onChange={(_, data) => setText(data.value)} rows={4} resize="vertical" />
-            </Field>
-            <Button appearance="primary" type="submit" disabled={snapshotBusy || busy || !text.trim() || !fromSession || !toSession || fromSession === toSession}>
-              {busy ? 'Sending…' : 'Send immediately'}
-            </Button>
-          </form>
+          </NewChatComposer>
         )}
         {pending.length > 0 && (
-          <ol className="v1-chat-list">
+          <ol className="v1-chat-list" aria-label="Messages sent from this page">
             {pending.map((message) => (
               <li key={message.id}>
                 <div><Badge appearance="outline">{message.status}</Badge><span>{message.from} → {message.to}</span></div>
                 <p>{message.text}</p>
-                <code>{message.id} · This local echo is not durable transcript evidence.</code>
+                <code>Shown from this page only. Reloading clears it.</code>
               </li>
             ))}
           </ol>
@@ -2058,198 +2013,18 @@ function ChatView({
 /** The shared authentication hook's return type, used by callback-bearing view props. */
 type AuthReturn = ReturnType<typeof useAuth>;
 
-/** Sends an answer or decision for the exact blocker shown by the owner snapshot. */
-function BlockerAction({
-  projectId,
-  runId,
-  status,
-  blocker,
-  decisions,
-  apiCall,
-  refresh,
-  snapshotBusy,
-}: {
-  projectId: string;
-  runId: string;
-  status: SessionStatusSnapshot;
-  blocker: SessionStatusBlocker;
-  decisions?: CoordinatorDecisionStateView;
-  apiCall: AuthReturn['apiCall'];
-  refresh: () => Promise<void>;
-  snapshotBusy: boolean;
-}) {
-  const [answer, setAnswer] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const currentGate = decisions?.pendingGate;
-  const exactGate = currentGate?.requestId === blocker.requestId;
-  const canAct = exactGate && !busy && !snapshotBusy;
-
-  const submit = async (approve?: boolean, choiceId?: string, freeformAnswer?: string) => {
-    if (!exactGate || !decisions) return;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const idempotencyKey = crypto.randomUUID();
-      let result: Awaited<ReturnType<typeof gatewayClient.answerGate>>;
-      if (blocker.kind === 'awaitingInput') {
-        result = await apiCall((token, tenantSelector) => gatewayClient.answerGate(
-          token, projectId, runId, status.identity.sessionId, blocker.requestId, decisions.stateVersion,
-          { choiceId, freeformAnswer }, idempotencyKey, tenantSelector,
-        ), { projectId, runId });
-      } else {
-        result = await apiCall((token, tenantSelector) => gatewayClient.resolveGate(
-          token, projectId, runId, status.identity.sessionId, blocker.requestId, decisions.stateVersion, Boolean(approve),
-          idempotencyKey, tenantSelector,
-        ), { projectId, runId });
-      }
-      if (!result.accepted) {
-        const details = result.issues
-          .map((issue) => `${issue.code} at ${issue.path}: ${issue.message}`)
-          .join(' ');
-        setNotice(
-          `The owner did not accept request ${blocker.requestId} at state version ${result.stateVersion}.` +
-          (details ? ` ${details}` : ''),
-        );
-        await refresh();
-        return;
-      }
-      setNotice(`The owner accepted the request for ${blocker.requestId}. A refreshed owner snapshot determines the resulting state.`);
-      await refresh();
-    } catch (reason) {
-      setError(reason);
-      if (reason instanceof GatewayError && reason.status === 409) {
-        setNotice('This request was stale or changed. The latest owner snapshots were reloaded; no approval state was inferred.');
-        await refresh();
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <article className="v1-record">
-      <div className="v1-record-title">
-        <div><h3>{blocker.kind}</h3><p className="v1-muted">Request ID: <code>{blocker.requestId}</code></p></div>
-        <Badge appearance="tint" color={blocker.kind === 'awaitingInput' ? 'informative' : 'warning'}>Pending in owner snapshot</Badge>
-      </div>
-      {blocker.prompt && <p>{blocker.prompt}</p>}
-      {blocker.kind === 'awaitingInput' ? (
-        <div className="v1-form">
-          {blocker.choices.map((choice) => (
-            <Button key={choice} appearance={answer === choice ? 'primary' : 'secondary'} disabled={!canAct} onClick={() => setAnswer(choice)}>
-              {choice}
-            </Button>
-          ))}
-          {blocker.allowsFreeform && (
-            <Field label="Freeform answer">
-              <Textarea value={answer} onChange={(_, data) => setAnswer(data.value)} rows={3} disabled={!canAct} />
-            </Field>
-          )}
-          <Button
-            appearance="primary"
-            disabled={!canAct || (!blocker.choices.includes(answer) && !(blocker.allowsFreeform && answer.trim()))}
-            onClick={() => void submit(undefined, blocker.choices.includes(answer) ? answer : undefined, blocker.choices.includes(answer) ? undefined : answer)}
-          >
-            {busy ? 'Submitting…' : 'Answer exact request'}
-          </Button>
-        </div>
-      ) : (
-        <ApprovalGate
-          stepId={blocker.requestId}
-          body={blocker.kind === 'awaitingOutcomeConfirmation'
-            ? 'Confirm the exact pending outcome gate.'
-            : blocker.kind === 'awaitingPlanApproval'
-              ? 'Confirm the exact pending work-plan gate.'
-              : 'Confirm the exact pending approval gate.'}
-          disclaimer="The owner validates this request ID and expected decision-state version. Only a refreshed owner snapshot can show its next state."
-          disabled={!canAct}
-          onApprove={() => void submit(true)}
-          onDeny={() => void submit(false)}
-        />
-      )}
-      {!exactGate && <p className="v1-warning">No matching pending gate with this exact request ID was returned by the decision snapshot. Actions are disabled until the owner snapshots converge.</p>}
-      {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
-      {notice && <p className="v1-muted">{notice}</p>}
-    </article>
-  );
-}
-
-/** Groups the currently reported session blockers with their matching decision states. */
-function ApprovalsView({
-  projectId,
-  runId,
-  statuses,
-  decisions,
-  apiCall,
-  refresh,
-  snapshotBusy,
-}: {
-  projectId: string;
-  runId: string;
-  statuses: Record<string, SessionStatusSnapshot>;
-  decisions: Record<string, CoordinatorDecisionStateView>;
-  apiCall: AuthReturn['apiCall'];
-  refresh: () => Promise<void>;
-  snapshotBusy: boolean;
-}) {
-  const pending = Object.values(statuses).flatMap((status) =>
-    status.blockers.map((blocker) => ({ status, blocker })));
-  return (
-    <Panel title="Pending outcome, plan, question, and approval requests">
-      {pending.length === 0 ? <p className="v1-muted">No pending requests were returned by current session status snapshots.</p> : (
-        <div className="v1-record-list">
-          {pending.map(({ status, blocker }) => (
-            <BlockerAction
-              key={`${status.identity.sessionId}/${blocker.requestId}`}
-              projectId={projectId}
-              runId={runId}
-              status={status}
-              blocker={blocker}
-              decisions={decisions[status.identity.sessionId]}
-              apiCall={apiCall}
-              refresh={refresh}
-              snapshotBusy={snapshotBusy}
-            />
-          ))}
-        </div>
-      )}
-    </Panel>
-  );
-}
-
-/** Shows the accepted immutable provider selection without treating it as a provisioned resource. */
+/** Shows the settings this run started with. Later configuration changes do not affect it. */
 function SelectionView({ selection }: { selection: EffectiveRunSelection | null }) {
-  if (!selection) return <p className="v1-muted">No accepted run-selection snapshot was returned by Projects & Config.</p>;
+  if (!selection) return <p className="v1-muted">The service returned no settings for this run.</p>;
   return (
     <div className="v1-stack">
-      <p className="v1-muted">This is the immutable accepted selection, not proof that a resource was provisioned or bound.</p>
+      <p className="v1-muted">These are the settings this run started with. Changing project settings does not change them.</p>
       <dl className="v1-detail-list">
-        <div><dt>Model selection reference</dt><dd><code>{selection.modelSelection.reference}</code></dd></div>
-        <div><dt>Configuration revision</dt><dd>{selection.projectConfigurationRevision}</dd></div>
+        <div><dt>Model</dt><dd><code>{selection.modelSelection.reference}</code></dd></div>
+        <div><dt>Project configuration revision</dt><dd>{selection.projectConfigurationRevision}</dd></div>
         <div><dt>Platform defaults revision</dt><dd>{selection.platformRuntimeRevision}</dd></div>
-        <div><dt>Selection context revision</dt><dd><code>{selection.contextRevision}</code></dd></div>
-        <div><dt>Runtime model ID</dt><dd>Unavailable in the current Gateway read contract; the selection reference is not treated as a runtime SDK model ID.</dd></div>
-        <div><dt>Provisioned provider pin</dt><dd>Unavailable in the current Gateway read contract; candidates below are not presented as resource bindings.</dd></div>
       </dl>
-      <div className="v1-record-list">
-        {selection.providers.map((provider, index) => (
-          <article className="v1-record" key={`${provider.seam}/${provider.meterSource ?? ''}/${index}`}>
-            <h3>{provider.seam}{provider.meterSource ? ` · ${provider.meterSource}` : ''}</h3>
-            <p className="v1-muted">Cardinality: {provider.cardinality}</p>
-            {provider.candidates.map((candidate) => (
-              <div className="v1-candidate" key={`${candidate.providerId}/${candidate.optionsRevision}`}>
-                <strong>{candidate.providerId}</strong>
-                <span>Adapter {candidate.adapterVersion} · options schema {candidate.optionsSchemaVersion} · revision {candidate.optionsRevision}</span>
-                <span>Hosting: {candidate.hosting}{candidate.layer ? ` · layer ${candidate.layer}` : ''}</span>
-                <span>Capabilities: {candidate.advertisedCapabilities.length ? candidate.advertisedCapabilities.join(', ') : 'none reported'}</span>
-              </div>
-            ))}
-          </article>
-        ))}
-      </div>
+      <PlatformComponentsTable components={selection.providers} />
     </div>
   );
 }
@@ -2560,7 +2335,7 @@ function RunPage() {
   const { session, apiCall, authorize, authorizationContext } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('view');
-  const tab: RunTab = isRunTab(requestedTab) ? requestedTab : 'topology';
+  const tab: RunTab = isRunTab(requestedTab) ? requestedTab : 'chat';
   const authorized = isSameBinding(session?.binding, binding);
   const snapshotScope = useMemo(() => ({
     projectId,
@@ -2568,7 +2343,8 @@ function RunPage() {
     accessToken: session?.accessToken ?? '',
   }), [projectId, runId, session?.accessToken]);
   const activeSnapshotScope = useRef(snapshotScope);
-  const runTenantSelector = authorized ? authorizationContext?.tenantId : undefined;
+  const tenantId = authorizationContext?.tenantId;
+  const runTenantSelector = authorized ? tenantId : undefined;
   const journal = useRunJournal(
     authorized ? session?.accessToken : undefined,
     projectId,
@@ -2592,7 +2368,7 @@ function RunPage() {
   useEffect(() => {
     if (requestedTab === null || isRunTab(requestedTab)) return;
     const normalizedParams = new URLSearchParams(searchParams);
-    normalizedParams.set('view', 'topology');
+    normalizedParams.set('view', 'chat');
     setSearchParams(normalizedParams, { replace: true });
   }, [requestedTab, searchParams, setSearchParams]);
 
@@ -2662,6 +2438,9 @@ function RunPage() {
       return;
     }
     setRunStatus(currentRun);
+    // Only a confirmed snapshot for this exact run goes into the browser's recent-run list.
+    if (tenantId)
+      rememberRun(tenantId, { projectId, runId, executionState: currentRun.executionState });
     if (selectionResult.status === 'fulfilled' &&
         selectionResult.value.projectId === projectId && selectionResult.value.runId === runId)
       setSelection(selectionResult.value);
@@ -2746,7 +2525,7 @@ function RunPage() {
     setSnapshotErrors(nextErrors);
     setLoadedSnapshotScope(scope);
     setSnapshotBusy(false);
-  }, [apiCall, authorized, binding, projectId, runId, selectedSession, snapshotScope]);
+  }, [apiCall, authorized, binding, projectId, runId, selectedSession, snapshotScope, tenantId]);
 
   useEffect(() => {
     refreshRef.current = refresh;
@@ -2784,6 +2563,7 @@ function RunPage() {
   const currentTree = snapshotIsCurrent ? tree : null;
   const currentStatuses = snapshotIsCurrent ? statuses : {};
   const currentDecisions = snapshotIsCurrent ? decisions : {};
+  const pendingDecisionCount = Object.values(currentStatuses).reduce((total, status) => total + (status?.blockers.length ?? 0), 0);
   const currentSelection = snapshotIsCurrent ? selection : null;
   const currentUsage = snapshotIsCurrent ? usage : null;
   const currentSnapshotErrors = snapshotIsCurrent ? snapshotErrors : {};
@@ -2826,9 +2606,10 @@ function RunPage() {
   return (
     <>
       <PageHeading
-        title="Coordinator run"
-        description={`Project ${projectId} · run ${runId} · root session ${currentRunStatus?.rootSessionId ?? 'loading'}`}
-        actions={<Button appearance="secondary" disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh run</Button>}
+        title="Run"
+        description={`Run ${runId}`}
+        page="Orchestrations"
+        actions={<Button appearance="secondary" aria-label="Refresh run" icon={<ArrowClockwiseRegular />} disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh</Button>}
       />
       {currentSnapshotMessage && <MessageBar intent="info"><MessageBarBody>{currentSnapshotMessage}</MessageBarBody></MessageBar>}
       {Object.entries(currentSnapshotErrors).map(([key, message]) => (
@@ -2838,7 +2619,7 @@ function RunPage() {
       {currentRunStatus && (
         <>
           <div className="v1-actions">
-            <Badge appearance="tint">{currentRunStatus.executionState}</Badge>
+            <Badge appearance="tint" color={runState(currentRunStatus.executionState).color}>{runState(currentRunStatus.executionState).label}</Badge>
             <details>
               <summary>Run details</summary>
               <SnapshotDetail runStatus={currentRunStatus} />
@@ -2857,12 +2638,13 @@ function RunPage() {
               }}
               aria-label="Run views"
             >
-              <Tab value="topology" icon={<Flowchart24Regular />}>Topology</Tab>
               <Tab value="chat" icon={<Chat24Regular />}>Chat</Tab>
-              <Tab value="approvals">Outcomes & approvals</Tab>
+              <Tab value="topology" icon={<Flowchart24Regular />}>Topology</Tab>
+              <Tab value="approvals">Approvals{pendingDecisionCount > 0 ? ` (${pendingDecisionCount})` : ''}</Tab>
               <Tab value="activity">Activity</Tab>
-              <Tab value="selection">Selection</Tab>
+              <Tab value="changes">Changes</Tab>
               <Tab value="usage">Usage</Tab>
+              <Tab value="selection">Run settings</Tab>
             </TabList>
           </div>
           {tab === 'topology' && (
@@ -2886,22 +2668,22 @@ function RunPage() {
                       selectedNode.lifecycle === 'completed' && selectedStatus.runExecution.state === 'completed' && (
                         <Button appearance="secondary" disabled={snapshotBusy} onClick={() => void runAction(selectedNode, 'archive')}>Archive completed child</Button>
                       )}
-                    {selectedStatus.parentSessionId && <Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/knowledge?runId=${encodeURIComponent(runId)}&agentId=${encodeURIComponent(selectedNode.identity.sessionId)}`}><Brain24Regular /> Knowledge for exact session ID</Link>}
+                    {selectedStatus.parentSessionId && <Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/knowledge?runId=${encodeURIComponent(runId)}&agentId=${encodeURIComponent(selectedNode.identity.sessionId)}`}><Brain24Regular /> Memories for this session</Link>}
                   </div>
-                  {selectedStatus.blockers.length > 0 && <p className="v1-warning">This session has {selectedStatus.blockers.length} owner-reported blocker(s). Open Outcomes & approvals to respond to the exact request IDs.</p>}
+                  {selectedStatus.blockers.length > 0 && <p className="v1-warning">This session has {selectedStatus.blockers.length} owner-reported blocker(s). Open Approvals to respond.</p>}
                 </Panel>
               )}
             </div>
           )}
           {tab === 'chat' && <ChatView key={`${projectId}/${runId}/${session?.accessToken ?? ''}`} projectId={projectId} runId={runId} nodes={nodes} journalEvents={journal.events} apiCall={apiCall} snapshotBusy={snapshotBusy} />}
           {tab === 'approvals' && (
-            <ApprovalsView projectId={projectId} runId={runId} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
+            <DecisionList projectId={projectId} runId={runId} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
           )}
           {tab === 'activity' && (
             <div className="v1-stack">
               <Panel title={`Committed event journal · ${journal.connected ? 'live' : journal.loading ? 'loading' : 'reconnecting'}`}>
                 {journal.error && <ErrorNotice code={errorCode(journal.error)}>{errorMessage(journal.error)}</ErrorNotice>}
-                <p className="v1-muted">Events are replayed in journal order, then streamed from the replay cursor. Duplicate event IDs are removed and positions remain sorted.</p>
+                <p className="v1-muted">Earlier events load first. New events appear as they happen, in order, without duplicates.</p>
                 <JournalList events={journal.events} />
               </Panel>
               <ActivityView runStatus={currentRunStatus} statuses={currentStatuses} />
@@ -2909,18 +2691,24 @@ function RunPage() {
           )}
           {tab === 'selection' && (
             <div className="v1-stack">
-              <Panel title="Accepted run selection"><SelectionView selection={currentSelection} /></Panel>
-              {currentSelection?.projectConfiguration.sourceControl?.authMode === 'githubApp' && (
+              <Panel title="Run settings"><SelectionView selection={currentSelection} /></Panel>
+            </div>
+          )}
+          {tab === 'changes' && (
+            <div className="v1-stack">
+              {currentSelection?.projectConfiguration.sourceControl?.authMode === 'githubApp' ? (
                 <RunGitHubAppPanel
                   projectId={projectId}
                   runId={runId}
                   sessionId={currentRunStatus.rootSessionId}
                   appConnectionId={currentSelection.projectConfiguration.sourceControl.appConnectionId ?? ''}
                 />
+              ) : (
+                <EmptyState title="No repository changes" description="This run does not use a GitHub App repository connection, so it has no branch or pull request to show." />
               )}
             </div>
           )}
-          {tab === 'usage' && <Panel title="Run usage and accounting"><UsageView usage={currentUsage} /></Panel>}
+          {tab === 'usage' && <Panel title="Usage"><UsageView usage={currentUsage} /></Panel>}
         </>
       )}
     </>
@@ -3121,16 +2909,16 @@ function AuthenticatedRoutes() {
   if (!session) return <SignInScreen />;
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/projects" replace />} />
-      <Route path="/overview" element={<Shell><UnavailablePage title="Overview" description="Live activity across projects is not available in this version. Open a project to view its team, configuration, memories, or an existing run." /></Shell>} />
-      <Route path="/sessions" element={<Shell><UnavailablePage title="Sessions" description="Session search across projects is not available in this version. Open a project, then enter an existing run ID in Orchestrations." /></Shell>} />
-      <Route path="/assistant" element={<Shell><UnavailablePage title="New session" description="Starting an assistant session is not available in this version. Open an existing project run to read and send messages." /></Shell>} />
+      <Route path="/" element={<Navigate to="/overview" replace />} />
+      <Route path="/overview" element={<Shell><OverviewPage /></Shell>} />
+      <Route path="/sessions" element={<Shell><UnavailablePage title="Sessions" description="Starting and listing chat sessions needs a service update. Open a project, then choose a run in Orchestrations." /></Shell>} />
+      <Route path="/assistant" element={<Shell><UnavailablePage title="New session" description="Starting a new chat needs a service update. Open a project, then choose a run in Orchestrations to read and send messages." /></Shell>} />
       <Route path="/console" element={<Navigate to="/assistant" replace />} />
       <Route path="/settings" element={<Shell><AccountSettingsPage /></Shell>} />
       <Route path="/platform-settings" element={<Shell><UnavailablePage title="Platform settings" description="Platform administration is not available in this web client." /></Shell>} />
       <Route path="/auth/callback" element={<CallbackPage />} />
       <Route path="/projects" element={<Shell><ProjectsPage /></Shell>} />
-      <Route path="/projects/:projectId" element={<Shell><ProjectOverviewPage /></Shell>} />
+      <Route path="/projects/:projectId" element={<Shell><DashboardPage /></Shell>} />
       <Route path="/projects/:projectId/settings" element={<Shell><ProjectConfigurationPage /></Shell>} />
       <Route path="/projects/:projectId/skills" element={<Shell><ProjectConfigurationPage view="skills" /></Shell>} />
       <Route path="/projects/:projectId/team" element={<Shell><ProjectConfigurationPage view="agents" /></Shell>} />
@@ -3138,7 +2926,7 @@ function AuthenticatedRoutes() {
       <Route path="/projects/:projectId/team/:agentName/memory" element={<AgentMemoryRedirect />} />
       <Route path="/projects/:projectId/knowledge" element={<Shell><KnowledgePage /></Shell>} />
       <Route path="/projects/:projectId/memories" element={<Shell><KnowledgePage /></Shell>} />
-      <Route path="/projects/:projectId/orchestrations" element={<Shell><ProjectOverviewPage runs /></Shell>} />
+      <Route path="/projects/:projectId/orchestrations" element={<Shell><OrchestrationsPage /></Shell>} />
       <Route path="/projects/:projectId/sessions" element={<Navigate to="/sessions" replace />} />
       <Route path="/projects/:projectId/runs/:runId" element={<Shell><RunPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunRedirect />} />
@@ -3160,9 +2948,9 @@ function CoordinatorRunRedirect() {
 
 /** Legacy destinations stay addressable without falling back to monolith APIs. */
 const unavailableProjectPages = [
-  { segment: 'board', title: 'Board', description: 'The project board is not available in this version. Open an existing run to review its outcomes and approvals.' },
-  { segment: 'flow', title: 'Flow', description: 'Project-wide agent activity is not available in this version. Open an existing run to view its session topology.' },
-  { segment: 'workspace', title: 'Workspace', description: 'Run file browsing is not available in this version. Open an existing run to review its outcomes.' },
+  { segment: 'board', title: 'Board', description: 'The project board is not available in this version. Open Orchestrations to review runs and approvals.' },
+  { segment: 'flow', title: 'Flow', description: 'Project-wide agent activity is not available in this version. Open Orchestrations, then a run, to view its session topology.' },
+  { segment: 'workspace', title: 'Workspace', description: 'Project file browsing is not available in this version. A run shows its changes in the Changes tab.' },
   { segment: 'workflows', title: 'Workflows', description: 'The workflow editor is not available in this version. Workflow references remain in Project settings.' },
   { segment: 'observability/*', title: 'Observability', description: 'Project trace and agent summaries are not available in this version. Open a run for Activity and Usage.' },
   { segment: 'diagnostics', title: 'Diagnostics', description: 'Project diagnostics are not available in this version. Run Activity shows the status reported for each session.' },
@@ -3185,7 +2973,7 @@ function AccountSettingsPage() {
   const { signOut } = useAuth();
   return <>
     <PageHeading title="Account settings" />
-    <Panel title="Sign-in"><p>Your sign-in stays in this tab.</p><Button onClick={signOut}>Clear session</Button></Panel>
+    <Panel title="Sign-in"><Button onClick={signOut}>Sign out</Button></Panel>
     <ProjectRepoAppConnectionPanel />
     <p>Choose a project in the navigation to manage its Copilot connection in Project settings.</p>
   </>;

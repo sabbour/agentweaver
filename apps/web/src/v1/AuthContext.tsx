@@ -33,6 +33,7 @@ import type {
   ProjectAuthorizationContextResponse,
 } from './contracts';
 import { gatewayClient, GatewayError } from './api';
+import { clearRecentRuns } from './recentRuns';
 
 /** In-memory bearer session bound to the project/run that initiated authorization. */
 interface AuthSession {
@@ -677,6 +678,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setConsent(null);
     setError(null);
     forgetSignIn();
+    clearRecentRuns();
     setRestoringSession(false);
   }, [setSession]);
 

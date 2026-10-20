@@ -156,15 +156,6 @@ export function SignInView({ heading, sessionError, action, error, note }: {
           </Text>
         </div>
 
-        <div className={styles.checklist}>
-          <Text className={styles.checklistItem}>
-            Describe the work, then review the proposed team, workflow, and approval gates.
-          </Text>
-          <Text className={styles.note}>
-            Authorize the Repo App or Copilot App when a project needs its respective GitHub capability.
-          </Text>
-        </div>
-
         <div className={styles.actions}>
           {action}
           {error && (

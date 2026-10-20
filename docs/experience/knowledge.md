@@ -1,43 +1,53 @@
 # Knowledge
 
-Use this page to search and manage records for an exact project, run, and
-agent. The run identifies the authorization context and selected Memory
-provider; records belong to the project and agent.
+Use this page to search and manage memories for a project, run, and agent.
+The page is named **Memories** in the app. The run sets the authorization
+context and the Memory provider. Records belong to the project and agent.
 
 ## Prerequisites
 
-- Know the exact run ID and agent ID.
+- Open the run once in this browser so it appears in **Recent runs in this
+  browser**.
 - Have current owner-granted access for the project and run.
-- Use a Broker token bound to the exact project and run.
+- Use a Broker token bound to the project and run.
 
-The v1 Knowledge page is backed by the unpublished `Agentweaver.Knowledge`
+The v1 Memories page is backed by the unpublished `Agentweaver.Knowledge`
 source candidate. Its route names describe source contracts, not deployed
 service availability.
 
 ## Select scope and search
 
-1. Open **Knowledge** from a project.
-2. Enter **Exact run ID** and **Exact agent ID**.
-3. Select **Apply scope**.
-4. If prompted, select **Sign in for this project and run**.
-5. Search by text or kind. **Include inactive records** is selected by
-   default; clear it to omit historical states.
-6. Use **Previous page** and **Next page** to read additional results.
+1. Open **Memories** from a project.
+2. Under **Show memories for**, choose a **Run**. The list contains the runs
+   you opened in this browser.
+3. Choose an **Agent**. The list contains the agents in the project
+   configuration.
+4. Select **Show memories**.
+5. If prompted, select **Sign in for this run**.
+6. Choose a kind tab: **All**, **Memories**, **Decisions**, **Proposals**, or
+   **Session context**.
+7. Enter **Search text** and select **Search**. **Include inactive records**
+   is selected by default; clear it to omit historical states.
+8. Use **Previous page** and **Next page** to read more results. Select
+   **Refresh** to read the results again.
 
-The page accepts `runId` and `agentId` query parameters. A Topology link for a
-child session supplies that exact session ID as the agent ID; it does not
-perform an agent-directory lookup. Search pages contain up to 50 records.
-Each result shows kind, type, revision, lifecycle state, trust state, content,
-rationale, and tags.
+If you haven't opened a run in this browser, the page shows **No runs yet**
+with a link to **Orchestrations**. You don't type a run ID.
 
-**Expected result:** The page shows results for the exact project and agent
-scope. The owner checks current access and run binding for every request.
+The page accepts `runId` and `agentId` query parameters. The **Memories for
+this session** link in **Topology** and the **View memories** link on
+**Agents** fill them in. Search pages contain up to 50 records. Each result
+shows kind, type, revision, lifecycle state, trust state, content, rationale,
+and tags.
+
+**Expected result:** The page shows results for the selected project and
+agent. The owner checks current access and run binding for every request.
 
 ## Create and review records
 
-The create form supports Memory, Proposal, and Session context records. It
-requires a type and content, and includes an importance selection. Title,
-rationale, and tags are optional.
+Use **Create a Knowledge record** to add a Memory, Proposal, or Session
+context record. Type and content are required. Choose an importance. Title,
+rationale, and tags are optional. Select **Create record**.
 
 | Action | When you can use it |
 | --- | --- |
@@ -45,7 +55,7 @@ rationale, and tags are optional.
 | Archive a record | Archive an active Memory or Session context record. |
 | Review a Proposal | Promote or reject a pending Proposal. |
 | Approve a Decision | Approve an active Decision with Pending or Legacy trust. |
-| Supersede a Decision | Select another active Decision from the exact-scope search results and supersede the current one with it. |
+| Supersede a Decision | Select another active Decision from the search results and supersede the current one with it. |
 
 The owner validates current state, revision, and permission for each
 operation. The app refreshes results after a write.
