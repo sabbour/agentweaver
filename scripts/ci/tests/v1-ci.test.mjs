@@ -90,11 +90,29 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.match(workflow, /io.agentweaver.source-tree/);
   assert.ok(jobs.dotnet.steps.some((step) => step.run?.includes('install --with-deps chromium')));
   assert.ok(jobs.dotnet.steps.some((step) => step.with?.path === '~/.cache/ms-playwright'));
-  assert.ok(jobs.dotnet.steps.some((step) => step.if === 'matrix.shard > 0' &&
+  assert.ok(jobs.dotnet.steps.some((step) => step.if === "matrix.shard > 0 && steps.web-modules.outputs.cache-hit != 'true'" &&
     step.run === 'npm ci --prefix apps/web --no-audit --no-fund'));
   assert.match(jobs.coverage.if, /inputs.collect_coverage == true/);
   assert.doesNotMatch(workflow, /github.event_name != 'pull_request'/);
   assert.ok(jobs.coverage.steps.some((step) => step.run === 'node scripts/coverage/dotnet.mjs --combine'));
+});
+
+test('installed web dependencies are cached only on an exact lockfile and Node.js key', async () => {
+  const { parse } = await import('yaml');
+  const { jobs } = parse(workflow);
+  for (const job of [jobs.web, jobs.dotnet]) {
+    const node = job.steps.find((step) => step.id === 'node');
+    assert.equal(node.uses, 'actions/setup-node@v4');
+    const cache = job.steps.find((step) => step.id === 'web-modules');
+    assert.equal(cache.uses, 'actions/cache@v4');
+    assert.equal(cache.with['restore-keys'], undefined, 'a partial node_modules restore could hide a lockfile drift');
+    assert.equal(cache.with.key, "v1-web-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('apps/web/package-lock.json') }}");
+    assert.match(cache.with.path, /^apps\/web\/node_modules$/m);
+    assert.match(cache.with.path, /^!apps\/web\/node_modules\/\.vite$/m);
+    const install = job.steps.find((step) => step.run === 'npm ci --prefix apps/web --no-audit --no-fund');
+    assert.match(install.if, /steps\.web-modules\.outputs\.cache-hit != 'true'/);
+    assert.ok(job.steps.indexOf(cache) < job.steps.indexOf(install));
+  }
 });
 
 test('Broker fixture keeps one PostgreSQL container, lazy shared driver and test-owned browser contexts', () => {

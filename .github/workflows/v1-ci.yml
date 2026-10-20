@@ -458,12 +458,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - id: node
+        uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
-      - run: npm ci --prefix apps/web --no-audit --no-fund
+      # Exact-key only: a lockfile or Node.js change misses and runs a clean npm ci.
+      - id: web-modules
+        name: Cache installed web dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/web/node_modules
+            !apps/web/node_modules/.cache
+            !apps/web/node_modules/.vite
+            !apps/web/node_modules/.vitest
+          key: v1-web-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('apps/web/package-lock.json') }}
+      - name: Install locked web dependencies
+        if: steps.web-modules.outputs.cache-hit != 'true'
+        run: npm ci --prefix apps/web --no-audit --no-fund
       - name: Test web once with optional coverage
         run: |
           if [ "$COLLECT_COVERAGE" = true ]; then
@@ -503,7 +517,8 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      - uses: actions/setup-node@v4
+      - id: node
+        uses: actions/setup-node@v4
         with:
           node-version: '24'
       - name: Cache NuGet packages
@@ -523,15 +538,27 @@ jobs:
         with:
           name: v1-web-dist
           path: apps/web/dist/
-      - name: Cache npm downloads for Broker Vite fixtures
+      # Shares the exact-key web job entry; a miss falls back to npm ci with the download cache.
+      - id: web-modules
+        name: Cache installed dependencies for Broker Vite fixtures
         if: matrix.shard > 0
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/web/node_modules
+            !apps/web/node_modules/.cache
+            !apps/web/node_modules/.vite
+            !apps/web/node_modules/.vitest
+          key: v1-web-modules-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('apps/web/package-lock.json') }}
+      - name: Cache npm downloads for Broker Vite fixtures
+        if: matrix.shard > 0 && steps.web-modules.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.npm
           key: v1-npm-${{ runner.os }}-${{ hashFiles('apps/web/package-lock.json') }}
           restore-keys: v1-npm-${{ runner.os }}-
       - name: Install locked dependencies for Broker Vite fixtures
-        if: matrix.shard > 0
+        if: matrix.shard > 0 && steps.web-modules.outputs.cache-hit != 'true'
         run: npm ci --prefix apps/web --no-audit --no-fund
       - name: Cache Playwright browsers
         if: matrix.shard > 0

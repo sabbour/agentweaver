@@ -98,6 +98,14 @@ a lazily created Playwright driver, but not browsers, resolver arguments,
 contexts or cookies. NuGet caches are keyed by SDK/project/lock inputs.
 Chromium caches are keyed by OS, architecture and Broker package lock; the
 installer still runs on cache hits to install required Linux libraries.
+The web job and Broker shards also cache the installed `apps/web/node_modules`
+directory. The key combines OS, architecture, the exact Node.js version, and
+the hash of `apps/web/package-lock.json`. The cache has no partial restore key,
+so a lockfile or Node.js change misses and runs a clean `npm ci`. On an exact
+hit, CI skips `npm ci`. Tool caches such as `node_modules/.vite` are excluded.
+CI does not cache .NET `bin`/`obj` output or Docker layers: a reused build
+output could hide a compile failure, and image builds must stay reproducible
+for the image provenance checks.
 
 Pull request, push, and manual `v1 foundation CI` runs never collect
 coverage. Coverage is a separate weekly measurement; see
