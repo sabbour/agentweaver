@@ -127,6 +127,11 @@ public sealed class ProjectRunReadStore
     /// <param name="cursor">The opaque cursor from a previous page, or null for the first page.</param>
     /// <param name="pageSize">The page size, from 1 to <see cref="MaximumPageSize"/>.</param>
     /// <param name="cancellationToken">Cancels the database read.</param>
+    /// <remarks>
+    /// The state is derived per row, so the filter can't use an index. The keyset index bounds an
+    /// unfiltered page to <paramref name="pageSize"/> + 1 rows; a selective state filter can read every
+    /// project run older than the cursor before it fills a page.
+    /// </remarks>
     /// <exception cref="CoordinationException">The page size or cursor is invalid for this query.</exception>
     public async Task<ProjectRunPage> ListAsync(
         string tenantId,

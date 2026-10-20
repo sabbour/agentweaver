@@ -1,5 +1,7 @@
 -- Records when a run reached a terminal outcome and indexes project-scoped run reads.
 -- completed_at is set going forward only; runs that ended before this migration keep NULL.
+-- The ADD COLUMN, CHECK validation and index builds run in one transaction and block writes
+-- to accepted_runs until they finish; review the table size before applying.
 ALTER TABLE {schema}.accepted_runs
     ADD COLUMN completed_at timestamptz,
     ADD CONSTRAINT accepted_runs_completed_at_check
