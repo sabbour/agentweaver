@@ -12,7 +12,7 @@ P2 proof of concept tracked by epic [#2111](https://github.com/sabbour/agentweav
 | Contract | Repository | Commit | Contract version |
 | --- | --- | --- | --- |
 | AgentSessions | `agent-primitives/sessions` | `465e82175da7815db39ec14852deb3949ff82670` | `0.2.0-draft` |
-| AgentSuite | `agent-primitives/suite` | `a09950a75359` | `v1` artifact media types |
+| AgentSuite | `agent-primitives/suite` | `a09950a75359cdc7de4d3361694582613f24c732` | `1.0.0-draft` |
 
 The Go reference tools in `tools/agent-primitives` pin these commits in `go.mod`. The .NET
 verifier pins the AgentSessions commit in `AgentSessionsPin` and rejects exports from any other
