@@ -5,7 +5,6 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createP1AcceptanceResult, sealP1NativeProbeEnvelope } from '../p1-acceptance-result.mjs';
-import { P1_SIGNIN_PROFILE_ROOT } from '../p1-signin.mjs';
 import { runP1Cli } from '../run-p1.mjs';
 
 function validInput() {
@@ -123,7 +122,10 @@ test('P1 CLI help describes the explicit identity providers without exposing cre
 });
 
 test('P1 UI surface remains blocked on #1859 before credentials or page providers are used', async () => {
-  const outputPath = path.join(P1_SIGNIN_PROFILE_ROOT, `ui-blocked-${randomUUID()}.jsonl`);
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-ui-blocked-'));
+  const inputPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  await writeFile(inputPath, JSON.stringify(validInput()), 'utf8');
   const output = [];
   const calls = [];
   const env = new Proxy({}, {
@@ -135,7 +137,7 @@ test('P1 UI surface remains blocked on #1859 before credentials or page provider
   try {
     const code = await runP1Cli([
       '--surface', 'ui',
-      '--input', 'unused-input.json',
+      '--input', inputPath,
       '--output', outputPath,
       '--page-module', 'unused-page-provider.mjs',
     ], env, { log: text => output.push(text), error: text => output.push(text) }, {
@@ -153,7 +155,52 @@ test('P1 UI surface remains blocked on #1859 before credentials or page provider
     assert.match(result.failure.message, /blocked on #1859/);
     assert.doesNotMatch(result.failure.message, /credential|deployment evidence|unused-page-provider/);
   } finally {
-    await rm(outputPath, { force: true });
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('P1 UI blocker does not overwrite probe envelopes or deployment artifacts', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-ui-collision-'));
+  const nativePath = path.join(directory, 'native.json');
+  const nativeInputPath = path.join(directory, 'native-input.json');
+  const artifactPath = path.resolve(
+    'scripts/harness-shared/test',
+    `p1-ui-protected-artifact-${randomUUID()}.json`,
+  );
+  const artifactInputPath = path.join(directory, 'artifact-input.json');
+  const sentinel = 'preserve this protected input';
+  try {
+    const nativeInput = validInput();
+    await writeFile(nativeInputPath, JSON.stringify(nativeInput), 'utf8');
+    await writeFile(nativePath, sentinel, 'utf8');
+
+    const artifactInput = validInput();
+    artifactInput.deploymentEvidence.publicationPath = path.relative(
+      process.cwd(), artifactPath,
+    ).split(path.sep).join('/');
+    await writeFile(artifactInputPath, JSON.stringify(artifactInput), 'utf8');
+    await writeFile(artifactPath, sentinel, 'utf8');
+
+    for (const [inputPath, outputPath, extraArgs] of [
+      [nativeInputPath, nativePath, ['--native-probe-envelope', nativePath]],
+      [artifactInputPath, artifactPath, []],
+    ]) {
+      const output = [];
+      const code = await runP1Cli([
+        '--surface', 'ui', '--input', inputPath, '--output', outputPath,
+        ...extraArgs,
+      ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
+        async prepareDeploymentEvidence() {
+          throw new Error('The blocked UI runner prepared deployment evidence.');
+        },
+      });
+      assert.equal(code, 2);
+      assert.match(JSON.parse(output.at(-1)).failure.message, /must not replace or duplicate|must not replace a P1 input/);
+      assert.equal(await readFile(outputPath, 'utf8'), sentinel);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    await rm(artifactPath, { force: true });
   }
 });
 

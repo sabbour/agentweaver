@@ -225,16 +225,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       throw new Error('A P1 surface, input manifest, and evidence output path are required.');
     }
     surface = options.surface;
-    if (surface === 'ui') {
-      inputPath = resolve(options.input);
-      const requestedOutputPath = resolve(options.output);
-      if (pathIdentity(inputPath) === pathIdentity(requestedOutputPath)) {
-        throw new Error('The evidence output path must not replace the input manifest.');
-      }
-      outputPath = requestedOutputPath;
-      throw new Error('The P1 UI page provider is blocked on #1859 until the 0.x UI is restored onto v1.');
-    }
-    if (!options.identityModule && typeof identityProvider !== 'function') {
+    if (surface !== 'ui' && !options.identityModule && typeof identityProvider !== 'function') {
       throw new Error('The selected API identity provider module is required.');
     }
     inputPath = resolve(options.input);
@@ -286,6 +277,9 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       .some(path => pathIdentity(path) === pathIdentity(requestedOutputPath))) {
       outputPath = undefined;
       throw new Error('The evidence output path must not replace a P1 input or deployment artifact.');
+    }
+    if (surface === 'ui') {
+      throw new Error('The P1 UI page provider is blocked on #1859 until the 0.x UI is restored onto v1.');
     }
     sourceEvidence = await prepareDeploymentEvidence({
       repoRoot: repositoryRoot,

@@ -10,6 +10,7 @@ import {
   P1_SIGNIN_PROFILE_ROOT,
   authorizeP1InBrowser,
   createP1AuthorizationRequest,
+  isAuthorizeUrl,
   validateP1BrokerToken,
   withFreshP1BrowserContext,
 } from '../p1-signin.mjs';
@@ -133,6 +134,42 @@ test('authorization request uses the registered public client, S256, and exact o
   });
   assert.equal(new URL(unbound.authorizeUrl).searchParams.has('project_id'), false);
   assert.equal(new URL(unbound.authorizeUrl).searchParams.has('run_id'), false);
+});
+
+test('authorization interception accepts the Broker continuation query without weakening bindings', () => {
+  const request = createP1AuthorizationRequest({
+    issuer: ISSUER,
+    scopes: P1_RUN_SCOPES,
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    random: () => Buffer.alloc(32, 3),
+  });
+  const original = new URL(request.authorizeUrl);
+  const orderedKeys = [
+    'client_id', 'redirect_uri', 'response_type', 'scope', 'state',
+    'code_challenge', 'code_challenge_method', 'nonce', 'project_id', 'run_id',
+  ];
+  const query = orderedKeys.flatMap(name => {
+    const value = name === 'nonce' ? 'broker-generated-nonce'
+      : original.searchParams.get(name);
+    return value === null ? [] : [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`];
+  }).join('&');
+  const brokerResumeUrl = `${original.origin}${original.pathname}?${query}`;
+
+  assert.notEqual(new URL(brokerResumeUrl).search, original.search);
+  assert.equal(isAuthorizeUrl(brokerResumeUrl, request), true);
+
+  const changedState = new URL(brokerResumeUrl);
+  changedState.searchParams.set('state', 'different-state');
+  assert.equal(isAuthorizeUrl(changedState.toString(), request), false);
+
+  const duplicateState = new URL(brokerResumeUrl);
+  duplicateState.searchParams.append('state', request.state);
+  assert.equal(isAuthorizeUrl(duplicateState.toString(), request), false);
+
+  const unexpected = new URL(brokerResumeUrl);
+  unexpected.searchParams.set('access_token', 'unexpected');
+  assert.equal(isAuthorizeUrl(unexpected.toString(), request), false);
 });
 
 test('Broker tokens must match actor, issuer, audience, expiry, required scopes, and run binding', () => {
@@ -282,7 +319,7 @@ test('sign-in completes consent, intercepts the registered callback, and exchang
       for (const [name, exposed] of exposedFunctions) window[name] = exposed;
       const fetch = async (url, options) => {
         browserFetches.push({ url, options });
-        return { ok: true, status: 200 };
+        return { ok: false, status: 0, type: 'opaqueredirect' };
       };
       runInNewContext(`(${callback.toString()})(__input)`, {
         __input: input,
@@ -344,6 +381,86 @@ test('sign-in completes consent, intercepts the registered callback, and exchang
   assert.equal(exchangeRequests[0].url, `${new URL(ISSUER).origin}/connect/token`);
   assert.equal(new URLSearchParams(exchangeRequests[0].options.body).get('code'), 'controlled-authorization-code');
   assert.doesNotMatch(log.join('\n'), /eyJ|controlled-authorization-code|controlled-csrf-token/);
+});
+
+test('cancelling while the consent prompt is open settles sign-in and deletes the profile', async () => {
+  const controller = new AbortController();
+  const routes = [];
+  const listeners = new Map();
+  let profilePath;
+  let profileClosed = false;
+  let showPrompt;
+  const promptShown = new Promise(resolve => { showPrompt = resolve; });
+  const page = {
+    setDefaultTimeout() {},
+    setDefaultNavigationTimeout() {},
+    route(matcher, handler) { routes.push({ matcher, handler }); },
+    once(event, listener) { listeners.set(event, listener); },
+    off(event, listener) {
+      if (listeners.get(event) === listener) listeners.delete(event);
+    },
+    async goto(url) {
+      const route = routes.find(entry => entry.matcher(url));
+      assert.ok(route, 'the authorization request was intercepted');
+      await route.handler({
+        request: () => ({ url: () => url }),
+        async fetch() {
+          return {
+            status: () => 200,
+            ok: () => true,
+            headers: () => ({ 'content-type': 'application/json' }),
+            async json() {
+              return {
+                consent_required: true,
+                consent_handle: 'controlled-consent-handle',
+                client_id: 'agentweaver-web',
+                requested_scopes: P1_SETUP_SCOPES,
+                csrf_token: 'controlled-csrf-token',
+              };
+            },
+          };
+        },
+        async fulfill() {},
+        async abort() {},
+      });
+    },
+    async exposeFunction() {},
+    async evaluate() { showPrompt(); },
+    pages() { return [page]; },
+    async close() {
+      if (profileClosed) return;
+      profileClosed = true;
+      listeners.get('close')?.();
+    },
+  };
+  const context = {
+    pages: () => [page],
+    async close() { await page.close(); },
+  };
+  const chromium = {
+    async launchPersistentContext(userDataDir) {
+      profilePath = userDataDir;
+      return context;
+    },
+  };
+  const signing = withFreshP1BrowserContext({
+    chromium,
+    authRoot: P1_SIGNIN_PROFILE_ROOT,
+    executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    signal: controller.signal,
+  }, browserContext => authorizeP1InBrowser({
+    context: browserContext,
+    environment: ENVIRONMENT,
+    scopes: P1_SETUP_SCOPES,
+    signal: controller.signal,
+    io: { log() {} },
+  }));
+
+  await promptShown;
+  controller.abort();
+  await assert.rejects(signing, /P1 sign-in could not be completed/);
+  assert.equal(profileClosed, true);
+  await assert.rejects(access(profilePath), { code: 'ENOENT' });
 });
 
 test('fresh browser user-data directory is empty and deleted after success, failure, and cancellation', async () => {
