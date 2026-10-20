@@ -1,4 +1,7 @@
 -- Durable interactive requests retain their identity across browser rebinding and retries.
+-- The accepted_runs ALTERs, CHECK validation and non-concurrent index build run in one
+-- transaction and block writes to accepted_runs until commit; review table size and
+-- schedule a write pause before applying. This migration does not ALTER sessions.
 CREATE TABLE {schema}.project_run_requests (
     tenant_id varchar(256) NOT NULL,
     project_id varchar(256) NOT NULL,
