@@ -3157,7 +3157,7 @@ function CoordinatorRunRedirect() {
 const unavailableProjectPages = [
   { segment: 'board', title: 'Board', description: 'The project board is not available in this version. Open an existing run to review its outcomes and approvals.' },
   { segment: 'flow', title: 'Flow', description: 'Project-wide agent activity is not available in this version. Open an existing run to view its session topology.' },
-  { segment: 'workspace', title: 'Workspace', description: 'Run file browsing is not available yet. This version does not expose local workspace files.' },
+  { segment: 'workspace', title: 'Workspace', description: 'Run file browsing is not available in this version. Open an existing run to review its outcomes.' },
   { segment: 'workflows', title: 'Workflows', description: 'The workflow editor is not available in this version. Workflow references remain in Project settings.' },
   { segment: 'observability/*', title: 'Observability', description: 'Project trace and agent summaries are not available in this version. Open a run for Activity and Usage.' },
   { segment: 'diagnostics', title: 'Diagnostics', description: 'Project diagnostics are not available in this version. Run Activity shows the status reported for each session.' },

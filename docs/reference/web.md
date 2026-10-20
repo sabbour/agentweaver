@@ -29,12 +29,18 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |
 | `src/v1/SkillsMarketplacePanel.tsx` | Marketplace sources, local upload, inventory, import, and assignment. |
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
+| `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP connection status, sign-in, refresh, and disconnect in project settings. |
+| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, and persona menu filled with Gateway projects and the Broker session. |
+| `src/v1/ConfigurationFields.tsx` | Readable model, reasoning, per-task model, and provider fields for project configuration. |
+| `src/v1/ConfigurationHistory.tsx` | Read-only view of one earlier configuration revision. |
 | `host/Program.cs` | Static files, runtime settings, callback headers, SPA fallback, and health routes. |
 | `index.html` | Callback query capture and removal before app assets load. |
 | `vite.config.ts` | React plugin, build-time runtime-script injection, and dev server on port 5173. |
 
-The retained `src/pages`, `src/api`, and legacy components do not define the
-active route tree. Some shared components remain imported by v1.
+`src/v1/App.tsx` defines the active route tree. It reuses the 0.x shell, sign-in
+card, page sections, gallery tiles, dialogs, and topology nodes through view
+components that take data as props. The retained `src/api` client and 0.x page
+data hooks are not mounted.
 
 ## Routes
 
@@ -44,14 +50,22 @@ active route tree. Some shared components remain imported by v1.
 | `/projects` | `ProjectsPage`. |
 | `/projects/:projectId` | `ProjectOverviewPage`. |
 | `/projects/:projectId/settings` | `ProjectConfigurationPage`. |
-| `/projects/:projectId/knowledge` | `KnowledgePage`; `runId` and `agentId` query values prefill scope. |
+| `/projects/:projectId/skills` | `ProjectConfigurationPage` on its Skills section. |
+| `/projects/:projectId/team` | `ProjectConfigurationPage` on its Agents section. |
+| `/projects/:projectId/orchestrations` | `ProjectOverviewPage` with the exact-run opener. |
+| `/projects/:projectId/knowledge`, `/projects/:projectId/memories` | `KnowledgePage`; `runId` and `agentId` query values prefill scope. |
+| `/projects/:projectId/team/:agentName/memory` | Redirect to Memories with `agentId` prefilled. |
+| `/settings` | Account settings: clear the session and manage the Repo App account. |
 | `/projects/:projectId/runs/:runId` | `RunPage`; `view` selects `topology`, `chat`, `approvals`, `activity`, `selection`, or `usage`. |
 | `/projects/:projectId/orchestrations/:runId` | Redirect to the corresponding run route. |
 | `/auth/callback` | Broker callback handling; popup callbacks bypass the main route tree. |
 | `/auth/github/copilot-app/callback` | Copilot popup callback, handled before the main route tree. |
 | `/settings/source-control` | Repo App callback only when the HTML bootstrap captured `repoApp=connected`. It is not a general settings page. |
 | `/auth/remote-mcp/oauth/callback` | Remote MCP OAuth popup callback, handled before the main route tree. |
-| Other paths | Redirect to `/projects` after authentication. |
+| `/console` | Redirect to `/assistant`. |
+| `/projects/:projectId/sessions` | Redirect to `/sessions`. |
+| `/overview`, `/sessions`, `/assistant`, `/platform-settings`, `/observability/*`, `/projects/:projectId/team/cast`, and the project `board`, `flow`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
+| Other paths | `UnavailablePage` with **Page not found**. |
 
 The production host serves `index.html` for client routes. Missing `/assets`
 files return `404`, not the SPA fallback.
@@ -143,8 +157,8 @@ Ingress logging needs its own callback-query redaction.
 Repo App requests use the Broker's local cookie and antiforgery flow directly.
 Their repository DTOs include numeric installation and repository metadata.
 Copilot calls use the Gateway connection BFF and its exact link cookie.
-Remote MCP callback handling exists, but settings do not include a UI that starts
-remote MCP consent.
+Project settings > Connections starts Remote MCP sign-in for a configured
+connection, then shows its status, refresh, and disconnect controls.
 
 ## Host health
 

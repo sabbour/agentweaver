@@ -46,14 +46,14 @@ a specific reason and a return link. They do not appear in navigation.
 | `/sessions`, `/projects/:id/sessions` | Cross-project session search. The project sessions address opens the same global explanation. |
 | `/assistant`, `/console` | Public assistant-root start flow. Console retains its Assistant compatibility redirect. |
 | `/platform-settings` | Browser platform administration. |
-| `/projects/:id/board` | Project board projection. |
+| `/projects/:id/board` | Project board data. |
 | `/projects/:id/flow` | Project-wide agent activity aggregate. |
 | `/projects/:id/workspace` | Pinned run-artifact file browser; see #1917. No host filesystem proxy is added. |
 | `/projects/:id/team/cast` | Interactive casting proposal UI. Current charters and cast remain visible in Agents. |
-| `/projects/:id/workflows` | Editable workflow projection in the admitted web API. |
+| `/projects/:id/workflows` | An API to edit workflows. |
 | `/observability/*`, `/projects/:id/observability/*` | Trace/agent aggregation. Existing run Activity and Usage remain available. |
-| `/projects/:id/diagnostics` | Project diagnostics projection. |
-| `/projects/:id/heartbeat` | Project heartbeat projection. |
+| `/projects/:id/diagnostics` | Project diagnostics data. |
+| `/projects/:id/heartbeat` | Project heartbeat data. |
 | `/projects/:id/cluster` | Browser cluster administration. |
 | Unknown addresses | A separate Page not found state, not a silent Projects redirect. |
 

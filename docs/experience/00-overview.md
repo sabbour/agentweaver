@@ -44,14 +44,24 @@ state for an existing run before it can display that run.
 | --- | --- |
 | `/projects` | List projects visible to your current identity and create a project. |
 | `/projects/:projectId` | Read project lifecycle and revision details, then open an existing run by ID. |
-| `/projects/:projectId/settings` | Edit configuration, manage account connections, and use Skills and marketplace. |
-| `/projects/:projectId/knowledge` | Search, write, review, version, and transfer exact-scope records. |
+| `/projects/:projectId/orchestrations` | Open an existing run by its exact ID. |
+| `/projects/:projectId/settings` | Edit configuration, view earlier revisions, manage connections, and use Skills and marketplace. |
+| `/projects/:projectId/skills` | Browse, preview, import, and assign Skills. |
+| `/projects/:projectId/team` | Review the project's agents. |
+| `/projects/:projectId/memories` | Search, write, review, version, and transfer exact-scope records. `/knowledge` opens the same page. |
+| `/settings` | Clear the session and manage the Repo App account. |
 | `/projects/:projectId/runs/:runId` | Inspect Topology, Chat, Outcomes & approvals, Activity, Selection, and Usage. |
 
 The run page's `view` query parameter accepts `topology`, `chat`, `approvals`,
 `activity`, `selection`, or `usage`. An invalid value selects `topology`. The
 older `/projects/:projectId/orchestrations/:runId` route redirects to the run
 route.
+
+Navigation hides 0.x destinations that have no v1 API, such as Board, Flow,
+Workspace, Workflows, Observability, Diagnostics, Heartbeat, Cluster, Assistant,
+and Platform settings. Their old addresses open one **Not available in this
+version** page that explains why and links back. Unknown addresses show **Page
+not found**.
 
 The shell enables **Run chat** only when your current Broker session is bound
 to an exact project and run. Otherwise, the control is disabled.
@@ -97,8 +107,8 @@ The [MCP host](../reference/mcp-tools.md) turns nonstreaming Gateway OpenAPI
 operations into `agentweaver_` tools. This includes owner operations that have
 no browser control. It excludes browser connection callbacks and live SSE.
 
-The active app entry exports `apps/web/src/v1/App.tsx`. Retained 0.x files
-under `apps/web/src/pages` do not define v1 navigation.
+The active app entry exports `apps/web/src/v1/App.tsx`. It reuses the 0.x shell,
+sign-in card, and shared components, but not the 0.x page data hooks.
 
 For implementation details, see the [web reference](../reference/web.md),
 [Gateway guide](../guide/gateway.md), and
