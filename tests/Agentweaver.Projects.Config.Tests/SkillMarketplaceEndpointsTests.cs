@@ -309,7 +309,11 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
         Assert.Equal("pinned-skill", preview.GetProperty("name").GetString());
         Assert.Equal("A controlled endpoint test skill.", preview.GetProperty("description").GetString());
         Assert.Equal(1, preview.GetProperty("resourceCount").GetInt32());
-        Assert.Equal(SkillMarkdown.Length + SkillResource.Length, preview.GetProperty("totalBytes").GetInt64());
+        // totalBytes counts semantic content (name, description, instructions, resources), not raw SKILL.md bytes.
+        Assert.Equal(
+            Encoding.UTF8.GetByteCount("pinned-skill" + "A controlled endpoint test skill." + "Follow the approved instructions.") +
+                SkillResource.Length,
+            preview.GetProperty("totalBytes").GetInt64());
         var digest = preview.GetProperty("contentDigest").GetString()!;
 
         using var imported = await SendAsync(
