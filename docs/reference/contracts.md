@@ -995,6 +995,29 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
 
+## Platform components report
+
+`PlatformComponentReport` in `Agentweaver.Abstractions` is the shared record for
+`GET /api/v1/platform/components`. Each owner service returns a
+`PlatformComponentOwnerReport` from `GET /internal/platform/components`.
+For behavior and examples, see [Platform components](../guide/platform-components.md).
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /api/platform/components` | Projects & Config requires `api.read`, an unbound non-purpose token, and a current TenantAdmin assignment for the caller's tenant or a current PlatformAdmin assignment. It asks the five owners in parallel with a three-second limit each, then returns all 16 areas in catalog order with `Cache-Control: no-store`. |
+| `GET /internal/platform/components` | Owner-only route, mapped only when `PlatformComponents:ServiceAuthentication` is configured. It accepts only a token for the private audience whose `sub` equals the configured Projects caller subject. Not in the Gateway OpenAPI document. |
+
+The report rules are:
+
+- Every area is present. A missing, failed, slow, or invalid owner answer
+  makes each of its areas `unknown` with reason `ownerUnavailable`.
+- Projects never reports a configured value as active without the owner's answer.
+- Canvas is always `notAvailable` with reason `noBackendOwner`.
+- An area's readiness is the least ready value among its active implementations.
+  An area with nothing selected is `disabled` with reason `notSelected`.
+- The report contains no option values, option revisions, endpoints,
+  credentials, or resource identifiers.
+
 ## Projects & Config host configuration
 
 For complete deployment-setting guidance, see

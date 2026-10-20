@@ -116,4 +116,5 @@ provide recovery without rewriting accepted history.
 - [Projects & Config contract](../architecture/projects-config.md)
 - [Skill marketplace sources](../architecture/skill-marketplace.md)
 - [Contracts and endpoints](../reference/contracts.md)
+- [Platform components](../guide/platform-components.md)
 - [Identity and secrets](./identity-secrets.md)

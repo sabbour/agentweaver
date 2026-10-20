@@ -136,6 +136,8 @@ builder.Services.AddScoped<SkillContentService>(services => new SkillContentServ
 builder.Services.AddScoped<ISkillContentService>(services => services.GetRequiredService<SkillContentService>());
 builder.Services.AddScoped<ISkillAssignmentService>(services => services.GetRequiredService<SkillContentService>());
 builder.Services.AddSingleton(TimeProvider.System);
+// Platform component owners are optional; unconfigured owners are reported as unknown.
+builder.Services.AddPlatformComponentCollector(builder.Configuration);
 builder.Services.AddSingleton(provider =>
     ProviderCatalogConfiguration.Load(provider.GetRequiredService<IConfiguration>()));
 

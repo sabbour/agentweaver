@@ -219,6 +219,9 @@ builder.Services.AddOpenIddict().AddValidation(validation =>
     validation.UseAspNetCore();
 });
 builder.Services.AddAuthorization();
+var platformComponentAuthentication =
+    PlatformComponentServiceAuthenticationOptions.ReadOptional(builder.Configuration, audience);
+builder.Services.AddPlatformComponentServiceAuthentication(platformComponentAuthentication);
 builder.Services.ConfigureHttpJsonOptions(json =>
 {
     json.SerializerOptions.UnmappedMemberHandling =
@@ -263,6 +266,23 @@ if (runtimeRegistrationEnabled)
 }
 if (runtimeUsageEnabled)
     app.MapRuntimeUsageSourceEndpoints();
+// Reports Policy, Guardrails, and Source Control from the frozen provider catalog.
+app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
+    PlatformComponentCatalogReporter.CreateOwnerReportAsync(
+        PlatformComponentOwners.Orchestrator,
+        async token =>
+        {
+            await CoordinationOwnerMigrator.VerifyAsync(dataSource, schema, token);
+            return true;
+        },
+        (readiness, observedAt) =>
+        [
+            PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.Policy, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.Guardrails, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.SourceControl, readiness, observedAt),
+        ],
+        services.GetRequiredService<TimeProvider>(),
+        ct));
 app.Run();
 
 // Reads a required non-blank configuration value or fails application startup.

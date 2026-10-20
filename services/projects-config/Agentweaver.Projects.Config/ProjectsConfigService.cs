@@ -1426,6 +1426,34 @@ public sealed partial class ProjectsConfigService
             throw ProjectConfigException.Forbidden();
     }
 
+    /// <summary>
+    /// Requires API read scope, an unbound request, and a current TenantAdmin assignment for the
+    /// caller's tenant or a current PlatformAdmin assignment before the platform components report.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The caller lacks a current qualifying assignment.</exception>
+    public async Task EnsurePlatformComponentReaderAsync(
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireUnboundRequest();
+        if (await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Tenant,
+                caller.TenantId,
+                ProjectAuthorityRole.TenantAdmin,
+                cancellationToken).ConfigureAwait(false) ||
+            await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin,
+                cancellationToken).ConfigureAwait(false))
+            return;
+        throw ProjectConfigException.Forbidden();
+    }
+
     /// <summary>Rejects stale or revoked membership revisions before project operations.</summary>
     private async Task EnsureCurrentMembershipAsync(
         ProjectAuthorizationContext caller,

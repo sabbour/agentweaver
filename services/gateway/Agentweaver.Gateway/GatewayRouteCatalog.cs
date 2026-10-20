@@ -154,6 +154,9 @@ public static class GatewayRouteCatalog
             "/api/platform/runtime-defaults/",
             "updatePlatformRuntimeDefaults", "Update platform runtime defaults", body: true,
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/platform/components", "/api/platform/components",
+            "getPlatformComponents", "Read active platform components",
+            forwardTenantSelector: true);
 
         var sourceControl = "/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}";
         void SourceControl(
