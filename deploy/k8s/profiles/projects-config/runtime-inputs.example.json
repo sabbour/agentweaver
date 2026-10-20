@@ -6,5 +6,14 @@
     "ProjectsConfig__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
     "ProjectsConfig__Authentication__Authority": null,
     "ProjectsConfig__Authentication__Audience": null
+  },
+  "privilegedSetupConfiguration": {
+    "ConnectionStrings__ProjectsConfigAuthority": null,
+    "ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TenantId": null,
+    "ProjectsConfig__AuthorityDatabase__WorkloadIdentity__ClientId": null,
+    "ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TokenFilePath": null,
+    "ProjectsConfig__PrivilegedSetup__ApprovedIssuer": null,
+    "ProjectsConfig__PrivilegedSetup__ApprovedSubject": null,
+    "ProjectsConfig__PrivilegedSetup__ApprovedTenantId": null
   }
 }

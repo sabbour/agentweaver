@@ -8,6 +8,37 @@ const SERVICE_NAME = 'projects-config';
 const COMMAND_DLL = 'Agentweaver.Projects.Config.dll';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const runnerOwnedFixtureInputs = new WeakSet();
+const SETUP_ERROR_CODES = new Set([
+  'forbidden', 'invalid_project_setup_request', 'setup_invocation_conflict',
+  'cleanup_invocation_conflict', 'cleanup_revision_conflict',
+]);
+
+/** Keep only known product codes and fixed transport classes, never raw process output or errors. */
+export function summarizePrivilegedSetupCommand(result) {
+  const stderr = typeof result.stderr === 'string' ? result.stderr : '';
+  const codes = [...stderr.matchAll(/^Privileged project setup failed \(([a-z_]+)\)\.\r?$/gm)]
+    .map(match => match[1]);
+  const productErrorCode = codes.length === 1 && SETUP_ERROR_CODES.has(codes[0]) ? codes[0] : null;
+  let stderrClass = stderr.trim() ? 'unrecognized' : 'empty';
+  if (productErrorCode) stderrClass = 'product-code';
+  else if (/^Privileged project setup failed; no credential or exception detail was written\.\r?$/m.test(stderr)) {
+    stderrClass = 'product-unclassified';
+  } else if (/Error from server \(Forbidden\)/.test(stderr)) stderrClass = 'kubectl-forbidden';
+  else if (/timed out|Timeout|deadline exceeded/i.test(stderr)) stderrClass = 'timeout';
+  else if (/unable to upgrade connection|error dialing backend|container not found|pod .* not found/i.test(stderr)) {
+    stderrClass = 'exec-transport';
+  }
+  return {
+    productErrorCode,
+    kubectlExitCode: Number.isInteger(result.status) ? result.status : null,
+    processErrorClass: result.error
+      ? (result.error.code === 'ETIMEDOUT' ? 'timeout'
+        : result.error.code === 'ENOENT' ? 'executable-not-found'
+          : result.error.code === 'ENOBUFS' ? 'output-limit' : 'process-error')
+      : null,
+    stderrClass,
+  };
+}
 
 /** Require a nonempty string field before using it in owner or setup requests. */
 function requireString(value, label) {
@@ -274,7 +305,9 @@ export async function executePrivilegedProjectSetup({
     input: stdin,
   });
   if (result.error || result.status !== 0) {
-    const failure = new Error('Projects Config privileged setup did not return a successful command result.');
+    const commandEvidence = summarizePrivilegedSetupCommand(result);
+    const failure = new Error(`Projects Config privileged setup did not return a successful command result (${commandEvidence.productErrorCode ?? commandEvidence.stderrClass}).`);
+    failure.commandEvidence = commandEvidence;
     failure.indeterminate = true;
     throw failure;
   }
@@ -282,23 +315,10 @@ export async function executePrivilegedProjectSetup({
     return JSON.parse(result.stdout);
   } catch {
     const failure = new Error('Projects Config privileged setup returned no valid JSON receipt.');
+    failure.commandEvidence = summarizePrivilegedSetupCommand(result);
     failure.indeterminate = true;
     throw failure;
   }
-}
-
-/** Retry an operation once only when its result is indeterminate and invocation-bound reconciliation is safe. */
-async function runIdempotentOperation(operation, runCommand) {
-  let lastError;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await runCommand(operation);
-    } catch (error) {
-      lastError = error;
-      if (error?.indeterminate !== true || attempt === 1) throw error;
-    }
-  }
-  throw lastError;
 }
 
 /** Require a live Projects authorization context for the exact actor and optional run binding. */
@@ -504,7 +524,7 @@ export async function createP1Fixture(plan, {
     throw new Error('An already-authorized run identity provider is required.');
   }
   const environment = plan.environment;
-  const state = { invocationId, setup: null, setupAttempted: false, selection: null, cleanup: null };
+  const state = { invocationId, setup: null, setupAttempted: false, selection: null, cleanup: null, commandFailures: [] };
   const actor = {
     actorId: environment.actorId,
     tenantId: environment.tenantId,
@@ -528,19 +548,41 @@ export async function createP1Fixture(plan, {
       expectedProjectRevision: operationKind.expectedProjectRevision ?? null,
       expectedAssignmentRevision: operationKind.expectedAssignmentRevision ?? null,
     };
-    const result = await runIdempotentOperation(request, setupRequest => {
-      if (setupRequest.operationKind === 'setup') state.setupAttempted = true;
-      return runPrivilegedSetup({
+    let result;
+    try {
+      if (request.operationKind === 'setup') state.setupAttempted = true;
+      else state.cleanup = {
+        invocationId,
+        state: 'indeterminate',
+        reason: 'Cleanup was attempted, but no matching cleanup receipt was verified.',
+      };
+      result = await runPrivilegedSetup({
         context: setupContext,
         namespace,
         sourceEvidence,
         sourceReceipt,
         accessToken: setupToken,
-        request: setupRequest,
+        request,
         executable: kubectl,
         spawnSyncImpl,
       });
-    });
+    } catch (error) {
+      if (error.commandEvidence) {
+        // Re-project injected command results as well; evidence is never an arbitrary error payload.
+        const evidence = error.commandEvidence;
+        state.commandFailures.push({
+          operationKind: request.operationKind,
+          productErrorCode: SETUP_ERROR_CODES.has(evidence.productErrorCode) ? evidence.productErrorCode : null,
+          kubectlExitCode: Number.isInteger(evidence.kubectlExitCode) ? evidence.kubectlExitCode : null,
+          processErrorClass: ['timeout', 'executable-not-found', 'output-limit', 'process-error']
+            .includes(evidence.processErrorClass) ? evidence.processErrorClass : null,
+          stderrClass: ['product-code', 'product-unclassified', 'kubectl-forbidden', 'timeout',
+            'exec-transport', 'empty', 'unrecognized'].includes(evidence.stderrClass)
+            ? evidence.stderrClass : 'unrecognized',
+        });
+      }
+      throw error;
+    }
     if (operationKind.operationKind === 'setup') {
       state.setup = requireSetupResult(result, request, actor);
     } else {
@@ -769,6 +811,12 @@ export function summarizeP1FixtureCleanup(state, cleanup, nativeFence) {
   return redact({
     invocationId: state?.invocationId ?? null,
     setup: state?.setup ?? null,
+    commandFailures: state?.commandFailures ?? [],
+    diagnosis: (state?.setupAttempted && !state?.setup) || state?.cleanup?.state === 'indeterminate' ? {
+      state: 'required',
+      command: `node scripts\\harness-shared\\diagnose-p1-setup.mjs --invocation-id ${state.invocationId}`,
+      reason: 'Run the generated read-only query against the attested Projects Config database. Do not retry setup or cleanup before reviewing its invocation-bound readback.',
+    } : null,
     selection: state?.selection ?? null,
     nativeFence: nativeFence ?? { status: 'not-started', reason: 'This setup path never invokes dispatch.' },
     cleanup: cleanup ?? state?.cleanup ?? { state: 'not-started' },

@@ -334,6 +334,39 @@ TenantAdmin command. They are not part of the runtime ConfigMap:
 | `ProjectsConfig__Migration__AccessToken` | Optional short-lived PostgreSQL Entra access token. The explicit command supplies it as the connection password. Store it in a short-lived Secret or environment variable. Do not put it in arguments or logs. |
 | `ProjectsConfig__Migration__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Alternative explicit workload identity for migration. Configure these settings or `AccessToken`, not both. |
 
+The privileged project-setup command has a separate authority database
+contract. The runtime connection and identity are not substitutes. The
+runtime principal must not write authority tables or read setup-operation
+receipts.
+
+| Setting | Contract |
+| --- | --- |
+| `ConnectionStrings__ProjectsConfigAuthority` | Required by `--privileged-project-setup`. Use a password-free connection to the same Projects & Config database, with a separately approved authority principal and `SSL Mode=VerifyFull`. |
+| `ProjectsConfig__AuthorityDatabase__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Required explicit workload identity for that authority principal. Use GUID tenant/client IDs and an absolute projected-token path. The approved identity must have the database grants needed for setup and cleanup. |
+
+These authority settings are not supplied by the standard runtime ConfigMap.
+To validate them, supply the optional, all-or-none
+`privilegedSetupConfiguration` object to
+`deploy\k8s\profiles\projects-config\render.mjs`. The example input includes
+empty values that you must replace with approved values, or remove the
+whole object for runtime-only validation. The validator returns the
+combined `data` map; it does not generate or apply Kubernetes resources.
+It rejects the runtime role or client ID, migration-role names, foreign
+database targets, and password-bearing connections. The authority client
+must be separately approved and federated to the ServiceAccount; validation
+does not establish that its federation or database grants exist.
+
+The current P1 runner executes
+`--privileged-project-setup` in the attested Projects Config pod, so that
+process must receive the approved authority configuration before setup can
+work. Adding it requires a separately reviewed configuration, workload
+identity, and deployment decision. Do not grant authority writes to the
+runtime principal, reuse migration credentials, or change Broker trust as
+a workaround. Missing authority configuration fails before the command
+opens a database connection; it does not establish the historical state
+of an invocation. See [Diagnose an indeterminate P1 project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
+for the read-only reconciliation steps.
+
 The provider catalog is supplied separately with the
 `ProjectsConfig__ProviderCatalog__` prefix. See
 [Configure providers](../guide/configure-providers.md) for the active catalog
