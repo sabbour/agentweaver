@@ -392,7 +392,11 @@ jobs:
         env:
           RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           RELEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
-        run: npm run release:validate -- --ci
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            export RELEASE_BASE_SHA="$(git rev-parse HEAD^1)"
+          fi
+          npm run release:validate -- --ci
       - uses: actions/setup-dotnet@v4
         if: needs.changes.outputs.node == 'true'
         with:

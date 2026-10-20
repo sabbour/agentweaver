@@ -77,6 +77,8 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.match(parsed.env.COLLECT_COVERAGE, /!= 'pull_request'/);
   assert.ok(jobs.images.steps.some((step) => step.name === 'Run pinned native prompt-capacity tests in an isolated AMD64 container'));
   assert.ok(jobs.node.steps.some((step) => step.name === 'Validate release composition'));
+  assert.match(jobs.node.steps.find((step) => step.name === 'Validate release composition').run,
+    /if \[ "\$GITHUB_EVENT_NAME" = workflow_dispatch \]; then[\s\S]*RELEASE_BASE_SHA="\$\(git rev-parse HEAD\^1\)"/);
   assert.ok(jobs.node.steps.some((step) => step.name === 'Test controlled P1 API, MCP, and UI journeys'));
   assert.deepEqual(jobs.node.needs, ['changes', 'web']);
   assert.ok(jobs.node.steps.some((step) => step.with?.name === 'v1-web-dist'));

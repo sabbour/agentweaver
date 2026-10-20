@@ -107,6 +107,9 @@ source-bound `v1-coverage-*` artifact with Web and Node reports. Local
 `npm run coverage:dotnet` retains its full sequential diagnostic behavior.
 Only superseded runs for the same PR are cancelled; pushes and manual runs
 have independent concurrency groups.
+Manual release validation derives its comparison base from the selected
+commit's first parent, preserving the validator's checked history contract
+without inventing a push event or changing the tested checkout.
 
 Run the workflow regression guards locally:
 
