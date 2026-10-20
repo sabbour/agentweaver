@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "cbb8a12d0243839106a19a71a804f2240ac27dfe",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "0a50564105001f06c85977e75868ed3dba7486b6ae28e17f4e11454f26d79a1e",
+  "appliedAt": "2026-10-20T01:51:31.753Z",
+  "components": [
+    {
+      "id": "Agentweaver.AgentHost",
+      "fromVersion": "1.0.2",
+      "toVersion": "1.0.3",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Environment",
+      "fromVersion": "1.1.3",
+      "toVersion": "1.1.4",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.1.2",
+      "toVersion": "1.1.3",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.1.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Identity",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "fromVersion": "1.1.3",
+      "toVersion": "1.1.4",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Knowledge",
+      "fromVersion": "1.0.3",
+      "toVersion": "1.0.4",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Mcp",
+      "fromVersion": "1.0.2",
+      "toVersion": "1.0.3",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.1.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.1.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "fromVersion": "1.1.3",
+      "toVersion": "1.1.4",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.0.4",
+      "toVersion": "1.0.5",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/first-tenant-admin-bootstrap.md",
+      "archivedPath": ".changeset/archive/first-tenant-admin-bootstrap.md",
+      "sha256": "6a2c6a720051ac21fb8759992fc25b0c9208f174f16e3c772e78bd5cccbca52c"
+    },
+    {
+      "sourcePath": ".changeset/owner-egress-ca-trust.md",
+      "archivedPath": ".changeset/archive/owner-egress-ca-trust.md",
+      "sha256": "d17d5c00ad67017aa5bd7754ff2d6afeda5d503f3e5bd2dd4e7042e4160098f9"
+    },
+    {
+      "sourcePath": ".changeset/silent-sign-in-2118.md",
+      "archivedPath": ".changeset/archive/silent-sign-in-2118.md",
+      "sha256": "c43be7ef72a8398150a2921507db8241a2691c0b9467e850444050e5f5fe9f74"
+    }
+  ]
+}
