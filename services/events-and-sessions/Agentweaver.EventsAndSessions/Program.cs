@@ -104,11 +104,10 @@ builder.Services.AddSingleton(new ProjectsAuthorizationContextOptions(
     projectsAuthorization["OwnerBaseAddress"],
     projectsAuthorization["Audience"],
     issuerUri.AbsoluteUri));
-// Both exact-run and project reads share the validated Projects transport.
-builder.Services.AddHttpClient<ProjectsAuthorizationContextClient>()
-    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
-builder.Services.AddTransient<IProjectsAuthorizationContextClient>(services =>
-    services.GetRequiredService<ProjectsAuthorizationContextClient>());
+// Preserve the established named transport for both exact-run and project-read clients.
+builder.Services.AddHttpClient<IProjectsAuthorizationContextClient, ProjectsAuthorizationContextClient>()
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler)
+    .AddTypedClient<ProjectsAuthorizationContextClient>();
 builder.Services.AddSingleton<ProjectUsageReadStore>();
 var coordinationOwner = builder.Configuration.GetSection("EventsAndSessions:OrchestratorOwner");
 builder.Services.AddSingleton(new CoordinationOwnerClientOptions(

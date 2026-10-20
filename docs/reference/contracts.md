@@ -120,6 +120,11 @@ budgeting. Events migration 009 adds the project/time ledger index through the
 separately approved migration path. Existing ledger `SELECT` grants cover
 these reads.
 
+The source-only P1 PostgreSQL plan records Events versions 001 through 009
+and includes them in its review hash. The initializer rejects a plan that
+omits migration 009. Updating these source checks does not authorize running
+the initializer or applying the index.
+
 The `Agentweaver.Gateway` source exposes a finite, versioned client API at
 `/api/v1`. The service is a source candidate; these mappings do not confirm a
 deployment. `GET /openapi/v1.json` returns the route catalog and identifies each
