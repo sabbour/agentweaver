@@ -22,7 +22,8 @@ public sealed record RemoteMcpConnectionDraft(
     string DisplayName,
     string EndpointUri,
     string? ResourceUri,
-    RemoteMcpAuthenticationMode AuthenticationMode);
+    RemoteMcpAuthenticationMode AuthenticationMode,
+    RemoteMcpRegistryServerPin? RegistryServer = null);
 
 /// <summary>Returns the current connection snapshot and whether the request replayed a saved result.</summary>
 public sealed record RemoteMcpConnectionMutationResult(
@@ -168,6 +169,123 @@ public sealed class RemoteMcpConnectionStore(
         return configuration;
     }
 
+    /// <summary>
+    /// Lists safe directory entries for non-removed project connections. Entries carry the current
+    /// configuration revision and checksum and never carry tokens, schemas, or Identity binding references.
+    /// </summary>
+    public async Task<RemoteMcpConnectionDirectoryPage> ListDirectoryAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        int pageSize,
+        Guid? afterConnectionId,
+        CancellationToken cancellationToken)
+    {
+        var page = await ListAsync(caller, projectId, pageSize, afterConnectionId, cancellationToken)
+            .ConfigureAwait(false);
+        return new(
+            page.Connections.Select(RemoteMcpConnectionDirectoryEntry.FromSnapshot).ToImmutableArray(),
+            page.NextConnectionId);
+    }
+
+    /// <summary>
+    /// Evaluates one reviewed tool against the current connection head with fresh ReadProjects authority.
+    /// A changed configuration or catalog returns a review-required denial and never a replacement grant.
+    /// </summary>
+    public async Task<RemoteMcpInvocationValidity> EvaluateInvocationAsync(
+        CurrentCallerRequest caller,
+        RemoteMcpConnectionReviewReference reviewed,
+        string toolName,
+        string toolRevision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reviewed);
+        var snapshot = await GetAsync(
+            caller, reviewed.Connection.ProjectId, reviewed.Connection.ConnectionId, cancellationToken)
+            .ConfigureAwait(false);
+        return RemoteMcpConnectionReview.Evaluate(reviewed, snapshot, toolName, toolRevision);
+    }
+
+    /// <summary>Checks current project authority before a Registry read, without reading connection data.</summary>
+    internal async Task EnsureAuthorityAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        bool write,
+        CancellationToken cancellationToken)
+    {
+        ValidateProjectId(projectId);
+        await AuthorizeAsync(
+            caller,
+            projectId,
+            write ? ProjectAuthorizationPermission.WriteProjects : ProjectAuthorizationPermission.ReadProjects,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Reads the current snapshot with WriteProjects authority before any discovery network call.</summary>
+    internal async Task<RemoteMcpConnectionSnapshot> GetForDiscoveryAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        Guid connectionId,
+        CancellationToken cancellationToken)
+    {
+        ValidateProjectId(projectId);
+        var initial = await AuthorizeAsync(
+            caller, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken).ConfigureAwait(false);
+        RemoteMcpConnectionSnapshot? snapshot;
+        await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
+            snapshot = await ReadSnapshotAsync(
+                connection, null, initial.TenantId, projectId, connectionId, cancellationToken).ConfigureAwait(false);
+        await EnsureCurrentAuthorityAsync(
+            caller, initial, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            .ConfigureAwait(false);
+        return snapshot ?? throw NotFound();
+    }
+
+    /// <summary>
+    /// Returns the saved result when this idempotency key already pinned discovery for the same connection
+    /// and expected row revision. A key used for any other request fails with <c>idempotency_conflict</c>.
+    /// </summary>
+    internal async Task<RemoteMcpConnectionMutationResult?> ReadDiscoveryReplayAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        Guid connectionId,
+        long expectedRowRevision,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        ValidateProjectId(projectId);
+        ValidateIdempotencyKey(idempotencyKey);
+        var initial = await AuthorizeAsync(
+            caller, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken).ConfigureAwait(false);
+        (string Operation, Guid? ConnectionId, string ResultJson)? saved;
+        await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await using var command = new NpgsqlCommand($"""
+                SELECT operation, connection_id, result_json
+                FROM {Idempotency}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id AND idempotency_key = @idempotency_key
+                """, connection);
+            AddOwner(command, initial.TenantId, projectId);
+            command.Parameters.AddWithValue("idempotency_key", NpgsqlDbType.Text, idempotencyKey);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            saved = await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+                ? (reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetGuid(1), reader.GetString(2))
+                : null;
+        }
+
+        await EnsureCurrentAuthorityAsync(
+            caller, initial, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            .ConfigureAwait(false);
+        if (saved is not { } value)
+            return null;
+        var snapshot = DeserializeSnapshot(value.ResultJson);
+        // A discovery save advances the row revision by exactly one from the expected revision.
+        if (!string.Equals(value.Operation, "SaveDiscovery", StringComparison.Ordinal) ||
+            value.ConnectionId != connectionId ||
+            snapshot.Head.RowRevision != checked(expectedRowRevision + 1))
+            throw Conflict("idempotency_conflict", "The idempotency key was already used for a different request.");
+        return new(snapshot, Replayed: true);
+    }
+
     /// <summary>Creates a draft connection and its first immutable configuration under a WriteProjects grant.</summary>
     public Task<RemoteMcpConnectionMutationResult> CreateAsync(
         CurrentCallerRequest caller,
@@ -179,12 +297,7 @@ public sealed class RemoteMcpConnectionStore(
         ValidateProjectId(projectId);
         ValidateIdempotencyKey(idempotencyKey);
         ArgumentNullException.ThrowIfNull(draft);
-        var fingerprint = Fingerprint(
-            "Create",
-            draft.DisplayName,
-            draft.EndpointUri,
-            draft.ResourceUri ?? string.Empty,
-            draft.AuthenticationMode.ToString());
+        var fingerprint = Fingerprint("Create", DraftFingerprintValues(draft));
         return MutateAsync(
             caller,
             projectId,
@@ -241,12 +354,11 @@ public sealed class RemoteMcpConnectionStore(
             throw new ArgumentOutOfRangeException(nameof(expectedRowRevision));
         var fingerprint = Fingerprint(
             "Update",
-            connectionId.ToString("D"),
-            expectedRowRevision.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            draft.DisplayName,
-            draft.EndpointUri,
-            draft.ResourceUri ?? string.Empty,
-            draft.AuthenticationMode.ToString());
+            [
+                connectionId.ToString("D"),
+                expectedRowRevision.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                .. DraftFingerprintValues(draft)
+            ]);
         return MutateAsync(
             caller,
             projectId,
@@ -724,7 +836,29 @@ public sealed class RemoteMcpConnectionStore(
             draft.ResourceUri,
             draft.AuthenticationMode,
             identityBindingReference: null,
-            RemoteMcpTransportProfile.StreamableHttp20250618);
+            RemoteMcpTransportProfile.StreamableHttp20250618,
+            draft.RegistryServer);
+
+    // Custom endpoint drafts keep the fingerprint input they had before Registry selection existed.
+    private static string[] DraftFingerprintValues(RemoteMcpConnectionDraft draft) =>
+        draft.RegistryServer is { } registry
+            ?
+            [
+                draft.DisplayName,
+                draft.EndpointUri,
+                draft.ResourceUri ?? string.Empty,
+                draft.AuthenticationMode.ToString(),
+                registry.ServerName,
+                registry.ExactVersion,
+                registry.MetadataSha256
+            ]
+            :
+            [
+                draft.DisplayName,
+                draft.EndpointUri,
+                draft.ResourceUri ?? string.Empty,
+                draft.AuthenticationMode.ToString()
+            ];
 
     private static async Task InsertConfigurationAsync(
         NpgsqlConnection connection,

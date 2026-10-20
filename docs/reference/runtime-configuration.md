@@ -247,6 +247,7 @@ omits it. The Broker reconciles only these declared clients at startup.
 | `Gateway__Owners__Knowledge` | Required HTTPS service root for Knowledge. |
 | `Gateway__Owners__Events` | Required HTTPS service root for Events & Sessions. |
 | `Gateway__Owners__IdentityBrokerAddress` | Required HTTPS service root for Identity Broker. |
+| `Gateway__Owners__Environment` | Optional HTTPS service root for Environment. The Remote MCP connection directory route uses it. Without it, the route returns 503 `owner_not_configured`. |
 | `Gateway__WebOrigin` | Required exact HTTPS Web origin. It must not contain a path, wildcard, credentials, query, or fragment. |
 | `Gateway__OwnerRequestTimeoutSeconds` | Optional Gateway setting. Integer from `1` through `120`; default is `15`. |
 | `Gateway__BaseAddress` | Required HTTPS Gateway service root for the MCP host. |

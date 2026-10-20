@@ -1,5 +1,5 @@
 import { gatewayBaseUrl } from './config';
-import { isProjectAuthorizationContextResponse } from './contracts';
+import { isProjectAuthorizationContextResponse, isRemoteMcpConnectionDirectoryPage } from './contracts';
 import type {
   CopilotAuthorizationCallback,
   CopilotConnectionBegin,
@@ -34,6 +34,7 @@ import type {
   SkillContentImportRequest,
   SkillContentPreview,
   ProjectSummary,
+  RemoteMcpConnectionDirectoryPage,
   RemoteMcpOAuthCallbackRequest,
   RemoteMcpOAuthConsentPreparation,
   RemoteMcpOAuthConsentRequest,
@@ -396,6 +397,30 @@ export class AgentweaverGatewayClient {
       this.baseUrl,
       tenantSelector,
     );
+  }
+
+  /** Lists the project's Remote MCP connections with configuration checksums. */
+  async listRemoteMcpConnections(
+    token: string,
+    projectId: string,
+    options: { pageSize?: number; after?: string } = {},
+    tenantSelector?: string | null,
+  ): Promise<RemoteMcpConnectionDirectoryPage> {
+    const query = new URLSearchParams();
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    if (options.after !== undefined) query.set('after', options.after);
+    const suffix = query.toString();
+    const page = await this.request<unknown>(
+      token,
+      `/projects/${encodeSegments(projectId, 'remote-mcp', 'connections')}${suffix ? `?${suffix}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (!isRemoteMcpConnectionDirectoryPage(page)) {
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The Remote MCP connection list is not valid.');
+    }
+    return page;
   }
 
   /** Changes a skill assignment and returns the resulting versioned configuration. */

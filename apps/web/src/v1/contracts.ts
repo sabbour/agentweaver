@@ -249,6 +249,78 @@ export interface RemoteMcpOAuthConsentRequest {
   expectedConfigurationSha256: string;
 }
 
+/** One project Remote MCP connection as listed by the Gateway directory route. */
+export interface RemoteMcpConnectionDirectoryEntry {
+  connectionId: string;
+  displayName: string;
+  endpointUri: string;
+  resourceUri: string | null;
+  authenticationMode: 'none' | 'delegatedOAuth';
+  transportProfile: 'streamableHttp20250618';
+  state: 'draft' | 'enabled' | 'disabled' | 'removed';
+  rowRevision: number;
+  configurationRevision: number;
+  configurationSha256: string;
+  identityBound: boolean;
+  registryServerName: string | null;
+  registryExactVersion: string | null;
+  discoveryRevision: number | null;
+  catalogSha256: string | null;
+  toolCount: number;
+}
+
+/** One page of project Remote MCP connections. */
+export interface RemoteMcpConnectionDirectoryPage {
+  connections: RemoteMcpConnectionDirectoryEntry[];
+  nextConnectionId: string | null;
+}
+
+const sha256Pattern = /^[0-9a-f]{64}$/;
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === 'string';
+}
+
+/** Validates one directory entry, including revisions and configuration checksums. */
+export function isRemoteMcpConnectionDirectoryEntry(
+  value: unknown,
+): value is RemoteMcpConnectionDirectoryEntry {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  return typeof entry.connectionId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.connectionId) &&
+    isNonEmptyString(entry.displayName) &&
+    isNonEmptyString(entry.endpointUri) &&
+    isNullableString(entry.resourceUri) &&
+    ['none', 'delegatedOAuth'].includes(String(entry.authenticationMode)) &&
+    entry.transportProfile === 'streamableHttp20250618' &&
+    ['draft', 'enabled', 'disabled', 'removed'].includes(String(entry.state)) &&
+    Number.isSafeInteger(entry.rowRevision) && (entry.rowRevision as number) > 0 &&
+    Number.isSafeInteger(entry.configurationRevision) &&
+    (entry.configurationRevision as number) > 0 &&
+    typeof entry.configurationSha256 === 'string' &&
+    sha256Pattern.test(entry.configurationSha256) &&
+    typeof entry.identityBound === 'boolean' &&
+    isNullableString(entry.registryServerName) &&
+    isNullableString(entry.registryExactVersion) &&
+    (entry.discoveryRevision === null ||
+      (Number.isSafeInteger(entry.discoveryRevision) && (entry.discoveryRevision as number) > 0)) &&
+    (entry.catalogSha256 === null ||
+      (typeof entry.catalogSha256 === 'string' && sha256Pattern.test(entry.catalogSha256))) &&
+    Number.isSafeInteger(entry.toolCount) && (entry.toolCount as number) >= 0;
+}
+
+/** Validates a directory page and every entry in it. */
+export function isRemoteMcpConnectionDirectoryPage(
+  value: unknown,
+): value is RemoteMcpConnectionDirectoryPage {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const page = value as Record<string, unknown>;
+  return Array.isArray(page.connections) &&
+    page.connections.every(isRemoteMcpConnectionDirectoryEntry) &&
+    isNullableString(page.nextConnectionId);
+}
+
 /** Validates exact fields, identifiers, revisions, and states in the owner response. */
 export function isRemoteMcpOAuthManagementStatus(
   value: unknown,

@@ -11,6 +11,7 @@ public enum GatewayOwner
     Knowledge,
     Events,
     IdentityBroker,
+    Environment,
 }
 
 /// <summary>Describes one versioned public route and how the Gateway proxies its request.</summary>
@@ -382,6 +383,13 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Events, run + "/usage",
             "/internal" + run + "/usage",
             "readRunUsage", "Read run usage totals", forwardTenantSelector: true);
+
+        Add("GET", GatewayOwner.Environment, "/projects/{projectId}/remote-mcp/connections",
+            "/api/projects/{projectId}/remote-mcp/directory",
+            "listRemoteMcpConnections",
+            "List Remote MCP connections with configuration checksums",
+            ["pageSize", "after"],
+            forwardTenantSelector: true);
 
         return routes.ToImmutable();
     }

@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
@@ -12,7 +14,9 @@ public sealed record CreateRemoteMcpConnectionRequest(
     string DisplayName,
     string EndpointUri,
     string? ResourceUri,
-    RemoteMcpAuthenticationMode AuthenticationMode);
+    RemoteMcpAuthenticationMode AuthenticationMode,
+    string? RegistryServerName = null,
+    string? RegistryExactVersion = null);
 
 /// <summary>Request body for replacing a connection configuration at an expected row revision.</summary>
 public sealed record UpdateRemoteMcpConnectionRequest(
@@ -21,7 +25,9 @@ public sealed record UpdateRemoteMcpConnectionRequest(
     string DisplayName,
     string EndpointUri,
     string? ResourceUri,
-    RemoteMcpAuthenticationMode AuthenticationMode);
+    RemoteMcpAuthenticationMode AuthenticationMode,
+    string? RegistryServerName = null,
+    string? RegistryExactVersion = null);
 
 /// <summary>Request body for an idempotent connection state change.</summary>
 public sealed record RemoteMcpConnectionStateRequest(
@@ -35,9 +41,24 @@ public sealed record LinkRemoteMcpIdentityBindingRequest(
     string IdentityBindingReference,
     string OperationId);
 
+/// <summary>Request body for checking one reviewed tool against the current connection head.</summary>
+public sealed record RemoteMcpInvocationValidityRequest(
+    long ConfigurationRevision,
+    string ConfigurationSha256,
+    long DiscoveryRevision,
+    string CatalogSha256,
+    string ToolName,
+    string ToolRevision);
+
 /// <summary>Maps authenticated project APIs for Remote MCP connection management.</summary>
 public static class RemoteMcpConnectionEndpoints
 {
+    // The Gateway publishes the directory, so enum values use stable camelCase strings.
+    internal static readonly JsonSerializerOptions DirectoryJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },
+    };
+
     /// <summary>
     /// Registers authenticated connection routes; state mutations use a JSON body for revision and idempotency.
     /// </summary>
@@ -61,7 +82,7 @@ public static class RemoteMcpConnectionEndpoints
             {
                 var page = await store.ListAsync(
                     caller!, projectId, pageSize ?? 50, after, cancellationToken).ConfigureAwait(false);
-                return Results.Ok(page);
+                return Results.Json(page, DirectoryJsonOptions);
             }).ConfigureAwait(false);
         });
 
@@ -70,6 +91,7 @@ public static class RemoteMcpConnectionEndpoints
             CreateRemoteMcpConnectionRequest request,
             HttpContext context,
             RemoteMcpConnectionStore store,
+            RemoteMcpDiscoveryService discovery,
             CancellationToken cancellationToken) =>
         {
             if (!TryReadCaller(context, out var caller))
@@ -79,11 +101,16 @@ public static class RemoteMcpConnectionEndpoints
                 var result = await store.CreateAsync(
                     caller!,
                     projectId,
-                    new(
+                    await discovery.ResolveDraftAsync(
+                        caller!,
+                        projectId,
                         request.DisplayName,
                         request.EndpointUri,
                         request.ResourceUri,
-                        request.AuthenticationMode),
+                        request.AuthenticationMode,
+                        request.RegistryServerName,
+                        request.RegistryExactVersion,
+                        cancellationToken).ConfigureAwait(false),
                     request.IdempotencyKey,
                     cancellationToken).ConfigureAwait(false);
                 return Results.Created(
@@ -159,6 +186,7 @@ public static class RemoteMcpConnectionEndpoints
             UpdateRemoteMcpConnectionRequest request,
             HttpContext context,
             RemoteMcpConnectionStore store,
+            RemoteMcpDiscoveryService discovery,
             CancellationToken cancellationToken) =>
         {
             if (!TryReadCaller(context, out var caller))
@@ -170,11 +198,16 @@ public static class RemoteMcpConnectionEndpoints
                     projectId,
                     connectionId,
                     request.ExpectedRowRevision,
-                    new(
+                    await discovery.ResolveDraftAsync(
+                        caller!,
+                        projectId,
                         request.DisplayName,
                         request.EndpointUri,
                         request.ResourceUri,
-                        request.AuthenticationMode),
+                        request.AuthenticationMode,
+                        request.RegistryServerName,
+                        request.RegistryExactVersion,
+                        cancellationToken).ConfigureAwait(false),
                     request.IdempotencyKey,
                     cancellationToken).ConfigureAwait(false);
                 return Results.Ok(result);
@@ -249,6 +282,92 @@ public static class RemoteMcpConnectionEndpoints
                     request.IdempotencyKey,
                     cancellationToken).ConfigureAwait(false);
                 return Results.Ok(result);
+            }).ConfigureAwait(false);
+        });
+
+        group.MapPost("/{connectionId:guid}/discover", async (
+            string projectId,
+            Guid connectionId,
+            RemoteMcpConnectionStateRequest request,
+            HttpContext context,
+            RemoteMcpDiscoveryService discovery,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteAsync(context, async () =>
+            {
+                var result = await discovery.DiscoverAsync(
+                    caller!,
+                    projectId,
+                    connectionId,
+                    request.ExpectedRowRevision,
+                    request.IdempotencyKey,
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(result);
+            }).ConfigureAwait(false);
+        });
+
+        group.MapPost("/{connectionId:guid}/invocation-validity", async (
+            string projectId,
+            Guid connectionId,
+            RemoteMcpInvocationValidityRequest request,
+            HttpContext context,
+            RemoteMcpConnectionStore store,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteAsync(context, async () =>
+            {
+                var reviewed = new RemoteMcpConnectionReviewReference(
+                    new RemoteMcpConnectionReference(projectId, connectionId),
+                    request.ConfigurationRevision,
+                    request.ConfigurationSha256,
+                    request.DiscoveryRevision,
+                    request.CatalogSha256);
+                var validity = await store.EvaluateInvocationAsync(
+                    caller!, reviewed, request.ToolName, request.ToolRevision, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(validity);
+            }).ConfigureAwait(false);
+        });
+
+        var project = endpoints.MapGroup("/api/projects/{projectId}/remote-mcp")
+            .RequireAuthorization();
+
+        project.MapGet("/directory", async (
+            string projectId,
+            int? pageSize,
+            Guid? after,
+            HttpContext context,
+            RemoteMcpConnectionStore store,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteAsync(context, async () =>
+            {
+                var page = await store.ListDirectoryAsync(
+                    caller!, projectId, pageSize ?? 50, after, cancellationToken).ConfigureAwait(false);
+                return Results.Json(page, DirectoryJsonOptions);
+            }).ConfigureAwait(false);
+        });
+
+        project.MapGet("/registry/servers", async (
+            string projectId,
+            string? cursor,
+            HttpContext context,
+            RemoteMcpDiscoveryService discovery,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteAsync(context, async () =>
+            {
+                var page = await discovery.ReadRegistryPageAsync(caller!, projectId, cursor, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(page);
             }).ConfigureAwait(false);
         });
 
