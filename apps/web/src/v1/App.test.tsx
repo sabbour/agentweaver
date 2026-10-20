@@ -431,6 +431,64 @@ describe('v1 web project scoping', () => {
     });
   });
 
+  it('retains gallery tiles and opens project creation in a dialog', async () => {
+    mocks.listProjects.mockResolvedValue([projectSummary('p1', 'Fixture project')]);
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    const gallery = await screen.findByRole('list', { name: 'Projects' });
+    expect(within(gallery).getByText('Fixture project')).toBeTruthy();
+    expect(within(gallery).getByText('Role unavailable')).toBeTruthy();
+    expect(screen.queryByLabelText('Project name')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(screen.getByLabelText('Project name')).toBeTruthy();
+  });
+
+  it('uses the retained collapse control and hides unsupported navigation', async () => {
+    mocks.getProject.mockResolvedValue(projectSummary('p1', 'Fixture project'));
+    window.history.replaceState({}, '', '/projects/p1');
+    render(<App />);
+    await screen.findByText('Fixture project');
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' });
+    expect(within(nav).getByRole('link', { name: 'Orchestrations' })).toBeTruthy();
+    expect(within(nav).getByRole('link', { name: 'Skills' })).toBeTruthy();
+    for (const name of ['Board', 'Flow', 'Workspace', 'Workflows', 'Observability', 'Diagnostics', 'Heartbeat', 'Cluster']) {
+      expect(within(nav).queryByRole('link', { name })).toBeNull();
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse navigation' }));
+    expect(nav.getAttribute('data-collapsed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand navigation' }));
+    expect(nav.getAttribute('data-collapsed')).toBe('false');
+  });
+
+  it.each(['board', 'flow', 'workspace', 'workflows', 'observability/traces', 'diagnostics', 'heartbeat', 'cluster'])(
+    'explains unsupported old %s links without pretending the route is Projects',
+    async (path) => {
+      window.history.replaceState({}, '', `/projects/p1/${path}`);
+      render(<App />);
+      expect(await screen.findByText('Not available in this version')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Open Dashboard' }).getAttribute('href')).toBe('/projects/p1');
+      expect(window.location.pathname).toBe(`/projects/p1/${path}`);
+    },
+  );
+
+  it('distinguishes unknown addresses from unavailable legacy features', async () => {
+    window.history.replaceState({}, '', '/unknown-page');
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();
+    expect(screen.queryByText('Not available in this version')).toBeNull();
+  });
+
+  it('keeps orchestration bookmarks and their selected run view', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    window.history.replaceState({}, '', '/projects/p1/orchestrations/r1?view=chat&source=bookmark');
+    render(<App />);
+    const chat = await screen.findByRole('tab', { name: 'Chat' });
+    expect(chat.getAttribute('aria-selected')).toBe('true');
+    expect(window.location.search).toContain('source=bookmark');
+  });
+
   it('explains known permissions and links each one to Agentweaver documentation', () => {
     mocks.consent = {
       consent_required: true,
@@ -1362,14 +1420,14 @@ describe('v1 web project scoping', () => {
       window.history.pushState({}, '', '/projects/p1');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
-    await screen.findByRole('heading', { name: 'Project One' });
+    await screen.findByText('Project One');
 
     act(() => {
       window.history.pushState({}, '', '/projects/p2');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
     await waitFor(() => expect(mocks.getProject).toHaveBeenCalledWith('broker-token', 'p2', 'tenant-1'));
-    expect(screen.queryByRole('heading', { name: 'Project One' })).toBeNull();
+    expect(screen.queryByText('Project One')).toBeNull();
 
     act(() => {
       window.history.pushState({}, '', '/projects/p3');
@@ -1380,13 +1438,13 @@ describe('v1 web project scoping', () => {
       oldProjectLoad.resolve(projectSummary('p2', 'Project Two'));
       await oldProjectLoad.promise;
     });
-    expect(screen.queryByRole('heading', { name: 'Project Two' })).toBeNull();
+    expect(screen.queryByText('Project Two')).toBeNull();
 
     await act(async () => {
       currentProjectLoad.resolve(projectSummary('p3', 'Project Three'));
       await currentProjectLoad.promise;
     });
-    await screen.findByRole('heading', { name: 'Project Three' });
+    await screen.findByText('Project Three');
   });
 
   it('does not show or save an old project configuration after navigation', async () => {
@@ -1422,7 +1480,7 @@ describe('v1 web project scoping', () => {
 
     expect((screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement).value)
       .toContain('"projectMarker": "p2"');
-    fireEvent.click(screen.getByRole('button', { name: 'Append configuration revision' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
     expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
       'broker-token',
@@ -1434,6 +1492,7 @@ describe('v1 web project scoping', () => {
   });
 
   it('loads marketplace sources through the selected project with the current tenant', async () => {
+    window.history.replaceState({}, '', '/projects/p1/skills');
     mocks.getProjectConfiguration.mockResolvedValue(projectConfiguration('p1', 4));
     mocks.listMarketplaceSources.mockResolvedValue([{
       sourceId: 'source-1',
@@ -1474,7 +1533,7 @@ describe('v1 web project scoping', () => {
 
     render(<App />);
 
-    await screen.findByRole('heading', { name: 'Revision 4' });
+    await screen.findByRole('heading', { name: 'Skills and marketplace' });
     await screen.findByRole('heading', { name: 'Skills and marketplace' });
     await waitFor(() => expect(mocks.listMarketplaceSources).toHaveBeenCalledWith(
       'broker-token',
@@ -1515,7 +1574,8 @@ describe('v1 web project scoping', () => {
     expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
   });
 
-  it('prevents configuration edits while a skill assignment is pending', async () => {
+  it('keeps Skills separate from configuration editing while assignment is pending', async () => {
+    window.history.replaceState({}, '', '/projects/p1/skills');
     const base = projectConfiguration('p1', 4);
     const configured = {
       ...base,
@@ -1561,10 +1621,8 @@ describe('v1 web project scoping', () => {
     mocks.updateSkillAssignment.mockReturnValue(pendingAssignment.promise);
     render(<App />);
 
-    await screen.findByRole('heading', { name: 'Revision 4' });
     await screen.findByRole('heading', { name: 'Skills and marketplace' });
-    const editor = screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement;
-    const originalEditor = editor.value;
+    expect(screen.queryByLabelText('Typed ProjectConfiguration JSON')).toBeNull();
     fireEvent.change(screen.getByLabelText('Skill folder or files'), {
       target: { files: [new File(['# Sample skill'], 'SKILL.md', { type: 'text/markdown' })] },
     });
@@ -1576,9 +1634,8 @@ describe('v1 web project scoping', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Assign to selected agents' }));
     await waitFor(() => expect(mocks.updateSkillAssignment).toHaveBeenCalledOnce());
 
-    expect(editor.readOnly).toBe(true);
-    fireEvent.change(editor, { target: { value: '{"projectMarker":"unsaved edit"}' } });
-    expect(editor.value).toBe(originalEditor);
+    expect((screen.getByRole('button', { name: 'Saving assignment…' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByLabelText('Typed ProjectConfiguration JSON')).toBeNull();
 
     await act(async () => {
       pendingAssignment.resolve(saved);
@@ -1586,9 +1643,7 @@ describe('v1 web project scoping', () => {
     });
 
     await screen.findByText(/saved this assignment in configuration revision 5/);
-    expect(editor.value).toBe(JSON.stringify(saved.configuration, null, 2));
-    expect(editor.value).not.toContain('unsaved edit');
-    expect(editor.readOnly).toBe(false);
+    expect(mocks.updateSkillAssignment).toHaveBeenCalledOnce();
   });
 
   it('clears an accepted selection and usage after a later snapshot read fails', async () => {
@@ -1620,7 +1675,7 @@ describe('v1 web project scoping', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
     await screen.findByText('model-meter');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh owner snapshots' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh run' }));
     await screen.findByText('No usage totals were returned by Events & Sessions.');
     expect(screen.queryByText('model-meter')).toBeNull();
 

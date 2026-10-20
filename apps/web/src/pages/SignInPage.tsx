@@ -1,5 +1,6 @@
 import { Button, MessageBar, MessageBarBody, MessageBarTitle, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ENTRA_AUTHORIZE_URL } from '../config';
+import type { ReactNode } from 'react';
 
 /**
  * Entra sign-in screen for unauthenticated users. It explains server-side OAuth
@@ -97,7 +98,6 @@ export interface SignInPageProps {
  * actionable copy; it does not retry authentication automatically.
  */
 export function SignInPage({ sessionError = null }: SignInPageProps) {
-  const styles = useStyles();
 
   const params = new URLSearchParams(window.location.search);
   const authError = params.get('auth') === 'error' ? (() => {
@@ -113,6 +113,25 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
         return 'Authentication could not be completed. Start a new sign-in.';
     }
   })() : null;
+  return (
+    <SignInView
+      heading="Sign in with Microsoft Entra ID"
+      sessionError={sessionError}
+      action={<Button appearance="primary" onClick={() => { window.location.href = ENTRA_AUTHORIZE_URL; }}>Sign in with Microsoft Entra ID</Button>}
+      error={authError}
+    />
+  );
+}
+
+/** Retains the sign-in presentation while each product line owns authorization. */
+export function SignInView({ heading, sessionError, action, error, note }: {
+  heading: string;
+  sessionError?: string | null;
+  action: ReactNode;
+  error?: string | null;
+  note?: ReactNode;
+}) {
+  const styles = useStyles();
   return (
     <div className={styles.page}>
       <div className={styles.card}>
@@ -131,7 +150,7 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
         )}
 
         <div>
-          <Text as="h1" className={styles.heading}>Sign in with Microsoft Entra ID</Text>
+          <Text as="h1" className={styles.heading}>{heading}</Text>
           <Text as="p" className={styles.subheading}>
             Run governed teams of AI agents on your organization&apos;s infrastructure.
           </Text>
@@ -147,16 +166,12 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
         </div>
 
         <div className={styles.actions}>
-          <Button
-            appearance="primary"
-            onClick={() => { window.location.href = ENTRA_AUTHORIZE_URL; }}
-          >
-            Sign in with Microsoft Entra ID
-          </Button>
-          {authError && (
-            <Text role="alert" className={styles.error}>{authError}</Text>
+          {action}
+          {error && (
+            <Text role="alert" className={styles.error}>{error}</Text>
           )}
         </div>
+        {note && <Text as="p" className={styles.note}>{note}</Text>}
       </div>
     </div>
   );

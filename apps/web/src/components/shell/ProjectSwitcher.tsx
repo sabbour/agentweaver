@@ -92,15 +92,34 @@ export interface ProjectSwitcherProps {
  * data and loading status.
  */
 export function ProjectSwitcher({
+  ...props
+}: ProjectSwitcherProps) {
+  const state = useProjectList();
+  return <ProjectSwitcherView {...props} {...state} />;
+}
+
+/** Only project identity and display names are needed by the retained switcher. */
+type SwitcherProject = Pick<Project, 'project_id' | 'name'>;
+
+/** Displays service-supplied projects without making legacy project API calls. */
+export function ProjectSwitcherView({
   projectId,
   pathname,
   isFallbackProject,
   onFallbackProjectMissing,
-}: ProjectSwitcherProps) {
+  projects,
+  loading,
+  authError,
+  loadError,
+}: ProjectSwitcherProps & {
+  projects: SwitcherProject[];
+  loading: boolean;
+  authError: boolean;
+  loadError: boolean;
+}) {
   const styles = useStyles();
   const navigate = useNavigate();
 
-  const { projects, loading, authError, loadError } = useProjectList();
   const loaded = !loading;
 
   const [comboValue, setComboValue] = useState('');
@@ -154,7 +173,7 @@ export function ProjectSwitcher({
     return recentIds
       .filter((rid) => rid !== projectId)
       .map((rid) => projects.find((p) => p.project_id === rid))
-      .filter((p): p is Project => Boolean(p))
+      .filter((p): p is SwitcherProject => Boolean(p))
       .filter((p) => !isFiltering || p.name.toLowerCase().includes(q));
   }, [recentIds, projects, projectId, isFiltering, comboValue]);
 

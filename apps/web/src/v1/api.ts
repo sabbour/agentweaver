@@ -200,10 +200,11 @@ export class AgentweaverGatewayClient {
     token: string,
     projectId: string,
     tenantSelector?: string | null,
+    revision?: number,
   ): Promise<VersionedProjectConfiguration> {
     return this.request(
       token,
-      `/projects/${encodeSegments(projectId)}/configuration`,
+      `/projects/${encodeSegments(projectId)}/configuration${revision === undefined ? '' : `?revision=${revision}`}`,
       {},
       this.baseUrl,
       tenantSelector,

@@ -1,4 +1,5 @@
 import { Button, Field, Input, MessageBar, MessageBarBody, Spinner } from '@fluentui/react-components';
+import { PageSection } from '../components/ui/PageSection';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { GatewayError } from './api';
@@ -881,12 +882,9 @@ export function SkillsMarketplacePanel({
   };
 
   return (
-    <section className="v1-panel v1-stack" aria-labelledby="skills-marketplace-heading">
-      <div className="v1-panel-heading">
-        <h2 id="skills-marketplace-heading">Skills and marketplace</h2>
-      </div>
+    <PageSection title={<span id="skills-marketplace-heading">Skills and marketplace</span>}>
       <p className="v1-muted">
-        The signed-in actor and current project are checked by the owner on every request. A source marked active is configured; it does not confirm that GitHub is available.
+        The service checks your project access for each action. An active source is saved; it does not confirm that GitHub is available.
       </p>
       {!actions && (
         <MessageBar intent="warning">
@@ -903,7 +901,7 @@ export function SkillsMarketplacePanel({
         {marketplaceError && <MessageBar intent="error" role="alert"><MessageBarBody>{marketplaceError}</MessageBarBody></MessageBar>}
         {marketplaceNotice && <MessageBar intent="success"><MessageBarBody>{marketplaceNotice}</MessageBarBody></MessageBar>}
         <p className="v1-muted">
-          Sources must be public GitHub repositories. Browse results pin a source revision and resolved commit. Preview and import read the selected content at that exact commit; the browser does not send source files.
+          Use public GitHub repositories. Preview and import use the exact saved source version shown in the results.
         </p>
         {sourceLoadState === 'loading' && <Spinner label="Loading marketplace sources…" />}
         {sourceLoadState === 'unavailable' && (
@@ -1368,6 +1366,6 @@ export function SkillsMarketplacePanel({
           </MessageBarBody>
         </MessageBar>
       </section>
-    </section>
+    </PageSection>
   );
 }

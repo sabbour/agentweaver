@@ -39,6 +39,7 @@ flowchart LR
   Orchestrator[Orchestrator]
   Events[Events & Sessions]
   Knowledge[Knowledge]
+  ToolSignIn[Remote tool sign-in service]
 
   Browser -->|HTTPS /api/v1 and exact /openapi/v1.json| Portal
   Portal -->|/api/v1 and exact /openapi/v1.json| Gateway
@@ -55,6 +56,8 @@ flowchart LR
   Browser -->|Repo App status, repositories, selection, disconnect: cookies + CSRF| Broker
   Browser -->|Native Repo App OAuth form in tracked popup| Broker
   Browser -->|Run-bound GitHub App installation and pin: bearer + exact tenant/run| Gateway
+  Browser -->|Remote tool status, setup and callback| Gateway
+  Browser -->|Tracked sign-in popup| ToolSignIn
   Gateway -->|Copilot connection BFF: optional tenant selector| Broker
   Gateway --> Projects
   Gateway --> Orchestrator
@@ -68,9 +71,50 @@ The client uses these routes:
 | --- | --- |
 | `/projects` | List visible projects and create a project. Creating a project does not assign an Owner. |
 | `/projects/:projectId` | Read project state and open an existing run by its exact ID. |
-| `/projects/:projectId/settings` | Read and update revisioned project configuration, manage Skill sources and assignments, and connect user accounts. |
-| `/projects/:projectId/knowledge` | Search and manage supported Knowledge records and transfer bundles for an exact project, run, and agent. |
+| `/projects/:projectId/settings` | Edit revisioned configuration, read history, and manage connections. |
+| `/projects/:projectId/skills` | Manage Skill sources, imported revisions, and agent assignments. |
+| `/projects/:projectId/memories` | Search and manage supported Knowledge records and transfer bundles for an exact project, run, and agent. `/knowledge` is a compatibility alias. |
 | `/projects/:projectId/runs/:runId` | Read run and session snapshots, journal events, topology, chat, outcomes, approvals, activity, accepted selection, and usage. The `view` query selects a run tab, such as `?view=chat`. |
+
+## Navigate the client
+
+The v1 client keeps the 0.x navigation rail, project switcher, floating content
+panel, gallery tiles, dialogs, typography, and theme. Its views use v1 service
+contracts instead of the 0.x API.
+
+Choose **Projects** to open the project gallery. Select **Create project** to
+open the creation dialog. Creating a project does not grant access to it.
+Project tiles and headings show **Role unavailable** because the current API
+does not return role names. The client does not derive TenantAdmin, Owner, or
+Orchestrator labels from permissions. This API gap is tracked in
+[#2131](https://github.com/sabbour/agentweaver/issues/2131).
+
+Within a project, use these destinations:
+
+| Destination | Route | What you can do |
+| --- | --- | --- |
+| Dashboard | `/projects/:projectId` | Read current project revisions and open an exact run ID. |
+| Orchestrations | `/projects/:projectId/orchestrations` | Open an existing run by its exact ID. |
+| Agents | `/projects/:projectId/team` | Read agent charters and current team assignments. |
+| Skills | `/projects/:projectId/skills` | Browse, preview, import, and assign pinned Skills. |
+| Memories | `/projects/:projectId/memories` | Work with scoped Knowledge records and revisions. |
+| Project settings | `/projects/:projectId/settings` | Edit model, reasoning, provider, and advanced configuration; read history; manage connections. |
+
+Open **Settings** in the rail to reach account or project settings. In project
+settings, use **Connections** for the GitHub Repo App, Copilot, and Remote MCP.
+The old `/knowledge` route still opens Memories. Existing
+`/orchestrations/:runId` links preserve their query parameters when opening
+the corresponding run.
+
+Board, Flow, Workspace, Workflows, Observability, Diagnostics, Heartbeat,
+Cluster, Assistant, and Platform settings are not navigation choices because
+their data is not exposed by this client's admitted v1 APIs. Old links show
+one **Not available in this version** pattern with a reason and a return link.
+Unknown addresses show **Page not found**. Neither state invents data or
+calls the old monolith.
+
+See the [UI parity inventory](../reference/web-ui-parity.md) for the retained
+patterns, v1 adaptations, and remaining limits.
 
 The run page polls owner snapshots and replays journal pages before it opens
 the live event stream. It merges overlapping replay and live events by event
@@ -131,11 +175,37 @@ unrelated APIs do not receive the selector. Owners recheck current authority
 for every protected operation. The context response is not a permission grant
 or a cached authorization decision.
 
-## Manage Skills in project settings
+## Edit project settings and read history
 
-Project settings can manage public marketplace sources, browse pinned source
-revisions, preview and import Skills, and assign imported revisions to agents
-in the current project cast.
+Project settings presents model defaults, model overrides by task, reasoning
+effort, and saved provider IDs as readable fields. Empty task fields inherit
+their defaults. The supported task categories are Planning, Review, Design,
+Security, Creative writing, Complex work, Code writing, and Straightforward
+work. The owner accepts Low, Medium, High, and Extra high reasoning effort.
+Model support remains subject to owner validation.
+
+Available model and provider choices are not returned through the current
+Gateway catalog. Enter existing references; the client does not substitute a
+hardcoded catalog. This API gap is tracked in
+[#2132](https://github.com/sabbour/agentweaver/issues/2132).
+Use **Advanced: edit configuration JSON** only when the readable fields do not
+cover the setting. It retains the complete document and saved references.
+After editing JSON, save or reload before using the readable fields.
+
+Saving appends a configuration revision. Existing runs keep their accepted
+selections. In **History**, enter an exact revision and select **View revision**
+to read its settings. Historical settings are read-only and do not replace
+the current editor.
+
+## Manage Skills
+
+The project's **Skills** destination can manage public marketplace sources,
+browse pinned source revisions, preview and import Skills, and assign imported
+revisions to agents in the current project cast.
+
+Project settings links to Skills. Skill assignment uses the current
+configuration revision, and the owner rejects stale updates. Skills does not
+mount a second configuration editor.
 
 For a marketplace Skill, the client sends source revision, resolved commit,
 selected path, and (for import) the preview digest and idempotency key. The
@@ -146,8 +216,8 @@ after the owner returns a matching digest.
 
 Assignment uses the imported revision and digest, the current configuration
 revision, and selected agents from the current cast. The client checks the
-returned configuration revision before it replaces the editor's revision and
-disables assignment while there are unsaved changes. The UI reports the
+returned configuration revision before it replaces the assignment's revision.
+It disables duplicate assignment requests while a save is pending. The UI reports the
 saved assignment; it does not claim that a runtime loaded the Skill.
 
 The read-only Skill inventory displays owner-reported assignments, revision
@@ -180,6 +250,9 @@ contain at most 25 records and 500 revisions, and its size is limited to
 1 MiB.
 
 ## Connect GitHub and Copilot accounts
+
+Use project **Settings > Connections**. GitHub and Copilot keep their existing
+authorization flows and revision checks.
 
 The Repo App account control uses Identity Broker status and an opaque
 `connectionId`. Project configuration selects the connection with
@@ -218,6 +291,24 @@ repository pinning remain run-bound Gateway operations with the exact project,
 run, and tenant. The owner checks the accepted run configuration and current
 authority. Status or discovery failures remain visible; the UI does not
 present them as an empty repository list or a disconnected account.
+
+## Connect a Remote MCP tool service
+
+In project **Settings > Connections > Remote MCP**, enter the saved connection
+ID and select **Load connection**. The view shows the state returned by the
+service. It rejects responses for another project or connection.
+
+Use **Connection setup** for registration and authorization metadata. Enter
+the checksum from the saved project connection setup. The current API does
+not return a connection directory or that checksum. This gap is tracked in
+[#2135](https://github.com/sabbour/agentweaver/issues/2135). The browser does not
+calculate a replacement checksum from its JSON formatting.
+
+Authorize opens the service-provided HTTPS address in a tracked popup. After
+sign-in returns, select **Load connection** to read the current result.
+A callback is not proof of success. Refresh and disconnect use the exact
+connection, credential, and configuration revisions returned by the owner.
+The browser does not collect or store provider tokens.
 
 ## Configure the client
 

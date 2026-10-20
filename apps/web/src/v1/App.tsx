@@ -9,18 +9,27 @@ import '../components/shell/shell.css';
 import './styles.css';
 import { FluentProvider, Button, Badge, Field, Input, Textarea, Spinner, TabList, Tab, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import {
-  Apps24Regular,
+  AddRegular,
   BookToolbox24Regular,
   Brain24Regular,
   Chat24Regular,
-  ChevronRightRegular,
-  Dismiss24Regular,
   Flowchart24Regular,
-  Home24Regular,
   Settings24Regular,
 } from '@fluentui/react-icons';
 import { ApprovalGate } from '../components/ui/agentic';
 import { agentweaverLightTheme } from '../theme';
+import { PageHeader } from '../components/ui/PageHeader';
+import { PageSection } from '../components/ui/PageSection';
+import { Tile, TileGrid } from '../components/ui/TileGrid';
+import { AppDialog } from '../components/ui/AppDialog';
+import { EmptyState } from '../components/ui/States';
+import { SignInView } from '../pages/SignInPage';
+import { RetainedShell as Shell } from './RetainedShell';
+import { iconForRole, workflowNodeTypes } from '../components/WorkflowGraphPanel';
+import type { WorkflowNodeData } from '../components/WorkflowGraphPanel';
+import { ConfigurationFields } from './ConfigurationFields';
+import { ConfigurationHistory } from './ConfigurationHistory';
+import { RemoteMcpConnectionPanel } from './RemoteMcpConnectionPanel';
 import {
   BrowserRouter,
   Link,
@@ -136,151 +145,47 @@ function Loading({ label = 'Loading from the Gateway…' }: { label?: string }) 
 function SignInScreen() {
   const { busy, error, configurationError, authorize } = useAuth();
   return (
-    <main className="v1-auth-page">
-      <section className="v1-auth-card">
-        <div className="v1-brand"><img src="/agentweaver.png" alt="" />Agentweaver</div>
-        <h1>Sign in</h1>
-        <p>Sign in through the Identity Broker to use the Gateway-backed project and run views.</p>
-        {configurationError && <ErrorNotice>{configurationError}</ErrorNotice>}
-        {error && <ErrorNotice>{error}</ErrorNotice>}
-        <Button
+    <SignInView
+      heading="Sign in"
+      sessionError={configurationError}
+      error={error}
+      action={<Button
           appearance="primary"
           disabled={busy || Boolean(configurationError)}
           onClick={() => void authorize(null)}
         >
-          {busy ? 'Waiting for Identity Broker…' : 'Continue with Identity Broker'}
-        </Button>
-        <p className="v1-muted">
-          Access and refresh tokens stay in memory only. After a reload, Agentweaver tries one
-          silent sign-in in this tab. If it cannot restore the session, continue sign-in again.
-        </p>
-      </section>
-    </main>
-  );
-}
-
-/** Renders shared navigation and the active project's route content. */
-function Shell({ children }: { children: ReactNode }) {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const { session, signOut } = useAuth();
-  const projectMatch = location.pathname.match(/^\/projects\/([^/]+)/);
-  const projectId = projectMatch ? decodeURIComponent(projectMatch[1]) : undefined;
-  const selected = (path: string) =>
-    location.pathname === path || location.pathname.startsWith(`${path}/`);
-
-  return (
-    <div className="aw-app-shell">
-      <nav className="aw-left-nav" aria-label="Primary navigation">
-        <div className="aw-rail-chrome">
-          <Link to="/projects" aria-label="Agentweaver home" className="aw-rail-brand">
-            <img src="/agentweaver.png" alt="" className="aw-rail-brand__icon" />
-            <span className="aw-rail-brand__label">Agentweaver</span>
-          </Link>
-          <Button appearance="subtle" icon={<Dismiss24Regular />} aria-label="Clear browser session" onClick={signOut} />
-        </div>
-        <div className="aw-rail-header">
-          <Badge appearance="tint" color="informative" className="v1-session-badge">
-            Broker session in memory
-          </Badge>
-        </div>
-        <div className="aw-rail-scroll">
-          <div className="aw-nav-section" role="group" aria-label="Workspace">
-            <div className="aw-nav-section__heading">Workspace</div>
-            <Link to="/projects" className={`aw-nav-item${selected('/projects') && !projectId ? ' aw-nav-item--selected' : ''}`}>
-              <span className="aw-nav-item__icon"><Apps24Regular /></span>
-              <span className="aw-nav-item__label">Projects</span>
-            </Link>
-          </div>
-          {projectId && (
-            <>
-              <hr className="aw-nav-divider" />
-              <div className="aw-nav-section" role="group" aria-label="Project">
-                <div className="aw-nav-section__heading">Project</div>
-                <Link to={`/projects/${encodeURIComponent(projectId)}`} className={`aw-nav-item${location.pathname === `/projects/${projectId}` ? ' aw-nav-item--selected' : ''}`}>
-                  <span className="aw-nav-item__icon"><Home24Regular /></span>
-                  <span className="aw-nav-item__label">Overview</span>
-                </Link>
-                <Link to={`/projects/${encodeURIComponent(projectId)}/settings`} className={`aw-nav-item${selected(`/projects/${projectId}/settings`) ? ' aw-nav-item--selected' : ''}`}>
-                  <span className="aw-nav-item__icon"><Settings24Regular /></span>
-                  <span className="aw-nav-item__label">Configuration</span>
-                </Link>
-                <Link to={`/projects/${encodeURIComponent(projectId)}/knowledge`} className={`aw-nav-item${selected(`/projects/${projectId}/knowledge`) ? ' aw-nav-item--selected' : ''}`}>
-                  <span className="aw-nav-item__icon"><Brain24Regular /></span>
-                  <span className="aw-nav-item__label">Knowledge</span>
-                </Link>
-              </div>
-            </>
-          )}
-          <hr className="aw-nav-divider" />
-          <div className="aw-nav-section" role="group" aria-label="Account">
-            <div className="aw-nav-section__heading">Account</div>
-            <button
-              className="aw-nav-item v1-nav-button"
-              disabled={!session?.binding}
-              onClick={() => {
-                if (!session?.binding) return;
-                navigate(
-                  `/projects/${encodeURIComponent(session.binding.projectId)}/runs/${encodeURIComponent(session.binding.runId)}?view=chat`,
-                );
-              }}
-            >
-              <span className="aw-nav-item__icon"><Chat24Regular /></span>
-              <span className="aw-nav-item__label">{session?.binding ? 'Run chat' : 'Run chat opens from a run'}</span>
-            </button>
-          </div>
-        </div>
-        <div className="aw-rail-footer"><span className="v1-muted">Agentweaver 1.0 · Gateway</span></div>
-      </nav>
-      <div className="aw-shell-canvas">
-        <main className="aw-shell-content" aria-label="Main content">
-          <div className="aw-shell-scroll">
-            <div className="v1-content">
-              <div className="v1-topbar">
-                <div className="v1-breadcrumb">
-                  <Link to="/projects">Projects</Link>
-                  {projectId && <><ChevronRightRegular /><span>{projectId}</span></>}
-                </div>
-                <Button appearance="subtle" onClick={signOut}>Clear session</Button>
-              </div>
-              {children}
-            </div>
-          </div>
-        </main>
-      </div>
-    </div>
+          {busy ? 'Signing in…' : 'Sign in'}
+        </Button>}
+      note="Your sign-in stays in this tab. After a reload, Agentweaver tries to restore it once. If it cannot, sign in again."
+    />
   );
 }
 
 /** Standard page title, optional description, and aligned page actions. */
 function PageHeading({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
-  return (
-    <header className="v1-page-heading">
-      <div><h1>{title}</h1>{description && <p>{description}</p>}</div>
-      {actions && <div className="v1-actions">{actions}</div>}
-    </header>
-  );
+  const { projectId } = useParams();
+  return <PageHeader title={title} description={description} actions={<>
+    {projectId && <Badge appearance="outline" title="The current API does not return role names.">Role unavailable</Badge>}
+    {actions}
+  </>} />;
 }
 
 /** Standard titled content panel with an optional action area. */
 function Panel({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
-  return (
-    <section className="v1-panel">
-      <div className="v1-panel-heading"><h2>{title}</h2>{actions}</div>
-      {children}
-    </section>
-  );
+  return <PageSection title={title} actions={actions}>{children}</PageSection>;
 }
 
 /** Lists the owner's projects and handles project creation and navigation. */
 function ProjectsPage() {
-  const { session, apiCall, authorize } = useAuth();
+  const { apiCall } = useAuth();
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectName, setProjectName] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -313,7 +218,8 @@ function ProjectsPage() {
         null,
       );
       setProjectName('');
-      setNotice(`Project ${created.projectId} was created. The source contract does not auto-assign an Owner; project access remains governed by Projects & Config.`);
+      setNotice(`Project ${created.name} was created. A tenant administrator must grant access before you can open it.`);
+      setCreateOpen(false);
       await load();
     } catch (reason) {
       setError(reason);
@@ -324,29 +230,34 @@ function ProjectsPage() {
 
   return (
     <>
-      <PageHeading title="Projects" description="Projects & Config owns project access, configuration revisions, and immutable accepted run selections." />
+      <PageHeading
+        title="Projects"
+        description="Create a workspace for the team, skills, workflows, runs, and approvals for your work."
+        actions={<Button appearance="primary" icon={<AddRegular />} onClick={() => setCreateOpen(true)}>Create project</Button>}
+      />
       {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
       {notice && <MessageBar intent="info"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
-      <div className="v1-columns">
-        <Panel title="Visible projects" actions={<Button appearance="subtle" onClick={() => void load()}>Refresh</Button>}>
-          {loading ? <Loading /> : projects.length === 0 ? (
-            <p className="v1-muted">No projects are visible to the current identity and role assignments.</p>
+      {loading ? <Loading label="Loading projects" /> : projects.length === 0 ? (
+            <EmptyState title="No projects yet" description="Create a project or ask a tenant administrator for access to an existing project." />
           ) : (
-            <div className="v1-project-list">
+            <TileGrid aria-label="Projects">
               {projects.map((project) => (
-                <article className="v1-project-row" key={project.projectId}>
-                  <div>
-                    <Link to={`/projects/${encodeURIComponent(project.projectId)}`} className="v1-project-name">{project.name}</Link>
-                    <div className="v1-muted">{project.projectId} · revision {project.revision} · configuration {project.configurationRevision}</div>
-                  </div>
-                  <Badge appearance="tint" color={project.state === 'active' ? 'success' : 'subtle'}>{project.state}</Badge>
-                </article>
+                <Tile
+                  key={project.projectId}
+                  primary={project.name}
+                  secondary={project.projectId}
+                  badges={<Badge appearance="tint" size="small" color={project.state === 'active' ? 'success' : 'subtle'}>{project.state}</Badge>}
+                  meta={<><Badge appearance="outline" size="small">Revision {project.revision}</Badge><Badge appearance="outline" size="small" title="The current API does not return role names.">Role unavailable</Badge></>}
+                  actions={<Button appearance="primary" size="small" onClick={() => navigate(`/projects/${encodeURIComponent(project.projectId)}`)}>Open</Button>}
+                  actionsAlwaysVisible
+                  onClick={() => navigate(`/projects/${encodeURIComponent(project.projectId)}`)}
+                />
               ))}
-            </div>
+            </TileGrid>
           )}
-        </Panel>
-        <Panel title="Create a project">
+      <AppDialog open={createOpen} onOpenChange={setCreateOpen} title="Create a project">
           <form className="v1-form" onSubmit={(event) => void create(event)}>
+            {error != null && <ErrorNotice>{errorMessage(error)}</ErrorNotice>}
             <Field label="Project name">
               <Input value={projectName} onChange={(_, data) => setProjectName(data.value)} maxLength={120} />
             </Field>
@@ -354,16 +265,15 @@ function ProjectsPage() {
               {busy ? 'Creating…' : 'Create project'}
             </Button>
             <p className="v1-muted">Project creation does not assign an Owner. Ask a tenant administrator to grant current access if the project is not visible afterward.</p>
+            <Button appearance="transparent" onClick={() => setCreateOpen(false)}>Cancel</Button>
           </form>
-        </Panel>
-      </div>
-      {!session && <Button onClick={() => void authorize(null)}>Sign in again</Button>}
+      </AppDialog>
     </>
   );
 }
 
 /** Loads and displays one project's current Gateway-backed overview. */
-function ProjectOverviewPage() {
+function ProjectOverviewPage({ runs = false }: { runs?: boolean }) {
   const { projectId = '' } = useParams();
   const { session, apiCall } = useAuth();
   const [project, setProject] = useState<ProjectSummary | null>(null);
@@ -415,7 +325,7 @@ function ProjectOverviewPage() {
 
   return (
     <>
-      <PageHeading title={currentLoading ? 'Project' : currentProject?.name ?? 'Project'} description={`Project ID: ${projectId}`} />
+      <PageHeading title={runs ? 'Orchestrations' : 'Dashboard'} description={currentProject?.name ?? `Project ${projectId}`} />
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentLoading ? <Loading /> : currentProject && (
         <div className="v1-columns">
@@ -717,11 +627,12 @@ function ProjectRepoAppConnectionPanel() {
 }
 
 /** Edits project configuration and reports rejected or stale updates. */
-function ProjectConfigurationPage() {
+function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | 'skills' | 'agents' }) {
   const { projectId = '' } = useParams();
   const { session, apiCall } = useAuth();
   const [versioned, setVersioned] = useState<VersionedProjectConfiguration | null>(null);
   const [editor, setEditor] = useState('');
+  const [configurationDraft, setConfigurationDraft] = useState<ProjectConfiguration | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingScope, setSavingScope] = useState<string | null>(null);
   const [skillAssignmentPending, setSkillAssignmentPending] = useState(false);
@@ -753,6 +664,7 @@ function ProjectConfigurationPage() {
         throw new Error('Projects & Config returned configuration for a different project.');
       setVersioned(result);
       setEditor(JSON.stringify(result.configuration, null, 2));
+      setConfigurationDraft(result.configuration);
       setLoadedScope(scope);
     } catch (reason) {
       if (activeScope.current !== scope || loadGeneration.current !== generation) return;
@@ -808,6 +720,7 @@ function ProjectConfigurationPage() {
         throw new Error('Projects & Config returned an update for a different project.');
       setVersioned(updated);
       setEditor(JSON.stringify(updated.configuration, null, 2));
+      setConfigurationDraft(updated.configuration);
       setNotice(`Configuration revision ${updated.revision} saved. Existing accepted runs retain their immutable selections.`);
       setNoticeScope(scope);
     } catch (reason) {
@@ -899,20 +812,41 @@ function ProjectConfigurationPage() {
 
   return (
     <>
-      <PageHeading title="Project configuration" description="Edit the owner-defined configuration document. This view does not supply or guess provider/model catalog options." />
-      <ProjectRepoAppConnectionPanel />
-      <CopilotUserConnectionPanel projectId={projectId} />
+      <PageHeading title={view === 'skills' ? 'Skills' : view === 'agents' ? 'Agents' : 'Project settings'} description={view === 'settings' ? 'Manage project configuration, account connections, and skills.' : 'Manage the team and skills for this project.'} />
+      <div className={view === 'settings' ? 'v1-settings-layout' : 'v1-stack'}>
+      {view === 'settings' && (
+        <nav className="v1-settings-rail" aria-label="Settings sections">
+          <a href="#general">General</a>
+          <a href="#history">History</a>
+          <a href="#connections">Connections</a>
+          <Link to={`/projects/${encodeURIComponent(projectId)}/skills`}>Skills</Link>
+        </nav>
+      )}
+      <div className="v1-stack v1-settings-pane">
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="success"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
       {currentLoading ? <Loading /> : currentConfiguration && (
         <>
-          <Panel title={`Revision ${currentConfiguration.revision}`}>
+          {view === 'agents' && (
+            <TileGrid aria-label="Agents">
+              {currentConfiguration.configuration.agentCharters.map((agent) => (
+                <Tile key={agent.agentId} primary={agent.name} secondary={agent.role}
+                  meta={currentConfiguration.configuration.casting.some((item) => item.agentId === agent.agentId) ? 'In the team' : 'Not in the team'}
+                  actions={<Link to={`/projects/${encodeURIComponent(projectId)}/memories?agentId=${encodeURIComponent(agent.agentId)}`}>Memories</Link>}
+                  actionsAlwaysVisible />
+              ))}
+              {currentConfiguration.configuration.agentCharters.length === 0 && <EmptyState title="No agents yet" description="Add agent charters and team assignments in Project settings." />}
+            </TileGrid>
+          )}
+          {view === 'settings' && <section id="general"><Panel title={`Revision ${currentConfiguration.revision}`}>
             <form className="v1-form" onSubmit={(event) => void save(event)}>
-              <p className="v1-muted">
-                Model references and provider IDs are opaque. Only IDs already present in this project or returned by the Gateway are shown.
-                The owner validates all changes and rejects unavailable selections. Secret references are metadata; credential values are never entered here.
-              </p>
-              <Field label="Typed ProjectConfiguration JSON" hint="Keep the complete current document to preserve unrelated settings, GitHub App connection references, and legacy source-control SecretRefs.">
+              {configurationDraft && <ConfigurationFields configuration={configurationDraft}
+                readOnly={skillAssignmentPending || savingScope === requestScope || editor !== JSON.stringify(configurationDraft, null, 2)}
+                onChange={(next) => { setConfigurationDraft(next); setEditor(JSON.stringify(next, null, 2)); }} />}
+              <details>
+              <summary>Advanced: edit configuration JSON</summary>
+              <p className="v1-muted">The complete document preserves other settings and saved references. After changing JSON, save or reload before using the readable fields.</p>
+              <Field label="Typed ProjectConfiguration JSON" hint="Keep the complete document to preserve other settings and saved connection references. Do not enter passwords or tokens.">
                 <Textarea
                   className="v1-json-editor"
                   value={editor}
@@ -925,15 +859,19 @@ function ProjectConfigurationPage() {
                   spellCheck={false}
                 />
               </Field>
+              </details>
               <div className="v1-actions">
                 <Button appearance="primary" type="submit" disabled={savingScope === requestScope || skillAssignmentPending || !editor.trim()}>
-                  {savingScope === requestScope ? 'Saving…' : 'Append configuration revision'}
+                  {savingScope === requestScope ? 'Saving…' : 'Save changes'}
                 </Button>
                 <Button appearance="secondary" type="button" disabled={savingScope === requestScope || skillAssignmentPending} onClick={() => void load()}>Reload owner revision</Button>
               </div>
             </form>
-          </Panel>
-          <SkillsMarketplacePanel
+          </Panel></section>}
+          {view === 'settings' && <section id="history"><ConfigurationHistory
+            key={`${requestScope}/${currentConfiguration.revision}`}
+            projectId={projectId} currentRevision={currentConfiguration.revision} /></section>}
+          {view === 'skills' && <section id="skills"><SkillsMarketplacePanel
             projectId={projectId}
             configurationRevision={currentConfiguration.revision}
             assignments={currentConfiguration.configuration.skills}
@@ -945,12 +883,21 @@ function ProjectConfigurationPage() {
               if (activeScope.current !== requestScope || updated.projectId !== projectId) return;
               setVersioned(updated);
               setEditor(JSON.stringify(updated.configuration, null, 2));
+              setConfigurationDraft(updated.configuration);
               setError(null);
               setErrorScope(null);
             }}
-          />
+          /></section>}
         </>
       )}
+      {view === 'settings' && <section id="connections" className="v1-stack">
+        <PageSection title="Connections" description="Connect the accounts and tools this project needs." />
+        <ProjectRepoAppConnectionPanel />
+        <CopilotUserConnectionPanel projectId={projectId} />
+        <RemoteMcpConnectionPanel key={requestScope} projectId={projectId} configurationRevision={currentConfiguration?.revision ?? null} />
+      </section>}
+      </div>
+      </div>
     </>
   );
 }
@@ -1546,7 +1493,7 @@ function KnowledgePage() {
 
   return (
     <>
-      <PageHeading title="Knowledge" description="Knowledge is scoped to an exact project, run, and agent. Current role and run bindings are checked by the owner for every request." />
+      <PageHeading title="Memories" description="Search and manage memories and decisions for a project, run, and agent." />
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="info"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
       <Panel title="Knowledge scope">
@@ -1858,19 +1805,18 @@ function createTopology(
       : 'Status unavailable';
     return {
       id: node.identity.sessionId,
+      type: 'workflow',
       position: { x: depth * 300, y: index * 150 },
-      data: { label: `${node.kind}\n${node.identity.sessionId}\n${description}` },
-      style: {
-        width: 250,
-        minHeight: 92,
-        borderRadius: 12,
-        border: '1px solid var(--colorNeutralStroke1)',
-        background: 'var(--colorNeutralBackground1)',
-        color: 'var(--colorNeutralForeground1)',
-        padding: 12,
-        whiteSpace: 'pre-line' as const,
-        boxShadow: 'var(--shadow2)',
-      },
+      data: {
+        def: { key: node.kind, label: node.kind, roleDescription: node.kind, Icon: iconForRole(node.kind) },
+        state: {
+          status: status?.activity === 'busy' ? 'started' : node.lifecycle === 'completed' ? 'completed' : 'pending',
+          message: description,
+        },
+        statusLabelOverride: status ? `${status.activity} · ${status.lifecycle}` : 'Status unavailable',
+        agentName: node.identity.sessionId,
+        dir: 'LR',
+      } satisfies WorkflowNodeData,
     };
   }));
   const edges = tree.nodes
@@ -2877,7 +2823,7 @@ function RunPage() {
       <PageHeading
         title="Coordinator run"
         description={`Project ${projectId} · run ${runId} · root session ${currentRunStatus?.rootSessionId ?? 'loading'}`}
-        actions={<Button appearance="secondary" disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh owner snapshots</Button>}
+        actions={<Button appearance="secondary" disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh run</Button>}
       />
       {currentSnapshotMessage && <MessageBar intent="info"><MessageBarBody>{currentSnapshotMessage}</MessageBarBody></MessageBar>}
       {Object.entries(currentSnapshotErrors).map(([key, message]) => (
@@ -2886,10 +2832,14 @@ function RunPage() {
       {(snapshotBusy || !snapshotIsCurrent) && !currentRunStatus && <Loading />}
       {currentRunStatus && (
         <>
-          <Panel title="Authoritative run snapshot">
-            <SnapshotDetail runStatus={currentRunStatus} />
-            <p className="v1-muted">The status comes from the Orchestrator owner. It does not indicate AgentHost health or infer pod state.</p>
-          </Panel>
+          <div className="v1-actions">
+            <Badge appearance="tint">{currentRunStatus.executionState}</Badge>
+            <details>
+              <summary>Run details</summary>
+              <SnapshotDetail runStatus={currentRunStatus} />
+              <p className="v1-muted">This status describes the run, not the health of the computers running it.</p>
+            </details>
+          </div>
           <div className="v1-run-tabs">
             <TabList
               selectedValue={tab}
@@ -2918,7 +2868,7 @@ function RunPage() {
                     <ReactFlowView nodes={graph.nodes} edges={graph.edges} onNodeClick={topologyNodeClick} />
                   </div>
                 ) : <p className="v1-muted">No session tree nodes were returned by the Orchestrator.</p>}
-                <p className="v1-muted">Node activity, lifecycle, blockers, detach, and archive controls are derived only from Orchestrator snapshots.</p>
+                <p className="v1-muted">Select a session to see its activity and blockers. Available actions depend on its current state.</p>
               </Panel>
               {selectedNode && selectedStatus && (
                 <Panel title={`Selected session · ${selectedNode.identity.sessionId}`}>
@@ -2985,6 +2935,7 @@ function ReactFlowView({
   return (
     <ReactFlow
       nodes={nodes}
+      nodeTypes={workflowNodeTypes}
       edges={edges}
       fitView
       fitViewOptions={{ padding: 0.2 }}
@@ -3166,14 +3117,31 @@ function AuthenticatedRoutes() {
   return (
     <Routes>
       <Route path="/" element={<Navigate to="/projects" replace />} />
+      <Route path="/overview" element={<Shell><UnavailablePage title="Overview" description="Live activity across projects is not available in this version. Open a project to view its team, configuration, memories, or an existing run." /></Shell>} />
+      <Route path="/sessions" element={<Shell><UnavailablePage title="Sessions" description="Session search across projects is not available in this version. Open a project, then enter an existing run ID in Orchestrations." /></Shell>} />
+      <Route path="/assistant" element={<Shell><UnavailablePage title="New session" description="Starting an assistant session is not available in this version. Open an existing project run to read and send messages." /></Shell>} />
+      <Route path="/console" element={<Navigate to="/assistant" replace />} />
+      <Route path="/settings" element={<Shell><AccountSettingsPage /></Shell>} />
+      <Route path="/platform-settings" element={<Shell><UnavailablePage title="Platform settings" description="Platform administration is not available in this web client." /></Shell>} />
       <Route path="/auth/callback" element={<CallbackPage />} />
       <Route path="/projects" element={<Shell><ProjectsPage /></Shell>} />
       <Route path="/projects/:projectId" element={<Shell><ProjectOverviewPage /></Shell>} />
       <Route path="/projects/:projectId/settings" element={<Shell><ProjectConfigurationPage /></Shell>} />
+      <Route path="/projects/:projectId/skills" element={<Shell><ProjectConfigurationPage view="skills" /></Shell>} />
+      <Route path="/projects/:projectId/team" element={<Shell><ProjectConfigurationPage view="agents" /></Shell>} />
+      <Route path="/projects/:projectId/team/cast" element={<Shell><UnavailablePage title="Cast a team" description="Interactive team casting is not available in this version. Review the current team in Agents and edit its configuration in Project settings." /></Shell>} />
+      <Route path="/projects/:projectId/team/:agentName/memory" element={<AgentMemoryRedirect />} />
       <Route path="/projects/:projectId/knowledge" element={<Shell><KnowledgePage /></Shell>} />
+      <Route path="/projects/:projectId/memories" element={<Shell><KnowledgePage /></Shell>} />
+      <Route path="/projects/:projectId/orchestrations" element={<Shell><ProjectOverviewPage runs /></Shell>} />
+      <Route path="/projects/:projectId/sessions" element={<Navigate to="/sessions" replace />} />
       <Route path="/projects/:projectId/runs/:runId" element={<Shell><RunPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunRedirect />} />
-      <Route path="*" element={<Navigate to="/projects" replace />} />
+      {unavailableProjectPages.map(({ segment, title, description }) => (
+        <Route key={segment} path={`/projects/:projectId/${segment}`} element={<Shell><UnavailablePage title={title} description={description} /></Shell>} />
+      ))}
+      <Route path="/observability/*" element={<Shell><UnavailablePage title="Observability" description="Project trace and agent summaries are not available in this version. Open an existing run for its Activity and Usage views." /></Shell>} />
+      <Route path="*" element={<Shell><UnavailablePage title="Page not found" description="This address does not match an Agentweaver page. Use the navigation to choose a destination." /></Shell>} />
     </Routes>
   );
 }
@@ -3181,7 +3149,50 @@ function AuthenticatedRoutes() {
 /** Preserves older orchestration links by redirecting them to the current run route. */
 function CoordinatorRunRedirect() {
   const { projectId = '', runId = '' } = useParams();
-  return <Navigate to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`} replace />;
+  const location = useLocation();
+  return <Navigate to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}${location.search}${location.hash}`} replace />;
+}
+
+/** Legacy destinations stay addressable without falling back to monolith APIs. */
+const unavailableProjectPages = [
+  { segment: 'board', title: 'Board', description: 'The project board is not available in this version. Open an existing run to review its outcomes and approvals.' },
+  { segment: 'flow', title: 'Flow', description: 'Project-wide agent activity is not available in this version. Open an existing run to view its session topology.' },
+  { segment: 'workspace', title: 'Workspace', description: 'Run file browsing is not available yet. This version does not expose local workspace files.' },
+  { segment: 'workflows', title: 'Workflows', description: 'The workflow editor is not available in this version. Workflow references remain in Project settings.' },
+  { segment: 'observability/*', title: 'Observability', description: 'Project trace and agent summaries are not available in this version. Open a run for Activity and Usage.' },
+  { segment: 'diagnostics', title: 'Diagnostics', description: 'Project diagnostics are not available in this version. Run Activity shows the status reported for each session.' },
+  { segment: 'heartbeat', title: 'Heartbeat', description: 'Project heartbeat monitoring is not available in this version.' },
+  { segment: 'cluster', title: 'Cluster', description: 'Cluster management is not available in this web client.' },
+];
+
+/** Uses the incumbent empty-state pattern for a capability with no admitted API. */
+function UnavailablePage({ title, description }: { title: string; description: string }) {
+  const { projectId } = useParams();
+  return <>
+    <PageHeading title={title} />
+    <EmptyState title={title === 'Page not found' ? 'Choose a destination' : 'Not available in this version'} description={description}
+      action={<Link className="v1-link-button" to={projectId ? `/projects/${encodeURIComponent(projectId)}` : '/projects'}>{projectId ? 'Open Dashboard' : 'Open Projects'}</Link>} />
+  </>;
+}
+
+/** Account connections use their existing owner checks, not a new identity store. */
+function AccountSettingsPage() {
+  const { signOut } = useAuth();
+  return <>
+    <PageHeading title="Account settings" />
+    <Panel title="Sign-in"><p>Your sign-in stays in this tab.</p><Button onClick={signOut}>Clear session</Button></Panel>
+    <ProjectRepoAppConnectionPanel />
+    <p>Choose a project in the navigation to manage its Copilot connection in Project settings.</p>
+  </>;
+}
+
+/** A legacy display name is a search input, never an authorization claim. */
+function AgentMemoryRedirect() {
+  const { projectId = '', agentName = '' } = useParams();
+  const location = useLocation();
+  const search = new URLSearchParams(location.search);
+  if (!search.has('agentId')) search.set('agentId', agentName);
+  return <Navigate to={`/projects/${encodeURIComponent(projectId)}/memories?${search}`} replace />;
 }
 
 /** Selects popup callback handling or the authenticated v1 route application. */
