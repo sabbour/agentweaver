@@ -713,7 +713,7 @@ internal sealed class CoordinatorDecisionOwnerStore
     }
 
     /// <summary>
-    /// Advances decision state to a new execution fence as part of a run failure or recovery transaction.
+    /// Advances decision state to a new execution fence as part of a run failure, recovery, or cancellation transaction.
     /// </summary>
     /// <remarks>Current grants are superseded and any pinned provider binding is carried forward only to the immediate next fence.</remarks>
     internal async Task AdvanceExecutionFenceAsync(
@@ -732,7 +732,7 @@ internal sealed class CoordinatorDecisionOwnerStore
         ArgumentNullException.ThrowIfNull(transaction);
         ValidateInput(actor, identity, selection);
         if (nextFence != previousFence + 1 || operationId == Guid.Empty ||
-            actionKind is not ("execution.failed" or "execution.indeterminate" or "execution.recovered"))
+            actionKind is not ("execution.failed" or "execution.indeterminate" or "execution.recovered" or "execution.cancelled"))
             throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
 
         var latest = await ReadLatestDecisionAsync(

@@ -50,6 +50,11 @@ Agentweaver checks your current project access, that you are assigned to manage
 runs, and that the saved settings match the requested project and run. This
 permission alone does not give you project access or a role.
 
+To start a new chat, the app first calls create with a token that is not bound
+to a run. It then signs in again for the new project and run, and calls start
+and cancel with that run-bound token. A project owner assigns the Orchestrator
+role through the project role assignments API.
+
 ## OpenID Connect references
 
 OpenID Connect is the standard Agentweaver uses for sign-in. It defines the

@@ -139,7 +139,9 @@ internal sealed partial class CoordinationOwnerStore
         if (run.ExecutionState is "completed" or "failed" or "indeterminate" or "cancelled")
             throw new CoordinationException("run_terminal", StatusCodes.Status409Conflict);
         var nextFence = checked(run.Fence + 1);
-        var cancelledAt = _timeProvider.GetUtcNow();
+        // Use the database clock shared by accepted_runs.created_at and its completion constraint.
+        await using var clock = new NpgsqlCommand("SELECT clock_timestamp()", connection, transaction);
+        var cancelledAt = new DateTimeOffset((DateTime)(await clock.ExecuteScalarAsync(cancellationToken))!);
         var result = new CancelProjectRunResponse(runId, "cancelled", cancelledAt);
         await using (var update = new NpgsqlCommand($"""
             UPDATE {_runs}

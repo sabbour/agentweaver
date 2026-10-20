@@ -153,6 +153,7 @@ exposes project configuration and run-selection operations.
 | POST | `/{projectId}/casting/import` | Admin | Validate and import casting. | No |
 | PUT | `/{projectId}/runs/{runId}/selection` | Selection | Accept an immutable run selection. | Yes |
 | GET | `/{projectId}/runs/{runId}/selection` | Selection | Read the accepted selection. | Yes |
+| PUT | `/{projectId}/runs/{runId}/interactive-selection` | Selection | Accept a new chat run selection from current server configuration. The Orchestrator calls this route during run creation. | No |
 
 ### Catalog and platform routes
 
@@ -206,6 +207,34 @@ See [Projects & Config](../architecture/projects-config.md) and
 ## Orchestrator
 
 Source: `services/orchestrator/Agentweaver.Orchestrator/`.
+
+### Runs
+
+Native prefix: `/api/projects/{projectId}/runs`.
+Gateway prefix: `/api/v1/projects/{projectId}/runs`.
+
+These routes start a new chat run, deliver its first message, and cancel it.
+The caller needs an Orchestrator role assignment on the project, which grants
+`acceptRunSelection`. Project role assignments are managed through
+`/api/v1/projects/{projectId}/role-assignments`.
+
+| Method | Suffix | Token | Purpose | Gateway |
+| --- | --- | --- | --- | --- |
+| POST | `/` | Not bound to a run | Save the first message, mint `runId` and `rootSessionId`, and accept the run selection. Returns `201` with `awaiting_binding`. | Yes |
+| POST | `/{runId}/start` | Bound to the run | Accept the root session and deliver the saved first message once. Returns `200` with `started`. | Yes |
+| POST | `/{runId}/cancel` | Bound to the run | Fence every session in the run and set the run to `cancelled`. Returns `200`. | Yes |
+
+Create and cancel require exactly one `Idempotency-Key` header. A retry with
+the same key and body returns the original result. A retry with the same key
+and a different body returns `409 idempotency_conflict`. Start takes no body
+and no key; a repeated start returns the same result without sending the first
+message again. Start or cancel on a cancelled or otherwise finished run returns
+`409 run_terminal`.
+
+The create request body has `firstMessage` (1–32,768 UTF-8 bytes),
+`expectedProjectConfigRevision`, and optional `title` and `workflowId`. The
+Gateway accepts create bodies up to 256 KiB. Responses never include the first
+message.
 
 ### Coordination
 

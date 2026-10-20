@@ -38,3 +38,7 @@ CREATE TABLE {schema}.project_run_cancellations (
     result jsonb NOT NULL,
     PRIMARY KEY (tenant_id, project_id, run_id, actor_issuer, actor_subject, idempotency_key_hash)
 );
+
+-- Keyset order for the project run list: most recently updated first, run_id as the tie breaker.
+CREATE INDEX ix_accepted_runs_project_updated
+    ON {schema}.accepted_runs(tenant_id, project_id, updated_at DESC, run_id);
