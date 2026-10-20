@@ -105,6 +105,22 @@ explicit target and authorized runtime inputs. Its result separates
 image-measurement, and native probes remain blocked until evidence exists.
 The aggregate exits `0` for passed, `1` for failed, and `2` for blocked.
 
+For one-account P1 API or MCP checks, `npm run harness:p1:signin-run -- ...`
+uses the existing `agentweaver-web` client with one interactive sign-in in a
+fresh empty disposable Chrome profile. It removes the profile in a `finally`
+path and does not read or copy an existing profile or credential cache. Tokens
+remain in memory only. The launcher does not sign in a denied actor. If
+`fixturePlan.deniedActor` is omitted, `valid-denied-actor-403` remains blocked
+with the missing-account reason, the other surface checks continue, and the
+surface cannot pass. Distinct-actor coverage is unavailable to this one-account
+operator flow; no same-user substitute or role change is permitted. A
+lower-level identity provider can preserve it only when a separate actor
+credential is independently available. The Host-caller probe-provider gap is
+still blocked; the launcher does not supply Host-caller probe adapters.
+
+The v1 UI surface remains blocked on #1859. Do not target the current
+`apps/web/src/v1/App.tsx` pages with new UI selectors or page providers.
+
 Pass the exact native and dispatch-recovery output envelopes with
 `--native-probe-envelope` and `--dispatch-recovery-envelope`. The aggregator
 preserves every supplied receipt and blocks any missing required probe. It

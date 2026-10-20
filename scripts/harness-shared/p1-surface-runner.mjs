@@ -217,6 +217,7 @@ export async function runP1SurfaceJourney(surface, input, {
   const startedAt = p1Timestamp(clock);
   const steps = [];
   let surfaceStatus = 'blocked';
+  let deniedActorUnavailable = false;
   let failure;
   let uiAdapterCloseStatus = surface === 'ui' ? 'not-started' : 'not-required';
   let mcpCloseStatus = surface === 'mcp' && mcp && typeof mcp.close === 'function'
@@ -267,8 +268,17 @@ export async function runP1SurfaceJourney(surface, input, {
       requiredApiOperations: [...new Set([...capabilities.apiOperations, ...supportingOperations])].length,
     });
 
-    const denied = await requireP1DeniedApiActor(deniedApi, input);
-    steps.push({ id: 'valid-denied-actor-403', status: 'passed', operationId: denied.operationId, httpStatus: 403 });
+    if (pins.fixtureScope.deniedActor) {
+      const denied = await requireP1DeniedApiActor(deniedApi, input);
+      steps.push({ id: 'valid-denied-actor-403', status: 'passed', operationId: denied.operationId, httpStatus: 403 });
+    } else {
+      deniedActorUnavailable = true;
+      steps.push({
+        id: 'valid-denied-actor-403',
+        status: 'blocked',
+        reason: 'Distinct authorized-but-denied actor unavailable: fixturePlan.deniedActor not provided (no second Broker account available)',
+      });
+    }
     const snapshot = await readP1OwnerSnapshots(api, pins.ownerFences);
     steps.push({ id: 'current-owner-fences', status: 'passed', operationId: 'readRunStatus/readSessionStatus/readDecisions' });
     if (input.journey.startsWith('gate-')) validateActorAnswer(snapshot, input);
@@ -380,7 +390,7 @@ export async function runP1SurfaceJourney(surface, input, {
         ...(surface === 'ui' ? { uiMethod: 'replayJournal' } : {}),
       });
     }
-    surfaceStatus = 'passed';
+    surfaceStatus = deniedActorUnavailable ? 'blocked' : 'passed';
   } catch (error) {
     failure = sanitizeP1Failure(error);
     surfaceStatus = error instanceof P1BlockedError ? 'blocked' : 'failed';

@@ -6,3 +6,4 @@ node_modules/
 artifacts/
 docs/.vitepress/dist/
 docs/public/diagrams/
+scripts/ui-harness/.auth/

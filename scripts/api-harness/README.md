@@ -190,24 +190,49 @@ manifest, publication, target namespace, image identities, and service
 readbacks. For a published release, `agentHostArchivePath` is the exact
 AgentHost OCI archive from that release's images artifact. The runner measures
 it against the published source commit, so you can run acceptance from a newer
-reviewed checkout that still contains that commit. `fixturePlan` requires a positive
-`expectedPlatformRuntimeRevision` alongside the selection context, a distinct
-denied actor, and only the gate or message content needed by the selected
-journey. The runner passes the expected revision through the existing
-run-selection request and verifies the accepted and observed owner selection
-revisions. The plan value is not authority or an ownership receipt; the owner
-compare-and-swap checks it against current state. The fixture keeps the
-project-configuration read and does not call the PlatformAdmin-only global
+reviewed checkout that still contains that commit. `fixturePlan` requires a
+positive `expectedPlatformRuntimeRevision` alongside the selection context and
+only the gate or message content needed by the selected journey. A distinct
+`fixturePlan.deniedActor` is optional. When supplied, it must remain a distinct
+actor and the identity provider must return its separate token. When omitted,
+the `valid-denied-actor-403` step is recorded as blocked with the explicit
+missing-account reason; the runner continues the other checks but the surface
+and full P1 result cannot pass. Do not substitute the signed-in actor or change
+any role or access grant. The runner passes the expected revision through the
+existing run-selection request and verifies the accepted and observed owner
+selection revisions. The plan value is not authority or an ownership receipt;
+the owner compare-and-swap checks it against current state. The fixture keeps
+the project-configuration read and does not call the PlatformAdmin-only global
 runtime-default endpoint.
 Do not put tokens or ownership receipts in the manifest.
 
-After read-only source and deployment checks pass, set
-`AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and provide an
-`--identity-module` that returns already-issued run-bound and denied-actor
-tokens. The runner does not sign in, refresh credentials, or request consent.
-These credentials are read only after source evidence passes. The command
-records the invocation ID in its JSONL output so an unfinished API or MCP run
-can replay setup and idempotent actions with the same IDs.
+For a one-account operator run, use the sign-in launcher:
+
+```powershell
+npm run harness:p1:signin-run -- --surface api --input <manifest.json> --output <evidence.jsonl>
+```
+
+The launcher uses the existing public `agentweaver-web` client and one
+interactive TenantAdmin sign-in. It creates a fresh empty headed-Chrome profile
+and removes it on success, failure, or cancellation; it never reads or copies
+an existing browser profile, cookie store, or credential cache. The same
+in-memory browser session authorizes the unbound setup token and the subsequent
+run-bound token. Token values stay in memory and are not written to output,
+logs, or evidence. Omit `fixturePlan.deniedActor` when using this launcher; it
+does not ask for a second Broker account. Distinct-actor coverage is
+unavailable in this one-account operator flow, so the denied-actor
+authorization check remains blocked while the remaining API steps run.
+The Host-caller probe-provider gap is also still blocked; this launcher does
+not provide Host-caller probe adapters, and missing native probes continue to
+block full P1 acceptance. The UI surface remains blocked on #1859.
+
+Advanced invocations may continue to use the lower-level runner with an
+already-authorized identity provider. It requires the setup token in the
+process environment and `--identity-module`; if a distinct denied actor is
+included in the plan, that provider must return a separate token for it. The
+shared runner does not sign in or refresh credentials. Both commands record
+the invocation ID in JSONL evidence so an unfinished API or MCP run can replay
+setup and idempotent actions with the same IDs.
 
 ```powershell
 npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
