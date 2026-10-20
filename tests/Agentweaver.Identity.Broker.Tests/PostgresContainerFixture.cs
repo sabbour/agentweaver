@@ -1,6 +1,7 @@
 using System.Data;
 using Agentweaver.Identity.Broker;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Playwright;
 using Npgsql;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -25,10 +26,25 @@ public sealed class PostgresContainerFixture : IAsyncLifetime
         """;
 
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine").Build();
+    private readonly Lazy<Task<IPlaywright>> _playwright = new(Playwright.CreateAsync);
 
     public async Task InitializeAsync() => await _container.StartAsync();
 
-    public async Task DisposeAsync() => await _container.DisposeAsync();
+    public async Task DisposeAsync()
+    {
+        try
+        {
+            if (_playwright.IsValueCreated)
+                (await _playwright.Value).Dispose();
+        }
+        finally
+        {
+            await _container.DisposeAsync();
+        }
+    }
+
+    // Share only the driver. Tests retain their own browser launch flags, contexts and cookies.
+    public Task<IPlaywright> GetPlaywrightAsync() => _playwright.Value;
 
     /// <summary>Creates a fresh, uniquely named database and returns a connection string to it.</summary>
     public async Task<string> CreateDatabaseAsync()
