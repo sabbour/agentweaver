@@ -656,6 +656,67 @@ export interface SourceControlRepositoryPinView {
   pinnedAt: string;
 }
 
+/** One admitted produced-output capture. The owner returns only admitted captures. */
+export interface SourceControlOutputCaptureSummary {
+  captureId: string;
+  eventId: string;
+  eventPosition: number;
+  capturedAt: string;
+  workspaceId: string;
+  branchName: string;
+  baseSha: string;
+  outputTreeSha: string;
+  manifestSha256: string;
+  manifestByteLength: number;
+  patchSha256: string;
+  patchByteLength: number;
+  packageByteLength: number;
+}
+
+/** A newest-first page of captures; pass both cursor values together to read the next page. */
+export interface SourceControlOutputCapturePage {
+  captures: SourceControlOutputCaptureSummary[];
+  nextBeforeCapturedAt?: string | null;
+  nextBeforeCaptureId?: string | null;
+}
+
+/** One file listed in a capture manifest. */
+export interface SourceControlOutputFile {
+  path: string;
+  mode: string;
+  sha256: string;
+  byteLength: number;
+}
+
+/** A capture and its validated manifest. */
+export interface SourceControlOutputCaptureDetail {
+  capture: SourceControlOutputCaptureSummary;
+  manifest: {
+    contractVersion: number;
+    workspaceId: string;
+    runId: string;
+    repositoryId: string;
+    resourceGeneration: number;
+    workspaceIncarnationId: string;
+    branchName: string;
+    baseSha: string;
+    outputTreeSha: string;
+    files: SourceControlOutputFile[];
+  };
+}
+
+/** A capture and its validated text patch. */
+export interface SourceControlOutputCaptureDiff {
+  capture: SourceControlOutputCaptureSummary;
+  patch: string;
+}
+
+/** Exact bytes of one captured file and the owner's SHA-256 digest of them. */
+export interface SourceControlOutputFileContent {
+  bytes: Uint8Array;
+  sha256: string | null;
+}
+
 /** Project configuration paired with the owner revision used for compare-and-swap updates. */
 export interface VersionedProjectConfiguration {
   projectId: string;

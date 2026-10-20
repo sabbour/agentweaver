@@ -446,10 +446,14 @@ can message existing sessions and request supported detach/archive actions.
 The Gateway does not expose journal object-content reads, so the UI displays
 opaque references rather than inventing transcript text.
 
-Run-produced-file browsing is unavailable. The run-bound artifact manifest,
-diff, and object-version producer needed to browse files after workspace
-changes has not been admitted. The Web client does not proxy a host filesystem
-or claim parity with older file endpoints.
+The run's **Changes** tab includes a **Produced files** panel. It lists the
+pinned output captures that Source Control admitted for the run, newest first,
+labeled by save time and branch. Select a file to view its exact captured
+bytes, or select **Changes** to view the capture diff. Text files that are not
+valid UTF-8 show as binary. The panel reads only through the Gateway
+output-capture routes and never reads a host filesystem. Source Control
+withholds captures while the run is failed or its outcome is not known; the
+panel then shows that produced files are not available.
 
 The run's **Run settings** tab shows the model reference and the allowed
 implementations for each platform component, in order. It doesn't show the

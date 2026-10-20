@@ -96,6 +96,7 @@ import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading, Panel } from './pageParts';
 import { rememberRun } from './recentRuns';
 import { DecisionList } from './DecisionView';
+import { ProducedFilesPanel } from './ProducedFilesPanel';
 import { NewChatComposer } from './NewChatComposer';
 import { PlatformComponentsTable } from './PlatformComponentsTable';
 import { isRunFinished, runState } from './runState';
@@ -2752,6 +2753,7 @@ function RunPage() {
               ) : (
                 <EmptyState title="No repository changes" description="This run does not use a GitHub App repository connection, so it has no branch or pull request to show." />
               )}
+              <ProducedFilesPanel projectId={projectId} runId={runId} sessionId={currentRunStatus.rootSessionId} />
             </div>
           )}
           {tab === 'usage' && (
@@ -3123,7 +3125,7 @@ function CoordinatorRunRedirect() {
 const unavailableProjectPages = [
   { segment: 'board', title: 'Board', description: 'The project board is not available in this version. Open Orchestrations to review runs and approvals.' },
   { segment: 'flow', title: 'Flow', description: 'Project-wide agent activity is not available in this version. Open Orchestrations, then a run, to view its session topology.' },
-  { segment: 'workspace', title: 'Workspace', description: 'Project file browsing is not available in this version. A run shows its changes in the Changes tab.' },
+  { segment: 'workspace', title: 'Workspace', description: 'Project file browsing is not available in this version. Open a run and select Changes to browse the files it produced.' },
   { segment: 'workflows', title: 'Workflows', description: 'The workflow editor is not available in this version. Workflow references remain in Project settings.' },
   { segment: 'observability/*', title: 'Observability', description: 'Project trace and agent summaries are not available in this version. Open a run for Activity and Usage.' },
   { segment: 'diagnostics', title: 'Diagnostics', description: 'Project diagnostics are not available in this version. Run Activity shows the status reported for each session.' },

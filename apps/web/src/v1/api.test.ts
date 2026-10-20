@@ -3,6 +3,37 @@ import { AgentweaverGatewayClient } from './api';
 import type { KnowledgeRecordTransferBundle } from './contracts';
 
 describe('Gateway API client', () => {
+  it('reads produced-file bytes with the owner digest and an encoded path', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(new Uint8Array([104, 105]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Source-Control-Output-Sha256': 'abc' },
+      }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    const file = await client.readSourceControlOutputCaptureFile('token', 'p 1', 'r1', 's1', 'tenant-1', 'c1', 'src/a b.ts');
+
+    expect(Array.from(file.bytes)).toEqual([104, 105]);
+    expect(file.sha256).toBe('abc');
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe('https://gateway.example.test/api/v1/projects/p%201/runs/r1/source-control/sessions/s1/output-captures/c1/files?path=src%2Fa+b.ts');
+    expect(new Headers(init?.headers).get('Accept')).toBe('application/octet-stream');
+  });
+
+  it('lists produced-output captures with the page cursor', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ captures: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await client.listSourceControlOutputCaptures('token', 'p1', 'r1', 's1', null, { capturedAt: '2026-01-01T00:00:00Z', captureId: 'c9' });
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe('https://gateway.example.test/api/v1/projects/p1/runs/r1/source-control/sessions/s1/output-captures?limit=50&beforeCapturedAt=2026-01-01T00%3A00%3A00Z&beforeCaptureId=c9');
+    expect(new Headers(init?.headers).get('Accept')).toBe('application/json');
+  });
+
   it('does not send a request without a Broker access token', async () => {
     const fetcher = vi.fn<typeof fetch>();
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);

@@ -54,6 +54,10 @@ import type {
   SessionStatusSnapshot,
   SessionTreeSnapshot,
   SourceControlRepositoryPinView,
+  SourceControlOutputCaptureDetail,
+  SourceControlOutputCaptureDiff,
+  SourceControlOutputCapturePage,
+  SourceControlOutputFileContent,
   UsageRunTotals,
   VersionedProjectConfiguration,
 } from './contracts';
@@ -114,13 +118,14 @@ export class AgentweaverGatewayClient {
     init: RequestInit = {},
     baseUrl = this.baseUrl,
     tenantSelector?: string | null,
+    rawResponse = false,
   ): Promise<T> {
     if (!token) {
       throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
     }
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
-    headers.set('Accept', 'application/json');
+    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     if (tenantSelector !== undefined && tenantSelector !== null)
       headers.set('X-Agentweaver-Tenant', tenantSelector);
     if (init.body !== undefined) headers.set('Content-Type', 'application/json');
@@ -147,6 +152,7 @@ export class AgentweaverGatewayClient {
       throw new GatewayError(response.status, body, problemMessage(body, response.status));
     }
     if (response.status === 204) return undefined as T;
+    if (rawResponse) return response as T;
     return await response.json() as T;
   }
 
@@ -771,6 +777,92 @@ export class AgentweaverGatewayClient {
       this.baseUrl,
       tenantSelector,
     );
+  }
+
+  /** Lists admitted produced-output captures for a run session, newest first. */
+  listSourceControlOutputCaptures(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantSelector: string | null,
+    before?: { capturedAt: string; captureId: string },
+  ): Promise<SourceControlOutputCapturePage> {
+    const query = new URLSearchParams({ limit: '50' });
+    if (before) {
+      query.set('beforeCapturedAt', before.capturedAt);
+      query.set('beforeCaptureId', before.captureId);
+    }
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures')}?${query}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads one admitted capture and its file list. */
+  readSourceControlOutputCapture(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantSelector: string | null,
+    captureId: string,
+  ): Promise<SourceControlOutputCaptureDetail> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads the diff stored with one admitted capture. */
+  readSourceControlOutputCaptureDiff(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantSelector: string | null,
+    captureId: string,
+  ): Promise<SourceControlOutputCaptureDiff> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'diff')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Reads the exact bytes of one captured file. The path must come from the capture's file list;
+   * the owner rejects any path that the manifest does not list.
+   */
+  async readSourceControlOutputCaptureFile(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantSelector: string | null,
+    captureId: string,
+    path: string,
+  ): Promise<SourceControlOutputFileContent> {
+    const response = await this.request<Response>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'files')}?${new URLSearchParams({ path })}`,
+      { headers: { Accept: 'application/octet-stream' } },
+      this.baseUrl,
+      tenantSelector,
+      true,
+    );
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      sha256: response.headers.get('X-Source-Control-Output-Sha256'),
+    };
   }
 
   /** Reads the effective provider and source-control selection for one run. */

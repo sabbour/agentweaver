@@ -55,10 +55,12 @@ const mocks = vi.hoisted(() => ({
   getAuthorizationContext: vi.fn(),
   listProjectRoleAssignments: vi.fn(),
   createProject: vi.fn(),
+  listSourceControlOutputCaptures: vi.fn(),
 }));
 
 vi.mock('./api', () => ({
   gatewayClient: {
+    listSourceControlOutputCaptures: mocks.listSourceControlOutputCaptures,
     completeRemoteMcpOAuthCallback: mocks.completeRemoteMcpOAuthCallback,
     listProjects: mocks.listProjects,
     getProject: mocks.getProject,
@@ -389,6 +391,7 @@ describe('v1 web project scoping', () => {
     mocks.consent = null;
     mocks.tenantSelector = 'tenant-1';
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
+    mocks.listSourceControlOutputCaptures.mockReset().mockResolvedValue({ captures: [] });
     mocks.listProjects.mockReset().mockResolvedValue([]);
     mocks.createProject.mockReset();
     mocks.getProject.mockReset().mockImplementation(async (_token: string, projectId: string) => projectSummary(projectId, 'Fixture project'));

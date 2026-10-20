@@ -81,7 +81,7 @@ surface. It does not approve that work.
 | Run page | 0.x **Orchestration** two-pane layout: status strip (state, sessions, elapsed time, live update state), **Run tree**, and a session panel with tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. The run token is requested silently; **Sign in for this project and run** appears only when that fails. | G1 for cancel | #1930 suspend and resume; #2113, #2115 export and fork; #2116 evaluations |
 | Run Chat | Journal and a composer that messages the coordinator by default, or the session selected in the run tree. No From/To form. Retries reuse one idempotency key. | Direct user-to-coordinator messages | — |
 | Run Approvals | Shared decision view. It rereads each gate before acting. | None | #1911 decision revise and supersede |
-| Run Changes | GitHub App repository access for the run. | None | #1917 produced files |
+| Run Changes | GitHub App repository access for the run, and **Produced files**: pinned output captures with file content and the capture diff. | None | — |
 | Run settings | Model, revisions, and allowed implementations per platform component. | None | — |
 | Agents | 0.x metrics row, filter, tiles, and a drawer with Overview and Charter. Charter edits save a configuration revision. | G4 | #1913 reviewed casting |
 | Cast a team | Old link explains the gap. | G4 | #1913 |
@@ -100,7 +100,7 @@ surface. It does not approve that work.
 | Settings > Advanced | Full configuration JSON. Fallback only. | None | — |
 | Board | Hidden. | G8 | #1915 |
 | Flow | Hidden. | G2 | Chief of Staff A1 grouped view |
-| Workspace | Hidden. Run Changes covers the run's repository. | — | #1917 |
+| Workspace | Hidden. Run Changes shows the run's repository and produced files. | Project-wide file browsing | — |
 | Workflows | Hidden. | G8 | #1914 |
 | Apps and Canvas | Hidden. | — | #1878, #1900, #1904 |
 | Observability, Diagnostics, Heartbeat, Cluster | Hidden. Run Activity and Usage cover one run. | G7 | — |
