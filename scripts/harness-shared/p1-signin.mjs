@@ -422,21 +422,17 @@ async function authorizeP1InContext({
       context.on('response', onResponse);
 
       // CDP pauses every matching request, including redirect hops that page.route skips.
-      // Fail the navigation before releasing the code to its only consumer: this launcher.
+      // Abort before validation: even an invalid callback must never reach the Portal.
+      // Never continue a request selected by this callback-only interception pattern.
       callbackSession = await context.newCDPSession(page);
       callbackSession.on('Fetch.requestPaused', async ({ requestId, request: pausedRequest }) => {
+        callbackObserved = true;
         try {
-          const code = callbackCode(pausedRequest.url, request);
-          if (code === null) {
-            await callbackSession.send('Fetch.continueRequest', { requestId });
-            return;
-          }
-          callbackObserved = true;
           await callbackSession.send('Fetch.failRequest', { requestId, errorReason: 'Aborted' });
+          const code = callbackCode(pausedRequest.url, request);
+          if (code === null) throw new Error('The intercepted request is not the registered callback.');
           callback.resolve(code);
         } catch {
-          callbackObserved = true;
-          // Never resume an invalid callback. Closing the page releases paused requests.
           callback.reject(new Error('The Identity Broker callback could not be captured safely.'));
         }
       });
@@ -513,7 +509,9 @@ async function authorizeP1InContext({
       return await exchangeCode({ ...request, issuer: environment.issuer, audience: environment.audience, actorId }, code, fetchImpl);
   } finally {
     if (onResponse) context.off('response', onResponse);
-    await page.close().catch(() => {});
+    // Detaching can resume paused requests. Keep interception until close succeeds;
+    // if close fails, leave the session attached for the owner's context cleanup.
+    await page.close();
     await callbackSession?.detach().catch(() => {});
   }
 }
