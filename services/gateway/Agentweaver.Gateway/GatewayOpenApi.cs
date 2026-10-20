@@ -104,6 +104,9 @@ internal static partial class GatewayOpenApi
             ["replayRunEvents"] = C(null, "SessionEventPage", "200"),
             ["streamRunEvents"] = C(null, "SessionEventPage", "200"),
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
+            ["readProjectBacklog"] = C(null, "BacklogGraph", "200"),
+            ["captureBacklogTask"] = C("CaptureBacklogTaskRequest", "BacklogGraph", "200"),
+            ["editBacklogTaskContent"] = C("EditBacklogTaskContentRequest", "BacklogGraph", "200"),
         };
 
     /// <summary>Checks operation/schema coverage and returns the versioned API document.</summary>
@@ -260,7 +263,14 @@ internal static partial class GatewayOpenApi
                             }
                             : null);
         }
-        if (route.IsRunEventStream)
+        if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent")
+        {
+            responses["400"] = JsonResponse(Ref("BacklogIssues"), "Invalid backlog content or revision.");
+            responses["409"] = JsonResponse(Ref("BacklogIssues"), "Stale revision, duplicate issue, or noneditable task.");
+            if (route.OperationId == "editBacklogTaskContent")
+                responses["404"] = JsonResponse(Ref("BacklogIssues"), "The task does not exist.");
+        }
+        else if (route.IsRunEventStream)
         {
             responses["400"] = ProblemResponse("The event cursor is invalid or ambiguous.");
         }
@@ -504,6 +514,30 @@ internal static partial class GatewayOpenApi
     {
         ["Problem"] = Obj(["title", "status", "code"],
             ("type", Str()), ("title", Str()), ("status", Int()), ("detail", Str()), ("code", Str())),
+
+        ["BacklogTaskReference"] = Obj(["projectId", "taskId"], ("projectId", Str()), ("taskId", Str())),
+        ["BacklogIssues"] = Obj(["issues"], ("issues", Arr(Ref("BacklogIssue")))),
+        ["BacklogIssue"] = Obj(["code", "path", "message"], ("code", Str()), ("path", Str()), ("message", Str())),
+        ["SourceControlRepositoryIdentity"] = Obj(["owner", "name"], ("owner", Str()), ("name", Str())),
+        ["BacklogRepositoryIssueLink"] = Obj(["providerId", "repository", "issueNumber"],
+            ("providerId", Str()), ("repository", Ref("SourceControlRepositoryIdentity")), ("issueNumber", Int())),
+        ["BacklogTaskContent"] = Obj(["title"], ("title", Str()), ("description", NullableStr()),
+            ("lifecycle", Enum("open", "closed")), ("repositoryIssue", Nullable(Ref("BacklogRepositoryIssueLink")))),
+        ["BacklogTaskSnapshot"] = Obj(
+            ["reference", "revision", "state", "isArchived", "isAutomationInvocationPending", "title", "lifecycle"],
+            ("reference", Ref("BacklogTaskReference")), ("revision", Int()),
+            ("state", Enum("backlog", "ready", "claimed")), ("isArchived", Bool()),
+            ("isAutomationInvocationPending", Bool()), ("title", Str()), ("description", NullableStr()),
+            ("lifecycle", Enum("open", "closed")), ("repositoryIssue", Nullable(Ref("BacklogRepositoryIssueLink")))),
+        ["BacklogDependencyEdge"] = Obj(["task", "prerequisite"],
+            ("task", Ref("BacklogTaskReference")), ("prerequisite", Ref("BacklogTaskReference"))),
+        ["BacklogGraph"] = Obj(["projectId", "revision", "tasks", "dependencies"],
+            ("projectId", Str()), ("revision", Int()), ("tasks", Arr(Ref("BacklogTaskSnapshot"))),
+            ("dependencies", Arr(Ref("BacklogDependencyEdge")))),
+        ["CaptureBacklogTaskRequest"] = Obj(["taskId", "content", "expectedGraphRevision"],
+            ("taskId", Str()), ("content", Ref("BacklogTaskContent")), ("expectedGraphRevision", Int())),
+        ["EditBacklogTaskContentRequest"] = Obj(["content", "expectedGraphRevision", "expectedTaskRevision"],
+            ("content", Ref("BacklogTaskContent")), ("expectedGraphRevision", Int()), ("expectedTaskRevision", Int())),
 
         ["ProjectSummary"] = Obj(["projectId", "name", "state", "revision", "configurationRevision", "createdAt", "updatedAt"],
             ("projectId", Str()), ("name", Str()), ("state", Enum("active", "archived")),

@@ -350,6 +350,15 @@ public static class GatewayRouteCatalog
             ["q", "maxItems", "maxTokens"]);
 
         var run = "/projects/{projectId}/runs/{runId}";
+        var projectBacklog = "/projects/{projectId}/backlog";
+        Add("GET", GatewayOwner.Orchestrator, projectBacklog, "/api" + projectBacklog + "/",
+            "readProjectBacklog", "Read project backlog tasks and dependencies", forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, projectBacklog + "/tasks", "/api" + projectBacklog + "/tasks",
+            "captureBacklogTask", "Capture project backlog work", body: true, forwardTenantSelector: true);
+        Add("PUT", GatewayOwner.Orchestrator, projectBacklog + "/tasks/{taskId}/content",
+            "/api" + projectBacklog + "/tasks/{taskId}/content",
+            "editBacklogTaskContent", "Replace backlog task content and lifecycle",
+            body: true, forwardTenantSelector: true);
         Add("GET", GatewayOwner.Events, run + "/events",
             "/internal" + run + "/events",
             "replayRunEvents", "Replay committed run events", ["cursor", "limit"],

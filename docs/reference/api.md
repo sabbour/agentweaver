@@ -49,6 +49,52 @@ clients cannot use it to grant membership or change identity.
 
 ## Gateway
 
+### Project backlog content
+
+The Orchestrator owns project backlog tasks independently of runs. The Gateway
+forwards the tenant selector and exposes these versioned operations:
+
+| Method | Gateway path | Authority |
+| --- | --- | --- |
+| GET | `/api/v1/projects/{projectId}/backlog` | Current `ReadProjects` |
+| POST | `/api/v1/projects/{projectId}/backlog/tasks` | Current `WriteProjects` |
+| PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/content` | Current `WriteProjects` |
+
+The native paths replace `/api/v1` with `/api`. Reads require `api.read`.
+Writes also require `projects.admin` and project Owner or tenant administrator
+authority. Run-bound and purpose-bound tokens cannot use these routes. An
+optional project binding must match the route. The bearer must include the
+Orchestrator and Projects audiences. The owner rechecks membership and role
+revisions after acquiring the graph lock and before committing a write.
+
+Capture accepts `taskId`, `expectedGraphRevision`, and `content`. Content
+contains `title`, optional `description`, `lifecycle` (`open` or `closed`,
+default `open`), and optional `repositoryIssue`. A title has 1-512 characters
+and no control characters. A description has at most 65,536 characters and no
+NUL character. The owner trims the title. Content replacement also requires
+`expectedTaskRevision`. Both operations return the current project graph;
+stale revisions and duplicate repository issues return `409` with typed
+backlog issues. An unchanged replacement preserves both revisions.
+
+`repositoryIssue` contains a provider catalog ID (`providerId`), a typed
+`repository` with `owner` and `name`, and a positive `issueNumber`. Repository
+names are normalized to lowercase. A project can link an issue to only one
+task, including archived tasks. Issue-sync clients read the graph to reuse
+that identity on repeated import; a conflicting insert does not create a
+second task. These routes do not call the repository provider or synchronize
+issues.
+
+Closing a ready task moves it back to backlog. A closed task cannot become
+ready or receive a new claim. Closing a claimed task retains its existing
+claim and run ownership; it does not cancel execution. Reopening does not
+schedule work. Archive remains separate from open/closed lifecycle.
+Historical ID-only tasks retain an empty title until edited.
+
+These source mappings require migration `026_backlog_task_content.sql`.
+Migration application, existing grant reconciliation, and the changed
+PostgreSQL plan hash require separate operator approval and remain unapplied.
+This content contract does not add MCP tools or a retained UI.
+
 Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 `GatewayRouteCatalog.cs`.
 
