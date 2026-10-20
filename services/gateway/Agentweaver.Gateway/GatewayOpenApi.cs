@@ -48,6 +48,7 @@ internal static partial class GatewayOpenApi
             ["prepareSourceControlMergeIntent"] = C("PrepareSourceControlMergeIntentRequest", "SourceControlMergeApprovalView", "200", "202"),
             ["readSourceControlMergeIntent"] = C(null, "SourceControlMergeIntentView", "200"),
             ["executeSourceControlMergeIntent"] = C(null, "SourceControlMergeExecutionView", "200"),
+            ["listProjectRuns"] = C(null, "ProjectRunPage", "200"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
             ["proposeOutcome"] = C("ProposeCoordinatorOutcomeRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readRunStatus"] = C(null, "OwnerRunStatus", "200"),
@@ -267,6 +268,12 @@ internal static partial class GatewayOpenApi
                 "The owner hides foreign projects and memberships found inactive or stale during the inventory recheck. " +
                 "Inactive membership rejected during initial caller resolution returns 403.");
         }
+        else if (route.OperationId == "listProjectRuns")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected an unknown or repeated query key, unknown state, invalid cursor, " +
+                "or page size outside 1 through 100.");
+        }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
             responses["400"] = ProblemResponse(
@@ -294,6 +301,14 @@ internal static partial class GatewayOpenApi
                 "after the read and permits archived projects. The opaque cursor uses stable SkillId-ascending " +
                 "order in C collation, then revision-descending order. It does not make multiple pages a " +
                 "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
+        }
+        else if (route.OperationId == "listProjectRuns")
+        {
+            description +=
+                " This read requires api.read and fresh Projects readProjects or readRunSelection authority on " +
+                "the project, or tenant readProjects authority. A run-bound token sees only its own run. Runs are " +
+                "ordered by createdAt descending, then runId descending. The opaque cursor is valid only with " +
+                "the same project, state filter, and page size, and multiple pages are not a snapshot.";
         }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
@@ -399,6 +414,16 @@ internal static partial class GatewayOpenApi
     {
         if (operationId == "listProjectSkillInventory" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
+        if (operationId == "listProjectRuns" && name == "pageSize")
+            return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
+        if (operationId == "listProjectRuns" && name == "state")
+            return new
+            {
+                type = "string",
+                description = "Comma-separated run states, or the open and terminal aliases.",
+                pattern = "^(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal)" +
+                    "(,(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal))*$",
+            };
 
         if ((operationId == "removeMarketplaceSource" && name == "expectedRevision") ||
             (operationId == "browseMarketplaceSource" && name == "expectedSourceRevision"))
@@ -745,6 +770,15 @@ internal static partial class GatewayOpenApi
             ("advertisedCapabilities", Arr(Str())), ("requiredCapabilities", Arr(Str())),
             ("layer", Nullable(Enum("l3L4", "l7")))),
 
+        ["ProjectRunStartedBy"] = StrictObj(["issuer", "subject"], ("issuer", Str()), ("subject", Str())),
+        ["ProjectRunSummary"] = StrictObj(
+            ["runId", "rootSessionId", "title", "goal", "state", "createdAt", "updatedAt", "completedAt", "startedBy"],
+            ("runId", Str()), ("rootSessionId", NullableStr()), ("title", NullableStr()), ("goal", NullableStr()),
+            ("state", Enum("idle", "active", "blocked", "completed", "failed", "indeterminate", "cancelled")),
+            ("createdAt", Date()), ("updatedAt", Date()), ("completedAt", Nullable(Date())),
+            ("startedBy", Ref("ProjectRunStartedBy"))),
+        ["ProjectRunPage"] = StrictObj(["projectId", "items", "nextCursor"],
+            ("projectId", Str()), ("items", Arr(Ref("ProjectRunSummary"))), ("nextCursor", NullableStr())),
         ["AcceptRootRequest"] = Obj(["sessionId"], ("sessionId", Str())),
         ["ProposeCoordinatorOutcomeRequest"] = Obj(["expectedStateVersion", "idempotencyKey", "requestId", "specification"],
             ("expectedStateVersion", Int()), ("idempotencyKey", Str()), ("requestId", Str()),
