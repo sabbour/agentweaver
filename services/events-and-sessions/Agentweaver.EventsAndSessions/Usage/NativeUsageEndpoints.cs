@@ -222,6 +222,25 @@ internal sealed class NativeUsageApplicationService(
         return result;
     }
 
+    /// <summary>Reads represented spend for the bound run and its project only when authority is unchanged.</summary>
+    internal async Task<UsageSpendEvidence> ReadSpendEvidenceAsync(
+        HttpContext context, string projectId, string runId, UsageSpendEvidenceRequest request,
+        CancellationToken cancellationToken)
+    {
+        UsageSpendEvidenceContract.ValidateRequest(request);
+        var first = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+        RequireReadAuthority(first);
+        if (first.BoundProjectId != projectId || first.BoundRunId != runId)
+            throw new RuntimeAuthorizationException("runtime_usage_receipt_scope_invalid");
+        var result = await ledger.ReadSpendEvidenceAsync(first.TenantId, projectId, runId, request, cancellationToken)
+            .ConfigureAwait(false);
+        var current = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+        RequireReadAuthority(current);
+        if (current.TenantId != first.TenantId || current.BoundProjectId != projectId || current.BoundRunId != runId)
+            throw new RuntimeAuthorizationException("runtime_usage_authority_changed");
+        return result;
+    }
+
     /// <summary>Builds a cost snapshot from required receipts and revalidates any supplied native-turn proof.</summary>
     internal async Task<RuntimeUsageCostSnapshotReceipt> ReadCostSnapshotAsync(
         HttpContext context, string projectId, string runId, RuntimeUsageCostSnapshotRequest request,
@@ -349,6 +368,12 @@ public static class NativeUsageEndpoints
             (string projectId, string runId, RuntimeUsageCostSnapshotRequest request, HttpContext context,
                 [FromServices] NativeUsageApplicationService service, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => service.ReadCostSnapshotAsync(
+                    context, projectId, runId, request, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/projects/{projectId}/runs/{runId}/usage/spend-evidence",
+            (string projectId, string runId, UsageSpendEvidenceRequest request, HttpContext context,
+                [FromServices] NativeUsageApplicationService service, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => service.ReadSpendEvidenceAsync(
                     context, projectId, runId, request, cancellationToken)))
             .RequireAuthorization();
         return endpoints;

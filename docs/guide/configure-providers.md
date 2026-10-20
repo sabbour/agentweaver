@@ -45,10 +45,41 @@ checked-in application catalog:
 
 - `cosmos.memory` and `redis.memory` are optional Memory implementation
   candidates. The default catalog does not register either one.
-- `azure.byok-usage-cost` has an options contract, but the default catalog
-  selects Copilot cost. Events admits Azure BYOK usage only from trusted
-  producers and records it as `Unpriced` until an Azure Cost provider is
-  configured.
+- `azure.byok-usage-cost` is off by default. Events admits Azure BYOK usage only
+  from trusted producers. It prices that usage when you configure
+  `EventsAndSessions:Cost:Azure` with a versioned rate card, as shown in the
+  following example. Without that section, the usage is recorded as `Unpriced`.
+
+  ```json
+  {
+    "EventsAndSessions": {
+      "Cost": {
+        "Azure": {
+          "ResourceId": "azure-openai-eastus2",
+          "ResourceGeneration": 1,
+          "OptionsRevision": "azure-cost-v1",
+          "OptionsSchemaVersion": 1,
+          "PricingModel": "StandardTokens",
+          "RateCard": {
+            "Id": "azure-retail-prices.standard.eastus2",
+            "Version": "2026-10-01",
+            "MeterSource": "byok.tokens",
+            "Unit": "USD",
+            "NanoUnitsPerUnit": 1000000,
+            "ModelMultipliers": {
+              "gpt-4.1|input": 2.00,
+              "gpt-4.1|output": 8.00
+            }
+          }
+        }
+      }
+    }
+  }
+  ```
+
+  Rates are per million tokens. Use your own reviewed retail or negotiated prices.
+  To change rates, publish a new `Version`. Runs that already pinned the earlier
+  card keep it, and their new usage stays `Unpriced`.
 - Foundation Probe registrations such as `azure-blob`, `azure-key-vault`, and
   `azure-monitor` are probe descriptors. They do not make application
   providers selectable.

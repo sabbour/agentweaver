@@ -417,6 +417,81 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TrustedAzureByokUsageIsPricedFromThePinnedRateCardAndReadAsSpendEvidence()
+    {
+        var periodStart = DateTimeOffset.UtcNow.AddDays(-1);
+        var request = new UsageSpendEvidenceRequest(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD",
+            new("current", periodStart, periodStart.AddDays(2)), []);
+        var empty = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", request);
+        Assert.Equal(0, empty.AccountingCursor);
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), empty.Run);
+
+        var receipt = AzureByokReceipt();
+        var (consumer, azure, binding) = AzureConsumer(1.25m, 5.75m);
+        var expected = azure.Price(receipt.Usage.Measurement, receipt.Usage.ModelBinding, binding);
+        Assert.Equal(CostDisposition.Estimate, expected.Disposition);
+        var first = await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Estimate, first.Accounting.Disposition);
+        Assert.Equal(expected.Amount, first.Accounting.Amount);
+        Assert.Equal("USD", first.Accounting.Unit);
+        Assert.Equal("azure-retail-prices.standard.eastus2", first.Accounting.RateCardId);
+        Assert.True((await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default)).IsDuplicate);
+
+        var dispatch = receipt.Usage.A2AMessageId!.Value.ToString("D");
+        var withDispatch = request with { DispatchIds = [dispatch, Guid.NewGuid().ToString("D")] };
+        var evidence = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", withDispatch);
+        UsageSpendEvidenceContract.ValidateEvidence(evidence, withDispatch, "tenant-1", "project-1", "run-1");
+        Assert.Equal(1, evidence.AccountingCursor);
+        Assert.Equal(new UsageSpendTotal(expected.Amount!.Value, 1, 0), evidence.Run);
+        Assert.Equal(evidence.Run, evidence.ProjectPeriod);
+        var witness = evidence.Dispatches[0];
+        Assert.Equal(UsageDispatchAccountingStatus.Partial, witness.Status);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(witness.Receipts).SourceReceiptId);
+        Assert.Equal(expected.Amount, witness.KnownPricedSubtotal);
+        Assert.Equal(UsageDispatchAccountingStatus.Unknown, evidence.Dispatches[1].Status);
+        Assert.Empty(evidence.Dispatches[1].Receipts);
+
+        // A changed rate card never reprices the run: history keeps its price and new usage in the
+        // pinned run fails closed as unpriced until the run's pinned card is served again.
+        var (changed, _, _) = AzureConsumer(9.00m, 9.00m);
+        var replay = await changed.AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(expected.Amount, replay.Accounting.Amount);
+        var second = await changed.AppendAsync(AzureByokReceipt(), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, second.Accounting.Disposition);
+        Assert.Equal("pinned-cost-binding-unavailable", second.Accounting.UnpricedReason);
+        var later = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", withDispatch);
+        Assert.Equal(2, later.AccountingCursor);
+        Assert.Equal(new UsageSpendTotal(expected.Amount!.Value, 1, 1), later.Run);
+        Assert.Equal(witness.ReceiptDigest, later.Dispatches[0].ReceiptDigest);
+        Assert.All(later.Dispatches, item => Assert.Equal(2, item.AccountingWatermark));
+
+        var outside = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", request with
+        {
+            ProjectPeriod = new("next", periodStart.AddDays(3), periodStart.AddDays(4))
+        });
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), outside.ProjectPeriod);
+        Assert.Equal(later.Run, outside.Run);
+        var euro = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", request with { Unit = "EUR" });
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), euro.Run);
+    }
+
+    [Fact]
+    public async Task NonAzureByokUsageStaysUnpricedEvenWithAnAzureRateCard()
+    {
+        var (consumer, _, _) = AzureConsumer(1.25m, 5.75m);
+        var accepted = await consumer.AppendAsync(
+            AzureByokReceipt(providerType: "openai"), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, accepted.Accounting.Disposition);
+        Assert.Equal("byok-provider-unpriced", accepted.Accounting.UnpricedReason);
+        Assert.Null(accepted.Accounting.Amount);
+        var evidence = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", new(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD", null, []));
+        Assert.Equal(new UsageSpendTotal(0m, 0, 1), evidence.Run);
+    }
+
+    [Fact]
     public async Task NativeConsumerAuthorityFailureAfterLedgerWaitRollsBackEveryAccountingArtifact()
     {
         var receipt = NativeReceipt();
@@ -1650,6 +1725,68 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         {
             RateCardContentHash = accounting.RateCardContentHash
         };
+    }
+
+    private (NativeUsageReceiptConsumer Consumer, AzureCostProvider Provider, CostBinding Binding) AzureConsumer(
+        decimal inputRate, decimal outputRate)
+    {
+        var options = new AzureCostProviderOptions(
+            "azure-openai-deployment-1", 1, "azure-cost-options-v1",
+            AzureCostProviderOptions.CurrentOptionsSchemaVersion, AzureCostPricingModel.StandardTokens,
+            new CostRateCard("azure-retail-prices.standard.eastus2", $"2026-10-01.{inputRate}.{outputRate}",
+                AzureCostProvider.MeterSource, "USD", AzureCostProviderOptions.TokensPerRateUnit,
+                ImmutableDictionary.CreateRange(StringComparer.Ordinal, new[]
+                {
+                    KeyValuePair.Create(AzureCostProviderOptions.InputRateKey("gpt-6.1-sol"), inputRate),
+                    KeyValuePair.Create(AzureCostProviderOptions.OutputRateKey("gpt-6.1-sol"), outputRate)
+                })));
+        var azure = new AzureCostProvider(options);
+        var catalog = ProviderCatalog.Create(
+            [azure.CreateRegistration()], [], [],
+            meterSourceSelections: [new(SdkMeterSources.ByokTokens, AzureCostProvider.ProviderId)]);
+        Assert.True(catalog.IsSuccess, catalog.Error?.Message);
+        var binder = new AzureCostProviderBinder(azure, new(catalog.Value!));
+        var pinned = binder.ResolveAndPin(SdkMeterSources.ByokTokens, "run-1");
+        Assert.True(pinned.IsSuccess, pinned.Error?.Message);
+        var consumer = new NativeUsageReceiptConsumer(_fixture.DataSource,
+            new PostgresSessionsProviderOptions("native-postgres", "test", 1, _schema, "native-options", 1),
+            _ledger, azureProvider: azure, azureBindings: binder);
+        return (consumer, azure, pinned.Value!);
+    }
+
+    private static RuntimeUsageSourceReceipt AzureByokReceipt(string providerType = "azure")
+    {
+        var hosted = NativeReceipt();
+        var registration = hosted.Registration with
+        {
+            Binding = hosted.Registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = new(1, hosted.Usage.SdkSource!.ModelSelectionReference,
+                    hosted.Usage.SdkSource.ModelId, ModelSourceMode.Byok, "byok-bindings-v1", new string('a', 64))
+                {
+                    ProviderType = providerType
+                }
+            }
+        };
+        var source = hosted.Usage.SdkSource! with
+        {
+            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null,
+            ByokProvider = new(providerType, hosted.Usage.SdkSource.ModelId, new string('a', 64)),
+            ModelBindingPin = registration.Binding.ModelBindingPin,
+            ResolvedModelBindingPin = registration.Binding.ModelBindingPin
+        };
+        var sdkEvent = Guid.NewGuid().ToString("D");
+        var observation = new SdkUsageObservation(
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, sdkEvent),
+            sdkEvent, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
+            17, 11, 0, 0, 3, null, 12.5m)
+        {
+            A2AMessageId = Guid.NewGuid()
+        };
+        var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
+        return new(1, Guid.NewGuid(), registration, usage,
+            RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
     }
 
     private static RuntimeUsageSourceReceipt NativeReceipt(

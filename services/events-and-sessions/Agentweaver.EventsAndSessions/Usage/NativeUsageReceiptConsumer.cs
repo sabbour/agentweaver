@@ -28,7 +28,8 @@ internal sealed record NativeUsageCostPreflightResult(
 /// <summary>Admits owner-issued receipts and maintains run-scoped cost bindings transactionally.</summary>
 internal sealed class NativeUsageReceiptConsumer(
     NpgsqlDataSource dataSource, PostgresSessionsProviderOptions options, PostgresUsageLedger ledger,
-    CopilotCostProvider? provider = null, ICostProviderBinder? bindings = null)
+    CopilotCostProvider? provider = null, ICostProviderBinder? bindings = null,
+    AzureCostProvider? azureProvider = null, AzureCostProviderBinder? azureBindings = null)
 {
     private const string InboxConsumer = "events.native-sdk-usage.v1";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -205,7 +206,7 @@ internal sealed class NativeUsageReceiptConsumer(
             var pinned = await ReadOrPinBindingAsync(connection, transaction, usage.Attribution.TenantId,
                 usage.Attribution.ProjectId, usage.Attribution.RunId, usage.ModelBinding.MeterSource, cancellationToken)
                 .ConfigureAwait(false);
-            var price = Price(usage, pinned);
+            var price = Price(usage, pinned, RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt));
             var appended = await ledger.AppendWithinTransactionAsync(
                 connection, transaction, usage, pinned.Binding, price, cancellationToken).ConfigureAwait(false);
             acknowledgment = new(receipt.ReceiptId, appended.Receipt, false);
@@ -499,7 +500,7 @@ internal sealed class NativeUsageReceiptConsumer(
                 return new(reader.IsDBNull(0) ? null : Deserialize<CostBinding>(reader.GetString(0)),
                     reader.IsDBNull(1) ? null : reader.GetString(1));
         }
-        var resolution = bindings?.ResolveAndPin(meterSource, runId);
+        var resolution = BinderFor(meterSource)?.ResolveAndPin(meterSource, runId);
         var pinned = resolution?.IsSuccess == true && resolution.Value is not null
             ? new RunCostBinding(resolution.Value, null)
             : new RunCostBinding(null, resolution?.Error?.Code.ToString() ?? "cost-provider-unavailable");
@@ -515,8 +516,14 @@ internal sealed class NativeUsageReceiptConsumer(
         return pinned;
     }
 
-    private CostPrice Price(UsageSubmission usage, RunCostBinding pinned)
+    /// <summary>Selects the binder that serves a meter source; BYOK tokens use the Azure adapter only.</summary>
+    private ICostProviderBinder? BinderFor(string meterSource) =>
+        meterSource == SdkMeterSources.ByokTokens ? azureBindings : bindings;
+
+    private CostPrice Price(UsageSubmission usage, RunCostBinding pinned, bool trustedAzureByok)
     {
+        if (usage.ModelBinding.MeterSource == SdkMeterSources.ByokTokens)
+            return PriceAzureByok(usage, pinned, trustedAzureByok);
         if (pinned.Binding is null)
             return new(null, UnpricedUnit(usage.ModelBinding.MeterSource),
                 CostDisposition.Unpriced, null, pinned.UnpricedReason);
@@ -526,6 +533,24 @@ internal sealed class NativeUsageReceiptConsumer(
             return new(null, pinned.Binding.RateCard.Unit, CostDisposition.Unpriced,
                 pinned.Binding.RateCard, "pinned-cost-binding-unavailable");
         return provider.Price(usage.Measurement, usage.ModelBinding, pinned.Binding);
+    }
+
+    /// <summary>
+    /// Prices BYOK token usage only for receipts that passed trusted Azure provenance. Other BYOK
+    /// providers stay unpriced; the adapter never substitutes zero or reprices a pinned rate card.
+    /// </summary>
+    private CostPrice PriceAzureByok(UsageSubmission usage, RunCostBinding pinned, bool trustedAzureByok)
+    {
+        if (!trustedAzureByok)
+            return new(null, null, CostDisposition.Unpriced, null, "byok-provider-unpriced");
+        if (pinned.Binding is null)
+            return new(null, null, CostDisposition.Unpriced, null, pinned.UnpricedReason);
+        var verified = azureBindings?.VerifyPinned(
+            usage.ModelBinding.MeterSource, usage.Attribution.RunId, pinned.Binding);
+        if (azureProvider is null || verified?.IsSuccess != true)
+            return new(null, pinned.Binding.RateCard.Unit, CostDisposition.Unpriced,
+                pinned.Binding.RateCard, "pinned-cost-binding-unavailable");
+        return azureProvider.Price(usage.Measurement, usage.ModelBinding, pinned.Binding);
     }
 
     private CostPrice Quote(string modelId, string runId, RunCostBinding pinned)
@@ -548,6 +573,15 @@ internal sealed class NativeUsageReceiptConsumer(
     {
         if (pinned.Binding is null)
             return new(null, false, pinned.UnpricedReason ?? "cost-provider-unavailable");
+        if (meterSource == SdkMeterSources.ByokTokens)
+        {
+            var azureVerified = azureBindings?.VerifyPinned(meterSource, runId, pinned.Binding);
+            if (azureProvider is null || azureVerified?.IsSuccess != true)
+                return new(pinned.Binding, false, "pinned-cost-binding-unavailable");
+            var azureQuote = azureProvider.Quote(
+                new CostQuoteRequest(modelId, 0m, CostQuoteBasis.ProviderWeightedNanoAiu), pinned.Binding);
+            return new(pinned.Binding, false, azureQuote.UnpricedReason ?? "cost-quote-invalid");
+        }
 
         var verified = bindings?.VerifyPinned(meterSource, runId, pinned.Binding);
         if (provider is null || verified?.IsSuccess != true)

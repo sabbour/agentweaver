@@ -82,9 +82,22 @@ runtime instance, registration revision, dispatch ID, deployment ID, pinned
 configuration revision and hash, and receipt payload hash. Events applies this
 check to every receipt that claims Azure BYOK and rejects a failed claim with
 `runtime_byok_azure_provenance_invalid`. Usage from an untrusted producer never
-enters the ledger. The default catalog does not register an Azure Cost provider,
-so admitted Azure BYOK usage is recorded as `Unpriced`. Provisioned-throughput
-usage remains unpriced without trusted usage-share evidence.
+enters the ledger. Azure pricing is off until `EventsAndSessions:Cost:Azure`
+supplies an explicit rate card; until then admitted Azure BYOK usage is recorded
+as `Unpriced`. Non-Azure BYOK usage is `Unpriced` with `byok-provider-unpriced`.
+Provisioned-throughput usage stays `Unpriced` per event.
+`AzureProvisionedThroughputAllocator.Allocate` returns a report-only allocation
+of a fixed period charge whose shares add up to the charge exactly.
+
+`UsageSpendEvidenceContract` defines the represented-spend read. A
+`UsageSpendEvidenceRequest` names one meter source and unit, an optional
+`UsageSpendPeriod` (inclusive start, exclusive end), and at most 64 unique,
+lowercase dispatch GUIDs. `UsageSpendEvidence` returns `UsageSpendTotal` values
+for the run and the period, one dispatch witness per requested dispatch, and an
+`AccountingCursor` that never decreases between reads. Every witness watermark
+equals the cursor. Events never reports `SourceComplete`; callers compare witness
+receipts with their own completion manifest. `ValidateEvidence` rejects any
+response that does not match its request.
 
 ## Gateway API and server-sent events
 
