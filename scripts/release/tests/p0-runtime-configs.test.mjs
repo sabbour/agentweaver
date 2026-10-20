@@ -189,7 +189,7 @@ test('Projects Config privileged setup contains only the approved issuer, tenant
     ),
     {
       ProjectsConfig__PrivilegedSetup__ApprovedIssuer: broker,
-      ProjectsConfig__PrivilegedSetup__ApprovedSubject: 'c4279823-a7c7-477e-982e-f4145bb0a83d',
+      ProjectsConfig__PrivilegedSetup__ApprovedSubject: '518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0',
       ProjectsConfig__PrivilegedSetup__ApprovedTenantId: tenant,
     },
   );
@@ -543,7 +543,7 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
     ProjectsConfig__Authentication__Audience: broker,
     ProjectsConfig__PrivilegedSetup__ApprovedIssuer: broker,
     ProjectsConfig__PrivilegedSetup__ApprovedTenantId: tenant,
-    ProjectsConfig__PrivilegedSetup__ApprovedSubject: 'c4279823-a7c7-477e-982e-f4145bb0a83d',
+    ProjectsConfig__PrivilegedSetup__ApprovedSubject: '518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0',
   });
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],

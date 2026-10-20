@@ -1058,7 +1058,10 @@ test('pre-acceptance dry-run detects changed Projects.Config data without exposi
     JSON.stringify(result).includes(desired.data.ProjectsConfig__PrivilegedSetup__ApprovedIssuer),
     false,
   );
-  assert.doesNotMatch(JSON.stringify(result), /c4279823-a7c7-477e-982e-f4145bb0a83d/);
+  assert.equal(
+    JSON.stringify(result).includes(desired.data.ProjectsConfig__PrivilegedSetup__ApprovedSubject),
+    false,
+  );
   assert.doesNotMatch(JSON.stringify(result), /ProjectsConfig__PrivilegedSetup__ApprovedTenantId/);
   assert.equal(result.target.tenantId, target.tenantId);
   assert.equal(dependencies.commands.length, 2);
