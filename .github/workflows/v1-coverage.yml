@@ -5,9 +5,6 @@ name: v1 coverage
 # dispatches this workflow on `v1` every Monday at 05:00 UTC with publish=true.
 # A manual dispatch without publish validates coverage collection only.
 on:
-  # TEMPORARY verification trigger; reverted before review.
-  push:
-    branches: [sabbour-speed-up-v1-ci]
   workflow_dispatch:
     inputs:
       publish:
@@ -34,7 +31,7 @@ jobs:
     needs: measure
     # The reusable workflow's foundation gate fails on any failed, cancelled, or
     # missing suite, so only a complete measurement reaches this job.
-    if: ${{ (inputs.publish || github.event_name == 'push') && needs.measure.result == 'success' }}
+    if: ${{ inputs.publish && needs.measure.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
