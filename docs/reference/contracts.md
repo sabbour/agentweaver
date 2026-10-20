@@ -173,9 +173,9 @@ IDs server-side.
 The browser lifecycle, user-level selection APIs, and callbacks are not exposed
 as first-party MCP tools. Run-bound repository operations in the finite OpenAPI
 catalog remain available as ordinary MCP tools and require `tenantSelector`.
-Run-produced-file list/diff/content reads remain unavailable until the durable
-manifest/object-version owner in P2 #1917 is admitted; no raw filesystem Gateway
-proxy is part of this contract.
+Run-produced files are available through the Source Control output-capture
+operations: capture, list, read, diff, and file. They read pinned, immutable
+captures; no raw filesystem Gateway proxy is part of this contract.
 
 ## First-party MCP client
 
