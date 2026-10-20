@@ -120,6 +120,10 @@ Use these routes to browse and select Skills:
   `expectedSourceRevision`; selected-content preview and import reject query
   parameters.
 - Inline Skill preview and import request bodies are limited to 3 MiB.
+  The Gateway buffers every explicitly bounded route before contacting its
+  owner, including these skill-content routes and requests without
+  `Content-Length`. Oversized requests return `413` with
+  `request_body_too_large` and are not forwarded.
   Marketplace-selected preview and import use the same request-body limit.
 
 The owner remains authoritative for permission checks, revision validation,
@@ -153,6 +157,8 @@ The proposal paths in steps 4 and 5 are relative to
 revision returns `409`. Read the latest state and review it again; do not
 automatically confirm a replacement draft. Casting uses revision checks in
 request bodies, not an `Idempotency-Key` header.
+The owner returns `403` when the caller lacks current `WriteProjects`
+authority for a casting write, including confirm, reject, and import.
 
 To transfer a team, read `/casting/export` under the project path, optionally
 with a positive `revision`. Send the returned transfer to `/casting/import`

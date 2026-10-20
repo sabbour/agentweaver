@@ -278,6 +278,9 @@ internal static partial class GatewayOpenApi
             responses["400"] = ProblemResponse("The owner rejected an invalid casting request.");
             responses["404"] = ProblemResponse("The owner did not find an accessible project or proposal.");
             responses["409"] = ProblemResponse("The configuration revision, draft revision, or proposal state conflicts.");
+            // Casting writes require the owner's current WriteProjects authority.
+            if (route.HasJsonBody)
+                responses["403"] = ProblemResponse("The owner denied current WriteProjects authority.");
             if (route.OperationId == "importProjectCasting")
             {
                 responses["413"] = ProblemResponse("The casting import request exceeds 1 MiB.");

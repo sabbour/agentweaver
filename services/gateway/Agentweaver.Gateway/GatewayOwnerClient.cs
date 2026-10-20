@@ -828,7 +828,7 @@ public sealed class GatewayOwnerClient(
             body);
     }
 
-    /// <summary>Checks bounded bodies before contacting an owner, including streams without Content-Length.</summary>
+    /// <summary>Buffers every explicitly bounded route, including 3 MiB skill content, before contacting an owner.</summary>
     private static async Task<MemoryStream?> BufferBoundedRequestAsync(
         HttpContext context,
         GatewayRoute route,

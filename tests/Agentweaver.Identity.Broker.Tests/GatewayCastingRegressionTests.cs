@@ -80,6 +80,11 @@ public sealed class GatewayCastingRegressionTests
             }
             Assert.Equal("#/components/schemas/" + expected.Response,
                 SchemaReference(operation.GetProperty("responses").GetProperty(expected.Status)));
+            // Every casting write documents the owner's authorization denial.
+            if (expected.Request is not null)
+                Assert.Equal("#/components/schemas/Problem",
+                    operation.GetProperty("responses").GetProperty("403").GetProperty("content")
+                        .GetProperty("application/problem+json").GetProperty("schema").GetProperty("$ref").GetString());
             if (expected.Suffix.Contains("{proposalId", StringComparison.Ordinal))
                 Assert.Equal("uuid", Assert.Single(parameters, item => item.GetProperty("name").GetString() == "proposalId")
                     .GetProperty("schema").GetProperty("format").GetString());
@@ -168,17 +173,24 @@ public sealed class GatewayCastingRegressionTests
         Assert.Equal(Routes.Length, calls.Count);
     }
 
-    /// <summary>Rejects oversized imports before contacting Projects, including bodies without a length header.</summary>
+    /// <summary>Enforces casting and skill-content bounds before Projects, with or without a length header.</summary>
     [Theory]
-    [InlineData(-1, false)]
-    [InlineData(0, false)]
-    [InlineData(1, false)]
-    [InlineData(-1, true)]
-    [InlineData(0, true)]
-    [InlineData(1, true)]
-    public async Task CastingImportEnforcesBodyLimitBeforeForwarding(int sizeOffset, bool unknownLength)
+    [InlineData(-1, false, false)]
+    [InlineData(0, false, false)]
+    [InlineData(1, false, false)]
+    [InlineData(-1, true, false)]
+    [InlineData(0, true, false)]
+    [InlineData(1, true, false)]
+    [InlineData(-1, false, true)]
+    [InlineData(0, false, true)]
+    [InlineData(1, false, true)]
+    [InlineData(-1, true, true)]
+    [InlineData(0, true, true)]
+    [InlineData(1, true, true)]
+    public async Task CastingAndSkillImportsEnforceBodyLimitsBeforeForwarding(
+        int sizeOffset, bool unknownLength, bool skillContent)
     {
-        const int maximumBytes = 1_048_576;
+        var maximumBytes = skillContent ? 3 * 1_048_576 : 1_048_576;
         using var rsa = RSA.Create(2048);
         var signingKey = new RsaSecurityKey(rsa);
         var token = new JwtSecurityToken(new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
@@ -198,7 +210,8 @@ public sealed class GatewayCastingRegressionTests
                 };
             }),
             (_, _, _) => throw new InvalidOperationException("Casting must call Projects only."));
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/projects/project-1/casting/import")
+        var path = skillContent ? "/api/v1/projects/project-1/skills/import" : "/api/v1/projects/project-1/casting/import";
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
         {
             Content = new ImportBodyContent(body, unknownLength),
         };
