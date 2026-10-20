@@ -1502,7 +1502,7 @@ function KnowledgePage() {
         {binding && !correctlyScoped && (
           <div className="v1-scope-action">
             <p className="v1-muted">You need to sign in again to read this run's memories.</p>
-            <Button appearance="primary" onClick={() => void authorize(binding)}>Sign in for this run</Button>
+            <Button appearance="primary" onClick={() => void authorize(binding)}>Sign in for this project and run</Button>
           </div>
         )}
       </Panel>

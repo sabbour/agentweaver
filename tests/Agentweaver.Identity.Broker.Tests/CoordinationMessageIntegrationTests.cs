@@ -5618,8 +5618,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         "The subject in the browser's Broker token must have the active run grant.");
                 }
                 await page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" }).ClickAsync();
-                await page.GetByText("Confirm the exact pending outcome gate.").WaitForAsync();
-                await page.GetByText($"Request ID: {outcomeGateRequestId}").WaitForAsync();
+                var outcomeDecision = page.GetByRole(AriaRole.Article, new() { Name = "Confirm the outcome", Exact = true });
+                await outcomeDecision.GetByText("Confirm the outcome this run should deliver.").WaitForAsync();
+                await outcomeDecision.GetByText($"request {outcomeGateRequestId}").WaitForAsync();
             }
             catch (Exception exception)
             {

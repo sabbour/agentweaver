@@ -46,8 +46,8 @@ project **Dashboard**, or **Orchestrations**.
 
 The Broker validates current authority for that project and run. The app
 does not reuse a token bound to another run. The **Memories** page uses the
-same run sign-in. It shows **Sign in for this run** when you choose a run that
-your current sign-in doesn't cover.
+same run sign-in and button when you choose a run that your current sign-in
+doesn't cover.
 
 **Expected result:** The run page loads only when your sign-in matches the
 project and run in the address. The page then reads owner snapshots,

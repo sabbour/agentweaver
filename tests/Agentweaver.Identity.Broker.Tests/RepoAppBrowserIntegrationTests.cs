@@ -214,15 +214,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     new Uri(response.Url).AbsolutePath.Equals(
                         configurationPath, StringComparison.Ordinal));
                 await page.GetByRole(
-                    AriaRole.Link,
-                    new() { Name = "Configuration" }).First.ClickAsync();
+                    AriaRole.Button,
+                    new() { Name = "Settings", Exact = true }).ClickAsync();
+                await page.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Project settings", Exact = true }).ClickAsync();
                 var configurationResponse = await configurationResponseTask;
                 Assert.Equal((int)HttpStatusCode.OK, configurationResponse.Status);
                 await page.GetByRole(
                     AriaRole.Heading,
                     new() { Name = "Project settings", Exact = true }).WaitForAsync();
-                await page.GetByText("Advanced: edit configuration JSON").ClickAsync();
-                await page.GetByLabel("Typed ProjectConfiguration JSON").WaitForAsync();
+                var settingsSections = page.GetByRole(
+                    AriaRole.Navigation,
+                    new() { Name = "Settings sections" });
+                await settingsSections.GetByRole(
+                    AriaRole.Link,
+                    new() { Name = "Advanced", Exact = true }).ClickAsync();
+                await page.GetByLabel("Configuration JSON", new() { Exact = true }).WaitForAsync();
+                await settingsSections.GetByRole(
+                    AriaRole.Link,
+                    new() { Name = "Connections", Exact = true }).ClickAsync();
                 await page.GetByText(
                     "No GitHub Repo App connection is available for this identity.")
                     .WaitForAsync();

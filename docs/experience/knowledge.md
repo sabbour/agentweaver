@@ -23,7 +23,7 @@ service availability.
 3. Choose an **Agent**. The list contains the agents in the project
    configuration.
 4. Select **Show memories**.
-5. If prompted, select **Sign in for this run**.
+5. If prompted, select **Sign in for this project and run**.
 6. Choose a kind tab: **All**, **Memories**, **Decisions**, **Proposals**, or
    **Session context**.
 7. Enter **Search text** and select **Search**. **Include inactive records**
