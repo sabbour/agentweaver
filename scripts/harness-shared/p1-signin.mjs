@@ -216,12 +216,25 @@ function callbackCode(urlValue, request) {
   return codes[0];
 }
 
-function isAuthorizeUrl(candidate, request) {
+export function isAuthorizeUrl(candidate, request) {
   try {
     const url = new URL(candidate);
     const expected = new URL(request.authorizeUrl);
-    return url.origin === expected.origin && url.pathname === expected.pathname
-      && url.search === expected.search;
+    if (url.origin !== expected.origin || url.pathname !== expected.pathname) return false;
+    const expectedParams = expected.searchParams;
+    const seen = new Set();
+    for (const [name, value] of url.searchParams) {
+      if (seen.has(name)) return false;
+      seen.add(name);
+      if (expectedParams.has(name)) {
+        if (expectedParams.get(name) !== value) return false;
+      } else if (name === 'nonce' && value) {
+        continue;
+      } else {
+        return false;
+      }
+    }
+    return [...expectedParams.keys()].every(name => seen.has(name));
   } catch {
     return false;
   }
@@ -245,75 +258,82 @@ function raceWithAbort(promise, signal, timeoutMs) {
   });
 }
 
-async function renderConsentPrompt(page, prompt, request) {
+async function renderConsentPrompt(page, prompt, request, { signal, timeoutMs }) {
   const decision = deferred();
-  await page.exposeFunction('__agentweaverP1ConsentDecision', approved => {
-    decision.resolve(approved === true);
-  });
-  await page.evaluate(({ scopes, authorizeUrl, consent }) => {
-    document.title = 'Agentweaver P1 sign-in consent';
-    document.body.replaceChildren();
-    document.body.style.cssText = 'font:16px system-ui,sans-serif;max-width:44rem;margin:4rem auto;padding:0 1rem';
-    const heading = document.createElement('h1');
-    heading.textContent = 'Approve Agentweaver access';
-    const intro = document.createElement('p');
-    intro.textContent = 'Review the permissions requested for this P1 sign-in.';
-    const list = document.createElement('ul');
-    for (const scope of scopes) {
-      const item = document.createElement('li');
-      item.textContent = scope;
-      list.append(item);
-    }
-    const status = document.createElement('p');
-    status.setAttribute('role', 'status');
-    const approve = document.createElement('button');
-    approve.textContent = 'Approve';
-    const decline = document.createElement('button');
-    decline.textContent = 'Decline';
-    decline.style.marginLeft = '0.75rem';
-    const decide = async (approved) => {
-      approve.disabled = true;
-      decline.disabled = true;
-      status.textContent = 'Submitting your decision…';
-      try {
-        const response = await fetch('/connect/consent', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            'X-CSRF-TOKEN': consent.csrf_token,
-          },
-          credentials: 'include',
-          cache: 'no-store',
-          redirect: 'manual',
-          body: JSON.stringify({
-            consent_handle: consent.consent_handle,
-            approve: approved,
-            scopes: approved ? scopes : [],
-          }),
-        });
-        if (!(response.ok || (response.status >= 300 && response.status < 400))) {
+  const onClose = () => decision.reject(new Error('The P1 sign-in window was closed.'));
+  page.once?.('close', onClose);
+  try {
+    await page.exposeFunction('__agentweaverP1ConsentDecision', approved => {
+      decision.resolve(approved === true);
+    });
+    await page.evaluate(({ scopes, authorizeUrl, consent }) => {
+      document.title = 'Agentweaver P1 sign-in consent';
+      document.body.replaceChildren();
+      document.body.style.cssText = 'font:16px system-ui,sans-serif;max-width:44rem;margin:4rem auto;padding:0 1rem';
+      const heading = document.createElement('h1');
+      heading.textContent = 'Approve Agentweaver access';
+      const intro = document.createElement('p');
+      intro.textContent = 'Review the permissions requested for this P1 sign-in.';
+      const list = document.createElement('ul');
+      for (const scope of scopes) {
+        const item = document.createElement('li');
+        item.textContent = scope;
+        list.append(item);
+      }
+      const status = document.createElement('p');
+      status.setAttribute('role', 'status');
+      const approve = document.createElement('button');
+      approve.textContent = 'Approve';
+      const decline = document.createElement('button');
+      decline.textContent = 'Decline';
+      decline.style.marginLeft = '0.75rem';
+      const decide = async (approved) => {
+        approve.disabled = true;
+        decline.disabled = true;
+        status.textContent = 'Submitting your decision…';
+        try {
+          const response = await fetch('/connect/consent', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              'X-CSRF-TOKEN': consent.csrf_token,
+            },
+            credentials: 'include',
+            cache: 'no-store',
+            redirect: 'manual',
+            body: JSON.stringify({
+              consent_handle: consent.consent_handle,
+              approve: approved,
+              scopes: approved ? scopes : [],
+            }),
+          });
+          if (!(response.ok || (response.status >= 300 && response.status < 400)
+            || response.type === 'opaqueredirect')) {
+            status.textContent = 'The consent decision could not be completed. Close this window and rerun the command.';
+            await window.__agentweaverP1ConsentDecision(false);
+            return;
+          }
+          await window.__agentweaverP1ConsentDecision(approved);
+          if (approved) window.location.assign(authorizeUrl);
+          else status.textContent = 'Consent declined. No P1 sign-in token was issued.';
+        } catch {
           status.textContent = 'The consent decision could not be completed. Close this window and rerun the command.';
           await window.__agentweaverP1ConsentDecision(false);
-          return;
         }
-        await window.__agentweaverP1ConsentDecision(approved);
-        if (approved) window.location.assign(authorizeUrl);
-        else status.textContent = 'Consent declined. No P1 sign-in token was issued.';
-      } catch {
-        status.textContent = 'The consent decision could not be completed. Close this window and rerun the command.';
-        await window.__agentweaverP1ConsentDecision(false);
-      }
-    };
-    approve.addEventListener('click', () => { void decide(true); });
-    decline.addEventListener('click', () => { void decide(false); });
-    document.body.append(heading, intro, list, approve, decline, status);
-  }, {
-    scopes: prompt.requested_scopes,
-    authorizeUrl: request.authorizeUrl,
-    consent: { consent_handle: prompt.consent_handle, csrf_token: prompt.csrf_token },
-  });
-  return decision.promise;
+      };
+      approve.addEventListener('click', () => { void decide(true); });
+      decline.addEventListener('click', () => { void decide(false); });
+      document.body.append(heading, intro, list, approve, decline, status);
+    }, {
+      scopes: prompt.requested_scopes,
+      authorizeUrl: request.authorizeUrl,
+      consent: { consent_handle: prompt.consent_handle, csrf_token: prompt.csrf_token },
+    });
+    return await raceWithAbort(decision.promise, signal, timeoutMs);
+  } finally {
+    page.off?.('close', onClose);
+  }
 }
 
 async function exchangeCode(request, code, fetchImpl) {
@@ -453,7 +473,7 @@ async function authorizeP1InContext({
       if (initial.kind === 'code') {
         code = initial.value;
       } else {
-        const decision = await renderConsentPrompt(page, initial.value, request);
+        const decision = await renderConsentPrompt(page, initial.value, request, { signal, timeoutMs });
         if (!decision) throw new Error('Broker consent was declined.');
         code = await raceWithAbort(callback.promise, signal, timeoutMs);
       }
