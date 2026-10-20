@@ -379,10 +379,28 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var observation = new SdkUsageObservation(
             SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, sdkEvent),
             sdkEvent, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
-            17, 11, 7, 5, 3, null, 12.5m);
+            17, 11, 7, 5, 3, null, 12.5m)
+        {
+            A2AMessageId = Guid.NewGuid()
+        };
         var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
         var receipt = new RuntimeUsageSourceReceipt(1, Guid.NewGuid(), registration, usage,
             RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
+        var undispatched = RuntimeUsageSourceReceiptContract.CreateUsage(
+            registration, source, observation with { A2AMessageId = null });
+        var untrusted = Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt with
+            {
+                Usage = undispatched,
+                CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(registration, undispatched)
+            }));
+        Assert.Equal("runtime_byok_azure_provenance_invalid", untrusted.Code);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => NativeConsumer().AppendAsync(receipt with
+        {
+            ReceiptId = Guid.NewGuid(), Usage = undispatched,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(registration, undispatched)
+        }, _ => Task.CompletedTask, default));
+        Assert.Equal(0, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
 
         var first = await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
         Assert.Equal(CostDisposition.Unpriced, first.Accounting.Disposition);
