@@ -419,6 +419,65 @@ test('sign-in completes consent, intercepts the registered callback, and exchang
   assert.doesNotMatch(log.join('\n'), /eyJ|controlled-authorization-code|controlled-csrf-token/);
 });
 
+test('invalid callbacks are aborted before rejection and page close precedes CDP detach', async t => {
+  for (const query of [
+    'code=code&state=invalid',
+    'code=code&state=expected&state=duplicate',
+    'state=expected',
+    'code=&state=expected',
+    'code=code&state=expected&error=access_denied',
+    'code=code&state=expected&iss=https://unexpected.test/',
+  ]) {
+    await t.test(query, async () => {
+      const events = [];
+      let releaseAbort;
+      const abortGate = new Promise(resolve => { releaseAbort = resolve; });
+      let notifyPaused;
+      const paused = new Promise(resolve => { notifyPaused = resolve; });
+      const session = callbackSession(async () => {
+        events.push('abort sent');
+        notifyPaused();
+        await abortGate;
+        events.push('abort acknowledged');
+      });
+      session.detach = async () => { events.push('detach'); };
+      const page = {
+        route() {},
+        async goto() {
+          void session.pause(`https://portal.cluster.aksapp.io/auth/callback?${query}`);
+          // Navigation must not decide whether the callback was safely blocked.
+          return new Promise(() => {});
+        },
+        async close() { events.push('close'); },
+      };
+      const signing = authorizeP1InBrowser({
+        context: { pages: () => [page], on() {}, off() {}, async newCDPSession() { return session; } },
+        environment: ENVIRONMENT,
+        scopes: P1_SETUP_SCOPES,
+        makeRequest: options => ({ ...createP1AuthorizationRequest(options), state: 'expected' }),
+        timeoutMs: 1000,
+        io: { log() {} },
+        fetchImpl: async () => { assert.fail('invalid callbacks must not exchange a code'); },
+      });
+      let settled = false;
+      signing.finally(() => { settled = true; }).catch(() => {});
+      try {
+        await Promise.race([
+          paused,
+          signing.then(() => assert.fail('invalid callback succeeded')),
+        ]);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(settled, false, 'wait for Fetch.failRequest before rejecting');
+        assert.deepEqual(events, ['abort sent']);
+      } finally {
+        releaseAbort();
+        await assert.rejects(signing, /P1 sign-in could not be completed/);
+      }
+      assert.deepEqual(events, ['abort sent', 'abort acknowledged', 'close', 'detach']);
+    });
+  }
+});
+
 test('cancelling while the consent prompt is open settles sign-in and deletes the profile', async () => {
   const controller = new AbortController();
   const routes = [];
@@ -723,7 +782,7 @@ test('built-in identity provider returns only the selected run token', async () 
 });
 
 test('redirect-hop callbacks are paused without page routing and rejected before code exchange when invalid', async t => {
-  for (const scenario of ['valid', 'pending-navigation', 'wrong-state', 'duplicate-code', 'error', 'wrong-issuer', 'abort-failure']) {
+  for (const scenario of ['valid', 'pending-navigation', 'wrong-state', 'duplicate-code', 'error', 'wrong-issuer', 'path-mismatch', 'abort-failure', 'close-failure']) {
     await t.test(scenario, async () => {
       let failed = false;
       let exchanged = false;
@@ -747,6 +806,8 @@ test('redirect-hop callbacks are paused without page routing and rejected before
           if (scenario === 'duplicate-code') callback.searchParams.append('code', 'second');
           if (scenario === 'error') callback.searchParams.set('error', 'access_denied');
           if (scenario === 'wrong-issuer') callback.searchParams.set('iss', 'https://wrong.test/');
+          if (scenario === 'path-mismatch') callback.pathname += '-unexpected';
+          if (scenario === 'close-failure') callback.searchParams.set('state', 'wrong');
           // Redirect hops bypass Playwright routes. Only request-stage CDP sees this callback.
           await session.pause(callback.toString());
           if (scenario === 'pending-navigation') {
@@ -756,6 +817,7 @@ test('redirect-hop callbacks are paused without page routing and rejected before
         },
         async close() {
           closed = true;
+          if (scenario === 'close-failure') throw new Error('controlled page close failure');
           releaseNavigation?.();
         },
       };
@@ -780,9 +842,10 @@ test('redirect-hop callbacks are paused without page routing and rejected before
       if (valid) assert.equal(await signing, jwt());
       else await assert.rejects(signing, /P1 sign-in could not be completed/);
       assert.equal(exchanged, valid);
+      assert.equal(failed, scenario !== 'abort-failure', 'invalid callbacks are also aborted');
       assert.equal(routeCount, 1, 'page routing is used only for the initial authorization/consent request');
       assert.equal(closed, true);
-      assert.equal(detached, true);
+      assert.equal(detached, scenario !== 'close-failure', 'never detach from a page that failed to close');
     });
   }
 });

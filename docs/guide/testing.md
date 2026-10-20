@@ -361,12 +361,24 @@ npm run test:harness:signin-browser
 The regression starts Chrome with a fresh empty profile under the ignored
 `scripts/ui-harness/.auth/` directory and deletes it in `finally`. It checks
 that a callback reached through server-side redirects is blocked before the
-Portal document or script loads. It also rejects an invalid callback state.
+Portal document or script loads. The launcher waits for Chrome to abort each
+intercepted callback before it validates the state or exchanges a code.
+Invalid callbacks must also produce zero Portal requests. Closing the page
+is not a substitute for aborting the request. The interception session stays
+attached until the page closes, including when sign-in fails or is cancelled.
+The shared contract tests delay the abort acknowledgement to check this
+ordering without depending on browser timing.
 It renders Broker consent when that response arrives through a redirect.
 The shared harness tests cover `--surface api,mcp`, separate evidence paths,
 one setup sign-in, and distinct run-bound tokens. These tests do not sign in
 to Entra, use an existing profile or credential cache, or prove live SSO.
 CI runs both the harness contract suite and this browser regression.
+
+To check timing-sensitive changes, run the browser suite repeatedly, both
+normally and with `NODE_V8_COVERAGE` set to a local output directory. Keep
+the zero-request assertions unchanged and record the pass and failure counts
+for each mode. Coverage instrumentation can expose cleanup races that do
+not appear in a single run. These local runs do not prove live sign-in.
 
 The runtime-observation probe also has a focused local test:
 
