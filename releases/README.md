@@ -901,8 +901,8 @@ After P1 live acceptance checks complete, build a separate `stage: release`
 manifest from the tracked composition, the exact deployed source SHA, and the
 actual HTTPS API, UI, and MCP persona evidence URLs. Only then use the strict
 `release:deploy` gate. The current gate does not accept the mixed-version
-v1.0.1, v1.0.2, v1.0.3, v1.0.4, or v1.0.5 compositions, and none of the bootstrap modes
-relaxes the gate.
+v1.0.1, v1.0.2, v1.0.3, v1.0.4, v1.0.5, or v1.0.6 compositions, and none of
+the bootstrap modes relaxes the gate.
 
 ### v1.0.5 pre-acceptance bootstrap
 
@@ -951,6 +951,63 @@ remains open for live sign-in verification.
 
 ```powershell
 npm run release:deploy-bootstrap -- v1.0.5 `
+  --manifest releases/foundation.json `
+  --publication artifacts/release/publish/publication.json `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap projects-config-provider-catalog `
+  --provider-catalog-source-commit b002620bd8cb53a971b6d5b082d6ab43dbf11fb7
+```
+
+### v1.0.6 pre-acceptance bootstrap
+
+The [v1.0.6 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.6)
+are already published at source
+`472601710cf1cf22d98d9cbe7492893768ce1218` and Git tree
+`bf63850ebb07d325bb0d0b34892d6e6cad04a240`. Do not create another release or
+tag after this bootstrap-pins pull request merges. Verify the `publication.json`
+release asset SHA-256
+`df3609ed0d05da5c3bd2679752e6ed049c8bdf0cf731631e7a5db88cc04d5b05` and
+provenance SHA-256
+`b68f0cbfa8571136af1a13ca887d52c3761f57bf96634f802a183a9cb171b402`.
+AgentHost's receipt-measured image is `linux/amd64`, version `1.0.3`, with
+config digest
+`sha256:167048aa1c859809f28fae913c5fc871d7dea4b87a932bde1c9fe9e46659a5a8`
+and compressed pull size `321486521` bytes. The measurement counts the
+platform manifest plus unique config and gzip-layer blob bytes. All checked-in
+image digests and AgentHost measurements must match this receipt.
+
+| Service | Image digest |
+| --- | --- |
+| AgentHost (per Sandbox) | `sha256:e15fab2de04014b77d58a3ba5f08c729ad9f4f49880cbdbc5995c1093fe77fe6` |
+| Identity Broker | `sha256:8841568368ebdea5c3f7c1db481ca7a6f68db3d5e965632710f0cf31ff49e384` |
+| Events & Sessions | `sha256:9bdffac08b291455e3686e33f1e1d008392a7c7504fdcc096b39277429698814` |
+| Gateway | `sha256:a1b30970ed3c1375450ca1ce8eb1e409c2b3acf7f53092fc83fbd4b0d62ee67c` |
+| MCP | `sha256:eb523a0505a9f5b61cb04c09fec0af3345ff50d4f256194709df8676a61a3b1d` |
+| Web | `sha256:ac1c3f8cad01e18f9306375d3218d93f15960fa13b68acfeb40dab1031d5d4d8` |
+| Orchestrator | `sha256:91e67a2ac41c31797ff63d137d1d8e0e42d59004964f8fb9ff0f715fb29c1075` |
+| Environment | `sha256:d45fef1a20f1e0f138ecee43889505efd64c92eb93e719d3b2f591c8236fe7e2` |
+| Knowledge | `sha256:939862dfde4d6931167131871b8ec7272a8ec3bbf1e42c14d909f645adc54b9f` |
+| Projects & Config | `sha256:e011dba619857b4cffcc0fd14f64f31de01ef9c16e5ea1965ede5f211dd14160` |
+
+The `projects-config-provider-catalog` ConfigMap remains bound to product
+source `c24d0000fe5fc6163e4f38594c39dff782d3a46d`; pass the separately reviewed
+catalog-source merge commit `b002620bd8cb53a971b6d5b082d6ab43dbf11fb7` as
+`--provider-catalog-source-commit`. The approved Projects & Config
+privileged-setup allowlist is unchanged by this bootstrap-pin update.
+
+Download `publication.json` from the exact source-bound publication artifact
+to `artifacts/release/publish/publication.json`. Continuation receipts and
+`--completion` proofs are rejected; no image is rebuilt or republished. This
+pre-acceptance bootstrap does not create release acceptance evidence.
+
+```powershell
+npm run release:deploy-bootstrap -- v1.0.6 `
   --manifest releases/foundation.json `
   --publication artifacts/release/publish/publication.json `
   --subscription-id <subscription-id> `

@@ -145,7 +145,7 @@
               },
               {
                 "name": "Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes",
-                "value": "321483958"
+                "value": "321486521"
               }
             ],
             "envFrom": [

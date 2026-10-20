@@ -375,7 +375,7 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    for the scope and behavior.
 
    ```powershell
-   npm run release:deploy-bootstrap -- v1.0.5 `
+   npm run release:deploy-bootstrap -- v1.0.6 `
      --manifest releases/foundation.json `
     --publication artifacts/release/publish/publication.json `
      --subscription-id <subscription-id> `
@@ -418,20 +418,21 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    See the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
    for retry scope, diagnostics, and checkpoint recovery.
 
-   The [v1.0.5 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.5)
+   The [v1.0.6 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.6)
    are already published. Do not create another release or tag after the
    bootstrap-pins pull request merges. Use the publication receipt for source
-   `edae14b469548b8409b0eef651504691e0216a1e` and source tree
-   `265da7c601e033adc99501735b74ccdb2df94420`. Verify the publication SHA-256
-   `149972c64222f1cf294b3795107f4e0ebf418bc766fbed4b1e2dcdd6e796c51b` and
+   `472601710cf1cf22d98d9cbe7492893768ce1218` and source tree
+   `bf63850ebb07d325bb0d0b34892d6e6cad04a240`. Verify the publication SHA-256
+   `df3609ed0d05da5c3bd2679752e6ed049c8bdf0cf731631e7a5db88cc04d5b05` and
    provenance SHA-256
-   `78c1fe655be9321727aa9882cb9bad2cf32d1e7faef86f6736151085adca9d21`.
-   The receipt measures AgentHost's `linux/amd64` image config as
-   `sha256:2bb01d7d5b90f225d98fde16904f11ef3d090b5f0c358f30f1fa35ec607fe618`
-   and its compressed pull size as `321483958` bytes. Use the reviewed
+   `b68f0cbfa8571136af1a13ca887d52c3761f57bf96634f802a183a9cb171b402`.
+   The receipt measures AgentHost version `1.0.3` on `linux/amd64` with image
+   config digest
+   `sha256:167048aa1c859809f28fae913c5fc871d7dea4b87a932bde1c9fe9e46659a5a8`
+   and compressed pull size `321486521` bytes. Use the reviewed
    provider-catalog ConfigMap and source commit shown in the command; do not
    rebuild or substitute image tags. See
-   [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v105-pre-acceptance-bootstrap)
+   [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v106-pre-acceptance-bootstrap)
    for all image digests and the full admission contract.
 
 4. After the release bootstrap succeeds and the product Services exist, run
