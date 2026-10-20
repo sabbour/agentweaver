@@ -69,7 +69,10 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   const { parse } = await import('yaml');
   const parsed = parse(workflow);
   const jobs = parsed.jobs;
-  assert.deepEqual(jobs.foundation.needs, ['changes', 'images', 'node', 'web', 'dotnet', 'coverage']);
+  assert.deepEqual(jobs.foundation.needs, ['changes', 'harness', 'images', 'node', 'web', 'dotnet', 'coverage']);
+  const harnessCommands = jobs.harness.steps.map((step) => step.run ?? '').join('\n');
+  assert.match(harnessCommands, /npm run test:harness:signin-browser/);
+  assert.doesNotMatch(harnessCommands, /--experimental-test-coverage|--coverage|run coverage/);
   assert.equal(jobs.foundation.if, '${{ always() }}');
   assert.equal(jobs.dotnet.strategy['fail-fast'], false);
   assert.match(parsed.concurrency['cancel-in-progress'], /pull_request/);
@@ -136,11 +139,11 @@ test('the real foundation gate rejects failures, cancellation and unexpected ski
   function execute(results, collect = 'false') {
     return runInNewContext(gate, { process: { env: { RESULTS: JSON.stringify(results), COLLECT_COVERAGE: collect } } });
   }
-  const full = Object.fromEntries(['changes', 'images', 'node', 'web', 'dotnet', 'coverage']
+  const full = Object.fromEntries(['changes', 'harness', 'images', 'node', 'web', 'dotnet', 'coverage']
     .map((name) => [name, { result: name === 'coverage' ? 'skipped' : 'success' }]));
   full.changes.outputs = { images: 'true', web: 'true', dotnet: 'true' };
   execute(full);
-  for (const name of ['images', 'node', 'web', 'dotnet', 'changes']) {
+  for (const name of ['harness', 'images', 'node', 'web', 'dotnet', 'changes']) {
     for (const result of ['failure', 'cancelled', 'skipped']) {
       const broken = structuredClone(full);
       broken[name].result = result;

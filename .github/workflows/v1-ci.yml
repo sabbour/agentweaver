@@ -25,6 +25,24 @@ env:
   COLLECT_COVERAGE: ${{ inputs.collect_coverage == true }}
 
 jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install locked harness dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix scripts/mcp-harness --ignore-scripts --no-audit --no-fund
+      - name: Install Chromium for loopback sign-in regression
+        run: npx playwright install --with-deps chromium
+      - name: Test harness contracts and redirect-hop callback capture
+        run: |
+          npm run test:harness
+          npm run test:harness:signin-browser
+
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -655,7 +673,7 @@ jobs:
           retention-days: 30
 
   foundation:
-    needs: [changes, images, node, web, dotnet, coverage]
+    needs: [changes, harness, images, node, web, dotnet, coverage]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -666,7 +684,7 @@ jobs:
           node --input-type=module -e '
             const jobs = JSON.parse(process.env.RESULTS);
             const expected = {
-              changes: true, node: true,
+              changes: true, harness: true, node: true,
               images: jobs.changes.outputs.images === "true",
               web: jobs.changes.outputs.web === "true",
               dotnet: jobs.changes.outputs.dotnet === "true",

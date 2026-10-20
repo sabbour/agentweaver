@@ -195,6 +195,7 @@ function addFixtureCleanup(result, state, cleanup, nativeFence, cleanupError) {
 /**
  * Validate inputs and source evidence, create an owned fixture, run one surface journey, and clean up.
  * Release evidence carries its exact tag into the source verifier; output stays append-only and sign-in is external.
+ * One invocation and evidence file belong to one surface; the sign-in launcher coordinates multiple surfaces.
  */
 export async function runP1Cli(argv = process.argv.slice(2), env = process.env, io = console, {
   prepareDeploymentEvidence = prepareP1DeploymentEvidence,

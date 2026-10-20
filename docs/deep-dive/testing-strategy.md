@@ -50,6 +50,16 @@ distinct from completed work. They record correlation and revision/fence
 evidence. Redaction runs before durable JSON Lines output; transient raw
 bodies are not saved as the transcript.
 
+The P1 one-account launcher shares one fresh browser session across setup and
+API/MCP run authorization. Each surface retains its own fixture and evidence
+file. Its loopback Chrome regression checks redirect-hop callback blocking
+before the Portal can consume the code, including an invalid state and
+redirected Broker consent. Shared
+contract tests check multi-surface execution and a callback that arrives while
+navigation is still pending. These tests do not use Entra or prove live SSO.
+See [Test retained API, UI, and MCP adapters](../guide/testing.md#test-retained-api-ui-and-mcp-adapters)
+for the commands.
+
 Authentication helpers check supplied token metadata and expiry. Broker,
 Gateway, and resource services remain responsible for server-side signature
 validation and current owner authorization.

@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url';
-import { resolve } from 'node:path';
+import { extname, resolve } from 'node:path';
 import {
   authorizeP1InBrowser,
   P1_RUN_SCOPES,
@@ -33,7 +33,7 @@ export function parseP1SigninArguments(argv) {
     if (!OPTION_NAMES.has(option)
       || typeof argv[index + 1] !== 'string'
       || argv[index + 1].startsWith('--')) {
-      throw new Error('Use --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>].');
+      throw new Error('Use --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>].');
     }
     const key = option.slice(2).replaceAll('-', '');
     if (result[key] !== undefined) throw new Error(`The ${option} option can only be used once.`);
@@ -87,7 +87,18 @@ export function createP1SigninIdentityProvider({
   };
 }
 
-/** Run the shared P1 CLI after collecting all required Broker credentials in memory. */
+/** Keep each surface's resumable invocation separate while sharing one sign-in session. */
+export function p1SigninSurfaceArguments(argv, surface, output, multiple) {
+  const result = [...argv];
+  result[result.indexOf('--surface') + 1] = surface;
+  const extension = extname(output);
+  result[result.indexOf('--output') + 1] = multiple
+    ? `${output.slice(0, output.length - extension.length)}.${surface}${extension}`
+    : output;
+  return result;
+}
+
+/** Run selected surfaces sequentially; tokens and the shared browser session stay in memory. */
 export async function runP1SigninCli(argv = process.argv.slice(2), env = process.env, io = console, {
   runP1 = runP1Cli,
   signIn = authorizeP1InBrowser,
@@ -105,12 +116,17 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     return 2;
   }
   if (options.help) {
-    io.log?.('Usage: npm run harness:p1:signin-run -- --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>]');
+    io.log?.('Usage: npm run harness:p1:signin-run -- --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>]');
     io.log?.('The launcher signs in with the registered agentweaver-web client. Broker tokens stay in memory and are not written to evidence.');
+    io.log?.('Multiple surfaces run sequentially with separate evidence files: evidence.api.jsonl and evidence.mcp.jsonl for --output evidence.jsonl. All surfaces run even if one returns a blocked or failed result.');
     return 0;
   }
-  if (!['api', 'mcp', 'ui'].includes(options.surface) || !options.input || !options.output) {
-    io.error?.('A P1 surface, input manifest, and evidence output path are required.');
+  const surfaces = options.surface?.split(',') ?? [];
+  if (surfaces.length === 0 || new Set(surfaces).size !== surfaces.length
+    || surfaces.some(surface => !['api', 'mcp', 'ui'].includes(surface))
+    || (surfaces.includes('ui') && surfaces.length > 1)
+    || !options.input || !options.output) {
+    io.error?.('Select api, mcp, api,mcp, or ui and supply an input manifest and evidence output path.');
     return 2;
   }
   if (options.surface === 'ui') {
@@ -155,10 +171,19 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
         signal,
         io,
       });
-      return await runP1(argv, {
-        ...env,
-        AGENTWEAVER_P1_SETUP_TOKEN: setupToken,
-      }, io, { identityProvider });
+      let exitCode = 0;
+      for (const surface of surfaces) {
+        if (signal?.aborted) throw new Error('P1 sign-in was cancelled.');
+        const surfaceArgv = p1SigninSurfaceArguments(
+          argv, surface, options.output, surfaces.length > 1,
+        );
+        const result = await runP1(surfaceArgv, {
+          ...env,
+          AGENTWEAVER_P1_SETUP_TOKEN: setupToken,
+        }, io, { identityProvider });
+        exitCode = Math.max(exitCode, result);
+      }
+      return exitCode;
     });
   } catch {
     io.error?.('P1 sign-in could not be completed. No token values were written or displayed.');
