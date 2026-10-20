@@ -61,6 +61,147 @@ source identity alongside the test output. Match a result to the exact source
 SHA, pull request head, workflow run, and attempt. A compiled test or a green
 run from an older revision is not evidence that the current revision passed.
 
+## Understand v1 pull request CI
+
+The `v1 foundation CI` workflow keeps the required `foundation` check as an
+always-reported aggregate. It fails if any selected job fails, is cancelled,
+or is unexpectedly skipped. Release composition validation, controlled P1
+journeys, CI/coverage guards, and issue-to-merge contracts still run on every
+candidate. `v1-docs-ci.yml` remains the separate documentation check.
+
+Changed-path detection skips expensive .NET, Web, image, and tooling suites
+for documentation/metadata-only PRs. Unrelated workflow edits do not run those
+suites. Unknown paths and edits to `v1-ci.yml` or CI helpers select everything.
+.NET and Node tooling inputs select Web validation too: Broker browser and
+Linux release-container tests consume the exact candidate's built Web
+artifact. The tooling job restores its AgentHost/Web Host publish dependencies.
+Broker shards also install locked Web dependencies for Vite-backed browser
+fixtures; the built artifact alone does not replace their development server.
+Service/package/test, lockfile and deployment
+inputs select image checks, including source receipts and isolated native
+prompt-capacity verification; no images are published by this workflow.
+Web, AgentHost, deployment and .NET build/lock inputs also select Node tooling
+because its executable Linux contracts consume those inputs.
+
+Each .NET project runs on its own runner. The Broker suite has four stable
+SHA-256 method shards, derived from the built assembly's VSTest discovery.
+All theory cases for a method stay together, including methods in large
+partial classes. Every Broker shard saves the complete partition and checks
+its TRX method set against its assigned partition. Empty discovery, empty
+shards, missing receipts and failed tests fail CI. Existing explicitly
+opt-in native cases retain their skip behavior; isolated image-native checks
+remain separate and mandatory when image validation is selected.
+
+The PostgreSQL collection already shares one container per test process;
+each test retains a fresh database. Browser-backed Projects tests also share
+a lazily created Playwright driver, but not browsers, resolver arguments,
+contexts or cookies. NuGet caches are keyed by SDK/project/lock inputs.
+Chromium caches are keyed by OS, architecture and Broker package lock; the
+installer still runs on cache hits to install required Linux libraries.
+The web job and Broker shards also cache the installed `apps/web/node_modules`
+directory. The key combines OS, architecture, the exact Node.js version, and
+the hash of `apps/web/package-lock.json`. The cache has no partial restore key,
+so a lockfile or Node.js change misses and runs a clean `npm ci`. On an exact
+hit, CI skips `npm ci`. Tool caches such as `node_modules/.vite` are excluded.
+CI does not cache .NET `bin`/`obj` output or Docker layers: a reused build
+output could hide a compile failure, and image builds must stay reproducible
+for the image provenance checks.
+
+Pull request, push, and manual `v1 foundation CI` runs never collect
+coverage. Coverage is a separate weekly measurement; see
+[Measure v1 coverage weekly](#measure-v1-coverage-weekly). Local
+`npm run coverage:dotnet` retains its full sequential diagnostic behavior.
+Only superseded runs for the same PR are cancelled; pushes and manual runs
+have independent concurrency groups.
+Manual release validation derives its comparison base from the selected
+commit's first parent, preserving the validator's checked history contract
+without inventing a push event or changing the tested checkout.
+
+Run the workflow regression guards locally:
+
+```powershell
+npm ci --ignore-scripts --no-audit --no-fund
+node --test scripts\ci\tests\*.test.mjs scripts\coverage\tests\*.test.mjs
+node scripts\ci\v1-test-plan.mjs matrix
+```
+
+After restoring/building a test project, use
+`node scripts\ci\v1-test-plan.mjs run identity-broker-1` to reproduce a
+Broker shard (Docker, Chromium and built Web assets are required). Set
+`COLLECT_COVERAGE=true` to instrument that invocation. Each shard's summary
+and artifact include test/discovery elapsed time; Actions job durations also
+include setup, restore and build.
+
+The historical comparison baseline was approximately 29 minutes median for
+v1 PR CI versus 15 minutes for dev, with Broker alone taking 13m46s.
+Performance acceptance requires at least three representative successful PR
+runs, a median total duration of at most 20 minutes and a longest Broker shard
+of at most 8 minutes. Record run URLs, cache warmth and runner/queue caveats
+on the tracking issue before closing it; configuration changes alone do not
+prove those timing targets.
+
+## Measure v1 coverage weekly
+
+The `v1 coverage` workflow (`.github/workflows/v1-coverage.yml`) measures
+coverage once a week. It calls `v1-ci.yml` with `collect_coverage: true`, so
+the same test jobs run with instrumentation, and the same `foundation` gate
+must pass. The coverage job merges the .NET shard reports without rerunning
+tests and uploads the source-bound `v1-coverage-<sha>-<attempt>` artifact,
+which is kept for 30 days.
+
+GitHub runs scheduled workflows only from the default branch, which is `dev`.
+A `dev` copy of `v1-coverage.yml` runs every Monday at 05:00 UTC and
+dispatches the real workflow on `refs/heads/v1` with `publish=true`. To
+validate coverage collection by hand, run the workflow on a branch:
+
+```powershell
+gh workflow run v1-coverage.yml --ref <branch>
+gh workflow run v1-coverage.yml --ref <branch> -f publish=true
+```
+
+The first command only measures. The second also publishes. Publishing from
+a branch other than `v1` replaces the current badges until the next weekly
+run, so publish only to verify the publication path.
+
+Each surface reports its own line coverage. The value is covered executable
+lines divided by coverable lines in that surface's instrumented scope:
+
+| Surface | Scope | Source report |
+| --- | --- | --- |
+| .NET | Production assemblies in the combined suite reports | ReportGenerator `Summary.json` |
+| Web | `apps/web/src/v1` source files | Vitest `coverage-summary.json` |
+| Node release tooling | `scripts/release/*.mjs` | Node test LCOV, merged per line |
+
+The surfaces are not combined, because one overall value would be dominated
+by .NET and hide the smaller surfaces. Values are rounded down to one decimal
+place.
+
+When a run publishes, `scripts/ci/v1-coverage-report.mjs`:
+
+1. Writes one shields.io endpoint document per surface, plus `coverage.json`
+   and `coverage.md`, to `v1/` on the `badges` branch. The README badges read
+   these documents and link to `coverage.md`, which records the source SHA,
+   run, and artifact. Only a run that passes the `foundation` gate publishes,
+   and the artifact's tested SHA must match the run's SHA. The workflow never
+   pushes to `v1`.
+1. Creates or updates one open issue labeled `area:testing` that starts with
+   the `agentweaver:v1-coverage-improvement` marker. The issue lists the
+   measured values, the five largest gaps for each surface (classes or files
+   with at least 10 uncovered lines), and acceptance criteria. If an open
+   marker issue exists, the run updates it instead of creating another.
+1. Assigns the issue to the Copilot coding agent with a `v1` base branch, then
+   reads the issue back to confirm the assignment. If Copilot is already
+   assigned, the run leaves the assignment unchanged.
+
+`GITHUB_TOKEN` can't assign Copilot. As a one-time setup, an administrator
+adds a repository secret named `COPILOT_ASSIGN_TOKEN` that holds a user
+token: a fine-grained personal access token with read access to metadata and
+read and write access to actions, contents, issues, and pull requests, or a
+classic token with the `repo` scope. If the secret is missing, the run still
+creates or updates the issue, logs a warning, and comments on the issue that
+Copilot was not assigned. If the secret is present but assignment fails, the
+job fails.
+
 ## Run focused database checks
 
 Run the Broker migration/grant and read-only bootstrap regressions against
@@ -208,6 +349,36 @@ pinned SDK and loopback JSON-RPC server. The UI tests use injected page
 doubles, not a browser. These tests check fixture creation, selected surface
 calls, cleanup outcomes, and refusal of unverified ownership claims. They do
 not prove live owner behavior, native model execution, or deployment.
+
+The one-account P1 sign-in launcher also has a real browser regression that
+uses loopback redirects only. Install the Playwright test browser and run it:
+
+```powershell
+npx playwright install chromium
+npm run test:harness:signin-browser
+```
+
+The regression starts Chrome with a fresh empty profile under the ignored
+`scripts/ui-harness/.auth/` directory and deletes it in `finally`. It checks
+that a callback reached through server-side redirects is blocked before the
+Portal document or script loads. The launcher waits for Chrome to abort each
+intercepted callback before it validates the state or exchanges a code.
+Invalid callbacks must also produce zero Portal requests. Closing the page
+is not a substitute for aborting the request. The interception session stays
+attached until the page closes, including when sign-in fails or is cancelled.
+The shared contract tests delay the abort acknowledgement to check this
+ordering without depending on browser timing.
+It renders Broker consent when that response arrives through a redirect.
+The shared harness tests cover `--surface api,mcp`, separate evidence paths,
+one setup sign-in, and distinct run-bound tokens. These tests do not sign in
+to Entra, use an existing profile or credential cache, or prove live SSO.
+CI runs both the harness contract suite and this browser regression.
+
+To check timing-sensitive changes, run the browser suite repeatedly, both
+normally and with `NODE_V8_COVERAGE` set to a local output directory. Keep
+the zero-request assertions unchanged and record the pass and failure counts
+for each mode. Coverage instrumentation can expose cleanup races that do
+not appear in a single run. These local runs do not prove live sign-in.
 
 The runtime-observation probe also has a focused local test:
 

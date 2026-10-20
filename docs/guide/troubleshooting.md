@@ -50,6 +50,70 @@ database credentials while collecting evidence.
 4. Compare the deployed image and ConfigMap source with the reviewed release
    receipt and [runtime configuration reference](../reference/runtime-configuration.md).
 
+## Diagnose an indeterminate P1 project setup
+
+The P1 API and MCP runners record privileged command failures under
+`observations.fixtureSetup.commandFailures`. Each entry contains
+`productErrorCode`, `kubectlExitCode`, `processErrorClass`, and `stderrClass`.
+The runner keeps only known product error codes and fixed classifications.
+It does not save standard error, standard output from a failed command,
+process error messages, or tokens. An unknown product code stays
+`unrecognized`; a generic product failure stays `product-unclassified`.
+
+For `forbidden`, compare the approved issuer, subject, and tenant in
+`ProjectsConfig__PrivilegedSetup__*` with the selected Broker actor. Also
+check current tenant membership, TenantAdmin authority, unbound request
+claims, and the `api.read`, `projects.admin`, and `projects.orchestrator` scopes.
+A `kubectl-forbidden` classification instead indicates Kubernetes
+authorization. For `product-unclassified`, first confirm that the Projects
+Config runtime ConfigMap contains `ConnectionStrings__ProjectsConfigAuthority`
+and the `ProjectsConfig__AuthorityDatabase__WorkloadIdentity__*` keys. The
+command fails before it connects to the database when they're missing. Then
+check migration state, workload identity, database connectivity, and
+concurrency failures. For the required values, see
+[Runtime configuration](../reference/runtime-configuration.md). A `timeout` or
+`exec-transport` result does not establish whether the owner committed the
+operation.
+
+The runner does not retry an indeterminate command automatically. Do not
+retry setup, start a replacement invocation, or run cleanup until you have
+reviewed the original invocation state. Use the persisted invocation UUID
+from the evidence, not a new UUID.
+
+1. Generate the read-only query from the repository root:
+
+   ```powershell
+   node scripts\harness-shared\diagnose-p1-setup.mjs --invocation-id <invocation-uuid> > diagnosis.sql
+   ```
+
+2. Have the database operator run `diagnosis.sql` against the **attested
+   Projects Config database**, using an existing approved read-only database
+   session. The generator does not connect, sign in, or acquire credentials.
+   The query uses a bounded, repeatable-read, read-only transaction and ends
+   with `ROLLBACK`. Save its JSON readback with the original invocation
+   evidence. A query error means the state is still unknown.
+3. Review the immutable setup and cleanup operation rows, current projects,
+   role assignments, and run selections. The query matches the invocation
+   receipt and the exact `p1-<invocation-uuid>` project name, so a project
+   without an operation receipt remains visible. It excludes configuration
+   payloads and credential material.
+4. Treat `not-observed` as absence **at that snapshot**, not proof that an
+   earlier exec cannot commit later. Confirm that the original command has
+   ended before considering a retry. `fixtures-observed` means the returned
+   rows require reconciliation; it does not mean cleanup passed.
+5. Compare issuer, subject, tenant, membership, project, assignment IDs,
+   revisions, and audit IDs with the original evidence. Keep projects with
+   accepted run selections as retained fixtures. A cleaned receipt must
+   agree with the current archived project and revoked grants. Missing or
+   mismatched rows remain indeterminate. Do not adopt, archive, revoke, or
+   delete a fixture as part of diagnosis.
+
+The readback always returns `retryAuthorized: false`. It is diagnostic
+evidence, not a cleanup receipt or permission to replay a write. Pod logs
+from the service process might not contain standard error from a separate
+`kubectl exec` process. Missing log entries do not prove that setup did
+nothing.
+
 ## Escalate unresolved issues
 
 If the failure remains, include the safe diagnostic details and the exact

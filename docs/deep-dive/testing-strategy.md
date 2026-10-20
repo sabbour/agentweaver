@@ -50,6 +50,16 @@ distinct from completed work. They record correlation and revision/fence
 evidence. Redaction runs before durable JSON Lines output; transient raw
 bodies are not saved as the transcript.
 
+The P1 one-account launcher shares one fresh browser session across setup and
+API/MCP run authorization. Each surface retains its own fixture and evidence
+file. Its loopback Chrome regression checks redirect-hop callback blocking
+before the Portal can consume the code, including an invalid state and
+redirected Broker consent. Shared
+contract tests check multi-surface execution and a callback that arrives while
+navigation is still pending. These tests do not use Entra or prove live SSO.
+See [Test retained API, UI, and MCP adapters](../guide/testing.md#test-retained-api-ui-and-mcp-adapters)
+for the commands.
+
 Authentication helpers check supplied token metadata and expiry. Broker,
 Gateway, and resource services remain responsible for server-side signature
 validation and current owner authorization.
@@ -177,16 +187,27 @@ not sufficient evidence.
 
 ## Understand CI boundaries
 
-`v1-ci.yml` runs on `v1` pull requests and pushes. It records tested-source
-identity, validates release composition, restores locked dependencies, builds
-.NET, and runs Web coverage, build, and lint. It also builds source-bound
-Probe, Broker, and AgentHost images, checks the pinned native runtime, and
-runs isolated native prompt-capacity tests.
+`v1-ci.yml` runs on `v1` pull requests, pushes and manual dispatches. Its
+always-reported `foundation` aggregate gates independently running image,
+Web, Node and .NET jobs. Path classification selects expensive suites; release
+composition, controlled P1 journeys and CI contract checks remain mandatory.
+The image job retains source-bound Probe, Broker and AgentHost image checks,
+the pinned native runtime and isolated native prompt-capacity tests.
 
-The workflow installs Chromium, runs .NET and Node coverage, tests controlled
-P1 journeys and coverage guards, and checks the issue-to-merge workflow. It
-uploads source-bound coverage artifacts and publishes a summary. Controlled
-journeys are not automatic deployed acceptance.
+.NET projects run concurrently, with four deterministic method shards for
+Broker and verified per-shard TRX receipts. NuGet, Chromium, and exact-key
+installed web dependency caches avoid
+repeated downloads and installs, without caching mutable databases, browser contexts, or build output.
+PR, push, and manual CI runs never collect coverage. The weekly
+`v1-coverage.yml` workflow reuses the same jobs with instrumentation, combines
+the reports without a second pass, and publishes separate .NET, Web, and Node
+line-coverage badges plus one Copilot coverage-improvement issue.
+The [testing guide](../guide/testing.md#understand-v1-pull-request-ci)
+describes path dependencies, cache invalidation, retained skip behavior and
+the measured performance acceptance criteria. Its
+[coverage section](../guide/testing.md#measure-v1-coverage-weekly) covers the
+schedule, denominators, and one-time Copilot token setup. Controlled journeys
+are not automatic deployed acceptance.
 
 `v1-docs-ci.yml` builds VitePress, checks links and source coverage, and
 validates diagram provenance and readability. On a `v1` push it stages a

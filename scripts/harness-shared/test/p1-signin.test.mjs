@@ -17,6 +17,7 @@ import {
 import {
   createP1SigninIdentityProvider,
   parseP1SigninArguments,
+  p1SigninSurfaceArguments,
   runP1SigninCli,
 } from '../p1-signin-run.mjs';
 
@@ -33,6 +34,31 @@ const PROJECT_ID = 'fixture-project';
 const RUN_ID = '00000000-0000-4000-8000-000000000001';
 const DENIED_ACTOR = { actorId: 'denied-actor', tenantId: 'denied-tenant' };
 const NOW = 2_000_000_000_000;
+
+function callbackSession(onFail = () => {}) {
+  const listeners = new Map();
+  return {
+    on(event, listener) { listeners.set(event, listener); },
+    async send(method, params) {
+      if (method === 'Fetch.enable') {
+        assert.equal(params.patterns[0].requestStage, 'Request');
+        assert.equal(params.patterns[0].urlPattern, 'https://portal.cluster.aksapp.io/auth/callback*');
+      } else if (method === 'Fetch.failRequest') {
+        assert.equal(params.errorReason, 'Aborted');
+        await onFail();
+      } else {
+        assert.equal(method, 'Fetch.continueRequest');
+      }
+    },
+    async pause(url) {
+      await listeners.get('Fetch.requestPaused')({
+        requestId: 'callback-request',
+        request: { url },
+      });
+    },
+    async detach() {},
+  };
+}
 
 function jwt({
   actorId = ENVIRONMENT.actorId,
@@ -218,12 +244,19 @@ test('sign-in completes consent, intercepts the registered callback, and exchang
   const exchangeRequests = [];
   const log = [];
   const abortedUrls = [];
+  let pausedUrl;
+  const session = callbackSession(() => { abortedUrls.push(pausedUrl); });
   let authorizationRequests = 0;
   let redirectPromise;
   let notifyRedirect;
   const redirectStarted = new Promise(resolve => { notifyRedirect = resolve; });
 
   async function dispatch(url) {
+    if (new URL(url).pathname === '/auth/callback') {
+      pausedUrl = url;
+      await session.pause(url);
+      return;
+    }
     for (const { matcher, handler } of routes) {
       if (!matcher(url)) continue;
       const route = {
@@ -338,7 +371,10 @@ test('sign-in completes consent, intercepts the registered callback, and exchang
   };
   const context = {
     pages: () => [page],
+    on() {},
+    off() {},
     async newPage() { return page; },
+    async newCDPSession() { return session; },
   };
   const codeExchange = async (url, options) => {
     exchangeRequests.push({ url: String(url), options });
@@ -381,6 +417,65 @@ test('sign-in completes consent, intercepts the registered callback, and exchang
   assert.equal(exchangeRequests[0].url, `${new URL(ISSUER).origin}/connect/token`);
   assert.equal(new URLSearchParams(exchangeRequests[0].options.body).get('code'), 'controlled-authorization-code');
   assert.doesNotMatch(log.join('\n'), /eyJ|controlled-authorization-code|controlled-csrf-token/);
+});
+
+test('invalid callbacks are aborted before rejection and page close precedes CDP detach', async t => {
+  for (const query of [
+    'code=code&state=invalid',
+    'code=code&state=expected&state=duplicate',
+    'state=expected',
+    'code=&state=expected',
+    'code=code&state=expected&error=access_denied',
+    'code=code&state=expected&iss=https://unexpected.test/',
+  ]) {
+    await t.test(query, async () => {
+      const events = [];
+      let releaseAbort;
+      const abortGate = new Promise(resolve => { releaseAbort = resolve; });
+      let notifyPaused;
+      const paused = new Promise(resolve => { notifyPaused = resolve; });
+      const session = callbackSession(async () => {
+        events.push('abort sent');
+        notifyPaused();
+        await abortGate;
+        events.push('abort acknowledged');
+      });
+      session.detach = async () => { events.push('detach'); };
+      const page = {
+        route() {},
+        async goto() {
+          void session.pause(`https://portal.cluster.aksapp.io/auth/callback?${query}`);
+          // Navigation must not decide whether the callback was safely blocked.
+          return new Promise(() => {});
+        },
+        async close() { events.push('close'); },
+      };
+      const signing = authorizeP1InBrowser({
+        context: { pages: () => [page], on() {}, off() {}, async newCDPSession() { return session; } },
+        environment: ENVIRONMENT,
+        scopes: P1_SETUP_SCOPES,
+        makeRequest: options => ({ ...createP1AuthorizationRequest(options), state: 'expected' }),
+        timeoutMs: 1000,
+        io: { log() {} },
+        fetchImpl: async () => { assert.fail('invalid callbacks must not exchange a code'); },
+      });
+      let settled = false;
+      signing.finally(() => { settled = true; }).catch(() => {});
+      try {
+        await Promise.race([
+          paused,
+          signing.then(() => assert.fail('invalid callback succeeded')),
+        ]);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(settled, false, 'wait for Fetch.failRequest before rejecting');
+        assert.deepEqual(events, ['abort sent']);
+      } finally {
+        releaseAbort();
+        await assert.rejects(signing, /P1 sign-in could not be completed/);
+      }
+      assert.deepEqual(events, ['abort sent', 'abort acknowledged', 'close', 'detach']);
+    });
+  }
 });
 
 test('cancelling while the consent prompt is open settles sign-in and deletes the profile', async () => {
@@ -435,6 +530,9 @@ test('cancelling while the consent prompt is open settles sign-in and deletes th
   };
   const context = {
     pages: () => [page],
+    on() {},
+    off() {},
+    async newCDPSession() { return callbackSession(); },
     async close() { await page.close(); },
   };
   const chromium = {
@@ -681,4 +779,142 @@ test('built-in identity provider returns only the selected run token', async () 
   assert.deepEqual(requests[0].scopes, P1_RUN_SCOPES);
   assert.equal(requests[0].projectId, PROJECT_ID);
   assert.equal(requests[0].runId, RUN_ID);
+});
+
+test('redirect-hop callbacks are paused without page routing and rejected before code exchange when invalid', async t => {
+  for (const scenario of ['valid', 'pending-navigation', 'wrong-state', 'duplicate-code', 'error', 'wrong-issuer', 'path-mismatch', 'abort-failure', 'close-failure']) {
+    await t.test(scenario, async () => {
+      let failed = false;
+      let exchanged = false;
+      let detached = false;
+      let closed = false;
+      let routeCount = 0;
+      let releaseNavigation;
+      const valid = ['valid', 'pending-navigation'].includes(scenario);
+      const session = callbackSession(() => {
+        if (scenario === 'abort-failure') throw new Error('controlled CDP failure');
+        failed = true;
+      });
+      session.detach = async () => { detached = true; };
+      const page = {
+        route() { routeCount += 1; },
+        async goto(url) {
+          const authorize = new URL(url);
+          const callback = new URL(authorize.searchParams.get('redirect_uri'));
+          callback.searchParams.set('state', scenario === 'wrong-state' ? 'wrong' : authorize.searchParams.get('state'));
+          callback.searchParams.set('code', 'redirect-code');
+          if (scenario === 'duplicate-code') callback.searchParams.append('code', 'second');
+          if (scenario === 'error') callback.searchParams.set('error', 'access_denied');
+          if (scenario === 'wrong-issuer') callback.searchParams.set('iss', 'https://wrong.test/');
+          if (scenario === 'path-mismatch') callback.pathname += '-unexpected';
+          if (scenario === 'close-failure') callback.searchParams.set('state', 'wrong');
+          // Redirect hops bypass Playwright routes. Only request-stage CDP sees this callback.
+          await session.pause(callback.toString());
+          if (scenario === 'pending-navigation') {
+            await new Promise(resolve => { releaseNavigation = resolve; });
+          }
+          throw new Error('navigation aborted');
+        },
+        async close() {
+          closed = true;
+          if (scenario === 'close-failure') throw new Error('controlled page close failure');
+          releaseNavigation?.();
+        },
+      };
+      const signing = authorizeP1InBrowser({
+        context: {
+          pages: () => [page],
+          on() {},
+          off() {},
+          async newCDPSession(target) { assert.equal(target, page); return session; },
+        },
+        environment: ENVIRONMENT,
+        scopes: P1_SETUP_SCOPES,
+        io: { log() {} },
+        timeoutMs: 1000,
+        fetchImpl: async (_url, options) => {
+          assert.equal(failed, true, 'the callback is blocked before exchanging its code');
+          assert.equal(options.body.get('code'), 'redirect-code');
+          exchanged = true;
+          return { ok: true, async json() { return { token_type: 'Bearer', access_token: jwt() }; } };
+        },
+      });
+      if (valid) assert.equal(await signing, jwt());
+      else await assert.rejects(signing, /P1 sign-in could not be completed/);
+      assert.equal(exchanged, valid);
+      assert.equal(failed, scenario !== 'abort-failure', 'invalid callbacks are also aborted');
+      assert.equal(routeCount, 1, 'page routing is used only for the initial authorization/consent request');
+      assert.equal(closed, true);
+      assert.equal(detached, scenario !== 'close-failure', 'never detach from a page that failed to close');
+    });
+  }
+});
+
+test('multi-surface launcher shares one setup sign-in and runs both surfaces despite a blocked result', async () => {
+  const { rm } = await import('node:fs/promises');
+  const manifestPath = path.resolve('scripts/harness-shared/test/p1-signin-multiple.fixture.json');
+  await writeFile(manifestPath, JSON.stringify(validInput()));
+  let browserSessions = 0;
+  const context = {};
+  const requests = [];
+  const runs = [];
+  try {
+    const result = await runP1SigninCli([
+      '--surface', 'api,mcp', '--input', manifestPath, '--output', 'evidence.jsonl',
+      '--native-probe-envelope', 'native.json',
+    ], {}, { log() {}, error() {} }, {
+      chromium: {},
+      withBrowserContext: async (_options, useContext) => {
+        browserSessions += 1;
+        return useContext(context);
+      },
+      signIn: async request => {
+        assert.equal(request.context, context);
+        requests.push(request);
+        return jwt(request);
+      },
+      async runP1(argv, env, _io, { identityProvider }) {
+        const surface = argv[argv.indexOf('--surface') + 1];
+        runs.push(surface);
+        assert.equal(argv[argv.indexOf('--output') + 1], `evidence.${surface}.jsonl`);
+        assert.equal(argv[argv.indexOf('--native-probe-envelope') + 1], 'native.json');
+        assert.equal(env.AGENTWEAVER_P1_SETUP_TOKEN, jwt());
+        await identityProvider({
+          ...ENVIRONMENT, projectId: `${PROJECT_ID}-${surface}`, runId: RUN_ID,
+        });
+        return surface === 'api' ? 2 : 0;
+      },
+    });
+    assert.equal(result, 2);
+    assert.deepEqual(runs, ['api', 'mcp']);
+    assert.equal(browserSessions, 1);
+    assert.equal(requests.length, 3);
+    assert.deepEqual(requests[0].scopes, P1_SETUP_SCOPES);
+    assert.equal(requests[1].projectId, `${PROJECT_ID}-api`);
+    assert.equal(requests[2].projectId, `${PROJECT_ID}-mcp`);
+  } finally {
+    await rm(manifestPath, { force: true });
+  }
+});
+
+test('surface output names are deterministic and invalid surface lists never open a browser', async () => {
+  for (const [output, expected] of [
+    ['evidence.jsonl', 'evidence.mcp.jsonl'],
+    ['evidence', 'evidence.mcp'],
+    ['dir.with.dot\\evidence.jsonl', 'dir.with.dot\\evidence.mcp.jsonl'],
+  ]) {
+    const argv = ['--surface', 'mcp,api', '--output', output];
+    assert.deepEqual(p1SigninSurfaceArguments(argv, 'mcp', output, true),
+      ['--surface', 'mcp', '--output', expected]);
+    assert.deepEqual(argv, ['--surface', 'mcp,api', '--output', output]);
+    assert.deepEqual(p1SigninSurfaceArguments(argv, 'mcp', output, false),
+      ['--surface', 'mcp', '--output', output]);
+  }
+  for (const surface of ['api,api', 'api,ui', 'api,', 'api, mcp', 'unknown', '']) {
+    assert.equal(await runP1SigninCli([
+      '--surface', surface, '--input', 'manifest.json', '--output', 'evidence.jsonl',
+    ], {}, { error() {} }, {
+      loadChromium: async () => { assert.fail('invalid input must not launch a browser'); },
+    }), 2);
+  }
 });

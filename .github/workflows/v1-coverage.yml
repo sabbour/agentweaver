@@ -1,0 +1,95 @@
+name: v1 coverage
+
+# Weekly v1 coverage measurement. GitHub runs `schedule` triggers only from the
+# default branch (`dev`), so `.github/workflows/v1-coverage-schedule.yml` on `dev`
+# dispatches this workflow on `v1` every Monday at 05:00 UTC with publish=true.
+# A manual dispatch without publish validates coverage collection only.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish badges and update the Copilot coverage-improvement issue
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1-coverage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Reuses the same test jobs as pull request CI, with instrumentation switched on.
+  measure:
+    uses: ./.github/workflows/v1-ci.yml
+    with:
+      collect_coverage: true
+
+  publish:
+    name: Publish v1 coverage badges and improvement issue
+    needs: measure
+    # The reusable workflow's foundation gate fails on any failed, cancelled, or
+    # missing suite, so only a complete measurement reaches this job.
+    if: ${{ inputs.publish && needs.measure.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    concurrency:
+      group: v1-coverage-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # A publish-only rerun has a newer run_attempt than the measurement, so
+      # download every attempt for this SHA and keep the newest one.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: v1-coverage-${{ github.sha }}-*
+          path: artifacts/downloads/
+      - name: Select the newest coverage measurement
+        run: |
+          latest=0
+          for dir in artifacts/downloads/v1-coverage-"$GITHUB_SHA"-*; do
+            attempt="${dir##*-}"
+            if [[ "$attempt" =~ ^[0-9]+$ ]] && (( attempt > latest )); then latest="$attempt"; fi
+          done
+          if (( latest == 0 )); then echo "::error::No coverage artifact exists for $GITHUB_SHA."; exit 1; fi
+          mv "artifacts/downloads/v1-coverage-$GITHUB_SHA-$latest" artifacts/coverage
+          echo "COVERAGE_ARTIFACT=v1-coverage-$GITHUB_SHA-$latest" >> "$GITHUB_ENV"
+      - name: Publish shields.io endpoint badges to the badges branch
+        run: |
+          BADGES="$RUNNER_TEMP/badges"
+          if git ls-remote --exit-code --heads origin badges > /dev/null; then
+            git fetch --depth=1 origin badges
+            git worktree add --detach "$BADGES" FETCH_HEAD
+          else
+            git worktree add --detach "$BADGES"
+            git -C "$BADGES" checkout --orphan badges
+            git -C "$BADGES" rm -rfq .
+          fi
+          node scripts/ci/v1-coverage-report.mjs badges artifacts/coverage "$BADGES/v1"
+          git -C "$BADGES" add v1
+          if git -C "$BADGES" diff --cached --quiet; then
+            echo "Badges are unchanged."
+            exit 0
+          fi
+          git -C "$BADGES" -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "chore(coverage): publish v1 coverage for $GITHUB_SHA"
+          git -C "$BADGES" push origin HEAD:refs/heads/badges
+          {
+            echo "## Coverage badges"
+            cat "$BADGES/v1/coverage.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Create or update the Copilot coverage-improvement issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # GITHUB_TOKEN cannot assign Copilot. This optional user token can; see
+          # docs/guide/testing.md for the one-time setup.
+          COPILOT_ASSIGN_TOKEN: ${{ secrets.COPILOT_ASSIGN_TOKEN }}
+          COPILOT_BASE_BRANCH: v1
+        run: node scripts/ci/v1-coverage-report.mjs issue artifacts/coverage

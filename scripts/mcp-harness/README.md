@@ -100,12 +100,22 @@ runtime-default endpoint.
 npm run harness:p1:signin-run -- --surface mcp --input <manifest.json> --output <evidence.jsonl>
 ```
 
+Use `--surface api,mcp` to run both surfaces sequentially after one sign-in.
+The setup token and fresh browser session are shared. Each surface creates its
+own fixture, run-bound token, and evidence file: `evidence.api.jsonl` and
+`evidence.mcp.jsonl`. The unsuffixed output path is not written. A blocked
+surface does not skip the next surface; the command returns the highest exit
+code. See the [API harness guide](../api-harness/README.md) for the full contract.
+
 The sign-in launcher uses the existing `agentweaver-web` public client and one
 interactive TenantAdmin sign-in. It uses one fresh empty headed-Chrome profile
 for the setup and run-bound authorization flows, then deletes it on success,
 failure, or cancellation. It never reads/copies an existing profile, cookie
 store, or credential cache. Token values stay in memory and never enter logs
-or evidence. This one-account command requires `fixturePlan.deniedActor` to be
+or evidence. Chrome request-stage interception blocks the registered Portal
+callback before the Portal loads, including server-side redirect hops. The
+launcher validates the callback and exchanges its code; the SPA cannot consume
+it. This one-account command requires `fixturePlan.deniedActor` to be
 omitted, so the distinct denied-actor check remains blocked while other
 journey steps continue. The Host-caller probe-provider gap remains blocked;
 the launcher adds no Host-caller provider, and missing native probes still

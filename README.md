@@ -1,5 +1,9 @@
 # Agentweaver 1.x
 
+[![v1 .NET coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsabbour%2Fagentweaver%2Fbadges%2Fv1%2Fcoverage-dotnet.json)](https://github.com/sabbour/agentweaver/blob/badges/v1/coverage.md)
+[![v1 web coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsabbour%2Fagentweaver%2Fbadges%2Fv1%2Fcoverage-web.json)](https://github.com/sabbour/agentweaver/blob/badges/v1/coverage.md)
+[![v1 Node coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsabbour%2Fagentweaver%2Fbadges%2Fv1%2Fcoverage-node.json)](https://github.com/sabbour/agentweaver/blob/badges/v1/coverage.md)
+
 Agentweaver 1.x is a rebuild of the Agentweaver platform on the `v1` branch.
 It defines provider contracts and service boundaries for agent projects,
 identity, Knowledge, run events, orchestration, environments, and user-facing

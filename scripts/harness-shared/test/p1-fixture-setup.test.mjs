@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createP1Fixture, executePrivilegedProjectSetup } from '../p1-fixture-setup.mjs';
+import {
+  createP1Fixture, executePrivilegedProjectSetup, summarizeP1FixtureCleanup, summarizePrivilegedSetupCommand,
+} from '../p1-fixture-setup.mjs';
 import { runP1SurfaceJourney } from '../p1-surface-runner.mjs';
 
 const SOURCE_SHA = 'a'.repeat(40);
@@ -604,6 +606,83 @@ test('a changed Projects Config Pod blocks before privileged stdin is sent', asy
   assert.equal(calls, 2);
 });
 
+test('privileged command diagnostics retain only stable codes and fixed process classifications', () => {
+  const cases = [
+    [{ status: 1, stderr: 'Privileged project setup failed (forbidden).\ncommand terminated with exit code 1\n' },
+      { productErrorCode: 'forbidden', kubectlExitCode: 1, processErrorClass: null, stderrClass: 'product-code' }],
+    [{ status: 1, stderr: 'Privileged project setup failed (cleanup_revision_conflict).\r\n' },
+      { productErrorCode: 'cleanup_revision_conflict', kubectlExitCode: 1, processErrorClass: null, stderrClass: 'product-code' }],
+    [{ status: 1, stderr: 'Privileged project setup failed; no credential or exception detail was written.\n' },
+      { productErrorCode: null, kubectlExitCode: 1, processErrorClass: null, stderrClass: 'product-unclassified' }],
+    [{ status: 1, stderr: 'Error from server (Forbidden): sensitive actor details' },
+      { productErrorCode: null, kubectlExitCode: 1, processErrorClass: null, stderrClass: 'kubectl-forbidden' }],
+    [{ status: null, error: { code: 'ETIMEDOUT', message: 'sensitive process details' }, stderr: 'context deadline exceeded' },
+      { productErrorCode: null, kubectlExitCode: null, processErrorClass: 'timeout', stderrClass: 'timeout' }],
+    [{ status: null, error: { code: 'ENOENT' } },
+      { productErrorCode: null, kubectlExitCode: null, processErrorClass: 'executable-not-found', stderrClass: 'empty' }],
+    [{ status: 1, stderr: 'unable to upgrade connection: sensitive endpoint' },
+      { productErrorCode: null, kubectlExitCode: 1, processErrorClass: null, stderrClass: 'exec-transport' }],
+  ];
+  for (const [result, expected] of cases) {
+    assert.deepEqual(summarizePrivilegedSetupCommand(result), expected);
+  }
+  for (const stderr of [
+    'Privileged project setup failed (secret_token).\n',
+    'Privileged project setup failed (forbidden-secret).\n',
+    'Bearer controlled-secret-token',
+    'prefix Privileged project setup failed (forbidden).\n',
+    'Privileged project setup failed (forbidden).\nPrivileged project setup failed (setup_invocation_conflict).\n',
+  ]) {
+    assert.deepEqual(summarizePrivilegedSetupCommand({ status: 1, stderr }), {
+      productErrorCode: null, kubectlExitCode: 1, processErrorClass: null, stderrClass: 'unrecognized',
+    });
+  }
+});
+
+for (const invalidReceipt of [false, true]) {
+  test(`privileged ${invalidReceipt ? 'invalid JSON receipt' : 'nonzero exit'} preserves safe invocation evidence`, async () => {
+    const evidence = sourceEvidence();
+    let calls = 0;
+    let failure;
+    try {
+      await createP1Fixture(plan('journal'), {
+        api: apiFor(),
+        invocationId: INVOCATION_ID,
+        setupToken: 'controlled-secret-token',
+        sourceEvidence: evidence,
+        sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
+        setupContext: 'p1-control',
+        namespace: 'agentweaver',
+        acquireRunIdentity: async () => { throw new Error('Must not acquire run identity.'); },
+        spawnSyncImpl(_executable, args) {
+          calls += 1;
+          if (args.includes('deployments,replicasets,pods')) {
+            return { status: 0, stdout: JSON.stringify({ items: evidence.objects }) };
+          }
+          if (args.includes('get')) return { status: 0, stdout: JSON.stringify(evidence.objects[2]) };
+          return {
+            status: invalidReceipt ? 0 : 1,
+            stdout: 'controlled-secret-token',
+            stderr: invalidReceipt ? '' : 'Privileged project setup failed (forbidden).\nBearer controlled-secret-token',
+          };
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+    assert.equal(calls, 3, 'Never retry an indeterminate command automatically');
+    assert.equal(failure.indeterminate, true);
+    const summary = summarizeP1FixtureCleanup(failure.p1SetupState, await failure.p1SetupCleanup());
+    assert.equal(summary.cleanup.state, 'indeterminate');
+    assert.equal(summary.commandFailures.length, 1);
+    assert.equal(summary.commandFailures[0].kubectlExitCode, invalidReceipt ? 0 : 1);
+    assert.equal(summary.commandFailures[0].productErrorCode, invalidReceipt ? null : 'forbidden');
+    assert.equal(summary.diagnosis.state, 'required');
+    assert.ok(summary.diagnosis.command.endsWith(`--invocation-id ${INVOCATION_ID}`));
+    assert.doesNotMatch(JSON.stringify(summary), /controlled-secret-token|Bearer|stdout|stderr":/);
+  });
+}
+
 test('same-invocation fixture creation uses owner readbacks and retains accepted selections on cleanup', async () => {
   const events = [];
   const setupApi = apiFor();
@@ -955,7 +1034,7 @@ test('setup failures without a verified receipt report indeterminate only after 
     setupError = error;
   }
   assert.ok(setupError);
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 1);
   assert.equal(setupError.p1SetupState.setupAttempted, true);
   assert.equal((await setupError.p1SetupCleanup()).state, 'indeterminate');
 
@@ -982,6 +1061,53 @@ test('setup failures without a verified receipt report indeterminate only after 
   assert.ok(discoveryError);
   assert.equal(discoveryError.p1SetupState.setupAttempted, false);
   assert.equal((await discoveryError.p1SetupCleanup()).state, 'not-created');
+});
+
+test('an indeterminate cleanup is not retried and retains diagnosis plus sanitized command evidence', async () => {
+  const operations = [];
+  const fixture = await createP1Fixture(plan('journal'), {
+    api: apiFor(),
+    invocationId: INVOCATION_ID,
+    setupToken: 'controlled-secret-token',
+    sourceEvidence: sourceEvidence(),
+    sourceReceipt: plan('journal').pins.sourceReceipt,
+    setupContext: 'p1-control',
+    namespace: 'agentweaver',
+    createId: purpose => purpose === 'run'
+      ? 'selected-run' : '00000000-0000-4000-8000-000000000022',
+    acquireRunIdentity: async binding => ({
+      token: 'run-token',
+      deniedToken: 'denied-token',
+      projectId: binding.projectId,
+      runId: binding.runId,
+      api: apiFor({ bound: true }),
+      deniedApi: apiFor({ actorId: 'denied-actor' }),
+    }),
+    runPrivilegedSetup: async ({ request }) => {
+      operations.push(request.operationKind);
+      if (request.operationKind === 'setup') return setupResult(request.invocationId, 'setup');
+      throw Object.assign(new Error('controlled cleanup failure'), {
+        indeterminate: true,
+        commandEvidence: {
+          productErrorCode: 'controlled-secret-token',
+          kubectlExitCode: 1,
+          processErrorClass: 'controlled-secret-token',
+          stderrClass: 'controlled-secret-token',
+          stderr: 'controlled-secret-token',
+        },
+      });
+    },
+  });
+  await assert.rejects(fixture.cleanup(), /controlled cleanup failure/);
+  assert.deepEqual(operations, ['setup', 'cleanup']);
+  const summary = summarizeP1FixtureCleanup(fixture.state);
+  assert.equal(summary.cleanup.state, 'indeterminate');
+  assert.equal(summary.diagnosis.state, 'required');
+  assert.deepEqual(summary.commandFailures, [{
+    operationKind: 'cleanup', productErrorCode: null, kubectlExitCode: 1,
+    processErrorClass: null, stderrClass: 'unrecognized',
+  }]);
+  assert.doesNotMatch(JSON.stringify(summary), /controlled-secret-token/);
 });
 
 test('setup cleanup verifies archive and revocation when selection was not accepted', async () => {
