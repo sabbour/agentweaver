@@ -1,6 +1,10 @@
 import { gatewayBaseUrl } from './config';
 import { isProjectAuthorizationContextResponse, isRemoteMcpConnectionDirectoryPage } from './contracts';
 import type {
+  AgentSuiteAgentPolicy,
+  AgentSuiteImport,
+  AgentSuiteImportRequest,
+  AgentSuiteImportResult,
   CancelProjectRunResponse,
   CopilotAuthorizationCallback,
   CreateProjectRunRequest,
@@ -590,6 +594,57 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'skills')}${suffix ? `?${suffix}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Validates and records a native AgentSuite archive, and stages its agents as a casting proposal. */
+  importProjectAgentSuite(
+    token: string,
+    projectId: string,
+    request: AgentSuiteImportRequest,
+    tenantSelector?: string | null,
+  ): Promise<AgentSuiteImportResult> {
+    // The archive travels base64-encoded inside JSON, so the request is about 4/3 the archive size.
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'agentsuite-imports')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads the retained import record for one AgentSuite source identity. */
+  getProjectAgentSuiteImport(
+    token: string,
+    projectId: string,
+    sourceIdentity: string,
+    tenantSelector?: string | null,
+  ): Promise<AgentSuiteImport> {
+    // sourceIdentity looks like "sha256:<hex>". encodeSegments escapes the ':' so it stays one path segment.
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'agentsuite-imports', sourceIdentity)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads the policy bound to one imported effective agent ID. */
+  getProjectAgentSuiteAgentPolicy(
+    token: string,
+    projectId: string,
+    effectiveAgentId: string,
+    tenantSelector?: string | null,
+  ): Promise<AgentSuiteAgentPolicy> {
+    // effectiveAgentId looks like "agentsuite:...". encodeSegments escapes it so it stays one path segment.
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'agentsuite-agents', effectiveAgentId, 'policy')}`,
       {},
       this.baseUrl,
       tenantSelector,

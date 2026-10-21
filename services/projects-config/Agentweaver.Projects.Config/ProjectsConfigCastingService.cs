@@ -523,12 +523,14 @@ public sealed partial class ProjectsConfigService
         ProjectRecord project,
         ProjectConfiguration draft,
         ProjectCastingTransferProvenance? transferProvenance,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? proposalId = null)
     {
         var now = timeProvider.GetUtcNow();
         var proposal = new ProjectCastingProposalRecord
         {
-            ProposalId = Guid.NewGuid(),
+            // Callers that need replay-safe imports pass a stable ID derived from the request; others get a random one.
+            ProposalId = proposalId ?? Guid.NewGuid(),
             ProjectId = project.ProjectId,
             BaseConfigurationRevision = project.ConfigurationRevision,
             DraftRevision = 1,

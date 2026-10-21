@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/agent.schema.json",
+  "title": "AgentSuite agent manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mediaType", "id", "instructions", "model"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0-draft"},
+    "mediaType": {"const": "application/vnd.agentsuite.agent.v1+json"},
+    "id": {"$ref": "#/$defs/id"},
+    "description": {"type": "string", "maxLength": 4096},
+    "instructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "descriptor"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "descriptor": {"$ref": "#/$defs/descriptor"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol"],
+      "oneOf": [{"required": ["model"], "not": {"required": ["capabilities"]}}, {"required": ["capabilities"], "not": {"anyOf": [{"required": ["model"]}, {"required": ["endpointEnv"]}, {"required": ["secretRefs"]}]}}],
+      "properties": {
+        "protocol": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "capabilities": {"$ref": "inference.schema.json"},
+        "endpointEnv": {"$ref": "#/$defs/env"},
+        "secretRefs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}
+      }
+    },
+    "toolProviders": {
+      "description": "Exact provider requirements; callable tools are declared by each referenced ToolProvider.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "executionMode"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "version": {"$ref": "#/$defs/version"},
+          "executionMode": {"const": "shared-sandbox"}
+        }
+      }
+    },
+    "invokes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["agent", "maxConcurrent", "maxDepth"],
+        "properties": {
+          "agent": {"$ref": "#/$defs/id"},
+          "maxConcurrent": {"type": "integer", "minimum": 1},
+          "maxDepth": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "evals": {
+      "description": "Optional single descriptor-bound per-agent evaluation index.",
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "descriptor"],
+        "properties": {
+          "path": {"type": "string", "maxLength": 1024, "pattern": "^evals/[a-z0-9][a-z0-9._-]{0,127}/index\\.json$"},
+          "descriptor": {"$ref": "#/$defs/descriptor"}
+        }
+      }
+    },
+    "policy": {
+      "description": "Optional authored policy at policies/<owning-agent-id>.json; the validator checks ownership and mediaType/version agreement.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "descriptor"],
+      "properties": {
+        "path": {"type": "string", "maxLength": 1024, "pattern": "^policies/[a-z0-9][a-z0-9._-]{0,127}\\.json$"},
+        "descriptor": {
+          "$ref": "#/$defs/descriptor",
+          "properties": {
+            "mediaType": {"enum": ["application/vnd.agentsuite.policy.v1+json", "application/vnd.agentsuite.policy.v2+json"]},
+            "size": {"maximum": 4194304}
+          }
+        }
+      }
+    },
+    "extensions": {"type": "array"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"},
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "path": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^/\\\\][^\\\\]*$"},
+    "env": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
+    "descriptor": {
+      "description": "OCI-compatible content descriptor: the mediaType, digest, and size of the exact referenced bytes, plus optional descriptive annotations.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mediaType", "digest", "size"],
+      "properties": {
+        "mediaType": {"type": "string", "minLength": 1},
+        "digest": {"$ref": "#/$defs/digest"},
+        "size": {"type": "integer", "minimum": 0},
+        "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    }
+  }
+}

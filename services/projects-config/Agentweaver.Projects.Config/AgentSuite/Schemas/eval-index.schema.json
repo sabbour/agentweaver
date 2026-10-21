@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/eval-index.schema.json",
+  "title": "AgentSuite evaluation index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mediaType", "agent", "cases", "limits"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0-draft"},
+    "mediaType": {"const": "application/vnd.agentsuite.eval.index.v1+json"},
+    "agent": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "descriptor"],
+        "properties": {
+          "path": {"type": "string", "maxLength": 1024, "pattern": "^evals/[a-z0-9][a-z0-9._-]{0,127}/cases/[A-Za-z0-9][A-Za-z0-9._-]{0,62}\\.json$"},
+          "descriptor": {"$ref": "#/$defs/descriptor"}
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxCases", "maxCaseBytes"],
+      "properties": {
+        "maxCases": {"type": "integer", "minimum": 1, "maximum": 128},
+        "maxCaseBytes": {"type": "integer", "minimum": 1, "maximum": 4194304}
+      }
+    }
+  },
+  "$defs": {
+    "descriptor": {
+      "description": "OCI-compatible content descriptor: the mediaType, digest, and size of the exact referenced bytes, plus optional descriptive annotations.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mediaType", "digest", "size"],
+      "properties": {
+        "mediaType": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "size": {"type": "integer", "minimum": 0},
+        "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    }
+  }
+}

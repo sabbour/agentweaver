@@ -398,6 +398,33 @@ describe('Gateway API client', () => {
     }
   });
 
+  it('routes AgentSuite import, record and policy reads to the project owner', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => new Response('{}', { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const request = {
+      expectedConfigurationRevision: 3,
+      format: 'oci-layout-tar' as const,
+      archive: 'AAAA',
+      toolConnections: [{ toolProvider: 'search@1.0.0', connectionId: '6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f' }],
+    };
+
+    await client.importProjectAgentSuite('token', 'project/1', request, 'tenant-1');
+    await client.getProjectAgentSuiteImport('token', 'project/1', 'sha256:abc', 'tenant-1');
+    await client.getProjectAgentSuiteAgentPolicy('token', 'project/1', 'agentsuite:team:writer:0123456789ab', 'tenant-1');
+
+    expect(fetcher.mock.calls.map(([url, init]) => [
+      String(url),
+      init?.method ?? 'GET',
+      init?.body ? JSON.parse(String(init.body)) : undefined,
+    ])).toEqual([
+      ['https://gateway.example.test/api/v1/projects/project%2F1/agentsuite-imports', 'POST', request],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/agentsuite-imports/sha256%3Aabc', 'GET', undefined],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/agentsuite-agents/agentsuite%3Ateam%3Awriter%3A0123456789ab/policy', 'GET', undefined],
+    ]);
+  });
+
   it('reads suggested marketplaces and rejects a malformed list', async () => {
     const definition = { name: 'Public', repository: 'example/skills', requestedRef: 'main', subpath: null, layoutNote: null, sourceId: null };
     const fetcher = vi.fn<typeof fetch>()
