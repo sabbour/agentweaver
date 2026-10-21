@@ -11,9 +11,9 @@ The eight original .NET foundation NuGet packages were:
 `Agentweaver.Identity`, `Agentweaver.Telemetry`,
 `Agentweaver.Telemetry.AzureMonitor`, and `Agentweaver.ObjectStore.AzureBlob`.
 Their historical P0 package baseline was `0.0.0`; its records remain unchanged.
-`Agentweaver.Identity.Broker` has current source version `1.1.3`; it is not one
+`Agentweaver.Identity.Broker` has current source version `1.2.0`; it is not one
 of the NuGet packages.
-`Agentweaver.Orchestrator` is also an unpublished service at source version `1.1.1`;
+`Agentweaver.Orchestrator` has prepared source version `1.2.0`;
 its `Agentweaver.Orchestrator.Core` dependency remains a separately versioned library.
 `Agentweaver.FoundationProbe` has a separate prepared source version at `0.0.3`.
 The manifest uses the `service` artifact kind for its executable container.
@@ -142,8 +142,8 @@ Account-free SDK transport tests cover failures, cancellation and redaction.
 This adds no authorization gate or deployable service; the draft composition's
 initial package baseline is `0.0.0`.
 
-#1766 adds explicit AKS workload-identity composition in the existing Key Vault
-adapter: trusted hosts provide tenant ID, client ID, and projected token-file path
+The existing Key Vault adapter adds explicit AKS workload-identity composition:
+trusted hosts provide tenant ID, client ID, and projected token-file path
 to Azure Identity, with no developer-identity fallback. Fake-transport tests cover
 OAuth exchange and exact-version vault requests. Authentication, authorization and
 rotation in a deployed AKS service remain unverified; no new component or version
@@ -183,8 +183,8 @@ It names the reviewed plan source, checksum, applied versions and archived note 
 The manifest remains a draft. This is not a published platform release or permission to publish.
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
-The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
-Its current manifest/project source version is `1.1.3`.
+The manifest registers `Agentweaver.Identity.Broker` as a service.
+Its current manifest/project source version is `1.2.0`.
 The record is release intent, not a registry artifact or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
 
@@ -230,6 +230,14 @@ and validate all `.changeset/*.md` records. Run
 an added or modified changeset in that diff for every changed product component.
 Generated `packages.lock.json` updates by themselves do not require a component
 changeset; project and source changes still do.
+After applying component versions or changing dependencies, run
+`dotnet restore tools/P1PostgresInitializer/P1PostgresInitializer.csproj` from
+the repository root with the SDK selected by `global.json`. Review and commit
+the generated lock file with the version or dependency changes. This tool is
+outside the solution, so restoring the solution does not update its lock file.
+The v1 release and P1 contract CI job restores it separately with `--locked-mode`
+and rejects a stale dependency graph. Normal operator restores must leave
+tracked files unchanged so the initializer's clean-tree gate remains satisfied.
 Both CI workflows use `npm run release:validate -- --ci`.
 This form verifies the checkout against `GITHUB_SHA` and the event's source history.
 For a PR, the tested merge must have ordered parents `[event base, authored head]`.
@@ -247,7 +255,7 @@ the Azure Blob transport adapter.
 
 ## Earlier foundation changes
 
-- #1776 adds the `Agentweaver.Identity` 0.0.0 authorization library. It authorizes
+- The initial `Agentweaver.Identity` 0.0.0 authorization library authorizes
   exact run grants and compares immutable
   pre/post grant identity, revision, expiry and bindings. Abstractions adds a
   metadata-only, thread-safe `SecretCredential.LimitLifetime` on the original
@@ -256,18 +264,18 @@ the Azure Blob transport adapter.
   compatibility record pins Identity's Abstractions dependency to 0.0.0.
   No broker/store/service/Azure
   deployment or new-tree approval from historical review receipts is implied.
-- #1768 adds consumer-scoped transactional inbox receipts to
+- Consumer-scoped transactional inbox receipts were added to
   `Agentweaver.Persistence.Postgres` 0.0.0. Migration 2 upgrades existing
   service-owned version-1 schemas without changing their outbox records. This
   remains a draft library, not a consumer service or exactly-once delivery.
-- #1750 supplies the platform-singleton Object Store contract for opaque platform
-  artifacts. #1744 adds the Azure Blob adapter, with streamed reads, create-only
+- The platform-singleton Object Store contract supports opaque platform
+  artifacts. Its Azure Blob adapter supports streamed reads, create-only
   writes, and missing-object delete semantics. This draft library composition
   is not a platform release or version bump. Changeset records track intent;
   source-bound version preparation is described here. The original P0 packages
-  were published from an earlier source; #1825 tracks their historical 0.0.0 baseline.
+  were published from an earlier source at their historical 0.0.0 baseline.
   This draft does not claim platform deployment.
-- #1767 adds ordered, layered provider composition: permitted Guardrails and
+- Ordered, layered provider composition means permitted Guardrails and
   Telemetry providers resolve and pin as ordered sets, pinning resource
   generations and order. Network Policy resolves its required L3/L4 and
   optional L7 layers as platform-selected, platform-owned providers, and
@@ -467,15 +475,60 @@ workflows to pass on the exact source commit.
 
 The release workflow validates the composition and changeset coverage, then
 starts two independent jobs. `packages` creates the NuGet package artifacts.
-`images` prepares the source-pinned build inputs and builds the product Docker
-images without the acceptance-only Foundation Probe. Each job uploads its
+`images` prepares the source-pinned build inputs, plans image reuse, and builds
+only the product Docker images that need a new build, without the
+acceptance-only Foundation Probe. Each job uploads its
 source-bound artifacts. `publish` waits for both jobs, verifies that their
 source SHA, manifest hash, selected components, and artifact files agree, then
 publishes only NuGet packages whose versions changed in the verified receipt,
-plus all ten product service images, to GitHub Packages and `ghcr.io/sabbour`.
+plus the rebuilt product service images, to GitHub Packages and `ghcr.io/sabbour`.
 The publisher rechecks artifact hashes and image contracts before its first
-external write. Each service image uses a tag containing its component version
-and the full source SHA, so a later receipt cannot move an existing version tag.
+external write. Each built service image uses a tag containing its component
+version and the full source SHA, so a later receipt cannot move an existing
+version tag.
+
+#### Incremental image reuse
+
+`npm run release:plan-image-reuse` (`scripts/release/image-reuse.mjs`) decides,
+per service image, whether to build or reuse. It finds the newest
+`agentweaver-publication/<sha>/result` tag with status `published` on the
+first-parent history of the release commit, then reads that result's receipt.
+An image is reused only when all of these hold:
+
+- the baseline receipt published the same component version to the same
+  registry repository, with an immutable `sha256` digest;
+- the image's input fingerprint at the baseline build commit equals the
+  fingerprint at the release commit.
+
+The fingerprint is a hash of Git blob IDs. It covers the project, its
+transitive `ProjectReference` closure, out-of-directory `Include` items,
+`Directory.Build.*`, `Directory.Packages.props`, `global.json`, `nuget.config`,
+the Dockerfile or SDK `ContainerBaseImage` pin, the web application directory,
+the AgentHost build directories, and the release workflow and scripts that
+build images. This is one derived closure that
+the planner and the publisher both use, so no hand-written path list can drift.
+An MSBuild expression the planner cannot resolve forces a build.
+
+Every other case builds: no baseline (the first release), an older receipt
+without reuse metadata, a version change, a different registry, an image
+missing from the baseline, or a changed fingerprint. Malformed baseline
+results, receipts, tags, or digests stop the run with an error instead of
+being treated as reusable.
+
+A reused image is not rebuilt, retagged, or pushed. The receipt records its
+original `<version>-<buildSha>` tag, digest, and a `reused` block with the
+original build source SHA and tree. Deployment pins the digest and verifies its
+OCI labels against that original build source, not the new release commit. A
+chain of reuses keeps the first build's source.
+
+Before claiming publication, the publisher recomputes the plan and requires it
+to match the pack provenance. It then resolves every reused tag in the registry
+and requires the recorded digest. A moved or missing tag fails before any
+registry or receipt write.
+
+Set the `rebuild_all_images` input on a manual dispatch to rebuild every image.
+The first release after a change to the image tooling also rebuilds every image,
+because the tooling is part of each fingerprint.
 The workflow queues receipt-triggered runs in FIFO order instead of replacing
 an earlier pending release.
 
@@ -880,7 +933,7 @@ Download the source-matched receipt's `publication.json` to
 `artifacts/release/publish/publication.json`. Continuation receipts and
 `--completion` proofs are rejected; no image is rebuilt or republished. The
 source-bound bootstrap command remains a pre-acceptance operation and does not
-complete the deployment evidence in issue #2097.
+complete the required deployment evidence.
 
 ```powershell
 npm run release:deploy-bootstrap -- v1.0.4 `
@@ -946,8 +999,8 @@ privileged-setup allowlist is unchanged by this bootstrap-pin update.
 Download `publication.json` from the exact receipt artifact to
 `artifacts/release/publish/publication.json`. Continuation receipts and
 `--completion` proofs are rejected; no image is rebuilt or republished. This
-pre-acceptance bootstrap does not close release issue #2104, and issue #2101
-remains open for live sign-in verification.
+pre-acceptance bootstrap does not complete release acceptance or live sign-in
+verification.
 
 ```powershell
 npm run release:deploy-bootstrap -- v1.0.5 `

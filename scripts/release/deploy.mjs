@@ -798,6 +798,7 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
   }
 
   let agentHostMeasurement;
+  const reusedFrom = new Map();
   for (const component of product) {
     const expectedKind = kindFor(component);
     const plan = planned.get(component.id);
@@ -808,11 +809,28 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
         result.kind !== expectedKind || !/^[a-f0-9]{64}$/.test(plan.sha256 ?? '')) {
       fail(`publication receipt does not prove the exact ${component.id} ${component.version} artifact`);
     }
+    // An unchanged image reused by this release keeps the digest and provenance of the commit that built it.
+    const reused = plan.reused;
+    if (reused !== undefined || result.reused !== undefined) {
+      // Only service images from current-format receipts can be reused, and only from an earlier
+      // commit. The plan and result copies must agree, or the receipt was edited.
+      if (component.kind !== 'service' || receipt.requiredPackageIds === undefined ||
+          !reused || typeof reused !== 'object' || !SHA.test(reused.sourceSha ?? '') ||
+          reused.sourceSha === sourceSha || !SHA.test(reused.sourceTree ?? '') ||
+          !DIGEST.test(reused.inputFingerprint ?? '') || !SHA.test(reused.receiptSourceSha ?? '') ||
+          JSON.stringify(result.reused) !== JSON.stringify(reused)) {
+        fail(`publication receipt has invalid reused-image provenance for ${component.id}`);
+      }
+      reusedFrom.set(component.id, { sourceSha: reused.sourceSha, sourceTree: reused.sourceTree });
+    }
+    // Tags and AgentHost measurements name the commit that built the image. For a reused image that
+    // is the original build commit, so check against it instead of this release's source.
+    const buildSourceSha = reused?.sourceSha ?? sourceSha;
     if (component.kind === 'service') {
       const expectedImage = `${expectedRepository(component.id)}@${component.imageDigest}`;
       // The original v1.0.0 receipt used version-only tags; current receipts use source-bound tags.
       const imageTag = receipt.requiredPackageIds === undefined
-        ? component.version : componentImageTag(component.version, sourceSha);
+        ? component.version : componentImageTag(component.version, buildSourceSha);
       if (plan.destination !== `${expectedRepository(component.id)}:${imageTag}` ||
           result.image !== expectedImage || result.archiveSha256 !== plan.sha256 ||
           !DIGEST.test(component.imageDigest)) {
@@ -821,7 +839,8 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
       if (component.id === 'Agentweaver.AgentHost') {
         const measurement = result.preparedOciMeasurement;
         if (measurement?.kind !== 'agenthost-image' || measurement.schemaVersion !== 1 ||
-            measurement.sourceSha !== sourceSha || !SHA.test(measurement.sourceTree ?? '') ||
+            measurement.sourceSha !== buildSourceSha || !SHA.test(measurement.sourceTree ?? '') ||
+            (reused !== undefined && measurement.sourceTree !== reused.sourceTree) ||
             measurement.image?.version !== component.version ||
             measurement.image.platform !== 'linux/amd64' ||
             !DIGEST.test(measurement.image.digest ?? '') ||
@@ -854,6 +873,8 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
   return PRODUCT_SERVICES.map((id) => {
     const component = manifest.components.find((entry) => entry.id === id);
     const result = { id, name: SERVICE_NAMES[id], image: `${expectedRepository(id)}@${component.imageDigest}` };
+    // Pass the original build source on, so the registry label check later expects those labels.
+    if (reusedFrom.has(id)) result.reusedFrom = reusedFrom.get(id);
     if (id === 'Agentweaver.AgentHost') {
       result.sandboxImage = agentHostMeasurement.image;
       result.compressedPullBytes = agentHostMeasurement.compressedPullBytes;

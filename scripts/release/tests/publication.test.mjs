@@ -7,6 +7,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { componentImageTag, packComponentsFromFile } from '../pack.mjs';
 import { findNugetPushDiagnostic, publishArtifacts } from '../publish.mjs';
+import { mergePacks } from '../merge-packs.mjs';
+import { planImageReuse } from '../image-reuse.mjs';
 import { resolveProbeImageSource } from '../../azure/build-foundation-probe-image.mjs';
 import { addAgentHostSource, agentHostComponent, agentHostDockerFixture } from './agenthost-fixture.mjs';
 import { measureAgentHostArchiveSync } from '../measure-agenthost-image.mjs';
@@ -15,7 +17,7 @@ const webBaseImage = `mcr.microsoft.com/dotnet/aspnet@sha256:${'a'.repeat(64)}`;
 const webImageId = `sha256:${'c'.repeat(64)}`;
 
 function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageXml,
-  foundationProbe = false, probeVersion = '0.0.1', web = false, agenthost = false, idMode = 'config' } = {}) {
+  foundationProbe = false, probeVersion = '0.0.1', web = false, agenthost = false, idMode = 'config', beforeSource } = {}) {
   const parent = path.resolve('artifacts', 'release-tests');
   mkdirSync(parent, { recursive: true });
   const root = mkdtempSync(path.join(parent, 'publication-'));
@@ -84,6 +86,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   git('config', 'core.autocrlf', 'false');
   git('add', '.');
   git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'source');
+  beforeSource?.({ root, git });
   const calls = [];
   const outDir = path.join(root, 'artifacts', 'release', 'pack');
   const agentHostDocker = agenthost ? agentHostDockerFixture(root, { idMode }) : undefined;
@@ -177,7 +180,13 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
     throw new Error(`unexpected injected GitHub request: ${method} ${endpoint}`);
   };
   const publish = (options = {}) => {
+    const { descriptors, ...publishOptions } = options;
     const external = options.run ?? ((bin, args) => {
+      if (bin === 'docker' && args[0] === 'buildx' && args[1] === 'imagetools' && args[2] === 'inspect') {
+        const digest = descriptors?.[args[3]];
+        if (!digest) throw new Error(`manifest unknown: ${args[3]}`);
+        return JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', digest, size: 1 });
+      }
       if (agenthost && bin === 'docker' && ['image', 'run'].includes(args[0])) return agentHostDocker(args);
       if (bin === 'docker' && args[0] === 'image' && args[1] === 'inspect') {
         return JSON.stringify({
@@ -198,7 +207,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
       return '';
     });
     return publishArtifacts('releases/foundation.json', outDir, sourceSha, {
-      root, confirmed: true, env, ...options,
+      root, confirmed: true, env, ...publishOptions,
       run: (bin, args, input) => {
         if (bin === 'gh') return (options.github ?? github)(args, input);
         externalCalls.push({ bin, args, input });
@@ -1382,4 +1391,147 @@ test('a feed fragment cannot leak a token into durable destination records', (t)
   }), /credential-free HTTPS feed/);
   assert.deepEqual(calls, []);
   assert.deepEqual(f.remoteCalls, []);
+});
+
+const reuseRegistry = 'registry.example.invalid';
+const baselineDigests = { Svc: `sha256:${'1'.repeat(64)}`, 'Agentweaver.Web': `sha256:${'2'.repeat(64)}` };
+const reuseRepository = id => `${reuseRegistry}/${id === 'Agentweaver.Web' ? 'agentweaver-web' : id.toLowerCase()}`;
+
+/** Records a durable published receipt for the fixture source, then commits a follow-up change. */
+function publishedBaseline(change) {
+  return ({ root, git }) => {
+    const sha = git('rev-parse', 'HEAD');
+    const images = Object.entries(baselineDigests).map(([id, digest]) => ({
+      planned: { id, version: '0.1.0', kind: 'image', sha256: '3'.repeat(64),
+        destination: `${reuseRepository(id)}:${componentImageTag('0.1.0', sha)}` },
+      published: { id, version: '0.1.0', kind: 'image', image: `${reuseRepository(id)}@${digest}`, archiveSha256: '3'.repeat(64) },
+    }));
+    const receipt = {
+      schemaVersion: 1, sourceSha: sha, requiredPackageIds: [], provenanceSha256: '4'.repeat(64),
+      planned: images.map(image => image.planned), status: 'published', published: images.map(image => image.published),
+    };
+    const identity = ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid'];
+    git(...identity, 'tag', '-a', `agentweaver-publication/${sha}/result`, '-m', JSON.stringify(receipt), sha);
+    change(root);
+    git('add', '-A');
+    git(...identity, 'commit', '-qm', 'follow-up');
+  };
+}
+
+function prepareWithReuse(f) {
+  const manifest = JSON.parse(readFileSync(path.join(f.root, 'releases', 'foundation.json'), 'utf8'));
+  const plan = planImageReuse({ manifest, sourceSha: f.sourceSha, registry: reuseRegistry, root: f.root });
+  const packages = path.join(f.root, 'artifacts', 'release', 'packages');
+  const images = path.join(f.root, 'artifacts', 'release', 'images');
+  f.prepare({ packagesOnly: true, outDir: packages, dotnet: args => {
+    if (args[0] === 'pack') writeFileSync(path.join(args[args.indexOf('--output') + 1], 'Pkg.0.1.0.nupkg'), 'test package bytes');
+  } });
+  const imageProvenance = f.prepare({ imagesOnly: true, platformOnly: true, outDir: images, reusePlan: plan });
+  const merged = mergePacks('releases/foundation.json', packages, images, f.outDir, { root: f.root, platformOnly: true });
+  const baselineSha = execFileSync('git', ['rev-parse', 'HEAD^'], { cwd: f.root, encoding: 'utf8' }).trim();
+  const descriptors = Object.fromEntries(Object.entries(baselineDigests).flatMap(([id, digest]) => [
+    [`${reuseRepository(id)}@${digest}`, digest],
+    [`${reuseRepository(id)}:${componentImageTag('0.1.0', baselineSha)}`, digest],
+  ]));
+  return { plan, imageProvenance, merged, baselineSha, descriptors };
+}
+
+const writes = f => f.remoteCalls.filter(({ args }) => args[args.indexOf('--method') + 1] === 'POST');
+const registryWrites = f => f.externalCalls.filter(({ bin, args }) => bin === 'docker' && ['load', 'tag', 'push'].includes(args[0]));
+
+test('an unchanged release builds no image and records the original digests, tags, and build source', t => {
+  const f = fixture(t, { web: true, beforeSource: publishedBaseline(root => writeFileSync(path.join(root, 'README.md'), 'docs\n')) });
+  const { plan, imageProvenance, merged, baselineSha, descriptors } = prepareWithReuse(f);
+  assert.deepEqual(plan.components.map(({ id, action }) => [id, action]), [['Svc', 'reuse'], ['Agentweaver.Web', 'reuse']]);
+  assert.deepEqual(imageProvenance.components, []);
+  assert.deepEqual(imageProvenance.artifacts, []);
+  assert.equal(f.calls.some(args => args[0] === 'publish'), false);
+  assert.deepEqual(merged.components.map(({ id }) => id), ['Pkg']);
+  assert.deepEqual(merged.imageReuse, plan);
+
+  const receipt = f.publish({ platformOnly: true, packageComponents: [], descriptors });
+  assert.equal(receipt.status, 'published');
+  assert.deepEqual(receipt.published.map(({ id, image }) => [id, image]), [
+    ['Svc', `${reuseRepository('Svc')}@${baselineDigests.Svc}`],
+    ['Agentweaver.Web', `${reuseRepository('Agentweaver.Web')}@${baselineDigests['Agentweaver.Web']}`],
+  ]);
+  for (const entry of [...receipt.planned, ...receipt.published]) {
+    assert.equal(entry.reused.sourceSha, baselineSha);
+    assert.notEqual(entry.reused.sourceSha, f.sourceSha);
+  }
+  for (const entry of receipt.planned) assert.ok(entry.destination.endsWith(`:${componentImageTag('0.1.0', baselineSha)}`));
+  assert.deepEqual(registryWrites(f), []);
+  assert.ok(f.externalCalls.some(({ args }) => args[0] === 'login'));
+  const result = [...f.tags.values()].find(({ tag }) => tag.endsWith('/result'));
+  assert.deepEqual(JSON.parse(result.message), receipt);
+});
+
+test('a mixed release pushes only the changed image and keeps the unchanged digest in a complete receipt', t => {
+  const f = fixture(t, { web: true, beforeSource: publishedBaseline(root =>
+    writeFileSync(path.join(root, 'apps', 'web', 'src', 'main.ts'), 'export const app = "changed";\n')) });
+  const { plan, merged, baselineSha, descriptors } = prepareWithReuse(f);
+  assert.deepEqual(plan.components.map(({ id, action }) => [id, action]), [['Svc', 'reuse'], ['Agentweaver.Web', 'build']]);
+  assert.deepEqual(merged.components.map(({ id }) => id), ['Pkg', 'Agentweaver.Web']);
+
+  const receipt = f.publish({ platformOnly: true, packageComponents: [], descriptors });
+  const pushes = f.externalCalls.filter(({ bin, args }) => bin === 'docker' && args[0] === 'push').map(({ args }) => args[1]);
+  assert.deepEqual(pushes, [`${reuseRepository('Agentweaver.Web')}:${componentImageTag('0.1.0', f.sourceSha)}`]);
+  assert.deepEqual(receipt.planned.map(({ id }) => id), ['Svc', 'Agentweaver.Web']);
+  assert.deepEqual(receipt.published.map(({ id }) => id), ['Svc', 'Agentweaver.Web']);
+  const [svc, web] = receipt.published;
+  assert.equal(svc.image, `${reuseRepository('Svc')}@${baselineDigests.Svc}`);
+  assert.equal(svc.reused.sourceSha, baselineSha);
+  assert.equal(web.reused, undefined);
+  assert.equal(receipt.planned[1].destination, `${reuseRepository('Agentweaver.Web')}:${componentImageTag('0.1.0', f.sourceSha)}`);
+});
+
+test('a reused image whose original tag moved or digest vanished fails before the claim and any push', t => {
+  for (const mutate of [
+    (descriptors, baselineSha) => { descriptors[`${reuseRepository('Svc')}:${componentImageTag('0.1.0', baselineSha)}`] = `sha256:${'9'.repeat(64)}`; },
+    descriptors => { delete descriptors[`${reuseRepository('Svc')}@${baselineDigests.Svc}`]; },
+  ]) {
+    const f = fixture(t, { beforeSource: publishedBaseline(root => writeFileSync(path.join(root, 'README.md'), 'docs\n')) });
+    const { descriptors, baselineSha } = prepareWithReuse(f);
+    mutate(descriptors, baselineSha);
+    assert.throws(() => f.publish({ platformOnly: true, packageComponents: [], descriptors }),
+      /no longer resolves to|cannot be read from the registry/);
+    assert.deepEqual(writes(f), []);
+    assert.deepEqual(registryWrites(f), []);
+  }
+});
+
+test('publication recomputes the reuse plan and rejects a plan that differs or an invalid rebuild flag', t => {
+  const f = fixture(t, { beforeSource: publishedBaseline(root => writeFileSync(path.join(root, 'README.md'), 'docs\n')) });
+  const { descriptors } = prepareWithReuse(f);
+  assert.throws(() => f.publish({ platformOnly: true, packageComponents: [], descriptors,
+    env: { ...f.env, RELEASE_REBUILD_ALL_IMAGES: 'true' } }), /differs from the plan recomputed/);
+  assert.throws(() => f.publish({ platformOnly: true, packageComponents: [], descriptors,
+    env: { ...f.env, RELEASE_REGISTRY: 'registry.example.invalid/other' } }), /differs from the plan recomputed/);
+  assert.throws(() => f.publish({ platformOnly: true, packageComponents: [], descriptors,
+    env: { ...f.env, RELEASE_REBUILD_ALL_IMAGES: 'yes' } }), /must be true or false/);
+  assert.deepEqual(f.remoteCalls, []);
+  assert.deepEqual(f.externalCalls, []);
+});
+
+test('image preparation rejects reuse plans outside platform-only image packs or for another source', t => {
+  const f = fixture(t, { beforeSource: publishedBaseline(root => writeFileSync(path.join(root, 'README.md'), 'docs\n')) });
+  const manifest = JSON.parse(readFileSync(path.join(f.root, 'releases', 'foundation.json'), 'utf8'));
+  const plan = planImageReuse({ manifest, sourceSha: f.sourceSha, registry: reuseRegistry, root: f.root });
+  assert.throws(() => f.prepare({ platformOnly: true, reusePlan: plan }), /applies only to platform-only images-only/);
+  assert.throws(() => f.prepare({ imagesOnly: true, platformOnly: true, reusePlan: { ...plan, sourceSha: 'f'.repeat(40) } }),
+    /does not match the exact source/);
+  assert.deepEqual(f.calls, []);
+});
+
+test('the release workflow plans image reuse before building and passes the same rebuild switch to publication', () => {
+  const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
+  const images = workflow.slice(workflow.indexOf('\n  images:'), workflow.indexOf('\n  publish:'));
+  const publish = workflow.slice(workflow.indexOf('\n  publish:'));
+  const switchValue = "RELEASE_REBUILD_ALL_IMAGES: ${{ inputs.rebuild_all_images && 'true' || 'false' }}";
+  assert.match(workflow, /rebuild_all_images:\s+description:[^\n]+\s+type: boolean\s+default: false/);
+  assert.ok(images.indexOf('release:plan-image-reuse') > images.indexOf('release:prepare-build-inputs'));
+  assert.ok(images.indexOf('release:plan-image-reuse') < images.indexOf('--reuse-plan artifacts/release/image-reuse-plan.json'));
+  assert.ok(images.includes(switchValue));
+  assert.ok(publish.includes(switchValue));
+  assert.match(publish, /merge-packs\.mjs[^\n]+--platform-only/);
 });
