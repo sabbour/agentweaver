@@ -74,6 +74,22 @@ public sealed partial class ProjectsConfigService
             NormalizeToolConnections(request.ToolConnections, result.Graph),
             NormalizeBlueprint(request.Blueprint, result.Graph));
         var charters = AgentSuiteImportPlanner.CreateCharters(record, result.Graph);
+        // A supplied blueprint must pass the same 0.x rules as inline apply before anything is stored.
+        // Validation runs outside the transaction because it only needs the request and the parsed suite.
+        var applyBlueprint = request.Blueprint is not null;
+        if (applyBlueprint)
+        {
+            // Skill binding roles must be native agent IDs from the suite graph.
+            var errors = ProjectBlueprintCatalog.ValidateBlueprint(
+                record.Blueprint, [.. result.Graph.Agents.Select(agent => agent.Id)]);
+            if (!errors.IsEmpty)
+                throw ProjectConfigException.Invalid(
+                    "invalid_blueprint",
+                    $"Blueprint is invalid: {string.Join(" ", errors)}");
+        }
+        // Maps each native agent ID to the agent ID it is cast as in this project, so bindings land on the right agent.
+        var agentIds = record.Agents.ToDictionary(
+            agent => agent.NativeId, agent => agent.EffectiveAgentId, StringComparer.Ordinal);
         var proposalId = AgentSuiteProposalId(projectId, record, request.ExpectedConfigurationRevision);
         var store = new AgentSuiteObjectStore(objectStore);
 
@@ -100,7 +116,16 @@ public sealed partial class ProjectsConfigService
                         "agentsuite_integrity_error",
                         "The import record for this proposal is missing.",
                         StatusCodes.Status500InternalServerError);
-                return new ProjectAgentSuiteImportResult(replayed, ToCastingProposal(existing));
+                var replayedProposal = ToCastingProposal(existing);
+                // The stored draft already includes the blueprint. Reapply it only to recover the same
+                // unresolved-binding report without changing the stored proposal.
+                return new ProjectAgentSuiteImportResult(replayed, replayedProposal)
+                {
+                    UnresolvedSkillBindings = applyBlueprint
+                        ? ProjectBlueprintCatalog.ApplyBlueprint(replayedProposal.Draft, record.Blueprint, agentIds)
+                            .UnresolvedSkillBindings
+                        : [],
+                };
             }
 
             // Revision fence: the caller reviewed an older configuration, so reject with 409 instead of merging.
@@ -116,15 +141,24 @@ public sealed partial class ProjectsConfigService
             var current = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
             // Merge first: it throws on an identity conflict before anything is written to storage.
             var draft = MergeAgentSuiteImport(current, charters);
+            var unresolved = ImmutableArray<BlueprintUnresolvedSkillBinding>.Empty;
+            if (applyBlueprint)
+            {
+                // A repeated agent import can still change workflows, skills or sandbox settings.
+                // Use the same apply path as inline blueprints, even when there are no new agents.
+                var application = ProjectBlueprintCatalog.ApplyBlueprint(draft ?? current, record.Blueprint, agentIds);
+                unresolved = application.UnresolvedSkillBindings;
+                draft = draft is null && SameConfiguration(current, application.Draft) ? null : application.Draft;
+            }
 
             // Store order: blobs, then the agent index, then the record. Every write is create-if-absent, so a
             // retry after a partial failure finishes the job without overwriting anything.
             await store.WriteBlobsAsync(result.Blobs, token).ConfigureAwait(false);
             await store.WriteAgentIndexAsync(record, token).ConfigureAwait(false);
             var stored = await store.WriteRecordAsync(record, JsonOptions, token).ConfigureAwait(false);
-            // Null draft: every agent already exists unchanged, so there is nothing to review (200, no proposal).
+            // Nothing changed, but bindings that could not apply must still be visible in the response.
             if (draft is null)
-                return new ProjectAgentSuiteImportResult(stored, null);
+                return new ProjectAgentSuiteImportResult(stored, null) { UnresolvedSkillBindings = unresolved };
 
             ProjectConfiguration normalized;
             try
@@ -144,7 +178,7 @@ public sealed partial class ProjectsConfigService
             // Stage a pending proposal with the stable ID. It is only applied after review; nothing is activated.
             var proposal = await AddCastingProposalAsync(
                 context, caller, project, normalized, null, token, proposalId).ConfigureAwait(false);
-            return new ProjectAgentSuiteImportResult(stored, proposal);
+            return new ProjectAgentSuiteImportResult(stored, proposal) { UnresolvedSkillBindings = unresolved };
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -320,8 +354,8 @@ public sealed partial class ProjectsConfigService
 
     /// <summary>
     /// Adds charters and cast entries that do not exist yet. Returns null when all already exist unchanged.
-    /// An existing effective ID with different content is a conflict; it is never replaced. The blueprint
-    /// projection is retained on the record only; the blueprint catalog owner applies it to configuration.
+    /// An existing effective ID with different content is a conflict; it is never replaced. A supplied blueprint
+    /// projection is applied afterward through <see cref="ProjectBlueprintCatalog.ApplyBlueprint"/>.
     /// </summary>
     private static ProjectConfiguration? MergeAgentSuiteImport(
         ProjectConfiguration current,
@@ -355,6 +389,11 @@ public sealed partial class ProjectsConfigService
                 (charter, index) => new ProjectAgentCast(charter.AgentId, charter.Role, order + index))),
         };
     }
+
+    /// <summary>Compares configuration values, including the contents of immutable arrays.</summary>
+    private static bool SameConfiguration(ProjectConfiguration left, ProjectConfiguration right) =>
+        // Record equality compares immutable arrays by reference rather than by their contents.
+        JsonSerializer.Serialize(left, JsonOptions) == JsonSerializer.Serialize(right, JsonOptions);
 
     // Decodes the base64 archive. The size check runs on the text first, so oversized input is never decoded.
     private static byte[] DecodeAgentSuiteArchive(string archive)

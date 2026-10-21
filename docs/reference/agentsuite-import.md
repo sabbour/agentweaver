@@ -22,8 +22,8 @@ is the only source for built-in and uploaded team blueprints.
 - `format` is `oci-layout-tar` (a tar of an OCI image layout) or `content-tar-gzip` (the raw
   content layer). The decoded archive is limited to 16 MiB, and the request body to 24 MiB.
 - `toolConnections` and `blueprint` are optional. The response is `201 Created` with the import
-  record and the proposal, or `200 OK` with a null proposal when every agent already exists
-  unchanged.
+  record, the proposal, and `unresolvedSkillBindings`, or `200 OK` with a null proposal when every
+  agent already exists unchanged and the blueprint changes nothing.
 
 ## Validation
 
@@ -122,8 +122,24 @@ policy when none is bound.
 `skillBindings`, and `sourceBlueprintId`. When it's omitted, the import uses the `default`
 workflow, review policy, and sandbox profile, no skills, and the suite name.
 
-The record keeps all of it. Import doesn't change project configuration from blueprint data. The
-blueprint catalog applies workflows, the sandbox profile, and skill bindings to the proposal.
+The record keeps all of it. When the request includes `blueprint`, import applies it to the
+proposal through the same path as an inline blueprint:
+
+1. The projection must pass the 0.x blueprint rules. Each role must be a suite agent, and each
+   workflow must be available. Otherwise the import returns `400 invalid_blueprint` and stores
+   nothing. Only the `default` workflow is available today.
+2. Each workflow becomes a workflow reference under `sourceBlueprintId`, and `defaultWorkflow`
+   becomes the project default workflow.
+3. The `restricted` sandbox profile removes all project egress. `default` keeps it. A
+   `restricted` profile needs platform runtime defaults. If they aren't configured, the import
+   returns `409 platform_runtime_unconfigured`.
+4. Each bound role's effective agent ID is added to a skill that the project already installed
+   and pinned. Import never installs a skill or changes whether it's enabled.
+   `unresolvedSkillBindings` lists each binding that doesn't take effect, with a code:
+   `skill_not_installed`, `skill_not_pinned`, or `skill_disabled`.
+
+`reviewPolicy`, `displayName`, and `description` are kept on the record for display only. When
+`blueprint` is omitted, project configuration changes only for the new charters and casting.
 
 ## Regenerate the AgentSuite fixtures
 

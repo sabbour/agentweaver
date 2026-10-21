@@ -1,0 +1,14 @@
+{
+  "id": "blueprint-content-authoring",
+  "name": "Content Authoring",
+  "description": "A focused writing and research team for documents, articles, and long-form content.",
+  "roster": ["lead-researcher", "writer", "editor"],
+  "workflows": ["content-authoring"],
+  "review_policy": "default",
+  "sandbox_profile": "restricted",
+  "skill_bindings": [
+    { "role_id": "lead-researcher", "skills": ["research-source-quality"] },
+    { "role_id": "writer", "skills": ["writing-editing-fact-checking"] },
+    { "role_id": "editor", "skills": ["writing-editing-fact-checking"] }
+  ]
+}

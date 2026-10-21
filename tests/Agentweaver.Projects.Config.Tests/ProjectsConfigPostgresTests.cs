@@ -2200,6 +2200,77 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
+    public async Task BlueprintCastingProposalStagesInlineBlueprintAndRejectsUnavailableBuiltIn()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "blueprint-casting-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "blueprint-casting-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(owner, "Blueprint casting", CancellationToken.None);
+        var current = await service.GetProjectConfigurationAsync(
+            owner, project.ProjectId, null, CancellationToken.None);
+
+        // A built-in whose workflows aren't registered yet can't be staged.
+        var unavailable = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.CreateBlueprintCastingProposalAsync(
+                owner,
+                project.ProjectId,
+                current.Revision,
+                "blueprint-software-development",
+                null,
+                CancellationToken.None));
+        Assert.Equal("blueprint_unavailable", unavailable.Code);
+
+        // A valid inline blueprint (two catalog roles, the default workflow) is staged as a proposal.
+        var proposal = (await service.CreateBlueprintCastingProposalAsync(
+            owner,
+            project.ProjectId,
+            current.Revision,
+            null,
+            new BlueprintDefinition
+            {
+                Id = "inline-team",
+                Name = "Inline team",
+                Roster = ["backend-engineer", "qa-engineer"],
+                Workflows = ["default"],
+                ReviewPolicy = "default",
+                SandboxProfile = "default",
+            },
+            CancellationToken.None)).Proposal;
+
+        // The pending draft casts the roster and references the blueprint's workflow. The default sandbox
+        // leaves egress unset.
+        Assert.Equal(ProjectCastingProposalState.Pending, proposal.State);
+        Assert.Equal(new[] { "backend-engineer", "qa-engineer" }, proposal.Draft.Casting.Select(item => item.AgentId));
+        Assert.Equal(
+            new[] { new BlueprintWorkflowReference("inline-team", "default") },
+            proposal.Draft.BlueprintWorkflowReferences);
+        Assert.Equal("default", proposal.Draft.DefaultWorkflowId);
+        Assert.Null(proposal.Draft.EgressNarrowing);
+        // Staging a proposal doesn't change the live configuration.
+        var unchanged = await service.GetProjectConfigurationAsync(
+            owner, project.ProjectId, null, CancellationToken.None);
+        Assert.Equal(current.Revision, unchanged.Revision);
+
+        // Confirming applies the draft, including the new default workflow.
+        var confirmed = await service.ConfirmCastingProposalAsync(
+            owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+        Assert.Equal(ProjectCastingProposalState.Confirmed, confirmed.State);
+        Assert.Equal("default", confirmed.Result?.DefaultWorkflowId);
+    }
+
+    [Fact]
     public async Task ManualCastingProposalRejectsInvalidRolesAndRejectLeavesConfigurationUnchanged()
     {
         await using var db = CreateDbContext();
