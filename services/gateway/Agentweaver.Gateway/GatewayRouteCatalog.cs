@@ -202,6 +202,16 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
             "/api/projects/{projectId}/runs", "listProjectRuns", "List project runs",
             ["state", "cursor", "pageSize"], forwardTenantSelector: true);
+        // Stored Source Control reads make no provider call. Issues come from backlog content that issue
+        // sync stored. Pull requests come from records that runs wrote on create or reuse; a run-bound
+        // token is narrowed to its run.
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/source-control/issues",
+            "/api/projects/{projectId}/source-control/issues", "listProjectIssues", "List synced project issues",
+            ["state", "cursor", "pageSize"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/source-control/pull-requests",
+            "/api/projects/{projectId}/source-control/pull-requests", "listProjectPullRequests",
+            "List pull requests recorded by project runs",
+            ["state", "cursor", "pageSize"], forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);

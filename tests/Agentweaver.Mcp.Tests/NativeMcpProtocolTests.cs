@@ -76,7 +76,7 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
         });
         var tools = list.GetProperty("result").GetProperty("tools");
         foreach (var operation in new[] { "readIssueSync", "configureIssueSync", "createIssueSyncGrant",
-            "readIssueSyncGrant", "revokeIssueSyncGrant" })
+            "readIssueSyncGrant", "revokeIssueSyncGrant", "listProjectIssues", "listProjectPullRequests" })
         {
             var tool = Assert.Single(tools.EnumerateArray(),
                 tool => tool.GetProperty("name").GetString() == "agentweaver_" + operation);

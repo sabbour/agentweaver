@@ -135,6 +135,8 @@ Revision checks stay inside `body`; no idempotency header is required.
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
 | `listProjectRuns` | List accepted project runs, newest first. |
+| `listProjectIssues` | List synced repository issues stored in the project backlog. |
+| `listProjectPullRequests` | List pull requests that project runs recorded after migration 032 was applied. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |

@@ -72,6 +72,8 @@ internal static partial class GatewayOpenApi
             ["readSourceControlMergeIntent"] = C(null, "SourceControlMergeIntentView", "200"),
             ["executeSourceControlMergeIntent"] = C(null, "SourceControlMergeExecutionView", "200"),
             ["listProjectRuns"] = C(null, "ProjectRunPage", "200"),
+            ["listProjectIssues"] = C(null, "ProjectIssuePage", "200"),
+            ["listProjectPullRequests"] = C(null, "ProjectPullRequestPage", "200"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
             ["proposeOutcome"] = C("ProposeCoordinatorOutcomeRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readRunStatus"] = C(null, "OwnerRunStatus", "200"),
@@ -322,6 +324,20 @@ internal static partial class GatewayOpenApi
                 "The owner rejected an unknown or repeated query key, unknown state, invalid cursor, " +
                 "or page size outside 1 through 100.");
         }
+        else if (route.OperationId is "listProjectIssues" or "listProjectPullRequests")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected an unknown or repeated query key, unknown state, invalid cursor, " +
+                "or page size outside 1 through 100.");
+            responses["403"] = ProblemResponse(
+                "The token lacks api.read or names another project, or the caller lacks current Projects " +
+                "read authority. The response contains no items.");
+            responses["502"] = ProblemResponse("The Projects owner returned an invalid or failed authority response.");
+            if (route.OperationId == "listProjectPullRequests")
+                responses["503"] = ProblemResponse(
+                    "pull_request_records_unavailable: Orchestrator migration 032 isn't applied, so no pull " +
+                    "request records exist yet. This isn't an empty list.");
+        }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
             responses["400"] = ProblemResponse(
@@ -391,6 +407,34 @@ internal static partial class GatewayOpenApi
                 "the project, or tenant readProjects authority. A run-bound token sees only its own run. Runs are " +
                 "ordered by createdAt descending, then runId descending. The opaque cursor is valid only with " +
                 "the same project, state filter, and page size, and multiple pages are not a snapshot.";
+        }
+        else if (route.OperationId == "listProjectIssues")
+        {
+            description +=
+                " This read returns issues that periodic issue sync stored in the project backlog. It makes no " +
+                "source control provider call. It requires api.read and fresh Projects readProjects authority " +
+                "on the project or tenant, the same authority as the project backlog read, and rejects " +
+                "run-bound tokens. Archived tasks are not returned. The state filter is open, closed, or all, " +
+                "and the default is open. Issues are ordered by number descending, then taskId descending. " +
+                "The stored issue has no URL or author. The opaque cursor is valid only with the same project, " +
+                "state filter, and page size, and multiple pages are not a snapshot.";
+        }
+        else if (route.OperationId == "listProjectPullRequests")
+        {
+            description +=
+                " This read returns pull requests that project runs created or reused through Source Control, " +
+                "as recorded at that time. It makes no source control provider call. It isn't a complete " +
+                "pull request history: recording starts when Orchestrator migration 032 is applied, and " +
+                "coverage.recordedSince states that time. Older pull requests, and pull requests that no run " +
+                "created or reused, aren't listed. Before migration 032 is applied, the read returns 503 " +
+                "pull_request_records_unavailable instead of an empty list. It requires api.read and fresh " +
+                "Projects readProjects or readRunSelection authority on the project, or tenant readProjects " +
+                "authority. A run-bound token sees only its run's pull requests. The state filter is open, " +
+                "closed, merged, or all, and the default is open. State is the recorded state, not the live " +
+                "provider state. Each item keeps its runId, disposition (created or reused), and recordedAt. " +
+                "Items are ordered by recordedAt descending, then runId, pinId, and number descending. The " +
+                "opaque cursor is valid only with the same project, state filter, and page size, and multiple " +
+                "pages are not a snapshot.";
         }
         else if (route.OperationId.Contains("Casting", StringComparison.Ordinal))
         {
@@ -518,6 +562,24 @@ internal static partial class GatewayOpenApi
             return new { type = "boolean", @default = false };
         if (operationId == "listProjectRuns" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
+        if (operationId is "listProjectIssues" or "listProjectPullRequests" && name == "pageSize")
+            return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
+        if (operationId == "listProjectIssues" && name == "state")
+            return new
+            {
+                type = "string",
+                description = "The stored issue state to list.",
+                @enum = new[] { "open", "closed", "all" },
+                @default = "open",
+            };
+        if (operationId == "listProjectPullRequests" && name == "state")
+            return new
+            {
+                type = "string",
+                description = "The recorded pull request state to list.",
+                @enum = new[] { "open", "closed", "merged", "all" },
+                @default = "open",
+            };
         if (operationId == "listProjectRuns" && name == "state")
             return new
             {
@@ -830,7 +892,8 @@ internal static partial class GatewayOpenApi
             ["number", "htmlUrl", "state", "headBranch", "headSha", "baseBranch", "baseSha", "merged", "disposition"],
             ("number", Int()), ("htmlUrl", new { type = "string", format = "uri" }), ("state", Str()),
             ("headBranch", Str()), ("headSha", Str()), ("baseBranch", Str()), ("baseSha", Str()),
-            ("merged", Bool()), ("disposition", Enum("created", "reused", "observed"))),
+            ("merged", Bool()), ("disposition", Enum("created", "reused", "observed")),
+            ("title", Str())),
         ["SourceControlReview"] = Obj(["id", "reviewer", "state"],
             ("id", Int()), ("reviewer", Str()),
             ("state", Enum("approved", "changesRequested", "commented", "pending", "dismissed", "unknown")),
@@ -975,6 +1038,27 @@ internal static partial class GatewayOpenApi
             ("startedBy", Ref("ProjectRunStartedBy"))),
         ["ProjectRunPage"] = StrictObj(["projectId", "items", "nextCursor"],
             ("projectId", Str()), ("items", Arr(Ref("ProjectRunSummary"))), ("nextCursor", NullableStr())),
+        ["ProjectSourceControlRepository"] = StrictObj(["owner", "name"], ("owner", Str()), ("name", Str())),
+        ["ProjectIssueSummary"] = StrictObj(
+            ["taskId", "taskState", "providerId", "repository", "number", "title", "state", "createdAt", "updatedAt"],
+            ("taskId", Str()), ("taskState", Enum("backlog", "ready", "claimed")), ("providerId", Str()),
+            ("repository", Ref("ProjectSourceControlRepository")), ("number", Int()), ("title", Str()),
+            ("state", Enum("open", "closed")), ("createdAt", Date()), ("updatedAt", Date())),
+        ["ProjectIssuePage"] = StrictObj(["projectId", "items", "nextCursor"],
+            ("projectId", Str()), ("items", Arr(Ref("ProjectIssueSummary"))), ("nextCursor", NullableStr())),
+        ["ProjectPullRequestSummary"] = StrictObj(
+            ["providerId", "repository", "number", "title", "htmlUrl", "state", "headBranch", "headSha",
+             "baseBranch", "baseSha", "runId", "disposition", "recordedAt", "updatedAt"],
+            ("providerId", Str()), ("repository", Ref("ProjectSourceControlRepository")), ("number", Int()),
+            ("title", NullableStr()), ("htmlUrl", Str()), ("state", Enum("open", "closed", "merged")),
+            ("headBranch", Str()), ("headSha", Str()), ("baseBranch", Str()), ("baseSha", Str()),
+            ("runId", Str()), ("disposition", Enum("created", "reused")),
+            ("recordedAt", Date()), ("updatedAt", Date())),
+        ["ProjectPullRequestCoverage"] = StrictObj(["recordedSince", "includesEarlierPullRequests"],
+            ("recordedSince", Date()), ("includesEarlierPullRequests", Bool())),
+        ["ProjectPullRequestPage"] = StrictObj(["projectId", "coverage", "items", "nextCursor"],
+            ("projectId", Str()), ("coverage", Ref("ProjectPullRequestCoverage")),
+            ("items", Arr(Ref("ProjectPullRequestSummary"))), ("nextCursor", NullableStr())),
         ["AcceptRootRequest"] = Obj(["sessionId"], ("sessionId", Str())),
         ["ProposeCoordinatorOutcomeRequest"] = Obj(["expectedStateVersion", "idempotencyKey", "requestId", "specification"],
             ("expectedStateVersion", Int()), ("idempotencyKey", Str()), ("requestId", Str()),

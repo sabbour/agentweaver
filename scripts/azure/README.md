@@ -25,6 +25,17 @@ list, not contiguous numbering; the absent 017, 023 and 024 do not require
 placeholders. The Core list is 1-16, 18-22, 25, 26, 27. Version 027 requires
 026 only. Merge order is #2197, then #2186, then #2196.
 
+Orchestrator migration `032_source_control_pull_request_records.sql` adds the
+`source_control_pull_requests` table for the project pull request list. It
+requires migration 012. It is an **unapplied code-only migration** that is
+**not** in the Core list, the default migrator, startup, or the P1 initializer,
+so the plan hash above doesn't change. Startup verification accepts a schema
+with or without it, but not a partial apply. The only apply path is
+`CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync`, which nothing calls
+yet. Applying it needs separate live approval and the planned grant of exactly
+`SELECT, INSERT, UPDATE` on `orchestrator.source_control_pull_requests`. Until
+then, the pull request list returns `503 pull_request_records_unavailable`.
+
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
 open/closed lifecycle and a unique repository issue identity. It requires
 migration 021 and has no schema dependency on migration 025, which requires
