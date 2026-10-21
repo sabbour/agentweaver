@@ -107,24 +107,22 @@ describe('useRunAttention', () => {
 
 describe('notificationAttentionItems', () => {
   const base: UserNotification = {
-    notificationId: 'n1', source: 'pendingGate', projectId: 'p1', runId: 'r1', sessionId: 's1',
+    notificationId: 'n1', projectId: 'p1', runId: 'r1', sessionId: 's1',
     requestId: 'q1', kind: 'awaitingInput', prompt: 'Which branch?', createdAt: '2026-10-20T00:00:00Z',
-    gateKind: 'question', stateVersion: 3, updatedAt: '2026-10-20T00:00:00Z', promotionId: null, taskCount: null,
+    gateKind: 'question', stateVersion: 3, updatedAt: '2026-10-20T00:00:00Z',
   };
 
   it('keeps pending gates and drops backlog promotion notices', () => {
-    const promoted: UserNotification = {
-      ...base, notificationId: 'n2', source: 'backlogPromoted', requestId: null, kind: null,
-      gateKind: null, stateVersion: null, promotionId: 'pr1', taskCount: 2,
+    const promoted = {
+      ...base, notificationId: 'n2', source: 'backlogPromoted',
+      promotionId: 'pr1', taskCount: 2,
     };
     const items = notificationAttentionItems({ items: [base, promoted], count: 2, nextCursor: null });
     expect(items).toEqual([expect.objectContaining({ notificationId: 'n1', requestId: 'q1', stateVersion: 3 })]);
   });
 
-  it('treats a gate from an owner without source as a pending gate', () => {
-    const legacy = { ...base } as Partial<UserNotification>;
-    delete legacy.source;
-    const items = notificationAttentionItems({ items: [legacy as UserNotification], count: 1, nextCursor: null });
+  it('accepts the canonical pending-gate contract without a source field', () => {
+    const items = notificationAttentionItems({ items: [base], count: 1, nextCursor: null });
     expect(items.map((item) => item.notificationId)).toEqual(['n1']);
   });
 });

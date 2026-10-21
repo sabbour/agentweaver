@@ -138,9 +138,8 @@ export function pinnedDecisionFromSearch(params: URLSearchParams): { requestId: 
 }
 
 /**
- * True for a pending-gate notification with a complete decision key. Owners that predate
- * `source` send only gates, so a missing source counts as `pendingGate`. Backlog-promotion
- * notices are never Needs input.
+ * The canonical owner returns pending gates without a source field. Ignore unrelated
+ * sources defensively if a mixed inbox payload reaches this UI adapter.
  */
 export function isPendingGateNotification(item: UserNotification): item is UserNotification & {
   requestId: string;

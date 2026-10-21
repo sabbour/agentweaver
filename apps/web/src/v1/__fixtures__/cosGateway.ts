@@ -20,13 +20,25 @@ export interface RecordedRequest {
   body: unknown;
 }
 
+/** Test-only mixed inbox payload. The canonical notification owner returns pending gates only. */
+type FixtureNotification = Omit<UserNotification, 'requestId' | 'kind' | 'gateKind' | 'stateVersion'> & {
+  requestId: UserNotification['requestId'] | null;
+  kind: UserNotification['kind'] | null;
+  gateKind: UserNotification['gateKind'] | null;
+  stateVersion: UserNotification['stateVersion'] | null;
+  source?: 'pendingGate' | 'backlogPromoted';
+  promotionId?: string | null;
+  taskCount?: number | null;
+  dismissed?: boolean;
+};
+
 export interface FakeGatewayState {
   projects: ProjectSummary[];
   runs: Record<string, ProjectRunSummary[]>;
   conversations: ChiefOfStaffConversation[];
   priorities: ChiefOfStaffPriority[];
   orderRevision: number;
-  notifications: Array<UserNotification & { dismissed?: boolean }>;
+  notifications: FixtureNotification[];
 }
 
 /**
@@ -63,7 +75,7 @@ export function priority(priorityId: string, outcome: string, overrides: Partial
   };
 }
 
-export function notification(notificationId: string, overrides: Partial<UserNotification & { dismissed?: boolean }> = {}): UserNotification & { dismissed?: boolean } {
+export function notification(notificationId: string, overrides: Partial<FixtureNotification> = {}): FixtureNotification {
   return {
     notificationId, projectId: 'p1', runId: 'r-blocked', sessionId: 's1', requestId: `req-${notificationId}`,
     source: 'pendingGate' as const, promotionId: null, taskCount: null,
@@ -140,9 +152,9 @@ export function createFakeGateway(seed: Partial<FakeGatewayState> = {}) {
       const items = state.notifications
         .filter((item) => (!projectId || item.projectId === projectId) && (includeDismissed || !item.dismissed))
         .map((item) => {
-          const copy: UserNotification & { dismissed?: boolean } = { ...item };
+          const copy = { ...item };
           delete copy.dismissed;
-          return copy as UserNotification;
+          return copy;
         });
       return json(200, { items, count: items.length, nextCursor: null });
     }
