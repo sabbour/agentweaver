@@ -6,25 +6,25 @@
     {
       "id": "Agentweaver.Abstractions",
       "kind": "contract",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "project": "packages/Agentweaver.Abstractions/Agentweaver.Abstractions.csproj"
     },
     {
       "id": "Agentweaver.Providers",
       "kind": "library",
-      "version": "1.0.2",
+      "version": "1.1.0",
       "project": "packages/Agentweaver.Providers/Agentweaver.Providers.csproj"
     },
     {
       "id": "Agentweaver.SourceControl",
       "kind": "library",
-      "version": "1.0.2",
+      "version": "1.1.0",
       "project": "packages/Agentweaver.SourceControl/Agentweaver.SourceControl.csproj"
     },
     {
       "id": "Agentweaver.Orchestrator.Core",
       "kind": "library",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "project": "services/orchestrator/Agentweaver.Orchestrator.Core/Agentweaver.Orchestrator.Core.csproj"
     },
     {
@@ -42,13 +42,13 @@
     {
       "id": "Agentweaver.Identity",
       "kind": "library",
-      "version": "1.3.0",
+      "version": "1.4.0",
       "project": "packages/Agentweaver.Identity/Agentweaver.Identity.csproj"
     },
     {
       "id": "Agentweaver.AgentRuntime",
       "kind": "library",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "project": "packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj"
     },
     {
@@ -78,19 +78,19 @@
     {
       "id": "Agentweaver.Identity.Broker",
       "kind": "service",
-      "version": "1.1.4",
+      "version": "1.2.0",
       "project": "services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj"
     },
     {
       "id": "Agentweaver.EventsAndSessions",
       "kind": "service",
-      "version": "1.1.3",
+      "version": "1.2.0",
       "project": "services/events-and-sessions/Agentweaver.EventsAndSessions/Agentweaver.EventsAndSessions.csproj"
     },
     {
       "id": "Agentweaver.Gateway",
       "kind": "service",
-      "version": "1.1.2",
+      "version": "1.2.0",
       "project": "services/gateway/Agentweaver.Gateway/Agentweaver.Gateway.csproj"
     },
     {
@@ -102,31 +102,31 @@
     {
       "id": "Agentweaver.Web",
       "kind": "service",
-      "version": "1.0.5",
+      "version": "1.1.0",
       "project": "apps/web/package.json"
     },
     {
       "id": "Agentweaver.Orchestrator",
       "kind": "service",
-      "version": "1.1.2",
+      "version": "1.2.0",
       "project": "services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj"
     },
     {
       "id": "Agentweaver.Environment",
       "kind": "service",
-      "version": "1.1.4",
+      "version": "1.2.0",
       "project": "services/environment/Agentweaver.Environment/Agentweaver.Environment.csproj"
     },
     {
       "id": "Agentweaver.Knowledge",
       "kind": "service",
-      "version": "1.0.4",
+      "version": "1.1.0",
       "project": "services/knowledge/Agentweaver.Knowledge/Agentweaver.Knowledge.csproj"
     },
     {
       "id": "Agentweaver.Projects.Config",
       "kind": "service",
-      "version": "1.1.2",
+      "version": "1.2.0",
       "project": "services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj"
     },
     {
