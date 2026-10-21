@@ -174,8 +174,17 @@ internal sealed class NativeUsageReceiptConsumer(
         RuntimeUsageSourceReceiptContract.Validate(receipt);
         // An Azure BYOK claim enters the ledger only with consistent owner-proven source facts.
         // Usage without a dispatch message ID is recorded as Unpriced; it is never rejected or dropped.
+        // Only dispatch-correlated usage that passes RequireTrustedAzureByok can be priced.
+        var trustedAzureByok = false;
         if (RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt))
+        {
             RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(receipt);
+            if (receipt.Usage.A2AMessageId is { } dispatchId && dispatchId != Guid.Empty)
+            {
+                RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt);
+                trustedAzureByok = true;
+            }
+        }
         var sourceJson = JsonSerializer.Serialize(receipt, JsonOptions);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
@@ -207,7 +216,7 @@ internal sealed class NativeUsageReceiptConsumer(
             var pinned = await ReadOrPinBindingAsync(connection, transaction, usage.Attribution.TenantId,
                 usage.Attribution.ProjectId, usage.Attribution.RunId, usage.ModelBinding.MeterSource, cancellationToken)
                 .ConfigureAwait(false);
-            var price = Price(usage, pinned, RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt));
+            var price = Price(usage, pinned, trustedAzureByok);
             var appended = await ledger.AppendWithinTransactionAsync(
                 connection, transaction, usage, pinned.Binding, price, cancellationToken).ConfigureAwait(false);
             acknowledgment = new(receipt.ReceiptId, appended.Receipt, false);

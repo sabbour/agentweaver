@@ -522,6 +522,20 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UncorrelatedAzureByokUsageIsAdmittedButNeverPricedFromAnAzureRateCard()
+    {
+        var (consumer, _, _) = AzureConsumer(1.25m, 5.75m);
+        var accepted = await consumer.AppendAsync(
+            AzureByokReceipt(withoutA2AMessageId: true), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, accepted.Accounting.Disposition);
+        Assert.Equal("byok-provider-unpriced", accepted.Accounting.UnpricedReason);
+        Assert.Null(accepted.Accounting.Amount);
+        var evidence = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", new(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD", null, []));
+        Assert.Equal(new UsageSpendTotal(0m, 0, 1), evidence.Run);
+    }
+
+    [Fact]
     public async Task NativeConsumerAuthorityFailureAfterLedgerWaitRollsBackEveryAccountingArtifact()
     {
         var receipt = NativeReceipt();
@@ -1784,7 +1798,8 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         return (consumer, azure, pinned.Value!);
     }
 
-    private static RuntimeUsageSourceReceipt AzureByokReceipt(string providerType = "azure")
+    private static RuntimeUsageSourceReceipt AzureByokReceipt(
+        string providerType = "azure", bool withoutA2AMessageId = false)
     {
         var hosted = NativeReceipt();
         var registration = hosted.Registration with
@@ -1812,7 +1827,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             sdkEvent, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
             17, 11, 0, 0, 3, null, 12.5m)
         {
-            A2AMessageId = Guid.NewGuid()
+            A2AMessageId = withoutA2AMessageId ? null : Guid.NewGuid()
         };
         var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
         return new(1, Guid.NewGuid(), registration, usage,
