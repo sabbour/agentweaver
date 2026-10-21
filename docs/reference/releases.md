@@ -18,35 +18,39 @@ digests or release evidence, so it is not an accepted platform release.
 
 | Component | Kind | Draft version |
 | --- | --- | --- |
-| `Agentweaver.Abstractions` | Contract | `1.1.1` |
-| `Agentweaver.Providers` | Library | `1.0.2` |
-| `Agentweaver.SourceControl` | Library | `1.0.2` |
-| `Agentweaver.Orchestrator.Core` | Library | `1.1.1` |
+| `Agentweaver.Abstractions` | Contract | `1.2.0` |
+| `Agentweaver.Providers` | Library | `1.1.0` |
+| `Agentweaver.SourceControl` | Library | `1.1.0` |
+| `Agentweaver.Orchestrator.Core` | Library | `1.2.0` |
 | `Agentweaver.Persistence.Postgres` | Library | `1.0.2` |
 | `Agentweaver.Secrets.AzureKeyVault` | Library | `1.0.2` |
-| `Agentweaver.Identity` | Library | `1.2.0` |
-| `Agentweaver.AgentRuntime` | Library | `1.1.1` |
-| `Agentweaver.AgentHost` | Service | `1.0.2` |
+| `Agentweaver.Identity` | Library | `1.4.0` |
+| `Agentweaver.AgentRuntime` | Library | `1.2.0` |
+| `Agentweaver.AgentHost` | Service | `1.0.3` |
 | `Agentweaver.Telemetry` | Library | `1.0.2` |
 | `Agentweaver.Telemetry.AzureMonitor` | Library | `1.0.2` |
 | `Agentweaver.ObjectStore.AzureBlob` | Library | `1.0.2` |
-| `Agentweaver.Identity.Broker` | Service | `1.1.3` |
-| `Agentweaver.EventsAndSessions` | Service | `1.1.2` |
-| `Agentweaver.Gateway` | Service | `1.1.1` |
-| `Agentweaver.Mcp` | Service | `1.0.2` |
-| `Agentweaver.Web` | Service | `1.0.4` |
-| `Agentweaver.Orchestrator` | Service | `1.1.1` |
-| `Agentweaver.Environment` | Service | `1.1.3` |
-| `Agentweaver.Knowledge` | Service | `1.0.3` |
-| `Agentweaver.Projects.Config` | Service | `1.1.1` |
+| `Agentweaver.Identity.Broker` | Service | `1.2.0` |
+| `Agentweaver.EventsAndSessions` | Service | `1.2.0` |
+| `Agentweaver.Gateway` | Service | `1.2.0` |
+| `Agentweaver.Mcp` | Service | `1.0.3` |
+| `Agentweaver.Web` | Service | `1.1.0` |
+| `Agentweaver.Orchestrator` | Service | `1.2.0` |
+| `Agentweaver.Environment` | Service | `1.2.0` |
+| `Agentweaver.Knowledge` | Service | `1.1.0` |
+| `Agentweaver.Projects.Config` | Service | `1.2.0` |
 | `Agentweaver.FoundationProbe` | Acceptance-only service | `0.0.3` |
 | `Agentweaver.Providers.Storage.AzureFiles` | Library | `1.0.4` |
-| `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `1.1.3` |
+| `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `1.1.4` |
 
 The manifest pins project-reference compatibility but does not yet pin service
 images. Its compatibility table contains 53 direct dependency relationships.
 The Foundation Probe is not a product service; `--platform-only` excludes it
 from product preparation and publication.
+
+Identity Broker `1.2.0` includes the EF migration
+`20261021000100_AddIssueSyncGrants`. Publishing the image does not run the
+migration or update the database.
 
 ## Validate and apply a version plan
 
