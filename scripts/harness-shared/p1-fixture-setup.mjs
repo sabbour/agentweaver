@@ -1,50 +1,10 @@
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { redact } from './redaction.mjs';
 
 /** Create invocation-bound API and Projects Config fixtures for a bounded P1 surface journey. */
-const SERVICE_COMPONENT = 'Agentweaver.Projects.Config';
-const SERVICE_NAME = 'projects-config';
-const COMMAND_DLL = 'Agentweaver.Projects.Config.dll';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const runnerOwnedFixtureInputs = new WeakSet();
-const SETUP_ERROR_CODES = new Set([
-  'forbidden', 'invalid_project_setup_request', 'setup_invocation_conflict',
-  'cleanup_invocation_conflict', 'cleanup_revision_conflict',
-]);
-
-/** Keep only known product codes and fixed transport classes, never raw process output or errors. */
-export function summarizePrivilegedSetupCommand(result) {
-  const stderr = typeof result.stderr === 'string' ? result.stderr : '';
-  const codes = [...stderr.matchAll(/^Privileged project setup failed \(([a-z_]+)\)\.\r?$/gm)]
-    .map(match => match[1]);
-  const productErrorCode = codes.length === 1 && SETUP_ERROR_CODES.has(codes[0]) ? codes[0] : null;
-  let stderrClass = stderr.trim() ? 'unrecognized' : 'empty';
-  if (productErrorCode) stderrClass = 'product-code';
-  else if (/^Privileged project setup failed; no credential or exception detail was written\.\r?$/m.test(stderr)) {
-    stderrClass = 'product-unclassified';
-  } else if (/Error from server \(Forbidden\)/.test(stderr)) stderrClass = 'kubectl-forbidden';
-  else if (/timed out|Timeout|deadline exceeded/i.test(stderr)) stderrClass = 'timeout';
-  else if (/unable to upgrade connection|error dialing backend|container not found|pod .* not found/i.test(stderr)) {
-    stderrClass = 'exec-transport';
-  }
-  return {
-    productErrorCode,
-    kubectlExitCode: Number.isInteger(result.status) ? result.status : null,
-    processErrorClass: result.error
-      ? (result.error.code === 'ETIMEDOUT' ? 'timeout'
-        : result.error.code === 'ENOENT' ? 'executable-not-found'
-          : result.error.code === 'ENOBUFS' ? 'output-limit' : 'process-error')
-      : null,
-    stderrClass,
-  };
-}
-
-/** Require a nonempty string field before using it in owner or setup requests. */
-function requireString(value, label) {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`The ${label} is required.`);
-  return value;
-}
+const PROBLEM_CODE = /^[a-z][a-z0-9_]{0,63}$/;
 
 /** Derive a stable, valid UUID from the persisted invocation and a resource purpose. */
 function stableUuid(invocationId, purpose) {
@@ -60,6 +20,11 @@ export function createP1IdempotencyKey(invocationId) {
   return stableUuid(invocationId, 'surface-idempotency');
 }
 
+/** Return the project name that binds a P1 fixture project to its persisted invocation. */
+export function p1FixtureProjectName(invocationId) {
+  return `p1-${invocationId.toLowerCase()}`;
+}
+
 /** Return whether the exact input object was created by this runner's fixture setup. */
 export function isP1RunnerOwnedFixtureInput(input) {
   return runnerOwnedFixtureInputs.has(input);
@@ -68,7 +33,15 @@ export function isP1RunnerOwnedFixtureInput(input) {
 function requireResponse(api, operationId, call, statuses) {
   if (!api.operations.has(operationId) || call?.operationId !== operationId
     || !statuses.includes(call.status)) {
-    throw new Error(`The P1 owner ${operationId} call returned an unexpected HTTP result.`);
+    const failure = new Error(`The P1 owner ${operationId} call returned an unexpected HTTP result.`);
+    // Keep only the HTTP status and a well-formed problem code; never keep a raw response body.
+    failure.httpEvidence = {
+      operationId,
+      status: Number.isInteger(call?.status) ? call.status : null,
+      problemCode: PROBLEM_CODE.test(call?.transientResponseBody?.code ?? '')
+        ? call.transientResponseBody.code : null,
+    };
+    throw failure;
   }
   return call.transientResponseBody;
 }
@@ -89,238 +62,51 @@ function parametersFor(api, operationId, values) {
 }
 
 /** Invoke one discovered owner operation and validate its actual status receipt. */
-async function invoke(api, operationId, values, body, statuses) {
+async function invoke(api, operationId, values, body, statuses, query) {
   const call = await api.invoke(operationId, {
     pathParameters: parametersFor(api, operationId, values),
+    ...(query === undefined ? {} : { query }),
     ...(body === undefined ? {} : { body }),
   });
   return { call, value: requireResponse(api, operationId, call, statuses) };
 }
 
-/** Require privileged setup and readback receipts to agree on the invocation and every created owner revision. */
-function requireSetupResult(result, request, actor) {
-  const setup = result?.setup;
-  const readback = result?.setupReadback;
-  if (result?.operationKind !== 'setup' || !setup || !readback
-    || setup.invocationId?.toLowerCase() !== request.invocationId.toLowerCase()
-    || setup.issuer !== actor.issuer || setup.subject !== actor.actorId
-    || setup.tenantId !== actor.tenantId
-    || !UUID.test(setup.membershipId ?? '')
-    || !UUID.test(setup.assignmentId ?? '')
-    || !UUID.test(setup.ownerAssignmentId ?? '')
-    || !UUID.test(setup.authorityAuditEventId ?? '')
-    || !UUID.test(setup.ownerAuthorityAuditEventId ?? '')
-    || !setup.projectId || setup.createdByActorId !== actor.actorId
-    || !Number.isSafeInteger(setup.membershipRevision) || setup.membershipRevision < 1
-    || !Number.isSafeInteger(setup.projectRevision) || setup.projectRevision < 1
-    || !Number.isSafeInteger(setup.projectConfigurationRevision) || setup.projectConfigurationRevision < 1
-    || !Number.isSafeInteger(setup.assignmentRevision) || setup.assignmentRevision < 1
-    || !Number.isSafeInteger(setup.ownerAssignmentRevision) || setup.ownerAssignmentRevision < 1
-    || readback.projectExists !== true || readback.projectState !== 'active'
-    || readback.projectRevision !== setup.projectRevision
-    || readback.projectConfigurationRevision !== setup.projectConfigurationRevision
-    || readback.initialConfigurationExists !== true || readback.assignmentExists !== true
-    || readback.assignmentState !== 'active' || readback.assignmentRevision !== setup.assignmentRevision
-    || readback.authorityAuditExists !== true
-    || readback.ownerAssignmentId !== setup.ownerAssignmentId
-    || readback.ownerAssignmentExists !== true || readback.ownerAssignmentState !== 'active'
-    || readback.ownerAssignmentRevision !== setup.ownerAssignmentRevision
-    || readback.ownerAuthorityAuditExists !== true) {
-    throw new Error('Projects Config did not return matching invocation-owned project and grant readbacks.');
+/** Require a role-assignment receipt for the exact project, actor, role, state, and revision. */
+function requireAssignment(assignment, projectId, actor, role, state, revision, assignmentId) {
+  if (!UUID.test(assignment?.assignmentId ?? '')
+    || (assignmentId && assignment.assignmentId !== assignmentId)
+    || assignment.projectId !== projectId || assignment.principalId !== actor.actorId
+    || assignment.role !== role || assignment.state !== state
+    || assignment.revision !== revision || assignment.grantedBy !== actor.actorId
+    || (state === 'revoked' && assignment.revokedBy !== actor.actorId)) {
+    throw new Error(`Projects Config did not return the exact ${state} ${role} assignment receipt.`);
   }
-  return setup;
+  return assignment;
 }
 
-/** Require a single source-attested Projects Config Deployment, ReplicaSet, and Pod receipt. */
-function sourceProjectsConfigEvidence(sourceEvidence, sourceReceipt) {
-  const services = sourceEvidence?.services?.services;
-  const matches = services?.filter(service => service.componentId === SERVICE_COMPONENT) ?? [];
-  if (sourceEvidence?.services?.status !== 'passed' || matches.length !== 1) {
-    throw new Error('The attested Projects Config Deployment and Pod evidence is missing.');
+/** Require a project summary for the exact invocation-owned project, state, and revision. */
+function requireProject(project, invocationId, state, projectId = null, revision = null) {
+  if (typeof project?.projectId !== 'string' || !project.projectId
+    || (projectId && project.projectId !== projectId)
+    || project.name !== p1FixtureProjectName(invocationId) || project.state !== state
+    || !Number.isSafeInteger(project.revision) || project.revision < 1
+    || (revision !== null && project.revision !== revision)
+    || !Number.isSafeInteger(project.configurationRevision) || project.configurationRevision < 1) {
+    throw new Error(`Projects Config did not return the exact ${state} fixture project.`);
   }
-  const service = matches[0];
-  const pod = service.pods?.length === 1 ? service.pods[0] : null;
-  if (!service.deployment?.uid || !service.replicaSet?.uid || !pod?.uid || !pod?.name
-    || service.deployment.desiredReplicas !== 1
-    || pod.registry?.sourceSha !== sourceReceipt.sourceSha
-    || pod.registry?.sourceTree !== sourceReceipt.sourceTree
-    || !pod.imageID) {
-    throw new Error('The Projects Config evidence is not bound to one current source-attested Pod.');
-  }
-  return { service, pod };
+  return project;
 }
 
-/** Find controller references that bind a workload object to the expected owner UID. */
-function ownerReference(resource, kind, uid) {
-  return (resource?.metadata?.ownerReferences ?? []).filter(reference =>
-    reference.kind === kind && reference.uid === uid && reference.controller === true);
-}
-
-/** Parse a successful kubectl list response and reject missing or malformed item arrays. */
-function requireListResult(result, label) {
-  if (result.error || result.status !== 0) throw new Error(`Could not attest the current Projects Config ${label}.`);
-  let value;
-  try {
-    value = JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`Kubernetes returned invalid Projects Config ${label}.`);
-  }
-  if (!Array.isArray(value?.items)) throw new Error(`Kubernetes returned no Projects Config ${label} list.`);
-  return value.items;
-}
-
-/** Run one bounded kubectl read or pod-exec command with the selected cluster and namespace. */
-function kubectl({ executable, spawnSyncImpl, context, namespace, args }) {
-  return spawnSyncImpl(executable, [
-    '--context', context,
-    '--namespace', namespace,
-    '--request-timeout=15s',
-    ...args,
-  ], {
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 20000,
-    maxBuffer: 8 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'pipe'],
+/** Keep only allowlisted failure evidence for a mutating setup or cleanup request. */
+function recordRequestFailure(state, step, error) {
+  const evidence = error?.httpEvidence;
+  state.requestFailures.push({
+    step,
+    operationId: typeof evidence?.operationId === 'string' ? evidence.operationId : null,
+    status: Number.isInteger(evidence?.status) ? evidence.status : null,
+    problemCode: typeof evidence?.problemCode === 'string' ? evidence.problemCode : null,
   });
 }
-
-/** Match the attested Projects Config Deployment, ReplicaSet, and sole Pod to a fresh Kubernetes list. */
-function verifyLiveProjectsConfig(items, expected) {
-  const deployments = items.filter(item =>
-    item.kind === 'Deployment' && item.metadata?.name === SERVICE_NAME);
-  const replicaSets = items.filter(item =>
-    item.kind === 'ReplicaSet' && ownerReference(item, 'Deployment', expected.service.deployment.uid).length === 1
-    && (item.spec?.replicas ?? 0) > 0);
-  const pods = items.filter(item =>
-    item.kind === 'Pod' && ownerReference(item, 'ReplicaSet', expected.service.replicaSet.uid).length === 1);
-  const deployment = deployments[0];
-  const replicaSet = replicaSets[0];
-  const pod = pods[0];
-  const container = deployment?.spec?.template?.spec?.containers?.[0];
-  if (deployments.length !== 1 || replicaSets.length !== 1 || pods.length !== 1
-    || deployment.metadata?.uid !== expected.service.deployment.uid
-    || deployment.metadata?.generation !== expected.service.deployment.generation
-    || deployment.spec?.replicas !== 1
-    || deployment.status?.observedGeneration !== deployment.metadata.generation
-    || deployment.status?.readyReplicas !== 1 || deployment.status?.availableReplicas !== 1
-    || deployment.status?.updatedReplicas !== 1
-    || container?.name !== SERVICE_NAME || container.image !== expected.pod.image
-    || replicaSet.metadata?.uid !== expected.service.replicaSet.uid
-    || replicaSet.metadata?.name !== expected.service.replicaSet.name
-    || pod.metadata?.uid !== expected.pod.uid || pod.metadata?.name !== expected.pod.name) {
-    throw new Error('The live Projects Config Deployment, ReplicaSet, or sole Pod differs from its source attestation.');
-  }
-  return { deployment, replicaSet, pod };
-}
-
-/** Require a fresh Pod read to preserve its identity, owner, readiness, and image ID. */
-function verifyFreshPod(pod, expected, replicaSet) {
-  const container = pod?.spec?.containers?.[0];
-  const containerStatus = pod?.status?.containerStatuses?.[0];
-  const ready = pod?.status?.conditions?.some(condition =>
-    condition.type === 'Ready' && condition.status === 'True');
-  if (pod?.kind !== 'Pod' || pod.metadata?.uid !== expected.pod.uid
-    || pod.metadata?.name !== expected.pod.name || pod.status?.phase !== 'Running' || ready !== true
-    || ownerReference(pod, 'ReplicaSet', replicaSet.metadata.uid).length !== 1
-    || container?.name !== SERVICE_NAME || container.image !== expected.pod.image
-    || containerStatus?.ready !== true || containerStatus.imageID !== expected.pod.imageID) {
-    throw new Error('The freshly observed Projects Config Pod no longer matches its source attestation.');
-  }
-}
-
-/**
- * Verify the attested Projects Config workload, then send a setup or cleanup request to its pod.
- * A command or receipt failure after execution begins is marked indeterminate so callers reconcile it.
- */
-export async function executePrivilegedProjectSetup({
-  context,
-  namespace,
-  sourceEvidence,
-  sourceReceipt,
-  accessToken,
-  request,
-  executable = 'kubectl',
-  spawnSyncImpl = spawnSync,
-}) {
-  requireString(context, 'Kubernetes context');
-  requireString(namespace, 'Kubernetes namespace');
-  requireString(accessToken, 'privileged Projects Config access token');
-  if (!request || !['setup', 'cleanup'].includes(request.operationKind)
-    || !UUID.test(request.invocationId ?? '')) {
-    throw new Error('The privileged Projects Config operation is invalid.');
-  }
-  const expected = sourceProjectsConfigEvidence(sourceEvidence, sourceReceipt);
-  const listed = requireListResult(kubectl({
-    executable,
-    spawnSyncImpl,
-    context,
-    namespace,
-    args: ['get', 'deployments,replicasets,pods', '--output=json'],
-  }), 'workload list');
-  const live = verifyLiveProjectsConfig(listed, expected);
-
-  const freshResult = kubectl({
-    executable,
-    spawnSyncImpl,
-    context,
-    namespace,
-    args: ['get', 'pod', expected.pod.name, '--output=json'],
-  });
-  if (freshResult.error || freshResult.status !== 0) {
-    throw new Error('Could not freshly re-read the attested Projects Config Pod before setup.');
-  }
-  let freshPod;
-  try {
-    freshPod = JSON.parse(freshResult.stdout);
-  } catch {
-    throw new Error('Kubernetes returned invalid fresh Projects Config Pod evidence.');
-  }
-  verifyFreshPod(freshPod, expected, live.replicaSet);
-
-  const stdin = JSON.stringify({
-    version: 1,
-    accessToken,
-    invocationId: request.invocationId,
-    operationKind: request.operationKind,
-    tenantId: request.tenantId,
-    expectedProjectRevision: request.expectedProjectRevision ?? null,
-    expectedAssignmentRevision: request.expectedAssignmentRevision ?? null,
-  });
-  const args = [
-    '--context', context,
-    '--namespace', namespace,
-    '--request-timeout=30s',
-    'exec', '-i', expected.pod.name,
-    '--container=projects-config',
-    '--',
-    'dotnet', COMMAND_DLL, '--privileged-project-setup',
-  ];
-  const result = spawnSyncImpl(executable, args, {
-    encoding: 'utf8',
-    windowsHide: true,
-    timeout: 30000,
-    maxBuffer: 1024 * 1024,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    input: stdin,
-  });
-  if (result.error || result.status !== 0) {
-    const commandEvidence = summarizePrivilegedSetupCommand(result);
-    const failure = new Error(`Projects Config privileged setup did not return a successful command result (${commandEvidence.productErrorCode ?? commandEvidence.stderrClass}).`);
-    failure.commandEvidence = commandEvidence;
-    failure.indeterminate = true;
-    throw failure;
-  }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    const failure = new Error('Projects Config privileged setup returned no valid JSON receipt.');
-    failure.commandEvidence = summarizePrivilegedSetupCommand(result);
-    failure.indeterminate = true;
-    throw failure;
-  }
-}
-
 /** Require a live Projects authorization context for the exact actor and optional run binding. */
 function requireContext(context, actor, binding = null) {
   if (context?.contractVersion !== 1 || context.issuer !== actor.issuer
@@ -502,29 +288,32 @@ function creationReceipt(resourceType, resourceId, invocationId, ownerFence, cre
 
 /**
  * Create a setup project, accepted run selection, root session, and journey-specific owned resources.
- * Returns a runner-marked input and cleanup handle; setup failures retain enough state for reconciliation.
+ * Setup and cleanup use only the public Projects API with the signed-in tenant admin's setup client.
+ * Any failure after a mutating setup or cleanup request is sent is indeterminate: it is never retried
+ * and no cleanup runs, so an operator can review the invocation-named project first.
  */
 export async function createP1Fixture(plan, {
   api,
   invocationId,
-  setupToken,
-  sourceEvidence,
-  sourceReceipt,
-  runPrivilegedSetup = executePrivilegedProjectSetup,
   acquireRunIdentity,
   now = () => Date.now(),
   createId,
-  setupContext,
-  namespace,
-  kubectl = 'kubectl',
-  spawnSyncImpl = spawnSync,
 }) {
   if (!UUID.test(invocationId ?? '')) throw new Error('A persisted P1 setup invocation ID is required.');
   if (typeof acquireRunIdentity !== 'function') {
     throw new Error('An already-authorized run identity provider is required.');
   }
   const environment = plan.environment;
-  const state = { invocationId, setup: null, setupAttempted: false, selection: null, cleanup: null, commandFailures: [] };
+  const state = {
+    invocationId,
+    projectName: p1FixtureProjectName(invocationId),
+    setup: null,
+    setupAttempted: false,
+    setupIndeterminate: false,
+    selection: null,
+    cleanup: null,
+    requestFailures: [],
+  };
   const actor = {
     actorId: environment.actorId,
     tenantId: environment.tenantId,
@@ -535,80 +324,107 @@ export async function createP1Fixture(plan, {
   const rootSessionId = idFor('root-session');
   const childSessionId = plan.journey === 'message' ? idFor('child-session') : null;
 
-  const runSetup = async operationKind => {
-    if (!UUID.test(operationKind.invocationId ?? '')
-      || operationKind.invocationId !== invocationId) {
-      throw new Error('The setup operation changed its persisted invocation ID.');
-    }
-    const request = {
-      version: 1,
-      invocationId,
-      operationKind: operationKind.operationKind,
-      tenantId: actor.tenantId,
-      expectedProjectRevision: operationKind.expectedProjectRevision ?? null,
-      expectedAssignmentRevision: operationKind.expectedAssignmentRevision ?? null,
-    };
-    let result;
+  /** Send one setup mutation; a failure after the request is sent makes setup indeterminate. */
+  const setupStep = async (step, send) => {
+    state.setupAttempted = true;
     try {
-      if (request.operationKind === 'setup') state.setupAttempted = true;
-      else state.cleanup = {
-        invocationId,
-        state: 'indeterminate',
-        reason: 'Cleanup was attempted, but no matching cleanup receipt was verified.',
-      };
-      result = await runPrivilegedSetup({
-        context: setupContext,
-        namespace,
-        sourceEvidence,
-        sourceReceipt,
-        accessToken: setupToken,
-        request,
-        executable: kubectl,
-        spawnSyncImpl,
-      });
+      return await send();
     } catch (error) {
-      if (error.commandEvidence) {
-        // Re-project injected command results as well; evidence is never an arbitrary error payload.
-        const evidence = error.commandEvidence;
-        state.commandFailures.push({
-          operationKind: request.operationKind,
-          productErrorCode: SETUP_ERROR_CODES.has(evidence.productErrorCode) ? evidence.productErrorCode : null,
-          kubectlExitCode: Number.isInteger(evidence.kubectlExitCode) ? evidence.kubectlExitCode : null,
-          processErrorClass: ['timeout', 'executable-not-found', 'output-limit', 'process-error']
-            .includes(evidence.processErrorClass) ? evidence.processErrorClass : null,
-          stderrClass: ['product-code', 'product-unclassified', 'kubectl-forbidden', 'timeout',
-            'exec-transport', 'empty', 'unrecognized'].includes(evidence.stderrClass)
-            ? evidence.stderrClass : 'unrecognized',
-        });
-      }
+      state.setupIndeterminate = true;
+      recordRequestFailure(state, step, error);
       throw error;
     }
-    if (operationKind.operationKind === 'setup') {
-      state.setup = requireSetupResult(result, request, actor);
-    } else {
-      const cleanup = result?.cleanup;
-      const cleaned = cleanup?.state === 'cleaned';
-      const retained = cleanup?.state === 'retainedPending';
-      if (result?.operationKind !== 'cleanup' || !cleanup
-        || result.cleanup.invocationId?.toLowerCase() !== invocationId.toLowerCase()
-        || result.cleanup.tenantId !== actor.tenantId
-        || result.cleanup.projectId !== state.setup?.projectId
-        || result.cleanup.assignmentId !== state.setup?.assignmentId
-        || !cleaned && !retained
-        || cleanup.ownerAssignmentId !== state.setup.ownerAssignmentId
-        || cleanup.projectConfigurationRevision !== state.setup.projectConfigurationRevision
-        || cleanup.projectRevision !== state.setup.projectRevision + (cleaned ? 1 : 0)
-        || cleanup.assignmentRevision !== state.setup.assignmentRevision + (cleaned ? 1 : 0)
-        || cleanup.ownerAssignmentRevision !== state.setup.ownerAssignmentRevision + (cleaned ? 1 : 0)
-        || (cleaned && (!UUID.test(cleanup.authorityAuditEventId ?? '')
-          || !UUID.test(cleanup.ownerRevocationAuditEventId ?? '')))
-        || (retained && (cleanup.authorityAuditEventId !== null
-          || cleanup.ownerRevocationAuditEventId !== null))) {
-        throw new Error('Projects Config did not return the exact setup cleanup receipt.');
-      }
-      state.cleanup = cleanup;
+  };
+
+  /** Create the invocation-named project and grant the signed-in actor Owner, then Orchestrator. */
+  const runSetup = async () => {
+    const created = await setupStep('create-project', async () => requireProject((await invoke(
+      api, 'createProject', {}, { name: state.projectName }, [201])).value, invocationId, 'active'));
+    state.setup = {
+      invocationId,
+      tenantId: actor.tenantId,
+      projectId: created.projectId,
+      projectRevision: created.revision,
+      projectConfigurationRevision: created.configurationRevision,
+      ownerAssignmentId: null,
+      ownerAssignmentRevision: null,
+      assignmentId: null,
+      assignmentRevision: null,
+      complete: false,
+    };
+    const owner = await setupStep('assign-owner', async () => requireAssignment((await invoke(
+      api, 'assignProjectRole', { projectId: created.projectId },
+      { principalId: actor.actorId, role: 'owner' }, [201])).value,
+    created.projectId, actor, 'owner', 'active', 1));
+    state.setup.ownerAssignmentId = owner.assignmentId;
+    state.setup.ownerAssignmentRevision = owner.revision;
+    const orchestrator = await setupStep('assign-orchestrator', async () => requireAssignment((await invoke(
+      api, 'assignProjectRole', { projectId: created.projectId },
+      { principalId: actor.actorId, role: 'orchestrator' }, [201])).value,
+    created.projectId, actor, 'orchestrator', 'active', 1));
+    state.setup.assignmentId = orchestrator.assignmentId;
+    state.setup.assignmentRevision = orchestrator.revision;
+    state.setup.complete = true;
+    return { created, owner, orchestrator };
+  };
+
+  /**
+   * Revoke Orchestrator, archive the project, then revoke Owner. The last Owner of an active project
+   * cannot be revoked, so the project is archived first. Any failure after the first request is sent
+   * leaves cleanup indeterminate and is not retried.
+   */
+  const runCleanup = async () => {
+    if (state.setupIndeterminate || !state.setup?.complete) {
+      return state.cleanup = {
+        invocationId,
+        state: 'indeterminate',
+        reason: 'Setup did not return every expected receipt, so cleanup was not attempted.',
+      };
     }
-    return result;
+    if (state.cleanup) {
+      throw new Error('P1 fixture cleanup was already attempted for this invocation and is never retried.');
+    }
+    const setup = state.setup;
+    const step = async (name, send) => {
+      try {
+        return await send();
+      } catch (error) {
+        recordRequestFailure(state, name, error);
+        throw error;
+      }
+    };
+    state.cleanup = {
+      invocationId,
+      state: 'indeterminate',
+      reason: 'Cleanup was attempted, but not every cleanup receipt was verified.',
+    };
+    const revokedOrchestrator = await step('revoke-orchestrator', async () => requireAssignment((await invoke(
+      api, 'revokeProjectRoleAssignment',
+      { projectId: setup.projectId, assignmentId: setup.assignmentId }, undefined, [200],
+      { expectedRevision: setup.assignmentRevision })).value,
+    setup.projectId, actor, 'orchestrator', 'revoked', setup.assignmentRevision + 1, setup.assignmentId));
+    const archived = await step('archive-project', async () => requireProject((await invoke(
+      api, 'updateProject', { projectId: setup.projectId },
+      { expectedRevision: setup.projectRevision, name: state.projectName, state: 'archived' }, [200])).value,
+    invocationId, 'archived', setup.projectId, setup.projectRevision + 1));
+    const revokedOwner = await step('revoke-owner', async () => requireAssignment((await invoke(
+      api, 'revokeProjectRoleAssignment',
+      { projectId: setup.projectId, assignmentId: setup.ownerAssignmentId }, undefined, [200],
+      { expectedRevision: setup.ownerAssignmentRevision })).value,
+    setup.projectId, actor, 'owner', 'revoked', setup.ownerAssignmentRevision + 1, setup.ownerAssignmentId));
+    return state.cleanup = {
+      invocationId,
+      state: 'cleaned',
+      tenantId: actor.tenantId,
+      projectId: setup.projectId,
+      projectRevision: archived.revision,
+      projectState: archived.state,
+      projectConfigurationRevision: setup.projectConfigurationRevision,
+      assignmentId: revokedOrchestrator.assignmentId,
+      assignmentRevision: revokedOrchestrator.revision,
+      ownerAssignmentId: revokedOwner.assignmentId,
+      ownerAssignmentRevision: revokedOwner.revision,
+    };
   };
 
   try {
@@ -616,12 +432,9 @@ export async function createP1Fixture(plan, {
     const { value: initialContext } = await invoke(api, 'getAuthorizationContext', {}, undefined, [200]);
     requireContext(initialContext, actor);
 
-    const setupResult = await runSetup({ invocationId, operationKind: 'setup' });
+    const setupResult = await runSetup();
     const setup = state.setup;
     const projectId = setup.projectId;
-    if (setup.projectRevision !== setupResult.setupReadback.projectRevision) {
-      throw new Error('The initial project revision does not match Projects Config setup readback.');
-    }
 
     const configurationResult = await invoke(
       api, 'getProjectConfiguration', { projectId }, undefined, [200]);
@@ -713,7 +526,7 @@ export async function createP1Fixture(plan, {
     const fixtureId = idFor('fixture');
     const ownershipReceipts = [
       creationReceipt('project', projectId, invocationId, root.executionFence,
-        setupResult.setup, setupResult.setupReadback),
+        setupResult.created, configuration),
       creationReceipt('run-selection', runId, invocationId, root.executionFence,
         acceptedSelection, observedSelection),
       creationReceipt('root-session', rootSessionId, invocationId, root.executionFence,
@@ -771,13 +584,7 @@ export async function createP1Fixture(plan, {
       identity,
       state,
       async cleanup() {
-        const cleanupResult = await runSetup({
-          invocationId,
-          operationKind: 'cleanup',
-          expectedProjectRevision: setup.projectRevision,
-          expectedAssignmentRevision: setup.assignmentRevision,
-        });
-        return cleanupResult.cleanup;
+        return runCleanup();
       },
       root,
     };
@@ -785,22 +592,8 @@ export async function createP1Fixture(plan, {
     error.p1SetupState = state;
     error.p1SetupApi = api;
     error.p1SetupCleanup = async () => {
-      if (!state.setup) {
-        return state.setupAttempted
-          ? {
-            invocationId,
-            state: 'indeterminate',
-            reason: 'Privileged setup may have completed, but no matching setup receipt was verified.',
-          }
-          : { invocationId, state: 'not-created' };
-      }
-      const cleanup = await runSetup({
-        invocationId,
-        operationKind: 'cleanup',
-        expectedProjectRevision: state.setup.projectRevision,
-        expectedAssignmentRevision: state.setup.assignmentRevision,
-      });
-      return cleanup.cleanup;
+      if (!state.setupAttempted) return { invocationId, state: 'not-created' };
+      return runCleanup();
     };
     throw error;
   }
@@ -811,12 +604,13 @@ export function summarizeP1FixtureCleanup(state, cleanup, nativeFence) {
   return redact({
     invocationId: state?.invocationId ?? null,
     setup: state?.setup ?? null,
-    commandFailures: state?.commandFailures ?? [],
-    diagnosis: (state?.setupAttempted && !state?.setup) || state?.cleanup?.state === 'indeterminate' ? {
-      state: 'required',
-      command: `node scripts\\harness-shared\\diagnose-p1-setup.mjs --invocation-id ${state.invocationId}`,
-      reason: 'Run the generated read-only query against the attested Projects Config database. Do not retry setup or cleanup before reviewing its invocation-bound readback.',
-    } : null,
+    requestFailures: state?.requestFailures ?? [],
+    diagnosis: state?.setupIndeterminate || state?.cleanup?.state === 'indeterminate'
+      || (cleanup?.state === 'indeterminate') ? {
+        state: 'required',
+        projectName: state.projectName ?? null,
+        reason: 'Find the project with this name through listProjects and review it and the setup actor\'s effective authority through getAuthorizationContext. Do not retry setup or cleanup before that review.',
+      } : null,
     selection: state?.selection ?? null,
     nativeFence: nativeFence ?? { status: 'not-started', reason: 'This setup path never invokes dispatch.' },
     cleanup: cleanup ?? state?.cleanup ?? { state: 'not-started' },

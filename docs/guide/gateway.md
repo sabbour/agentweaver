@@ -120,12 +120,100 @@ Use these routes to browse and select Skills:
   `expectedSourceRevision`; selected-content preview and import reject query
   parameters.
 - Inline Skill preview and import request bodies are limited to 3 MiB.
+  The Gateway buffers every explicitly bounded route before contacting its
+  owner, including these skill-content routes and requests without
+  `Content-Length`. Oversized requests return `413` with
+  `request_body_too_large` and are not forwarded.
   Marketplace-selected preview and import use the same request-body limit.
 
 The owner remains authoritative for permission checks, revision validation,
 content validation, and persistence. A returned Skill assignment or inventory
 record does not prove that a runtime loaded the Skill. The current public API
 does not provide actor-safe runtime-loaded status.
+
+## List project runs
+
+Use `GET /api/v1/projects/{projectId}/runs` to list a project's runs without
+knowing a run ID. The Gateway forwards the request to the Orchestrator owner
+and returns its status and body with `Cache-Control: no-store`.
+
+- `pageSize` defaults to 25 and accepts 1 through 100.
+- `state` filters by a comma-separated list of derived states, or by the
+  `open` (`idle`, `active`, `blocked`) and `terminal` aliases.
+- `cursor` continues from the previous page's `nextCursor`. Send the same
+  `state` and `pageSize` values with it.
+- Items are ordered by creation time, newest first. Pages are not a snapshot;
+  a run created after the first page is not repeated.
+
+The owner checks the caller's current project or tenant read permission with
+Projects & Config. A run-bound token sees only its own run. The list reads
+persisted run records only. `title` and `goal` are `null` until a run start
+request stores them.
+
+## Read project metrics and usage
+
+Send `GET /api/v1/projects/{projectId}/metrics` for run counts and a daily
+series. Send `GET /api/v1/projects/{projectId}/usage` for usage grouped by
+model and agent. The Gateway forwards these requests to Orchestrator and
+Events & Sessions, respectively. It does not aggregate the responses.
+
+Use the same explicit `from` and `to` values for aligned intervals. Bounds
+are inclusive and exclusive, respectively, and use UTC. ISO dates and
+timestamps with explicit offsets are accepted. If omitted, `to` is now and
+`from` is 30 days earlier. The maximum interval is 92 days. Metrics supports
+only `bucket=day`; usage does not accept a bucket. Unknown or repeated query
+keys return `400`.
+
+Both routes require `api.read`, the owning service and Projects audiences,
+and current project or tenant read permission. Run-bound callers see only
+their own run. Responses use `Cache-Control: no-store`. Reads do not change
+stored data.
+
+Read the [metrics definitions](../reference/api.md#project-metrics-and-usage)
+before comparing v1 with the 0.x dashboard. Run success uses completed runs,
+not agent dependencies. Usage retains unknown values and separate cost units.
+These routes do not price usage or change budgets. Cross-project overview
+is out of scope.
+
+## Review project casting
+
+Casting routes use the Projects & Config owner. The Gateway forwards the
+validated bearer and optional `X-Agentweaver-Tenant` selector without granting
+authority. Proposal reads require current `ReadProjects`; mutations and export
+require current `WriteProjects`, including `api.read` and `projects.admin`.
+Catalog reads require an authenticated bearer.
+
+1. Read `GET /api/v1/casting/templates` or `GET /api/v1/catalog/roles`.
+2. Read the current project configuration revision.
+3. Send `POST /api/v1/projects/{projectId}/casting/proposals/scenario` with
+   `expectedConfigurationRevision` and `templateId`. For manual selection, use
+   `/proposals/manual` with `roleIds`. To supply a complete draft, use
+   `/proposals` with `draft`.
+4. Review the returned pending proposal. List proposals with `GET /proposals`
+   and optional `limit` (1 through 100, default 50). Read or patch one at
+   `/proposals/{proposalId}`; patch requires `expectedDraftRevision` and `draft`.
+5. Send `POST /proposals/{proposalId}/confirm` or `/reject` with
+   `expectedDraftRevision`. Confirmation appends a configuration revision;
+   rejection leaves configuration unchanged.
+
+The proposal paths in steps 4 and 5 are relative to
+`/api/v1/projects/{projectId}/casting`. A stale draft or base configuration
+revision returns `409`. Read the latest state and review it again; do not
+automatically confirm a replacement draft. Casting uses revision checks in
+request bodies, not an `Idempotency-Key` header.
+The owner returns `403` when the caller lacks current `WriteProjects`
+authority for a casting write, including confirm, reject, and import.
+
+To transfer a team, read `/casting/export` under the project path, optionally
+with a positive `revision`. Send the returned transfer to `/casting/import`
+with the target `expectedConfigurationRevision`. Import checks the format and
+digest and stages a proposal for review. It does not apply the team. Both the
+Gateway and owner limit import request bodies to 1 MiB. The Gateway checks
+the complete body before forwarding, including requests without
+`Content-Length`. Larger bodies return `413` without contacting the owner.
+Transfer version or
+team incompatibility returns `422`. These source routes do not establish
+deployment or a browser wizard.
 
 ## Send Knowledge writes
 
