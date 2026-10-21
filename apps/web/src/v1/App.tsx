@@ -107,6 +107,8 @@ import { NewSessionPage } from './NewSessionPage';
 import { readPendingRun } from './pendingRun';
 import { StopRunButton } from './StopRunButton';
 import { AgentsView } from './AgentsView';
+import { CastTeamPage } from './CastTeamPage';
+import { PlatformSettingsPage } from './PlatformSettingsPage';
 import { accessSummary, permissionsForProject, useAuthorizationContext, useProjectConfiguration, useProjectSummary } from './projectData';
 import { runListErrorMessage, useProjectRunList } from './runListData';
 import { CONFIGURATION_SECTIONS, SETTINGS_SECTIONS, settingsSection } from './settingsSections';
@@ -831,14 +833,23 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     </>
   );
 
-  // Agents route: the Agents view saves through the same persist() path.
-  if (view === 'agents') return (
+  // Agents route: the Agents view renders its own header with the team
+  // controls once the configuration is loaded, and saves through persist().
+  if (view === 'agents') return currentConfiguration && !currentLoading ? (
+    <AgentsView
+      projectId={projectId}
+      configuration={currentConfiguration.configuration}
+      configurationRevision={currentConfiguration.revision}
+      readOnly={busy}
+      onSave={persist}
+      status={statusMessages}
+      onReload={() => void load()}
+    />
+  ) : (
     <>
       <PageHeading title="Agents" description="The cast working on this project." page="Agents" />
       {statusMessages}
-      {currentLoading ? <Loading label="Loading agents" /> : currentConfiguration && (
-        <AgentsView projectId={projectId} configuration={currentConfiguration.configuration} readOnly={busy} onSave={persist} />
-      )}
+      {currentLoading && <Loading label="Loading agents" />}
     </>
   );
 
@@ -3208,7 +3219,7 @@ function AuthenticatedRoutes() {
       <Route path="/assistant" element={<Shell><NewSessionPage /></Shell>} />
       <Route path="/console" element={<Navigate to="/assistant" replace />} />
       <Route path="/settings" element={<Shell><AccountSettingsPage /></Shell>} />
-      <Route path="/platform-settings" element={<Shell><UnavailablePage title="Platform settings" description="Platform administration is not available in this web client." /></Shell>} />
+      <Route path="/platform-settings" element={<Shell><PlatformSettingsPage /></Shell>} />
       <Route path="/auth/callback" element={<CallbackPage />} />
       <Route path="/projects" element={<Shell><ProjectsPage /></Shell>} />
       <Route path="/projects/:projectId" element={<Shell><DashboardPage /></Shell>} />
@@ -3216,7 +3227,7 @@ function AuthenticatedRoutes() {
       <Route path="/projects/:projectId/settings" element={<Shell><ProjectConfigurationPage /></Shell>} />
       <Route path="/projects/:projectId/skills" element={<Shell><ProjectConfigurationPage view="skills" /></Shell>} />
       <Route path="/projects/:projectId/team" element={<Shell><ProjectConfigurationPage view="agents" /></Shell>} />
-      <Route path="/projects/:projectId/team/cast" element={<Shell><UnavailablePage title="Cast a team" description="Interactive team casting is not available in this version. Review the current team in Agents and edit its configuration in Project settings." /></Shell>} />
+      <Route path="/projects/:projectId/team/cast" element={<Shell><CastTeamPage /></Shell>} />
       <Route path="/projects/:projectId/team/:agentName/memory" element={<AgentMemoryRedirect />} />
       {/* "knowledge" is the older address for Memories; both show the same page. */}
       <Route path="/projects/:projectId/knowledge" element={<Shell><KnowledgePage /></Shell>} />

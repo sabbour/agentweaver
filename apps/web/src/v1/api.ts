@@ -7,10 +7,14 @@ import type {
   CreateProjectRunResponse,
   CreateManualProjectCastingProposalRequest,
   CreateScenarioProjectCastingProposalRequest,
+  CreateProjectCastingProposalRequest,
+  ImportProjectCastingTransferRequest,
   PlatformComponentReport,
   ProjectCastingProposal,
   ProjectCastingRoleDefinition,
   ProjectCastingTemplateDefinition,
+  ProjectCastingTransfer,
+  UpdateProjectCastingProposalRequest,
   ProjectMetrics,
   ProjectRunPage,
   ProjectRunStateFilter,
@@ -1394,6 +1398,96 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId, action)}`,
       { method: 'POST', body: JSON.stringify({ expectedDraftRevision }) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads one casting proposal, including its draft and current state. */
+  getCastingProposal(
+    token: string,
+    projectId: string,
+    proposalId: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Stages a complete configuration draft as a casting proposal. Used when the
+   * browser builds the draft itself, for example to add one member.
+   */
+  createCastingDraftProposal(
+    token: string,
+    projectId: string,
+    request: CreateProjectCastingProposalRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Replaces the draft of a pending proposal. `expectedDraftRevision` must
+   * match the draft that was shown, or the service returns 409.
+   */
+  updateCastingProposal(
+    token: string,
+    projectId: string,
+    proposalId: string,
+    request: UpdateProjectCastingProposalRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId)}`,
+      { method: 'PATCH', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Exports the project's agent charters and casting, at `revision` or the current revision. */
+  exportCastingTransfer(
+    token: string,
+    projectId: string,
+    revision?: number,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingTransfer> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'export')}${revision === undefined ? '' : `?revision=${revision}`}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Stages an exported team as a pending proposal in this project. The service
+   * checks the digest and rejects bodies over 1 MiB (413) or invalid transfers (422).
+   */
+  importCastingTransfer(
+    token: string,
+    projectId: string,
+    request: ImportProjectCastingTransferRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'import')}`,
+      { method: 'POST', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
     );

@@ -2,18 +2,29 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemoteMcpConnectionPanel } from './RemoteMcpConnectionPanel';
 
-const mocks = vi.hoisted(() => ({ read: vi.fn(), refresh: vi.fn(), disconnect: vi.fn(), prepare: vi.fn(), register: vi.fn() }));
-vi.mock('./AuthContext', () => ({
-  useAuth: () => ({ apiCall: <T,>(operation: (token: string, tenant: string) => Promise<T>) => operation('token', 'tenant') }),
-}));
-vi.mock('./api', () => ({
+const mocks = vi.hoisted(() => ({ read: vi.fn(), refresh: vi.fn(), disconnect: vi.fn(), prepare: vi.fn(), register: vi.fn(), list: vi.fn() }));
+// One stable apiCall, like the real provider, so effects that depend on it run once.
+const auth = vi.hoisted(() => ({ apiCall: <T,>(operation: (token: string, tenant: string) => Promise<T>) => operation('token', 'tenant') }));
+vi.mock('./AuthContext', () => ({ useAuth: () => auth }));
+vi.mock('./api', async (importActual) => ({
+  ...(await importActual<typeof import('./api')>()),
   gatewayClient: {
     getRemoteMcpOAuthConnection: mocks.read, refreshRemoteMcpOAuthConnection: mocks.refresh,
     disconnectRemoteMcpOAuthConnection: mocks.disconnect, prepareRemoteMcpOAuthConsent: mocks.prepare,
-    registerRemoteMcpOAuthConnection: mocks.register,
+    registerRemoteMcpOAuthConnection: mocks.register, listRemoteMcpConnections: mocks.list,
   },
 }));
 const id = '11111111-1111-4111-8111-111111111111';
+/** One saved connection as the project directory lists it. */
+function entry(connectionId: string, displayName: string, overrides: Record<string, unknown> = {}) {
+  return {
+    connectionId, displayName, endpointUri: `https://${displayName.toLowerCase()}.example/mcp`, resourceUri: null,
+    authenticationMode: 'delegatedOAuth', transportProfile: 'streamableHttp20250618', state: 'enabled',
+    rowRevision: 1, configurationRevision: 4, configurationSha256: 'b'.repeat(64), identityBound: false,
+    registryServerName: null, registryExactVersion: null, discoveryRevision: 2, catalogSha256: 'c'.repeat(64), toolCount: 3,
+    ...overrides,
+  };
+}
 const status = {
   projectId: 'project', connectionId: id, connectionRevision: 2, credentialRevision: 1,
   state: 'Authorized', storedConfigurationRevision: 4, currentConfigurationRevision: 4,
@@ -22,11 +33,53 @@ const status = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.read.mockResolvedValue(status);
+  mocks.list.mockResolvedValue({ connections: [], nextConnectionId: null });
   mocks.disconnect.mockResolvedValue({ ...status, connectionRevision: 3, state: 'Disconnected', credentialUseAvailable: false });
 });
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('Remote MCP settings connection', () => {
+  it('lists saved connections and loads the one the user selects', async () => {
+    const other = '22222222-2222-4222-8222-222222222222';
+    mocks.list.mockResolvedValue({
+      connections: [entry(id, 'Tracker'), entry(other, 'Wiki', { discoveryRevision: null, toolCount: 0 }), entry('33333333-3333-4333-8333-333333333333', 'Gone', { state: 'removed' })],
+      nextConnectionId: null,
+    });
+    render(<RemoteMcpConnectionPanel projectId="project" configurationRevision={4} />);
+    expect(await screen.findByText('Tracker')).toBeTruthy();
+    expect(mocks.list).toHaveBeenCalledWith('token', 'project', { pageSize: 25 }, 'tenant');
+    // Removed connections are not offered, and an unread tool list is not shown as zero tools.
+    expect(screen.queryByText('Gone')).toBeNull();
+    expect(screen.getByText('Not read yet')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Select Tracker' }));
+    await screen.findByText('Authorized');
+    expect(mocks.read).toHaveBeenCalledWith('token', id, 'tenant');
+    expect((screen.getByLabelText('Remote MCP connection ID') as HTMLInputElement).value).toBe(id);
+    fireEvent.click(screen.getByText('Connection setup'));
+    expect((screen.getByLabelText('Configuration checksum') as HTMLInputElement).value).toBe('b'.repeat(64));
+  });
+
+  it('pages through saved connections', async () => {
+    const other = '22222222-2222-4222-8222-222222222222';
+    mocks.list
+      .mockResolvedValueOnce({ connections: [entry(id, 'Tracker')], nextConnectionId: id })
+      .mockResolvedValueOnce({ connections: [entry(other, 'Wiki')], nextConnectionId: null });
+    render(<RemoteMcpConnectionPanel projectId="project" configurationRevision={4} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Load more connections' }));
+    expect(await screen.findByText('Wiki')).toBeTruthy();
+    expect(screen.getByText('Tracker')).toBeTruthy();
+    expect(mocks.list).toHaveBeenLastCalledWith('token', 'project', { pageSize: 25, after: id }, 'tenant');
+    expect(screen.queryByRole('button', { name: 'Load more connections' })).toBeNull();
+  });
+
+  it('shows an empty directory and a list error plainly', async () => {
+    render(<RemoteMcpConnectionPanel projectId="project" configurationRevision={4} />);
+    expect(await screen.findByText('This project has no saved Remote MCP connections.')).toBeTruthy();
+    mocks.list.mockRejectedValueOnce(new Error('Listing failed.'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh list' }));
+    expect(await screen.findByText('Listing failed.')).toBeTruthy();
+  });
+
   /** Loads owner status and supplies the saved setup digest before starting consent. */
   async function prepareAuthorization() {
     render(<RemoteMcpConnectionPanel projectId="project" configurationRevision={4} />);
