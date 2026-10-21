@@ -79,6 +79,7 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `getAuthorizationContext` | Read current tenant and effective authority. |
 | `getPlatformRuntimeDefaults` | Read platform defaults. |
 | `updatePlatformRuntimeDefaults` | Append platform defaults. |
+| `getPlatformComponents` | Read active platform components and their readiness. |
 | `acceptRunSelection` | Accept an immutable run selection. |
 | `getRunSelection` | Read the accepted selection. |
 
@@ -114,9 +115,11 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `previewMarketplaceSkill` | Validate selected content at the pinned commit. |
 | `importMarketplaceSkill` | Import the selected, previewed content. |
 | `previewSkillContent` | Validate submitted local content without importing. |
+| `packageSkillContent` | Turn uploaded files, a ZIP archive, or draft fields into skill candidates. |
 | `importProjectSkill` | Import validated local content. |
 | `updateProjectSkillAssignment` | Update project assignments at an expected configuration revision. |
 | `listProjectSkillInventory` | Read paginated revision metadata. |
+| `revokeProjectSkillRevision` | Revoke one imported skill revision with a reason. |
 
 ### AgentSuite imports
 
@@ -194,6 +197,11 @@ for metric definitions and differences from the 0.x dashboard.
 | `prepareSourceControlMergeIntent` | Request merge approval. |
 | `readSourceControlMergeIntent` | Read a merge intent. |
 | `executeSourceControlMergeIntent` | Execute an approved intent. |
+| `captureSourceControlWorkspaceOutput` | Capture the produced output of a workspace. |
+| `listSourceControlOutputCaptures` | List admitted output captures, newest first. |
+| `readSourceControlOutputCapture` | Read a capture and its file list. |
+| `readSourceControlOutputCaptureDiff` | Read the diff of a capture. |
+| `readSourceControlOutputCaptureFile` | Read one captured file. The tool returns the body as text. |
 
 ### Knowledge
 

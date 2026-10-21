@@ -807,6 +807,28 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        // Reports active platform components for TenantAdmin or PlatformAdmin callers.
+        app.MapGet("/api/platform/components", async (
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            [Microsoft.AspNetCore.Mvc.FromServices] PlatformComponentCollector collector,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await service.EnsurePlatformComponentReaderAsync(caller, cancellationToken).ConfigureAwait(false);
+                return Results.Ok(await collector.CollectAsync(cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).RequireAuthorization();
+
         if (enableBrokerRunBinding)
         {
             app.MapPost(

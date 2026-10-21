@@ -380,6 +380,167 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             await collision.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DecisionLifecycleChangesCurrentContextAndKeepsAcceptedRevisionsReadable()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        const string agentRoute = "/api/projects/project-a/runs/run-a/agents/agent-a";
+
+        async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, string? key)
+        {
+            using var request = new HttpRequestMessage(method, agentRoute + path);
+            if (body is not null)
+                request.Content = JsonContent.Create(body, options: JsonOptions);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+            if (key is not null)
+                request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
+            return await client.SendAsync(request);
+        }
+
+        async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response, HttpStatusCode expected)
+        {
+            var text = await response.Content.ReadAsStringAsync();
+            Assert.True(expected == response.StatusCode, $"{response.StatusCode}: {text}");
+            using var document = JsonDocument.Parse(text);
+            return document.RootElement.Clone();
+        }
+
+        async Task<Guid> CreateDecisionAsync(string key, string type, string content)
+        {
+            using var created = await SendAsync(HttpMethod.Post, "/records", new
+            {
+                kind = "proposal",
+                type,
+                title = key,
+                content,
+                importance = "medium",
+                tags = new[] { "lifecycle" }
+            }, $"{key}-create");
+            var proposalId = (await ReadJsonAsync(created, HttpStatusCode.Created))
+                .GetProperty("record").GetProperty("recordId").GetGuid();
+            using var promoted = await SendAsync(
+                HttpMethod.Post, $"/proposals/{proposalId:D}/promote", new { expectedRevision = 1 }, $"{key}-promote");
+            return (await ReadJsonAsync(promoted, HttpStatusCode.Created))
+                .GetProperty("decision").GetProperty("recordId").GetGuid();
+        }
+
+        object DecisionBody(int expectedRevision, string type, string content, string state, Guid? replacement = null) =>
+            new
+            {
+                expectedRevision,
+                type,
+                title = "decision",
+                content,
+                importance = "medium",
+                tags = new[] { "lifecycle" },
+                state,
+                supersededByRecordId = replacement
+            };
+
+        async Task<Dictionary<Guid, (int Revision, Guid RevisionId)>> ReadContextDecisionsAsync()
+        {
+            using var response = await SendAsync(HttpMethod.Get, "/context", null, null);
+            var json = await ReadJsonAsync(response, HttpStatusCode.OK);
+            return json.GetProperty("revisionReferences").EnumerateArray()
+                .Where(reference => reference.GetProperty("kind").GetString() == "decision")
+                .ToDictionary(
+                    reference => reference.GetProperty("recordId").GetGuid(),
+                    reference => (
+                        reference.GetProperty("revision").GetInt32(),
+                        reference.GetProperty("revisionId").GetGuid()));
+        }
+
+        var original = await CreateDecisionAsync("original", "architectural", "Store run state in PostgreSQL.");
+        var replacement = await CreateDecisionAsync("replacement", "architectural", "Store run state in Cosmos DB.");
+        var scope = await CreateDecisionAsync("scope", "scope", "Ship P2 with the agreed scope.");
+
+        var acceptedByPastRun = await ReadContextDecisionsAsync();
+        Assert.True(acceptedByPastRun.Keys.ToHashSet().SetEquals([original, replacement, scope]));
+
+        var supersedeBody = DecisionBody(1, "architectural", "Store run state in PostgreSQL.", "superseded", replacement);
+        using (var superseded = await SendAsync(
+                   HttpMethod.Put, $"/records/{original:D}", supersedeBody, "supersede-original"))
+            await ReadJsonAsync(superseded, HttpStatusCode.OK);
+        using (var replay = await SendAsync(
+                   HttpMethod.Put, $"/records/{original:D}", supersedeBody, "supersede-original"))
+            Assert.Equal(2, (await ReadJsonAsync(replay, HttpStatusCode.OK))
+                .GetProperty("record").GetProperty("revision").GetInt32());
+        using (var stale = await SendAsync(
+                   HttpMethod.Put, $"/records/{original:D}", supersedeBody, "supersede-original-stale"))
+            Assert.Equal("stale_revision", (await ReadJsonAsync(stale, HttpStatusCode.Conflict))
+                .GetProperty("code").GetString());
+        using (var cycle = await SendAsync(
+                   HttpMethod.Put,
+                   $"/records/{replacement:D}",
+                   DecisionBody(1, "architectural", "Store run state in Cosmos DB.", "superseded", original),
+                   "supersede-cycle"))
+            await ReadJsonAsync(cycle, HttpStatusCode.Conflict);
+
+        var afterSupersession = await ReadContextDecisionsAsync();
+        Assert.DoesNotContain(original, afterSupersession.Keys);
+        Assert.Equal(acceptedByPastRun[replacement], afterSupersession[replacement]);
+
+        using (var corrected = await SendAsync(
+                   HttpMethod.Put,
+                   $"/records/{scope:D}",
+                   DecisionBody(1, "scope", "Ship P2 with the agreed scope and its docs.", "active"),
+                   "correct-scope"))
+            Assert.Equal("pending", (await ReadJsonAsync(corrected, HttpStatusCode.OK))
+                .GetProperty("record").GetProperty("trustState").GetString());
+        Assert.DoesNotContain(scope, (await ReadContextDecisionsAsync()).Keys);
+        using (var approved = await SendAsync(
+                   HttpMethod.Post, $"/records/{scope:D}/approve", new { expectedRevision = 2 }, "approve-scope"))
+            await ReadJsonAsync(approved, HttpStatusCode.OK);
+        var afterCorrection = await ReadContextDecisionsAsync();
+        Assert.Equal(3, afterCorrection[scope].Revision);
+        Assert.NotEqual(acceptedByPastRun[scope].RevisionId, afterCorrection[scope].RevisionId);
+
+        using (var archived = await SendAsync(
+                   HttpMethod.Put,
+                   $"/records/{replacement:D}",
+                   DecisionBody(1, "architectural", "Store run state in Cosmos DB.", "archived"),
+                   "archive-replacement"))
+            await ReadJsonAsync(archived, HttpStatusCode.OK);
+        Assert.Equal([scope], (await ReadContextDecisionsAsync()).Keys.ToArray());
+
+        using (var restored = await SendAsync(
+                   HttpMethod.Post,
+                   $"/records/{replacement:D}/restore",
+                   new { expectedRevision = 2, revision = 1, reason = "restore archived decision" },
+                   "restore-replacement"))
+            await ReadJsonAsync(restored, HttpStatusCode.OK);
+        Assert.DoesNotContain(replacement, (await ReadContextDecisionsAsync()).Keys);
+        using (var approvedRestore = await SendAsync(
+                   HttpMethod.Post,
+                   $"/records/{replacement:D}/approve",
+                   new { expectedRevision = 3 },
+                   "approve-restored-replacement"))
+            await ReadJsonAsync(approvedRestore, HttpStatusCode.OK);
+        Assert.Equal(4, (await ReadContextDecisionsAsync())[replacement].Revision);
+
+        foreach (var (recordId, accepted) in acceptedByPastRun)
+        {
+            using var response = await SendAsync(HttpMethod.Get, $"/records/{recordId:D}/revisions", null, null);
+            var history = (await ReadJsonAsync(response, HttpStatusCode.OK)).GetProperty("items")
+                .EnumerateArray().ToArray();
+            var pinned = Assert.Single(history, item => item.GetProperty("revision").GetInt32() == accepted.Revision);
+            Assert.Equal(accepted.RevisionId, pinned.GetProperty("revisionId").GetGuid());
+            Assert.Equal("active", pinned.GetProperty("state").GetString());
+        }
+        using (var originalHistory = await SendAsync(
+                   HttpMethod.Get, $"/records/{original:D}/revisions", null, null))
+        {
+            var items = (await ReadJsonAsync(originalHistory, HttpStatusCode.OK)).GetProperty("items")
+                .EnumerateArray().ToArray();
+            Assert.Equal([2, 1], items.Select(item => item.GetProperty("revision").GetInt32()));
+            Assert.Equal("Store run state in PostgreSQL.", items[1].GetProperty("content").GetString());
+            Assert.Equal(replacement, items[0].GetProperty("supersededByRecordId").GetGuid());
+        }
+    }
+
     [Theory]
     [InlineData("missing-issuer-token")]
     [InlineData("cross-issuer-token")]

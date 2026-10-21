@@ -56,6 +56,7 @@ export default defineConfig({
             { text: 'Configure Knowledge memory', link: '/guide/configure-knowledge' },
             { text: 'Web client', link: '/guide/web-client' },
             { text: 'Gateway/BFF', link: '/guide/gateway' },
+            { text: 'Platform components', link: '/guide/platform-components' },
           ],
         },
         {

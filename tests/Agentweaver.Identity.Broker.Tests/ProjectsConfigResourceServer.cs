@@ -159,6 +159,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                         "__ef_migrations_history", ProjectsConfigDbContext.Schema)));
                 services.AddSingleton(catalog);
                 services.AddSingleton(TimeProvider.System);
+                services.AddPlatformComponentCollector(new ConfigurationBuilder().Build());
                 services.AddScoped<ProjectsConfigService>();
                 services.AddScoped<ProjectRoleAssignmentService>();
                 if (skillContentObjects is not null)

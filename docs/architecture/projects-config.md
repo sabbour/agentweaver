@@ -115,6 +115,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `POST /api/projects/{projectId}/casting/import` | Stage an explicit owner-authorized charter/casting import for review. |
 | `GET /api/platform/runtime-defaults` | Read the platform administrator's current defaults. |
 | `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
+| `GET /api/platform/components` | Report the active implementation and readiness of every platform component area for a current TenantAdmin or PlatformAdmin. Projects collects owner reports in parallel. See [Platform components](../guide/platform-components.md). |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the exact signed project/run binding, active project, current actor membership, active Orchestrator assignment, and matching accepted run-selection snapshot. |
@@ -510,7 +511,12 @@ last-Owner invariant, and database append-only triggers.
 ## Skill content and assignment
 
 `POST /api/skills/preview` validates a `SKILL.md` document and its text resources
-and returns a digest without storing the content. Project import requires current
+and returns a digest without storing the content. `POST /api/skills/package`
+groups uploaded files, one ZIP archive, or draft form fields into candidates.
+Each `SKILL.md` marks a skill root, and files under a nested root belong only to
+that nested skill. The route checks every path, applies file-count and size
+limits while it expands an archive, and validates each candidate with the same
+preview rules. It stores nothing. Project import requires current
 project write authority, that exact digest, and an idempotency key. Each successful
 import creates an immutable revision with source provenance. Reusing the key for a
 different request or importing against a stale revision returns a conflict.

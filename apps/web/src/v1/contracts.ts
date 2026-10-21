@@ -1386,3 +1386,99 @@ export interface BrokerTokenResponse {
   refresh_token?: string;
   scope?: string;
 }
+
+/** Stable platform component area identifiers. */
+export type PlatformComponentArea =
+  | 'sessions'
+  | 'snapshots'
+  | 'sandbox'
+  | 'storage'
+  | 'memory'
+  | 'policy'
+  | 'guardrails'
+  | 'networkPolicy'
+  | 'cost'
+  | 'applicationHosting'
+  | 'canvas'
+  | 'secrets'
+  | 'sourceControl'
+  | 'telemetry'
+  | 'messaging'
+  | 'objectStore';
+
+/** Owner service that reports a platform component area; `none` has no backend owner. */
+export type PlatformComponentOwner =
+  | 'eventsAndSessions'
+  | 'environment'
+  | 'knowledge'
+  | 'orchestrator'
+  | 'identityBroker'
+  | 'none';
+
+/** How many implementations can serve a platform component area. */
+export type PlatformComponentCardinality =
+  | 'exclusive'
+  | 'orderedComposite'
+  | 'platformSingleton'
+  | 'layered'
+  | 'keyedByMeterSource'
+  | 'perApplication'
+  | 'perCanvas';
+
+/** Readiness of an area or implementation as reported by its owner. */
+export type PlatformComponentReadiness =
+  | 'ready'
+  | 'degraded'
+  | 'notReady'
+  | 'disabled'
+  | 'notAvailable'
+  | 'unknown';
+
+/** Reason code for an area or implementation that isn't `ready`. */
+export type PlatformComponentReason =
+  | 'ownerUnavailable'
+  | 'noBackendOwner'
+  | 'notSelected'
+  | 'notImplemented'
+  | 'readinessCheckFailed'
+  | 'readinessTimedOut';
+
+/** One implementation that currently serves a platform component area. */
+export interface PlatformComponentActiveImplementation {
+  implementationId: string;
+  displayName: string;
+  version: string;
+  hosting: string;
+  layer: 'l3l4' | 'l7' | null;
+  meterSource: string | null;
+  order: number | null;
+  readiness: PlatformComponentReadiness;
+  reason: PlatformComponentReason | null;
+  observedAt: string;
+}
+
+/** One registered implementation that an owner could select for an area. */
+export interface PlatformComponentAvailableImplementation {
+  implementationId: string;
+  displayName: string;
+  version: string;
+  enabled: boolean;
+}
+
+/** Active and available implementations for one platform component area. */
+export interface PlatformComponentAreaReport {
+  area: PlatformComponentArea;
+  purpose: string;
+  owner: PlatformComponentOwner;
+  cardinality: PlatformComponentCardinality;
+  readiness: PlatformComponentReadiness;
+  reason: PlatformComponentReason | null;
+  active: PlatformComponentActiveImplementation[];
+  available: PlatformComponentAvailableImplementation[];
+}
+
+/** Response of `GET /api/v1/platform/components`; every area is always present. */
+export interface PlatformComponentReport {
+  observedAt: string;
+  areas: PlatformComponentAreaReport[];
+}
