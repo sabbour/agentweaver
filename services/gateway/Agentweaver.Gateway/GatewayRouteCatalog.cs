@@ -179,6 +179,13 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
             "/api/projects/{projectId}/runs", "listProjectRuns", "List project runs",
             ["state", "cursor", "pageSize"], forwardTenantSelector: true);
+        // Each reporting owner aggregates only its own data; the Gateway remains a catalog proxy.
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/metrics",
+            "/api/projects/{projectId}/metrics", "readProjectMetrics", "Read project run metrics",
+            ["from", "to", "bucket"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Events, "/projects/{projectId}/usage",
+            "/api/projects/{projectId}/usage", "readProjectUsage", "Read project usage",
+            ["from", "to"], forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);
@@ -243,6 +250,17 @@ public static class GatewayRouteCatalog
             "readSourceControlMergeIntent", "Read a pull request merge intent");
         SourceControl("POST", "/merge-intents/{intentId}/execute",
             "executeSourceControlMergeIntent", "Execute an approved pull request merge");
+
+        // Interactive creation precedes the existing run-bound coordination routes.
+        Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
+            "/api/projects/{projectId}/runs", "createProjectRun", "Create an interactive run",
+            body: true, maximumRequestBodyBytes: 256 * 1024, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs/{runId}/start",
+            "/api/projects/{projectId}/runs/{runId}/start", "startProjectRun", "Deliver the first run message",
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs/{runId}/cancel",
+            "/api/projects/{projectId}/runs/{runId}/cancel", "cancelProjectRun", "Cancel a run",
+            body: true, forwardTenantSelector: true);
 
         var coordination = "/projects/{projectId}/runs/{runId}/coordination";
         void Coordination(

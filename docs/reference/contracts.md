@@ -98,6 +98,27 @@ usage also remains unpriced without trusted usage-share evidence.
 
 ## Gateway API and server-sent events
 
+Project reporting uses two separate owner contracts. `ProjectMetrics` returns
+current active and blocked counts, lifetime accepted runs, bounded created and
+terminal-completed counts, succeeded runs, and zero-filled UTC daily points.
+`ProjectUsage` returns ledger measurements grouped by model ID and agent ID.
+The Gateway never aggregates across owners. Cross-project overview is out of
+scope. See [Project metrics and usage](./api.md#project-metrics-and-usage) for
+the field definitions and 0.x dashboard mapping.
+
+Both contracts echo normalized `from` and `to` bounds. The half-open interval
+defaults to the last 30 days and cannot exceed 92 days. Only metrics accepts
+`bucket=day`. Both owners validate fresh project read authority, return
+`Cache-Control: no-store`, and narrow run-bound tokens to their own run.
+OpenAPI defines strict response objects and query schemas. Invalid or repeated
+query values return a `400` problem response with `title` and `code` set to
+`query_invalid`, without exception text.
+
+Usage measurements remain nullable when source data is missing. Cost subtotals
+are grouped by unit and disposition; consumers must not add different units
+or treat unpriced usage as zero. The read path does not invoke pricing or
+budgeting.
+
 The `Agentweaver.Gateway` source exposes a finite, versioned client API at
 `/api/v1`. The service is a source candidate; these mappings do not confirm a
 deployment. `GET /openapi/v1.json` returns the route catalog and identifies each
@@ -416,6 +437,9 @@ caller cannot submit a resource pin or override the durable binding.
 
 | Method and path | Contract |
 | --- | --- |
+| `POST /api/projects/{projectId}/runs` | Create a new chat run. The bearer must not carry a run binding. Requires one `Idempotency-Key`, current project `acceptRunSelection` authority, and a body with `firstMessage` and `expectedProjectConfigRevision`. Persists the request in `project_run_requests`, mints `runId` and `rootSessionId`, and accepts the selection through the Projects `interactive-selection` route. Returns `201` with `awaiting_binding` and the binding selectors. A replay with the same key and body returns the same run; a changed body returns `409 idempotency_conflict`. |
+| `POST /api/projects/{projectId}/runs/{runId}/start` | Run-bound and bodyless. Locks the saved request, accepts the root session, and delivers the saved first message as a root-to-root addressed message with key `{runId}:first`. The owner accepts this self-addressed message only when its payload matches the saved request. Returns `200` with `started`; a replay does not deliver again. |
+| `POST /api/projects/{projectId}/runs/{runId}/cancel` | Requires a token not bound to a run and fresh Projects `cancelRun` permission from a Contributor, Owner, or tenant admin; Viewer receives `403`. Requires one `Idempotency-Key` and accepts an optional `reason`. For an accepted run, advances the fence, sets `cancelled_at` and `completed_at`, and cancels active sessions. Pending requests are cancelled without root admission. Saves a caller-scoped receipt and `orchestrator.run.cancelled` event atomically. A finished run returns `200` with `alreadyTerminal: true` without mutation or another event. |
 | `GET /api/projects/{projectId}/runs` | List accepted runs in the project, newest first, as a `ProjectRunPage`. The caller needs `api.read`, both Orchestrator and Projects audiences, and current project or tenant read permission from Projects & Config. A run-bound token sees only its own run. The keyset cursor is opaque and bound to the query. A state filter is applied to each run's derived state, so a selective filter can read many older runs before it fills a page. Each `ProjectRunSummary` reports the run ID, root session ID, derived state, timestamps, `completedAt`, and the accepting actor as `startedBy`. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/root` | Accept the root session for the current accepted run selection and register it with Events & Sessions. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/decisions` | Read the current typed decision state and pending gate without exposing a transferable authorization or provider pin. |

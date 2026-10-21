@@ -1,4 +1,40 @@
 /** JSON contracts exchanged by the v1 browser, Gateway, and resource owners. */
+/** Interactive run input persisted before the existing Broker run-binding redirect. */
+export interface CreateProjectRunRequest {
+  firstMessage: string;
+  expectedProjectConfigRevision: number;
+  title?: string;
+  workflowId?: string;
+}
+
+/** Stable run and root identities used to resume a new chat after a reload. */
+export interface CreateProjectRunResponse {
+  runId: string;
+  rootSessionId: string;
+  state: 'awaiting_binding';
+  binding: { projectId: string; runId: string };
+}
+
+/** Receipt for idempotent first-message delivery to the accepted root. */
+export interface StartProjectRunResponse {
+  runId: string;
+  rootSessionId: string;
+  state: 'started';
+}
+
+/** Optional human-readable explanation saved with a cancellation. */
+export interface CancelProjectRunRequest {
+  reason?: string;
+}
+
+/** Durable cancellation receipt; ended runs are successful no-ops with no new cancellation timestamp. */
+export interface CancelProjectRunResponse {
+  runId: string;
+  state: 'cancelled' | 'completed' | 'failed' | 'indeterminate';
+  cancelledAt: string | null;
+  alreadyTerminal: boolean;
+}
+
 /** Problem details returned for failed Gateway requests. */
 export interface Problem {
   type?: string;
@@ -676,6 +712,58 @@ export interface ProjectRunPage {
   projectId: string;
   items: ProjectRunSummary[];
   nextCursor: string | null;
+}
+
+/** Created and terminal-completed run counts on one UTC calendar day. */
+export interface ProjectMetricsDay {
+  date: string;
+  created: number;
+  completed: number;
+}
+
+/** Orchestrator-owned current state, lifetime total, and half-open interval run metrics. */
+export interface ProjectMetrics {
+  projectId: string;
+  from: string;
+  to: string;
+  activeRuns: number;
+  blockedRuns: number;
+  runsInRange: number;
+  runsTotal: number;
+  completedRuns: number;
+  succeededRuns: number;
+  series: ProjectMetricsDay[];
+}
+
+/** Persisted cost subtotal; consumers must not combine units or replace unknown amounts with zero. */
+export interface ProjectUsageCost {
+  priceUnit: string | null;
+  disposition: 'estimate' | 'reconciled' | 'unpriced';
+  amount: number | null;
+}
+
+/** Model or agent ledger aggregate; any missing measurement makes its aggregate null. */
+export interface ProjectUsageItem {
+  id: string;
+  requestCount: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  avgDurationMs: number | null;
+  runs: number;
+  unpricedRequestCount: number | null;
+  cost: ProjectUsageCost[];
+}
+
+/** Events-owned usage grouped independently by persisted model and agent IDs. */
+export interface ProjectUsage {
+  projectId: string;
+  from: string;
+  to: string;
+  usageByModel: ProjectUsageItem[];
+  usageByAgent: ProjectUsageItem[];
 }
 
 /** Revision-fenced skill assignment update sent to the Projects owner. */

@@ -156,6 +156,8 @@ exposes project configuration and run-selection operations.
 | POST | `/{projectId}/casting/import` | Admin | Stage a digest-checked transfer; request body limit 1 MiB. | Yes |
 | PUT | `/{projectId}/runs/{runId}/selection` | Selection | Accept an immutable run selection. | Yes |
 | GET | `/{projectId}/runs/{runId}/selection` | Selection | Read the accepted selection. | Yes |
+| PUT | `/{projectId}/runs/{runId}/interactive-selection` | Selection | Accept a new chat run selection from current server configuration. The Orchestrator calls this route during run creation. | No |
+| GET | `/{projectId}/runs/{runId}/cancellation-selection` | `api.read`, `projects.orchestrator`, unbound project cancellation authority | Read the saved selection after a fresh Contributor, Owner, or tenant-admin check. Used by Orchestrator cancellation, not run admission. | No |
 
 ### Project role assignments
 
@@ -324,6 +326,39 @@ See [Projects & Config](../architecture/projects-config.md) and
 
 Source: `services/orchestrator/Agentweaver.Orchestrator/`.
 
+### Runs
+
+Native prefix: `/api/projects/{projectId}/runs`.
+Gateway prefix: `/api/v1/projects/{projectId}/runs`.
+
+These routes start a new chat run, deliver its first message, and cancel it.
+Create and start require the project Orchestrator role (`acceptRunSelection`).
+Owner or Contributor alone receives `403` when creating a chat.
+A tenant admin grants the caller the project
+Orchestrator role through
+`/api/v1/projects/{projectId}/role-assignments`.
+
+| Method | Suffix | Token | Purpose | Gateway |
+| --- | --- | --- | --- | --- |
+| POST | `/` | Not bound to a run | Save the first message, mint `runId` and `rootSessionId`, and accept the run selection. Returns `201` with `awaiting_binding`. | Yes |
+| POST | `/{runId}/start` | Bound to the run | Accept the root session and deliver the saved first message once. Returns `200` with `started`. | Yes |
+| POST | `/{runId}/cancel` | Not bound to a run | Cancel any run as a current project Contributor, Owner, or tenant admin. Viewer receives `403`. Returns `200`, including terminal no-ops. | Yes |
+
+Create and cancel require exactly one `Idempotency-Key` header. A retry with
+the same key and body returns the original result. A retry with the same key
+and a different body returns `409 idempotency_conflict`. Start takes no body
+and no key; a repeated start returns the same result without sending the first
+message again. Cancel on a finished run returns `200` with `alreadyTerminal: true`
+and does not change state. Cancellation receipts are scoped to each caller.
+Start has a 30-second deadline covering its request lock and downstream calls;
+a timeout returns `504 run_start_timeout`. Start after cancellation returns
+`409 run_terminal`.
+
+The create request body has `firstMessage` (1–32,768 UTF-8 bytes),
+`expectedProjectConfigRevision`, and optional `title` and `workflowId`. The
+Gateway accepts create bodies up to 256 KiB. Responses never include the first
+message.
+
 ### Run list
 
 Native path: `/api/projects/{projectId}/runs`.
@@ -342,6 +377,84 @@ A run-bound token sees only its own run. `pageSize` defaults to 25 and accepts
 `400 run_state_filter_invalid`, `cursor_invalid`, or `page_size_invalid`.
 Pass `nextCursor` back with the same filter and page size.
 `title` and `goal` are `null` until a run start request stores them.
+
+### Project metrics and usage
+
+Use these read-only routes for one project's dashboard:
+
+| Gateway path (GET) | Owner path | Operation ID |
+| --- | --- | --- |
+| `/api/v1/projects/{projectId}/metrics?from=&to=&bucket=day` | Orchestrator `/api/projects/{projectId}/metrics` | `readProjectMetrics` |
+| `/api/v1/projects/{projectId}/usage?from=&to=` | Events & Sessions `/api/projects/{projectId}/usage` | `readProjectUsage` |
+
+Both owners require `api.read`, their own audience and the Projects audience,
+and a fresh Projects authorization context. The caller needs project
+`readProjects` or `readRunSelection`, or tenant `readProjects`. Unbound and
+project-bound callers can read the project. A run-bound caller sees only its
+own run. Both responses use `Cache-Control: no-store`.
+
+`from` is inclusive and `to` is exclusive. Supply ISO dates (`2026-10-01`)
+or timestamps with an explicit offset (`2026-10-01T00:00:00Z`). Dates start
+at UTC midnight. When `to` is omitted, it defaults to the current UTC time.
+When `from` is omitted, it defaults to 30 days before `to`. An interval can
+span at most 92 days. Equal bounds are valid and return no interval activity.
+Only metrics accepts `bucket`; its only value is `day`. Unknown or repeated
+query parameters, invalid dates, reversed bounds, and unsupported buckets
+return a `400` problem response with `title` and `code` set to `query_invalid`.
+The response does not include exception text. A default start date earlier
+than the supported date range is also invalid.
+
+Metrics returns `projectId`, normalized `from` and `to`, the counts below,
+and `series`. Current state and lifetime counts are not limited by the date
+range. They still respect tenant, project, and run-bound scope.
+
+| Field | v1 definition | 0.x dashboard mapping |
+| --- | --- | --- |
+| `activeRuns` | Runs whose derived state is `active`, including presenting root turns. | Active runs tile; does not include the separate active-agent count. |
+| `blockedRuns` | Runs whose derived state is `blocked`. | Additional v1 state detail, not a summary tile in 0.x. |
+| `runsInRange` | Runs with `created_at` in `[from,to)`. | Runs this week when callers select that week; Created total for the selected range. |
+| `runsTotal` | All accepted runs in the authorized scope. | Total run count. |
+| `completedRuns` | Terminal runs (`completed`, `failed`, `cancelled`, `indeterminate`) with `completed_at` in `[from,to)`. | Completed total and Done series; not the 0.x completed-task count. |
+| `succeededRuns` | Runs in `completedRuns` whose derived state is `completed`. | Numerator for v1 run success; not the 0.x agent-dependency success measure. |
+| `series[].date` | UTC calendar date, ascending, for each day intersecting the interval. | Runs over time and daily activity. |
+| `series[].created` | Runs created within the interval on that UTC day. | Created series. |
+| `series[].completed` | Terminal runs completed within the interval on that UTC day. | Done series. |
+
+Days with no activity have zero counts. An equal-bound interval has an empty
+series. A run created before the interval can contribute to its completion
+count. Terminal rows without `completed_at` do not contribute to completion
+metrics.
+
+These definitions map to the 0.x dashboard controls. v1 uses persisted
+owner data, not Application Insights, and cannot reproduce historic 0.x
+telemetry. v1 run success is `succeededRuns / completedRuns`; display it as
+unknown when the denominator is zero. 0.x used per-agent dependency success,
+so the two percentages are not equivalent.
+
+Usage returns `projectId`, normalized `from` and `to`, `usageByModel`, and
+`usageByAgent`. Each array item has `id` (persisted `model_id` or `agent_id`),
+`requestCount`, `inputTokens`, `outputTokens`, `cachedTokens`,
+`cacheWriteTokens`, `reasoningTokens`, `avgDurationMs`, `runs`, `cost`, and
+`unpricedRequestCount`. Empty intervals or projects have empty usage arrays.
+`runs` counts distinct `run_id` values represented in that group and interval.
+These groups replace the model metrics and usage portion of the agent
+leaderboard, not agent-role or agent-success telemetry.
+
+Token and request counts are sums of recorded measurements. `avgDurationMs`
+is the arithmetic mean of ledger-event durations, not a request-weighted mean.
+If any included row lacks a measurement, that aggregate is `null`, not zero.
+TTFT is not returned because the ledger does not record it.
+
+`cost[]` keeps a separate subtotal for each `(priceUnit, disposition)` pair.
+Disposition is `estimate`, `reconciled`, or `unpriced`. Never sum across
+units. An unpriced amount remains `null`, including a missing unit.
+`unpricedRequestCount` sums request counts on unpriced rows; it is `null`
+when any such row has an unknown request count, and zero when no rows are
+unpriced. Reads do not price, reprice, reserve, or change budgets.
+
+Cross-project overview is out of scope. The Gateway proxies each owner; it
+does not combine metrics and usage into one response. Clients that need
+aligned intervals should pass the same explicit bounds to both routes.
 
 ### Coordination
 

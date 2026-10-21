@@ -66,7 +66,13 @@ internal static partial class GatewayOpenApi
             ["readSourceControlMergeIntent"] = C(null, "SourceControlMergeIntentView", "200"),
             ["executeSourceControlMergeIntent"] = C(null, "SourceControlMergeExecutionView", "200"),
             ["listProjectRuns"] = C(null, "ProjectRunPage", "200"),
+            // Reporting contracts stay separate across the two data owners.
+            ["readProjectMetrics"] = C(null, "ProjectMetrics", "200"),
+            ["readProjectUsage"] = C(null, "ProjectUsage", "200"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
+            ["createProjectRun"] = C("CreateProjectRunRequest", "CreateProjectRunResponse", "201"),
+            ["startProjectRun"] = C(null, "StartProjectRunResponse", "200"),
+            ["cancelProjectRun"] = C("CancelProjectRunRequest", "CancelProjectRunResponse", "200"),
             ["proposeOutcome"] = C("ProposeCoordinatorOutcomeRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readRunStatus"] = C(null, "OwnerRunStatus", "200"),
             ["recoverRun"] = C("RecoverRunExecutionRequest", "RunExecutionTransitionResult", "200"),
@@ -213,6 +219,8 @@ internal static partial class GatewayOpenApi
             }).ToArray();
 
         if (route.OperationId is
+            "createProjectRun" or
+            "cancelProjectRun" or
             "createKnowledgeRecord" or
             "updateKnowledgeRecord" or
             "restoreKnowledgeRecord" or
@@ -300,6 +308,12 @@ internal static partial class GatewayOpenApi
                 "The owner hides foreign projects and memberships found inactive or stale during the inventory recheck. " +
                 "Inactive membership rejected during initial caller resolution returns 403.");
         }
+        else if (route.OperationId is "readProjectMetrics" or "readProjectUsage")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected an unknown or repeated query key, an invalid ISO date or offset timestamp, " +
+                "a reversed interval, a range longer than 92 days, or a bucket other than day.");
+        }
         else if (route.OperationId == "listProjectRuns")
         {
             responses["400"] = ProblemResponse(
@@ -367,6 +381,14 @@ internal static partial class GatewayOpenApi
                 "after the read and permits archived projects. The opaque cursor uses stable SkillId-ascending " +
                 "order in C collation, then revision-descending order. It does not make multiple pages a " +
                 "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
+        }
+        else if (route.OperationId is "readProjectMetrics" or "readProjectUsage")
+        {
+            description +=
+                " Requires api.read, the owner and Projects audiences, and fresh Projects readProjects or " +
+                "readRunSelection project authority, or tenant readProjects. A run-bound caller sees only its run. " +
+                "Responses are no-store. The half-open UTC interval [from,to) defaults to the preceding 30 days " +
+                "and cannot exceed 92 days. Cross-project overview is out of scope. Usage reads never price or budget.";
         }
         else if (route.OperationId == "listProjectRuns")
         {
@@ -491,6 +513,17 @@ internal static partial class GatewayOpenApi
 
     private static object QuerySchema(string operationId, string name)
     {
+        // Reporting owners accept dates and explicitly offset timestamps, never local-time strings.
+        if (operationId is "readProjectMetrics" or "readProjectUsage")
+            return name == "bucket"
+                ? new { type = "string", @enum = new[] { "day" }, @default = "day" }
+                : new
+                {
+                    type = "string",
+                    pattern = @"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|[+-]\d{2}:\d{2}))?$",
+                    description = "ISO date or timestamp with explicit offset; UTC half-open range, at most 92 days."
+                };
+
         if (operationId == "listProjectCastingProposals" && name == "limit")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 50 };
 
@@ -937,7 +970,47 @@ internal static partial class GatewayOpenApi
             ("startedBy", Ref("ProjectRunStartedBy"))),
         ["ProjectRunPage"] = StrictObj(["projectId", "items", "nextCursor"],
             ("projectId", Str()), ("items", Arr(Ref("ProjectRunSummary"))), ("nextCursor", NullableStr())),
+        // Strict reporting schemas preserve nullable measurements and independent cost units.
+        ["ProjectMetricsDay"] = StrictObj(["date", "created", "completed"],
+            ("date", new { type = "string", format = "date" }), ("created", Int()), ("completed", Int())),
+        ["ProjectMetrics"] = StrictObj(
+            ["projectId", "from", "to", "activeRuns", "blockedRuns", "runsInRange", "runsTotal",
+                "completedRuns", "succeededRuns", "series"],
+            ("projectId", Str()), ("from", Date()), ("to", Date()),
+            ("activeRuns", Int()), ("blockedRuns", Int()), ("runsInRange", Int()), ("runsTotal", Int()),
+            ("completedRuns", Int()), ("succeededRuns", Int()), ("series", Arr(Ref("ProjectMetricsDay")))),
+        ["ProjectUsageCost"] = StrictObj(["priceUnit", "disposition", "amount"],
+            ("priceUnit", NullableStr()), ("disposition", Enum("estimate", "reconciled", "unpriced")),
+            ("amount", NullableNumber())),
+        ["ProjectUsageItem"] = StrictObj(
+            ["id", "requestCount", "inputTokens", "outputTokens", "cachedTokens", "cacheWriteTokens",
+                "reasoningTokens", "avgDurationMs", "runs", "unpricedRequestCount", "cost"],
+            ("id", Str()), ("requestCount", NullableInt()), ("inputTokens", NullableNumber()),
+            ("outputTokens", NullableNumber()), ("cachedTokens", NullableNumber()),
+            ("cacheWriteTokens", NullableNumber()), ("reasoningTokens", NullableNumber()),
+            ("avgDurationMs", NullableNumber()), ("runs", Int()), ("unpricedRequestCount", NullableInt()),
+            ("cost", Arr(Ref("ProjectUsageCost")))),
+        ["ProjectUsage"] = StrictObj(["projectId", "from", "to", "usageByModel", "usageByAgent"],
+            ("projectId", Str()), ("from", Date()), ("to", Date()),
+            ("usageByModel", Arr(Ref("ProjectUsageItem"))), ("usageByAgent", Arr(Ref("ProjectUsageItem")))),
         ["AcceptRootRequest"] = Obj(["sessionId"], ("sessionId", Str())),
+        // The message limit is UTF-8 bytes at the owner, not a JavaScript character count.
+        ["CreateProjectRunRequest"] = Obj(["firstMessage", "expectedProjectConfigRevision"],
+            ("firstMessage", new { type = "string", minLength = 1, maxLength = 32768 }),
+            ("expectedProjectConfigRevision", new { type = "integer", minimum = 1 }),
+            ("title", new { type = "string", minLength = 1, maxLength = 256 }),
+            ("workflowId", new { type = "string", minLength = 1, maxLength = 256 })),
+        ["ProjectRunBinding"] = Obj(["projectId", "runId"], ("projectId", Str()), ("runId", Str())),
+        ["CreateProjectRunResponse"] = Obj(["runId", "rootSessionId", "state", "binding"],
+            ("runId", Str()), ("rootSessionId", Str()), ("state", Enum("awaiting_binding")),
+            ("binding", Ref("ProjectRunBinding"))),
+        ["StartProjectRunResponse"] = Obj(["runId", "rootSessionId", "state"],
+            ("runId", Str()), ("rootSessionId", Str()), ("state", Enum("started"))),
+        ["CancelProjectRunRequest"] = Obj([], ("reason", new { type = "string", maxLength = 2048 })),
+        // Terminal cancellations are successful no-ops, not conflicts or invented cancellation times.
+        ["CancelProjectRunResponse"] = Obj(["runId", "state", "cancelledAt", "alreadyTerminal"],
+            ("runId", Str()), ("state", Enum("cancelled", "completed", "failed", "indeterminate")),
+            ("cancelledAt", NullableStr()), ("alreadyTerminal", Bool())),
         ["ProposeCoordinatorOutcomeRequest"] = Obj(["expectedStateVersion", "idempotencyKey", "requestId", "specification"],
             ("expectedStateVersion", Int()), ("idempotencyKey", Str()), ("requestId", Str()),
             ("specification", Ref("CoordinatorOutcomeSpecification"))),
