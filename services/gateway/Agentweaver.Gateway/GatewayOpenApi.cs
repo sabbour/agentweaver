@@ -150,6 +150,7 @@ internal static partial class GatewayOpenApi
             ["replayRunEvents"] = C(null, "SessionEventPage", "200"),
             ["streamRunEvents"] = C(null, "SessionEventPage", "200"),
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
+            ["listRemoteMcpConnections"] = C(null, "RemoteMcpConnectionDirectoryPage", "200"),
             ["readProjectBacklog"] = C(null, "BacklogGraph", "200"),
             ["captureBacklogTask"] = C("CaptureBacklogTaskRequest", "BacklogGraph", "200"),
             ["editBacklogTaskContent"] = C("EditBacklogTaskContentRequest", "BacklogGraph", "200"),
@@ -1741,6 +1742,19 @@ else if (route.OperationId is
             ("cacheWriteTokens", NullableInt())),
         ["UsageAmountTotal"] = Obj(["meterSource", "unit", "amount", "pricedEvents", "unpricedEvents"],
             ("meterSource", Str()), ("unit", Str()), ("amount", Number()), ("pricedEvents", Int()), ("unpricedEvents", Int())),
+        ["RemoteMcpConnectionDirectoryPage"] = Obj(["connections", "nextConnectionId"],
+            ("connections", Arr(Ref("RemoteMcpConnectionDirectoryEntry"))), ("nextConnectionId", Nullable(Uuid()))),
+        ["RemoteMcpConnectionDirectoryEntry"] = Obj(
+            ["connectionId", "displayName", "endpointUri", "resourceUri", "authenticationMode", "transportProfile",
+                "state", "rowRevision", "configurationRevision", "configurationSha256", "identityBound",
+                "registryServerName", "registryExactVersion", "discoveryRevision", "catalogSha256", "toolCount"],
+            ("connectionId", Uuid()), ("displayName", Str()), ("endpointUri", Str()), ("resourceUri", NullableStr()),
+            ("authenticationMode", Enum("none", "delegatedOAuth")),
+            ("transportProfile", Enum("streamableHttp20250618")),
+            ("state", Enum("draft", "enabled", "disabled", "removed")),
+            ("rowRevision", Int()), ("configurationRevision", Int()), ("configurationSha256", Str()),
+            ("identityBound", Bool()), ("registryServerName", NullableStr()), ("registryExactVersion", NullableStr()),
+            ("discoveryRevision", NullableInt()), ("catalogSha256", NullableStr()), ("toolCount", Int())),
     };
 
     private static object Obj(

@@ -478,6 +478,58 @@ describe('Gateway API client', () => {
     expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
   });
 
+  it('lists project Remote MCP connections through the Gateway directory route', async () => {
+    const entry = {
+      connectionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      displayName: 'Docs',
+      endpointUri: 'https://mcp.example.test/mcp',
+      resourceUri: null,
+      authenticationMode: 'delegatedOAuth',
+      transportProfile: 'streamableHttp20250618',
+      state: 'enabled',
+      rowRevision: 3,
+      configurationRevision: 2,
+      configurationSha256: 'a'.repeat(64),
+      identityBound: true,
+      registryServerName: null,
+      registryExactVersion: null,
+      discoveryRevision: 1,
+      catalogSha256: 'b'.repeat(64),
+      toolCount: 2,
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ connections: [entry], nextConnectionId: null }), { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    const page = await client.listRemoteMcpConnections(
+      'current-user-token',
+      'project-1',
+      { pageSize: 10, after: 'aaaaaaaa-bbbb-cccc-dddd-000000000000' },
+      'tenant-1',
+    );
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe(
+      'https://gateway.example.test/api/v1/projects/project-1/remote-mcp/connections?pageSize=10&after=aaaaaaaa-bbbb-cccc-dddd-000000000000',
+    );
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(page.connections[0].configurationSha256).toBe('a'.repeat(64));
+  });
+
+  it('rejects a Remote MCP directory page with a malformed checksum', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({
+        connections: [{ connectionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', configurationSha256: 'nope' }],
+        nextConnectionId: null,
+      }), { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.listRemoteMcpConnections('current-user-token', 'project-1'))
+      .rejects.toMatchObject({ status: 502, code: 'invalid_owner_response' });
+  });
+
   it('keeps repository pin run-bound and preserves legacy bodyless pin requests', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),

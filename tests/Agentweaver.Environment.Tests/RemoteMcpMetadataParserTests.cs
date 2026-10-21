@@ -80,4 +80,45 @@ public sealed class RemoteMcpMetadataParserTests
         Assert.Throws<InvalidDataException>(() =>
             RemoteMcpMetadataParser.ParseToolsList(Encoding.UTF8.GetBytes(oversizedSchema)));
     }
+
+    [Fact]
+    public void SinglePageParserRejectsResponseThatHasMorePages()
+    {
+        var json = """{"result":{"tools":[{"name":"a","inputSchema":{"type":"object"}}],"nextCursor":"page-2"}}""";
+
+        Assert.Throws<InvalidDataException>(() =>
+            RemoteMcpMetadataParser.ParseToolsList(Encoding.UTF8.GetBytes(json)));
+        var page = RemoteMcpMetadataParser.ParseToolsListPage(Encoding.UTF8.GetBytes(json));
+        Assert.Equal("page-2", page.NextCursor);
+        Assert.Single(page.Tools);
+    }
+
+    [Fact]
+    public void CatalogFromPagesIsOrderIndependentAndRejectsCrossPageDuplicates()
+    {
+        var first = RemoteMcpMetadataParser.ParseToolsListPage(Encoding.UTF8.GetBytes(
+            """{"result":{"tools":[{"name":"b","inputSchema":{"type":"object"}}],"nextCursor":"next"}}"""));
+        var second = RemoteMcpMetadataParser.ParseToolsListPage(Encoding.UTF8.GetBytes(
+            """{"result":{"tools":[{"name":"a","inputSchema":{"type":"object"}}]}}"""));
+        var duplicate = RemoteMcpMetadataParser.ParseToolsListPage(Encoding.UTF8.GetBytes(
+            """{"result":{"tools":[{"name":"b","inputSchema":{"type":"object"}}]}}"""));
+
+        var paged = RemoteMcpMetadataParser.BuildCatalog(first.Tools.AddRange(second.Tools));
+        var single = RemoteMcpMetadataParser.ParseToolsList(Encoding.UTF8.GetBytes(
+            """{"result":{"tools":[{"name":"a","inputSchema":{"type":"object"}},{"name":"b","inputSchema":{"type":"object"}}]}}"""));
+
+        Assert.Equal(single.CatalogSha256, paged.CatalogSha256);
+        Assert.Equal(["a", "b"], paged.Tools.Select(tool => tool.Name));
+        Assert.Throws<InvalidDataException>(() =>
+            RemoteMcpMetadataParser.BuildCatalog(first.Tools.AddRange(duplicate.Tools)));
+    }
+
+    [Theory]
+    [InlineData("""{"result":{"tools":[],"nextCursor":42}}""")]
+    [InlineData("""{"result":{"tools":[],"nextCursor":"bad\u0001cursor"}}""")]
+    public void ToolsListPageRejectsInvalidCursors(string json)
+    {
+        Assert.Throws<InvalidDataException>(() =>
+            RemoteMcpMetadataParser.ParseToolsListPage(Encoding.UTF8.GetBytes(json)));
+    }
 }

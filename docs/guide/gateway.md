@@ -60,6 +60,7 @@ Set the following configuration before you start the host:
 | `Gateway:Owners:Knowledge` | HTTPS service root for Knowledge. |
 | `Gateway:Owners:Events` | HTTPS service root for Events. |
 | `Gateway:Owners:IdentityBrokerAddress` | HTTPS service root for the Identity Broker. |
+| `Gateway:Owners:Environment` | Optional HTTPS service root for Environment. Without it, Environment routes return 503 `owner_not_configured`. |
 | `Gateway:WebOrigin` | The Web application's exact HTTPS origin, for example `https://portal.<managed-domain>`. |
 | `Gateway:OwnerRequestTimeoutSeconds` | Finite timeout from 1 through 120 seconds. The default is 15 seconds. |
 
@@ -241,6 +242,19 @@ the complete body before forwarding, including requests without
 Transfer version or
 team incompatibility returns `422`. These source routes do not establish
 deployment or a browser wizard.
+
+## List Remote MCP connections
+
+`GET /api/v1/projects/{projectId}/remote-mcp/connections` lists the project's
+Remote MCP connections. The Gateway forwards the request to the Environment
+`/api/projects/{projectId}/remote-mcp/directory` route with the bearer token
+and tenant selector. It accepts `pageSize` (1 through 100, default 50) and
+`after`, the last connection ID of the previous page. Each entry includes the
+configuration revision, the configuration SHA-256, the state, the Identity
+binding flag, and the current discovery revision and catalog SHA-256. Entries
+never include credentials, tokens, or tool schemas. Environment requires
+current `ReadProjects` authority. For the full contract, see
+[Remote MCP connections](../architecture/remote-mcp-connections.md).
 
 ## Send idempotent writes
 
