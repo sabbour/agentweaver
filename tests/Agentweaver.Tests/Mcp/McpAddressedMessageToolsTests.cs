@@ -24,6 +24,7 @@ public sealed class McpAddressedMessageToolsTests
             .Should().Contain("accepted");
         (await tools.ListAsync("project", "run-2")).Should().Contain("accepted");
         (await tools.GetAsync("project", "message-1")).Should().Contain("accepted");
+        (await tools.RetryAsync("project", "message-1", "retry-2", "run-3")).Should().Contain("accepted");
         (await tools.ClaimAsync("project", "worker-1")).Should().Contain("accepted");
         (await tools.DeliverAsync("project", "message-1", "worker-1", 7)).Should().Contain("accepted");
         (await tools.AcknowledgeAsync("project", "message-1")).Should().Contain("accepted");
@@ -32,13 +33,17 @@ public sealed class McpAddressedMessageToolsTests
             "/api/projects/project/agent-messages",
             "/api/projects/project/agent-messages?run_id=run-2",
             "/api/projects/project/agent-messages/message-1",
+            "/api/projects/project/agent-messages/message-1/retry",
             "/api/projects/project/agent-messages/claim",
             "/api/projects/project/agent-messages/message-1/deliver",
             "/api/projects/project/agent-messages/message-1/acknowledge");
         using var sent = JsonDocument.Parse(handler.Requests[0].Body!);
         sent.RootElement.GetProperty("target_run_id").GetString().Should().Be("run-2");
         sent.RootElement.GetProperty("idempotency_key").GetString().Should().Be("retry-1");
-        using var delivered = JsonDocument.Parse(handler.Requests[4].Body!);
+        using var retried = JsonDocument.Parse(handler.Requests[3].Body!);
+        retried.RootElement.GetProperty("idempotency_key").GetString().Should().Be("retry-2");
+        retried.RootElement.GetProperty("target_run_id").GetString().Should().Be("run-3");
+        using var delivered = JsonDocument.Parse(handler.Requests[5].Body!);
         delivered.RootElement.GetProperty("fence").GetInt64().Should().Be(7);
     }
 
