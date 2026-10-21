@@ -386,8 +386,14 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
         var receipt = new RuntimeUsageSourceReceipt(1, Guid.NewGuid(), registration, usage,
             RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
-        var undispatched = RuntimeUsageSourceReceiptContract.CreateUsage(
-            registration, source, observation with { A2AMessageId = null });
+        // A distinct SDK event keeps the uncorrelated usage from reusing the correlated usage event ID.
+        var uncorrelatedEvent = Guid.NewGuid().ToString("D");
+        var undispatched = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation with
+        {
+            EventId = SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, uncorrelatedEvent),
+            SdkEventId = uncorrelatedEvent,
+            A2AMessageId = null
+        });
         var untrusted = Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt with
             {
