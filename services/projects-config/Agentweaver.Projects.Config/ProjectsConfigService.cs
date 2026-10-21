@@ -697,6 +697,57 @@ public sealed partial class ProjectsConfigService
     }
 
     /// <summary>
+    /// Resolves the current project-scope spend budgets from the current project and platform revisions, so a
+    /// tightened project budget applies to the next dispatch of every accepted run.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The caller, project, run selection, or current configuration is not valid.</exception>
+    public async Task<CurrentProjectSpendBudgets> GetCurrentProjectSpendBudgetsAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
+        caller.RequireResourceBinding(projectId, runId);
+        if (!await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Project,
+            projectId,
+            ProjectAuthorityRole.Orchestrator,
+            cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+        var project = await FindTenantProjectAsync(caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        if (!await db.RunSelections.AsNoTracking()
+            .AnyAsync(item => item.ProjectId == project.ProjectId && item.RunId == runId, cancellationToken)
+            .ConfigureAwait(false))
+            throw ProjectConfigException.NotFound();
+
+        var projectVersion = await db.ProjectConfigurationRevisions.AsNoTracking()
+            .SingleAsync(item => item.ProjectId == project.ProjectId &&
+                item.Revision == project.ConfigurationRevision, cancellationToken)
+            .ConfigureAwait(false);
+        var projectConfiguration = ProjectConfigurationValidator.Validate(
+            Deserialize<ProjectConfiguration>(projectVersion.ConfigurationJson));
+        var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
+        if (platformHead.CurrentRevision == 0)
+            throw new ProjectConfigException(
+                "platform_runtime_unconfigured",
+                "Platform runtime defaults must be configured before reading spend budgets.",
+                StatusCodes.Status409Conflict);
+        var platformVersion = await db.PlatformRuntimeRevisions.AsNoTracking()
+            .SingleAsync(item => item.Revision == platformHead.CurrentRevision, cancellationToken)
+            .ConfigureAwait(false);
+        var defaults = Deserialize<PlatformRuntimeDefaults>(platformVersion.ConfigurationJson);
+        var limits = ProjectConfigurationValidator.ResolveLimits(defaults, projectConfiguration.RunLimits);
+        return new CurrentProjectSpendBudgets(
+            project.ProjectId,
+            project.ConfigurationRevision,
+            platformHead.CurrentRevision,
+            [.. (limits.SpendBudgets ?? []).Where(budget => budget.Scope == SpendBudgetScopes.Project)]);
+    }
+
+    /// <summary>
     /// Builds a bounded proof for the exact signed Broker request from current authority and the stored selection hash.
     /// </summary>
     /// <exception cref="ProjectConfigException">The caller, active project, assignment, or selection binding is no longer valid.</exception>

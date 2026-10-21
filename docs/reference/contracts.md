@@ -104,6 +104,19 @@ equals the cursor. Events never reports `SourceComplete`; callers compare witnes
 receipts with their own completion manifest. `ValidateEvidence` rejects any
 response that does not match its request.
 
+A request can also name an `AgentId`. The evidence then includes an `Agent`
+total for that agent in the run. Dispatch witnesses match dispatches from any run
+in the project, because project budgets hold exposure for other runs.
+
+`SpendBudgetContract` defines spend budgets. A `SpendBudget` has a `BudgetId`, a
+`Revision`, a `Scope` (`project`, `run`, or `agent`), a meter source and unit, an
+optional `SoftLimit`, an optional `HardLimit`, and a positive
+`ReservePerDispatch`. Agent budgets name an `AgentId`. Project budgets name an
+explicit `Period` with an inclusive start and exclusive end. The soft limit
+can't exceed the hard limit, and one configuration layer can't have two budgets
+for the same bucket. `CurrentProjectSpendBudgets` returns the current project
+budgets with the project and platform revisions that produced them.
+
 ## Gateway API and server-sent events
 
 The `Agentweaver.Gateway` source exposes a finite, versioned client API at
@@ -1026,6 +1039,7 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 | `GET /api/authorization/context` | Versioned current effective permission context, filtered by the validated audience, `api.read` scope, purpose, optional tenant selector, and project/run bindings. Returns `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}?runId={runId}` | Read project metadata for an exactly matching run-bound token after fresh current `ReadProjects` authorization. Purpose-bound, unbound, or mismatched tokens and duplicate/unknown query parameters are denied; the response is `Cache-Control: no-store`. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, enabled only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. It requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the active project, current actor membership, active Orchestrator assignment, exact project/run token binding, and matching run selection. |
+| `GET /api/projects/{projectId}/runs/{runId}/spend-budgets` | Orchestrator-only read of `CurrentProjectSpendBudgets`. Requires `api.read`, the Orchestrator scope and current role, an exact project/run binding, and an accepted run selection. Resolves project-scope budgets from the current project and platform revisions, so a changed project budget applies to the next dispatch of every run. Returns `Cache-Control: no-store`. |
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
 

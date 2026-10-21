@@ -486,6 +486,35 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SpendEvidenceReportsAgentTotalsAndWitnessesDispatchesFromOtherRuns()
+    {
+        var receipt = AzureByokReceipt();
+        var (consumer, _, _) = AzureConsumer(1.25m, 5.75m);
+        var accepted = await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default);
+        var dispatch = receipt.Usage.A2AMessageId!.Value.ToString("D");
+        var periodStart = DateTimeOffset.UtcNow.AddDays(-1);
+        var request = new UsageSpendEvidenceRequest(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD",
+            new("current", periodStart, periodStart.AddDays(2)), [dispatch])
+        {
+            AgentId = receipt.Usage.Attribution.AgentId
+        };
+
+        var own = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", request);
+        UsageSpendEvidenceContract.ValidateEvidence(own, request, "tenant-1", "project-1", "run-1");
+        Assert.Equal(new UsageSpendTotal(accepted.Accounting.Amount!.Value, 1, 0), own.Agent);
+        var other = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-other", request);
+        UsageSpendEvidenceContract.ValidateEvidence(other, request, "tenant-1", "project-1", "run-other");
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), other.Run);
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), other.Agent);
+        Assert.Equal(own.ProjectPeriod, other.ProjectPeriod);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(other.Dispatches[0].Receipts).SourceReceiptId);
+        var stranger = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1",
+            request with { AgentId = "agent-other" });
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), stranger.Agent);
+    }
+
+    [Fact]
     public async Task ConcurrentAzureByokReplaysCommitOneImmutableCharge()
     {
         var receipt = AzureByokReceipt();

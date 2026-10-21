@@ -186,6 +186,8 @@ public static partial class CoordinationEndpoints
                 CoordinatorWorkflowCatalog.ReadMaxWallTimeSeconds(selection.Selection.Snapshot);
             _ =
                 CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(selection.Selection.Snapshot);
+            var pinnedSpendBudgets = CoordinatorWorkflowCatalog.ReadSpendBudgets(selection.Selection.Snapshot)
+                .Where(budget => budget.Scope != SpendBudgetScopes.Project).ToImmutableArray();
             var sessions = await store.ReadSessionTreeAsync(actor, identity, cancellationToken)
                 .ConfigureAwait(false);
             var rootSession = sessions.Nodes.SingleOrDefault(
@@ -369,12 +371,16 @@ public static partial class CoordinationEndpoints
                     if (runtimeSourceOwner is null)
                         throw new CoordinationException(
                             "maf_execution_native_source_unavailable", StatusCodes.Status503ServiceUnavailable);
+                    var projectSpendBudgets = await projects.ReadCurrentProjectSpendBudgetsAsync(
+                        context, projectId, runId, token).ConfigureAwait(false);
                     await runtimeSourceOwner.PrepareNativeTurnAsync(
                         context, registration, identity, currentIntent.Snapshot, intent, message,
                         (connection, transaction, currentToken) =>
                             decisions.RequireCurrentDispatchStateInTransactionAsync(
                                 connection, transaction, actor, identity, selection, selectionContext,
-                                decision.StateVersion, decision.State.Fence, plan.Plan.Id, currentToken), token)
+                                decision.StateVersion, decision.State.Fence, plan.Plan.Id, currentToken), token,
+                        new SpendBudgetAdmissionContext(pinnedSpendBudgets,
+                            projectSpendBudgets.Budgets.IsDefaultOrEmpty ? null : projectSpendBudgets))
                         .ConfigureAwait(false);
                     response = await SendRuntimeHostMessageAsync(
                         hostClient,

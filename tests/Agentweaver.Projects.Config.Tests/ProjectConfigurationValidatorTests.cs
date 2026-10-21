@@ -440,6 +440,49 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void SpendBudgetsInheritAddProjectBudgetsAndCanOnlyNarrowPlatformBudgets()
+    {
+        var period = new UsageSpendPeriod("2026-09",
+            new(2026, 9, 1, 0, 0, 0, TimeSpan.Zero), new(2026, 10, 1, 0, 0, 0, TimeSpan.Zero));
+        var platformBudget = new SpendBudget("platform-aic", 1, SpendBudgetScopes.Run,
+            SdkMeterSources.CopilotNanoAiu, "AIC", 5m, 10m, 1m);
+        var platform = PlatformDefaults() with
+        {
+            RunLimits = PlatformDefaults().RunLimits with { SpendBudgets = [platformBudget] }
+        };
+        Assert.Equal(new[] { platformBudget }, ProjectConfigurationValidator.ResolveLimits(platform, new()).SpendBudgets!.Value.ToArray());
+
+        var projectBudget = new SpendBudget("azure-month", 1, SpendBudgetScopes.Project,
+            SdkMeterSources.ByokTokens, "USD", 50m, 100m, 0.5m) { Period = period };
+        var narrowed = platformBudget with { SoftLimit = 2m, HardLimit = 4m };
+        var resolved = ProjectConfigurationValidator.ResolveLimits(platform, new()
+        {
+            SpendBudgets = [narrowed, projectBudget]
+        }).SpendBudgets!.Value;
+        Assert.Equal(new[] { narrowed, projectBudget }, resolved.ToArray());
+
+        foreach (var invalid in new ImmutableArray<SpendBudget>[]
+        {
+            [platformBudget with { HardLimit = 11m }],
+            [platformBudget with { SoftLimit = null }],
+            [platformBudget with { Unit = "USD" }],
+            [projectBudget with { Period = null }],
+            [projectBudget with { SoftLimit = 101m }],
+            [projectBudget, projectBudget with { BudgetId = "duplicate-bucket" }]
+        })
+            Assert.Throws<ProjectConfigException>(() =>
+                ProjectConfigurationValidator.ResolveLimits(platform, new() { SpendBudgets = invalid }));
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.ResolveLimits(
+            PlatformDefaults() with
+            {
+                RunLimits = PlatformDefaults().RunLimits with
+                {
+                    SpendBudgets = [platformBudget with { ReservePerDispatch = 0m }]
+                }
+            }, new()));
+    }
+
+    [Fact]
     public void OptionalLimitsDoNotChangeHistoricalNullSerializationOrAcceptedSnapshotShape()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);

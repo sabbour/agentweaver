@@ -127,6 +127,16 @@ public sealed class AzureSpendAccountingTests
             evidence with { ProjectPeriodId = "2026-11" }, request, "tenant-1", "project-1", "run-1"));
         Assert.Throws<ArgumentException>(() => UsageSpendEvidenceContract.ValidateEvidence(
             evidence with { Run = new(-1m, 1, 0) }, request, "tenant-1", "project-1", "run-1"));
+
+        var agentRequest = request with { AgentId = "agent-1" };
+        UsageSpendEvidenceContract.ValidateEvidence(
+            evidence with { Agent = new(1.25m, 1, 0) }, agentRequest, "tenant-1", "project-1", "run-1");
+        Assert.Throws<ArgumentException>(() => UsageSpendEvidenceContract.ValidateEvidence(
+            evidence, agentRequest, "tenant-1", "project-1", "run-1"));
+        Assert.Throws<ArgumentException>(() => UsageSpendEvidenceContract.ValidateEvidence(
+            evidence with { Agent = new(1.25m, 1, 0) }, request, "tenant-1", "project-1", "run-1"));
+        Assert.Throws<ArgumentException>(() => UsageSpendEvidenceContract.ValidateRequest(
+            request with { AgentId = " " }));
     }
 
     [Fact]

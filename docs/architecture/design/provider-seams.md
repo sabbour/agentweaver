@@ -846,6 +846,87 @@ flowchart LR
     end
 ```
 
+#### Scoped spend budgets and dispatch exposure
+
+`runLimits.spendBudgets` defines budget buckets. Each bucket is one meter source and unit, such as
+`copilot.nano_aiu` in `AIC` or `byok.tokens` in `USD`, at one scope:
+
+- **Run** budgets limit the run's total.
+- **Agent** budgets limit one agent's total in the run.
+- **Project** budgets limit the project's total for an explicit period with an inclusive start and an
+  exclusive end.
+
+A project can add budgets. It can only narrow a platform budget that has the same `BudgetId`: the same
+bucket and period, lower or equal limits, and a reserve that is at least the platform reserve. The
+accepted run selection pins run and agent budgets. Orchestrator reads project budgets from Projects for
+each dispatch, so a tightened project budget applies to the next dispatch of every run.
+
+Events is the only usage ledger. Orchestrator stores no spend amounts. Migration
+`024_spend_budget_exposure.sql` adds two tables to the Orchestrator schema:
+
+- `spend_budget_reservations` holds one reservation of `ReservePerDispatch` per admitted dispatch and
+  bucket. A reservation is `outstanding` until Events accounts for the dispatch, and then it becomes
+  `retired`. Triggers reject deletes, truncates, and every other change.
+- `spend_budget_accounting_cursors` holds the highest Events accounting cursor that admission observed for
+  each project and meter source. Triggers reject decreases and deletes.
+
+Admission runs in the native dispatch preparation transaction, before the AgentHost sends anything. For
+each applicable bucket, Orchestrator:
+
+1. Takes a transaction-scoped advisory lock for the bucket, so concurrent dispatches for the same bucket
+   are admitted one at a time.
+1. Reads Events spend evidence for the bucket, including witnesses for up to 64 outstanding dispatches.
+1. Rejects evidence whose cursor is lower than the stored cursor.
+1. Retires a reservation only when its dispatch completed and Events witnesses every source receipt in the
+   dispatch completion manifest. Partial receipts don't retire exposure.
+1. Admits the dispatch only when committed spend, the reserves of outstanding dispatches, and the new
+   reserve stay within the hard limit. An outstanding reservation counts its full reserve even when
+   Events already holds some of its receipts.
+1. Stores the reservation and the cursor in the same transaction as the dispatch.
+
+Reservations count as exposure, so dispatches that start before their usage reaches Events can't exceed
+the hard limit together. A retry of the same dispatch reserves once.
+
+A denial records the `orchestrator.run.spend_budget_dispatch_denied` outbox event, stores no
+reservation, and stops the dispatch before send. Dispatch preparation then fails with the error code, the
+same way it fails for a Copilot hard credit limit, so no new turn starts. The first time
+committed spend reaches a soft limit, Orchestrator records one
+`orchestrator.run.spend_budget_soft_limit_reached` outbox event per bucket and period.
+
+Hard budgets fail closed. Soft-only budgets never block, and they send no notification when evidence is
+unavailable.
+
+| Error code | Cause |
+| --- | --- |
+| `runtime_spend_budget_exhausted` | Committed spend plus exposure would exceed the hard limit. |
+| `runtime_spend_evidence_unavailable` | Events evidence for a hard budget can't be read or validated. |
+| `runtime_spend_evidence_stale` | Events evidence is older than evidence that admission already observed. |
+| `runtime_spend_budget_pricing_missing` | The bucket of a hard budget contains unpriced usage. |
+| `runtime_spend_budget_period_uncovered` | No configured period of a hard project budget contains the current time. |
+| `runtime_spend_budget_exposure_unbounded` | A hard budget has more than 64 outstanding dispatches. |
+| `runtime_spend_budget_reservation_conflict` | A retried dispatch doesn't match its stored reservation. |
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant P as Projects
+    participant E as Events
+    participant H as AgentHost
+    O->>P: Read current project budgets
+    O->>O: Lock bucket
+    O->>E: Read spend evidence and outstanding witnesses
+    E-->>O: Totals, witnesses, cursor
+    O->>O: Check cursor, retire accounted reservations
+    alt Committed spend plus exposure within hard limit
+        O->>O: Store reservation and cursor
+        O-->>H: Dispatch prepared
+        H->>E: Usage receipts after send
+    else Over hard limit or evidence unusable
+        O->>O: Record denial outbox event
+        O-->>H: Denied before send
+    end
+```
+
 ## Application Hosting
 
 **Owner:** Environment manager. **Cardinality:** chosen per application, pinned per deployed revision. A
