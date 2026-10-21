@@ -88,6 +88,17 @@ semantic-version intent. Documentation-only changes do not require a changeset.
    changesets, and a source-bound receipt. Review and commit those changes
    before you prepare artifacts.
 
+After applying versions, restore the separate PostgreSQL initializer from the
+repository root and commit its generated lock file with the release changes:
+
+```powershell
+dotnet restore tools/P1PostgresInitializer/P1PostgresInitializer.csproj
+```
+
+Use the SDK selected by `global.json`. Restoring the solution does not include
+this tool. CI checks its lock file separately with `--locked-mode`; a stale
+file fails validation rather than dirtying an operator's checkout at runtime.
+
 The current manifest remains a draft after version application. Applying a plan
 does not build, publish, deploy, or accept a release.
 
