@@ -421,6 +421,89 @@ export interface ProjectConfiguration {
   sourceControl?: SourceControlProjectSettings | null;
 }
 
+/** Owner-reviewed casting draft and its configuration and draft revision fences. */
+export interface ProjectCastingProposal {
+  proposalId: string;
+  projectId: string;
+  baseConfigurationRevision: number;
+  draftRevision: number;
+  state: 'pending' | 'confirmed' | 'rejected';
+  draft: ProjectConfiguration;
+  confirmedConfigurationRevision: number | null;
+  result: ProjectConfiguration | null;
+  transferProvenance: ProjectCastingTransferProvenance | null;
+  createdByActorId: string;
+  createdAt: string;
+  updatedByActorId: string;
+  updatedAt: string;
+}
+
+/** Complete configuration staged for review without applying it. */
+export interface CreateProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  draft: ProjectConfiguration;
+}
+
+/** Built-in scenario selected at the current configuration revision. */
+export interface CreateScenarioProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  templateId: string;
+}
+
+/** Catalog roles selected at the current configuration revision. */
+export interface CreateManualProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  roleIds: string[];
+}
+
+/** Replacement draft fenced to the pending proposal's draft revision. */
+export interface UpdateProjectCastingProposalRequest {
+  expectedDraftRevision: number;
+  draft: ProjectConfiguration;
+}
+
+/** Expected draft revision used for confirmation or rejection. */
+export interface TransitionProjectCastingProposalRequest {
+  expectedDraftRevision: number;
+}
+
+/** Verified source identity and digest retained on an imported proposal. */
+export interface ProjectCastingTransferProvenance {
+  formatVersion: 1;
+  sourceProjectId: string;
+  sourceConfigurationRevision: number;
+  contentDigest: string;
+}
+
+/** Versioned, digest-checked charter and casting payload; excludes other settings. */
+export interface ProjectCastingTransfer extends ProjectCastingTransferProvenance {
+  agentCharters: ProjectConfiguration['agentCharters'];
+  casting: ProjectConfiguration['casting'];
+}
+
+/** Transfer staged for review against the target project's current revision. */
+export interface ImportProjectCastingTransferRequest {
+  expectedConfigurationRevision: number;
+  transfer: ProjectCastingTransfer;
+}
+
+/** Built-in scenario that seeds a proposal from catalog role identifiers. */
+export interface ProjectCastingTemplateDefinition {
+  id: string;
+  title: string;
+  description: string;
+  roleIds: string[];
+}
+
+/** Built-in role text used to generate a project agent charter. */
+export interface ProjectCastingRoleDefinition {
+  id: string;
+  title: string;
+  summary: string;
+  responsibilities: string[];
+  boundaries: string[];
+}
+
 /** Revision and optional agent scope for one assigned skill. */
 export interface ProjectSkillAssignment {
   skillId: string;
@@ -629,6 +712,58 @@ export interface ProjectRunPage {
   projectId: string;
   items: ProjectRunSummary[];
   nextCursor: string | null;
+}
+
+/** Created and terminal-completed run counts on one UTC calendar day. */
+export interface ProjectMetricsDay {
+  date: string;
+  created: number;
+  completed: number;
+}
+
+/** Orchestrator-owned current state, lifetime total, and half-open interval run metrics. */
+export interface ProjectMetrics {
+  projectId: string;
+  from: string;
+  to: string;
+  activeRuns: number;
+  blockedRuns: number;
+  runsInRange: number;
+  runsTotal: number;
+  completedRuns: number;
+  succeededRuns: number;
+  series: ProjectMetricsDay[];
+}
+
+/** Persisted cost subtotal; consumers must not combine units or replace unknown amounts with zero. */
+export interface ProjectUsageCost {
+  priceUnit: string | null;
+  disposition: 'estimate' | 'reconciled' | 'unpriced';
+  amount: number | null;
+}
+
+/** Model or agent ledger aggregate; any missing measurement makes its aggregate null. */
+export interface ProjectUsageItem {
+  id: string;
+  requestCount: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  avgDurationMs: number | null;
+  runs: number;
+  unpricedRequestCount: number | null;
+  cost: ProjectUsageCost[];
+}
+
+/** Events-owned usage grouped independently by persisted model and agent IDs. */
+export interface ProjectUsage {
+  projectId: string;
+  from: string;
+  to: string;
+  usageByModel: ProjectUsageItem[];
+  usageByAgent: ProjectUsageItem[];
 }
 
 /** `unavailable` means the caller can no longer read the project; project-owned fields are then null or absent. */

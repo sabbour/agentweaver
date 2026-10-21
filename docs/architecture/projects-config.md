@@ -151,6 +151,33 @@ resource bytes, or object keys.
 
 ### Reviewed casting proposals and explicit transfers
 
+The Gateway exposes these owner routes under `/api/v1`, including templates
+and roles. It forwards the bearer and optional tenant selector; Projects remains
+the authorization and persistence owner. Import request bodies have the same
+1 MiB limit at both entry points. Export requires `WriteProjects`, not just read
+authority. See [Gateway casting](../reference/api.md#casting-through-the-gateway).
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant Projects as Projects & Config
+    participant DB as PostgreSQL
+    Client->>Gateway: Create proposal (expectedConfigurationRevision, draft or catalog selection)
+    Gateway->>Projects: Forward bearer, tenant selector, and body
+    Projects->>DB: Check current WriteProjects; stage revision-bound proposal
+    Projects-->>Client: 201 pending proposal through Gateway
+    Client->>Gateway: Confirm reviewed proposal (expectedDraftRevision)
+    Gateway->>Projects: Forward unchanged
+    Projects->>DB: Lock project; recheck authority and both revisions
+    alt Revisions are current
+        Projects->>DB: Append configuration and confirm proposal atomically
+        Projects-->>Client: 200 confirmed proposal through Gateway
+    else Revision is stale
+        Projects-->>Client: 409 through Gateway; configuration unchanged
+    end
+```
+
 Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
 
 Authorized project readers can list and read proposals. Project writers can
@@ -255,11 +282,15 @@ does not produce a receipt.
   allow list. It also carries each layered Network Policy provider's layer,
   options revision, and required/advertised capabilities. The Environment consumer rechecks the current authorization context before reading this snapshot and compiles the final intent.
 - Project configuration revisions, platform runtime revisions, and run-selection snapshots are append-only at the database boundary. Project metadata and revision heads remain mutable under optimistic revision checks.
-- Memberships and role assignments live in this service's schema. A privileged
-  source path provisions or revokes them. Public APIs cannot self-grant roles.
+- Memberships and role assignments live in this service's schema. A
+  privileged source path provisions or revokes them. A current TenantAdmin
+  can also assign and revoke project roles through the public
+  role-assignment API; project Owners can list them but can't change them.
   Revocation uses expected revisions and records an immutable audit event. It
-  cannot remove the last explicit project Owner. Runtime database credentials
-  have SELECT-only access to membership, assignment, and audit tables. Casting
+  cannot remove the last Owner of an active project. Runtime database
+  credentials are read-only on memberships. On assignments and audit they
+  have only the approved `INSERT` and column-scoped `UPDATE` grants, and no
+  `DELETE`. Casting
   row locks use the fixed security-definer authority function. Startup checks
   its exact EXECUTE grant.
 - Operators create the first TenantAdmin with the one-shot
@@ -448,7 +479,7 @@ dotnet test tests/Agentweaver.Projects.Config.Tests/Agentweaver.Projects.Config.
 
 The PostgreSQL tests use Testcontainers. They verify tenant-scoped run selection, revision and idempotency behavior,
 model fail-closed semantics, and provider candidate metadata. They also verify
-SELECT-only runtime authority grants, CAS revocation and audit retention, the
+the exact runtime authority grant set, CAS revocation and audit retention, the
 last-Owner invariant, and database append-only triggers.
 
 ## Skill content and assignment

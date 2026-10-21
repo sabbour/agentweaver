@@ -56,7 +56,8 @@ public sealed class GatewayOwnerClient(
         {
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(cancellationToken);
-            using var request = CreateOwnerRequest(context, route, bearer);
+            using var boundedBody = await BufferBoundedRequestAsync(context, route, timeout.Token).ConfigureAwait(false);
+            using var request = CreateOwnerRequest(context, route, bearer, boundedBody);
             using var response = await SendAsync(route.Owner, request, timeout.Token).ConfigureAwait(false);
             if (IsRedirect(response.StatusCode))
             {
@@ -827,17 +828,70 @@ public sealed class GatewayOwnerClient(
             body);
     }
 
-    private HttpRequestMessage CreateOwnerRequest(
+    /// <summary>Buffers every explicitly bounded route, including 3 MiB skill content, before contacting an owner.</summary>
+    private static async Task<MemoryStream?> BufferBoundedRequestAsync(
         HttpContext context,
         GatewayRoute route,
-        AuthenticationHeaderValue bearer) =>
-        CreateOwnerRequest(context, route, bearer, out _);
+        CancellationToken cancellationToken)
+    {
+        if (!route.HasJsonBody || route.MaximumRequestBodyBytes is not { } maximumBytes)
+            return null;
+
+        if (context.Request.ContentLength > maximumBytes)
+            throw RequestBodyTooLarge();
+
+        var body = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
+        {
+            while (true)
+            {
+                var count = await context.Request.Body.ReadAsync(
+                    buffer.AsMemory(0, (int)Math.Min(buffer.Length, maximumBytes - body.Length + 1)),
+                    cancellationToken).ConfigureAwait(false);
+                if (count == 0)
+                    break;
+                if (body.Length + count > maximumBytes)
+                    throw RequestBodyTooLarge();
+                await body.WriteAsync(buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
+            }
+            body.Position = 0;
+            return body;
+        }
+        catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            body.Dispose();
+            throw RequestBodyTooLarge();
+        }
+        catch
+        {
+            body.Dispose();
+            throw;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>Uses the Gateway problem contract when an inbound request exceeds its route bound.</summary>
+    private static GatewayOwnerFailureException RequestBodyTooLarge() =>
+        new(StatusCodes.Status413PayloadTooLarge, "application/problem+json",
+            ProblemBody("request_body_too_large", StatusCodes.Status413PayloadTooLarge));
 
     private HttpRequestMessage CreateOwnerRequest(
         HttpContext context,
         GatewayRoute route,
         AuthenticationHeaderValue bearer,
-        out string? tenantSelector)
+        Stream? requestBody = null) =>
+        CreateOwnerRequest(context, route, bearer, out _, requestBody);
+
+    private HttpRequestMessage CreateOwnerRequest(
+        HttpContext context,
+        GatewayRoute route,
+        AuthenticationHeaderValue bearer,
+        out string? tenantSelector,
+        Stream? requestBody = null)
     {
         tenantSelector = null;
         var path = ExpandOwnerPath(route.OwnerPath, context);
@@ -867,7 +921,7 @@ public sealed class GatewayOwnerClient(
                     "application/problem+json",
                     ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
             }
-            request.Content = new StreamContent(context.Request.Body);
+            request.Content = new StreamContent(requestBody ?? context.Request.Body);
             if (context.Request.ContentLength is { } contentLength)
                 request.Content.Headers.ContentLength = contentLength;
             request.Content.Headers.ContentType = contentType is null

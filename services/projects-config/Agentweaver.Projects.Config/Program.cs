@@ -102,6 +102,7 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
             "__ef_migrations_history", ProjectsConfigDbContext.Schema));
 });
 builder.Services.AddScoped<ProjectsConfigService>();
+builder.Services.AddScoped<ProjectRoleAssignmentService>();
 builder.Services.AddScoped<MarketplaceSourceStore>();
 builder.Services.AddScoped<IProjectMarketplaceSourceStore>(
     provider => provider.GetRequiredService<MarketplaceSourceStore>());

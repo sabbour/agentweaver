@@ -1,7 +1,7 @@
 name: v1 coverage
 
 # Weekly v1 coverage measurement. GitHub runs `schedule` triggers only from the
-# default branch (`dev`), so `.github/workflows/v1-coverage-schedule.yml` on `dev`
+# default branch (`dev`), so the `dev` copy of `.github/workflows/v1-coverage.yml`
 # dispatches this workflow on `v1` every Monday at 05:00 UTC with publish=true.
 # A manual dispatch without publish validates coverage collection only.
 on:

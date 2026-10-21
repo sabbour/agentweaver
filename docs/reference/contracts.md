@@ -46,6 +46,32 @@ entries containing `MeterSource` and `ProviderId`. Native
 stored `EffectiveProviderSelection`. Both retain current owner authorization.
 No new usage-writing endpoint, model-source authority, or pricing API is introduced.
 
+## Casting proposals and transfers
+
+The Gateway exposes the existing Projects & Config casting contracts under
+`/api/v1`. See the [API reference](./api.md#casting-through-the-gateway) for routes
+and [Projects & Config](../architecture/projects-config.md#reviewed-casting-proposals-and-explicit-transfers)
+for the owner transaction boundary.
+
+| Contract | Fields and behavior |
+| --- | --- |
+| `CreateProjectCastingProposalRequest` | `expectedConfigurationRevision`, complete `draft`. |
+| `CreateScenarioProjectCastingProposalRequest` | `expectedConfigurationRevision`, catalog `templateId`. |
+| `CreateManualProjectCastingProposalRequest` | `expectedConfigurationRevision`, non-empty catalog `roleIds`. |
+| `UpdateProjectCastingProposalRequest` | `expectedDraftRevision`, replacement `draft`. |
+| `TransitionProjectCastingProposalRequest` | `expectedDraftRevision` for confirm or reject. |
+| `ProjectCastingProposal` | `proposalId`, `projectId`, `baseConfigurationRevision`, `draftRevision`, `state` (`pending`, `confirmed`, or `rejected`), `draft`, nullable `confirmedConfigurationRevision`, nullable `result`, nullable `transferProvenance`, and creation/update actor IDs and timestamps. |
+| `ProjectCastingTransfer` | `formatVersion` (1), `sourceProjectId`, `sourceConfigurationRevision`, `agentCharters`, `casting`, `contentDigest`. Contains no unrelated project settings. |
+| `ProjectCastingTransferProvenance` | Verified transfer format, source project/revision, and content digest retained on an imported proposal. |
+| `ImportProjectCastingTransferRequest` | Target `expectedConfigurationRevision` and `transfer`; creates a pending proposal. Request body limit is 1 MiB at Gateway and owner. |
+| `ProjectCastingTemplateDefinition` | `id`, `title`, `description`, `roleIds`. |
+| `ProjectCastingRoleDefinition` | `id`, `title`, `summary`, `responsibilities`, `boundaries`. |
+
+The owner rejects unknown request fields and preserves revision conflicts as
+`409`. The Gateway publishes these schemas in `GET /openapi/v1.json`, and the
+web contract module supplies types only. There is no new casting permission,
+idempotency header, or UI implementation.
+
 ## Cost and usage storage contracts
 
 `CostBinding` records the meter source, provider identity, adapter version,
@@ -71,6 +97,27 @@ admitted, BYOK receipt accounting remains `Unpriced`; provisioned-throughput
 usage also remains unpriced without trusted usage-share evidence.
 
 ## Gateway API and server-sent events
+
+Project reporting uses two separate owner contracts. `ProjectMetrics` returns
+current active and blocked counts, lifetime accepted runs, bounded created and
+terminal-completed counts, succeeded runs, and zero-filled UTC daily points.
+`ProjectUsage` returns ledger measurements grouped by model ID and agent ID.
+The Gateway never aggregates across owners. Cross-project overview is out of
+scope. See [Project metrics and usage](./api.md#project-metrics-and-usage) for
+the field definitions and 0.x dashboard mapping.
+
+Both contracts echo normalized `from` and `to` bounds. The half-open interval
+defaults to the last 30 days and cannot exceed 92 days. Only metrics accepts
+`bucket=day`. Both owners validate fresh project read authority, return
+`Cache-Control: no-store`, and narrow run-bound tokens to their own run.
+OpenAPI defines strict response objects and query schemas. Invalid or repeated
+query values return a `400` problem response with `title` and `code` set to
+`query_invalid`, without exception text.
+
+Usage measurements remain nullable when source data is missing. Cost subtotals
+are grouped by unit and disposition; consumers must not add different units
+or treat unpriced usage as zero. The read path does not invoke pricing or
+budgeting.
 
 The `Agentweaver.Gateway` source exposes a finite, versioned client API at
 `/api/v1`. The service is a source candidate; these mappings do not confirm a
@@ -1026,8 +1073,18 @@ approved identity settings and the separate migration connection. It creates
 the active tenant membership, TenantAdmin assignment, and authority audit rows
 in one transaction. It exits without changes when that identity already has
 the active grant. It refuses when another active TenantAdmin exists. Normal
-host startup never runs this command. Runtime database grants remain
-SELECT-only on authority tables.
+host startup never runs this command.
+
+The runtime database principal is read-only on authority tables, with one
+exception. The project role-assignment API can insert project role
+assignments, mark them revoked, and insert matching `authority_audit` rows.
+The API, not the database grant, enforces who can make these changes: only a
+caller with the current TenantAdmin role, checked in the same serializable
+transaction as the change. The runtime principal can't delete authority rows
+or write tenant memberships and tenant-level roles. See
+[Runtime authority writes](runtime-configuration.md#runtime-authority-writes)
+for the exact grants and [Project role assignments](api.md#project-role-assignments)
+for the routes.
 
 ## Knowledge and Memory
 

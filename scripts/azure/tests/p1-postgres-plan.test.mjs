@@ -138,12 +138,13 @@ test('Initializer validates planned and installed mutation guards before it comm
   assert.ok(source.includes('24 => \\"chief_of_staff\\"'));
 });
 
+// Both owner catalogs must agree with the separately reviewed initializer plan.
 test('Current source catalog preserves exact Core and Events versions and embedded resources', () => {
   const plan = buildP1PostgresPlan();
   const owners = [
     ['orchestrator/Agentweaver.Orchestrator', 'CoordinationOwnerMigrator.cs', plan.coreVersions],
     ['events-and-sessions/Agentweaver.EventsAndSessions', 'EventsAndSessionsMigrator.cs',
-      Array.from({ length: 8 }, (_, index) => index + 1)],
+      plan.eventsVersions],
   ];
   for (const [owner, migrator, versions] of owners) {
     const directory = new URL(`../../../services/${owner}/`, import.meta.url);
@@ -174,12 +175,22 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
       assert.ok(source.includes('Enumerable.Range(57, 21)'));
     } else {
-      assert.ok(source.includes('private const int CurrentSchemaVersion = 8;'));
+      assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));
+      assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));
       assert.ok(source.includes('(applied.Contains(8) && !applied.Contains(7))'));
+      assert.ok(source.includes('(applied.Contains(9) && !applied.Contains(8))'));
       assert.ok(source.includes('3 when legacyProjectFactsV2 => "Agentweaver.EventsAndSessions.Migrations.002_addressed_messages.sql"'));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 3);
     }
   }
+});
+
+// The initializer must reject a plan or source that omits the new Events index migration.
+test('Initializer requires the reviewed Events project usage migration and exact plan versions', () => {
+  const source = readFileSync(new URL('../../../tools/P1PostgresInitializer/Program.cs', import.meta.url), 'utf8');
+  assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));
+  assert.ok(source.includes('009_project_usage_index.sql'));
+  assert.ok(source.includes('plan.EventsVersions.SequenceEqual(Enumerable.Range(1, 9))'));
 });
 
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
