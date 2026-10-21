@@ -79,6 +79,13 @@ if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,
     !migratorSource.Contains("29 => \"spend_budget_exposure\"", StringComparison.Ordinal))
     throw new InvalidOperationException("Reviewed Core 016/018/021/022/029 migration wiring is required before initialization; 017 is not permitted.");
 
+// The Events reporting index is a separately reviewed live-apply prerequisite, never an implicit runtime write.
+var eventsMigratorSource = await File.ReadAllTextAsync(
+    Path.Combine("services", "events-and-sessions", "Agentweaver.EventsAndSessions", "EventsAndSessionsMigrator.cs"));
+if (!eventsMigratorSource.Contains("private const int CurrentSchemaVersion = 9;", StringComparison.Ordinal) ||
+    !eventsMigratorSource.Contains("9 => \"Agentweaver.EventsAndSessions.Migrations.009_project_usage_index.sql\"", StringComparison.Ordinal))
+    throw new InvalidOperationException("Reviewed Events 009 project usage index wiring is required before initialization.");
+
 var planJson = await RunLocalAsync("node", ["scripts/azure/lib/p1-postgres-plan.mjs", "--json"]);
 // The reviewed plan hash binds every later role, schema, relation, and grant decision to source output.
 var planHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(planJson))).ToLowerInvariant();
@@ -88,6 +95,8 @@ var plan = JsonSerializer.Deserialize<PostgresPlan>(planJson, new JsonSerializer
 {
     PropertyNameCaseInsensitive = true,
 }) ?? throw new InvalidOperationException("The exact source plan is missing.");
+if (plan.EventsVersions is null || !plan.EventsVersions.SequenceEqual(Enumerable.Range(1, 9)))
+    throw new InvalidOperationException("The reviewed Events migration plan must include exactly versions 001 through 009.");
 InitializerChecks.AssertPrincipalObjectIds(plan.Services);
 InitializerChecks.AssertMutationDenialPlan(plan.Services);
 InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);

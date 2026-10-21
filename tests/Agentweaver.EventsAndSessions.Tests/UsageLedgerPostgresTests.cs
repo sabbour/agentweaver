@@ -46,6 +46,85 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         await command.ExecuteNonQueryAsync();
     }
 
+    /// <summary>Reads half-open project usage with unit/disposition separation, nulls, and caller isolation.</summary>
+    [Fact]
+    public async Task ProjectUsagePreservesUnitsUnknownsAndRunBoundScope()
+    {
+        var start = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var usage = UsageContractTests.Submission() with { OccurredAt = start };
+        await _ledger.AppendAsync(usage, UsageContractTests.Binding(), UsageContractTests.Price());
+        var eur = UsageContractTests.Card() with { Id = "eur-card", Unit = "EUR" };
+        await _ledger.AppendAsync(usage with { EventId = Guid.NewGuid(), OccurredAt = start.AddHours(1) },
+            UsageContractTests.Binding(eur), new(2m, "EUR", CostDisposition.Reconciled, eur, null));
+        await _ledger.AppendAsync(usage with { EventId = Guid.NewGuid(), OccurredAt = start.AddHours(1) },
+            UsageContractTests.Binding(), new(0.75m, "USD", CostDisposition.Reconciled, UsageContractTests.Card(), null));
+        await CreateSessionAsync("project-1", "run-2", "session-1");
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(),
+            OccurredAt = start.AddHours(2),
+            Attribution = usage.Attribution with { RunId = "run-2" },
+            Measurement = usage.Measurement with { RequestCount = null, InputTokens = null, DurationMilliseconds = null }
+        }, null, new(null, null, CostDisposition.Unpriced, null, "Unknown source."));
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(),
+            Attribution = usage.Attribution with { AgentId = "agent-2" },
+            ModelBinding = usage.ModelBinding with { ModelId = "model-2" },
+            Measurement = usage.Measurement with { RequestCount = 3 }
+        }, null, new(null, null, CostDisposition.Unpriced, null, "Unknown model."));
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(), OccurredAt = start.AddDays(1)
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(), OccurredAt = start.AddTicks(-1)
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(), Attribution = usage.Attribution with { TenantId = "tenant-2" }
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+        await CreateSessionAsync("project-2", "run-1", "session-1");
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(), Attribution = usage.Attribution with { ProjectId = "project-2" }
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+
+        var options = new PostgresSessionsProviderOptions("resource", "database", 1, _schema, "options-v1");
+        var store = new ProjectUsageReadStore(_fixture.DataSource, options);
+        var range = new ProjectMetricsRange(start, start.AddDays(1));
+        var result = await store.ReadAsync("tenant-1", "project-1", null, range, default);
+        Assert.Equal(2, result.UsageByModel.Count);
+        Assert.Equal(2, result.UsageByAgent.Count);
+        var model = Assert.Single(result.UsageByModel, item => item.Id == "model-1");
+        var agent = Assert.Single(result.UsageByAgent, item => item.Id == "agent-1");
+        Assert.Equal("model-1", model.Id);
+        Assert.Equal("agent-1", agent.Id);
+        Assert.Equal(2, model.Runs);
+        Assert.Null(model.RequestCount);
+        Assert.Null(model.InputTokens);
+        Assert.Null(model.AvgDurationMs);
+        Assert.Null(model.UnpricedRequestCount);
+        Assert.Equal(80m, model.OutputTokens);
+        Assert.Equal(4, model.Cost.Count);
+        Assert.Contains(new ProjectUsageCost("USD", "estimate", 1.25m), model.Cost);
+        Assert.Contains(new ProjectUsageCost("USD", "reconciled", 0.75m), model.Cost);
+        Assert.Contains(new ProjectUsageCost("EUR", "reconciled", 2m), model.Cost);
+        Assert.Contains(new ProjectUsageCost(null, "unpriced", null), model.Cost);
+        Assert.Equal(3, Assert.Single(result.UsageByModel, item => item.Id == "model-2").UnpricedRequestCount);
+        var bound = Assert.Single((await store.ReadAsync("tenant-1", "project-1", "run-1", range, default)).UsageByModel,
+            item => item.Id == "model-1");
+        Assert.Equal(1, bound.Runs);
+        Assert.Equal(3, bound.RequestCount);
+        Assert.Equal(12.5m, bound.AvgDurationMs);
+        Assert.Equal(0, bound.UnpricedRequestCount);
+        Assert.Empty((await store.ReadAsync("tenant-1", "project-1", "foreign-run", range, default)).UsageByAgent);
+        Assert.Single((await store.ReadAsync("tenant-2", "project-1", null, range, default)).UsageByAgent);
+        Assert.Empty((await store.ReadAsync("tenant-1", "project-1", null, new(start, start), default)).UsageByModel);
+        await EventsAndSessionsMigrator.VerifyAsync(_fixture.DataSource, _schema);
+    }
+
     [Fact]
     public async Task NativeConsumerCommitsPriceLedgerRateCardInboxAndReceiptOnceAcrossRestart()
     {
