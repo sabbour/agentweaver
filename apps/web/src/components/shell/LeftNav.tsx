@@ -369,11 +369,11 @@ export function LeftNavView({
             {collapsed ? (
               <div role="group" aria-label="Sessions" className="aw-nav-section" style={{ gap: '2px' }}>
                 {renderGlobalItem(globalSessionsItem)}
-                {showNewSession && <Tooltip content="New session" relationship="label" positioning="after">
+                {showNewSession && <Tooltip content="New chat" relationship="label" positioning="after">
                   <Button
                     appearance="subtle"
                     icon={<AddRegular />}
-                    aria-label="New session"
+                    aria-label="New chat"
                     onClick={startNewSession}
                     className="aw-nav-action-button"
                   />
@@ -392,11 +392,11 @@ export function LeftNavView({
                     <span className="aw-nav-item__icon" aria-hidden="true">{globalSessionsItem.icon}</span>
                     <span className="aw-nav-item__label">{globalSessionsItem.label}</span>
                   </Link>
-                  {showNewSession && <Tooltip content="New session" relationship="label" positioning="after">
+                  {showNewSession && <Tooltip content="New chat" relationship="label" positioning="after">
                     <Button
                       appearance="subtle"
                       icon={<AddRegular />}
-                      aria-label="New session"
+                      aria-label="New chat"
                       onClick={startNewSession}
                       className="aw-nav-action-button"
                     />

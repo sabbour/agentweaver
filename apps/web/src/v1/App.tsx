@@ -92,6 +92,8 @@ import type {
 } from './contracts';
 import type { RunBinding } from './authProtocol';
 import { useRunJournal } from './useRunJournal';
+import { TranscriptPanel } from './TranscriptPanel';
+import { useTurnTranscript } from './turnTranscript';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading, Panel } from './pageParts';
 import { rememberRun } from './recentRuns';
@@ -1862,7 +1864,9 @@ function eventSummary(event: SessionEventEnvelope): string {
   const payload = event.payload;
   if (event.kind === 'turn') {
     const role = typeof payload.role === 'string' ? payload.role : 'turn';
-    return `${role} content is stored separately. This page cannot show it.`;
+    if (role === 'user') return 'User message. The text shows in Chat.';
+    if (role === 'assistant') return 'Assistant message. The text shows in Chat.';
+    return `${role} turn.`;
   }
   if (event.kind === 'toolCall') {
     const name = typeof payload.toolName === 'string' ? payload.toolName : 'Tool call';
@@ -1991,6 +1995,7 @@ function ChatView({
   const sender = activeNodes.find((node) => node.kind === 'coordinator' && node !== target) ??
     activeNodes.find((node) => node !== target);
   const targetName = target ? sessionName(target) : 'Coordinator';
+  const transcript = useTurnTranscript(journalEvents, projectId, runId, apiCall);
 
   const send = async (text: string, idempotencyKey: string) => {
     if (!target || !sender) return;
@@ -2005,7 +2010,8 @@ function ChatView({
   return (
     <div className="v1-stack">
       {notice && <MessageBar intent="info"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
-      <Panel title="Activity" description="Events from this run, oldest first. Message text is not stored in the event list.">
+      <TranscriptPanel transcript={transcript} />
+      <Panel title="Activity" description="Events from this run, newest first.">
         <JournalList events={journalEvents} />
       </Panel>
       <Panel title={`Message the ${targetName.toLowerCase()}`} description="Choose another session in the run tree to message it instead.">

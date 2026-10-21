@@ -476,7 +476,7 @@ describe('AppShell navigation', () => {
       screen.getByRole('button', { name: 'Settings' }),
       screen.getByTestId('notification-bell'),
       screen.getByRole('button', { name: 'Expand navigation' }),
-      screen.getByRole('button', { name: 'New session' }),
+      screen.getByRole('button', { name: 'New chat' }),
       screen.getByRole('button', { name: 'GitHub identity' }),
     ]) {
       expect(control.getAttribute('aria-label')).toBeTruthy();
@@ -544,7 +544,7 @@ describe('AppShell navigation', () => {
         screen.getByTestId('notification-bell'),
         screen.getByRole('button', { name: 'Expand navigation' }),
         screen.getByRole('link', { name: 'Overview' }),
-        screen.getByRole('button', { name: 'New session' }),
+        screen.getByRole('button', { name: 'New chat' }),
         screen.getByRole('link', { name: 'Board' }),
         screen.getByRole('button', { name: 'GitHub identity' }),
       ]) {

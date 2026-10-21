@@ -1091,6 +1091,17 @@ export interface SessionEventEnvelope {
   objectReferences: unknown[];
 }
 
+/**
+ * Text of one committed `turn` event, from `readSessionTurnContent`
+ * (`GET /projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}`).
+ * Needs a token bound to the run and current project read access. The owner
+ * resolves the event's content reference; no object keys are returned.
+ */
+export interface SessionTurnContent {
+  eventId: string;
+  identity: SessionIdentity;
+  text: string;
+}
 /** Persisted event page with a cursor for continued replay. */
 export interface SessionEventPage {
   events: SessionEventEnvelope[];

@@ -67,6 +67,7 @@ import type {
   SessionEventEnvelope,
   SessionEventPage,
   SessionStatusSnapshot,
+  SessionTurnContent,
   SessionTreeSnapshot,
   SourceControlRepositoryPinView,
   UsageRunTotals,
@@ -875,6 +876,23 @@ export class AgentweaverGatewayClient {
   }
 
   /** Reads pending decisions and gate state for one coordination session. */
+  /** Reads the text of one committed turn event with the run-bound token. */
+  readSessionTurnContent(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    eventId: string,
+    tenantSelector?: string | null,
+  ): Promise<SessionTurnContent> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'sessions', sessionId, 'turns', eventId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
   getDecisions(
     token: string,
     projectId: string,
