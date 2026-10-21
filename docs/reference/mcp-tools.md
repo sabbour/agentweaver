@@ -156,6 +156,17 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `listProjectSkillInventory` | Read paginated revision metadata. |
 | `revokeProjectSkillRevision` | Revoke one imported skill revision with a reason. |
 
+### AgentSuite imports
+
+| Operation ID | Purpose |
+| --- | --- |
+| `importProjectAgentSuite` | Validate an AgentSuite archive and stage a casting proposal; request body limit 24 MiB. |
+| `getProjectAgentSuiteImport` | Read a retained AgentSuite import record by source identity. |
+| `getProjectAgentSuiteAgentPolicy` | Read the policy bound to an imported agent. The policy is not enforced. |
+
+Import doesn't activate or run agents. Confirm or reject the staged proposal with the casting tools.
+See [AgentSuite import](./agentsuite-import.md).
+
 ### Coordination
 
 | Operation ID | Purpose |

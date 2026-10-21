@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/execution.schema.json",
+  "title": "Agent image execution contract",
+  "$comment": "Full conformance also requires semantic validation: input names and environment destinations must each be unique. JSON Schema cannot express uniqueness by a selected property.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "protocol", "port", "healthPath", "inputs"],
+  "properties": {
+    "configuration": {"const": "agentkit-v0-mounted-v1"},
+    "kind": {"const": "http-v1"},
+    "protocol": {"const": "openai-chat-v1"},
+    "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+    "healthPath": {"type": "string", "pattern": "^/([^/?#\\\\\\r\\n]+(/[^/?#\\\\\\r\\n]+)*)?$", "not": {"pattern": "(^|/)\\.{1,2}(/|$)"}},
+    "inputs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "environment", "secret"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "environment": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$", "not": {"anyOf": [{"pattern": "^LD_"}, {"enum": ["PYTHONPATH", "NODE_OPTIONS", "BASH_ENV", "PATH", "HOME", "AGENTKIT_PROTOCOL", "AGENTKIT_PORT"]}]}},
+          "secret": {"type": "boolean"}
+        }
+      }
+    }
+  },
+  "if": {"required": ["configuration"]},
+  "then": {"properties": {"port": {"const": 8080}, "healthPath": {"const": "/healthz"}}}
+}

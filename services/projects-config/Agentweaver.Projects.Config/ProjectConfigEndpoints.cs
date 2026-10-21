@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Projects.Config;
@@ -563,6 +564,104 @@ public static class ProjectConfigEndpoints
             }
         }).WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
 
+        // Validates an AgentSuite archive and stages its agents as one casting proposal. The 24 MiB request
+        // limit fits a 16 MiB archive after base64 encoding (about 21.3 MiB) plus the JSON fields around it.
+        projects.MapPost("/{projectId}/agentsuite-imports", async (
+            string projectId,
+            ImportProjectAgentSuiteRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                // Import results include proposal data, so proxies and browsers must not cache them.
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                // The object store is optional in this service. Without it there is nowhere to keep blobs: 503.
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                var result = await service.ImportAgentSuiteAsync(
+                    caller, projectId, request, store, cancellationToken).ConfigureAwait(false);
+                // No proposal means every agent already exists unchanged: 200. Otherwise 201 with the proposal URL.
+                return result.Proposal is null
+                    ? Results.Ok(result)
+                    : Results.Created(
+                        $"/api/projects/{projectId}/casting/proposals/{result.Proposal.ProposalId}",
+                        result);
+            }
+            catch (AgentSuiteImportRejectedException exception)
+            {
+                // Invalid archive: 422 with every validation error line, so the author can fix them all at once.
+                return Results.Problem(
+                    title: "agentsuite_invalid",
+                    detail: exception.Message,
+                    statusCode: StatusCodes.Status422UnprocessableEntity,
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["code"] = exception.Code,
+                        ["errors"] = exception.Errors,
+                    });
+            }
+            catch (ProjectConfigException exception)
+            {
+                // Authorization, stale revision, conflict and storage errors keep their own status code.
+                return ToProblem(exception);
+            }
+        }).WithMetadata(new RequestSizeLimitAttribute(24 * 1024 * 1024));
+
+        // Read-only: returns the stored import record. The service checks the caller's read role.
+        projects.MapGet("/{projectId}/agentsuite-imports/{sourceIdentity}", async (
+            string projectId,
+            string sourceIdentity,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                return Results.Ok(await service.GetAgentSuiteImportAsync(
+                    caller, projectId, sourceIdentity, store, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        // Read-only: returns the policy bound to one imported agent. Reading it never enforces it.
+        projects.MapGet("/{projectId}/agentsuite-agents/{effectiveAgentId}/policy", async (
+            string projectId,
+            string effectiveAgentId,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                return Results.Ok(await service.GetAgentSuiteAgentPolicyAsync(
+                    caller, projectId, effectiveAgentId, store, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
         // This owner-only helper applies the existing Orchestrator role gate without exposing platform defaults.
         projects.MapPut("/{projectId}/runs/{runId}/interactive-selection", async (
             string projectId,
@@ -767,6 +866,13 @@ public static class ProjectConfigEndpoints
             detail: exception.Message,
             statusCode: exception.StatusCode,
             extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+
+    // Retained AgentSuite blobs need the optional object store (ProjectsConfig:SkillContent:ContainerUri).
+    // 503 tells the caller this is a deployment setting, not a problem with the request.
+    private static ProjectConfigException AgentSuiteStoreUnavailable() =>
+        new("agentsuite_store_unavailable",
+            "AgentSuite import needs object storage. Configure ProjectsConfig:SkillContent:ContainerUri.",
+            StatusCodes.Status503ServiceUnavailable);
 
     /// <summary>Resolves the bearer principal and optional tenant selector through the Projects authority owner.</summary>
     private static Task<ProjectAuthorizationContext> ResolveCallerAsync(

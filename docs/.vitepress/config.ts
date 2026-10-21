@@ -140,6 +140,7 @@ export default defineConfig({
             { text: 'Events', link: '/reference/events' },
             { text: 'Web client', link: '/reference/web' },
             { text: 'MCP tools', link: '/reference/mcp-tools' },
+            { text: 'AgentSuite import', link: '/reference/agentsuite-import' },
             { text: 'Contracts and endpoints', link: '/reference/contracts' },
             { text: 'Component releases', link: '/reference/releases' },
           ],
