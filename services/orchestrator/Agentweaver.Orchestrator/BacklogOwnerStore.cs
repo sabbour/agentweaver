@@ -490,6 +490,7 @@ internal sealed class BacklogOwnerStore
         ArgumentNullException.ThrowIfNull(revalidateCurrentAuthority);
         var projectId = selection.Selection.ProjectId;
         var runId = selection.Selection.RunId;
+        // Validate the project ID with the same rules as an empty graph before any database access.
         var projectValidation = BacklogDependencyGraph.Create(
             new BacklogDependencyGraphSnapshot(projectId, 0, [], []));
         if (!projectValidation.IsSuccess)
@@ -502,6 +503,8 @@ internal sealed class BacklogOwnerStore
             expectedGraphRevision < 0)
             throw new CoordinationException("backlog_promotion_invalid", StatusCodes.Status400BadRequest);
 
+        // The request hash binds the idempotency key to the caller, the selection, and every expected value.
+        // The promotion ID comes from the hash, so a replay of the same request gets the same ID.
         var selectionHash = HashSelection(selection.Selection);
         var requestHash = CoordinatorDecisionOwnerStore.ComputeCommandHash(new
         {
@@ -521,6 +524,8 @@ internal sealed class BacklogOwnerStore
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
             .ConfigureAwait(false);
+        // Reject a reused key with different values early, before taking any locks.
+        // The locked read below repeats this check for concurrent requests.
         var preview = await ReadPromotionByIdempotencyKeyAsync(
             connection, transaction: null, projectId, idempotencyKey, cancellationToken).ConfigureAwait(false);
         if (preview is not null && preview.RequestHash != requestHash)
@@ -530,6 +535,8 @@ internal sealed class BacklogOwnerStore
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
+        // Lock the project graph rows first. Every other graph writer takes this lock, so it serializes
+        // this promotion with task edits, claims, and other promotions in the project.
         await EnsureProjectAsync(connection, transaction, projectId, cancellationToken).ConfigureAwait(false);
         var graph = await ReadGraphInTransactionAsync(
             connection, transaction, projectId, lockRows: true, cancellationToken).ConfigureAwait(false);
@@ -537,6 +544,7 @@ internal sealed class BacklogOwnerStore
             return await RollbackFailureAsync<BacklogPlanPromotion>(
                 transaction, graph.Issues).ConfigureAwait(false);
 
+        // A stored promotion with this key is a replay. Return it unchanged if the request matches.
         var existing = await ReadPromotionByIdempotencyKeyAsync(
             connection, transaction, projectId, idempotencyKey, cancellationToken).ConfigureAwait(false);
         if (existing is not null)
@@ -553,6 +561,7 @@ internal sealed class BacklogOwnerStore
             return BacklogCoreResult<BacklogPlanPromotion>.Success(existing.Promotion);
         }
 
+        // A plan can be promoted only once. A different key for the same plan is a conflict, not a replay.
         if (await IsPlanPromotedAsync(connection, transaction, projectId, runId, workPlanId, cancellationToken)
                 .ConfigureAwait(false))
         {
@@ -560,6 +569,8 @@ internal sealed class BacklogOwnerStore
             throw new CoordinationException("backlog_promotion_conflict", StatusCodes.Status409Conflict);
         }
 
+        // Lock the run owner binding row and read the confirmed plan again inside this transaction.
+        // MAF dispatch takes the same lock, so the plan can't be dispatched while it's promoted.
         var identity = new SessionIdentity(projectId, runId, rootSessionId);
         var state = await decisions.ReadConfirmedWorkPlanForPromotionInTransactionAsync(
             connection, transaction, actor, identity, selection, selectionContext,
@@ -567,10 +578,13 @@ internal sealed class BacklogOwnerStore
             .ConfigureAwait(false);
         var plan = state.ConfirmedWorkPlan!.Plan;
 
+        // Each task ID is derived from the project, run, plan, and item IDs, so it's stable across replays.
         var taskIds = plan.Items.ToImmutableDictionary(
             item => item.Id,
             item => BacklogPlanPromotionIds.CreateTaskId(projectId, runId, plan.Id, item.Id),
             StringComparer.Ordinal);
+        // Apply each change to the in-memory graph first, so the graph rules check every task and edge.
+        // The first change uses the caller's expected revision; a stale revision fails here.
         var current = graph.Value!;
         var revision = expectedGraphRevision;
         foreach (var item in plan.Items)
@@ -590,6 +604,7 @@ internal sealed class BacklogOwnerStore
         foreach (var item in plan.Items)
         foreach (var prerequisite in item.DependsOn.Distinct(StringComparer.Ordinal))
         {
+            // A dependency on an item that isn't in this plan means the plan isn't usable as stored.
             if (!taskIds.TryGetValue(prerequisite, out var prerequisiteTaskId))
             {
                 await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
@@ -608,6 +623,7 @@ internal sealed class BacklogOwnerStore
             edges.Add(edge);
         }
 
+        // Persist the validated graph: the new revision, the tasks, and then the edges that reference them.
         await UpdateGraphRevisionAsync(connection, transaction, current, cancellationToken).ConfigureAwait(false);
         foreach (var item in plan.Items)
             await InsertTaskAsync(connection, transaction,
@@ -618,6 +634,7 @@ internal sealed class BacklogOwnerStore
                 connection, transaction, edge.Task, edge.Prerequisite, add: true, cancellationToken)
                 .ConfigureAwait(false);
 
+        // Record the promotion and one origin row per task. Only promoted tasks get an origin row.
         var promotedAt = await InsertPromotionAsync(
             connection,
             transaction,
@@ -645,6 +662,7 @@ internal sealed class BacklogOwnerStore
                     item.Id),
                 cancellationToken).ConfigureAwait(false);
 
+        // Check caller authority again after the lock waits, then commit everything at once.
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return BacklogCoreResult<BacklogPlanPromotion>.Success(new BacklogPlanPromotion(
@@ -672,6 +690,7 @@ internal sealed class BacklogOwnerStore
         CancellationToken cancellationToken)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // One snapshot for both queries, so a concurrent promotion can't appear without its tasks.
         await using var transaction = await connection.BeginTransactionAsync(
             System.Data.IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
         var promotions = await ReadPromotionsInTransactionAsync(
@@ -688,6 +707,7 @@ internal sealed class BacklogOwnerStore
         CancellationToken cancellationToken)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // Origin rows are insert-only, so a single query without a transaction is consistent.
         await using var command = new NpgsqlCommand($"""
             SELECT task_id, promotion_id, run_id, root_session_id, work_plan_id, work_item_id
             FROM {_origins}
@@ -708,6 +728,7 @@ internal sealed class BacklogOwnerStore
         return origins.ToImmutable();
     }
 
+    // Accepts nonblank text within the column length that contains no control characters.
     private static bool IsBoundedText(string? value, int maximumLength) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= maximumLength && !value.Any(char.IsControl);
 
@@ -728,6 +749,7 @@ internal sealed class BacklogOwnerStore
         string? idempotencyKey,
         CancellationToken cancellationToken)
     {
+        // Read the promotion rows first. A null key reads every promotion in the project.
         var rows = new List<(BacklogPlanPromotion Promotion, string RequestHash, int TaskCount)>();
         await using (var command = new NpgsqlCommand($"""
             SELECT promotion_id, run_id, root_session_id, work_plan_id, workflow_id, workflow_revision,
@@ -758,6 +780,7 @@ internal sealed class BacklogOwnerStore
         if (rows.Count == 0)
             return [];
 
+        // Then read the promoted tasks for those promotions and group them by promotion ID.
         var tasks = new Dictionary<Guid, ImmutableArray<BacklogPromotedTask>.Builder>();
         await using (var command = new NpgsqlCommand($"""
             SELECT promotion_id, task_id, work_item_id
@@ -785,12 +808,15 @@ internal sealed class BacklogOwnerStore
             var promoted = tasks.TryGetValue(row.Promotion.PromotionId, out var builder)
                 ? [.. builder.OrderBy(task => task.WorkItemId, StringComparer.Ordinal)]
                 : ImmutableArray<BacklogPromotedTask>.Empty;
+            // The stored task count must match the origin rows. A mismatch means the data is
+            // incomplete, so report the store as unavailable instead of returning a partial promotion.
             if (promoted.Length != row.TaskCount)
                 throw new CoordinationException("backlog_promotion_unavailable", StatusCodes.Status503ServiceUnavailable);
             return new StoredBacklogPromotion(row.Promotion with { Tasks = promoted }, row.RequestHash);
         })];
     }
 
+    // Returns true when any promotion already exists for this plan in the run, whatever its key.
     private async Task<bool> IsPlanPromotedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -810,6 +836,7 @@ internal sealed class BacklogOwnerStore
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
+    // Inserts the promotion row and returns the database timestamp, so replays report the same time.
     private async Task<DateTimeOffset> InsertPromotionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -846,10 +873,12 @@ internal sealed class BacklogOwnerStore
         insert.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, idempotencyKey);
         insert.Parameters.AddWithValue("hash", NpgsqlDbType.Char, requestHash);
         insert.Parameters.AddWithValue("task_count", NpgsqlDbType.Integer, plan.Items.Length);
+        // Npgsql returns timestamptz as a UTC DateTime; mark it as UTC explicitly.
         var createdAt = (DateTime)(await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
         return new DateTimeOffset(DateTime.SpecifyKind(createdAt, DateTimeKind.Utc));
     }
 
+    // Inserts one origin row. The unique indexes allow one origin per task and per plan item.
     private async Task InsertOriginAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,

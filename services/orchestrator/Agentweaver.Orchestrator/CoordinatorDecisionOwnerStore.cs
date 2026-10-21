@@ -430,6 +430,7 @@ internal sealed class CoordinatorDecisionOwnerStore
             connection, transaction, actor, identity, selection, selectionContext,
             expectedStateVersion, expectedFence, expectedWorkPlanId,
             "maf_execution_dispatch_stale", cancellationToken).ConfigureAwait(false);
+        // A promoted plan is owned by the backlog, so the run can't also dispatch it through MAF.
         if (await IsWorkPlanPromotedAsync(
                 connection, transaction, identity, expectedWorkPlanId, cancellationToken).ConfigureAwait(false))
             throw new CoordinationException(
@@ -460,6 +461,7 @@ internal sealed class CoordinatorDecisionOwnerStore
             connection, transaction, actor, identity, selection, selectionContext,
             expectedStateVersion, expectedFence, expectedWorkPlanId,
             "backlog_promotion_stale", cancellationToken).ConfigureAwait(false);
+        // Promotion is allowed only before execution starts: no child sessions and no MAF dispatches.
         if (await ReadRegisteredChildCountAsync(
                 connection, transaction, identity, cancellationToken).ConfigureAwait(false) != 0 ||
             await HasDispatchRecordsAsync(connection, transaction, identity, cancellationToken).ConfigureAwait(false))
@@ -468,6 +470,7 @@ internal sealed class CoordinatorDecisionOwnerStore
         return state;
     }
 
+    // Returns true when the backlog has recorded a promotion of this plan in the run.
     private async Task<bool> IsWorkPlanPromotedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -486,6 +489,7 @@ internal sealed class CoordinatorDecisionOwnerStore
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
+    // Returns true when MAF dispatch has recorded any work for the run.
     private async Task<bool> HasDispatchRecordsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -502,6 +506,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
+    // Shared by dispatch and promotion. It locks the owner binding row, then checks that the fence,
+    // the decision version, the selection, and the confirmed plan ID still match. Each caller passes
+    // its own error code for a stale request.
     private async Task<CoordinatorDecisionState> ReadConfirmedWorkPlanStateInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,

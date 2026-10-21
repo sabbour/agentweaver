@@ -28,9 +28,9 @@ keys take `SHARE ROW EXCLUSIVE` locks on `backlog_projects`,
 `backlog_tasks`, and `coordination_sessions`, which block writes to those
 tables until commit. The plan grants the orchestrator role exactly
 `SELECT, INSERT` on both new tables, with no `UPDATE`, `DELETE`, or default
-privileges. Applying migration 030, granting those privileges, and accepting
-the new exact plan hash are separate, unapplied operator steps that require
-approval.
+privileges. Migration 030 must be applied before the promotion routes work.
+Applying it, granting those privileges, and accepting the new exact plan hash
+are separate operator steps that require approval.
 
 Run these commands from the repository root:
 
