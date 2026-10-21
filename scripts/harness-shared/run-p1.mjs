@@ -172,7 +172,7 @@ function addFixtureCleanup(result, state, cleanup, nativeFence, cleanupError) {
   const fixtureSetup = summarizeP1FixtureCleanup(state, cleanup, nativeFence);
   result.observations = { ...result.observations, fixtureSetup };
   if (fixtureSetup.cleanup?.state === 'indeterminate') {
-    const message = 'Privileged setup may have completed, but its owner receipt was not verified; reconcile the invocation before retrying.';
+    const message = 'A fixture setup or cleanup request may have completed, but its response was not verified; reconcile the invocation before retrying.';
     result.failure = result.failure
       ? { message: `${result.failure.message}; ${message}` }
       : { message };
@@ -316,11 +316,6 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       fixture = await createFixture(validated, {
         api: setupApi,
         invocationId,
-        setupToken,
-        sourceEvidence,
-        sourceReceipt: pins.sourceReceipt,
-        setupContext: pins.context,
-        namespace: pins.namespace,
         acquireRunIdentity: async binding => {
           const identity = await acquireRunIdentity({
             modulePath: options.identityModule ? resolve(options.identityModule) : undefined,

@@ -135,8 +135,8 @@ containers.
 
 Projects & Config applies migrations as its schema owner. After migration
 `20261009021400_AddCastingAuthorityLockFunction` is applied, an approved
-operator can grant the runtime role only `EXECUTE` on the exact casting
-authority-lock function:
+operator can grant the runtime role `EXECUTE` on the exact casting
+authority-lock function and the project role-assignment write set:
 
 ```powershell
 psql "$PROJECTS_CONFIG_DATABASE_URL" `
@@ -144,9 +144,18 @@ psql "$PROJECTS_CONFIG_DATABASE_URL" `
   -f infra\bicep\postgres-projectsconfig-runtime-grants.sql
 ```
 
-This file does not grant access to data tables. Keep
-`tenant_memberships` and `project_role_assignments` SELECT-only for runtime;
-do not add UPDATE privileges to enable row locking. The function is owned by
-the migration/schema owner, returns authorization status only, and is not
-executable by `PUBLIC`. The SQL file is an operator definition, not an
-automatic grant or deployment.
+The file defines these data-table grants for the project role-assignment API:
+
+- `INSERT` on `projects_config.project_role_assignments`.
+- `UPDATE (state, revision, revoked_by, revoked_at)` on
+  `projects_config.project_role_assignments`.
+- `INSERT` on `projects_config.authority_audit`.
+
+It grants no `DELETE` and no write access to `tenant_memberships`. The API
+allows these writes only for a current TenantAdmin and audits each change in
+the same transaction. Don't add other privileges to enable row locking. The
+function is owned by the migration/schema owner, returns authorization status
+only, and is not executable by `PUBLIC`. The SQL file is an operator
+definition, not an automatic grant or deployment. Each live grant needs a
+separate approval. See
+[Runtime authority writes](../../docs/reference/runtime-configuration.md#runtime-authority-writes).
