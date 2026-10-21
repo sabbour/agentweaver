@@ -100,7 +100,7 @@ The web app shows Chief of Staff on **Overview** (`/overview`), on **Sessions**
 
 ### Start a chat
 
-1. On **Overview** or **Sessions**, go to **New chat**. **New session** in the
+1. On **Overview** or **Sessions**, go to **New chat**. The **New chat** button in the
    navigation opens `/assistant`, the same panel; `?project=<projectId>`
    preselects a project.
 1. Under **Project**, choose an active project. You don't type an ID.
@@ -129,9 +129,17 @@ project you can no longer read shows **Unavailable** and no project content.
 On the run page, the **Chat** tab lists the run's activity and has a composer.
 Enter a message and select **Send** to message the run's coordinator. The web
 app sends it with a token bound to that run and one idempotency key per draft,
-so a repeated send delivers one message. The service doesn't return message
-text in the run's activity, so the first message and follow-ups show only on
-the page that sent them. The conversation title comes from the first message.
+so a repeated send delivers one message. The conversation title comes from the
+first message.
+
+The **Messages** panel shows the run's user and assistant messages, oldest first.
+The web app reads each message's text from the run's activity with a token bound
+to that run, so the history is the same after a reload, a lost connection, or
+sign-in on another device. A message the service no longer has shows **Not
+found**; a message that fails to load shows **Could not load this message.** and
+**Retry**. If you lose read access to the project, the panel hides all message
+text and shows **You can no longer read this run. Messages are hidden.** A message
+you send appears in **Messages** after the agent records it.
 
 ### Priorities
 
@@ -144,9 +152,12 @@ the page that sent them. The conversation title comes from the first message.
 - **Move up** and **Move down** change the order.
 - **Add link** links a run or a conversation. Choose a project and pick a run
   from its run list, or pick one of your conversations. Issue, pull request,
-  and artifact links aren't offered: the Gateway has no route that lists a
-  project's issues, pull requests, or run artifacts, and the web app doesn't
-  accept typed IDs. Existing links of those kinds show **Unavailable** as
+  and artifact links aren't offered, because the web app doesn't accept typed
+  IDs and no Gateway route lists their targets. The Gateway has no `GET` route
+  for a project's repository issues or pull requests (only `POST /issues`,
+  `POST /pull-requests`, and `GET /pull-requests/{number}/reviews`), and run
+  output captures are listed only by the native run-bound API, not the
+  Gateway. Existing links of those kinds show **Unavailable** as
   their state.
 - Run and conversation links show the run state. A link you can't read shows
   **Unavailable** and its kind only. A deleted target shows **Not found**.

@@ -72,7 +72,7 @@ The client uses these routes:
 | `/` | Opens `/overview`. |
 | `/overview` | Chief of Staff home: **Priorities**, **Needs attention**, **New chat**, **My conversations**, your projects, and **Recent runs in this browser**. |
 | `/sessions` | **Sessions**: **New chat** and **My conversations** across projects. |
-| `/assistant` | **New chat** and **My conversations**. **New session** in the rail opens it. `?project=<projectId>` preselects a project. |
+| `/assistant` | **New chat** and **My conversations**. The rail's **New chat** button opens it. `?project=<projectId>` preselects a project. |
 | `/projects` | Browse project tiles and create a project. Creating a project does not make you its owner. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, recent runs, team, and quick actions. |
 | `/projects/:projectId/flow` | Read the project's work grouped as **Needs input**, **Open**, **Working**, and **Done**. |
@@ -90,7 +90,7 @@ The v1 client keeps the 0.x navigation rail, project switcher, floating content
 panel, gallery tiles, dialogs, typography, and theme. Its views use v1 service
 contracts instead of the 0.x API.
 
-The rail has **Overview**, **Sessions**, **Projects**, and **New session**. **Overview** is the home page and
+The rail has **Overview**, **Sessions**, **Projects**, and **New chat**. **Overview** is the home page and
 the Chief of Staff home. It shows your **Priorities**, **Needs attention** (the
 pending gates from your notifications), **New chat**, **My conversations**, a
 summary of your projects, and **Recent runs in this browser**. The notification

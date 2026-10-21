@@ -42,6 +42,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/DecisionView.tsx`, `src/v1/decisionTitles.ts` | Shared decision view that rereads a gate before it approves or rejects. |
 | `src/v1/AttentionList.tsx`, `src/v1/runAttention.ts` | Items that need input: pending gate notifications for Overview, Flow, and the bell. `useRunAttention` reads one bound run's gates. |
 | `src/v1/runState.ts` | State words for runs: Needs input, Open, Working, Done, Failed, Cancelled, Outcome unknown, and Unavailable. |
+| `src/v1/turnTranscript.ts`, `src/v1/TranscriptPanel.tsx` | Run chat history: reads each replayed `turn` event's text with `readSessionTurnContent` and the run-bound token, and hides all text when read access is lost. |
 | `src/v1/NewChatComposer.tsx` | Message composer with a stable idempotency key per draft. The run Chat tab uses it. |
 | `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
 | `src/v1/AgentsView.tsx` | Agents roster, filters, and the charter drawer. |
