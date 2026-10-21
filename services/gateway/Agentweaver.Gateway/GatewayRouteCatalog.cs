@@ -147,6 +147,14 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/skills",
             "listProjectSkillInventory", "Read current project skill inventory",
             ["cursor", "pageSize"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-imports/{sourceIdentity}",
+            "/api/projects/{projectId}/agentsuite-imports/{sourceIdentity}",
+            "getProjectAgentSuiteImport", "Read a retained AgentSuite import record",
+            forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-agents/{effectiveAgentId}/policy",
+            "/api/projects/{projectId}/agentsuite-agents/{effectiveAgentId}/policy",
+            "getProjectAgentSuiteAgentPolicy", "Read the policy bound to an imported AgentSuite agent",
+            forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);

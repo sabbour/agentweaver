@@ -1,0 +1,1 @@
+{"id":"writer","instructions":{"descriptor":{"digest":"sha256:516ff360a8ebb5e36e87f0d401a3cc7436ad2ad1059aae64670aff1078171df8","mediaType":"text/markdown; charset=utf-8","size":15},"path":"instructions/writer.md"},"mediaType":"application/vnd.agentsuite.agent.v1+json","model":{"model":"example-model","protocol":"openai-compatible"},"schemaVersion":"1.0.0-draft"}

@@ -1,0 +1,465 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/tool-provider.schema.json",
+  "title": "AgentSuite ToolProvider manifest",
+  "description": "An immutable tool provider contract exposing callable tools, with bundled shared-sandbox variants, one remote declaration, or both. This draft supports the MCP protocol.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mediaType", "id", "version", "protocol", "revision", "tools"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0-draft"},
+    "mediaType": {"const": "application/vnd.agentsuite.tool.provider.v1+json"},
+    "id": {"$ref": "#/$defs/id"},
+    "version": {"$ref": "#/$defs/version"},
+    "retained": {
+      "description": "Explicitly permits this ToolProvider to remain in the catalog without an inward reference. Presence does not authorize use or create a runtime binding.",
+      "const": true
+    },
+    "protocol": {"const": "mcp"},
+    "revision": {"type": "string", "minLength": 1},
+    "tools": {
+      "description": "The complete set of model-callable tools exposed by this provider contract.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/tool"}
+    },
+    "variants": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/variant"}
+    },
+    "remote": {
+      "description": "Unresolved Streamable HTTP MCP connection contract for a separately deployed provider.",
+      "$ref": "#/$defs/remote"
+    },
+    "extensions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/extension"}
+    }
+  },
+  "anyOf": [
+    {"required": ["variants"]},
+    {"required": ["remote"]}
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "env": {
+      "type": "string",
+      "pattern": "^[A-Z_][A-Z0-9_]*$"
+    },
+    "capability": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+    },
+    "contentPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^/\\\\][^\\\\]*$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^/"
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture"],
+      "properties": {
+        "os": {"const": "linux"},
+        "architecture": {"enum": ["amd64", "arm64"]}
+      }
+    },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mediaType", "digest", "size"],
+      "properties": {
+        "mediaType": {"type": "string", "minLength": 1},
+        "digest": {"$ref": "#/$defs/digest"},
+        "size": {"type": "integer", "minimum": 0},
+        "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "fileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "descriptor"],
+      "properties": {
+        "path": {"$ref": "#/$defs/contentPath"},
+        "descriptor": {"$ref": "#/$defs/descriptor"}
+      }
+    },
+    "extension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "critical"],
+      "properties": {
+        "name": {"$ref": "#/$defs/capability"},
+        "critical": {"type": "boolean"},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "inputSchema"],
+      "properties": {
+        "name": {"$ref": "#/$defs/id"},
+        "description": {"type": "string"},
+        "inputSchema": {"$ref": "#/$defs/fileRef"},
+        "outputSchema": {"$ref": "#/$defs/fileRef"},
+        "effects": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "effect": {
+          "description": "Tool behavior independent of credentials. Mutating includes changing application state, sending, publishing, or initiating external work; incidental logging, caching, and accounting do not change the classification. Omission makes no read-only claim.",
+          "enum": ["read-only", "mutating"]
+        },
+        "approval": {
+          "description": "Required mandates approval before invocation; policy-controlled leaves the requirement to runtime policy. Runtime policy may impose stronger requirements for either effect class. Omission is equivalent to policy-controlled.",
+          "enum": ["required", "policy-controlled"]
+        },
+        "delegatedAuthorization": {"$ref": "#/$defs/delegatedAuthorization"}
+      },
+      "if": {"required": ["delegatedAuthorization"]},
+      "then": {"required": ["effect", "approval"]}
+    },
+    "delegatedAuthorization": {
+      "description": "Declares that this callable Tool requires delegated-user authorization before it may be called. This object never contains an OAuth client secret, authorization callback or consent state, access or refresh token, token expiry/refresh/revocation state, a person's mutable Connection/account link, or a deployment-specific Connection identifier. The deployment/runtime resolves this portable requirement to a verified requester and a live user-owned connection.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "scope", "credential"],
+      "properties": {
+        "service": {
+          "description": "Stable identifier of the external service or provider requirement this delegated-user authorization is scoped to (for example \"microsoft-graph\"). Not a deployment-specific Connection identifier.",
+          "$ref": "#/$defs/id"
+        },
+        "scope": {
+          "description": "Delegated-user authorization capability required to call this Tool (for example \"mail.send\"). Not a granted token, consent record, or account link.",
+          "$ref": "#/$defs/capability"
+        },
+        "credential": {"$ref": "#/$defs/brokeredCredential"}
+      }
+    },
+    "brokeredCredential": {
+      "description": "Declares that credential resolution and injection for this delegated-user authorization requirement are brokered entirely by the runtime. This object never contains a client secret, access token, refresh token, or token lifecycle state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolution", "bindingRef"],
+      "properties": {
+        "resolution": {"const": "runtime-brokered"},
+        "bindingRef": {
+          "description": "Identifier naming an unresolved runtime/deployment binding slot for this authorization requirement. It is not a connection identifier, account identifier, or credential value.",
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"$ref": "#/$defs/env"},
+        "required": {"type": "boolean"},
+        "secret": {"type": "boolean"},
+        "delivery": {"enum": ["env", "file"]}
+      },
+      "oneOf": [
+        {
+          "required": ["secret", "delivery"],
+          "properties": {"secret": {"const": true}}
+        },
+        {
+          "not": {"required": ["delivery"]},
+          "properties": {"secret": {"const": false}}
+        }
+      ]
+    },
+    "networkAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "host", "port"],
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9+.-]*$"
+        },
+        "host": {"type": "string", "minLength": 1},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "secretKeyRef": {
+      "description": "Reference to one key in a separately supplied Secret; it never contains a credential value.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key"],
+      "properties": {
+        "name": {
+          "description": "Name of the Secret supplied by the runtime binding.",
+          "$ref": "#/$defs/id"
+        },
+        "key": {
+          "description": "Key within the named Secret.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      }
+    },
+    "remoteHeader": {
+      "description": "HTTP header whose value is sourced only from a Secret key reference.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "secretRef"],
+      "properties": {
+        "name": {
+          "description": "HTTP header name; transport-managed header names are prohibited.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+        },
+        "secretRef": {
+          "description": "Secret key supplying the complete header value.",
+          "$ref": "#/$defs/secretKeyRef"
+        }
+      }
+    },
+    "remoteNetworkRequirement": {
+      "description": "Unresolved outbound-network requirement supplied by runtime binding.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["destinationRef"],
+      "properties": {
+        "destinationRef": {
+          "description": "Identifier of a separately bound network destination.",
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "remote": {
+      "description": "Remote MCP transport requirements that remain unresolved in the portable ToolProvider manifest.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "endpointRef",
+        "network",
+        "timeouts",
+        "cancellation",
+        "connection"
+      ],
+      "properties": {
+        "transport": {
+          "description": "MCP transport used by the remote provider.",
+          "const": "streamable-http"
+        },
+        "endpointRef": {
+          "description": "Identifier of the endpoint supplied by runtime binding; it is not a URL.",
+          "$ref": "#/$defs/id"
+        },
+        "headers": {
+          "description": "Optional Secret-backed HTTP headers sent to the remote provider.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/remoteHeader"}
+        },
+        "network": {
+          "description": "One or more network destinations that runtime policy must bind and permit.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/remoteNetworkRequirement"}
+        },
+        "timeouts": {
+          "description": "Positive connection and request deadlines enforced by the client.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["connectMilliseconds", "requestMilliseconds"],
+          "properties": {
+            "connectMilliseconds": {
+              "description": "Maximum time in milliseconds to establish the connection.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600000
+            },
+            "requestMilliseconds": {
+              "description": "Maximum time in milliseconds for one MCP request.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400000
+            }
+          }
+        },
+        "cancellation": {
+          "description": "Requires client cancellation to propagate to the remote request.",
+          "const": "propagate"
+        },
+        "connection": {
+          "description": "Requires the client to honor protocol-managed MCP session state.",
+          "const": "session-aware"
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["abi", "cpuBaseline"],
+      "properties": {
+        "abi": {"enum": ["static", "gnu", "musl"]},
+        "abiVersion": {"type": "string", "minLength": 1},
+        "cpuBaseline": {"type": "string", "minLength": 1},
+        "requiredBasePaths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/absolutePath"}
+        }
+      }
+    },
+    "inventoryEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "type", "mode", "uid", "gid"],
+      "properties": {
+        "path": {"$ref": "#/$defs/contentPath"},
+        "type": {"enum": ["file", "directory", "symlink", "hardlink"]},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 511},
+        "uid": {"const": 0},
+        "gid": {"const": 0},
+        "size": {"type": "integer", "minimum": 0},
+        "digest": {"$ref": "#/$defs/digest"},
+        "linkTarget": {"type": "string", "minLength": 1},
+        "component": {"type": "string", "minLength": 1}
+      },
+      "oneOf": [
+        {
+          "properties": {"type": {"const": "file"}},
+          "required": ["size", "digest"],
+          "not": {"required": ["linkTarget"]}
+        },
+        {
+          "properties": {"type": {"const": "directory"}},
+          "allOf": [
+            {
+              "if": {"required": ["size"]},
+              "then": {"properties": {"size": {"const": 0}}}
+            }
+          ],
+          "not": {
+            "anyOf": [
+              {"required": ["digest"]},
+              {"required": ["linkTarget"]}
+            ]
+          }
+        },
+        {
+          "properties": {"type": {"enum": ["symlink", "hardlink"]}},
+          "required": ["linkTarget"],
+          "allOf": [
+            {
+              "if": {"required": ["size"]},
+              "then": {"properties": {"size": {"const": 0}}}
+            },
+            {"not": {"required": ["digest"]}}
+          ]
+        }
+      ]
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "variantDigest"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "version": {"$ref": "#/$defs/version"},
+        "variantDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "variantDigest",
+        "installRoot",
+        "payloadRoot",
+        "entrypoint",
+        "runtime",
+        "files"
+      ],
+      "properties": {
+        "platform": {"$ref": "#/$defs/platform"},
+        "variantDigest": {"$ref": "#/$defs/digest"},
+        "installRoot": {"$ref": "#/$defs/absolutePath"},
+        "relocatable": {"type": "boolean"},
+        "payloadRoot": {
+          "$ref": "#/$defs/contentPath",
+          "description": "Root of the complete multi-file payload in AgentSuite content."
+        },
+        "entrypoint": {
+          "$ref": "#/$defs/absolutePath",
+          "description": "Absolute path of the MCP provider launcher. Other inventoried executables may support the provider but are not directly model-callable."
+        },
+        "arguments": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "searchPath": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "Absolute directories containing bundled helper executables available to the provider.",
+          "items": {"$ref": "#/$defs/absolutePath"}
+        },
+        "environment": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/environment"}
+        },
+        "writablePaths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/absolutePath"}
+        },
+        "network": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/networkAccess"}
+        },
+        "runtime": {"$ref": "#/$defs/runtime"},
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Complete inventory of all payload files, directories, links, executables, libraries, scripts, and data.",
+          "items": {"$ref": "#/$defs/inventoryEntry"}
+        },
+        "dependencies": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/dependency"}
+        },
+        "sbom": {"$ref": "#/$defs/descriptor"},
+        "provenance": {"$ref": "#/$defs/descriptor"}
+      }
+    }
+  }
+}

@@ -37,6 +37,8 @@ internal static partial class GatewayOpenApi
             ["importProjectSkill"] = C("ImportSkillContentRequest", "SkillContentImportReceipt", "200"),
             ["updateProjectSkillAssignment"] = C("UpdateSkillAssignmentRequest", "VersionedProjectConfiguration", "200"),
             ["listProjectSkillInventory"] = C(null, "ProjectSkillInventoryPage", "200"),
+            ["getProjectAgentSuiteImport"] = C(null, "ProjectAgentSuiteImport", "200"),
+            ["getProjectAgentSuiteAgentPolicy"] = C(null, "ProjectAgentSuiteAgentPolicy", "200"),
             ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
             ["acceptRunSelection"] = C("AcceptRunSelectionRequest", "EffectiveRunSelection", "200"),
             ["getRunSelection"] = C(null, "EffectiveRunSelection", "200"),
@@ -270,6 +272,20 @@ internal static partial class GatewayOpenApi
                 "The owner hides foreign projects and memberships found inactive or stale during the inventory recheck. " +
                 "Inactive membership rejected during initial caller resolution returns 403.");
         }
+        else if (route.OperationId == "getProjectAgentSuiteImport")
+        {
+            responses["400"] = ProblemResponse("The source identity is not sha256: followed by 64 lowercase hex characters.");
+            responses["404"] = ProblemResponse("The owner did not find the project or import record.");
+            responses["500"] = ProblemResponse("The owner reported an import record integrity error.");
+            responses["503"] = ProblemResponse("The AgentSuite object store is not configured.");
+        }
+        else if (route.OperationId == "getProjectAgentSuiteAgentPolicy")
+        {
+            responses["400"] = ProblemResponse("The effective agent ID does not start with 'agentsuite:'.");
+            responses["404"] = ProblemResponse("The owner did not find the project or imported agent.");
+            responses["500"] = ProblemResponse("The owner reported an import record integrity error.");
+            responses["503"] = ProblemResponse("The AgentSuite object store is not configured.");
+        }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
             responses["400"] = ProblemResponse(
@@ -331,6 +347,19 @@ internal static partial class GatewayOpenApi
                 "after the read and permits archived projects. The opaque cursor uses stable SkillId-ascending " +
                 "order in C collation, then revision-descending order. It does not make multiple pages a " +
                 "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
+        }
+        else if (route.OperationId == "getProjectAgentSuiteImport")
+        {
+            description +=
+                " This read requires current project read authority. It returns the immutable record for one native " +
+                "source identity: native digests and IDs, effective agent IDs, capability blockers, and retained " +
+                "blob digests. Import and proposal review are native Projects routes and are not exposed here.";
+        }
+        else if (route.OperationId == "getProjectAgentSuiteAgentPolicy")
+        {
+                description +=
+                    " This read requires current project read authority. It returns the policy bound to one imported " +
+                    "effective agent ID, or a null policy when none is bound. A policy is retained, not enforced.";
         }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
@@ -590,6 +619,73 @@ internal static partial class GatewayOpenApi
             ("configurationRevision", Int()), ("assignments", Arr(Ref("ProjectSkillInventoryAssignment"))),
             ("revisions", Arr(Ref("ProjectSkillInventoryRevision"))), ("pageSize", Int()),
             ("nextCursor", NullableStr())),
+        ["ProjectAgentSuiteBlob"] = Obj(["digest", "mediaType", "size"],
+            ("digest", Str()), ("mediaType", Str()), ("size", Int())),
+        ["ProjectAgentSuiteBlocker"] = Obj(["code", "message"], ("code", Str()), ("message", Str())),
+        ["ProjectAgentSuiteInvoke"] = Obj(["agent", "maxConcurrent", "maxDepth"],
+            ("agent", Str()), ("maxConcurrent", Int()), ("maxDepth", Int())),
+        ["ProjectAgentSuiteToolDependency"] = Obj(["toolProvider", "kind", "connectionId", "tools"],
+            ("toolProvider", Str()), ("kind", Enum("remote-mcp", "bundled")), ("connectionId", NullableUuid()),
+            ("tools", Arr(Str()))),
+        ["ProjectAgentSuiteAgentMapping"] = Obj(
+            ["nativeId", "manifestDigest", "instructionsDigest", "effectiveAgentId", "role", "platforms",
+                "invokes", "toolDependencies", "policyDigest", "supported", "runnable", "blockers"],
+            ("nativeId", Str()), ("manifestDigest", Str()), ("instructionsDigest", Str()),
+            ("effectiveAgentId", Str()), ("role", Str()), ("platforms", Arr(Str())),
+            ("invokes", Arr(Ref("ProjectAgentSuiteInvoke"))),
+            ("toolDependencies", Arr(Ref("ProjectAgentSuiteToolDependency"))), ("policyDigest", NullableStr()),
+            ("supported", Bool()), ("runnable", Bool()), ("blockers", Arr(Ref("ProjectAgentSuiteBlocker")))),
+        ["ProjectAgentSuiteEgressRule"] = Obj(["address", "protocol", "port"],
+            ("address", Str()), ("protocol", Str()), ("port", Int())),
+        ["ProjectAgentSuitePolicy"] = Obj(
+            ["digest", "mediaType", "version", "owningAgent", "egressAllow", "requiredCapabilities"],
+            ("digest", Str()), ("mediaType", Str()), ("version", NullableStr()), ("owningAgent", Str()),
+            ("egressAllow", Nullable(Arr(Ref("ProjectAgentSuiteEgressRule")))),
+            ("requiredCapabilities", Arr(Str()))),
+        ["ProjectAgentSuiteRemoteHeader"] = Obj(["name", "secretName", "secretKey"],
+            ("name", Str()), ("secretName", Str()), ("secretKey", Str())),
+        ["ProjectAgentSuiteRemoteMcp"] = Obj(
+            ["transport", "endpointRef", "headers", "networkDestinationRefs", "connectMilliseconds",
+                "requestMilliseconds"],
+            ("transport", Str()), ("endpointRef", Str()), ("headers", Arr(Ref("ProjectAgentSuiteRemoteHeader"))),
+            ("networkDestinationRefs", Arr(Str())), ("connectMilliseconds", Int()), ("requestMilliseconds", Int())),
+        ["ProjectAgentSuiteDelegatedAuthorization"] = Obj(["service", "scope", "bindingRef"],
+            ("service", Str()), ("scope", Str()), ("bindingRef", Str())),
+        ["ProjectAgentSuiteTool"] = Obj(["name", "effect", "approval", "delegatedAuthorization"],
+            ("name", Str()), ("effect", NullableStr()), ("approval", NullableStr()),
+            ("delegatedAuthorization", NullableRef("ProjectAgentSuiteDelegatedAuthorization"))),
+        ["ProjectAgentSuiteToolProvider"] = Obj(
+            ["id", "version", "manifestDigest", "bundledVariants", "remote", "tools", "support"],
+            ("id", Str()), ("version", Str()), ("manifestDigest", Str()), ("bundledVariants", Bool()),
+            ("remote", NullableRef("ProjectAgentSuiteRemoteMcp")), ("tools", Arr(Ref("ProjectAgentSuiteTool"))),
+            ("support", Enum("remote-mcp", "unsupported"))),
+        ["ProjectAgentSuiteToolConnection"] = Obj(["toolProvider", "connectionId"],
+            ("toolProvider", Str()), ("connectionId", Uuid())),
+        ["ProjectAgentSuiteSkillBinding"] = Obj(["role", "skills"], ("role", Str()), ("skills", Arr(Str()))),
+        ["ProjectAgentSuiteBlueprint"] = Obj(
+            ["sourceBlueprintId", "displayName", "description", "workflows", "defaultWorkflow", "reviewPolicy",
+                "sandboxProfile", "skillBindings"],
+            ("sourceBlueprintId", NullableStr()), ("displayName", NullableStr()), ("description", NullableStr()),
+            ("workflows", Arr(Str())), ("defaultWorkflow", Str()), ("reviewPolicy", Str()),
+            ("sandboxProfile", Enum("default", "restricted")),
+            ("skillBindings", Arr(Ref("ProjectAgentSuiteSkillBinding")))),
+        ["ProjectAgentSuiteImport"] = Obj(
+            ["recordVersion", "projectId", "sourceIdentity", "sourceFormat", "manifestDigest", "contentDigest",
+                "suiteName", "suiteManifestDigest", "specVersion", "schemaCommit", "agents", "toolProviders",
+                "policies", "toolConnections", "blueprint", "runtimeProfiles", "blobs"],
+            ("recordVersion", Int()), ("projectId", Str()), ("sourceIdentity", Str()),
+            ("sourceFormat", Enum("oci-layout-tar", "content-tar-gzip")), ("manifestDigest", NullableStr()),
+            ("contentDigest", Str()), ("suiteName", Str()), ("suiteManifestDigest", Str()),
+            ("specVersion", Str()), ("schemaCommit", Str()),
+            ("agents", Arr(Ref("ProjectAgentSuiteAgentMapping"))),
+            ("toolProviders", Arr(Ref("ProjectAgentSuiteToolProvider"))),
+            ("policies", Arr(Ref("ProjectAgentSuitePolicy"))),
+            ("toolConnections", Arr(Ref("ProjectAgentSuiteToolConnection"))),
+            ("blueprint", Ref("ProjectAgentSuiteBlueprint")),
+            ("runtimeProfiles", Arr(Str())), ("blobs", Arr(Ref("ProjectAgentSuiteBlob")))),
+        ["ProjectAgentSuiteAgentPolicy"] = Obj(["effectiveAgentId", "sourceIdentity", "policy"],
+            ("effectiveAgentId", Str()), ("sourceIdentity", Str()),
+            ("policy", NullableRef("ProjectAgentSuitePolicy"))),
         ["SkillContentResourceRequest"] = StrictObj(["relativePath", "content"],
             ("relativePath", Str()), ("content", Base64Bytes())),
         ["SkillContentCandidateRequest"] = StrictObj(["skillMarkdown", "resources"],

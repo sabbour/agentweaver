@@ -18,6 +18,10 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <ProjectReference Include="..\..\services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="AgentSuite\Upstream\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
   <!-- Snapshot tests compare the real catalog loader with its source and runtime-input contracts. -->
   <ItemGroup>
     <None Include="..\..\deploy\k8s\provider-catalogs\projects-config-provider-catalog.snapshot.json"

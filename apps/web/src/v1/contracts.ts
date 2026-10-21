@@ -510,6 +510,130 @@ export interface SkillContentImportReceipt {
   totalBytes: number;
 }
 
+/** Binds one suite tool provider (`id@version`) to an Environment Remote MCP connection. */
+export interface AgentSuiteToolConnection {
+  toolProvider: string;
+  connectionId: string;
+}
+
+/** Blueprint data that travels with an AgentSuite import. Omitted fields use defaults. */
+export interface AgentSuiteBlueprint {
+  sourceBlueprintId?: string | null;
+  displayName?: string | null;
+  description?: string | null;
+  workflows?: string[];
+  defaultWorkflow?: string;
+  reviewPolicy?: string;
+  sandboxProfile?: 'default' | 'restricted';
+  skillBindings?: Array<{ role: string; skills: string[] }>;
+}
+
+/** Request to validate a native AgentSuite archive and stage its agents as a casting proposal. */
+export interface AgentSuiteImportRequest {
+  expectedConfigurationRevision: number;
+  format: 'oci-layout-tar' | 'content-tar-gzip';
+  /** Base64 archive bytes. */
+  archive: string;
+  toolConnections?: AgentSuiteToolConnection[];
+  blueprint?: AgentSuiteBlueprint | null;
+}
+
+/** One reason an imported agent cannot run. */
+export interface AgentSuiteBlocker {
+  code: string;
+  message: string;
+}
+
+/** Maps one native suite agent to its effective agent ID. */
+export interface AgentSuiteAgentMapping {
+  nativeId: string;
+  manifestDigest: string;
+  instructionsDigest: string;
+  effectiveAgentId: string;
+  role: string;
+  platforms: string[];
+  invokes: Array<{ agent: string; maxConcurrent: number; maxDepth: number }>;
+  toolDependencies: Array<{ toolProvider: string; kind: string; connectionId?: string | null; tools: string[] }>;
+  policyDigest?: string | null;
+  supported: boolean;
+  runnable: boolean;
+  blockers: AgentSuiteBlocker[];
+}
+
+/** An imported agent policy. Import records it; it does not enforce it. */
+export interface AgentSuitePolicy {
+  digest: string;
+  mediaType: string;
+  version?: string | null;
+  owningAgent: string;
+  egressAllow?: Array<{ address: string; protocol: string; port: number }> | null;
+  requiredCapabilities: string[];
+}
+
+/** A validated tool provider. Nothing is contacted at import. */
+export interface AgentSuiteToolProvider {
+  id: string;
+  version: string;
+  manifestDigest: string;
+  bundledVariants: boolean;
+  remote?: {
+    transport: string;
+    endpointRef: string;
+    headers: Array<{ name: string; secretName: string; secretKey: string }>;
+    networkDestinationRefs: string[];
+    connectMilliseconds: number;
+    requestMilliseconds: number;
+  } | null;
+  tools: Array<{
+    name: string;
+    effect?: string | null;
+    approval?: string | null;
+    delegatedAuthorization?: { service: string; scope: string; bindingRef: string } | null;
+  }>;
+  support: 'remote-mcp' | 'unsupported';
+}
+
+/** Immutable import record for one native source identity in one project. */
+export interface AgentSuiteImport {
+  recordVersion: number;
+  projectId: string;
+  sourceIdentity: string;
+  sourceFormat: string;
+  manifestDigest?: string | null;
+  contentDigest: string;
+  suiteName: string;
+  suiteManifestDigest: string;
+  specVersion: string;
+  schemaCommit: string;
+  agents: AgentSuiteAgentMapping[];
+  toolProviders: AgentSuiteToolProvider[];
+  policies: AgentSuitePolicy[];
+  toolConnections: AgentSuiteToolConnection[];
+  blueprint: AgentSuiteBlueprint;
+  runtimeProfiles: string[];
+  blobs: Array<{ digest: string; mediaType: string; size: number }>;
+}
+
+/** Import outcome. `proposal` is null when there is nothing to review. */
+export interface AgentSuiteImportResult {
+  import: AgentSuiteImport;
+  proposal?: {
+    proposalId: string;
+    projectId: string;
+    baseConfigurationRevision: number;
+    draftRevision: number;
+    state: string | number;
+    draft: ProjectConfiguration;
+  } | null;
+}
+
+/** The policy bound to one imported agent, or null when none is bound. */
+export interface AgentSuiteAgentPolicy {
+  effectiveAgentId: string;
+  sourceIdentity: string;
+  policy?: AgentSuitePolicy | null;
+}
+
 /** Cursor and page-size controls for skill inventory queries. */
 export interface SkillContentInventoryQuery {
   cursor?: string;

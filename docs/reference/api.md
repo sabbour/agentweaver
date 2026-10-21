@@ -154,6 +154,9 @@ exposes project configuration and run-selection operations.
 | POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | No |
 | GET | `/{projectId}/casting/export` | Admin | Export casting configuration. | No |
 | POST | `/{projectId}/casting/import` | Admin | Validate and import casting. | No |
+| POST | `/{projectId}/agentsuite-imports` | Admin | Validate a native AgentSuite archive and stage its agents as a casting proposal. | No |
+| GET | `/{projectId}/agentsuite-imports/{sourceIdentity}` | Read | Read a retained AgentSuite import record. | Yes |
+| GET | `/{projectId}/agentsuite-agents/{effectiveAgentId}/policy` | Read | Read the policy bound to an imported agent. | Yes |
 | PUT | `/{projectId}/runs/{runId}/selection` | Selection | Accept an immutable run selection. | Yes |
 | GET | `/{projectId}/runs/{runId}/selection` | Selection | Read the accepted selection. | Yes |
 

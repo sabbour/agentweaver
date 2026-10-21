@@ -428,7 +428,7 @@ public static class ProjectConfigurationValidator
         }
     }
 
-    private static bool IsReservedOrchestrationRole(string value) =>
+    internal static bool IsReservedOrchestrationRole(string value) =>
         value.Equals("scribe", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("work-monitor", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("coordinator", StringComparison.OrdinalIgnoreCase) ||
