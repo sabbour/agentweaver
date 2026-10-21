@@ -598,8 +598,9 @@ The command reports whether it created the grant or found the same active
 grant. A different active TenantAdmin stops the command without changes.
 After the Job succeeds, remove the Job and Secret and delete the local token
 file. Sign in as the approved user and load the Projects page. The page should
-open without `403`. The runtime database role remains SELECT-only on authority
-tables.
+open without `403`. The runtime database role stays read-only on authority
+tables until an operator applies the separately approved role-assignment
+grants. See [Runtime authority writes](../reference/runtime-configuration.md#runtime-authority-writes).
 
 3. Check readiness, the deployed image digests, and the exact ServiceAccount
    on each workload. Review only the affected pod's logs if a rollout fails.
