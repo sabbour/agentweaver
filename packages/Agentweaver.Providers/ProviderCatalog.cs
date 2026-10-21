@@ -252,6 +252,15 @@ public sealed class ProviderCatalog
     public bool TryGetProvider(string id, out ProviderRegistration? registration) =>
         _registrations.TryGetValue(id, out registration);
 
+    /// <summary>Lists every registered provider, ordered by ID.</summary>
+    public IEnumerable<ProviderRegistration> Registrations =>
+        _registrations.Values.OrderBy(registration => registration.Descriptor.Id, StringComparer.Ordinal);
+
+    /// <summary>Lists every cost meter-source assignment, ordered by meter source.</summary>
+    public IEnumerable<ProviderMeterSourceSelection> MeterSourceSelections =>
+        _meterSources.OrderBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry => new ProviderMeterSourceSelection(entry.Key, entry.Value));
+
     private static ProviderResult<ProviderCatalog> Invalid(string message) =>
         ProviderResult<ProviderCatalog>.Failure(ProviderErrorCode.InvalidConfiguration, message);
 }

@@ -39,6 +39,101 @@ public sealed class BacklogDependencyGraph
     public BacklogDependencyGraphSnapshot Snapshot =>
         new(ProjectId, Revision, Tasks, Dependencies);
 
+    /// <summary>Captures task content and identity in one graph revision.</summary>
+    public BacklogCoreResult<BacklogTaskEdit> AddTask(
+        BacklogTaskReference? taskReference,
+        BacklogTaskContent content,
+        long expectedGraphRevision)
+    {
+        var validation = ValidateContent(content, taskReference?.TaskId);
+        if (!validation.IsEmpty)
+            return BacklogCoreResult<BacklogTaskEdit>.Failure(validation);
+        var added = AddTask(taskReference, expectedGraphRevision);
+        if (!added.IsSuccess)
+            return added;
+        var graph = added.Value!.Graph;
+        var task = ApplyContent(graph._tasks[taskReference!.TaskId], content);
+        return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(
+            new BacklogDependencyGraph(ProjectId, graph.Revision,
+                graph._tasks.SetItem(taskReference.TaskId, task), _dependencies, _prerequisitesByTask), true));
+    }
+
+    /// <summary>Replaces task content without changing claim identity or execution ownership.</summary>
+    public BacklogCoreResult<BacklogTaskEdit> SetTaskContent(
+        BacklogTaskReference? taskReference,
+        BacklogTaskContent content,
+        long expectedGraphRevision,
+        long expectedTaskRevision)
+    {
+        if (!TryValidateTaskMutation(taskReference, expectedGraphRevision, expectedTaskRevision,
+                out var task, out var issues))
+            return BacklogCoreResult<BacklogTaskEdit>.Failure(issues);
+        var validation = ValidateContent(content, taskReference!.TaskId);
+        if (!validation.IsEmpty)
+            return BacklogCoreResult<BacklogTaskEdit>.Failure(validation);
+        var updated = ApplyContent(task!, content);
+        if (updated == task)
+            return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(this, false));
+        if (task!.IsArchived || task.IsAutomationInvocationPending)
+            return TaskFailure(BacklogIssueCode.TaskNotEditable, "task",
+                "Archived tasks and pending automation invocations cannot be edited.");
+        if (task.Revision == long.MaxValue)
+            return TaskFailure(BacklogIssueCode.TaskRevisionExhausted, "task.revision",
+                "The task revision cannot be incremented.");
+        if (Revision == long.MaxValue)
+            return TaskFailure(BacklogIssueCode.GraphRevisionExhausted, "graph.revision",
+                "The dependency graph revision cannot be incremented.");
+        return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(
+            new BacklogDependencyGraph(ProjectId, Revision + 1,
+                _tasks.SetItem(taskReference.TaskId, updated with { Revision = task.Revision + 1 }),
+                _dependencies, _prerequisitesByTask), true));
+    }
+
+    /// <summary>Validates bounded content and the unique provider/repository/issue association.</summary>
+    private ImmutableArray<BacklogIssue> ValidateContent(BacklogTaskContent? content, string? taskId)
+    {
+        if (!IsValidContent(content, allowLegacyTitle: false))
+            return [new BacklogIssue(BacklogIssueCode.InvalidTaskContent, "content",
+                "A title of 1-512 characters, description of at most 65536 characters, valid lifecycle, and valid issue identity are required.")];
+        if (content!.RepositoryIssue is { } issue && _tasks.Values.Any(task =>
+                task.Reference.TaskId != taskId && SameIssue(task.RepositoryIssue, issue)))
+            return [new BacklogIssue(BacklogIssueCode.DuplicateRepositoryIssue, "content.repositoryIssue",
+                "This repository issue is already linked to a task in the project.")];
+        return [];
+    }
+
+    /// <summary>Checks content bounds; historical ID-only records retain their empty title.</summary>
+    private static bool IsValidContent(BacklogTaskContent? content, bool allowLegacyTitle) =>
+        content is not null && content.Title is not null &&
+        (allowLegacyTitle && content.Title.Length == 0 || !string.IsNullOrWhiteSpace(content.Title)) &&
+        content.Title.Length <= 512 && !content.Title.Any(char.IsControl) &&
+        (content.Description is null || content.Description.Length <= 65536 && !content.Description.Contains('\0')) &&
+        Enum.IsDefined(content.Lifecycle) &&
+        (content.RepositoryIssue is null ||
+            WorkflowValidationSupport.IsStableId(content.RepositoryIssue.ProviderId) &&
+            content.RepositoryIssue.Repository is not null && content.RepositoryIssue.IssueNumber > 0);
+
+    /// <summary>Compares provider issue identities using case-insensitive repository names.</summary>
+    private static bool SameIssue(BacklogRepositoryIssueLink? left, BacklogRepositoryIssueLink right) =>
+        left?.Repository is not null && right.Repository is not null &&
+        left.ProviderId == right.ProviderId && left.IssueNumber == right.IssueNumber &&
+        string.Equals(left.Repository.FullName, right.Repository.FullName, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Closes readiness without releasing an existing execution claim.</summary>
+    private static BacklogTaskSnapshot ApplyContent(BacklogTaskSnapshot task, BacklogTaskContent content) =>
+        task with
+        {
+            Title = content.Title.Trim(),
+            Description = content.Description,
+            Lifecycle = content.Lifecycle,
+            RepositoryIssue = content.RepositoryIssue is { } issue
+                ? issue with { Repository = new Agentweaver.Abstractions.SourceControlRepositoryIdentity(
+                    issue.Repository.Owner.ToLowerInvariant(), issue.Repository.Name.ToLowerInvariant()) }
+                : null,
+            State = content.Lifecycle == BacklogTaskLifecycle.Closed && task.State == BacklogTaskState.Ready
+                ? BacklogTaskState.Backlog : task.State
+        };
+
     /// <summary>Adds a task when the expected graph revision is current.</summary>
     /// <param name="taskReference">Stable identity in this graph's project.</param>
     /// <param name="expectedGraphRevision">Revision observed by the caller.</param>
@@ -96,6 +191,9 @@ public sealed class BacklogDependencyGraph
         if (state == BacklogTaskState.Claimed)
             return TaskFailure(BacklogIssueCode.TaskNotEditable, "task.state",
                 "Claimed state can be set only by an atomic claim.");
+        if (state == BacklogTaskState.Ready && task!.Lifecycle == BacklogTaskLifecycle.Closed)
+            return TaskFailure(BacklogIssueCode.TaskNotEligible, "task.lifecycle",
+                "A closed task cannot become ready.");
         if (task!.State == state)
             return BacklogCoreResult<BacklogTaskEdit>.Success(
                 new BacklogTaskEdit(this, Changed: false));
@@ -249,6 +347,14 @@ public sealed class BacklogDependencyGraph
                 if (!Enum.IsDefined(task.State))
                     Add(issues, BacklogIssueCode.InvalidTaskState, path + ".state",
                         "Task state is not supported.");
+                if (!IsValidContent(new BacklogTaskContent(
+                        task.Title, task.Description, task.Lifecycle, task.RepositoryIssue), allowLegacyTitle: true))
+                    Add(issues, BacklogIssueCode.InvalidTaskContent, path + ".content",
+                        "Persisted task content or issue identity is invalid.");
+                if (task.RepositoryIssue is { } issue &&
+                    tasks.Values.Any(existing => SameIssue(existing.RepositoryIssue, issue)))
+                    Add(issues, BacklogIssueCode.DuplicateRepositoryIssue, path + ".repositoryIssue",
+                        "A repository issue can belong to only one task in a project.");
                 if (!tasks.TryAdd(task.Reference.TaskId, task))
                     Add(issues, BacklogIssueCode.DuplicateTask, path + ".taskId",
                         $"Task '{task.Reference.TaskId}' appears more than once.");

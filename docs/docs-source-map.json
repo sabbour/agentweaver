@@ -9,6 +9,7 @@
     "docs/guide/build-and-use.md",
     "docs/guide/testing.md",
     "docs/guide/gateway.md",
+    "docs/guide/platform-components.md",
     "docs/guide/azure-acceptance.md",
     "docs/diagrams/README.md",
     "docs/architecture/overview.md",
@@ -198,6 +199,24 @@
         "docs/reference/contracts.md",
         "docs/guide/gateway.md",
         "docs/guide/testing.md"
+      ]
+    },
+    {
+      "name": "Platform components report",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/PlatformComponent",
+        "packages/Agentweaver.Providers/PlatformComponentReporting.cs",
+        "services/projects-config/Agentweaver.Projects.Config/PlatformComponentCollector.cs",
+        "services/events-and-sessions/Agentweaver.EventsAndSessions/PlatformComponentOwnerEndpoint.cs",
+        "services/environment/Agentweaver.Environment/PlatformComponentOwnerEndpoint.cs",
+        "services/knowledge/Agentweaver.Knowledge/PlatformComponentOwnerEndpoint.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/PlatformComponentOwnerEndpoint.cs",
+        "services/identity/Agentweaver.Identity.Broker/PlatformComponentOwnerEndpoint.cs"
+      ],
+      "required": [
+        "docs/guide/platform-components.md",
+        "docs/reference/api.md",
+        "docs/reference/runtime-configuration.md"
       ]
     },
     {

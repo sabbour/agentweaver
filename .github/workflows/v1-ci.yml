@@ -423,23 +423,24 @@ jobs:
           fi
           npm run release:validate -- --ci
       - uses: actions/setup-dotnet@v4
-        if: needs.changes.outputs.node == 'true'
+        # Keep executable-test prerequisites aligned when release validation fails first.
+        if: ${{ !cancelled() && needs.changes.outputs.node == 'true' }}
         with:
           global-json-file: global.json
       - name: Cache NuGet packages for executable tooling fixtures
-        if: needs.changes.outputs.node == 'true'
+        if: ${{ !cancelled() && needs.changes.outputs.node == 'true' }}
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
           key: v1-nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', '**/packages.lock.json', '**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.Config') }}
           restore-keys: v1-nuget-${{ runner.os }}-${{ runner.arch }}-
       - name: Restore dependencies required by Linux collector and Web image contracts
-        if: needs.changes.outputs.node == 'true'
+        if: ${{ !cancelled() && needs.changes.outputs.node == 'true' }}
         run: |
           dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --locked-mode
           dotnet restore apps/web/host/Agentweaver.Web.Host.csproj --locked-mode
       - uses: actions/download-artifact@v4
-        if: needs.changes.outputs.node == 'true'
+        if: ${{ !cancelled() && needs.changes.outputs.node == 'true' }}
         with:
           name: v1-web-dist
           path: apps/web/dist/

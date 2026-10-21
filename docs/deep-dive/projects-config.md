@@ -93,6 +93,10 @@ Casting proposals stage a complete configuration draft for review. Scenario
 templates and manual role selections produce version-bound proposals.
 Confirmation appends a configuration revision only while the proposal and
 configuration remain current. Rejection leaves configuration unchanged.
+The [Gateway casting routes](../reference/api.md#casting-through-the-gateway)
+expose the same review flow, templates, roles, and explicit transfers. The owner
+still checks current permissions and revision fences; import is limited to
+1 MiB at both entry points and never applies a team before confirmation.
 
 Skills use imported content revisions and digests, with assignments to project
 agents. Configuration validation checks these pins. An accepted run reads its
@@ -116,4 +120,5 @@ provide recovery without rewriting accepted history.
 - [Projects & Config contract](../architecture/projects-config.md)
 - [Skill marketplace sources](../architecture/skill-marketplace.md)
 - [Contracts and endpoints](../reference/contracts.md)
+- [Platform components](../guide/platform-components.md)
 - [Identity and secrets](./identity-secrets.md)

@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.19.0" />
     <PackageReference Include="OpenIddict.Validation.AspNetCore" Version="7.7.1" />
     <PackageReference Include="OpenIddict.Validation.SystemNetHttp" Version="7.7.1" />
@@ -41,5 +42,13 @@
     <EmbeddedResource Include="Migrations\019_session_suspend_resume.sql" />
     <EmbeddedResource Include="Migrations\020_maf_buildtest_workspace_seed.sql" />
     <EmbeddedResource Include="Migrations\021_row_lock_record_updates.sql" />
+    <EmbeddedResource Include="Migrations\022_run_list_completion.sql" />
+    <EmbeddedResource Include="Migrations\023_project_run_requests.sql" />
+    <EmbeddedResource Include="Migrations\024_chief_of_staff.sql" />
+    <EmbeddedResource Include="Migrations\025_user_notification_dismissals.sql" />
+    <EmbeddedResource Include="Migrations\026_backlog_task_content.sql" />
+    <EmbeddedResource Include="Migrations\027_periodic_issue_sync.sql" />
+    <EmbeddedResource Include="Migrations\028_guardrails_evaluations.sql" />
+    <EmbeddedResource Include="Migrations\032_source_control_pull_request_records.sql" />
   </ItemGroup>
 </Project>

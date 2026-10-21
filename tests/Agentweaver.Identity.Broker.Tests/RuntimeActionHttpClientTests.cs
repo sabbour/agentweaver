@@ -292,6 +292,109 @@ public sealed class RuntimeActionHttpClientTests
         Assert.Equal(external.AssistantResponse, await turn);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ModelTurnSendsContentOnlyAfterTheOwnerRequiresGuardrailsContent(bool contentRequired)
+    {
+        // The stub owner answers the first admission with 428 when contentRequired is true, which the client
+        // reads as "content required". The hash-only call must never contain the prompt text.
+        var paths = new List<string>();
+        RuntimeActionContentRequest? sent = null;
+        RuntimeActionAdmission? issued = null;
+        using var client = new HttpClient(new Handler(async request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            paths.Add(path);
+            var json = await request.Content!.ReadAsStringAsync();
+            if (path.EndsWith("/authorize", StringComparison.Ordinal))
+            {
+                Assert.DoesNotContain("protected prompt", json);
+                var action = JsonSerializer.Deserialize<RuntimeActionRequest>(
+                    json, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+                issued = new(1, action, action.EventId.ToString("N"), "1", action.EventId,
+                    PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed);
+                if (!contentRequired)
+                    return Response(request, issued);
+                var required = Response(request, new { code = "content_required" });
+                required.StatusCode = HttpStatusCode.PreconditionRequired;
+                return required;
+            }
+            if (path.EndsWith("/authorize-content", StringComparison.Ordinal))
+            {
+                sent = JsonSerializer.Deserialize<RuntimeActionContentRequest>(
+                    json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                return Response(request, issued!);
+            }
+            return Response(request, issued!);
+        }));
+        var actor = new RuntimeActorAuthorization(
+            new SecretCredential("protected-actor", DateTimeOffset.UtcNow.AddMinutes(1)), "tenant");
+        var actions = new RuntimeActionHttpClient(client, new("https://orchestrator.test/"), actor);
+        await actions.RequireAsync(RuntimeCopilotSessionTests.Registration(), "model.turn", Guid.NewGuid(),
+            "protected prompt"u8.ToArray(), _ => Task.CompletedTask, default, null);
+        // Expected calls: authorize, then authorize-content only when required, then the follow-up call that
+        // happens after admission in both cases.
+        if (contentRequired)
+        {
+            Assert.Equal(3, paths.Count);
+            Assert.EndsWith("/authorize-content", paths[1], StringComparison.Ordinal);
+            Assert.NotNull(sent);
+            Assert.Equal("protected prompt", sent.Content);
+            Assert.Equal(issued!.Request, sent.Request);
+        }
+        else
+        {
+            Assert.Equal(2, paths.Count);
+            Assert.DoesNotContain(paths, path => path.EndsWith("/authorize-content", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public async Task ContentRequiredForAnActionWithoutContentFailsClosed()
+    {
+        // A tool action has no content form, so a 428 from the owner must fail without a second call.
+        var paths = new List<string>();
+        using var client = new HttpClient(new Handler(request =>
+        {
+            paths.Add(request.RequestUri!.AbsolutePath);
+            var required = Response(request, new { code = "content_required" });
+            required.StatusCode = HttpStatusCode.PreconditionRequired;
+            return Task.FromResult(required);
+        }));
+        var actor = new RuntimeActorAuthorization(
+            new SecretCredential("protected-actor", DateTimeOffset.UtcNow.AddMinutes(1)), "tenant");
+        var actions = new RuntimeActionHttpClient(client, new("https://orchestrator.test/"), actor);
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => actions.RequireAsync(
+            RuntimeCopilotSessionTests.Registration(), "tool.read", "args"u8.ToArray(),
+            _ => Task.CompletedTask, default, isToolInvocation: true));
+        Assert.Equal("runtime_guardrails_content_unsupported", failure.Code);
+        Assert.Single(paths);
+    }
+
+    [Fact]
+    public void ContentValidationRequiresTheExactModelTurnText()
+    {
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var hash = RuntimeContractValidation.Hash("bounded text"u8);
+        var request = new RuntimeActionRequest(1, registration.RuntimeInstanceId, registration.Revision,
+            registration.Binding.ExecutionFence, Guid.NewGuid(), "model.turn", hash);
+        Assert.Equal("bounded text"u8.ToArray(),
+            RuntimeActionContract.ValidateContent(new(request, "bounded text")));
+        // Rejected: text that doesn't match the hash, a non-model action, oversized text even with a matching
+        // hash, and empty text.
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeActionContract.ValidateContent(new(request, "changed text")));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeActionContract.ValidateContent(new(request with { ActionId = "tool.read" }, "bounded text")));
+        var oversized = new string('a', RuntimeActionContract.MaximumContentBytes + 1);
+        Assert.Throws<RuntimeAuthorizationException>(() => RuntimeActionContract.ValidateContent(
+            new(request with { InputHash = RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(oversized)) },
+                oversized)));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeActionContract.ValidateContent(new(request, "")));
+    }
+
     private static HttpResponseMessage Response<T>(HttpRequestMessage request, T body) => new(HttpStatusCode.OK)
     {
         RequestMessage = request, Content = JsonContent.Create(body),

@@ -259,6 +259,14 @@ public static class SessionMaterialEndpoints
                     return await service.WriteAsync(context, sessionId, request, token).ConfigureAwait(false);
                 }))
             .RequireAuthorization();
+        // A fixed material kind keeps browser history reads separate from protected runtime material.
+        endpoints.MapGet("/internal/sessions/{sessionId}/turns/{eventId:guid}",
+            (HttpContext context, string sessionId, Guid eventId,
+                [FromServices] SessionMaterialApplicationService service, CancellationToken token) =>
+                ExecuteAsync(context, async () => SessionTurnContent.FromMaterial(
+                    await service.ReadAsync(context, sessionId, eventId, SessionMaterialKind.TurnContent, token)
+                        .ConfigureAwait(false))))
+            .RequireAuthorization();
         endpoints.MapGet("/internal/sessions/{sessionId}/material/{eventId:guid}/{kind}",
             (HttpContext context, string sessionId, Guid eventId, string kind,
                 [FromServices] SessionMaterialApplicationService service, CancellationToken token) =>

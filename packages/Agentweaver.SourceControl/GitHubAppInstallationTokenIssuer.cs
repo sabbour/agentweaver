@@ -61,13 +61,15 @@ public sealed class GitHubAppInstallationTokenIssuer
         long repositoryId,
         string appJwt,
         bool issueWriteRequested,
+        bool issuesOnly,
         CancellationToken cancellationToken)
     {
-        var permissions = new Dictionary<string, string>(StringComparer.Ordinal)
+        var permissions = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!issuesOnly)
         {
-            ["contents"] = "write",
-            ["pull_requests"] = "write"
-        };
+            permissions["contents"] = "write";
+            permissions["pull_requests"] = "write";
+        }
         if (issueWriteRequested)
             permissions["issues"] = "write";
 
@@ -91,6 +93,7 @@ public sealed class GitHubAppInstallationTokenIssuer
     private async Task<GitHubAppInstallationCredential> ReadCredentialAsync(
         HttpResponseMessage response,
         bool issueWriteRequested,
+        bool issuesOnly,
         CancellationToken cancellationToken)
     {
         if (!response.IsSuccessStatusCode)
@@ -110,8 +113,9 @@ public sealed class GitHubAppInstallationTokenIssuer
                 !expiryElement.TryGetDateTimeOffset(out var expiresAt) ||
                 !root.TryGetProperty("permissions", out var permissionsElement))
                 throw new JsonException("The GitHub installation-token response was incomplete or invalid.");
-            var permissions = ReadPermissions(permissionsElement, issueWriteRequested);
-            if (expiresAt <= _timeProvider.GetUtcNow())
+            var permissions = ReadPermissions(permissionsElement, issueWriteRequested, issuesOnly);
+            if (expiresAt <= _timeProvider.GetUtcNow() ||
+                issuesOnly && expiresAt > _timeProvider.GetUtcNow().AddHours(1).AddMinutes(5))
                 throw new JsonException("The GitHub installation-token response was expired.");
 
             var issueWriteGranted =
@@ -149,12 +153,22 @@ public sealed class GitHubAppInstallationTokenIssuer
     /// <param name="cancellationToken">Cancels the outbound API request.</param>
     /// <returns>A token credential and digest of the permissions actually granted.</returns>
     /// <exception cref="SourceControlOperationException">The key, API response, transport result, or requested grants are invalid.</exception>
-    public async Task<GitHubAppInstallationCredential> MintAsync(
+    public Task<GitHubAppInstallationCredential> MintAsync(
         long installationId,
         long repositoryId,
         SecretCredential appPrivateKey,
         bool issueWriteRequested,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        MintCoreAsync(installationId, repositoryId, appPrivateKey, issueWriteRequested, false, cancellationToken);
+
+    /// <summary>Mints only issues:write for one repository; never contents or pull-request authority.</summary>
+    public Task<GitHubAppInstallationCredential> MintIssueSyncAsync(
+        long installationId, long repositoryId, SecretCredential appPrivateKey, CancellationToken cancellationToken) =>
+        MintCoreAsync(installationId, repositoryId, appPrivateKey, true, true, cancellationToken);
+
+    private async Task<GitHubAppInstallationCredential> MintCoreAsync(
+        long installationId, long repositoryId, SecretCredential appPrivateKey, bool issueWriteRequested,
+        bool issuesOnly, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(appPrivateKey);
         if (installationId <= 0)
@@ -166,10 +180,10 @@ public sealed class GitHubAppInstallationTokenIssuer
         {
             var appJwt = CreateAppJwt(appPrivateKey);
             using var response = await SendTokenRequestAsync(
-                installationId, repositoryId, appJwt, issueWriteRequested, cancellationToken)
+                installationId, repositoryId, appJwt, issueWriteRequested, issuesOnly, cancellationToken)
                 .ConfigureAwait(false);
             return await ReadCredentialAsync(
-                response, issueWriteRequested, cancellationToken).ConfigureAwait(false);
+                response, issueWriteRequested, issuesOnly, cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
         {
@@ -262,7 +276,7 @@ public sealed class GitHubAppInstallationTokenIssuer
     /// <summary>Validates GitHub's granted permissions against the requested permission ceiling.</summary>
     private static ImmutableSortedDictionary<string, string> ReadPermissions(
         JsonElement permissionsElement,
-        bool issueWriteRequested)
+        bool issueWriteRequested, bool issuesOnly)
     {
         if (permissionsElement.ValueKind != JsonValueKind.Object)
             throw new JsonException("The GitHub response permissions were invalid.");
@@ -275,7 +289,7 @@ public sealed class GitHubAppInstallationTokenIssuer
             var level = permission.Value.GetString();
             var permittedLevel = permission.Name switch
             {
-                "contents" or "pull_requests" => level is "read" or "write",
+                "contents" or "pull_requests" => !issuesOnly && (level is "read" or "write"),
                 "issues" => issueWriteRequested && (level is "read" or "write"),
                 "metadata" => level == "read",
                 _ => false
@@ -285,7 +299,7 @@ public sealed class GitHubAppInstallationTokenIssuer
             permissions.Add(permission.Name, level!);
         }
 
-        if (!permissions.ContainsKey("contents") || !permissions.ContainsKey("pull_requests"))
+        if (!issuesOnly && (!permissions.ContainsKey("contents") || !permissions.ContainsKey("pull_requests")))
             throw new JsonException("The GitHub response omitted a requested permission.");
 
         return permissions.ToImmutable();

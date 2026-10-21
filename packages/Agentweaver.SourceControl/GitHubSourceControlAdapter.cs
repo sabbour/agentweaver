@@ -43,7 +43,7 @@ public sealed class SourceControlOperationException(
 /// Implements the Source Control provider contract against GitHub's REST API.
 /// Every operation checks the pinned provider/resource/capability binding and treats uncertain writes distinctly.
 /// </summary>
-public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
+public sealed partial class GitHubSourceControlAdapter : ISourceControlAdapter, ISourceControlIssueAdapter
 {
     /// <summary>The provider-options schema version supported by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 1;
@@ -111,16 +111,7 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         SecretCredential credential,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(candidate);
-        ArgumentNullException.ThrowIfNull(repository);
-        ArgumentNullException.ThrowIfNull(credential);
-        if (candidate.Seam != ProviderSeam.SourceControl ||
-            !string.Equals(candidate.ProviderId, ProviderId, StringComparison.Ordinal) ||
-            candidate.OptionsSchemaVersion != CurrentOptionsSchemaVersion ||
-            !candidate.AdvertisedCapabilities.IsSupersetOf(AdvertisedCapabilities))
-            throw new SourceControlOperationException(
-                SourceControlFailureCode.InvalidBinding,
-                "The selected provider candidate does not match this GitHub adapter and options schema.");
+        ValidateRepositoryCandidate(candidate, repository, credential);
 
         var info = await ReadRepositoryAsync(repository, credential, cancellationToken).ConfigureAwait(false);
         var capabilities = GetNegotiatedCapabilities(info);
@@ -129,6 +120,12 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 SourceControlFailureCode.InvalidBinding,
                 "The GitHub repository negotiated a capability not advertised by the selected provider.");
 
+        return RepositoryNegotiation(repository, info, capabilities);
+    }
+
+    private SourceControlRepositoryNegotiation RepositoryNegotiation(SourceControlRepositoryIdentity repository,
+        RepositoryInfo info, ImmutableHashSet<string> capabilities)
+    {
         var resource = new ProviderResourceRef(
             ProviderSeam.SourceControl,
             ProviderId,
@@ -140,6 +137,20 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             info.Id,
             info.DefaultBranch,
             info.IsPrivate);
+    }
+
+    private void ValidateRepositoryCandidate(ProviderCandidate candidate, SourceControlRepositoryIdentity repository,
+        SecretCredential credential)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(credential);
+        if (candidate.Seam != ProviderSeam.SourceControl ||
+            !string.Equals(candidate.ProviderId, ProviderId, StringComparison.Ordinal) ||
+            candidate.OptionsSchemaVersion != CurrentOptionsSchemaVersion ||
+            !candidate.AdvertisedCapabilities.IsSupersetOf(AdvertisedCapabilities))
+            throw new SourceControlOperationException(SourceControlFailureCode.InvalidBinding,
+                "The selected provider candidate does not match this GitHub adapter and options schema.");
     }
 
     /// <summary>Rereads repository identity and permission-derived capabilities for a pinned operation.</summary>
@@ -1175,7 +1186,10 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             ReadRequiredString(@base, "ref"),
             ReadRequiredString(@base, "sha"),
             merged,
-            disposition);
+            disposition,
+            // Title is display data only. It's optional so a response without it still parses,
+            // and it isn't part of the exact-match checks above.
+            ReadOptionalString(root, "title"));
     }
 
     /// <summary>Requires a pull request's branches and head/base SHAs to equal the request exactly.</summary>
@@ -1358,6 +1372,21 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             !string.IsNullOrWhiteSpace(value.GetString()))
             return value.GetString()!;
         throw InvalidResponse("GitHub returned an incomplete response.");
+    }
+
+    /// <summary>Reads an optional string; a missing, null, or blank value returns null.</summary>
+    /// <exception cref="SourceControlOperationException">The value is present but isn't a string.</exception>
+    private static string? ReadOptionalString(JsonElement source, string property)
+    {
+        if (!source.TryGetProperty(property, out var value) || value.ValueKind == JsonValueKind.Null)
+            return null;
+        // A present value of the wrong type means the response isn't what GitHub documents, so
+        // fail instead of guessing.
+        if (value.ValueKind != JsonValueKind.String)
+            throw InvalidResponse("GitHub returned an invalid response.");
+        // Treat a blank string like a missing value, so callers only see a usable title or null.
+        var text = value.GetString();
+        return string.IsNullOrWhiteSpace(text) ? null : text;
     }
 
     /// <summary>Reads a required string nested under a required JSON object.</summary>
