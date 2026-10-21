@@ -153,11 +153,12 @@ you send appears in **Messages** after the agent records it.
 - **Add link** links a run or a conversation. Choose a project and pick a run
   from its run list, or pick one of your conversations. Issue, pull request,
   and artifact links aren't offered, because the web app doesn't accept typed
-  IDs and no Gateway route lists their targets. The Gateway has no `GET` route
+  IDs and they don't have a picker yet. The Gateway has no finite list route
   for a project's repository issues or pull requests (only `POST /issues`,
-  `POST /pull-requests`, and `GET /pull-requests/{number}/reviews`), and run
-  output captures are listed only by the native run-bound API, not the
-  Gateway. Existing links of those kinds show **Unavailable** as
+  `POST /pull-requests`, and `GET /pull-requests/{number}/reviews`). A Gateway
+  output-capture list (`listSourceControlOutputCaptures`) exists in pending
+  work but isn't integrated into the web app, so there's no artifact picker.
+  Existing links of those kinds show **Unavailable** as
   their state.
 - Run and conversation links show the run state. A link you can't read shows
   **Unavailable** and its kind only. A deleted target shows **Not found**.
