@@ -188,6 +188,10 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/agentsuite-agents/{effectiveAgentId}/policy",
             "getProjectAgentSuiteAgentPolicy", "Read the policy bound to an imported AgentSuite agent",
             forwardTenantSelector: true);
+        // Project-scoped run reads accept an unbound token; a run-bound token is narrowed to its run.
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
+            "/api/projects/{projectId}/runs", "listProjectRuns", "List project runs",
+            ["state", "cursor", "pageSize"], forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);
