@@ -8,7 +8,10 @@ describes source receipts, target guards, and the separate #1784 runtime gate.
 ## Offline validation
 
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
-open/closed lifecycle and a unique repository issue identity. It takes an
+open/closed lifecycle and a unique repository issue identity. It requires
+migration 021 and has no schema dependency on migration 025, which requires
+only migration 002. The migrator applies missing registered versions in
+ascending order. It takes an
 `ACCESS EXCLUSIVE` lock on `backlog_tasks` and blocks writes until commit.
 It adds no tables or runtime privileges: existing `SELECT, INSERT, UPDATE`
 grants on `backlog_tasks` and `backlog_projects` remain sufficient.
