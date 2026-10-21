@@ -13,7 +13,7 @@ import { ErrorNotice, Loading, PageHeading } from './pageParts';
 import { useProjectConfiguration, useProjectSummary } from './projectData';
 import { projectReadiness } from './projectReadiness';
 import { RunList } from './RunList';
-import { useBrowserRunList } from './runListData';
+import { runListErrorMessage, useProjectRunList } from './runListData';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXL },
@@ -120,11 +120,12 @@ export function DashboardPage() {
   const { projectId = '' } = useParams();
   const project = useProjectSummary(projectId);
   const configuration = useProjectConfiguration(projectId);
-  const runs = useBrowserRunList(projectId);
+  // The newest runs for the list, and the open runs for the counts.
+  const runs = useProjectRunList(projectId, { pageSize: 5 });
+  const openRuns = useProjectRunList(projectId, { states: ['open'], pageSize: 100 });
   const base = `/projects/${encodeURIComponent(projectId)}`;
-  // Refresh re-reads the summary and the saved configuration. Browser run
-  // history is local and needs no reload.
-  const refresh = () => { project.reload(); configuration.reload(); };
+  // Refresh re-reads the summary, the saved configuration, and both run lists.
+  const refresh = () => { project.reload(); configuration.reload(); runs.reload(); openRuns.reload(); };
   const loading = project.loading || configuration.loading;
   // Show one error at a time. A summary error is shown before a configuration error.
   const error = project.error ?? configuration.error;
@@ -132,10 +133,12 @@ export function DashboardPage() {
   // Readiness needs the configuration. An archived project gets the archived
   // status card no matter how complete its setup is.
   const readiness = config ? projectReadiness(config, project.data?.state === 'archived') : null;
-  // These counts use the state each run had when it was last opened in this
-  // browser, not live state. The tile captions say so.
-  const needsInput = runs.items.filter((run) => run.executionState === 'blocked').length;
-  const working = runs.items.filter((run) => run.executionState === 'active').length;
+  // Counts come from the loaded open runs. A "+" marks counts that may be
+  // higher because the service has more open runs than one page.
+  const more = openRuns.hasMore ? '+' : '';
+  const needsInput = openRuns.items.filter((run) => run.executionState === 'blocked').length;
+  const working = openRuns.items.filter((run) => run.executionState === 'active').length;
+  const runError = runs.error ?? openRuns.error;
   const enabledSkills = config?.skills.filter((skill) => skill.enabled).length ?? 0;
 
   return (
@@ -181,14 +184,14 @@ export function DashboardPage() {
             </div>
             <div className={styles.summaryGrid} aria-label="Project summary">
               <Link to={`${base}/orchestrations`} className={styles.summaryTile}>
-                <Text className={styles.summaryLabel}>Recent runs</Text>
-                <Text className={styles.summaryValue}>{runs.items.length}</Text>
-                <Text className={styles.summaryMeta}>Opened in this browser</Text>
+                <Text className={styles.summaryLabel}>Active runs</Text>
+                <Text className={styles.summaryValue}>{openRuns.items.length}{more}</Text>
+                <Text className={styles.summaryMeta}>Working, open, or waiting</Text>
               </Link>
               <Link to={`${base}/orchestrations`} className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Needs input</Text>
-                <Text className={styles.summaryValue}>{needsInput}</Text>
-                <Text className={styles.summaryMeta}>{working} working when last opened</Text>
+                <Text className={styles.summaryValue}>{needsInput}{more}</Text>
+                <Text className={styles.summaryMeta}>{working}{more} working now</Text>
               </Link>
               <Link to={`${base}/team`} className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Agents</Text>
@@ -203,13 +206,16 @@ export function DashboardPage() {
             </div>
           </section>
           <div className={styles.mainGrid}>
-            <RunList
-              title="Recent runs in this browser"
-              description="Runs you opened in this project. A full run list needs a service update."
-              data={runs}
-              emptyText="Runs you open appear here."
-              limit={5}
-            />
+            <div>
+              {runError != null && <ErrorNotice code={errorCode(runError)}>{runListErrorMessage(runError)}</ErrorNotice>}
+              <RunList
+                title="Recent runs"
+                description="The newest runs in this project."
+                data={runs}
+                emptyText={runs.loading ? 'Loading runs…' : 'No runs yet.'}
+                limit={5}
+              />
+            </div>
             <aside className={styles.panel} aria-labelledby="dashboard-team-title">
               <Text as="h2" id="dashboard-team-title" className={styles.panelTitle}>Team</Text>
               {config.agentCharters.length === 0 ? <Text className={styles.muted}>No agents yet. Add agents in Agents.</Text> : (

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   tenantSelector: 'tenant-1',
   completeRemoteMcpOAuthCallback: vi.fn(),
   listProjects: vi.fn(),
+  listProjectRuns: vi.fn(),
   getProject: vi.fn(),
   getProjectConfiguration: vi.fn(),
   updateProjectConfiguration: vi.fn(),
@@ -61,6 +62,7 @@ vi.mock('./api', () => ({
   gatewayClient: {
     completeRemoteMcpOAuthCallback: mocks.completeRemoteMcpOAuthCallback,
     listProjects: mocks.listProjects,
+    listProjectRuns: mocks.listProjectRuns,
     getProject: mocks.getProject,
     getProjectConfiguration: mocks.getProjectConfiguration,
     updateProjectConfiguration: mocks.updateProjectConfiguration,
@@ -182,7 +184,7 @@ vi.mock('./config', async (importOriginal) => {
 
 import App from './App';
 import { GatewayError } from './api';
-import { clearRecentRuns, rememberRun } from './recentRuns';
+import { clearRecentRuns } from './recentRuns';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -390,6 +392,7 @@ describe('v1 web project scoping', () => {
     mocks.tenantSelector = 'tenant-1';
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
     mocks.listProjects.mockReset().mockResolvedValue([]);
+    mocks.listProjectRuns.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, items: [], nextCursor: null }));
     mocks.createProject.mockReset();
     mocks.getProject.mockReset().mockImplementation(async (_token: string, projectId: string) => projectSummary(projectId, 'Fixture project'));
     mocks.getProjectConfiguration.mockReset().mockImplementation(async (_token: string, projectId: string) => projectConfiguration(projectId, 1));
@@ -1292,14 +1295,20 @@ describe('v1 web project scoping', () => {
     expect([projectId, runId, sender, recipient, text]).toEqual(['p1', 'r1', 's2', 's1', 'Status?']);
   });
 
-  it('lists runs opened in this browser in Orchestrations and opens one on Chat', async () => {
+  it('lists project runs in Orchestrations and opens one on Chat', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
-    rememberRun('tenant-1', { projectId: 'p1', runId: 'r1', executionState: 'running' });
+    mocks.listProjectRuns.mockImplementation(async (_token: string, projectId: string, options: { states?: string[] }) => ({
+      projectId,
+      nextCursor: null,
+      items: options.states?.includes('open')
+        ? [{ runId: 'r1', title: 'Fix the build', state: 'active', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', startedBy: { issuer: 'https://issuer.test', subject: 'user' } }]
+        : [],
+    }));
     window.history.replaceState({}, '', '/projects/p1/orchestrations');
     render(<App />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Open run r1' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Open run Fix the build' }));
 
     const chatTab = await screen.findByRole('tab', { name: 'Chat' });
     await waitFor(() => expect(chatTab.getAttribute('aria-selected')).toBe('true'));

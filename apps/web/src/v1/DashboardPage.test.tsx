@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   project: null as unknown,
   configuration: null as unknown,
   runs: [] as unknown[],
+  useProjectRunList: vi.fn(),
+  reloadRuns: vi.fn(),
 }));
 
 vi.mock('./projectData', () => ({
@@ -18,8 +20,12 @@ vi.mock('./projectData', () => ({
   useProjectConfiguration: () => mocks.configuration,
 }));
 
-vi.mock('./runListData', () => ({
-  useBrowserRunList: () => ({ items: mocks.runs, reload: vi.fn() }),
+vi.mock('./runListData', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./runListData')>(),
+  useProjectRunList: (projectId: string, options?: { states?: string[] }) => {
+    mocks.useProjectRunList(projectId, options);
+    return { items: mocks.runs, loading: false, error: null, hasMore: false, loadingMore: false, loadMore: vi.fn(), reload: mocks.reloadRuns };
+  },
 }));
 
 vi.mock('./pageParts', async () => {
@@ -50,7 +56,7 @@ function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfigura
 }
 
 function run(runId: string, executionState: string): RunListItem {
-  return { projectId: 'p1', runId, executionState, time: { label: 'Last opened', value: '2026-01-01T00:00:00Z' } };
+  return { projectId: 'p1', runId, label: `Task ${runId}`, executionState, time: { label: 'Started', value: '2026-01-01T00:00:00Z' } };
 }
 
 function renderPage() {
@@ -66,6 +72,8 @@ describe('DashboardPage', () => {
     mocks.project = loaded({ projectId: 'p1', name: 'Alpha', state: 'active' });
     mocks.configuration = loaded({ projectId: 'p1', revision: 12, configuration: config() });
     mocks.runs = [];
+    mocks.useProjectRunList.mockClear();
+    mocks.reloadRuns.mockClear();
   });
 
   it('shows loading until the configuration arrives', () => {
@@ -82,8 +90,11 @@ describe('DashboardPage', () => {
   });
 
   it('shows a ready project with its checks, summary, and team', () => {
-    mocks.runs = [run('r1', 'blocked'), run('r2', 'active'), run('r3', 'completed')];
+    mocks.runs = [run('r1', 'blocked'), run('r2', 'active'), run('r3', 'idle')];
     renderPage();
+    expect(mocks.useProjectRunList).toHaveBeenCalledWith('p1', { pageSize: 5 });
+    expect(mocks.useProjectRunList).toHaveBeenCalledWith('p1', { states: ['open'], pageSize: 100 });
+    expect(screen.getByRole('link', { name: 'Open run Task r1' }).getAttribute('href')).toBe('/projects/p1/runs/r1');
     expect(screen.getByText('Ready')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Project is set up for runs' })).toBeTruthy();
     const checks = within(screen.getByRole('list', { name: 'Setup checks' })).getAllByRole('listitem').map((entry) => entry.textContent);
@@ -92,9 +103,9 @@ describe('DashboardPage', () => {
     expect(within(actions).getByRole('link', { name: 'Open Orchestrations' }).getAttribute('href')).toBe('/projects/p1/orchestrations');
     expect(within(actions).getAllByRole('link', { name: 'Open Orchestrations' })).toHaveLength(1);
     const summary = screen.getByLabelText('Project summary');
-    expect(summary.textContent).toContain('Recent runs3');
+    expect(summary.textContent).toContain('Active runs3');
     expect(summary.textContent).toContain('Needs input1');
-    expect(summary.textContent).toContain('1 working when last opened');
+    expect(summary.textContent).toContain('1 working now');
     expect(summary.textContent).toContain('Enabled in this project');
     expect(summary.textContent).not.toContain('Configuration revision');
     expect(screen.getByText('Ada')).toBeTruthy();
@@ -117,10 +128,11 @@ describe('DashboardPage', () => {
     expect(screen.getByRole('heading', { name: 'This project is archived' })).toBeTruthy();
   });
 
-  it('reloads the project and configuration on Refresh', () => {
+  it('reloads the project, configuration, and runs on Refresh', () => {
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect((mocks.project as LoadedStub<unknown>).reload).toHaveBeenCalled();
     expect((mocks.configuration as LoadedStub<unknown>).reload).toHaveBeenCalled();
+    expect(mocks.reloadRuns).toHaveBeenCalledTimes(2);
   });
 });

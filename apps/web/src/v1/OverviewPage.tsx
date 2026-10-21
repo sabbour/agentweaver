@@ -1,14 +1,14 @@
 /**
  * Cross-project Overview in the 0.x layout: Operations card, Recent projects,
- * Recent runs in this browser, and Needs attention. Counts come from the project
- * list, browser run history, and the open run. The 0.x usage charts and
+ * Recent runs, and Needs attention. Counts come from the project list, the
+ * newest runs of each project, and the open run. The 0.x usage charts and
  * activity feed need a service metrics API that does not exist yet, so they are
  * not shown. This page
  * is the planned home for Chief of Staff priorities.
  */
 import { Button, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AttentionList } from './AttentionList';
 import { useAuth } from './AuthContext';
@@ -18,7 +18,7 @@ import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
 import { useRunAttention } from './runAttention';
 import { RunList } from './RunList';
-import { useBrowserRunList } from './runListData';
+import { runListErrorMessage, useCrossProjectRunList } from './runListData';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXL },
@@ -111,8 +111,9 @@ export function OverviewPage() {
   const styles = useStyles();
   const { apiCall } = useAuth();
   const attention = useRunAttention();
-  const runs = useBrowserRunList();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  // Each project list load also reads the newest runs of every project.
+  const runs = useCrossProjectRunList(projects, 5);
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
@@ -141,25 +142,20 @@ export function OverviewPage() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  // Project ID to name lookup, so the cross-project run list can show names.
-  const projectNames = useMemo(
-    () => new Map((projects ?? []).map((project) => [project.projectId, project.name])),
-    [projects],
-  );
   // Only active projects count as recent. Archived projects are counted in the
   // Operations card but not listed. ISO timestamps sort correctly as strings,
   // so newest first is a reverse string compare.
   const active = (projects ?? []).filter((project) => project.state === 'active');
   const recent = [...active].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT_PROJECT_LIMIT);
-  // Refresh re-reads both the project list and the open run's pending items.
-  // Browser run history is local, so it needs no reload here.
+  // Refresh re-reads the project list, which also re-reads the runs, and the
+  // open run's pending items.
   const refresh = () => { void load(); attention.reload(); };
 
   return (
     <div className={styles.root}>
       <PageHeading
         title="Overview"
-        description="Your projects, the runs you opened, and what needs your input."
+        description="Your projects, their newest runs, and what needs your input."
         breadcrumb={false}
         actions={(
           <div className={styles.headerActions}>
@@ -188,8 +184,8 @@ export function OverviewPage() {
                 <Text className={styles.glanceValue}>{projects.length - active.length}</Text>
               </div>
               <div className={styles.glance}>
-                <Text className={styles.glanceLabel}>Recent runs in this browser</Text>
-                <Text className={styles.glanceValue}>{runs.items.length}</Text>
+                <Text className={styles.glanceLabel}>Recent runs</Text>
+                <Text className={styles.glanceValue}>{runs.items.length}{runs.hasMore ? '+' : ''}</Text>
               </div>
               <div className={styles.glance}>
                 <Text className={styles.glanceLabel}>Needs your input</Text>
@@ -219,14 +215,18 @@ export function OverviewPage() {
             )}
           </section>
           <div className={styles.mainGrid}>
-            <RunList
-              title="Recent runs in this browser"
-              description="Runs you opened in any project. A full run list needs a service update."
-              data={runs}
-              emptyText="Runs you open appear here."
-              projectNames={projectNames}
-              limit={8}
-            />
+            <div>
+              {runs.error != null && <ErrorNotice code={errorCode(runs.error)}>{runListErrorMessage(runs.error)}</ErrorNotice>}
+              <RunList
+                title="Recent runs"
+                description="The newest runs across your projects."
+                data={runs}
+                emptyText={runs.loading ? 'Loading runs…' : 'No runs yet.'}
+                projectNames={runs.projectNames}
+                limit={8}
+              />
+              <Link className={styles.link} to="/sessions">View all sessions</Link>
+            </div>
             <section className={styles.card} aria-labelledby="overview-attention">
               <Text as="h2" id="overview-attention" className={styles.sectionTitle}>Needs attention</Text>
               <AttentionList attention={attention} />

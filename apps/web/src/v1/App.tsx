@@ -102,9 +102,10 @@ import { isRunFinished, runState } from './runState';
 import { DashboardPage } from './DashboardPage';
 import { OverviewPage } from './OverviewPage';
 import { OrchestrationsPage } from './OrchestrationsPage';
+import { SessionsPage } from './SessionsPage';
 import { AgentsView } from './AgentsView';
 import { accessSummary, permissionsForProject, useAuthorizationContext, useProjectConfiguration, useProjectSummary } from './projectData';
-import { useBrowserRunList } from './runListData';
+import { runListErrorMessage, useProjectRunList } from './runListData';
 import { CONFIGURATION_SECTIONS, SETTINGS_SECTIONS, settingsSection } from './settingsSections';
 import type { SettingsSection } from './settingsSections';
 
@@ -1056,17 +1057,19 @@ function KnowledgePage() {
     () => runId.trim() ? { projectId, runId: runId.trim() } : null,
     [projectId, runId],
   );
-  const recentRuns = useBrowserRunList(projectId);
+  // The newest runs in this project, for the run select. The service caps a
+  // page at 100 runs.
+  const projectRuns = useProjectRunList(projectId, { pageSize: 100 });
   const knowledgeConfiguration = useProjectConfiguration(projectId);
-  /** Recent runs in this browser, plus the run from the URL so a deep link keeps its choice. */
+  /** The project's newest runs, plus the run from the URL so a deep link keeps its choice. */
   const runOptions = useMemo(() => {
-    const options = recentRuns.items.map((item) => ({ value: item.runId, label: `${item.runId} · ${runState(item.executionState).label}` }));
-    // There is no server list of runs, so a run from a link may be missing from
-    // this browser's list. Add it at the top so the select can show it.
+    const options = projectRuns.items.map((item) => ({ value: item.runId, label: `${item.label} · ${runState(item.executionState).label}` }));
+    // A run from a link can be older than the loaded page. Add it at the top so
+    // the select can show it.
     const current = searchParams.get('runId');
     if (current && !options.some((option) => option.value === current)) options.unshift({ value: current, label: current });
     return options;
-  }, [recentRuns.items, searchParams]);
+  }, [projectRuns.items, searchParams]);
   /** Agents from the project configuration, plus the agent from the URL (for example, a session opened from Topology). */
   const agentOptions = useMemo(() => {
     const options = (knowledgeConfiguration.data?.configuration.agentCharters ?? [])
@@ -1564,8 +1567,10 @@ function KnowledgePage() {
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="info"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
       <Panel title="Show memories for">
-        {runOptions.length === 0 ? (
-          <EmptyState title="No runs yet" description="Memories belong to a run. Open a run from Orchestrations, then come back here."
+        {projectRuns.error != null && <ErrorNotice code={errorCode(projectRuns.error)}>{runListErrorMessage(projectRuns.error)}</ErrorNotice>}
+        {/* Wait for the run list before saying there are no runs. */}
+        {runOptions.length === 0 && projectRuns.loading ? <Loading label="Loading runs" /> : runOptions.length === 0 ? (
+          <EmptyState title="No runs yet" description="Memories belong to a run. Start a run in this project, then come back here."
             action={<Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/orchestrations`}>Open Orchestrations</Link>} />
         ) : (
           <form className="v1-form v1-inline-form" onSubmit={setScope}>
@@ -3185,7 +3190,7 @@ function AuthenticatedRoutes() {
       {/* App-wide pages. Pages without a v1 service show an explanation instead of failing. */}
       <Route path="/" element={<Navigate to="/overview" replace />} />
       <Route path="/overview" element={<Shell><OverviewPage /></Shell>} />
-      <Route path="/sessions" element={<Shell><UnavailablePage title="Sessions" description="Starting and listing chat sessions needs a service update. Open a project, then choose a run in Orchestrations." /></Shell>} />
+      <Route path="/sessions" element={<Shell><SessionsPage /></Shell>} />
       <Route path="/assistant" element={<Shell><UnavailablePage title="New session" description="Starting a new chat needs a service update. Open a project, then choose a run in Orchestrations to read and send messages." /></Shell>} />
       <Route path="/console" element={<Navigate to="/assistant" replace />} />
       <Route path="/settings" element={<Shell><AccountSettingsPage /></Shell>} />
