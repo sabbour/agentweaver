@@ -56,30 +56,40 @@ public static class AzureProvisionedThroughputAllocator
     {
         ArgumentNullException.ThrowIfNull(charge);
         ArgumentNullException.ThrowIfNull(usage);
+        // The charge must name its rate card, use an upper-case three-letter currency code, have a
+        // supported number of minor-unit digits, be non-negative, and cover a non-empty period.
         if (string.IsNullOrWhiteSpace(charge.RateCardId) || string.IsNullOrWhiteSpace(charge.RateCardVersion) ||
             charge.Unit is not { Length: 3 } || !charge.Unit.All(character => character is >= 'A' and <= 'Z') ||
             charge.MinorUnitDigits is < 0 or > 6 || charge.Amount < 0 || charge.EndsAt <= charge.StartsAt)
             throw new ArgumentException("The provisioned-throughput charge is invalid.", nameof(charge));
+        // Work in whole minor units (for example, cents) so the split uses integer arithmetic only.
+        // A charge with more decimal places than the currency allows is rejected, not rounded.
         var scale = Pow10(charge.MinorUnitDigits);
         var scaled = charge.Amount * scale;
         if (scaled != decimal.Truncate(scaled) || scaled > long.MaxValue)
             throw new ArgumentException(
                 "The provisioned-throughput charge is not exact at its minor-unit precision.", nameof(charge));
         var chargeMinor = (long)scaled;
+        // Each ledger event may appear once, with a real ID and non-negative token counts.
         var events = new HashSet<Guid>();
         foreach (var item in usage)
             if (item is null || item.EventId == Guid.Empty || !events.Add(item.EventId) ||
                 item.InputTokens < 0 || item.OutputTokens < 0)
                 throw new ArgumentException("The provisioned-throughput usage set is invalid.", nameof(usage));
 
+        // A missing token count would make every share wrong, so the whole report stays unpriced
+        // instead of treating the missing count as zero.
         if (usage.Any(item => item.InputTokens is null || item.OutputTokens is null))
             return Unpriced(charge, chargeMinor, "token-measurements-missing");
         var tokens = usage.ToDictionary(item => item.EventId,
             item => checked(item.InputTokens!.Value + item.OutputTokens!.Value));
         var total = tokens.Values.Aggregate(0L, (sum, value) => checked(sum + value));
+        // With no tokens there is no share to divide by, so nothing can be allocated.
         if (total == 0)
             return Unpriced(charge, chargeMinor, "provisioned-throughput-usage-missing");
 
+        // First pass: each event gets the rounded-down value of charge × tokens ÷ total. BigInteger
+        // keeps the product exact even when the charge and token counts are both large.
         var floors = new Dictionary<Guid, long>();
         var remainders = new List<(Guid EventId, BigInteger Remainder)>();
         foreach (var (eventId, count) in tokens)
@@ -88,6 +98,9 @@ public static class AzureProvisionedThroughputAllocator
             floors[eventId] = (long)BigInteger.DivRem(product, total, out var remainder);
             remainders.Add((eventId, remainder));
         }
+        // Rounding down leaves fewer minor units than the event count. Give one extra unit to the
+        // events with the largest remainders. Equal remainders are ordered by event ID so the same
+        // input always produces the same result.
         var leftover = chargeMinor - floors.Values.Sum();
         var bumped = remainders
             .OrderByDescending(item => item.Remainder)
@@ -95,6 +108,7 @@ public static class AzureProvisionedThroughputAllocator
             .Take((int)leftover)
             .Select(item => item.EventId)
             .ToHashSet();
+        // Return shares in event-ID order and convert minor units back to the charge currency.
         var shares = tokens
             .OrderBy(item => item.Key.ToString("D"), StringComparer.Ordinal)
             .Select(item =>
@@ -111,6 +125,7 @@ public static class AzureProvisionedThroughputAllocator
         AzureProvisionedThroughputCharge charge, long chargeMinor, string reason) =>
         new(charge, 0, chargeMinor, [], RoundingMethod, reason);
 
+    // Computes 10^digits as a decimal, which is exact for the 0 to 6 digits allowed above.
     private static decimal Pow10(int digits)
     {
         var value = 1m;

@@ -178,7 +178,11 @@ internal sealed class NativeUsageReceiptConsumer(
         var trustedAzureByok = false;
         if (RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt))
         {
+            // Step 1: every Azure claim must have matching provider, deployment, and configuration
+            // facts. A failed check throws, so a false Azure claim never reaches the ledger.
             RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(receipt);
+            // Step 2: pricing also needs the dispatch ID, so the charge can be traced to one dispatch.
+            // Usage without it is still recorded, but it stays unpriced.
             if (receipt.Usage.A2AMessageId is { } dispatchId && dispatchId != Guid.Empty)
             {
                 RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt);
@@ -532,6 +536,7 @@ internal sealed class NativeUsageReceiptConsumer(
 
     private CostPrice Price(UsageSubmission usage, RunCostBinding pinned, bool trustedAzureByok)
     {
+        // BYOK token usage has its own pricing rules and provider; all other meters use the Copilot path.
         if (usage.ModelBinding.MeterSource == SdkMeterSources.ByokTokens)
             return PriceAzureByok(usage, pinned, trustedAzureByok);
         if (pinned.Binding is null)
@@ -551,10 +556,14 @@ internal sealed class NativeUsageReceiptConsumer(
     /// </summary>
     private CostPrice PriceAzureByok(UsageSubmission usage, RunCostBinding pinned, bool trustedAzureByok)
     {
+        // Non-Azure BYOK usage, and Azure usage without a dispatch ID, is never priced.
         if (!trustedAzureByok)
             return new(null, null, CostDisposition.Unpriced, null, "byok-provider-unpriced");
+        // No rate card was pinned for this run, for example because Azure pricing is not configured.
         if (pinned.Binding is null)
             return new(null, null, CostDisposition.Unpriced, null, pinned.UnpricedReason);
+        // The run keeps the rate card it pinned first. If the configured card has changed since then,
+        // verification fails and new usage stays unpriced instead of being priced at a different rate.
         var verified = azureBindings?.VerifyPinned(
             usage.ModelBinding.MeterSource, usage.Attribution.RunId, pinned.Binding);
         if (azureProvider is null || verified?.IsSuccess != true)
@@ -583,6 +592,8 @@ internal sealed class NativeUsageReceiptConsumer(
     {
         if (pinned.Binding is null)
             return new(null, false, pinned.UnpricedReason ?? "cost-provider-unavailable");
+        // BYOK work is never quoted before it runs, because its cost depends on tokens that are not yet
+        // known. The checks below only choose the reason that is reported for the missing quote.
         if (meterSource == SdkMeterSources.ByokTokens)
         {
             var azureVerified = azureBindings?.VerifyPinned(meterSource, runId, pinned.Binding);

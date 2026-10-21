@@ -145,12 +145,15 @@ if (costProvider is not null)
 var azureCostOptions = AzureCostProviderOptions.FromConfiguration(
     builder.Configuration.GetSection("EventsAndSessions:Cost:Azure"));
 var azureCostProvider = azureCostOptions is null ? null : new AzureCostProvider(azureCostOptions);
+// Without the configuration section, no Azure provider is registered and BYOK token usage stays unpriced.
 if (azureCostProvider is not null)
 {
     registrations.Add(azureCostProvider.CreateRegistration());
     builder.Services.AddSingleton(azureCostProvider);
     builder.Services.AddSingleton<AzureCostProviderBinder>();
 }
+// The catalog maps each meter source to exactly one Cost provider. Copilot usage and Azure BYOK token
+// usage use different meter sources, so both providers can be enabled together.
 var meterSourceSelections = new List<ProviderMeterSourceSelection>();
 if (costProvider is not null)
     meterSourceSelections.Add(new(CopilotCostProvider.MeterSource, CopilotCostProvider.ProviderId));
