@@ -122,7 +122,8 @@ public sealed class AzureCostProvider : ICostProvider
             return Unpriced("provisioned-throughput-share-unavailable");
         if (string.IsNullOrWhiteSpace(model.ModelId))
             return Unpriced("model-rate-unavailable");
-        if (usage.ProviderUnits is not null || usage.ProviderUnit is not null)
+        // Runtime BYOK receipts label token measurements "tokens"; any other provider unit stays unpriced.
+        if (usage.ProviderUnits is not null || usage.ProviderUnit is not (null or "tokens"))
             return Unpriced("provider-units-unsupported");
         if (usage.InputTokens is null || usage.OutputTokens is null)
             return Unpriced("token-measurements-missing");

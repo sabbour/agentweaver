@@ -147,6 +147,24 @@ if (costProvider is not null)
     builder.Services.AddSingleton<ICostProvider>(costProvider);
     builder.Services.AddSingleton<ICostProviderBinder, CopilotCostProviderBinder>();
 }
+// Azure BYOK pricing is enabled only by an explicit, versioned rate card; there is no default.
+var azureCostOptions = AzureCostProviderOptions.FromConfiguration(
+    builder.Configuration.GetSection("EventsAndSessions:Cost:Azure"));
+var azureCostProvider = azureCostOptions is null ? null : new AzureCostProvider(azureCostOptions);
+// Without the configuration section, no Azure provider is registered and BYOK token usage stays unpriced.
+if (azureCostProvider is not null)
+{
+    registrations.Add(azureCostProvider.CreateRegistration());
+    builder.Services.AddSingleton(azureCostProvider);
+    builder.Services.AddSingleton<AzureCostProviderBinder>();
+}
+// The catalog maps each meter source to exactly one Cost provider. Copilot usage and Azure BYOK token
+// usage use different meter sources, so both providers can be enabled together.
+var meterSourceSelections = new List<ProviderMeterSourceSelection>();
+if (costProvider is not null)
+    meterSourceSelections.Add(new(CopilotCostProvider.MeterSource, CopilotCostProvider.ProviderId));
+if (azureCostProvider is not null)
+    meterSourceSelections.Add(new(AzureCostProvider.MeterSource, AzureCostProvider.ProviderId));
 var permittedOverrides = projectOverrides.Values.Distinct(StringComparer.Ordinal)
     .Select(providerId => new ProviderOverridePermission(ProviderSeam.Sessions, providerId))
     .ToArray();
@@ -157,8 +175,8 @@ var catalogResult = ProviderCatalog.Create(
         new ProviderSelection(ProviderSeam.Messaging, NativePostgresMessagingProvider.ProviderId)
     ],
     permittedOverrides,
-    meterSourceSelections: costProvider is null ? []
-        : [new(CopilotCostProvider.MeterSource, CopilotCostProvider.ProviderId)]);
+    meterSourceSelections: meterSourceSelections);
+
 if (!catalogResult.IsSuccess)
     throw new InvalidOperationException("The Sessions provider catalog configuration is invalid.");
 var resolver = new ProviderResolver(catalogResult.Value!);

@@ -843,10 +843,14 @@ counts, unsupported cache categories, unknown models, and changed bindings remai
 `unpriced`, not zero-cost. Events verifies trusted Azure provider and deployment
 facts bound to the accepted runtime model pin and rejects any Azure BYOK claim
 that fails the check. Only usage that also carries its dispatch message ID passes
-`RequireTrustedAzureByok` and can be priced. Without a configured Azure Cost
-provider, admitted Azure BYOK usage stays `unpriced`. Provisioned
-throughput remains `unpriced` until trusted resource- and time-window-level usage
-share supplies its denominator. Other meter sources provide their own pricing.
+`RequireTrustedAzureByok` and can be priced. Azure pricing is off until the
+`EventsAndSessions:Cost:Azure` section supplies an explicit, versioned rate card;
+until then admitted Azure BYOK usage stays `unpriced`. Other BYOK providers stay
+`unpriced`. Provisioned throughput stays `unpriced` per event; a report-only
+allocator splits a fixed period charge by token share with exact largest-remainder
+rounding and never changes ledger rows. Events also serves represented-spend
+evidence: per-bucket run and period totals, dispatch witnesses, and a monotonic
+accounting cursor from one ledger snapshot. Other meter sources provide their own pricing.
 Sandbox compute cost is a later meter source, not part of the 1.0 model-cost
 contract.
 

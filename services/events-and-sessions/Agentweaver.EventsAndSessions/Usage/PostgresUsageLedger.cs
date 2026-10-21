@@ -140,6 +140,136 @@ public sealed class PostgresUsageLedger : IUsageLedger
             SdkMeterSources.CopilotNanoAiu, cancellationToken);
     }
 
+    /// <summary>JSON path text that identifies the dispatch of a stored usage payload.</summary>
+    /// <remarks>Native receipts carry the A2A dispatch message ID; older submissions carry an attribution dispatch ID.</remarks>
+    internal const string DispatchIdSql =
+        "coalesce(l.payload->'usage'->>'a2AMessageId', l.payload->'usage'->'attribution'->>'dispatchId')";
+
+    /// <summary>
+    /// Reads represented spend for one bucket from one repeatable-read snapshot. Unpriced events in the
+    /// meter source count against every unit of that meter, so missing prices stay explicit.
+    /// </summary>
+    public async Task<UsageSpendEvidence> ReadSpendEvidenceAsync(
+        string tenantId, string projectId, string runId, UsageSpendEvidenceRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
+        UsageSpendEvidenceContract.ValidateRequest(request);
+        // Both queries below run in one repeatable-read transaction, so the totals, the cursor, and the
+        // dispatch witnesses all describe the same ledger state even while new usage is being appended.
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(
+            System.Data.IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+        var period = request.ProjectPeriod;
+        // A priced row belongs to the bucket only if it has the requested unit. An unpriced row has no
+        // amount, so it counts in every unit of its meter source. This keeps missing prices visible.
+        const string Bucket = """
+            (l.price_disposition <> 'Unpriced' AND l.price_unit = @unit
+             OR l.price_disposition = 'Unpriced' AND (l.price_unit IS NULL OR l.price_unit = @unit))
+            """;
+        const string InPeriod = "(@period_start IS NOT NULL AND l.occurred_at >= @period_start AND l.occurred_at < @period_end)";
+        await using var totals = new NpgsqlCommand($"""
+            SELECT count(*),
+                coalesce(sum(l.price_amount) FILTER (WHERE l.run_id = @run AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit), 0),
+                count(*) FILTER (WHERE l.run_id = @run AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit),
+                count(*) FILTER (WHERE l.run_id = @run AND l.price_disposition = 'Unpriced' AND {Bucket}),
+                coalesce(sum(l.price_amount) FILTER (WHERE {InPeriod} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit), 0),
+                count(*) FILTER (WHERE {InPeriod} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit),
+                count(*) FILTER (WHERE {InPeriod} AND l.price_disposition = 'Unpriced' AND {Bucket})
+            FROM {_quotedSchema}.usage_ledger l
+            WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id AND l.meter_source = @meter_source
+            """, connection, transaction);
+        AddSpendParameters(totals, tenantId, projectId, runId, request);
+        // The first column, count(*), is the accounting cursor: the number of ledger rows for this project
+        // and meter source. Rows are never deleted or updated, so the cursor can only grow between reads.
+        long cursor;
+        UsageSpendTotal run;
+        UsageSpendTotal? projectPeriod;
+        try
+        {
+            await using var reader = await totals.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("The spend aggregate returned no row.");
+            cursor = reader.GetInt64(0);
+            run = new(reader.GetDecimal(1), reader.GetInt64(2), reader.GetInt64(3));
+            projectPeriod = period is null ? null : new(reader.GetDecimal(4), reader.GetInt64(5), reader.GetInt64(6));
+        }
+        catch (OverflowException exception)
+        {
+            // Fail rather than return a rounded or truncated total.
+            throw new InvalidOperationException(
+                "Spend totals exceed the exact numeric range supported by the usage contract.", exception);
+        }
+
+        var scope = new UsageDispatchAccountingScope(
+            tenantId, projectId, runId, request.MeterSource, request.Unit, period?.PeriodId);
+        // Start with an empty receipt list for every requested dispatch, so a dispatch with no ledger rows
+        // still gets a witness (with status Unknown) instead of being left out.
+        var rows = request.DispatchIds.ToDictionary(
+            id => id, _ => new List<(UsageDispatchSourceReceiptIdentity Receipt, bool Priced, decimal Amount)>(),
+            StringComparer.Ordinal);
+        if (!request.DispatchIds.IsEmpty)
+        {
+            await using var dispatches = new NpgsqlCommand($"""
+                SELECT {DispatchIdSql}, s.source_receipt_id, l.event_id, s.source_payload_hash,
+                       l.price_disposition, l.price_amount
+                FROM {_quotedSchema}.usage_ledger l
+                JOIN {_quotedSchema}.usage_source_receipts s ON s.event_id = l.event_id
+                WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id AND l.run_id = @run
+                    AND l.meter_source = @meter_source AND {Bucket}
+                    AND (@period_start IS NULL OR {InPeriod})
+                    AND {DispatchIdSql} = ANY(@dispatches)
+                ORDER BY s.source_receipt_id
+                """, connection, transaction);
+            AddSpendParameters(dispatches, tenantId, projectId, runId, request);
+            dispatches.Parameters.AddWithValue("dispatches", NpgsqlDbType.Array | NpgsqlDbType.Text,
+                request.DispatchIds.ToArray());
+            await using var reader = await dispatches.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                // Unpriced rows add a receipt but no amount; zero is never used as a price.
+                var priced = reader.GetString(4) != nameof(CostDisposition.Unpriced);
+                rows[reader.GetString(0)].Add((
+                    new UsageDispatchSourceReceiptIdentity(reader.GetGuid(1), reader.GetGuid(2), reader.GetString(3)),
+                    priced, priced ? reader.GetDecimal(5) : 0m));
+            }
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        // Build witnesses after the snapshot has committed. Every witness uses the same cursor as the totals.
+        // Events cannot tell whether a dispatch has reported all of its usage, so the status is Partial
+        // when receipts exist and Unknown when none do; the caller decides completeness.
+        var witnesses = request.DispatchIds.Select(dispatchId =>
+        {
+            var receipts = rows[dispatchId].Select(row => row.Receipt).ToImmutableArray();
+            var priced = rows[dispatchId].Where(row => row.Priced).ToArray();
+            return new UsageDispatchAccountingWitness(
+                dispatchId, scope, cursor, receipts,
+                UsageDispatchAccountingWitnessContract.ComputeReceiptDigest(dispatchId, scope, receipts),
+                priced.Sum(row => row.Amount), priced.Length, receipts.Length - priced.Length,
+                receipts.IsEmpty ? UsageDispatchAccountingStatus.Unknown : UsageDispatchAccountingStatus.Partial,
+                null, null, null);
+        }).ToImmutableArray();
+        return new UsageSpendEvidence(UsageSpendEvidenceContract.CurrentVersion, tenantId, projectId, runId,
+            request.MeterSource, request.Unit, cursor, run, projectPeriod, period?.PeriodId, witnesses);
+    }
+
+    private static void AddSpendParameters(
+        NpgsqlCommand command, string tenantId, string projectId, string runId, UsageSpendEvidenceRequest request)
+    {
+        command.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Varchar, tenantId);
+        command.Parameters.AddWithValue("project_id", NpgsqlDbType.Varchar, projectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
+        command.Parameters.AddWithValue("meter_source", NpgsqlDbType.Varchar, request.MeterSource);
+        command.Parameters.AddWithValue("unit", NpgsqlDbType.Varchar, request.Unit);
+        // Without a project period both bounds are null. The period totals then match no rows, and the
+        // dispatch query is not filtered by time.
+        command.Parameters.AddWithValue("period_start", NpgsqlDbType.TimestampTz,
+            request.ProjectPeriod is { } start ? start.StartsAt : DBNull.Value);
+        command.Parameters.AddWithValue("period_end", NpgsqlDbType.TimestampTz,
+            request.ProjectPeriod is { } end ? end.EndsAt : DBNull.Value);
+    }
+
     /// <summary>Aggregates measurements without substituting zero for missing values.</summary>
     private async Task<UsageRunTotals> GetRunTotalsCoreAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction,
