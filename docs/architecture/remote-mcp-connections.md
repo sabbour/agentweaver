@@ -120,6 +120,15 @@ The connection configuration replaces the provider's endpoint references:
 
 Binding never reads a credential. Run-time use still requires `RemoteMcpConnectionReview.Evaluate` and a current Identity credential decision.
 
+### Import records
+
+The AgentSuite import (#2114) stores each binding as `toolConnections[{ toolProvider, connectionId }]`, where `toolProvider` is `id@version`. Projects & Config checks only the shape: `connectionId` must be a lowercase `D` format GUID and not the empty GUID. It never calls Environment and never resolves an endpoint or secret. Import reports these blockers:
+
+- `tool_connection_unbound`: a remote provider has no connection ID.
+- `tool_connection_header_secrets_unsupported`: the provider declares header `secretRef` values. This matches `HeaderSecretsUnsupported`.
+
+When reviewed tool snapshots (#1925) are built, the caller derives `RemoteMcpToolProviderRequirement` from the import record and calls `RemoteMcpToolProviderBinding.Evaluate` with the bound connection's current snapshot. Import doesn't reference these types.
+
 The Cilium Environment provider enforces L3/L4 egress only. Remote MCP needs L7 mediation, so this provider does not authorize or execute MCP requests.
 
 Separate optional TLS profiles register Environment's fixed Identity and
