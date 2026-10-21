@@ -10,6 +10,7 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed class PromptShieldsClassifierTests
 {
+    // Canned Prompt Shields responses. Each one includes both analysis fields, as the real service does.
     private const string Clear = """{"userPromptAnalysis":{"attackDetected":false},"documentsAnalysis":[]}""";
     private const string UserAttack = """{"userPromptAnalysis":{"attackDetected":true},"documentsAnalysis":[]}""";
     private const string DocumentClear = """{"userPromptAnalysis":{"attackDetected":false},"documentsAnalysis":[{"attackDetected":false}]}""";
@@ -89,6 +90,7 @@ public sealed class PromptShieldsClassifierTests
     [InlineData("[]")]
     [InlineData("""{"documentsAnalysis":[]}""")]
     [InlineData("""{"userPromptAnalysis":{"attackDetected":"yes"}}""")]
+    // Non-JSON, a non-object root, a missing analysis, and a non-boolean flag must never be read as "clear".
     public async Task MalformedUserPromptResponseIsInvalid(string response)
     {
         var handler = new StubHandler((_, _) => Json(HttpStatusCode.OK, response));
@@ -102,6 +104,7 @@ public sealed class PromptShieldsClassifierTests
     [Fact]
     public async Task DocumentResponseWithWrongDocumentCountIsInvalid()
     {
+        // Clear has an empty documentsAnalysis array, but a tool result sends one document.
         var handler = new StubHandler((_, _) => Json(HttpStatusCode.OK, Clear));
 
         var result = await Create(handler).ClassifyAsync(
@@ -113,6 +116,7 @@ public sealed class PromptShieldsClassifierTests
     [Fact]
     public async Task OversizedResponseIsInvalid()
     {
+        // Leading whitespace keeps the body valid JSON, so only the size limit can reject it.
         var handler = new StubHandler((_, _) => Json(
             HttpStatusCode.OK, new string(' ', PromptShieldsClassifier.MaximumResponseBytes + 1) + Clear));
 
@@ -125,11 +129,13 @@ public sealed class PromptShieldsClassifierTests
     [Fact]
     public async Task TransportErrorAndCredentialErrorAreUnavailable()
     {
+        // Simulates a network failure while sending the request.
         var failing = new StubHandler((_, _) => throw new HttpRequestException("network"));
         var transport = await Create(failing).ClassifyAsync(
             Options(), Request(GuardrailsContentStage.UserInput, "text"), default);
         Assert.Equal(GuardrailsClassifierFailure.Unavailable, transport.Failure);
 
+        // Simulates a token source that throws; the service must not be called without a token.
         var handler = new StubHandler((_, _) => Json(HttpStatusCode.OK, Clear));
         var credential = await new PromptShieldsClassifier(
                 new HttpClient(handler), new StubCredential(() => throw new InvalidOperationException("no token")))
@@ -173,6 +179,8 @@ public sealed class PromptShieldsClassifierTests
     [Fact]
     public async Task LongContentIsSplitAndAnyChunkAttackIsAFinding()
     {
+        // The text is one full chunk of 'a' followed by "attack", so it needs two requests. The stub
+        // reports an attack only for the chunk that contains "attack", which is the second one.
         var text = new string('a', PromptShieldsClassifier.MaximumCharactersPerRequest) + "attack";
         var handler = new StubHandler((body, _) => Json(
             HttpStatusCode.OK, body.Contains("attack", StringComparison.Ordinal) ? UserAttack : Clear));
@@ -187,6 +195,7 @@ public sealed class PromptShieldsClassifierTests
     [Fact]
     public async Task SplitNeverSeparatesASurrogatePair()
     {
+        // Places an emoji (a surrogate pair) across the chunk limit, so a naive split would cut it in half.
         var text = new string('a', PromptShieldsClassifier.MaximumCharactersPerRequest - 1) + "\U0001F600" + "b";
         var handler = new StubHandler((_, _) => Json(HttpStatusCode.OK, Clear));
 
@@ -210,6 +219,7 @@ public sealed class PromptShieldsClassifierTests
     internal static PromptShieldsClassifier Create(HttpMessageHandler handler) =>
         new(new HttpClient(handler), new StubCredential(() => "token-1"));
 
+    // Builds a classifier request whose digest is the real SHA-256 of the UTF-8 text.
     private static GuardrailsClassifierRequest Request(
         GuardrailsContentStage stage,
         string text,
@@ -230,6 +240,8 @@ public sealed class PromptShieldsClassifierTests
 
     internal sealed record Call(Uri Uri, string? Authorization, bool HasSubscriptionKey, string Body);
 
+    // Records each outgoing request (URI, auth header, key header, body) and returns a response chosen by the
+    // test from the request body and the 1-based call number.
     internal sealed class StubHandler(Func<string, int, HttpResponseMessage> respond) : HttpMessageHandler
     {
         public List<Call> Calls { get; } = [];

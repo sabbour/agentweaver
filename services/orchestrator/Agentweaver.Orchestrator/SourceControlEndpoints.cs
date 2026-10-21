@@ -19,6 +19,7 @@ namespace Agentweaver.Orchestrator;
 internal static partial class SourceControlEndpoints
 {
     private static readonly TimeSpan MergeSettlementTimeout = TimeSpan.FromSeconds(30);
+    // Internal so the Guardrails gate parses the accepted provider selection with the same strict rules.
     internal static readonly JsonSerializerOptions ProviderSelectionJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },

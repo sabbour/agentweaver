@@ -48,11 +48,15 @@ internal sealed class RuntimeActionOwner(
         var policyBinding = await SourceControlEndpoints.ResolvePolicyBindingAsync(
             accepted.Selection.Snapshot, binding.RunId, catalog, resolver, policy,
             policyOptions, cancellationToken).ConfigureAwait(false);
+        // Decide before the grant is issued whether Guardrails checks apply. If content is required but missing,
+        // this throws now, so a rejected request leaves no grant behind.
         var guardrails = RuntimeGuardrailsGate.Prepare(services, request, accepted, content);
         var grant = await grants.IssueRuntimeActionGrantAsync(
             context, registration, request, cancellationToken).ConfigureAwait(false);
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
         // Guardrails checks run before the guarded callback, so withheld content never gets a policy receipt.
+        // The authority check re-reads the registration and the accepted selection from their owners, and
+        // compares them with the values used for this admission.
         if (guardrails is not null)
             await RuntimeGuardrailsGate.RequireAllowedAsync(services, policy, guardrails,
                 RuntimeGuardrailsGate.AuthorityCheck(
@@ -271,6 +275,8 @@ public static class RuntimeActionEndpoints
             (HttpContext context, RuntimeActionContentRequest request, [FromServices] RuntimeActionOwner owner,
                 CancellationToken token) => ExecuteAsync(context, () =>
                 {
+                    // Encode the content as strict UTF-8, check its size, and confirm its digest matches the
+                    // request's input hash. Then run the normal admission with the content attached.
                     var content = RuntimeActionContract.ValidateContent(request);
                     return owner.AuthorizeAsync(context, request.Request, token, content);
                 }))
@@ -303,6 +309,11 @@ public static class RuntimeActionEndpoints
         }
         catch (RuntimeAuthorizationException failure)
         {
+            // 428 Precondition Required: checks apply but the request had no content. The runtime must resend the
+            // turn to the content endpoint; this is not a denial.
+            // 503 Service Unavailable: a dependency (cost guard, classifier, journal, or owner) could not answer,
+            // or the classifier timed out. A retry may succeed.
+            // 403 Forbidden: every other failure is a final denial, including content that the checks blocked.
             var status = failure.Code == RuntimeGuardrailsGate.ContentRequiredCode
                 ? StatusCodes.Status428PreconditionRequired
                 : failure.Code == "runtime_fixed_credit_guard_unavailable" ||

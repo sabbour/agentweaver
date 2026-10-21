@@ -57,6 +57,7 @@ const GROUPS = {
     SELECT: 'coordination_schema_migrations outbox_schema_migrations',
     'SELECT,INSERT,UPDATE': 'accepted_runs coordination_sessions coordination_messages coordination_requests parent_notifications coordinator_gates executable_action_grants coordination_tree_commands coordination_idle_subscriptions coordination_execution_operations runtime_registration_heads source_control_merge_intents source_control_output_captures maf_execution_run_guards maf_execution_dispatches outbox_streams outbox_events backlog_projects backlog_tasks',
     'SELECT,INSERT,DELETE': 'backlog_dependencies',
+    // Insert-only tables. guardrails_evaluations is here because Guardrails evidence is append-only.
     'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots guardrails_evaluations',
   },
 };
@@ -144,6 +145,7 @@ const FUNCTIONS = {
     'enforce_suspend_resume_operation_phase()',
     'reject_session_consistency_manifest_mutation()',
     'reject_row_lock_record_update()',
+    // Trigger function that keeps Guardrails evidence rows immutable.
     'reject_guardrails_evaluation_mutation()',
   ],
 };

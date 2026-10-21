@@ -76,6 +76,7 @@ if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,
     !migratorSource.Contains("18 => \"reviewed_remote_tool_snapshots\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("21 => \"row_lock_record_updates\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("22 => \"run_list_completion\"", StringComparison.Ordinal) ||
+    // 028 creates the append-only Guardrails evidence table that the plan grants SELECT and INSERT on.
     !migratorSource.Contains("28 => \"guardrails_evaluations\"", StringComparison.Ordinal))
     throw new InvalidOperationException("Reviewed Core 016/018/021/022/028 migration wiring is required before initialization; 017 is not permitted.");
 

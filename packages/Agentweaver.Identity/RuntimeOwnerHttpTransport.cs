@@ -314,6 +314,8 @@ public static class RuntimeOwnerHttpTransport
                     System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden =>
                         "runtime_owner_denied",
                     System.Net.HttpStatusCode.Conflict => "runtime_owner_binding_changed",
+                    // 428 means the run selects Guardrails checks, so the caller must resend the
+                    // request with the model-turn text before the owner can issue a grant.
                     System.Net.HttpStatusCode.PreconditionRequired => "runtime_owner_content_required",
                     _ => "runtime_owner_unavailable"
                 });

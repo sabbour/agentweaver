@@ -98,8 +98,10 @@ public static class RuntimeActionContract
     {
         ArgumentNullException.ThrowIfNull(request);
         Validate(request.Request);
+        // Only model turns carry content, and empty content has nothing to check.
         if (request.Request.ActionId != "model.turn" || string.IsNullOrEmpty(request.Content))
             throw new RuntimeAuthorizationException("runtime_action_invalid");
+        // Strict encoding rejects lone surrogates instead of replacing them, which would change the bytes.
         byte[] content;
         try
         {
@@ -109,6 +111,8 @@ public static class RuntimeActionContract
         {
             throw new RuntimeAuthorizationException("runtime_action_invalid");
         }
+        // Compare the content digest with the request's input hash. This proves the checked text is the same
+        // text the runtime will send to the model, so a caller can't get clean text checked and run other input.
         if (content.Length > MaximumContentBytes ||
             RuntimeContractValidation.Hash(content) != request.Request.InputHash)
             throw new RuntimeAuthorizationException("runtime_action_invalid");

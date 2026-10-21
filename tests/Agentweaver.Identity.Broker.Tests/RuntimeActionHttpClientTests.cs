@@ -297,6 +297,8 @@ public sealed class RuntimeActionHttpClientTests
     [InlineData(true)]
     public async Task ModelTurnSendsContentOnlyAfterTheOwnerRequiresGuardrailsContent(bool contentRequired)
     {
+        // The stub owner answers the first admission with 428 when contentRequired is true, which the client
+        // reads as "content required". The hash-only call must never contain the prompt text.
         var paths = new List<string>();
         RuntimeActionContentRequest? sent = null;
         RuntimeActionAdmission? issued = null;
@@ -331,6 +333,8 @@ public sealed class RuntimeActionHttpClientTests
         var actions = new RuntimeActionHttpClient(client, new("https://orchestrator.test/"), actor);
         await actions.RequireAsync(RuntimeCopilotSessionTests.Registration(), "model.turn", Guid.NewGuid(),
             "protected prompt"u8.ToArray(), _ => Task.CompletedTask, default, null);
+        // Expected calls: authorize, then authorize-content only when required, then the follow-up call that
+        // happens after admission in both cases.
         if (contentRequired)
         {
             Assert.Equal(3, paths.Count);
@@ -349,6 +353,7 @@ public sealed class RuntimeActionHttpClientTests
     [Fact]
     public async Task ContentRequiredForAnActionWithoutContentFailsClosed()
     {
+        // A tool action has no content form, so a 428 from the owner must fail without a second call.
         var paths = new List<string>();
         using var client = new HttpClient(new Handler(request =>
         {
@@ -376,6 +381,8 @@ public sealed class RuntimeActionHttpClientTests
             registration.Binding.ExecutionFence, Guid.NewGuid(), "model.turn", hash);
         Assert.Equal("bounded text"u8.ToArray(),
             RuntimeActionContract.ValidateContent(new(request, "bounded text")));
+        // Rejected: text that doesn't match the hash, a non-model action, oversized text even with a matching
+        // hash, and empty text.
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeActionContract.ValidateContent(new(request, "changed text")));
         Assert.Throws<RuntimeAuthorizationException>(() =>

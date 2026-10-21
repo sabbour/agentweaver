@@ -30,6 +30,8 @@ internal sealed class GuardrailsEvidenceStore : IGuardrailsEvidenceJournal
     public GuardrailsEvidenceStore(NpgsqlDataSource dataSource, string schema)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
+        // The schema name is put into SQL text, not passed as a parameter, so only a strict lowercase
+        // identifier is accepted. System schemas are rejected so evidence can't be written there.
         if (schema is null ||
             !System.Text.RegularExpressions.Regex.IsMatch(
                 schema, "^[a-z][a-z0-9_]{0,62}\\z",
@@ -54,6 +56,10 @@ internal sealed class GuardrailsEvidenceStore : IGuardrailsEvidenceJournal
         var document = JsonSerializer.Serialize(evidence, JsonOptions);
         try
         {
+            // One statement does both steps: insert the row if the operation is new, otherwise leave the existing
+            // row untouched (evidence is append-only, and a database trigger blocks UPDATE and DELETE).
+            // Column 1 says whether this call inserted the row. Column 2 says whether the stored evidence is
+            // identical to this evidence.
             await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
             await using var command = new NpgsqlCommand($"""
                 WITH inserted AS (
@@ -84,19 +90,27 @@ internal sealed class GuardrailsEvidenceStore : IGuardrailsEvidenceJournal
             command.Parameters.AddWithValue("reason", NpgsqlDbType.Varchar, evidence.ReasonCode.ToString());
             command.Parameters.AddWithValue("evidence", NpgsqlDbType.Jsonb, document);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            // The SELECT always returns one row; no row means something unexpected happened, so fail closed.
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 return GuardrailsJournalAppendStatus.Unavailable;
+            // This call inserted the row.
             if (reader.GetBoolean(0))
                 return GuardrailsJournalAppendStatus.Appended;
             // The CTE snapshot can't see a row inserted concurrently by another statement; treat that as unavailable.
             if (reader.IsDBNull(1))
                 return GuardrailsJournalAppendStatus.Unavailable;
+            // A row already exists. Identical evidence is a safe replay (for example, a runtime retry after the
+            // response was lost), so it counts as appended. Different evidence for the same operation means two
+            // different decisions were attempted for one operation. That is rejected as a duplicate so the
+            // first recorded decision can't be silently replaced, and the gate withholds the content.
             return reader.GetBoolean(1)
                 ? GuardrailsJournalAppendStatus.Appended
                 : GuardrailsJournalAppendStatus.Duplicate;
         }
         catch (Exception exception) when (exception is NpgsqlException or InvalidOperationException or TimeoutException)
         {
+            // The database is unreachable or failed. Report Unavailable so the gate withholds the content and
+            // the endpoint returns 503; the runtime can retry later.
             return GuardrailsJournalAppendStatus.Unavailable;
         }
     }

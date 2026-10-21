@@ -54,6 +54,7 @@ public sealed class GuardrailsEvidenceStorePostgresTests(CoordinationPostgresFix
     {
         var evidence = Evidence(Guid.NewGuid());
 
+        // Both transient results report success without writing a row, so the final decision can still be stored.
         Assert.Equal(GuardrailsJournalAppendStatus.Appended, await _store.AppendAsync(
             evidence with { ReasonCode = GuardrailsReasonCode.ClassifierTimedOut }, default));
         Assert.Equal(GuardrailsJournalAppendStatus.Appended, await _store.AppendAsync(
@@ -78,6 +79,7 @@ public sealed class GuardrailsEvidenceStorePostgresTests(CoordinationPostgresFix
     [Fact]
     public async Task UnavailableDatabaseReturnsUnavailable()
     {
+        // A schema that was never migrated has no table, so the insert fails like an unavailable database.
         var store = new GuardrailsEvidenceStore(fixture.DataSource, "missing_" + Guid.NewGuid().ToString("N"));
 
         Assert.Equal(GuardrailsJournalAppendStatus.Unavailable, await store.AppendAsync(Evidence(Guid.NewGuid()), default));
@@ -97,6 +99,8 @@ public sealed class GuardrailsEvidenceStorePostgresTests(CoordinationPostgresFix
         return (T)(await command.ExecuteScalarAsync())!;
     }
 
+    // Allowed evidence with valid digests. The JSON fields that the table checks against its key columns
+    // (operation, project, run, digest, reason) come from these same values.
     private static GuardrailsEvaluationEvidence Evidence(Guid operationId) => new(
         operationId,
         "model-turn-1",

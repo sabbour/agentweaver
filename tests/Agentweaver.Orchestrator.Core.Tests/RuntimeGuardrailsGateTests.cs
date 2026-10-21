@@ -53,6 +53,7 @@ public sealed class RuntimeGuardrailsGateTests
             Selection(ProviderCardinality.OrderedComposite, "first"),
             Selection(ProviderCardinality.OrderedComposite, "second"));
 
+        // Wrong cardinality, two Guardrails entries, and an unreadable provider list must all fail closed.
         Assert.Equal("runtime_guardrails_invalid_configuration", Assert.Throws<RuntimeAuthorizationException>(
             () => RuntimeGuardrailsGate.ReadAcceptedChecks(single)).Code);
         Assert.Equal("runtime_guardrails_invalid_configuration", Assert.Throws<RuntimeAuthorizationException>(
@@ -85,6 +86,7 @@ public sealed class RuntimeGuardrailsGateTests
     [Fact]
     public void PrepareRequiresContentOnlyWhenChecksApply()
     {
+        // A resolver with an empty catalog: checks apply only when the run's snapshot records them.
         var resolver = new GuardrailsStagePlanResolver(
             Assert.IsType<ProviderCatalog>(ProviderCatalog.Create([], [], []).Value), []);
         var services = new ServiceCollection().AddSingleton(resolver).BuildServiceProvider();
@@ -108,6 +110,8 @@ public sealed class RuntimeGuardrailsGateTests
         Task<RuntimeRegistration> Same(CancellationToken _) => Task.FromResult(registration);
         Task<AuthorizedRunSelection> SameSelection(CancellationToken _) => Task.FromResult(accepted);
 
+        // Unchanged reads are current; a changed registration or selection is stale; an owner refusal or a
+        // 4xx is revoked; a 5xx or network failure is unavailable.
         Assert.Equal(GuardrailsAuthorityStatus.Current,
             await RuntimeGuardrailsGate.AuthorityCheck(Same, SameSelection, registration, hash)(default));
         Assert.Equal(GuardrailsAuthorityStatus.Stale, await RuntimeGuardrailsGate.AuthorityCheck(
@@ -166,6 +170,7 @@ public sealed class RuntimeGuardrailsGateTests
     private static RuntimeActionRequest Request(string actionId) =>
         new(1, Guid.NewGuid(), 1, 1, Guid.NewGuid(), actionId, new string('a', 64));
 
+    // The binding is never read by the authority check, so null is enough for these tests.
     private static RuntimeRegistration Registration() =>
         new(Guid.NewGuid(), 1, null!, RuntimeRegistrationState.Active, DateTimeOffset.UnixEpoch);
 }

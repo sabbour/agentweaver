@@ -16,6 +16,7 @@ public sealed class GuardrailsStagePlanResolverTests
     private const string SecondId = "second-check";
     private static readonly Version Adapter = new(1, 0, 0);
 
+    // Minimal platform policy: allow model turns, but deny any turn that has Guardrails findings.
     private const string PlatformAllowModelTurn = """
         apiVersion: governance.toolkit/v1
         version: "1.0"
@@ -68,6 +69,7 @@ public sealed class GuardrailsStagePlanResolverTests
     [Fact]
     public void ProjectCannotReorderOrAddChecks()
     {
+        // "extra" is enabled in the catalog but isn't in the platform order, so a project can't add it.
         var resolver = Resolver([Catalog(ShieldsId, true), Catalog(SecondId, true), Catalog("extra", true)],
             [ShieldsId, SecondId]);
 
@@ -83,10 +85,13 @@ public sealed class GuardrailsStagePlanResolverTests
     [Fact]
     public void DisabledCheckCannotEnterThePlatformOrderOrTheAcceptedSelection()
     {
+        // The catalog itself refuses a platform order that names a disabled provider.
         Assert.False(ProviderCatalog.Create(
             [Catalog(ShieldsId, false)], [], [],
             [new ProviderOrderedSelection(ProviderSeam.Guardrails, [ShieldsId])]).IsSuccess);
 
+        // Even with an override permission and a registered implementation, an accepted selection can't
+        // bring the disabled provider into the plan.
         var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
             [Catalog(ShieldsId, true), Catalog("disabled", false)],
             [],
@@ -104,6 +109,7 @@ public sealed class GuardrailsStagePlanResolverTests
     [Fact]
     public void ChangedAcceptedRevisionIsStale()
     {
+        // Simulates a run accepted against an older options revision than the catalog now advertises.
         var resolver = Resolver([Catalog(ShieldsId, true)], [ShieldsId]);
 
         var result = resolver.Resolve("run-1", GuardrailsContentStage.UserInput, GuardrailsContentClass.Text,
@@ -129,6 +135,7 @@ public sealed class GuardrailsStagePlanResolverTests
     [Fact]
     public void MissingRegistrationIsUnavailable()
     {
+        // The catalog enables two checks, but the host registers an implementation for only one.
         var catalog = CreateCatalog([Catalog(ShieldsId, true), Catalog(SecondId, true)], [ShieldsId, SecondId]);
         var resolver = new GuardrailsStagePlanResolver(catalog, [Registration(ShieldsId)]);
 
@@ -141,6 +148,8 @@ public sealed class GuardrailsStagePlanResolverTests
     public void InvalidOrMismatchedOptionsAreInvalidConfiguration()
     {
         var catalog = CreateCatalog([Catalog(ShieldsId, true)], [ShieldsId]);
+        // One registration has options that fail validation (HTTP endpoint); the other has valid options whose
+        // revision differs from the catalog entry.
         var insecure = new GuardrailsStagePlanResolver(catalog,
         [
             Registration(ShieldsId, options => options with { Endpoint = new Uri("http://shields.example.test/") })
@@ -164,6 +173,7 @@ public sealed class GuardrailsStagePlanResolverTests
         var configured = Resolver([Catalog(ShieldsId, true)], [ShieldsId]);
 
         Assert.False(empty.IsActive(null));
+        // An empty accepted list still counts as a recorded selection, so Guardrails stays active.
         Assert.True(empty.IsActive([]));
         Assert.True(configured.IsActive(null));
     }
@@ -185,6 +195,8 @@ public sealed class GuardrailsStagePlanResolverTests
         GuardrailsDecision decision,
         GuardrailsReasonCode reason)
     {
+        // End to end: a stubbed Prompt Shields service reports an attack or not, the resolver builds the plan,
+        // and the content gate combines the finding with the platform AGT policy.
         var handler = new PromptShieldsClassifierTests.StubHandler((_, _) => PromptShieldsClassifierTests.Json(
             HttpStatusCode.OK,
             $$"""{"userPromptAnalysis":{"attackDetected":{{(attack ? "true" : "false")}}},"documentsAnalysis":[]}"""));
@@ -197,6 +209,7 @@ public sealed class GuardrailsStagePlanResolverTests
         var plan = resolver.Resolve("run-1", GuardrailsContentStage.UserInput, GuardrailsContentClass.Text, null);
         Assert.True(plan.IsSuccess);
 
+        // Pin the AGT policy provider for the same run, then build the accepted run binding that the gate uses.
         var policyProvider = new AgtPolicyProvider();
         var policyOptions = new AgtPolicyProviderOptions("policy-resource", 1, "policy-revision-1", [PlatformAllowModelTurn]);
         var policyCatalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
@@ -224,6 +237,7 @@ public sealed class GuardrailsStagePlanResolverTests
         var check = Assert.Single(evidence.Checks);
         Assert.Equal(ShieldsId, check.ProviderId);
         Assert.Equal(0, check.Order);
+        // Evidence records only the digest of the content. It must never contain the prompt text or the token.
         Assert.DoesNotContain("prompt fixture", JsonSerializer.Serialize(evidence));
         Assert.DoesNotContain("token-1", JsonSerializer.Serialize(evidence));
         Assert.Equal(Convert.ToHexString(SHA256.HashData(content)), evidence.ContentDigest);
@@ -241,6 +255,7 @@ public sealed class GuardrailsStagePlanResolverTests
         Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
             registrations, [], [], [new ProviderOrderedSelection(ProviderSeam.Guardrails, order)]).Value);
 
+    // Catalog entry whose options revision is "options-<id>", matching the default Registration options.
     private static ProviderRegistration Catalog(string id, bool enabled) => new(
         new ProviderDescriptor(
             ProviderSeam.Guardrails,
@@ -258,6 +273,8 @@ public sealed class GuardrailsStagePlanResolverTests
     private static PromptShieldsClassifierOptions Options(string id) => new(
         id, "options-" + id, new Uri("https://shields.example.test/"), "2024-09-01", TimeSpan.FromSeconds(5));
 
+    // Registers a Prompt Shields classifier under the given ID. The optional change lets a test break the
+    // options. The stub service is never expected to be called by resolver-only tests.
     private static IGuardrailsCheckRegistration Registration(
         string id,
         Func<PromptShieldsClassifierOptions, PromptShieldsClassifierOptions>? change = null)
@@ -272,6 +289,7 @@ public sealed class GuardrailsStagePlanResolverTests
             1);
     }
 
+    // Always reports that the run's authority is still current.
     private sealed class CurrentAuthority : IGuardrailsCurrentAuthority
     {
         public Task<GuardrailsAuthorityStatus> CheckCurrentAsync(
@@ -280,6 +298,7 @@ public sealed class GuardrailsStagePlanResolverTests
             Task.FromResult(GuardrailsAuthorityStatus.Current);
     }
 
+    // In-memory evidence journal so the test can inspect what the gate recorded.
     private sealed class Journal : IGuardrailsEvidenceJournal
     {
         public List<GuardrailsEvaluationEvidence> Evidence { get; } = [];

@@ -730,13 +730,13 @@ unavailable classifiers, journals, or owners return HTTP 503 and fail closed. To
 concurrency behavior are unchanged: tool actions never carry content, and a 428 for an action without
 content fails with `runtime_guardrails_content_unsupported`.
 
-Prompt Shields is the only supported P2 check. Tool and MCP result checks integrate with the Tool & MCP
-gateway work in [#1925](https://github.com/sabbour/agentweaver/issues/1925) and
-[#1929](https://github.com/sabbour/agentweaver/issues/1929). For configuration, see
+Prompt Shields is the only supported P2 check. The gate doesn't check tool results or MCP results yet.
+Those checks run at the `ToolResult` stage after the Tool & MCP gateway returns remote results to the
+Orchestrator. For configuration, see
 [Guardrails settings](../../reference/runtime-configuration.md#guardrails-settings).
 
 AgentSuite policy documents and per-agent policy bindings are the interoperable policy format. The
-AgentSuite import ([#2114](https://github.com/sabbour/agentweaver/issues/2114)) is the only loader. It
+Projects & Config AgentSuite import is the only loader. It
 retains each policy and binds it to the effective agent ID and policy digest. Importing or persisting a
 policy doesn't prove that the runner enforces it. The AgentSuite v2 policy carries only a network egress
 allow-list, which Guardrails doesn't enforce. A bound agent keeps the `policy_not_enforced` blocker until

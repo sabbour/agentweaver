@@ -56,6 +56,8 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
+        // Fail closed on any applied version this build doesn't know, and on any version applied without its
+        // prerequisite. Running newer or out-of-order migrations on top of an unknown schema could corrupt data.
         if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 28)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
@@ -77,9 +79,11 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(20) && !applied.Contains(19)) ||
             (applied.Contains(21) && !applied.Contains(20)) ||
             (applied.Contains(22) && !applied.Contains(21)) ||
+            // The Guardrails evidence table builds on the latest schema this build ships before it.
             (applied.Contains(28) && !applied.Contains(22)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
-        // Versions 23 through 27 are reserved for other in-flight Orchestrator migrations.
+        // The migrator skips version numbers that this build doesn't ship (17 and 23 through 27). The allowed
+        // versions are listed explicitly, so an unknown version fails closed instead of being applied or ignored.
         foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 28])
             .Where(version => !applied.Contains(version)))
         {
@@ -301,6 +305,9 @@ public static class CoordinationOwnerMigrator
             "reviewedRemoteToolSnapshots", NpgsqlDbType.Text, $"{schema}.reviewed_remote_tool_snapshots");
         command.Parameters.AddWithValue(
             "snapshotMutationFunction", NpgsqlDbType.Text, $"{schema}.reject_reviewed_remote_tool_snapshot_mutation()");
+        // Version 028 checks: the migration is recorded once, the evidence table exists, and its immutability
+        // trigger is installed, enabled, and calls the reject function. Trigger type 27 means
+        // BEFORE UPDATE OR DELETE, FOR EACH ROW, so no evidence row can be changed or removed.
         command.Parameters.AddWithValue(
             "guardrailsEvaluations", NpgsqlDbType.Text, $"{schema}.guardrails_evaluations");
         command.Parameters.AddWithValue(
@@ -322,6 +329,7 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
+            // Columns 57 onward are boolean checks; the last three are the version 028 checks.
             Enumerable.Range(57, 16).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
