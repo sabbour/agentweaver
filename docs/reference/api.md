@@ -139,6 +139,9 @@ exposes project configuration and run-selection operations.
 | GET | `/` | Read; unbound token | List visible tenant projects. | Yes, empty suffix |
 | GET | `/{projectId}` | Read; exact signed run when `runId` is supplied | Read project metadata. | Yes |
 | PATCH | `/{projectId}` | Admin | Update name and lifecycle at `expectedRevision`. | Yes |
+| GET | `/{projectId}/role-assignments` | Read; unbound token, TenantAdmin or project Owner | List active project role assignments. | Yes |
+| POST | `/{projectId}/role-assignments` | Admin; unbound token, TenantAdmin | Assign a project role to a tenant member. | Yes |
+| DELETE | `/{projectId}/role-assignments/{assignmentId:guid}` | Admin; unbound token, TenantAdmin | Revoke an assignment at `expectedRevision`. | Yes |
 | GET | `/{projectId}/configuration` | Read | Read current or requested `revision`. | Yes |
 | PUT | `/{projectId}/configuration` | Admin | Append validated configuration. | Yes |
 | POST | `/{projectId}/casting/proposals` | Admin | Stage a complete configuration draft for review. | Yes |
@@ -153,6 +156,97 @@ exposes project configuration and run-selection operations.
 | POST | `/{projectId}/casting/import` | Admin | Stage a digest-checked transfer; request body limit 1 MiB. | Yes |
 | PUT | `/{projectId}/runs/{runId}/selection` | Selection | Accept an immutable run selection. | Yes |
 | GET | `/{projectId}/runs/{runId}/selection` | Selection | Read the accepted selection. | Yes |
+
+### Project role assignments
+
+These routes manage who holds the Owner, Contributor, Viewer, and
+Orchestrator roles on one project. Gateway operation IDs are
+`listProjectRoleAssignments`, `assignProjectRole`, and
+`revokeProjectRoleAssignment`. Every response sets `Cache-Control: no-store`.
+None of the routes accept idempotency keys. A repeated assign request returns
+`409 role_assignment_exists`, and a repeated revoke request returns
+`409 revision_conflict`.
+
+**Authorization.** The request token must be unbound: no project, run, or
+purpose binding.
+
+- To list, the caller needs the `api.read` scope and either the current
+  TenantAdmin role for the tenant or the Owner role on the project.
+- To assign or revoke, the caller needs the `api.read` and `projects.admin`
+  scopes and the current TenantAdmin role. A project Owner can't change
+  roles. The service share-locks the caller's membership and checks the
+  exact TenantAdmin assignment and revision in the same serializable
+  transaction as the change. Each change writes an `authority_audit` row in
+  that transaction.
+
+**List.** `GET /api/v1/projects/{projectId}/role-assignments` accepts no query
+parameters and returns `200` with only active assignments:
+
+```json
+{
+  "projectId": "string",
+  "assignments": [
+    {
+      "assignmentId": "uuid",
+      "principalId": "string",
+      "role": "owner | contributor | viewer | orchestrator",
+      "revision": 1,
+      "createdBy": "string",
+      "createdAt": "date-time"
+    }
+  ]
+}
+```
+
+`principalId` is the member's subject under the caller's issuer.
+`createdBy` is the subject of the tenant admin who made the assignment.
+Assignments are sorted by role, then by `principalId`.
+
+**Assign.** `POST /api/v1/projects/{projectId}/role-assignments` accepts a
+strict JSON body and no query parameters:
+
+```json
+{ "principalId": "string", "role": "owner | contributor | viewer | orchestrator" }
+```
+
+The principal must have an active membership in the caller's tenant. The
+route returns `201` with a `Location` header and this body:
+
+```json
+{
+  "assignmentId": "uuid",
+  "projectId": "string",
+  "principalId": "string",
+  "role": "orchestrator",
+  "state": "active",
+  "revision": 1,
+  "grantedBy": "string",
+  "grantedAt": "date-time",
+  "revokedBy": null,
+  "revokedAt": null
+}
+```
+
+**Revoke.** `DELETE /api/v1/projects/{projectId}/role-assignments/{assignmentId}?expectedRevision=N`
+requires one unsigned integer `expectedRevision`. It returns `200` with the
+same assignment shape, with `state` set to `revoked` and the revision
+increased by one. The last active Owner of an active project can't be
+revoked. After the project is archived, a tenant admin can revoke its last
+Owner.
+
+| Status | Problem code | Meaning |
+| --- | --- | --- |
+| `400` | `invalid_request`, `invalid_project_role`, `invalid_principal_id`, `invalid_expected_revision` | The query, role, principal ID, or revision isn't valid. |
+| `403` | `forbidden` | The token or current role doesn't allow the operation. |
+| `404` | `not_found`, `principal_not_found` | The project, assignment, or tenant member doesn't exist for the caller. |
+| `409` | `role_assignment_exists`, `project_archived`, `last_project_owner`, `revision_conflict` | The current state doesn't allow the change. |
+| `503` | `role_assignment_unavailable` | The runtime database grants for assign and revoke aren't applied. See [Runtime authority writes](runtime-configuration.md#runtime-authority-writes). |
+
+> [!NOTE]
+> The web client's existing `assignProjectRole` and `revokeProjectRoleAssignment`
+> calls in `apps/web/src/api/client.ts` send snake_case fields and read a
+> `GET /projects/{projectId}/access` route that doesn't exist. The web client
+> must use the contract on this page.
 
 ### Catalog and platform routes
 

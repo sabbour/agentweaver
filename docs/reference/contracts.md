@@ -1047,8 +1047,18 @@ approved identity settings and the separate migration connection. It creates
 the active tenant membership, TenantAdmin assignment, and authority audit rows
 in one transaction. It exits without changes when that identity already has
 the active grant. It refuses when another active TenantAdmin exists. Normal
-host startup never runs this command. Runtime database grants remain
-SELECT-only on authority tables.
+host startup never runs this command.
+
+The runtime database principal is read-only on authority tables, with one
+exception. The project role-assignment API can insert project role
+assignments, mark them revoked, and insert matching `authority_audit` rows.
+The API, not the database grant, enforces who can make these changes: only a
+caller with the current TenantAdmin role, checked in the same serializable
+transaction as the change. The runtime principal can't delete authority rows
+or write tenant memberships and tenant-level roles. See
+[Runtime authority writes](runtime-configuration.md#runtime-authority-writes)
+for the exact grants and [Project role assignments](api.md#project-role-assignments)
+for the routes.
 
 ## Knowledge and Memory
 

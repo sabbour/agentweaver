@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { classify } from '../v1-changes.mjs';
-import { brokerShardCount, partitionMethods, testMatrix, verifyTrx } from '../v1-test-plan.mjs';
+import { brokerShardCount, loadBrokerWeights, measureWeights, partitionMethods, testMatrix, verifyTrx } from '../v1-test-plan.mjs';
 import { suites } from '../../coverage/dotnet.mjs';
 
 const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
@@ -53,6 +53,42 @@ test('discovered methods and theory cases are partitioned once, deterministicall
   assert.ok(partitions.every((partition) => partition.length > 0));
   assert.throws(() => partitionMethods('No tests found'), /no Agentweaver/);
   assert.throws(() => partitionMethods('    Agentweaver.Tests.One.Test'), /empty Broker shard/);
+});
+
+test('measured weights spread slow Broker methods across shards and keep every method exactly once', () => {
+  const heavy = Array.from({ length: 8 }, (_, index) => `Agentweaver.Broker.Tests.Slow.Method${index}`);
+  const light = Array.from({ length: 40 }, (_, index) => `Agentweaver.Broker.Tests.Fast.Method${index}`);
+  const discovery = [...heavy, ...light].map((name) => `    ${name}`).join('\n');
+  const weights = { defaultSeconds: 0.2, methods: Object.fromEntries(heavy.map((name) => [name, 50])) };
+  const partitions = partitionMethods(discovery, weights);
+  assert.deepEqual(partitionMethods(discovery, weights), partitions);
+  assert.deepEqual(partitions.flat().sort(), [...heavy, ...light].sort());
+  assert.ok(partitions.every((partition) => partition.filter((name) => heavy.includes(name)).length === 2));
+  const loads = partitions.map((partition) => partition.reduce((sum, name) => sum + (weights.methods[name] ?? 0.2), 0));
+  assert.ok(Math.max(...loads) - Math.min(...loads) <= 0.2 + 1e-9);
+});
+
+test('weights are measured per method from TRX receipts with theory cases summed', () => {
+  const trx = (id, className, name, duration) =>
+    `<UnitTest name="${name}" storage="x.dll" id="${id}"><Execution id="e${id}" /><TestMethod codeBase="x.dll" className="${className}" name="${name}" /></UnitTest>` +
+    `<UnitTestResult executionId="e${id}" testId="${id}" testName="${name}(case)" duration="${duration}" outcome="Passed" />`;
+  const weights = measureWeights([
+    trx('a', 'Agentweaver.T.C', 'Slow', '00:00:30.0000000') + trx('b', 'Agentweaver.T.C', 'Slow', '00:01:00.5000000'),
+    trx('c', 'Agentweaver.T.C', 'Fast', '00:00:00.3000000'),
+  ], { source: 'unit' });
+  assert.deepEqual(weights, { source: 'unit', defaultSeconds: 0.3, methods: { 'Agentweaver.T.C.Slow': 90.5 } });
+  assert.throws(() => measureWeights(['']), /no test results/);
+});
+
+test('committed Broker weights are recorded, positive and scoped to Broker tests', () => {
+  const weights = loadBrokerWeights();
+  assert.match(weights.source, /run \d+/);
+  assert.ok(weights.defaultSeconds > 0);
+  assert.ok(Object.keys(weights.methods).length > 0);
+  for (const [method, seconds] of Object.entries(weights.methods)) {
+    assert.match(method, /^Agentweaver\.Identity\.Broker\.Tests\./);
+    assert.ok(Number.isFinite(seconds) && seconds > 0, method);
+  }
 });
 
 test('TRX receipts reject zero execution, missing counters and failures while preserving explicit opt-in skips', () => {
