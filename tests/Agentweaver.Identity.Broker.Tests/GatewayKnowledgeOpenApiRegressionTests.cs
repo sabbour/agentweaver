@@ -60,8 +60,11 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         AssertNullablePropertyType(schemas.GetProperty("ProjectUsageCost").GetProperty("properties"), "amount", "number");
     }
 
-    private static readonly string[] KnowledgeWriteOperationIds =
+    private static readonly string[] IdempotentWriteOperationIds =
     [
+        "createProjectRun",
+        "cancelProjectRun",
+        "createChiefOfStaffPriority",
         "createKnowledgeRecord",
         "updateKnowledgeRecord",
         "restoreKnowledgeRecord",
@@ -72,7 +75,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     ];
 
     [Fact]
-    public async Task ServedOpenApiRequiresIdempotencyKeyOnlyForKnowledgeWrites()
+    public async Task ServedOpenApiRequiresIdempotencyKeyOnlyForIdempotentWrites()
     {
         using var rsa = RSA.Create(2048);
         await using var gateway = await GatewayResourceServer.StartAsync(
@@ -86,7 +89,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var paths = document.RootElement.GetProperty("paths");
 
-        foreach (var operationId in KnowledgeWriteOperationIds)
+        foreach (var operationId in IdempotentWriteOperationIds)
         {
             var operation = FindOperation(paths, operationId);
             var header = Assert.Single(
@@ -112,7 +115,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         }
 
         Assert.Equal(
-            KnowledgeWriteOperationIds.OrderBy(id => id, StringComparer.Ordinal),
+            IdempotentWriteOperationIds.OrderBy(id => id, StringComparer.Ordinal),
             operationsWithIdempotencyKey);
     }
 
@@ -306,6 +309,14 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         AssertNullablePropertyType(importProperties, "skillId", "string");
         AssertNullablePropertyType(importProperties, "expectedRevision", "integer");
 
+        var revoke = FindOperation(paths, "revokeProjectSkillRevision");
+        Assert.Equal("Projects", revoke.GetProperty("x-agentweaver-owner").GetString());
+        Assert.True(revoke.GetProperty("responses").TryGetProperty("204", out _));
+        var package = FindOperation(paths, "packageSkillContent");
+        Assert.Equal(
+            "#/components/schemas/SkillContentPackageResult",
+            package.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
         var inventory = FindOperation(paths, "listProjectSkillInventory");
         var inventoryQuery = inventory.GetProperty("parameters").EnumerateArray()
             .Where(parameter => parameter.GetProperty("in").GetString() == "query")
@@ -353,6 +364,77 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         Assert.Equal(
             new[] { "runId", "rootSessionId", "title", "goal", "state", "createdAt", "updatedAt", "completedAt", "startedBy" },
             runSummary.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+
+        foreach (var operationId in new[] { "listProjectIssues", "listProjectPullRequests" })
+        {
+            var sourceList = FindOperation(paths, operationId);
+            var sourceQuery = sourceList.GetProperty("parameters").EnumerateArray()
+                .Where(parameter => parameter.GetProperty("in").GetString() == "query")
+                .ToArray();
+            Assert.Equal(
+                new[] { "state", "cursor", "pageSize" },
+                sourceQuery.Select(parameter => parameter.GetProperty("name").GetString()).ToArray());
+            Assert.All(sourceQuery, parameter => Assert.False(parameter.GetProperty("required").GetBoolean()));
+            var sourcePageSize = sourceQuery
+                .Single(parameter => parameter.GetProperty("name").GetString() == "pageSize")
+                .GetProperty("schema");
+            Assert.Equal(1, sourcePageSize.GetProperty("minimum").GetInt32());
+            Assert.Equal(100, sourcePageSize.GetProperty("maximum").GetInt32());
+            Assert.Equal(25, sourcePageSize.GetProperty("default").GetInt32());
+            foreach (var status in new[] { "200", "400", "403", "502" })
+                Assert.True(sourceList.GetProperty("responses").TryGetProperty(status, out _), status);
+            Assert.Contains("makes no source control provider call",
+                sourceList.GetProperty("description").GetString(), StringComparison.Ordinal);
+        }
+        var issueState = FindOperation(paths, "listProjectIssues").GetProperty("parameters").EnumerateArray()
+            .Single(parameter => parameter.GetProperty("name").GetString() == "state").GetProperty("schema");
+        Assert.Equal(new[] { "open", "closed", "all" },
+            issueState.GetProperty("enum").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal("open", issueState.GetProperty("default").GetString());
+        Assert.Contains("rejects run-bound tokens",
+            FindOperation(paths, "listProjectIssues").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        Assert.Contains("run-bound token sees only its run's pull requests",
+            FindOperation(paths, "listProjectPullRequests").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        var componentSchemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        var issueSummary = componentSchemas.GetProperty("ProjectIssueSummary");
+        Assert.False(issueSummary.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[] { "taskId", "taskState", "providerId", "repository", "number", "title", "state", "createdAt", "updatedAt" },
+            issueSummary.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        var pullRequestSummary = componentSchemas.GetProperty("ProjectPullRequestSummary");
+        Assert.False(pullRequestSummary.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[]
+            {
+                "providerId", "repository", "number", "title", "htmlUrl", "state", "headBranch", "headSha",
+                "baseBranch", "baseSha", "runId", "disposition", "recordedAt", "updatedAt"
+            },
+            pullRequestSummary.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        var issuePage = componentSchemas.GetProperty("ProjectIssuePage");
+        Assert.False(issuePage.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(new[] { "projectId", "items", "nextCursor" },
+            issuePage.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        var pullRequestPage = componentSchemas.GetProperty("ProjectPullRequestPage");
+        Assert.False(pullRequestPage.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(new[] { "projectId", "coverage", "items", "nextCursor" },
+            pullRequestPage.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal(new[] { "recordedSince", "includesEarlierPullRequests" },
+            componentSchemas.GetProperty("ProjectPullRequestCoverage").GetProperty("required").EnumerateArray()
+                .Select(item => item.GetString()).ToArray());
+        var pullRequestState = FindOperation(paths, "listProjectPullRequests").GetProperty("parameters")
+            .EnumerateArray().Single(parameter => parameter.GetProperty("name").GetString() == "state")
+            .GetProperty("schema");
+        Assert.Equal(new[] { "open", "closed", "merged", "all" },
+            pullRequestState.GetProperty("enum").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.True(FindOperation(paths, "listProjectPullRequests").GetProperty("responses")
+            .TryGetProperty("503", out var unavailable));
+        Assert.Contains("pull_request_records_unavailable",
+            unavailable.GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("isn't a complete pull request history",
+            FindOperation(paths, "listProjectPullRequests").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
 
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
         var inventoryPage = schemas.GetProperty("ProjectSkillInventoryPage");
@@ -437,12 +519,17 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             "SkillContentCandidateRequest",
             "ImportSkillContentRequest",
             "UpdateSkillAssignmentRequest",
+            "PackageSkillContentRequest",
+            "SkillPackageFileRequest",
+            "SkillPackageDraftRequest",
+            "RevokeSkillRevisionRequest",
         })
         {
             Assert.False(schemas.GetProperty(schemaName).GetProperty("additionalProperties").GetBoolean());
         }
 
         Assert.Equal(3L * 1024 * 1024, gateway.GetRequestSizeLimit("/api/v1/skills/preview")?.MaxRequestBodySize);
+        Assert.Equal(3L * 1024 * 1024, gateway.GetRequestSizeLimit("/api/v1/skills/package")?.MaxRequestBodySize);
         Assert.Equal(
             3L * 1024 * 1024,
             gateway.GetRequestSizeLimit("/api/v1/projects/{projectId}/skills/import")?.MaxRequestBodySize);
@@ -456,7 +543,8 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
                 "/api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import")?.MaxRequestBodySize);
         foreach (var operationId in new[]
         {
-            "previewSkillContent", "importProjectSkill", "previewMarketplaceSkill", "importMarketplaceSkill",
+            "previewSkillContent", "packageSkillContent", "importProjectSkill", "previewMarketplaceSkill",
+            "importMarketplaceSkill",
         })
         {
             Assert.Equal(

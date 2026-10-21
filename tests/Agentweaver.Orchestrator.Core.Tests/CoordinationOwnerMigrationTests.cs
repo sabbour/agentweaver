@@ -35,6 +35,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(20)]
     [InlineData(21)]
     [InlineData(22)]
+    [InlineData(23)]
+    [InlineData(24)]
+    [InlineData(25)]
+    [InlineData(26)]
+    [InlineData(27)]
+    [InlineData(28)]
     // Version 29 adds the spend budget reservation and accounting cursor tables.
     [InlineData(29)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
@@ -110,6 +116,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Theory]
+    [InlineData(2)]
     [InlineData(14)]
     [InlineData(15)]
     [InlineData(19)]
@@ -139,6 +146,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData("backlog_tasks")]
     [InlineData("backlog_dependencies")]
     [InlineData("reviewed_remote_tool_snapshots")]
+    [InlineData("user_notification_dismissals")]
+    [InlineData("guardrails_evaluations")]
     public async Task VerificationRequiresRegisteredTables(string table)
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -205,7 +214,13 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (20, "020_maf_buildtest_workspace_seed.sql"),
             (21, "021_row_lock_record_updates.sql"),
             (22, "022_run_list_completion.sql"),
-            // Versions 23 to 28 are reserved for other changes, so the spend budget migration is 29.
+            (23, "023_project_run_requests.sql"),
+            (24, "024_chief_of_staff.sql"),
+            (25, "025_user_notification_dismissals.sql"),
+            (26, "026_backlog_task_content.sql"),
+            (27, "027_periodic_issue_sync.sql"),
+            (28, "028_guardrails_evaluations.sql"),
+            // The spend budget migration follows 028.
             (29, "029_spend_budget_exposure.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
@@ -279,12 +294,28 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                    AND column_name = 'completed_at' AND is_nullable = 'YES'),
                 to_regclass(@runListIndex) IS NOT NULL,
                 to_regclass(@runCompletedIndex) IS NOT NULL,
+                (SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = @schema AND table_name = 'accepted_runs'
+                   AND column_name = 'cancelled_at' AND is_nullable = 'YES'),
+                to_regclass(@projectRunRequests) IS NOT NULL,
+                to_regclass(@projectRunCancellations) IS NOT NULL,
+                (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                 WHERE conrelid = to_regclass(@runs) AND conname = 'accepted_runs_execution_state_check'),
+                to_regclass(@cosConversations) IS NOT NULL,
+                to_regclass(@cosPriorities) IS NOT NULL,
+                to_regclass(@cosLinks) IS NOT NULL,
                 (SELECT count(*) FROM pg_trigger
                  WHERE tgrelid IN (to_regclass(@reservations), to_regclass(@cursors))
                    AND tgname IN ('spend_budget_reservations_guard', 'spend_budget_reservations_no_truncate',
                        'spend_budget_accounting_cursors_guard', 'spend_budget_accounting_cursors_no_truncate')
                    AND tgenabled = 'O' AND NOT tgisinternal)
             """, connection);
+        command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
+        command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
+        command.Parameters.AddWithValue("runs", $"{_schema}.accepted_runs");
+        command.Parameters.AddWithValue("cosConversations", $"{_schema}.chief_of_staff_conversations");
+        command.Parameters.AddWithValue("cosPriorities", $"{_schema}.chief_of_staff_priorities");
+        command.Parameters.AddWithValue("cosLinks", $"{_schema}.chief_of_staff_priority_links");
         command.Parameters.AddWithValue("runListIndex", $"{_schema}.ix_accepted_runs_project_created");
         command.Parameters.AddWithValue("runCompletedIndex", $"{_schema}.ix_accepted_runs_project_completed");
         command.Parameters.AddWithValue("schema", _schema);
@@ -320,7 +351,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The migration history ends with 29 after the upgrade.
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 29]), reader.GetFieldValue<int[]>(9));
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));
@@ -329,8 +360,15 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(15));
         Assert.True(reader.GetBoolean(16));
         Assert.True(reader.GetBoolean(17));
+        Assert.Equal(1L, reader.GetInt64(18));
+        Assert.True(reader.GetBoolean(19));
+        Assert.True(reader.GetBoolean(20));
+        Assert.Contains("'cancelled'", reader.GetString(21));
+        Assert.True(reader.GetBoolean(22));
+        Assert.True(reader.GetBoolean(23));
+        Assert.True(reader.GetBoolean(24));
         // Both spend budget tables have an enabled guard trigger and no-truncate trigger: 2 tables x 2 = 4.
-        Assert.Equal(4L, reader.GetInt64(18));
+        Assert.Equal(4L, reader.GetInt64(25));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

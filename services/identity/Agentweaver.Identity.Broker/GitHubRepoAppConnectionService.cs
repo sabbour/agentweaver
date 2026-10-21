@@ -105,7 +105,7 @@ internal sealed class GitHubRepoAppConnectionException(
 /// minting rechecks run grants, connection state, repository selection and permission
 /// digests before returning a credential.
 /// </summary>
-internal sealed class GitHubRepoAppConnectionService
+internal sealed partial class GitHubRepoAppConnectionService
 {
     private static readonly TimeSpan AuthorizationLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan AccessTokenRefreshWindow = TimeSpan.FromMinutes(2);

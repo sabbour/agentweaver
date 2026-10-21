@@ -228,12 +228,15 @@ internal sealed class NativeUsageApplicationService(
         CancellationToken cancellationToken)
     {
         UsageSpendEvidenceContract.ValidateRequest(request);
+        // The caller may read only the project and run that its credential is bound to.
         var first = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
         RequireReadAuthority(first);
         if (first.BoundProjectId != projectId || first.BoundRunId != runId)
             throw new RuntimeAuthorizationException("runtime_usage_receipt_scope_invalid");
         var result = await ledger.ReadSpendEvidenceAsync(first.TenantId, projectId, runId, request, cancellationToken)
             .ConfigureAwait(false);
+        // Check authority again after the read. If access was revoked or rebound while the read ran,
+        // the result is discarded instead of being returned to a caller that no longer has access.
         var current = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
         RequireReadAuthority(current);
         if (current.TenantId != first.TenantId || current.BoundProjectId != projectId || current.BoundRunId != runId)

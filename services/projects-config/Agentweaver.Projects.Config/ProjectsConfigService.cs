@@ -504,7 +504,25 @@ public sealed partial class ProjectsConfigService
         string projectId,
         string runId,
         AcceptRunSelectionRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        await AcceptRunSelectionCoreAsync(caller, projectId, runId, request, false, cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary>Accepts an interactive selection using owner-held platform revisions and configured provider choices.</summary>
+    public Task<EffectiveRunSelection> AcceptInteractiveRunSelectionAsync(
+        ProjectAuthorizationContext caller, string projectId, string runId,
+        InteractiveRunSelectionRequest request, CancellationToken cancellationToken) =>
+        AcceptRunSelectionCoreAsync(caller, projectId, runId, new AcceptRunSelectionRequest
+        {
+            ExpectedProjectConfigRevision = request.ExpectedProjectConfigRevision,
+            ExpectedPlatformRuntimeRevision = 0,
+            Context = new RunSelectionContext { Revision = "interactive-v1" }
+        }, true, cancellationToken);
+
+    /// <summary>Shares the same authority locks, replay checks and selection transaction for both admission contracts.</summary>
+    private async Task<EffectiveRunSelection> AcceptRunSelectionCoreAsync(
+        ProjectAuthorizationContext caller, string projectId, string runId,
+        AcceptRunSelectionRequest request, bool interactive, CancellationToken cancellationToken)
     {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
@@ -559,12 +577,14 @@ public sealed partial class ProjectsConfigService
                 "platform_runtime_unconfigured",
                 "Platform runtime defaults must be configured before accepting a run.",
                 StatusCodes.Status409Conflict);
-        if (platformHead.CurrentRevision != request.ExpectedPlatformRuntimeRevision)
+        if (!interactive && platformHead.CurrentRevision != request.ExpectedPlatformRuntimeRevision)
             throw ProjectConfigException.Conflict("The platform runtime revision has changed.");
         var platformVersion = await db.PlatformRuntimeRevisions.AsNoTracking()
             .SingleAsync(item => item.Revision == platformHead.CurrentRevision, cancellationToken)
             .ConfigureAwait(false);
         var defaults = Deserialize<PlatformRuntimeDefaults>(platformVersion.ConfigurationJson);
+        if (interactive)
+            request = request with { Context = CreateInteractiveRunContext(projectConfiguration, defaults) };
 
         var modelSelections = ResolveModelSelections(projectConfiguration, defaults, request.Context);
         var providers = ResolveProviders(projectConfiguration, request.Context);
@@ -676,12 +696,21 @@ public sealed partial class ProjectsConfigService
         ProjectAuthorizationContext caller,
         string projectId,
         string runId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forCancellation = false)
     {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
         caller.RequireResourceBinding(projectId, runId);
-        if (!await HasCurrentRoleAsync(
+        // Only the cancellation owner route permits project-access roles without run binding.
+        var canCancel = forCancellation && caller.BoundRunId is null &&
+            (await HasCurrentRoleAsync(caller, ProjectAuthorityResourceType.Tenant, caller.TenantId,
+                ProjectAuthorityRole.TenantAdmin, cancellationToken).ConfigureAwait(false) ||
+             await HasCurrentRoleAsync(caller, ProjectAuthorityResourceType.Project, projectId,
+                ProjectAuthorityRole.Owner, cancellationToken).ConfigureAwait(false) ||
+             await HasCurrentRoleAsync(caller, ProjectAuthorityResourceType.Project, projectId,
+                ProjectAuthorityRole.Contributor, cancellationToken).ConfigureAwait(false));
+        if (forCancellation ? !canCancel : !await HasCurrentRoleAsync(
             caller,
             ProjectAuthorityResourceType.Project,
             projectId,
@@ -1486,6 +1515,34 @@ public sealed partial class ProjectsConfigService
             ProjectAuthorityRole.PlatformAdmin,
             cancellationToken).ConfigureAwait(false))
             throw ProjectConfigException.Forbidden();
+    }
+
+    /// <summary>
+    /// Requires API read scope, an unbound request, and a current TenantAdmin assignment for the
+    /// caller's tenant or a current PlatformAdmin assignment before the platform components report.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The caller lacks a current qualifying assignment.</exception>
+    public async Task EnsurePlatformComponentReaderAsync(
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireUnboundRequest();
+        if (await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Tenant,
+                caller.TenantId,
+                ProjectAuthorityRole.TenantAdmin,
+                cancellationToken).ConfigureAwait(false) ||
+            await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin,
+                cancellationToken).ConfigureAwait(false))
+            return;
+        throw ProjectConfigException.Forbidden();
     }
 
     /// <summary>Rejects stale or revoked membership revisions before project operations.</summary>

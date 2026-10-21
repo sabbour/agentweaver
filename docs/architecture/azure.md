@@ -174,8 +174,10 @@ type, function source/owner, and runtime EXECUTE restriction. Its role stage
 checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
-Its source catalog includes 20 Core migration versions, with version 17 excluded, and eight Events versions.
-It retains 95 tables, eight row-lock columns, and 29 exact function signatures.
+Its source catalog includes 28 Core migration versions (1 through 16 and 18
+through 29), with version 17 excluded, and nine Events versions. The initializer
+compares that catalog with each migrator's compiled version list.
+It retains 107 tables, eight row-lock columns, and 33 exact function signatures.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,
@@ -183,6 +185,11 @@ or default privileges.
 Only casting authority can receive direct runtime EXECUTE.
 Restricted-role behavior and actual PostgreSQL catalog behavior still require
 separate database proof; source tests do not execute the initializer.
+For an initialized database, `--inspect` reads roles, schemas, migration
+history, and grants without writing. `--apply-pending-migrations` applies only
+missing Core and Events versions up to explicit maximum versions, then the
+exact plan grants. It fails closed if the source catalog extends past those
+maximums.
 The separate continuation mode admits only the exact Projects-only prefix,
 checks ordered EF migration histories and every service's migration inventory,
 and migrates the other schemas without runtime object grants. Its pre-grant

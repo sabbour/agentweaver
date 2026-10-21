@@ -24,6 +24,166 @@ internal sealed class ProjectsRunSelectionClient(
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
     };
 
+    /// <summary>Reads current project authority without requiring an accepted execution.</summary>
+    /// <exception cref="CoordinationException">The caller is run-bound or lacks the current project permission.</exception>
+    internal async Task<ProjectsAuthorizationContext> ReadBacklogProjectAuthorityAsync(
+        HttpContext context, string projectId, bool write, CancellationToken cancellationToken)
+    {
+        CoordinationIdentity.ValidateIdentity(projectId, "project_id");
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        var projects = context.User.FindAll("project_id").ToArray();
+        var scopes = context.User.FindAll("scope").Concat(context.User.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .ToHashSet(StringComparer.Ordinal);
+        if (context.User.HasClaim(claim => claim.Type is "run_id" or "purpose") ||
+            projects.Length > 1 || projects.Length == 1 && projects[0].Value != projectId ||
+            !CoordinationIdentity.HasAudience(context.User, options.Audience) ||
+            !CoordinationIdentity.HasAudience(context.User, options.ProjectsAudience) ||
+            !scopes.Contains("api.read") || write && !scopes.Contains("projects.admin"))
+            throw new CoordinationException("backlog_project_permission_denied", StatusCodes.Status403Forbidden);
+        var authority = await ReadAuthorizationAsync(
+            RequireOwnerUri(options.ProjectsOwnerBaseAddress), CoordinationIdentity.RequireBearer(context),
+            CoordinationIdentity.ReadTenantSelector(context), cancellationToken).ConfigureAwait(false);
+        if (authority.ContractVersion != 1 || authority.Issuer != actor.Issuer ||
+            authority.ActorId != actor.Subject || string.IsNullOrWhiteSpace(authority.TenantId) ||
+            authority.MembershipRevision < 1 || authority.BoundRunId is not null ||
+            authority.BoundProjectId is not null && authority.BoundProjectId != projectId ||
+            authority.EffectiveAuthority.IsDefault ||
+            !authority.EffectiveAuthority.Any(item =>
+                (item.ResourceType == "project" && item.ResourceId == projectId ||
+                 item.ResourceType == "tenant" && item.ResourceId == authority.TenantId) &&
+                !item.Permissions.IsDefault && item.Permissions.Any(permission =>
+                    permission.Permission == (write ? "writeProjects" : "readProjects") &&
+                    permission.RoleRevision > 0)))
+            throw new CoordinationException("backlog_project_permission_denied", StatusCodes.Status403Forbidden);
+        if (!authority.EffectiveAuthority.Any(item =>
+            item.ResourceType == "project" && item.ResourceId == projectId &&
+            !item.Permissions.IsDefault && item.Permissions.Any(permission =>
+                permission.Permission == (write ? "writeProjects" : "readProjects") && permission.RoleRevision > 0)))
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                new Uri(RequireOwnerUri(options.ProjectsOwnerBaseAddress),
+                    $"/api/projects/{Uri.EscapeDataString(projectId)}"));
+            request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", authority.TenantId);
+            using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
+                throw new CoordinationException("backlog_project_permission_denied", StatusCodes.Status403Forbidden);
+            if (response.StatusCode != HttpStatusCode.OK || response.Headers.CacheControl?.NoStore != true)
+                throw new CoordinationException("backlog_project_unavailable", StatusCodes.Status502BadGateway);
+            try
+            {
+                using var project = await JsonDocument.ParseAsync(
+                    await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false),
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (project.RootElement.ValueKind != JsonValueKind.Object ||
+                    !project.RootElement.TryGetProperty("projectId", out var id) ||
+                    id.ValueKind != JsonValueKind.String || id.GetString() != projectId)
+                    throw new CoordinationException("backlog_project_contract_invalid", StatusCodes.Status502BadGateway);
+            }
+            catch (JsonException)
+            {
+                throw new CoordinationException("backlog_project_contract_invalid", StatusCodes.Status502BadGateway);
+            }
+        }
+        return authority;
+    }
+
+    /// <summary>Resolves fresh project authority before creating a run without a run-bound token.</summary>
+    internal async Task<ProjectsAuthorizationContext> ReadProjectRunAuthorityAsync(
+        HttpContext context, string projectId, CancellationToken cancellationToken,
+        string requiredPermission = "acceptRunSelection")
+    {
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        CoordinationIdentity.RequireScopes(context.User);
+        CoordinationIdentity.ValidateIdentity(projectId, "project_id");
+        var projects = context.User.FindAll("project_id").Take(2).ToArray();
+        if (projects.Length > 1 || projects.Length == 1 && projects[0].Value != projectId ||
+            context.User.FindAll("run_id").Any() ||
+            !CoordinationIdentity.HasAudience(context.User, options.ProjectsAudience) ||
+            !CoordinationIdentity.HasAudience(context.User, options.Audience))
+            throw new CoordinationException("caller_binding_mismatch", StatusCodes.Status403Forbidden);
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        var bearer = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        var authority = await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken).ConfigureAwait(false);
+        if (authority.ContractVersion != 1 || authority.Issuer != caller.Issuer ||
+            authority.ActorId != caller.Subject || authority.MembershipRevision < 1 ||
+            string.IsNullOrWhiteSpace(authority.TenantId) || authority.BoundRunId is not null ||
+            authority.BoundProjectId is not null && authority.BoundProjectId != projectId ||
+            authority.EffectiveAuthority.IsDefault ||
+            !authority.EffectiveAuthority.Any(item =>
+                (item.ResourceType == "project" && item.ResourceId == projectId ||
+                 requiredPermission == "cancelRun" && item.ResourceType == "tenant" &&
+                    item.ResourceId == authority.TenantId) && !item.Permissions.IsDefault &&
+                item.Permissions.Any(permission => permission.Permission == requiredPermission &&
+                    permission.RoleRevision > 0)))
+            throw new CoordinationException(requiredPermission == "acceptRunSelection"
+                ? "project_orchestrator_role_required_acceptRunSelection"
+                : "run_cancel_permission_denied", StatusCodes.Status403Forbidden);
+        return authority;
+    }
+
+    /// <summary>Creates or replays the interactive selection using the caller bearer and current Projects configuration.</summary>
+    internal async Task CreateInteractiveSelectionAsync(
+        HttpContext context, string projectId, string runId, long expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        using var request = new HttpRequestMessage(HttpMethod.Put, new Uri(owner,
+            $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/interactive-selection"));
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
+        request.Content = JsonContent.Create(new { expectedProjectConfigRevision = expectedRevision });
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            throw new CoordinationException("run_selection_permission_denied", StatusCodes.Status403Forbidden);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            throw new CoordinationException("project_not_found", StatusCodes.Status404NotFound);
+        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.UnprocessableEntity)
+            throw new CoordinationException("run_selection_conflict", (int)response.StatusCode);
+        if (response.StatusCode != HttpStatusCode.OK || response.Headers.CacheControl?.NoStore != true)
+            throw new CoordinationException("projects_run_selection_unavailable", StatusCodes.Status502BadGateway);
+        using var document = await JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+        var root = document.RootElement;
+        if (!root.TryGetProperty("projectId", out var project) || project.GetString() != projectId ||
+            !root.TryGetProperty("runId", out var run) || run.GetString() != runId)
+            throw new CoordinationException("projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+    }
+
+    /// <summary>
+    /// Reads fresh caller-wide authority for cross-run attention. Only unbound tokens are accepted;
+    /// a project or run binding does not narrow this caller-wide endpoint.
+    /// </summary>
+    internal async Task<ProjectsAuthorizationContext> ReadNotificationAuthorityAsync(
+        HttpContext context, CancellationToken cancellationToken)
+    {
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        var scopes = context.User.FindAll("scope").Concat(context.User.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        if (!scopes.Contains("api.read", StringComparer.Ordinal) ||
+            !HasAudience(context.User, options.Audience) ||
+            !HasAudience(context.User, options.ProjectsAudience) ||
+            context.User.HasClaim(claim => claim.Type is "project_id" or "run_id"))
+            throw new CoordinationException("caller_binding_mismatch", StatusCodes.Status403Forbidden);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        var authority = await ReadAuthorizationAsync(
+            RequireOwnerUri(options.ProjectsOwnerBaseAddress), CoordinationIdentity.RequireBearer(context),
+            tenant, cancellationToken).ConfigureAwait(false);
+        if (authority.ContractVersion != 1 || authority.Issuer != options.Issuer ||
+            authority.ActorId != caller.Subject || string.IsNullOrWhiteSpace(authority.TenantId) ||
+            (tenant is not null && tenant != authority.TenantId) || authority.MembershipRevision < 1 ||
+            authority.BoundProjectId is not null || authority.BoundRunId is not null ||
+            authority.EffectiveAuthority.IsDefault ||
+            authority.EffectiveAuthority.Any(item => item is null || item.Permissions.IsDefault ||
+                item.Permissions.Any(permission => permission is null)))
+            throw new CoordinationException("projects_authorization_contract_invalid", StatusCodes.Status502BadGateway);
+        return authority;
+    }
+
     /// <summary>
     /// Reads the run selection after requiring the caller's project-level accept-selection permission.
     /// </summary>
@@ -64,6 +224,12 @@ internal sealed class ProjectsRunSelectionClient(
         HttpContext context, string projectId, string runId, CancellationToken cancellationToken) =>
         ReadSelectionWithAuthorityAsync(
             context, projectId, runId, "readRunSelection", cancellationToken, refreshAuthority: true);
+
+    /// <summary>Reads the accepted selection using fresh unbound Contributor, Owner, or tenant-admin cancellation authority.</summary>
+    internal Task<AuthorizedRunSelection> ReadSelectionForCancelAsync(
+        HttpContext context, string projectId, string runId, CancellationToken cancellationToken) =>
+        ReadSelectionWithAuthorityAsync(
+            context, projectId, runId, "cancelRun", cancellationToken, refreshAuthority: true);
 
     /// <summary>
     /// Reads the agent's run skills and verifies their revisions and digests against accepted configuration pins.
@@ -335,17 +501,23 @@ internal sealed class ProjectsRunSelectionClient(
     {
         var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         CoordinationIdentity.RequireScopes(context.User);
-        var scope = CoordinationIdentity.RequireRunScope(context.User);
-        if (scope.ProjectId != projectId || scope.RunId != runId ||
-            !HasAudience(context.User, options.ProjectsAudience))
+        var cancelling = requiredPermission == "cancelRun";
+        if (!cancelling)
+        {
+            var scope = CoordinationIdentity.RequireRunScope(context.User);
+            if (scope.ProjectId != projectId || scope.RunId != runId)
+                throw new CoordinationException("accepted_run_caller_mismatch", StatusCodes.Status403Forbidden);
+        }
+        if (!HasAudience(context.User, options.ProjectsAudience))
             throw new CoordinationException("accepted_run_caller_mismatch", StatusCodes.Status403Forbidden);
         var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
         var bearer = CoordinationIdentity.RequireBearer(context);
         var tenant = CoordinationIdentity.ReadTenantSelector(context);
-        var authorization = await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken)
-            .ConfigureAwait(false);
+        var authorization = cancelling
+            ? await ReadProjectRunAuthorityAsync(context, projectId, cancellationToken, "cancelRun")
+            : await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken).ConfigureAwait(false);
 
-        if (authorization.ContractVersion != 1 ||
+        if (!cancelling && (authorization.ContractVersion != 1 ||
             authorization.Issuer != options.Issuer ||
             authorization.ActorId != caller.Subject ||
             authorization.BoundProjectId != projectId ||
@@ -357,12 +529,13 @@ internal sealed class ProjectsRunSelectionClient(
                 authority.ResourceId == projectId &&
                 !authority.Permissions.IsDefault &&
                 authority.Permissions.Any(permission =>
-                    permission.Permission == requiredPermission && permission.RoleRevision > 0)))
+                    permission.Permission == requiredPermission && permission.RoleRevision > 0))))
             throw new CoordinationException("run_selection_permission_denied", StatusCodes.Status403Forbidden);
 
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
-            new Uri(owner, $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/selection"));
+            new Uri(owner, $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/" +
+                (cancelling ? "cancellation-selection" : "selection")));
         request.Headers.Authorization = bearer;
         if (tenant is not null)
             request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
@@ -407,9 +580,10 @@ internal sealed class ProjectsRunSelectionClient(
                 root, projectId, cancellationToken).ConfigureAwait(false);
             if (refreshAuthority)
             {
-                authorization = await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken)
-                    .ConfigureAwait(false);
-                if (authorization.ContractVersion != 1 ||
+                authorization = cancelling
+                    ? await ReadProjectRunAuthorityAsync(context, projectId, cancellationToken, "cancelRun")
+                    : await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken).ConfigureAwait(false);
+                if (!cancelling && (authorization.ContractVersion != 1 ||
                     authorization.Issuer != options.Issuer ||
                     authorization.ActorId != caller.Subject ||
                     authorization.BoundProjectId != projectId ||
@@ -421,7 +595,7 @@ internal sealed class ProjectsRunSelectionClient(
                         authority.ResourceId == projectId &&
                         !authority.Permissions.IsDefault &&
                         authority.Permissions.Any(permission =>
-                            permission.Permission == requiredPermission && permission.RoleRevision > 0)))
+                            permission.Permission == requiredPermission && permission.RoleRevision > 0))))
                     throw new CoordinationException("run_selection_permission_denied", StatusCodes.Status403Forbidden);
             }
             return new AuthorizedRunSelection(
@@ -479,19 +653,67 @@ internal sealed class ProjectsRunSelectionClient(
             (authorization.BoundRunId is not null && authorization.BoundProjectId is null) ||
             authorization.BoundProjectId != (boundProjects.Length == 1 ? boundProjects[0].Value : null) ||
             authorization.BoundRunId != (boundRuns.Length == 1 ? boundRuns[0].Value : null) ||
-            authorization.EffectiveAuthority.IsDefault ||
-            !authorization.EffectiveAuthority.Any(authority =>
-                !authority.Permissions.IsDefault &&
-                ((authority.ResourceType == "project" && authority.ResourceId == projectId &&
-                    authority.Permissions.Any(permission =>
-                        permission.Permission is "readProjects" or "readRunSelection" &&
-                        permission.RoleRevision > 0)) ||
-                 (authority.ResourceType == "tenant" && authority.ResourceId == authorization.TenantId &&
-                    authority.Permissions.Any(permission =>
-                        permission.Permission == "readProjects" && permission.RoleRevision > 0)))))
+            !CanReadProject(authorization, projectId))
             throw new CoordinationException("project_read_permission_denied", StatusCodes.Status403Forbidden);
         return authorization;
     }
+
+    /// <summary>
+    /// Reads fresh Projects authorization for a caller-scoped read that spans projects.
+    /// </summary>
+    /// <param name="context">The authenticated request whose bearer and tenant selector are forwarded to Projects.</param>
+    /// <param name="cancellationToken">Cancels the Projects call.</param>
+    /// <returns>The validated authorization context. Use <see cref="CanReadProject"/> per project.</returns>
+    /// <exception cref="CoordinationException">The caller, token binding, or owner response is invalid.</exception>
+    /// <remarks>
+    /// The token must not be bound to a project or run, because the result covers every project the caller can read.
+    /// </remarks>
+    internal async Task<ProjectsAuthorizationContext> ReadCallerAuthorityAsync(
+        HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        CoordinationIdentity.RequireReadScope(context.User);
+        if (!HasAudience(context.User, options.Audience) ||
+            !HasAudience(context.User, options.ProjectsAudience) ||
+            context.User.HasClaim(claim => claim.Type is "project_id" or "run_id"))
+            throw new CoordinationException("caller_binding_mismatch", StatusCodes.Status403Forbidden);
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        var bearer = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        var authorization = await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken)
+            .ConfigureAwait(false);
+        if (authorization.ContractVersion != 1 ||
+            authorization.Issuer != options.Issuer ||
+            authorization.ActorId != caller.Subject ||
+            string.IsNullOrWhiteSpace(authorization.TenantId) ||
+            (tenant is not null && authorization.TenantId != tenant) ||
+            authorization.MembershipRevision < 1 ||
+            authorization.BoundProjectId is not null ||
+            authorization.BoundRunId is not null ||
+            authorization.EffectiveAuthority.IsDefault)
+            throw new CoordinationException("projects_authorization_contract_invalid", StatusCodes.Status502BadGateway);
+        return authorization;
+    }
+
+    /// <summary>
+    /// Returns whether validated authority grants read access to one project.
+    /// </summary>
+    /// <remarks>
+    /// Accepts <c>readProjects</c> or <c>readRunSelection</c> on the project, or tenant-level <c>readProjects</c>.
+    /// Every accepted grant must carry a positive role revision.
+    /// </remarks>
+    internal static bool CanReadProject(ProjectsAuthorizationContext authorization, string projectId) =>
+        !authorization.EffectiveAuthority.IsDefault &&
+        authorization.EffectiveAuthority.Any(authority =>
+            !authority.Permissions.IsDefault &&
+            ((authority.ResourceType == "project" && authority.ResourceId == projectId &&
+                authority.Permissions.Any(permission =>
+                    permission.Permission is "readProjects" or "readRunSelection" &&
+                    permission.RoleRevision > 0)) ||
+             (authority.ResourceType == "tenant" && authority.ResourceId == authorization.TenantId &&
+                authority.Permissions.Any(permission =>
+                    permission.Permission == "readProjects" && permission.RoleRevision > 0))));
 
     /// <summary>
     /// Resolves every reviewed remote-tool snapshot reference before accepting the selection contract.

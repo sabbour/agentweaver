@@ -25,7 +25,8 @@ public sealed class AzureSpendAccountingTests
         var allocation = AzureProvisionedThroughputAllocator.Allocate(Charge(),
             [new(third, 1, 0), new(first, 1, 0), new(second, 0, 1)]);
 
-        // 100.00 USD = 10,000 cents over 3 tokens.
+        // 10,000 cents split three ways is 3,333 each with 1 cent left over. All remainders are equal,
+        // so the lowest event ID gets the extra cent, and the shares still add up to the full charge.
         Assert.Null(allocation.UnpricedReason);
         Assert.Equal(3, allocation.TotalTokens);
         Assert.Equal(10_000, allocation.ChargeMinorUnits);
@@ -50,8 +51,8 @@ public sealed class AzureSpendAccountingTests
         var allocation = AzureProvisionedThroughputAllocator.Allocate(Charge(0.10m),
             [new(small, 1, 0), new(large, 2, 0)]);
 
-        // Whole cents are 3 + 6 = 9. The leftover cent goes to the larger remainder (0.67 > 0.33),
-        // even though "small" has the lower event ID.
+        // Exact shares are 3.33 and 6.67 cents. The larger remainder (0.67) gets the leftover cent,
+        // even though the other event has the lower ID.
         Assert.Equal([0.03m, 0.07m], allocation.Shares.Select(share => share.Amount));
         Assert.Equal(0.10m, allocation.Shares.Sum(share => share.Amount));
     }
@@ -174,6 +175,7 @@ public sealed class AzureSpendAccountingTests
         // Web JSON serialization writes A2AMessageId as "a2AMessageId".
         var json = JsonSerializer.SerializeToElement(
             new { A2AMessageId = Guid.NewGuid() }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        // The SQL reads the dispatch ID by its JSON key, so it must match the key the serializer writes.
         Assert.True(json.TryGetProperty("a2AMessageId", out _));
         // The ledger SQL that finds a usage event's dispatch reads that same key.
         Assert.Contains("'a2AMessageId'", PostgresUsageLedger.DispatchIdSql);
@@ -189,7 +191,7 @@ public sealed class AzureSpendAccountingTests
         Assert.True(originalBinder.VerifyPinned(AzureCostProvider.MeterSource, "run-1", pinned.Value!).IsSuccess);
         Assert.Equal(original.Options.RateCard, pinned.Value!.RateCard);
 
-        // A binder serving a changed rate card (9.00) refuses the earlier pin instead of repricing the run.
+        // A new rate card with a different rate must not validate the pin the run already holds.
         var (_, changedBinder) = Binder(9.00m);
         Assert.False(changedBinder.VerifyPinned(AzureCostProvider.MeterSource, "run-1", pinned.Value!).IsSuccess);
     }
