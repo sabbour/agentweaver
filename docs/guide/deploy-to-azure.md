@@ -240,6 +240,12 @@ constraint on `accepted_runs`, which scans the whole table. The ALTER takes an
 `ACCESS EXCLUSIVE` lock, so reads and writes to `accepted_runs` block until
 the transaction commits. It doesn't alter `sessions` or build indexes on existing
 tables. Review table size and plan a write pause.
+Orchestrator migration 024 adds private Chief of Staff conversations and
+Priorities. It creates four new, empty tables and doesn't alter or scan
+existing tables. The reviewed plan grants `SELECT, INSERT` on
+`chief_of_staff_conversations`, `SELECT, INSERT, UPDATE` on
+`chief_of_staff_priority_lists` and `chief_of_staff_priorities`, and
+`SELECT, INSERT, DELETE` on `chief_of_staff_priority_links`.
 
 Then review and run the source-bound PostgreSQL initializer:
 

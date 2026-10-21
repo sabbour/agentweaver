@@ -209,6 +209,39 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Events, "/projects/{projectId}/usage",
             "/api/projects/{projectId}/usage", "readProjectUsage", "Read project usage",
             ["from", "to"], forwardTenantSelector: true);
+        // Chief of Staff routes are caller-private and require an unbound token.
+        var chiefOfStaff = "/chief-of-staff";
+        Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/conversations", "/api" + chiefOfStaff + "/conversations",
+            "listChiefOfStaffConversations", "List my Chief of Staff conversations",
+            ["cursor", "pageSize"], forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, chiefOfStaff + "/conversations", "/api" + chiefOfStaff + "/conversations",
+            "bindChiefOfStaffConversation", "Add a run I started to my Chief of Staff conversations",
+            body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/conversations/{conversationId}",
+            "/api" + chiefOfStaff + "/conversations/{conversationId}",
+            "getChiefOfStaffConversation", "Read one of my Chief of Staff conversations",
+            forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities", "/api" + chiefOfStaff + "/priorities",
+            "listChiefOfStaffPriorities", "List my Priorities", forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities", "/api" + chiefOfStaff + "/priorities",
+            "createChiefOfStaffPriority", "Create a Priority", body: true, forwardTenantSelector: true);
+        Add("PUT", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/order",
+            "/api" + chiefOfStaff + "/priorities/order",
+            "reorderChiefOfStaffPriorities", "Reorder my Priorities", body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/{priorityId}",
+            "/api" + chiefOfStaff + "/priorities/{priorityId}",
+            "getChiefOfStaffPriority", "Read a Priority", forwardTenantSelector: true);
+        Add("PATCH", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/{priorityId}",
+            "/api" + chiefOfStaff + "/priorities/{priorityId}",
+            "updateChiefOfStaffPriority", "Update a Priority", body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/{priorityId}/links",
+            "/api" + chiefOfStaff + "/priorities/{priorityId}/links",
+            "addChiefOfStaffPriorityLink", "Link a Priority to a run, conversation, issue, pull request, or artifact",
+            body: true, forwardTenantSelector: true);
+        Add("DELETE", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/{priorityId}/links/{linkId}",
+            "/api" + chiefOfStaff + "/priorities/{priorityId}/links/{linkId}",
+            "removeChiefOfStaffPriorityLink", "Remove a Priority link",
+            ["expectedRevision"], forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);
@@ -451,6 +484,9 @@ public static class GatewayRouteCatalog
             "streamRunEvents", "Stream committed run events using SSE", ["cursor"],
             eventStream: true,
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Events, run + "/sessions/{sessionId}/turns/{eventId:guid}",
+            "/internal/sessions/{sessionId}/turns/{eventId:guid}",
+            "readSessionTurnContent", "Read authorized session turn text", forwardTenantSelector: true);
         Add("GET", GatewayOwner.Events, run + "/usage",
             "/internal" + run + "/usage",
             "readRunUsage", "Read run usage totals", forwardTenantSelector: true);

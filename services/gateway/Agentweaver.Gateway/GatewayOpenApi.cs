@@ -67,6 +67,16 @@ internal static partial class GatewayOpenApi
             ["prepareSourceControlMergeIntent"] = C("PrepareSourceControlMergeIntentRequest", "SourceControlMergeApprovalView", "200", "202"),
             ["readSourceControlMergeIntent"] = C(null, "SourceControlMergeIntentView", "200"),
             ["executeSourceControlMergeIntent"] = C(null, "SourceControlMergeExecutionView", "200"),
+            ["listChiefOfStaffConversations"] = C(null, "ChiefOfStaffConversationPage", "200"),
+            ["bindChiefOfStaffConversation"] = C("BindChiefOfStaffConversationRequest", "ChiefOfStaffConversation", "200"),
+            ["getChiefOfStaffConversation"] = C(null, "ChiefOfStaffConversation", "200"),
+            ["listChiefOfStaffPriorities"] = C(null, "ChiefOfStaffPriorityList", "200"),
+            ["createChiefOfStaffPriority"] = C("CreateChiefOfStaffPriorityRequest", "ChiefOfStaffPriority", "200", "201"),
+            ["reorderChiefOfStaffPriorities"] = C("ReorderChiefOfStaffPrioritiesRequest", "ChiefOfStaffPriorityList", "200"),
+            ["getChiefOfStaffPriority"] = C(null, "ChiefOfStaffPriority", "200"),
+            ["updateChiefOfStaffPriority"] = C("UpdateChiefOfStaffPriorityRequest", "ChiefOfStaffPriority", "200"),
+            ["addChiefOfStaffPriorityLink"] = C("AddChiefOfStaffPriorityLinkRequest", "ChiefOfStaffPriority", "200"),
+            ["removeChiefOfStaffPriorityLink"] = C(null, "ChiefOfStaffPriority", "200"),
             ["captureSourceControlWorkspaceOutput"] = C("PrepareSourceControlWorkspaceRevisionRequest", "SourceControlOutputCaptureSummary", "200", "201"),
             ["listSourceControlOutputCaptures"] = C(null, "SourceControlOutputCapturePage", "200"),
             ["readSourceControlOutputCapture"] = C(null, "SourceControlOutputCaptureDetail", "200"),
@@ -127,6 +137,7 @@ internal static partial class GatewayOpenApi
             ["promoteKnowledgeProposal"] = C("PromoteKnowledgeProposalRequest", "KnowledgeProposalPromotionResult", "200", "201"),
             ["rejectKnowledgeProposal"] = C("RejectKnowledgeProposalRequest", "KnowledgeRecordWriteResult", "200", "201"),
             ["compileKnowledgeContext"] = C(null, "MemoryContextCompilation", "200"),
+            ["readSessionTurnContent"] = C(null, "SessionTurnContent", "200"),
             ["replayRunEvents"] = C(null, "SessionEventPage", "200"),
             ["streamRunEvents"] = C(null, "SessionEventPage", "200"),
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
@@ -228,6 +239,7 @@ internal static partial class GatewayOpenApi
         if (route.OperationId is
             "createProjectRun" or
             "cancelProjectRun" or
+            "createChiefOfStaffPriority" or
             "createKnowledgeRecord" or
             "updateKnowledgeRecord" or
             "restoreKnowledgeRecord" or
@@ -432,6 +444,14 @@ else if (route.OperationId is
                     "Revision comparisons remain in request bodies; no Idempotency-Key header is required.",
             };
         }
+        else if (route.OperationId.Contains("ChiefOfStaff", StringComparison.Ordinal))
+        {
+            description +=
+                " This caller-private route requires api.read and an unbound token. The owner reads fresh Projects " +
+                "authority on every call and returns only the caller's rows. Content in a project the caller can no " +
+                "longer read is returned with access unavailable and without project fields. Priority writes require " +
+                "the current revision and never change run, session, or gate state.";
+        }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
             description +=
@@ -555,6 +575,7 @@ else if (route.OperationId is
     private static bool IsRequiredQueryParameter(string operationId, string name) =>
         operationId == "removeMarketplaceSource" && name == "expectedRevision" ||
         operationId == "revokeProjectRoleAssignment" && name == "expectedRevision" ||
+        operationId == "removeChiefOfStaffPriorityLink" && name == "expectedRevision" ||
         operationId == "browseMarketplaceSource" && name == "expectedSourceRevision" ||
         operationId == "readSourceControlOutputCaptureFile" && name == "path";
 
@@ -586,7 +607,7 @@ else if (route.OperationId is
 
         if (operationId == "listProjectSkillInventory" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
-        if (operationId == "listProjectRuns" && name == "pageSize")
+        if (operationId is "listProjectRuns" or "listChiefOfStaffConversations" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
         if (operationId == "listProjectRuns" && name == "state")
             return new
@@ -598,6 +619,7 @@ else if (route.OperationId is
             };
 
         if ((operationId is "removeMarketplaceSource" or "revokeProjectRoleAssignment" && name == "expectedRevision") ||
+            (operationId == "removeChiefOfStaffPriorityLink" && name == "expectedRevision") ||
             (operationId == "browseMarketplaceSource" && name == "expectedSourceRevision"))
             return Int();
 
@@ -1091,6 +1113,55 @@ else if (route.OperationId is
         ["ProjectUsage"] = StrictObj(["projectId", "from", "to", "usageByModel", "usageByAgent"],
             ("projectId", Str()), ("from", Date()), ("to", Date()),
             ("usageByModel", Arr(Ref("ProjectUsageItem"))), ("usageByAgent", Arr(Ref("ProjectUsageItem")))),
+        ["BindChiefOfStaffConversationRequest"] = StrictObj(["projectId", "runId"],
+            ("projectId", Str()), ("runId", Str())),
+        // An unavailable conversation keeps only its identifier, access, and creation time.
+        ["ChiefOfStaffConversation"] = StrictObj(
+            ["conversationId", "access", "projectId", "runId", "rootSessionId", "title", "requestState", "runState", "createdAt"],
+            ("conversationId", Str()), ("access", Enum("available", "unavailable")),
+            ("projectId", NullableStr()), ("runId", NullableStr()), ("rootSessionId", NullableStr()),
+            ("title", NullableStr()),
+            ("requestState", Nullable(Enum("awaiting_binding", "started", "cancelled"))),
+            ("runState", Nullable(Enum("idle", "active", "blocked", "completed", "failed", "indeterminate", "cancelled"))),
+            ("createdAt", Date())),
+        ["ChiefOfStaffConversationPage"] = StrictObj(["items", "nextCursor"],
+            ("items", Arr(Ref("ChiefOfStaffConversation"))), ("nextCursor", NullableStr())),
+        ["ChiefOfStaffChecklistItem"] = StrictObj(["text", "done"],
+            ("itemId", NullableStr()), ("text", new { type = "string", minLength = 1, maxLength = 500 }),
+            ("done", Bool())),
+        ["CreateChiefOfStaffPriorityRequest"] = StrictObj(["outcome"],
+            ("outcome", new { type = "string", minLength = 1, maxLength = 200 }),
+            ("notes", NullableStr()),
+            ("checklist", new { type = "array", maxItems = 50, items = Ref("ChiefOfStaffChecklistItem") })),
+        // Omitted fields keep their values. An empty notes value clears the notes.
+        ["UpdateChiefOfStaffPriorityRequest"] = StrictObj(["expectedRevision"],
+            ("expectedRevision", new { type = "integer", minimum = 1 }),
+            ("outcome", new { type = "string", minLength = 1, maxLength = 200 }),
+            ("notes", NullableStr()),
+            ("state", Enum("active", "achieved", "dropped")),
+            ("checklist", new { type = "array", maxItems = 50, items = Ref("ChiefOfStaffChecklistItem") })),
+        ["ReorderChiefOfStaffPrioritiesRequest"] = StrictObj(["expectedOrderRevision", "priorityIds"],
+            ("expectedOrderRevision", new { type = "integer", minimum = 0 }),
+            ("priorityIds", new { type = "array", maxItems = 100, items = Str() })),
+        ["AddChiefOfStaffPriorityLinkRequest"] = StrictObj(["expectedRevision", "kind", "projectId"],
+            ("expectedRevision", new { type = "integer", minimum = 1 }),
+            ("kind", Enum("run", "conversation", "issue", "pull_request", "artifact")),
+            ("projectId", Str()), ("runId", NullableStr()), ("conversationId", NullableStr()),
+            ("number", Nullable(new { type = "integer", minimum = 1 })), ("artifactId", NullableStr())),
+        // Unavailable links carry only linkId, kind, and access. Issue, pull request, and artifact state is unavailable.
+        ["ChiefOfStaffPriorityLink"] = StrictObj(["linkId", "kind", "access"],
+            ("linkId", Str()), ("kind", Enum("run", "conversation", "issue", "pull_request", "artifact")),
+            ("access", Enum("available", "missing", "unavailable")),
+            ("projectId", Str()), ("runId", Str()), ("conversationId", Str()), ("number", Int()),
+            ("artifactId", Str()), ("state", Str()), ("createdAt", Date())),
+        ["ChiefOfStaffPriority"] = StrictObj(
+            ["priorityId", "outcome", "notes", "state", "checklist", "position", "revision", "links", "createdAt", "updatedAt"],
+            ("priorityId", Str()), ("outcome", Str()), ("notes", NullableStr()),
+            ("state", Enum("active", "achieved", "dropped")),
+            ("checklist", Arr(Ref("ChiefOfStaffChecklistItem"))), ("position", Int()), ("revision", Int()),
+            ("links", Arr(Ref("ChiefOfStaffPriorityLink"))), ("createdAt", Date()), ("updatedAt", Date())),
+        ["ChiefOfStaffPriorityList"] = StrictObj(["orderRevision", "items"],
+            ("orderRevision", Int()), ("items", Arr(Ref("ChiefOfStaffPriority")))),
         ["AcceptRootRequest"] = Obj(["sessionId"], ("sessionId", Str())),
         // The message limit is UTF-8 bytes at the owner, not a JavaScript character count.
         ["CreateProjectRunRequest"] = Obj(["firstMessage", "expectedProjectConfigRevision"],
@@ -1456,6 +1527,8 @@ else if (route.OperationId is
         ["KnowledgeRevisionReference"] = Obj(["kind", "recordId", "revision", "revisionId"],
             ("kind", Str()), ("recordId", Uuid()), ("revision", Int()), ("revisionId", Uuid())),
 
+        ["SessionTurnContent"] = Obj(["eventId", "identity", "text"],
+            ("eventId", Uuid()), ("identity", Ref("SessionIdentity")), ("text", Str())),
         ["SessionEventPage"] = Obj(["events", "nextCursor", "hasMore"],
             ("events", Arr(Ref("SessionEventEnvelope"))), ("nextCursor", NullableStr()), ("hasMore", Bool())),
         ["SessionEventEnvelope"] = Obj(["schemaVersion", "eventVersion", "eventId", "identity", "position", "occurredAt", "kind", "payload", "objectReferences"],
