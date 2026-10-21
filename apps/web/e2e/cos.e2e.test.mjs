@@ -218,8 +218,14 @@ test('stale gate: the decision view rereads the gate and sends nothing when its 
   }
 });
 
-test('follow-up: a chat reopens from Sessions and sends one message per draft with the run-bound token', async () => {
-  const room = runRoom({ projectId: 'p2', runId: 'run-1' });
+test('follow-up: a chat reopens from Sessions with its messages and sends one message per draft', async () => {
+  const room = runRoom({
+    projectId: 'p2', runId: 'run-1',
+    turns: [
+      { role: 'user', text: 'Fix the flaky search test' },
+      { role: 'assistant', text: 'The retry budget is too low. I raised it to three.' },
+    ],
+  });
   const app = await openApp({
     origin: server.origin,
     seed: { projects: [project('p1', 'Payments'), project('p2', 'Search')] },
@@ -237,6 +243,12 @@ test('follow-up: a chat reopens from Sessions and sends one message per draft wi
     await page.goto(`${server.origin}/sessions`);
     await page.getByRole('button', { name: 'Open Fix the flaky search test' }).click();
     await page.waitForURL(/\/projects\/p2\/runs\/run-1$/);
+    const history = page.getByRole('list', { name: 'Messages' });
+    await history.getByText('The retry budget is too low. I raised it to three.').waitFor();
+    await history.getByText('Fix the flaky search test').waitFor();
+    const turnReads = app.gateway.requests.filter((request) => /\/sessions\/[^/]+\/turns\/[^/]+$/.test(request.url.pathname));
+    assert.ok(turnReads.length >= 2);
+    for (const request of turnReads) assert.equal(request.headers.get('authorization'), 'Bearer tok.p2.run-1');
     await page.getByLabel('Message', { exact: true }).fill('Also check the retry budget');
     await page.getByRole('button', { name: 'Send' }).dblclick();
     await page.getByText('Message sent. It shows in the activity list when the agent receives it.').waitFor();
@@ -250,6 +262,13 @@ test('follow-up: a chat reopens from Sessions and sends one message per draft wi
     assert.ok(body.idempotencyKey);
     assert.equal(writes(app, 'POST', /^\/api\/v1\/projects\/p2\/runs$/).length, 1, 'follow-up creates no new run');
     assert.equal(app.gateway.state.conversations.length, 1);
+
+    // Permission loss: the owner refuses turn reads, so no message text renders.
+    room.revoked = true;
+    await page.reload();
+    await page.getByText('You can no longer read this run. Messages are hidden.').waitFor();
+    assert.equal(await page.getByText('The retry budget is too low. I raised it to three.').count(), 0);
+    assert.equal(await page.getByRole('list', { name: 'Messages' }).count(), 0);
   } finally {
     await app.close();
   }

@@ -142,11 +142,11 @@ export async function openApp({ seed = {}, extra, origin }) {
 /**
  * Fakes the bound run endpoints the run page reads, in the shapes from
  * `src/v1/contracts.ts`: owner status, a coordinator root with one child work session,
- * session status with the pending gate as a blocker, decision state, an empty journal,
- * gate actions, and addressed messages. Every route needs a token bound to this run.
+ * session status with the pending gate as a blocker, decision state, a journal of `turn`
+ * events with their text from `readSessionTurnContent`, gate actions, and addressed messages. Every route needs a token bound to this run.
  * Mutate `room.decisions` to change or replace the gate. Writes land in `room.writes`.
  */
-export function runRoom({ projectId, runId, gate = null }) {
+export function runRoom({ projectId, runId, gate = null, turns = [] }) {
   const rootSessionId = `${runId}-root`;
   const childSessionId = `${runId}-work`;
   const createdAt = '2026-10-20T12:00:00.000Z';
@@ -159,6 +159,9 @@ export function runRoom({ projectId, runId, gate = null }) {
     rootSessionId,
     childSessionId,
     writes: [],
+    /** Set to true to answer turn reads with 403, as after losing project read access. */
+    revoked: false,
+    turns: turns.map((value, index) => ({ eventId: `turn-${index + 1}`, sessionId: rootSessionId, ...value })),
     decisions: {
       stateVersion: gate?.stateVersion ?? 1, executionFence: 1, outcomeConfirmed: true, workflowConfirmed: true,
       canDecompose: false, canDispatch: false,
@@ -184,7 +187,22 @@ export function runRoom({ projectId, runId, gate = null }) {
     if (!path.startsWith(`${prefix}/`)) return undefined;
     if (binding?.projectId !== projectId || binding?.runId !== runId) return json(403, { error: 'caller_binding_mismatch' });
     const rest = path.slice(prefix.length);
-    if (method === 'GET' && rest === '/events') return json(200, { events: [], nextCursor: null, hasMore: false });
+    if (method === 'GET' && rest === '/events') return json(200, {
+      events: room.turns.map((value, index) => ({
+        schemaVersion: 1, eventVersion: 1, eventId: value.eventId, identity: identity(value.sessionId), position: index + 1,
+        occurredAt: createdAt, kind: 'turn', payload: { kind: 'turn', role: value.role, content: { reference: `content-${index + 1}` } },
+        objectReferences: [],
+      })),
+      nextCursor: null, hasMore: false,
+    });
+    const turnRead = method === 'GET' && rest.match(/^\/sessions\/([^/]+)\/turns\/([^/]+)$/);
+    if (turnRead) {
+      if (room.revoked) return json(403, { error: 'project_read_permission_denied' });
+      const found = room.turns.find((value) => value.sessionId === decodeURIComponent(turnRead[1]) && value.eventId === decodeURIComponent(turnRead[2]));
+      return found
+        ? json(200, { eventId: found.eventId, identity: identity(found.sessionId), text: found.text })
+        : json(404, { error: 'turn_content_not_found' });
+    }
     if (method === 'GET' && rest === '/events/live') return new Response('', { status: 200, headers: { 'content-type': 'text/event-stream' } });
     if (method === 'GET' && rest === '/coordination/status') return json(200, {
       projectId, runId, rootSessionId, executionFence: 1, logicalTurnOrdinal: 1,
