@@ -409,6 +409,7 @@ export class AgentweaverGatewayClient {
     request: AgentSuiteImportRequest,
     tenantSelector?: string | null,
   ): Promise<AgentSuiteImportResult> {
+    // The archive travels base64-encoded inside JSON, so the request is about 4/3 the archive size.
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'agentsuite-imports')}`,
@@ -425,6 +426,7 @@ export class AgentweaverGatewayClient {
     sourceIdentity: string,
     tenantSelector?: string | null,
   ): Promise<AgentSuiteImport> {
+    // sourceIdentity looks like "sha256:<hex>". encodeSegments escapes the ':' so it stays one path segment.
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'agentsuite-imports', sourceIdentity)}`,
@@ -441,6 +443,7 @@ export class AgentweaverGatewayClient {
     effectiveAgentId: string,
     tenantSelector?: string | null,
   ): Promise<AgentSuiteAgentPolicy> {
+    // effectiveAgentId looks like "agentsuite:...". encodeSegments escapes it so it stays one path segment.
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'agentsuite-agents', effectiveAgentId, 'policy')}`,

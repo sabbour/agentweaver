@@ -52,6 +52,7 @@ internal static partial class GatewayOpenApi
             ["importProjectSkill"] = C("ImportSkillContentRequest", "SkillContentImportReceipt", "200"),
             ["updateProjectSkillAssignment"] = C("UpdateSkillAssignmentRequest", "VersionedProjectConfiguration", "200"),
             ["listProjectSkillInventory"] = C(null, "ProjectSkillInventoryPage", "200"),
+            // 201 when a new casting proposal is staged; 200 when there is nothing to propose.
             ["importProjectAgentSuite"] = C("ImportProjectAgentSuiteRequest", "ProjectAgentSuiteImportResult", "200", "201"),
             ["getProjectAgentSuiteImport"] = C(null, "ProjectAgentSuiteImport", "200"),
             ["getProjectAgentSuiteAgentPolicy"] = C(null, "ProjectAgentSuiteAgentPolicy", "200"),

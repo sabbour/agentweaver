@@ -1,6 +1,6 @@
 # AgentSuite import
 
-> Implements [#2114](https://github.com/sabbour/agentweaver/issues/2114). Pinned to [agent-primitives/suite](https://github.com/agent-primitives/suite) commit `a09950a75359cdc7de4d3361694582613f24c732` (`1.0.0-draft`).
+> Agentweaver reads AgentSuite as defined by [agent-primitives/suite](https://github.com/agent-primitives/suite) commit `a09950a75359cdc7de4d3361694582613f24c732` (spec version `1.0.0-draft`). A suite with another `schemaVersion` is rejected.
 
 `POST /api/projects/{projectId}/agentsuite-imports` validates a native AgentSuite archive offline
 and stages its agents as one pending casting proposal. Import is inert: it doesn't activate,

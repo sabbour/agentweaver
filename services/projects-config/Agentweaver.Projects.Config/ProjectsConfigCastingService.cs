@@ -529,6 +529,7 @@ public sealed partial class ProjectsConfigService
         var now = timeProvider.GetUtcNow();
         var proposal = new ProjectCastingProposalRecord
         {
+            // Callers that need replay-safe imports pass a stable ID derived from the request; others get a random one.
             ProposalId = proposalId ?? Guid.NewGuid(),
             ProjectId = project.ProjectId,
             BaseConfigurationRevision = project.ConfigurationRevision,

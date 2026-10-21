@@ -650,6 +650,8 @@ export interface AgentSuiteBlueprint {
 /** Request to validate a native AgentSuite archive and stage its agents as a casting proposal. */
 export interface AgentSuiteImportRequest {
   expectedConfigurationRevision: number;
+  // 'oci-layout-tar' is a tar of a full OCI image layout. 'content-tar-gzip' is only the suite content
+  // layer, so it has no OCI manifest.
   format: 'oci-layout-tar' | 'content-tar-gzip';
   /** Base64 archive bytes. */
   archive: string;
@@ -718,6 +720,7 @@ export interface AgentSuiteImport {
   projectId: string;
   sourceIdentity: string;
   sourceFormat: string;
+  // Null for 'content-tar-gzip' imports, which have no OCI manifest.
   manifestDigest?: string | null;
   contentDigest: string;
   suiteName: string;

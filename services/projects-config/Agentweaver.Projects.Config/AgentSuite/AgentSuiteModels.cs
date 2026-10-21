@@ -96,5 +96,6 @@ internal sealed record AgentSuiteValidationResult(
     AgentSuiteGraph? Graph,
     ImmutableArray<AgentSuiteBlob> Blobs)
 {
+    // Accepted needs a clean native pass, no Agentweaver refusals, and a built graph; any one missing means not accepted.
     public bool Accepted => NativeErrors.IsEmpty && ProfileErrors.IsEmpty && Graph is not null;
 }

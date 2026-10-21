@@ -13,6 +13,8 @@ import (
 const committedFixtures = "../../../tests/Agentweaver.Projects.Config.Tests/Fixtures/AgentSuite"
 
 func TestCommittedFixturesMatchGenerator(t *testing.T) {
+	// Regenerate everything in a temporary folder, the same way cmd/agentsuite-fixture does, then compare
+	// byte for byte with the committed copy. This catches a stale fixture after a generator change.
 	root := t.TempDir()
 	verdicts, err := Write(root)
 	if err != nil {
@@ -27,6 +29,7 @@ func TestCommittedFixturesMatchGenerator(t *testing.T) {
 	}
 	generated := readTree(t, root)
 	committed := readTree(t, committedFixtures)
+	// Check both directions: every generated file must be committed, and every committed file must be generated.
 	for name, want := range generated {
 		got, ok := committed[name]
 		if !ok {
@@ -48,6 +51,7 @@ func readTree(t *testing.T, root string) map[string][]byte {
 	t.Helper()
 	files := map[string][]byte{}
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		// Return walk errors as they are; skip folders, because only file bytes are compared.
 		if err != nil || entry.IsDir() {
 			return err
 		}
@@ -59,6 +63,7 @@ func readTree(t *testing.T, root string) map[string][]byte {
 		if err != nil {
 			return err
 		}
+		// Key by a forward-slash relative path so names match on Windows and Unix.
 		files[filepath.ToSlash(rel)] = data
 		return nil
 	})
@@ -69,6 +74,8 @@ func readTree(t *testing.T, root string) map[string][]byte {
 }
 
 func TestVariantsMatchUpstreamVerdicts(t *testing.T) {
+	// Generate twice into different folders. Equal results prove the output does not depend on the
+	// output path or on anything that changes between runs.
 	first, err := Write(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +91,8 @@ func TestVariantsMatchUpstreamVerdicts(t *testing.T) {
 			t.Fatalf("variant %s is not deterministic: %+v != %+v", v.Name, v, second[i])
 		}
 		switch v.Name {
+		// Only these variants are valid suites. "team-model-secret-refs" is valid upstream even though
+		// Agentweaver later refuses it, so the parity data records both decisions separately.
 		case "valid", "valid-retagged", "team", "team-model-secret-refs":
 			if !v.Accepted {
 				t.Fatalf("%s rejected: %s", v.Name, v.Error)
@@ -94,6 +103,7 @@ func TestVariantsMatchUpstreamVerdicts(t *testing.T) {
 			}
 		}
 	}
+	// A tag lives in index.json, outside the manifest, so retagging must keep the artifact identity.
 	if byName["valid"].ManifestDigest != byName["valid-retagged"].ManifestDigest {
 		t.Fatal("a tag change must not change the manifest digest")
 	}

@@ -16,12 +16,14 @@ func main() {
 	out := flag.String("out", "", "output directory")
 	flag.Parse()
 	if *out == "" {
+		// Write deletes and recreates variant folders, so require an explicit target instead of a default.
 		log.Fatal("-out is required")
 	}
 	verdicts, err := suitefixture.Write(*out)
 	if err != nil {
 		log.Fatal(err)
 	}
+	// parity.json uses the same indentation and trailing newline as the test, so the test can compare bytes.
 	data, err := json.MarshalIndent(verdicts, "", "  ")
 	if err != nil {
 		log.Fatal(err)
