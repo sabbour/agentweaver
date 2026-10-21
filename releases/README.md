@@ -11,9 +11,9 @@ The eight original .NET foundation NuGet packages were:
 `Agentweaver.Identity`, `Agentweaver.Telemetry`,
 `Agentweaver.Telemetry.AzureMonitor`, and `Agentweaver.ObjectStore.AzureBlob`.
 Their historical P0 package baseline was `0.0.0`; its records remain unchanged.
-`Agentweaver.Identity.Broker` has current source version `1.1.3`; it is not one
+`Agentweaver.Identity.Broker` has current source version `1.2.0`; it is not one
 of the NuGet packages.
-`Agentweaver.Orchestrator` is also an unpublished service at source version `1.1.1`;
+`Agentweaver.Orchestrator` is also an unpublished service at source version `1.2.0`;
 its `Agentweaver.Orchestrator.Core` dependency remains a separately versioned library.
 `Agentweaver.FoundationProbe` has a separate prepared source version at `0.0.3`.
 The manifest uses the `service` artifact kind for its executable container.
@@ -184,7 +184,7 @@ The manifest remains a draft. This is not a published platform release or permis
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
 The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
-Its current manifest/project source version is `1.1.3`.
+Its current manifest/project source version is `1.2.0`.
 The record is release intent, not a registry artifact or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
 

@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "c6dbc1a4ef8db2831927101042c382fac48bd611",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "33248eb5ffa0ca9e0cafbd4cf0297b12c8579537e0a1469298dd51874ed59685",
+  "appliedAt": "2026-10-21T18:50:43.034Z",
+  "components": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.AgentRuntime",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Environment",
+      "fromVersion": "1.1.4",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.1.3",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.1.2",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity",
+      "fromVersion": "1.3.0",
+      "toVersion": "1.4.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "fromVersion": "1.1.4",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Knowledge",
+      "fromVersion": "1.0.4",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "1.1.2",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Orchestrator.Core",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.1.2",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Providers",
+      "fromVersion": "1.0.2",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.SourceControl",
+      "fromVersion": "1.0.2",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.0.5",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/agentsuite-native-import-2114.md",
+      "archivedPath": ".changeset/archive/agentsuite-native-import-2114.md",
+      "sha256": "7ed6ec1f5738b251668eef6e13972132baeefff732d39c6b77c32fb6e21ca3f6"
+    },
+    {
+      "sourcePath": ".changeset/caller-attention-notifications.md",
+      "archivedPath": ".changeset/archive/caller-attention-notifications.md",
+      "sha256": "6de373cb2047d83e6046f901a454eb6c809ee56e07832dbc4669684a6c3c78f3"
+    },
+    {
+      "sourcePath": ".changeset/caller-notification-promotions.md",
+      "archivedPath": ".changeset/archive/caller-notification-promotions.md",
+      "sha256": "ccb2b5fcc2e1fcaa51490f152c89751c9755a99e3b8f4de46ba1d89a64948ebb"
+    },
+    {
+      "sourcePath": ".changeset/chief-of-staff-a1-a2.md",
+      "archivedPath": ".changeset/archive/chief-of-staff-a1-a2.md",
+      "sha256": "9aa83fab973c242a3e2f8f41e0f768d8d1a22c324e1ec989d4886e8a43d6aa79"
+    },
+    {
+      "sourcePath": ".changeset/g1-project-run-admission.md",
+      "archivedPath": ".changeset/archive/g1-project-run-admission.md",
+      "sha256": "4bb4a13fe10ee6af88cb2bc75bcfe0fa0317249ed58752d2e305bdd3ff9adee3"
+    },
+    {
+      "sourcePath": ".changeset/g2-project-run-list.md",
+      "archivedPath": ".changeset/archive/g2-project-run-list.md",
+      "sha256": "1f4a1e5476f30feb338d74bb664de9e3f123ce292181308f8f7da590ad78d8f5"
+    },
+    {
+      "sourcePath": ".changeset/g3-project-metrics-api.md",
+      "archivedPath": ".changeset/archive/g3-project-metrics-api.md",
+      "sha256": "b30c0c7232fc2abe7f9d279cf3f2f0f0af62d85a9a1e5c23ddc3330aca57b14f"
+    },
+    {
+      "sourcePath": ".changeset/g4-casting-gateway.md",
+      "archivedPath": ".changeset/archive/g4-casting-gateway.md",
+      "sha256": "983311d04584de37151a656570127239608fe5577f171c35c37b74a2a1a29d6f"
+    },
+    {
+      "sourcePath": ".changeset/gateway-agent-definition-2182.md",
+      "archivedPath": ".changeset/archive/gateway-agent-definition-2182.md",
+      "sha256": "5156a0cb62faf5967ebe3ca301c3aed7d863e62adc6ae65440e41ca5fa09c7f7"
+    },
+    {
+      "sourcePath": ".changeset/gateway-output-captures-1917.md",
+      "archivedPath": ".changeset/archive/gateway-output-captures-1917.md",
+      "sha256": "e9cc4c68d9ff25364f2f56759c88c67fe30d668e592f80234d9b8f2643eb0d0a"
+    },
+    {
+      "sourcePath": ".changeset/p1-postgres-inspect-and-pending-migrations.md",
+      "archivedPath": ".changeset/archive/p1-postgres-inspect-and-pending-migrations.md",
+      "sha256": "8b66930c09347f5144eeb8893217bb5dc8135dd86cf1bab159dc7083e2d2e776"
+    },
+    {
+      "sourcePath": ".changeset/p2-azure-byok-cost-1924.md",
+      "archivedPath": ".changeset/archive/p2-azure-byok-cost-1924.md",
+      "sha256": "ba385c7b712dad384334491f102578607a0d33164979de17d690e67dcd418d9d"
+    },
+    {
+      "sourcePath": ".changeset/p2-backlog-plan-promotion.md",
+      "archivedPath": ".changeset/archive/p2-backlog-plan-promotion.md",
+      "sha256": "39b9d466d65297a3b6ea69ac6077ad83ec5ab4acbad2662b27c71e111a89bce8"
+    },
+    {
+      "sourcePath": ".changeset/p2-backlog-task-content.md",
+      "archivedPath": ".changeset/archive/p2-backlog-task-content.md",
+      "sha256": "ee5858fa2b168008d4449caf08312ec9d5a07d119034a8afb417ef529ab22434"
+    },
+    {
+      "sourcePath": ".changeset/p2-guardrails-prompt-shields-1928.md",
+      "archivedPath": ".changeset/archive/p2-guardrails-prompt-shields-1928.md",
+      "sha256": "b1348479ce1e2675f55a9cea91e39e8c2506372c878dd81d36a87bf20a7d2bda"
+    },
+    {
+      "sourcePath": ".changeset/p2-periodic-issue-sync.md",
+      "archivedPath": ".changeset/archive/p2-periodic-issue-sync.md",
+      "sha256": "08714a3c6dc682074958294b9965af5d366c0e94dfb4f466e785050c51bbd9db"
+    },
+    {
+      "sourcePath": ".changeset/p2-project-issue-pr-lists.md",
+      "archivedPath": ".changeset/archive/p2-project-issue-pr-lists.md",
+      "sha256": "b1542777e51cf49d200a0e16558778252dea87612b280c7d94d03759e289ee62"
+    },
+    {
+      "sourcePath": ".changeset/p2-remote-mcp-connections-catalog.md",
+      "archivedPath": ".changeset/archive/p2-remote-mcp-connections-catalog.md",
+      "sha256": "a9e2a4aa9f8545f9d2914b2e7b60c141a0cd1cbba57f5f9a67c3ec7cc2424aed"
+    },
+    {
+      "sourcePath": ".changeset/p2-remote-mcp-oauth-validity.md",
+      "archivedPath": ".changeset/archive/p2-remote-mcp-oauth-validity.md",
+      "sha256": "6558914b9ff399e322184c6bae7b2a22022ec067b6106cbd65a24c9be027c625"
+    },
+    {
+      "sourcePath": ".changeset/p2-scoped-budgets-1926.md",
+      "archivedPath": ".changeset/archive/p2-scoped-budgets-1926.md",
+      "sha256": "252f180fdae1a107f0ab35b518a811817f132fc265ffc0215e8486ecfdee117a"
+    },
+    {
+      "sourcePath": ".changeset/p2-skill-marketplace-definitions.md",
+      "archivedPath": ".changeset/archive/p2-skill-marketplace-definitions.md",
+      "sha256": "7af5464dc828a91df9439733fb0f4f6933e4ae6048c78f9de9f04be708ee2844"
+    },
+    {
+      "sourcePath": ".changeset/p2-skill-upload-packaging.md",
+      "archivedPath": ".changeset/archive/p2-skill-upload-packaging.md",
+      "sha256": "7883ca799167b1007c307b7b03008b51e7798b0946427f76c15221714afc0ea5"
+    },
+    {
+      "sourcePath": ".changeset/p2-trusted-azure-byok-provenance-1921.md",
+      "archivedPath": ".changeset/archive/p2-trusted-azure-byok-provenance-1921.md",
+      "sha256": "c6dc41991540abd1c63f3fff7ac1e8d32b7d47bc6bd3966298d146ff00c94e5f"
+    },
+    {
+      "sourcePath": ".changeset/project-role-assignment-api.md",
+      "archivedPath": ".changeset/archive/project-role-assignment-api.md",
+      "sha256": "c4fc2216ba7929d43ab420138dfec962b5239c41d99cb87509cd0368a5d14732"
+    },
+    {
+      "sourcePath": ".changeset/v1-platform-components-report.md",
+      "archivedPath": ".changeset/archive/v1-platform-components-report.md",
+      "sha256": "360ecf1342dcfcf19d82dacaa6013d425551dd98426f4c33dcdf8be8e423da23"
+    },
+    {
+      "sourcePath": ".changeset/v1-retained-web-ui.md",
+      "archivedPath": ".changeset/archive/v1-retained-web-ui.md",
+      "sha256": "31e2ebdf52ad20c312908edbaa73ed8d51947fbe6a4ef15ba99e16672f1e3481"
+    },
+    {
+      "sourcePath": ".changeset/web-produced-files.md",
+      "archivedPath": ".changeset/archive/web-produced-files.md",
+      "sha256": "7f8b6deb04a2f93d5ebab42fa3253d646483048abc722ba2e5495b922704900b"
+    }
+  ]
+}
