@@ -211,6 +211,43 @@ namespace Agentweaver.Identity.Broker.Migrations
                     b.ToTable("issue_sync_grants", "identity_broker");
                 });
 
+            modelBuilder.Entity("Agentweaver.Identity.Broker.IssueSyncMintAudit", b =>
+                {
+                    b.Property<Guid>("AuditId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("GrantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid>("OwnerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("Repository")
+                        .IsRequired()
+                        .HasMaxLength(201)
+                        .HasColumnType("character varying(201)");
+
+                    b.HasKey("AuditId");
+
+                    b.HasIndex("GrantId", "CreatedAt");
+
+                    b.ToTable("issue_sync_mint_audit", "identity_broker");
+                });
+
             modelBuilder.Entity("Agentweaver.Identity.Broker.PendingAuthorization", b =>
                 {
                     b.Property<Guid>("Id")

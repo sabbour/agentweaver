@@ -207,7 +207,8 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
         {
             if (Failure is not null) throw new RuntimeAuthorizationException(Failure);
             Mints++;
-            return Task.FromResult(new IssueSyncCredentialResponse(Grant, "cycle-token-" + Mints, DateTimeOffset.UtcNow.AddMinutes(5)));
+            return Task.FromResult(new IssueSyncCredentialResponse(Grant, "cycle-token-" + Mints,
+                DateTimeOffset.UtcNow.AddMinutes(5), true));
         }
         public Task<IssueSyncGrantReceipt> ValidateAsync(Guid id, CancellationToken ct)
         {
@@ -239,7 +240,7 @@ public sealed class IssueSyncEnginePostgresTests(CoordinationPostgresFixture fix
                 return Json("""
                     {"id":123,"full_name":"octo/widget","default_branch":"main","private":true,
                      "created_at":"2020-01-01T00:00:00Z","has_issues":true,
-                     "permissions":{"pull":true,"push":true,"admin":false}}
+                     "permissions":{"pull":false,"push":false,"admin":false}}
                     """);
             if (request.Method == HttpMethod.Post)
             {

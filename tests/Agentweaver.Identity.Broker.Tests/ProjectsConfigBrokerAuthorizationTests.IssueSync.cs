@@ -30,6 +30,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         using (var tenantAdminOnly = await SendAsync(projects.Client, HttpMethod.Get, ownerPath, token, [TenantId]))
             Assert.Equal(HttpStatusCode.Forbidden, tenantAdminOnly.StatusCode);
+        using (var adminRevocation = await SendAsync(projects.Client, HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/issue-sync-grant-revocation", token, [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, adminRevocation.StatusCode);
+            Assert.Contains("\"isAdministrator\":true", await adminRevocation.Content.ReadAsStringAsync());
+        }
         var assignment = await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membership.MembershipId,
             ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Owner);
         using (var owner = await SendAsync(projects.Client, HttpMethod.Get, ownerPath, token, [TenantId]))

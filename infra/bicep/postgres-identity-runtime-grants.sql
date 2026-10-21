@@ -106,6 +106,15 @@ SELECT format(
   'GRANT SELECT, INSERT, UPDATE ON TABLE %I.%I TO %I',
   'identity_broker', 'issue_sync_grants', :'runtime_role') \gexec
 SELECT format(
+  'REVOKE ALL ON TABLE %I.%I FROM PUBLIC',
+  'identity_broker', 'issue_sync_mint_audit') \gexec
+SELECT format(
+  'REVOKE ALL ON TABLE %I.%I FROM %I',
+  'identity_broker', 'issue_sync_mint_audit', :'runtime_role') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT ON TABLE %I.%I TO %I',
+  'identity_broker', 'issue_sync_mint_audit', :'runtime_role') \gexec
+SELECT format(
   'GRANT SELECT, INSERT, UPDATE ON TABLE %I.%I, %I.%I, %I.%I, %I.%I TO %I',
   'identity_broker', 'repo_app_authorization_transactions',
   'identity_broker', 'repo_app_connections',

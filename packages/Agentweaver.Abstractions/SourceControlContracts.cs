@@ -229,6 +229,10 @@ public sealed record SourceControlIssuePage(ImmutableArray<SourceControlIssueCon
 /// <summary>Issue read and reconciliation capability, separate from run orchestration operations.</summary>
 public interface ISourceControlIssueAdapter
 {
+    Task<SourceControlRepositoryNegotiation> NegotiateIssueRepositoryAsync(ProviderCandidate candidate,
+        SourceControlRepositoryIdentity repository, SecretCredential credential, bool issueWriteGranted,
+        CancellationToken cancellationToken);
+    Task VerifyCurrentIssueBindingAsync(SourceControlOperationContext context, CancellationToken cancellationToken);
     Task<SourceControlIssuePage> ListIssuesAsync(SourceControlOperationContext context, int page,
         int pageSize, CancellationToken cancellationToken);
     Task<SourceControlIssueContent> ReadIssueAsync(SourceControlOperationContext context, long number,

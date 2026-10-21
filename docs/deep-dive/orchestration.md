@@ -61,6 +61,9 @@ Owner, and the repository/connection is still selected. The worker validates
 this evidence before effects and inside revision-checked backlog writes.
 GitHub credentials live only for a single cycle and are invalidated afterward;
 no user bearer token is saved. Existing run-token issuance is unchanged.
+The creator or a current tenant administrator can revoke the grant. Identity
+persists credential-free, append-only `requested` and `minted` audit evidence
+with grant ID and owner before returning any minted credential.
 
 Mappings live in the backlog's unique repository issue link and in sync
 receipts. Baselines support field-by-field three-way reconciliation: an

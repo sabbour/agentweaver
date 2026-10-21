@@ -8,6 +8,36 @@ namespace Agentweaver.SourceControl.Tests;
 
 public sealed partial class GitHubSourceControlAdapterTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task IssueOnlyNegotiationUsesVerifiedMintEvidenceNotPushPermission(bool granted)
+    {
+        var calls = 0;
+        var adapter = CreateAdapter(new StubHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(JsonResponse("""
+                {"id":123,"full_name":"octo/widget","default_branch":"main","private":true,
+                 "created_at":"2020-01-01T00:00:00Z","has_issues":true}
+                """));
+        }));
+        var candidate = ResolveCandidate(CreateResolver());
+        if (!granted)
+        {
+            var failure = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+                adapter.NegotiateIssueRepositoryAsync(candidate, new("octo", "widget"), NewCredential(), false, default));
+            Assert.Equal(SourceControlFailureCode.CapabilityUnavailable, failure.Code);
+            Assert.Equal(0, calls);
+            return;
+        }
+        var result = await adapter.NegotiateIssueRepositoryAsync(candidate,
+            new("octo", "widget"), NewCredential(), true, default);
+        Assert.Equal(2, result.Resource.Capabilities.Count);
+        Assert.Contains(SourceControlCapabilities.IssueWrite, result.Resource.Capabilities);
+        Assert.DoesNotContain(SourceControlCapabilities.RepositoryCheckout, result.Resource.Capabilities);
+    }
+
     [Fact]
     public async Task IssuePageIncludesClosedWorkButFiltersPullRequestsAndUsesBoundedRepositoryPath()
     {

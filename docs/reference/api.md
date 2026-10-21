@@ -47,8 +47,8 @@ Concurrent configuration/cycles return 409.
 
 Owners may disable sync even after its grant is revoked or the repository is
 unselected. Revocation returns `{ "revoked": true }` and prevents the next
-cycle; in-flight cycles also revalidate before effects. Current Owners may
-revoke another Owner's project grant. Grant reads validate the original
+cycle; in-flight cycles also revalidate before effects. Only the creator or
+a current tenant administrator can revoke a grant. Grant reads validate the original
 creator's current authority. A changed repository does not reuse old mappings.
 
 Status is `configured`, `disabled`, `running`, `succeeded`, or `failed`.
@@ -66,6 +66,8 @@ Orchestrator mTLS peer. Projects `POST /internal/issue-sync/project-authority`
 accepts only the Identity mTLS peer and `{ projectId, tenantId, creatorId }`.
 Projects' authenticated `GET /api/projects/{projectId}/issue-sync-owner`
 and `issue-sync-authority` provide live owner and selected-repository proofs.
+The native `GET /api/projects/{projectId}/issue-sync-grant-revocation` supplies
+current creator/admin revocation evidence without granting worker authority.
 These routes never create run or secret grants. Webhooks and conflict prompts
 are out of scope.
 

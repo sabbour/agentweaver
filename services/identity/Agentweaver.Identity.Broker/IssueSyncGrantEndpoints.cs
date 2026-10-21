@@ -36,7 +36,7 @@ internal static class IssueSyncGrantEndpoints
             IssueSyncGrantAuthority authority) => ExecuteAsync(context, async () =>
         {
             await authority.RevokeAsync(grantId,
-                await ReadOwnerAsync<IssueSyncOwnerProof>(context, projectId, "issue-sync-owner"), context.RequestAborted);
+                await ReadOwnerAsync<IssueSyncRevocationProof>(context, projectId, "issue-sync-grant-revocation"), context.RequestAborted);
             return new { revoked = true };
         }));
         app.MapPost("/internal/issue-sync/grants/{grantId:guid}/token",
@@ -50,7 +50,7 @@ internal static class IssueSyncGrantEndpoints
                 try
                 {
                     return new IssueSyncCredentialResponse(IssueSyncGrantAuthority.Receipt(grant),
-                        credential.Credential.GetValue(), credential.Credential.ExpiresAt);
+                        credential.Credential.GetValue(), credential.Credential.ExpiresAt, credential.IssueWriteGranted);
                 }
                 finally { credential.Credential.Invalidate(); }
             })).AllowAnonymous();
@@ -104,6 +104,8 @@ internal static class IssueSyncGrantEndpoints
         { await Error(context, "issue_sync_authority_unavailable", 503); }
         catch (System.Text.Json.JsonException)
         { await Error(context, "issue_sync_authority_response_invalid", 503); }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+        { await Error(context, "issue_sync_persistence_unavailable", 503); }
         catch (ArgumentException)
         { await Error(context, "issue_sync_request_invalid", 400); }
     }

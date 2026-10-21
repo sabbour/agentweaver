@@ -29,6 +29,26 @@ public static class IssueSyncAuthorityEndpoints
             catch (ProjectConfigException)
             { return Results.Json(new { error = "issue_sync_creator_not_owner" }, statusCode: 403); }
         }).RequireAuthorization();
+        app.MapGet("/api/projects/{projectId}/issue-sync-grant-revocation", async (
+            string projectId, HttpContext context, ProjectAuthorizationOwner owner,
+            ProjectsConfigService projects, CancellationToken ct) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                var actor = await owner.ResolveAsync(context.User,
+                    context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader].ToArray(), ct);
+                actor.RequireUnboundRequest();
+                actor.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+                var admin = actor.HasRole(ProjectAuthorityResourceType.Tenant, actor.TenantId, ProjectAuthorityRole.TenantAdmin);
+                if (!admin && !actor.HasRole(ProjectAuthorityResourceType.Project, projectId, ProjectAuthorityRole.Owner))
+                    throw ProjectConfigException.Forbidden();
+                await projects.GetProjectAsync(actor, projectId, ct);
+                return Results.Ok(new IssueSyncRevocationProof(projectId, actor.TenantId, actor.ActorId, admin));
+            }
+            catch (ProjectConfigException)
+            { return Results.Json(new { error = "issue_sync_grant_revocation_denied" }, statusCode: 403); }
+        }).RequireAuthorization();
         app.MapGet("/api/projects/{projectId}/issue-sync-authority", async (
             string projectId, HttpContext context, ProjectAuthorizationOwner owner,
             ProjectsConfigService projects, CancellationToken ct) =>

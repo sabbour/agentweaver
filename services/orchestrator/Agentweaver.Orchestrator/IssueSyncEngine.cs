@@ -35,7 +35,8 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
                 await store.SetStatusAsync(project, "running", null, page, cursor, ct);
                 var minted = await authority.MintAsync(project.Settings.GrantId, ct);
                 RequireGrant(project, minted.Grant);
-                if (string.IsNullOrWhiteSpace(minted.AccessToken) || minted.ExpiresAt <= time.GetUtcNow())
+                if (!minted.IssueWriteGranted || string.IsNullOrWhiteSpace(minted.AccessToken) ||
+                    minted.ExpiresAt <= time.GetUtcNow())
                     throw new CoordinationException("issue_sync_credential_invalid", 403);
                 credential = new(minted.AccessToken, minted.ExpiresAt, time);
                 var candidateResult = resolver.Resolve(new(ProviderSeam.SourceControl, null,
@@ -46,7 +47,8 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
                     candidate.ProviderId != source.ProviderId || source.ProviderId != SourceControlProviderIds.GitHub)
                     throw new CoordinationException("issue_sync_provider_unavailable", 409);
                 var repository = project.GrantProof.Project.Repository;
-                var negotiated = await source.NegotiateRepositoryAsync(candidate, repository, credential, ct);
+                var negotiated = await issues.NegotiateIssueRepositoryAsync(candidate, repository, credential,
+                    minted.IssueWriteGranted, ct);
                 var pin = resolver.Pin("issue-sync:" + project.Settings.GrantId.ToString("N"), candidate,
                     negotiated.Resource.Resource.ResourceId, negotiated.Resource);
                 if (!pin.IsSuccess)
@@ -62,7 +64,7 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
                 }
 
                 await Revalidate(ct);
-                await source.VerifyCurrentBindingAsync(context, SourceControlCapabilities.IssueWrite, ct);
+                await issues.VerifyCurrentIssueBindingAsync(context, ct);
                 var imported = await issues.ListIssuesAsync(context, page, project.Settings.MaxItems, ct);
                 foreach (var remote in imported.Issues)
                 {
@@ -121,6 +123,7 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
                             throw new CoordinationException("issue_sync_task_title_required", 409);
                         receipt = new(task.Reference.TaskId, repository.FullName.ToLowerInvariant(), null, null, true);
                         await Revalidate(ct);
+                        await issues.VerifyCurrentIssueBindingAsync(context, ct);
                         await store.WriteReceiptAsync(projectId, receipt, ct);
                         try
                         {
@@ -190,7 +193,7 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
         if (remote != external)
         {
             await revalidate(ct);
-            await source.VerifyCurrentBindingAsync(context, SourceControlCapabilities.IssueWrite, ct);
+            await issues.VerifyCurrentIssueBindingAsync(context, ct);
             await issues.UpdateIssueAsync(context, external, ct);
         }
         var content = ToContent(desired, context.Repository);

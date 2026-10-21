@@ -22,6 +22,31 @@ public sealed class IssueSyncGrant
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>Append-only mint evidence, never credential material.</summary>
+public sealed class IssueSyncMintAudit
+{
+    public Guid AuditId { get; set; }
+    public Guid GrantId { get; set; }
+    public Guid OwnerId { get; set; }
+    public required string ProjectId { get; set; }
+    public required string Repository { get; set; }
+    public required string Outcome { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+internal sealed class IssueSyncMintAuditModel : IEntityTypeConfiguration<IssueSyncMintAudit>
+{
+    public void Configure(EntityTypeBuilder<IssueSyncMintAudit> entity)
+    {
+        entity.ToTable("issue_sync_mint_audit");
+        entity.HasKey(row => row.AuditId);
+        entity.Property(row => row.ProjectId).HasMaxLength(256);
+        entity.Property(row => row.Repository).HasMaxLength(201);
+        entity.Property(row => row.Outcome).HasMaxLength(32);
+        entity.HasIndex(row => new { row.GrantId, row.CreatedAt });
+    }
+}
+
 internal sealed class IssueSyncGrantModel : IEntityTypeConfiguration<IssueSyncGrant>
 {
     public void Configure(EntityTypeBuilder<IssueSyncGrant> entity)
@@ -94,7 +119,14 @@ internal sealed class IssueSyncGrantAuthority(IdentityBrokerDbContext db, IIssue
         var grant = await db.IssueSyncGrants.AsNoTracking().SingleOrDefaultAsync(row => row.GrantId == id, ct);
         if (grant is null || !grant.Active)
             throw new RuntimeAuthorizationException("issue_sync_grant_revoked");
-        await RequireProjectAsync(grant, ct);
+        try { await RequireProjectAsync(grant, ct); }
+        catch (RuntimeAuthorizationException error) when (
+            error.Code is "issue_sync_creator_not_owner" or "issue_sync_project_inactive")
+        {
+            await db.IssueSyncGrants.Where(row => row.GrantId == id).ExecuteUpdateAsync(
+                set => set.SetProperty(row => row.Active, false), ct);
+            throw;
+        }
         return grant;
     }
 
@@ -106,13 +138,28 @@ internal sealed class IssueSyncGrantAuthority(IdentityBrokerDbContext db, IIssue
             throw new RuntimeAuthorizationException("issue_sync_repository_not_selected");
     }
 
-    internal async Task RevokeAsync(Guid id, IssueSyncOwnerProof proof, CancellationToken ct)
+    internal async Task RevokeAsync(Guid id, IssueSyncRevocationProof proof, CancellationToken ct)
     {
         var grant = await db.IssueSyncGrants.AsNoTracking().SingleOrDefaultAsync(row => row.GrantId == id, ct);
         if (grant is null || grant.ProjectId != proof.ProjectId || grant.TenantId != proof.TenantId)
             throw new RuntimeAuthorizationException("issue_sync_grant_unknown");
+        if (!proof.IsAdministrator && proof.ActorId != grant.CreatorId.ToString("D"))
+            throw new RuntimeAuthorizationException("issue_sync_grant_revocation_denied");
         await db.IssueSyncGrants.Where(row => row.GrantId == id).ExecuteUpdateAsync(
             set => set.SetProperty(row => row.Active, false), ct);
+    }
+
+    internal async Task RecordMintAsync(IssueSyncGrant grant, string outcome, CancellationToken ct)
+    {
+        if (outcome is not ("requested" or "minted"))
+            throw new ArgumentException("Unknown issue sync mint outcome.", nameof(outcome));
+        db.IssueSyncMintAudit.Add(new()
+        {
+            AuditId = Guid.NewGuid(), GrantId = grant.GrantId, OwnerId = grant.CreatorId,
+            ProjectId = grant.ProjectId, Repository = grant.RepositoryOwner + "/" + grant.RepositoryName,
+            Outcome = outcome, CreatedAt = time.GetUtcNow()
+        });
+        await db.SaveChangesAsync(ct);
     }
 
     internal static IssueSyncProjectProof Proof(IssueSyncGrant row) => new(row.ProjectId, row.TenantId,

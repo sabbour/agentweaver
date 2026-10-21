@@ -8,6 +8,37 @@ namespace Agentweaver.SourceControl;
 
 public sealed partial class GitHubSourceControlAdapter
 {
+    /// <summary>Negotiates issue-only capability from Identity-verified mint evidence, not repository push permission.</summary>
+    public async Task<SourceControlRepositoryNegotiation> NegotiateIssueRepositoryAsync(ProviderCandidate candidate,
+        SourceControlRepositoryIdentity repository, SecretCredential credential, bool issueWriteGranted,
+        CancellationToken cancellationToken)
+    {
+        ValidateRepositoryCandidate(candidate, repository, credential);
+        if (!issueWriteGranted || !credential.IsUsable())
+            throw new SourceControlOperationException(SourceControlFailureCode.CapabilityUnavailable,
+                "Issue synchronization requires verified issue-write token evidence.");
+        var info = await ReadRepositoryAsync(repository, credential, cancellationToken).ConfigureAwait(false);
+        if (!info.HasIssues)
+            throw new SourceControlOperationException(SourceControlFailureCode.CapabilityUnavailable,
+                "The repository has issues disabled.");
+        return RepositoryNegotiation(repository, info, ImmutableHashSet.Create(StringComparer.Ordinal,
+            SourceControlCapabilities.RepositoryRead, SourceControlCapabilities.IssueWrite));
+    }
+
+    /// <summary>Checks current resource identity without claiming checkout, pull-request or push authority.</summary>
+    public async Task VerifyCurrentIssueBindingAsync(SourceControlOperationContext context, CancellationToken cancellationToken)
+    {
+        ValidateContext(context, SourceControlCapabilities.IssueWrite);
+        var info = await ReadRepositoryAsync(context.Repository, context.Credential, cancellationToken).ConfigureAwait(false);
+        if (context.Binding.Resource.ResourceId != info.Id.ToString(CultureInfo.InvariantCulture) ||
+            context.Binding.Resource.Generation != info.CreatedAt.UtcDateTime.Ticks)
+            throw new SourceControlOperationException(SourceControlFailureCode.InvalidBinding,
+                "The issue repository no longer matches its pinned resource.");
+        if (!info.HasIssues)
+            throw new SourceControlOperationException(SourceControlFailureCode.CapabilityUnavailable,
+                "The repository has issues disabled.");
+    }
+
     /// <summary>Lists a bounded stable-order page, including closed issues for recovery, but never PRs.</summary>
     public async Task<SourceControlIssuePage> ListIssuesAsync(
         SourceControlOperationContext context, int page, int pageSize, CancellationToken cancellationToken)

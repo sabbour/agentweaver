@@ -28,6 +28,14 @@ public sealed class IssueSyncGrantTests(PostgresContainerFixture postgres)
         var denied = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => authority.RequireAsync(row.GrantId, default));
         Assert.Equal(error, denied.Code);
         Assert.Equal(2, projects.Calls);
+        if (error is "issue_sync_creator_not_owner" or "issue_sync_project_inactive")
+        {
+            projects.Failure = null;
+            var ended = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                authority.RequireAsync(row.GrantId, default));
+            Assert.Equal("issue_sync_grant_revoked", ended.Code);
+            Assert.Equal(2, projects.Calls);
+        }
     }
 
     [Fact]
@@ -40,7 +48,7 @@ public sealed class IssueSyncGrantTests(PostgresContainerFixture postgres)
         await db.SaveChangesAsync();
         var projects = new ProjectAuthority(proof);
         var authority = new IssueSyncGrantAuthority(db, projects, TimeProvider.System);
-        await authority.RevokeAsync(row.GrantId, new(proof.ProjectId, proof.TenantId, proof.CreatorId), default);
+        await authority.RevokeAsync(row.GrantId, new(proof.ProjectId, proof.TenantId, proof.CreatorId, false), default);
         var error = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => authority.RequireAsync(row.GrantId, default));
         Assert.Equal("issue_sync_grant_revoked", error.Code);
         Assert.Equal(0, projects.Calls);
@@ -70,7 +78,7 @@ public sealed class IssueSyncGrantTests(PostgresContainerFixture postgres)
             Assert.Equal("issue_sync_repository_not_selected", error.Code);
         }
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
-            authority.RevokeAsync(row.GrantId, new(proof.ProjectId, "other", proof.CreatorId), default));
+            authority.RevokeAsync(row.GrantId, new(proof.ProjectId, "other", proof.CreatorId, false), default));
         Assert.True((await db.IssueSyncGrants.AsNoTracking().SingleAsync()).Active);
     }
 
@@ -126,6 +134,44 @@ public sealed class IssueSyncGrantTests(PostgresContainerFixture postgres)
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => authority.CreateAsync(proof, code, default));
         Assert.Empty(await db.RuntimeGrantHeads.ToArrayAsync());
         Assert.Empty(await db.SecretGrantHeads.ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task AnotherOwnerCannotRevokeButCurrentAdministratorCan()
+    {
+        await using var db = await CreateDbAsync();
+        var proof = Proof();
+        var grant = Row(proof);
+        db.IssueSyncGrants.Add(grant);
+        await db.SaveChangesAsync();
+        var authority = new IssueSyncGrantAuthority(db, new ProjectAuthority(proof), TimeProvider.System);
+        var actor = new IssueSyncRevocationProof(proof.ProjectId, proof.TenantId, Guid.NewGuid().ToString("D"), false);
+        var error = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            authority.RevokeAsync(grant.GrantId, actor, default));
+        Assert.Equal("issue_sync_grant_revocation_denied", error.Code);
+        await authority.RevokeAsync(grant.GrantId, actor with { IsAdministrator = true }, default);
+        Assert.False((await db.IssueSyncGrants.AsNoTracking().SingleAsync()).Active);
+    }
+
+    [Fact]
+    public async Task MintAuditPersistsGrantOwnerAndRepositoryWithoutCredentials()
+    {
+        await using var db = await CreateDbAsync();
+        var proof = Proof();
+        var grant = Row(proof);
+        var authority = new IssueSyncGrantAuthority(db, new ProjectAuthority(proof), TimeProvider.System);
+        await authority.RecordMintAsync(grant, "requested", default);
+        await authority.RecordMintAsync(grant, "minted", default);
+        var rows = await db.IssueSyncMintAudit.OrderBy(row => row.CreatedAt).ToArrayAsync();
+        Assert.Equal(["requested", "minted"], rows.Select(row => row.Outcome).ToArray());
+        Assert.All(rows, row =>
+        {
+            Assert.Equal(grant.GrantId, row.GrantId);
+            Assert.Equal(grant.CreatorId, row.OwnerId);
+            Assert.Equal(proof.Repository.FullName, row.Repository);
+        });
+        Assert.DoesNotContain(db.Model.FindEntityType(typeof(IssueSyncMintAudit))!.GetProperties(),
+            property => property.Name.Contains("Token", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

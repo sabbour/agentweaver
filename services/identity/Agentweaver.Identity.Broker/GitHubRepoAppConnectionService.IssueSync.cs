@@ -37,7 +37,10 @@ internal sealed partial class GitHubRepoAppConnectionService
             appKey = await _secretRedemption.RedeemAsync(new(new(_options.PrivateKeySecretId,
                 _options.PrivateKeySecretVersion), SourceControlSecretPurposes.GitHubAppPrivateKey,
                 "issue-sync:" + grant.GrantId.ToString("N")), ct);
-            result = await issuer.MintAsync(selection.InstallationId, selection.RepositoryId, appKey, true, ct);
+            await authority.RequireAsync(grant.GrantId, ct);
+            await authority.RecordMintAsync(grant, "requested", ct);
+            result = await issuer.MintIssueSyncAsync(selection.InstallationId, selection.RepositoryId, appKey, ct);
+            await authority.RecordMintAsync(grant, "minted", ct);
             if (!result.IssueWriteGranted)
                 throw new RuntimeAuthorizationException("issue_sync_issue_write_denied");
             await EnsureConnectionCurrentAsync(connection, ct);

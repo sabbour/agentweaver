@@ -5,6 +5,9 @@ namespace Agentweaver.Abstractions;
 /// <summary>Current project Owner evidence, including when no repository is connected.</summary>
 public sealed record IssueSyncOwnerProof(string ProjectId, string TenantId, string CreatorId);
 
+/// <summary>Current project grant-revocation authority; not permission to configure synchronization.</summary>
+public sealed record IssueSyncRevocationProof(string ProjectId, string TenantId, string ActorId, bool IsAdministrator);
+
 /// <summary>Current project-owner and repository evidence, never a user credential.</summary>
 public sealed record IssueSyncProjectProof(string ProjectId, string TenantId, string CreatorId,
     string ConnectionId, SourceControlRepositoryIdentity Repository);
