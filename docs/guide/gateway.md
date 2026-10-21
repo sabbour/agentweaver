@@ -150,6 +150,31 @@ Projects & Config. A run-bound token sees only its own run. The list reads
 persisted run records only. `title` and `goal` are `null` until a run start
 request stores them.
 
+## Read project metrics and usage
+
+Send `GET /api/v1/projects/{projectId}/metrics` for run counts and a daily
+series. Send `GET /api/v1/projects/{projectId}/usage` for usage grouped by
+model and agent. The Gateway forwards these requests to Orchestrator and
+Events & Sessions, respectively. It does not aggregate the responses.
+
+Use the same explicit `from` and `to` values for aligned intervals. Bounds
+are inclusive and exclusive, respectively, and use UTC. ISO dates and
+timestamps with explicit offsets are accepted. If omitted, `to` is now and
+`from` is 30 days earlier. The maximum interval is 92 days. Metrics supports
+only `bucket=day`; usage does not accept a bucket. Unknown or repeated query
+keys return `400`.
+
+Both routes require `api.read`, the owning service and Projects audiences,
+and current project or tenant read permission. Run-bound callers see only
+their own run. Responses use `Cache-Control: no-store`. Reads do not change
+stored data.
+
+Read the [metrics definitions](../reference/api.md#project-metrics-and-usage)
+before comparing v1 with the 0.x dashboard. Run success uses completed runs,
+not agent dependencies. Usage retains unknown values and separate cost units.
+These routes do not price usage or change budgets. Cross-project overview
+is out of scope.
+
 ## Review project casting
 
 Casting routes use the Projects & Config owner. The Gateway forwards the
@@ -190,18 +215,25 @@ Transfer version or
 team incompatibility returns `422`. These source routes do not establish
 deployment or a browser wizard.
 
-## Send Knowledge writes
+## Send idempotent writes
 
-The following Knowledge operations require exactly one `Idempotency-Key`
-header: `createKnowledgeRecord`, `updateKnowledgeRecord`,
-`restoreKnowledgeRecord`, `approveKnowledgeDecision`,
-`importKnowledgeRecords`, `promoteKnowledgeProposal`, and
-`rejectKnowledgeProposal`. Use a value of 1–128 ASCII letters or digits, or
-`.`, `_`, `-`, or `:`. Reuse the same key when retrying the same write.
+The following operations require exactly one `Idempotency-Key` header:
+
+- Runs: `createProjectRun` and `cancelProjectRun`.
+- Chief of Staff: `createChiefOfStaffPriority`.
+- Knowledge: `createKnowledgeRecord`, `updateKnowledgeRecord`,
+  `restoreKnowledgeRecord`, `approveKnowledgeDecision`,
+  `importKnowledgeRecords`, `promoteKnowledgeProposal`, and
+  `rejectKnowledgeProposal`.
+
+Use a value of 1–128 ASCII letters or digits, or `.`, `_`, `-`, or `:`. Reuse
+the same key when you retry the same write. Browser preflight allows the
+header only for these operations.
 
 The key provides idempotency only. It does not establish identity or authorize
-an operation. Knowledge rejects missing, duplicate, blank, and invalid keys.
+an operation. The owner rejects missing, duplicate, blank, and invalid keys.
 Reads, including `exportKnowledgeRecords`, do not require this header.
+`startProjectRun` does not take a key, because the owner replays start by run.
 
 ## Use the Identity Broker browser routes
 
@@ -309,10 +341,13 @@ Gateway request bodies are limited to 64 KiB by default. The Knowledge import
 endpoint accepts up to 1 MiB. Inline Skill preview and import each accept up to
 3 MiB. The MCP JSON-RPC envelope adds a separate 64 KiB allowance.
 
-The Gateway does not expose journal object-content reads or run-produced-file
-browsing in v1. The durable run-bound artifact manifest and object-version
-producer has not been admitted, so neither the Gateway nor the retained Web
-client claims host-file access or parity with older monolithic file routes.
+The Gateway does not expose journal object-content reads in v1. It exposes
+run-produced files only through the Source Control output-capture routes:
+capture, list, read, diff, and file. Each capture is a pinned, immutable copy
+of a run's workspace output, so neither the Gateway nor the retained Web client
+reads a host filesystem. The three read routes accept owner responses up to
+64 MiB, and the file route exposes the `X-Source-Control-Output-Sha256` header
+to browser callers.
 
 ## Build and test the host
 

@@ -90,6 +90,7 @@ There is no separate Chief of Staff notification store or bell. See
 | `getAuthorizationContext` | Read current tenant and effective authority. |
 | `getPlatformRuntimeDefaults` | Read platform defaults. |
 | `updatePlatformRuntimeDefaults` | Append platform defaults. |
+| `getPlatformComponents` | Read active platform components and their readiness. |
 | `acceptRunSelection` | Accept an immutable run selection. |
 | `getRunSelection` | Read the accepted selection. |
 
@@ -125,9 +126,11 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `previewMarketplaceSkill` | Validate selected content at the pinned commit. |
 | `importMarketplaceSkill` | Import the selected, previewed content. |
 | `previewSkillContent` | Validate submitted local content without importing. |
+| `packageSkillContent` | Turn uploaded files, a ZIP archive, or draft fields into skill candidates. |
 | `importProjectSkill` | Import validated local content. |
 | `updateProjectSkillAssignment` | Update project assignments at an expected configuration revision. |
 | `listProjectSkillInventory` | Read paginated revision metadata. |
+| `revokeProjectSkillRevision` | Revoke one imported skill revision with a reason. |
 
 ### Coordination
 
@@ -135,6 +138,17 @@ Revision checks stay inside `body`; no idempotency header is required.
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
 | `listProjectRuns` | List accepted project runs, newest first. |
+| `readProjectMetrics` | Read bounded project run counts and daily UTC activity from Orchestrator. |
+| `listChiefOfStaffConversations` | List my private Chief of Staff conversations. |
+| `bindChiefOfStaffConversation` | Bind a run I created to a Chief of Staff conversation. |
+| `getChiefOfStaffConversation` | Read one of my Chief of Staff conversations. |
+| `listChiefOfStaffPriorities` | List my ordered Priorities with resolved links. |
+| `createChiefOfStaffPriority` | Create a Priority. Requires `Idempotency-Key`. |
+| `reorderChiefOfStaffPriorities` | Reorder my Priorities at an expected order revision. |
+| `getChiefOfStaffPriority` | Read one Priority. |
+| `updateChiefOfStaffPriority` | Change a Priority at an expected revision. Never changes run state. |
+| `addChiefOfStaffPriorityLink` | Link a Priority to a run, conversation, issue, pull request, or artifact. |
+| `removeChiefOfStaffPriorityLink` | Remove a Priority link at an expected revision. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |
@@ -171,6 +185,16 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `readPolicyEvaluation` | Read a policy receipt. |
 | `validatePolicyEvaluationAdmission` | Revalidate receipt admission. |
 
+`readProjectMetrics` accepts optional `from`, `to`, and `bucket=day`.
+`readProjectUsage` accepts optional `from` and `to`, and reads Events &
+Sessions ledger totals grouped by model and agent. Both tools use fresh
+project read authority and a half-open UTC interval of at most 92 days,
+defaulting to the last 30 days. A run-bound caller sees only its own run.
+Cost units and dispositions remain separate, unknown values remain `null`,
+and usage reads do not price or change budgets. Cross-project overview is out
+of scope. See [Project metrics and usage](./api.md#project-metrics-and-usage)
+for metric definitions and differences from the 0.x dashboard.
+
 ### Source Control
 
 | Operation ID | Purpose |
@@ -184,6 +208,11 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `prepareSourceControlMergeIntent` | Request merge approval. |
 | `readSourceControlMergeIntent` | Read a merge intent. |
 | `executeSourceControlMergeIntent` | Execute an approved intent. |
+| `captureSourceControlWorkspaceOutput` | Capture the produced output of a workspace. |
+| `listSourceControlOutputCaptures` | List admitted output captures, newest first. |
+| `readSourceControlOutputCapture` | Read a capture and its file list. |
+| `readSourceControlOutputCaptureDiff` | Read the diff of a capture. |
+| `readSourceControlOutputCaptureFile` | Read one captured file. The tool returns the body as text. |
 
 ### Knowledge
 
@@ -207,7 +236,9 @@ Revision checks stay inside `body`; no idempotency header is required.
 | Operation ID | Purpose |
 | --- | --- |
 | `replayRunEvents` | Read a finite committed journal page. |
+| `readSessionTurnContent` | Read recorded turn text with current run-bound project authority. Excludes cache, configuration, and tool-result material. |
 | `readRunUsage` | Read run usage totals. |
+| `readProjectUsage` | Read persisted project usage grouped by model and agent. |
 
 ## Results and errors
 

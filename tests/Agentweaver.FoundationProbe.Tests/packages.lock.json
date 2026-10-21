@@ -1050,6 +1050,7 @@
           "Agentweaver.Providers": "[1.0.2, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
           "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
         }
@@ -1107,6 +1108,7 @@
           "Agentweaver.SourceControl": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.Agents.AI.Workflows": "[1.19.0, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
           "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
         }

@@ -50,6 +50,17 @@ Agentweaver checks your current project access, that you are assigned to manage
 runs, and that the saved settings match the requested project and run. This
 permission alone does not give you project access or a role.
 
+To start a new chat, the app first calls create with a token that is not bound
+to a run. It persists the pending run ID across a top-level PKCE redirect with
+`prompt=none`, `project_id`, and `run_id`, then exchanges the code for a
+run-bound token and calls start. With an existing Broker session and matching
+consent, this needs no UI. On `login_required` or `consent_required`, the client
+falls back to interactive sign-in without retrying silently. Cancel instead
+uses a token that is not bound to a run and a current Contributor, Owner, or
+tenant administrator role. Creating a chat requires the project Orchestrator
+role (`acceptRunSelection`); Owner or Contributor alone receives `403`.
+A tenant admin grants that role through the project role assignments API.
+
 ## OpenID Connect references
 
 OpenID Connect is the standard Agentweaver uses for sign-in. It defines the

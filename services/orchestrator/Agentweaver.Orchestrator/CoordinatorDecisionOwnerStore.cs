@@ -713,7 +713,7 @@ internal sealed class CoordinatorDecisionOwnerStore
     }
 
     /// <summary>
-    /// Advances decision state to a new execution fence as part of a run failure or recovery transaction.
+    /// Advances decision state to a new execution fence as part of a run failure, recovery, or cancellation transaction.
     /// </summary>
     /// <remarks>Current grants are superseded and any pinned provider binding is carried forward only to the immediate next fence.</remarks>
     internal async Task AdvanceExecutionFenceAsync(
@@ -730,9 +730,14 @@ internal sealed class CoordinatorDecisionOwnerStore
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
-        ValidateInput(actor, identity, selection);
+        // Cancellation authority belongs to the requester; the decision envelope remains bound to its original actor.
+        var cancelling = actionKind == "execution.cancelled";
+        if (cancelling)
+            CoordinationOwnerStore.RequireProjectRunCancellationAuthority(actor, selection);
+        else
+            ValidateInput(actor, identity, selection);
         if (nextFence != previousFence + 1 || operationId == Guid.Empty ||
-            actionKind is not ("execution.failed" or "execution.indeterminate" or "execution.recovered"))
+            actionKind is not ("execution.failed" or "execution.indeterminate" or "execution.recovered" or "execution.cancelled"))
             throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
 
         var latest = await ReadLatestDecisionAsync(
@@ -740,14 +745,24 @@ internal sealed class CoordinatorDecisionOwnerStore
         if (latest is null)
             return;
 
-        var previousBinding = CoordinatorDecisionBinding.Create(actor, identity, selection, previousFence);
+        var decisionActor = cancelling
+            ? new CoordinationActor(latest.Envelope.Issuer, latest.Envelope.Subject)
+            : actor;
+        var decisionSelection = cancelling
+            ? selection with
+            {
+                Authorization = selection.Authorization with
+                { Issuer = decisionActor.Issuer, ActorId = decisionActor.Subject }
+            }
+            : selection;
+        var previousBinding = CoordinatorDecisionBinding.Create(decisionActor, identity, decisionSelection, previousFence);
         var restored = await RestoreEnvelopeAsync(
             latest.Envelope, previousBinding, selection.Selection, cancellationToken).ConfigureAwait(false);
         if (!restored.IsValid || latest.StateVersion < 1 ||
             restored.State!.Fence != previousFence)
             throw InvalidPersistedState();
         var currentState = restored.State;
-        ValidateStateActor(currentState, actor);
+        ValidateStateActor(currentState, decisionActor);
 
         var selectionContext = await _runSelectionContexts.ReadAsync(
             selection.Selection, previousFence, cancellationToken).ConfigureAwait(false);
@@ -772,7 +787,7 @@ internal sealed class CoordinatorDecisionOwnerStore
         if (!nextStateResult.IsValid || nextStateResult.Value is null)
             throw InvalidPersistedState();
         var nextState = nextStateResult.Value;
-        var nextBinding = CoordinatorDecisionBinding.Create(actor, identity, selection, nextFence);
+        var nextBinding = CoordinatorDecisionBinding.Create(decisionActor, identity, decisionSelection, nextFence);
         var nextEnvelope = CoordinatorDecisionStateEnvelope.Capture(
             nextState,
             nextBinding,
