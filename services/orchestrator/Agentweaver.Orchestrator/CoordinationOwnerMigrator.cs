@@ -56,6 +56,8 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
+        // Gaps are allowed, but each recorded migration must have its actual schema prerequisites.
+        // Promotion dismissals need both the caller-dismissal feature and the promotion table.
         if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 30 or 31)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
@@ -84,6 +86,7 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(30) && !applied.Contains(26)) ||
             (applied.Contains(31) && (!applied.Contains(30) || !applied.Contains(25))))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
+        // Install only registered resources, in dependency order; never synthesize missing version numbers.
         foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 30, 31])
             .Where(version => !applied.Contains(version)))
         {
@@ -284,6 +287,7 @@ public static class CoordinationOwnerMigrator
             "projectRunCancellations", NpgsqlDbType.Text, $"{schema}.project_run_cancellations");
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("userDismissals", NpgsqlDbType.Text, $"{schema}.user_notification_dismissals");
+        // Bind the relation name as data; schema validation alone does not prove the table exists.
         command.Parameters.AddWithValue("userPromotionDismissals", NpgsqlDbType.Text, $"{schema}.user_notification_promotion_dismissals");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
         command.Parameters.AddWithValue("messages", NpgsqlDbType.Text, $"{schema}.coordination_messages");
@@ -351,6 +355,8 @@ public static class CoordinationOwnerMigrator
         command.Parameters.AddWithValue(
             "snapshotMutationFunction", NpgsqlDbType.Text, $"{schema}.reject_reviewed_remote_tool_snapshot_mutation()");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        // The final boolean group includes migration receipts and required relations, not just a version count.
+        // Keep its range aligned with the SELECT when adding checks; 031 contributes two booleans.
         if (!await reader.ReadAsync(cancellationToken) ||
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
             reader.GetInt64(3) != 1 || reader.GetInt64(4) != 1 || reader.GetInt64(5) != 1 ||

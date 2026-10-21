@@ -71,6 +71,7 @@ if (coreParents.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 2)
 var migratorSource = await File.ReadAllTextAsync(
     Path.Combine("services", "orchestrator", "Agentweaver.Orchestrator", "CoordinationOwnerMigrator.cs"));
 // Core versions include durable interactive requests and must match the reviewed plan; 017 stays excluded.
+// Include promotion dismissals in this source check before any credentials or database access.
 if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,\s*19,\s*20,\s*21,\s*22,\s*23,\s*24,\s*25,\s*26,\s*30,\s*31\]\)") ||
     !migratorSource.Contains("16 => \"project_backlog\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("18 => \"reviewed_remote_tool_snapshots\"", StringComparison.Ordinal) ||

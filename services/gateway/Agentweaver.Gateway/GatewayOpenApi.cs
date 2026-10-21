@@ -1411,6 +1411,7 @@ else if (route.OperationId is
             ("sha256", Str()), ("utf8ByteLength", Int())),
         ["RuntimeExecutionCheckpointParent"] = StrictObj(["hasParentMetadata", "parentCheckpointId"],
             ("hasParentMetadata", Bool()), ("parentCheckpointId", NullableStr())),
+        // Both sources use one strict item shape. Fields for the other source are present but null.
         ["UserNotification"] = StrictObj(
             ["notificationId", "source", "projectId", "runId", "sessionId", "requestId", "kind", "prompt",
                 "createdAt", "gateKind", "stateVersion", "updatedAt", "promotionId", "taskCount"],

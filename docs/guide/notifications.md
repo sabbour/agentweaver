@@ -1,6 +1,6 @@
 # Read notifications across runs
 
-Notifications show persisted work that needs your attention. The Orchestrator
+Notifications show pending decisions and recently created backlog tasks. The Orchestrator
 derives them from two sources:
 
 - `pendingGate`: a pending decision gate that needs human input.
@@ -64,8 +64,7 @@ routes, which enforce their own authority and stale-version checks.
 
 ## Compatibility with 0.x
 
-The reference implementation is `NotificationsService` and
-`NotificationsEndpointsTests` on `origin/dev`. It has three derived sources:
+The 0.x notification feed has three derived sources:
 
 | Source | Trigger and identity | Removal |
 | --- | --- | --- |
@@ -108,6 +107,5 @@ uses the same route as gates and is stored per caller.
 This matches the 0.x promotion source with one difference: v1 shows one notice per
 promotion instead of one per run. A v1 run promotes each work plan at most once.
 
-See [#2175](https://github.com/sabbour/agentweaver/issues/2175) for notifications
-and [#2176](https://github.com/sabbour/agentweaver/issues/2176) for repository issue
-synchronization. ADR 0001 does not drop these capabilities.
+Promotions use persisted task origins rather than task creation times. This
+keeps ordinary task capture separate from work created by a confirmed plan.

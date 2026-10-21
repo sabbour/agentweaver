@@ -96,6 +96,7 @@ test('Only the existing casting authority function receives direct runtime EXECU
 
 // Migrations 023, 024, 025, 030, and 031 must be reviewed with their exact grants, never applied by these checks.
 test('Core plan includes all 27 registered versions but never 017; source approval is not execution permission', () => {
+  // The plan must include every shipped resource without granting mutation of caller receipts.
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
     [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 30, 31]);
@@ -130,6 +131,7 @@ test('Plans and hashes are deterministic and independent copies', () => {
 });
 
 test('Initializer validates planned and installed mutation guards before it commits grants', () => {
+  // Read source only: these assertions must not mint credentials or initialize a database.
   const source = readFileSync(new URL('../../../tools/P1PostgresInitializer/Program.cs', import.meta.url), 'utf8')
     .replace(/\r\n/g, '\n');
   const planGuard = source.indexOf('InitializerChecks.AssertMutationDenialPlan(plan.Services)');
@@ -155,6 +157,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       plan.eventsVersions],
   ];
   for (const [owner, migrator, versions] of owners) {
+    // Version registration, embedded resources, and the reviewed plan must describe the same catalog.
     const directory = new URL(`../../../services/${owner}/`, import.meta.url);
     const source = readFileSync(new URL(migrator, directory), 'utf8').replace(/\r\n/g, '\n');
     const project = readFileSync(new URL(`${owner.split('/')[1]}.csproj`, directory), 'utf8');
@@ -202,6 +205,7 @@ test('Initializer requires the reviewed Events project usage migration and exact
 });
 
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
+  // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
   assert.equal(plan.services.flatMap(service => service.tables).length, 105);
   const orchestrator = plan.services.find(service => service.schema === 'orchestrator');

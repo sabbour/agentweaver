@@ -114,6 +114,7 @@ public sealed class UserNotificationStorePostgresTests(CoordinationPostgresFixtu
     [Fact]
     public async Task PromotionNoticeCountsUnarchivedPromotedTasksInsideTheWindowOncePerPromotion()
     {
+        // Only one promotion is recent, visible, and has unarchived tasks; ordinary capture has no origin.
         var now = DateTimeOffset.UtcNow;
         var live = await SeedPromotionAsync("project-a", "run-a", "plan-a", now.AddMinutes(-5), tasks: 3, archived: 1);
         await SeedPromotionAsync("project-a", "run-b", "plan-b", now.AddMinutes(-4), tasks: 2, archived: 2);
@@ -122,6 +123,7 @@ public sealed class UserNotificationStorePostgresTests(CoordinationPostgresFixtu
         await SeedPromotionAsync("project-a", "run-e", "plan-e", now.AddMinutes(-2), tasks: 1, tenant: "tenant-b");
         await SeedOrdinaryTaskAsync("project-a", "captured");
         var page = await _store.ListAsync(UserNotificationContractTests.Authority(), 100, null, default);
+        // Count tasks, not notices, and keep gate-only fields empty for this source.
         Assert.Equal(1, page.Count);
         var item = Assert.Single(page.Items);
         Assert.Equal(UserNotificationSources.BacklogPromoted, item.Source);
@@ -137,6 +139,7 @@ public sealed class UserNotificationStorePostgresTests(CoordinationPostgresFixtu
     [Fact]
     public async Task GatesAndPromotionsShareOrderingCursorDismissalAndBoundAuthority()
     {
+        // A newer promotion must page before the gate without dropping either source.
         var now = DateTimeOffset.UtcNow;
         await SeedAsync("project-a", "run-a", "gate-a", now.AddMinutes(-2));
         var promotion = await SeedPromotionAsync("project-a", "run-b", "plan-b", now.AddMinutes(-1), tasks: 2);
@@ -147,13 +150,16 @@ public sealed class UserNotificationStorePostgresTests(CoordinationPostgresFixtu
         var second = await _store.ListAsync(authority, 1, first.NextCursor, default);
         Assert.Equal("gate-a", Assert.Single(second.Items).RequestId);
         Assert.Null(second.NextCursor);
+        // A run binding or project filter can narrow results but cannot grant new access.
         Assert.Equal("run-a", Assert.Single((await _store.ListAsync(
             authority with { BoundProjectId = "project-a", BoundRunId = "run-a" }, 10, null, default)).Items).RunId);
         Assert.Empty((await _store.ListAsync(authority, 10, null, default, "project-other")).Items);
 
         var id = first.Items[0].NotificationId;
+        // Losing read authority prevents dismissal even when the notification ID is known.
         await _store.DismissAsync(authority with { EffectiveAuthority = [] }, id, default);
         Assert.Equal(2, (await _store.ListAsync(authority, 10, null, default)).Count);
+        // Repeating an authorized dismissal survives store recreation and stays private to the caller.
         await _store.DismissAsync(authority, id, default);
         await _store.DismissAsync(authority, id, default);
         var restarted = new UserNotificationStore(fixture.DataSource, _schema);
@@ -167,6 +173,7 @@ public sealed class UserNotificationStorePostgresTests(CoordinationPostgresFixtu
         string project, string run, string workPlan, DateTimeOffset createdAt, int tasks, int archived = 0,
         string tenant = "tenant-a")
     {
+        // Seed the persisted promotion and origin rows together; task creation alone is not promotion.
         var promotion = Guid.NewGuid();
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
@@ -211,6 +218,7 @@ public sealed class UserNotificationStorePostgresTests(CoordinationPostgresFixtu
 
     private async Task SeedOrdinaryTaskAsync(string project, string task)
     {
+        // Deliberately omit origin rows so this fixture cannot produce a promotion notice.
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             INSERT INTO "{_schema}".backlog_projects (project_id) VALUES (@project) ON CONFLICT DO NOTHING;

@@ -2,8 +2,8 @@
 
 These dependency-free tools define and inspect infrastructure.
 They do not deploy a service or prove workload identity.
-The [#1777 specification](../../docs/specs/1777-azure-p0-infrastructure.md)
-describes source receipts, target guards, and the separate #1784 runtime gate.
+The [infrastructure specification](../../docs/specs/1777-azure-p0-infrastructure.md)
+describes source receipts, target guards, and the separate runtime acceptance checks.
 
 ## Offline validation
 
@@ -331,7 +331,7 @@ cost by 50%, plus per-node service charges. Quota headroom does not prove region
 
 AKS opts into Advanced Container Networking Services (ACNS) with security
 enabled and observability disabled, the security-only configuration needed for
-the #1784 FQDN-filtering work. Runtime Kubernetes must be version 1.29 or later.
+runtime fully qualified domain name filtering. Runtime Kubernetes must be version 1.29 or later.
 The template leaves `kubernetesVersion` empty so AKS selects its currently
 supported default rather than pinning an older version.
 
@@ -843,7 +843,7 @@ no retries, and a 360-to-420-second deadline. The observed pod must belong to
 that Job by UID, run in the exact namespace with the expected ServiceAccount,
 have the Azure workload-identity projection, and terminate with exit code 0.
 
-The immutable target ConfigMap must contain the strict #1784 `ProbeTarget` for
+The immutable target ConfigMap must contain the strict runtime `ProbeTarget` for
 the exact reviewed SHA, Git tree, infrastructure hash, deployment, identities,
 resources, database target, and read-only Key Vault secret name/version.
 The native probe receipt must preserve the exact federation issuer, subject,
@@ -897,7 +897,7 @@ Key Vault Secrets User remains read-only.
 The probe requires a separately approved fixture with an exact secret name and version.
 Probe secret creation, deletion, and purge are not permitted by this contract.
 Purge protection remains enabled.
-The executable #1784 probe must adopt this read-only fixture before cloud acceptance.
+The executable runtime probe must use this read-only fixture before cloud acceptance.
 
 The exported Blob diagnostic is operator-only and requires separate write approval.
 It creates a local fixture under `artifacts\azure`, uses a generated owned blob,

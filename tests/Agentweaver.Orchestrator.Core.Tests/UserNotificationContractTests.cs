@@ -55,6 +55,7 @@ public sealed class UserNotificationContractTests
     [Fact]
     public void PromotionIdentityIsStablePerPromotionAndNeverMatchesAGateId()
     {
+        // A fixed promotion is repeatable, while a new promotion or source must get a different hash.
         var promotion = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
         var first = UserNotificationStore.PromotionNotificationId("project-a", "run-a", promotion);
         Assert.Equal(first, UserNotificationStore.PromotionNotificationId("project-a", "run-a", promotion));
