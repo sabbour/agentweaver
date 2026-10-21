@@ -236,6 +236,7 @@ internal sealed class UserNotificationStore
     {
         // Count and paging reuse this exact projection so both sources obey the same visibility rules.
         // Group task origins by promotion: one plan can create many tasks but only one notice.
+        // Apply each caller's dismissal filter to both sources, or neither for the shared work view.
         return $"""
         WITH sources AS (
             SELECT 'pendingGate'::text AS source, g.project_id, g.run_id, g.session_id,
@@ -263,6 +264,7 @@ internal sealed class UserNotificationStore
         // An origin row proves promotion; ordinary captures have none. Inner joins also exclude
         // promotions with no remaining unarchived tasks before either counting or dismissal.
         // Tenant and project checks apply even when a caller knows another promotion's ID.
+        // Omit the dismissal filter for shared reads and idempotent dismissal retries.
         return $"""
         FROM {_schema}.backlog_plan_promotions p
         JOIN {_schema}.accepted_runs r ON r.project_id = p.project_id AND r.run_id = p.run_id
