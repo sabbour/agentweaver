@@ -144,17 +144,17 @@ exposes project configuration and run-selection operations.
 | DELETE | `/{projectId}/role-assignments/{assignmentId:guid}` | Admin; unbound token, TenantAdmin | Revoke an assignment at `expectedRevision`. | Yes |
 | GET | `/{projectId}/configuration` | Read | Read current or requested `revision`. | Yes |
 | PUT | `/{projectId}/configuration` | Admin | Append validated configuration. | Yes |
-| POST | `/{projectId}/casting/proposals` | Admin | Create a reviewed casting proposal. | No |
-| POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | No |
-| POST | `/{projectId}/casting/proposals/manual` | Admin | Create a manual proposal. | No |
-| GET | `/{projectId}/casting/proposals` | Read | List proposals. | No |
-| GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | No |
-| PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | No |
-| POST | `/{projectId}/casting/proposals/{proposalId:guid}/confirm` | Admin | Confirm reviewed casting. | No |
-| POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | No |
-| GET | `/{projectId}/casting/export` | Admin | Export casting configuration. | No |
-| POST | `/{projectId}/casting/import` | Admin | Validate and import casting. | No |
-| POST | `/{projectId}/agentsuite-imports` | Admin | Validate a native AgentSuite archive and stage its agents as a casting proposal. | No |
+| POST | `/{projectId}/casting/proposals` | Admin | Stage a complete configuration draft for review. | Yes |
+| POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | Yes |
+| POST | `/{projectId}/casting/proposals/manual` | Admin | Create a manual proposal. | Yes |
+| GET | `/{projectId}/casting/proposals` | Read | List proposals with optional `limit` (1–100, default 50). | Yes |
+| GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | Yes |
+| PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | Yes |
+| POST | `/{projectId}/casting/proposals/{proposalId:guid}/confirm` | Admin | Confirm reviewed casting. | Yes |
+| POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | Yes |
+| GET | `/{projectId}/casting/export` | Admin | Export current casting or optional positive `revision`. | Yes |
+| POST | `/{projectId}/casting/import` | Admin | Stage a digest-checked transfer; request body limit 1 MiB. | Yes |
+| POST | `/{projectId}/agentsuite-imports` | Admin | Validate a native AgentSuite archive and stage its agents as a casting proposal; request body limit 24 MiB. | Yes |
 | GET | `/{projectId}/agentsuite-imports/{sourceIdentity}` | Read | Read a retained AgentSuite import record. | Yes |
 | GET | `/{projectId}/agentsuite-agents/{effectiveAgentId}/policy` | Read | Read the policy bound to an imported agent. | Yes |
 | PUT | `/{projectId}/runs/{runId}/selection` | Selection | Accept an immutable run selection. | Yes |
@@ -256,11 +256,33 @@ Owner.
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | GET | `/api/authorization/context` | Bearer; `api.read`, non-purpose token | Read current authority. | `/api/v1/authorization/context` |
-| GET | `/api/casting/templates` | Bearer | Read built-in casting templates. | No |
-| GET | `/api/catalog/roles` | Bearer | Read built-in roles. | No |
+| GET | `/api/casting/templates` | Bearer | Read built-in casting templates. | `/api/v1/casting/templates` |
+| GET | `/api/catalog/roles` | Bearer | Read built-in roles. | `/api/v1/catalog/roles` |
 | GET | `/api/platform/runtime-defaults/` | `api.read`, `projects.admin`, unbound PlatformAdmin | Read platform runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | PUT | `/api/platform/runtime-defaults/` | Same PlatformAdmin authority | Append runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
+
+### Casting through the Gateway
+
+All casting routes forward the original bearer and optional
+`X-Agentweaver-Tenant` selector to Projects & Config. The owner enforces
+`ReadProjects` for proposal reads and `WriteProjects` for mutations **and
+export**. Writes and export require `api.read`, `projects.admin`, and current
+TenantAdmin or project Owner authority. Catalog reads require authentication.
+No new roles or idempotency headers are introduced.
+
+Create requests carry `expectedConfigurationRevision` and either `draft`,
+`templateId`, or `roleIds`. Patch carries `expectedDraftRevision` and `draft`.
+Confirm and reject carry `expectedDraftRevision`. Confirmation also checks the
+proposal's base configuration revision. A stale revision returns `409`; rejection
+does not change configuration. Import accepts `expectedConfigurationRevision`
+and `transfer` and creates a pending proposal, not an applied configuration.
+Gateway and owner import request bodies are limited to 1,048,576 bytes.
+Unsupported transfer versions or incompatible teams return `422`.
+
+See [casting contracts](./contracts.md#casting-proposals-and-transfers) for
+response fields and [Use the Gateway](../guide/gateway.md#review-project-casting)
+for the review sequence.
 
 ### Skills
 

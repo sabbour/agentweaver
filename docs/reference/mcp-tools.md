@@ -82,6 +82,26 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `acceptRunSelection` | Accept an immutable run selection. |
 | `getRunSelection` | Read the accepted selection. |
 
+### Casting
+
+Casting tools forward the bearer and optional tenant selector to Projects.
+Revision checks stay inside `body`; no idempotency header is required.
+
+| Operation ID | Purpose |
+| --- | --- |
+| `createProjectCastingProposal` | Stage a complete configuration draft. |
+| `createScenarioProjectCastingProposal` | Stage a built-in scenario. |
+| `createManualProjectCastingProposal` | Stage selected catalog roles. |
+| `listProjectCastingProposals` | List proposals with optional `limit`. |
+| `getProjectCastingProposal` | Read a proposal. |
+| `updateProjectCastingProposal` | Replace a pending draft at its expected revision. |
+| `confirmProjectCastingProposal` | Confirm reviewed casting at current revisions. |
+| `rejectProjectCastingProposal` | Reject without changing configuration. |
+| `exportProjectCasting` | Export charters and casting; requires write authority. |
+| `importProjectCasting` | Stage a digest-checked transfer; request body limit 1 MiB. |
+| `listProjectCastingTemplates` | Read built-in templates. |
+| `listProjectCastingRoles` | Read built-in roles. |
+
 ### Skills and marketplace
 
 | Operation ID | Purpose |
@@ -215,7 +235,7 @@ Local error codes include `unknown_tool`, `invalid_arguments`,
   `/api/v1/`.
 - `streamRunEvents` is excluded because it is SSE. Use finite replay tools.
 - Browser connection lifecycle routes and callbacks are outside the catalog.
-- Native-only casting, backlog, runtime, Environment, and private material routes
+- Native-only backlog, runtime, Environment, and private material routes
   are not tools.
 - Catalog downloads are limited to 2 MiB; owner responses are limited to 8 MiB.
   Gateway request deadlines are ten seconds.

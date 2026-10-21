@@ -20,7 +20,7 @@ is the only source for built-in and uploaded team blueprints.
 ```
 
 - `format` is `oci-layout-tar` (a tar of an OCI image layout) or `content-tar-gzip` (the raw
-  content layer). The decoded archive is limited to 16 MiB.
+  content layer). The decoded archive is limited to 16 MiB, and the request body to 24 MiB.
 - `toolConnections` and `blueprint` are optional. The response is `201 Created` with the import
   record and the proposal, or `200 OK` with a null proposal when every agent already exists
   unchanged.

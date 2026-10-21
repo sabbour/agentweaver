@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Projects.Config;
 
@@ -536,6 +537,7 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        // Match the public Gateway bound before binding a transfer payload.
         projects.MapPost("/{projectId}/casting/import", async (
             string projectId,
             ImportProjectCastingTransferRequest request,
@@ -560,7 +562,7 @@ public static class ProjectConfigEndpoints
             {
                 return ToProblem(exception);
             }
-        });
+        }).WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
 
         projects.MapPost("/{projectId}/agentsuite-imports", async (
             string projectId,
@@ -601,7 +603,7 @@ public static class ProjectConfigEndpoints
             {
                 return ToProblem(exception);
             }
-        });
+        }).WithMetadata(new RequestSizeLimitAttribute(24 * 1024 * 1024));
 
         projects.MapGet("/{projectId}/agentsuite-imports/{sourceIdentity}", async (
             string projectId,
