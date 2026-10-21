@@ -96,8 +96,10 @@ public sealed class ProjectPullRequestReadStore
     /// <exception cref="CoordinationException">The value isn't an accepted state filter.</exception>
     public static string ParseStateFilter(string? value)
     {
+        // A missing filter means open pull requests, the usual picker case.
         if (value is null)
             return "open";
+        // Matching is exact and case-sensitive, so the cursor can compare the stored filter directly.
         if (!StateFilters.Contains(value))
             throw new CoordinationException("pull_request_state_filter_invalid", StatusCodes.Status400BadRequest);
         return value;
@@ -130,18 +132,27 @@ public sealed class ProjectPullRequestReadStore
         int pageSize,
         CancellationToken cancellationToken)
     {
+        // Validate inputs again here, because the store can be called without the endpoint.
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         CoordinationIdentity.ValidateIdentity(projectId, "project_id");
         state = ParseStateFilter(state);
         if (pageSize is < 1 or > ProjectRunReadStore.MaximumPageSize)
             throw new CoordinationException("page_size_invalid", StatusCodes.Status400BadRequest);
+        // A cursor is valid only for the same project, page size, and filter that issued it.
         var after = cursor is null ? null : DecodeCursor(projectId, pageSize, state, cursor);
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // Check for migration 032 before reading. Its ledger time is also the start of coverage.
+        // Without it there are no records at all, so return 503 instead of an empty page that
+        // would look like "this project has no pull requests". This check never applies 032.
         var recordedSince = await SourceControlPullRequestRecords.ReadCoverageStartAsync(
                 connection, _schema, cancellationToken).ConfigureAwait(false)
             ?? throw new CoordinationException(
                 SourceControlPullRequestRecords.UnavailableCode, StatusCodes.Status503ServiceUnavailable);
+        // Tenant comes from the run's resource pin, because the record table has no tenant column.
+        // The inner join drops any record whose pin isn't in the caller's tenant. A bound run narrows
+        // the list to that run. The keyset tuple matches the ORDER BY exactly, so paging never skips
+        // or repeats a row; recorded_at doesn't change on reuse, so rows don't move between pages.
         await using var command = new NpgsqlCommand($"""
             SELECT r.provider_id, r.repository_owner, r.repository_name, r.pull_request_number, r.title,
                 r.html_url, r.state, r.head_branch, r.head_sha, r.base_branch, r.base_sha, r.run_id,
@@ -168,9 +179,12 @@ public sealed class ProjectPullRequestReadStore
         command.Parameters.AddWithValue("afterPin", NpgsqlDbType.Varchar, (object?)after?.PinId ?? DBNull.Value);
         command.Parameters.AddWithValue(
             "afterNumber", NpgsqlDbType.Bigint, (object?)after?.PullRequestNumber ?? DBNull.Value);
+        // Read one extra row. If it exists there is a next page; it is not returned.
         command.Parameters.AddWithValue("limit", NpgsqlDbType.Integer, pageSize + 1);
 
         var items = ImmutableArray.CreateBuilder<ProjectPullRequestSummary>(pageSize);
+        // The pin ID is part of the sort key but not of the public summary, so keep the last one
+        // separately for the next cursor.
         string? lastPinId = null;
         var hasMore = false;
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
@@ -186,6 +200,7 @@ public sealed class ProjectPullRequestReadStore
                     reader.GetString(0),
                     new ProjectSourceControlRepository(reader.GetString(1), reader.GetString(2)),
                     reader.GetInt64(3),
+                    // Title is null when the provider didn't return one.
                     reader.IsDBNull(4) ? null : reader.GetString(4),
                     new Uri(reader.GetString(5), UriKind.Absolute),
                     reader.GetString(6),
@@ -200,6 +215,7 @@ public sealed class ProjectPullRequestReadStore
                 lastPinId = reader.GetString(15);
             }
         }
+        // Every page reports coverage, so a client never reads a page as complete history.
         var last = items.Count > 0 ? items[^1] : null;
         return new ProjectPullRequestPage(
             projectId,
@@ -218,6 +234,8 @@ public sealed class ProjectPullRequestReadStore
     private static PullRequestListCursor DecodeCursor(string projectId, int pageSize, string state, string value)
     {
         var cursor = ProjectListCursor.Decode<PullRequestListCursor>(value);
+        // Reject cursors from another version, ordering, project, page size, or filter, and
+        // reject key values that no stored row can have.
         if (cursor.Version != CursorVersion ||
             cursor.Order != CursorOrder ||
             cursor.ProjectId != projectId ||

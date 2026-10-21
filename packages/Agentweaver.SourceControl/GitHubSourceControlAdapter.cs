@@ -1187,6 +1187,8 @@ public sealed partial class GitHubSourceControlAdapter : ISourceControlAdapter, 
             ReadRequiredString(@base, "sha"),
             merged,
             disposition,
+            // Title is display data only. It's optional so a response without it still parses,
+            // and it isn't part of the exact-match checks above.
             ReadOptionalString(root, "title"));
     }
 
@@ -1378,8 +1380,11 @@ public sealed partial class GitHubSourceControlAdapter : ISourceControlAdapter, 
     {
         if (!source.TryGetProperty(property, out var value) || value.ValueKind == JsonValueKind.Null)
             return null;
+        // A present value of the wrong type means the response isn't what GitHub documents, so
+        // fail instead of guessing.
         if (value.ValueKind != JsonValueKind.String)
             throw InvalidResponse("GitHub returned an invalid response.");
+        // Treat a blank string like a missing value, so callers only see a usable title or null.
         var text = value.GetString();
         return string.IsNullOrWhiteSpace(text) ? null : text;
     }

@@ -31,6 +31,9 @@ internal static class SourceControlPullRequestRecords
         string quotedSchema,
         CancellationToken cancellationToken)
     {
+        // Require both the ledger row and the table. A ledger row without the table (or the reverse)
+        // is a broken apply, and treating it as unavailable is safer than reading a missing table.
+        // to_regclass returns NULL instead of failing when the table doesn't exist.
         await using var command = new NpgsqlCommand($"""
             SELECT applied_at
             FROM {quotedSchema}.coordination_schema_migrations
@@ -38,6 +41,8 @@ internal static class SourceControlPullRequestRecords
             """, connection);
         command.Parameters.AddWithValue(
             "records", NpgsqlDbType.Text, $"{quotedSchema}.source_control_pull_requests");
+        // No row means 032 isn't applied. Npgsql may return timestamptz as a UTC DateTime or as a
+        // DateTimeOffset depending on settings, so accept both.
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is DateTime applied
             ? new DateTimeOffset(DateTime.SpecifyKind(applied, DateTimeKind.Utc))

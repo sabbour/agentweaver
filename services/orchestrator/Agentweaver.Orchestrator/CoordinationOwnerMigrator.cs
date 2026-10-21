@@ -56,6 +56,9 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
+        // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
+        // Optional 032 is a known version here, so a database where 032 was applied separately is
+        // accepted, but 032 is not in the default list below and is never applied by this method.
         if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 32)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
@@ -82,6 +85,7 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(25) && !applied.Contains(2)) ||
             (applied.Contains(26) && !applied.Contains(21)) ||
             (applied.Contains(27) && !applied.Contains(26)) ||
+            // 032 records reference repository pins, which migration 012 adds.
             (applied.Contains(32) && !applied.Contains(12)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27])
@@ -153,11 +157,14 @@ public static class CoordinationOwnerMigrator
     {
         ArgumentNullException.ThrowIfNull(dataSource);
         ValidateSchema(schema);
+        // Apply 032 only on top of a current base schema. Verify also rejects a half-applied 032.
         await VerifyAsync(dataSource, schema, cancellationToken);
 
         var quotedSchema = Quote(schema);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        // Take the same transaction-scoped lock as MigrateAsync, so this can't run at the same time
+        // as a default migration or a second apply on the same schema.
         await using (var advisoryLock = new NpgsqlCommand(
             "SELECT pg_advisory_xact_lock(hashtext('agentweaver.coordination.migrate'), hashtext(@schema))",
             connection, transaction))
@@ -165,6 +172,7 @@ public static class CoordinationOwnerMigrator
             advisoryLock.Parameters.AddWithValue("schema", NpgsqlDbType.Text, schema);
             await advisoryLock.ExecuteNonQueryAsync(cancellationToken);
         }
+        // Check the ledger under the lock. If another caller already applied 032, do nothing.
         await using (var query = new NpgsqlCommand(
             $"SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32",
             connection, transaction))
@@ -177,6 +185,8 @@ public static class CoordinationOwnerMigrator
         using var text = new StreamReader(resource);
         var sql = (await text.ReadToEndAsync(cancellationToken))
             .Replace("{schema}", quotedSchema, StringComparison.Ordinal);
+        // Create the table and write the ledger row in one transaction, so a failure leaves neither.
+        // The ledger row's applied_at becomes the start of pull request list coverage.
         await using (var migration = new NpgsqlCommand(sql, connection, transaction))
             await migration.ExecuteNonQueryAsync(cancellationToken);
         await using (var record = new NpgsqlCommand(
@@ -316,6 +326,8 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@issueSyncProjects) IS NOT NULL,
                 to_regclass(@issueSyncReceipts) IS NOT NULL,
                 -- 032 is optional at startup: the PR list reports it as not available until it is applied.
+                -- Accept "not applied" (no ledger row, no table) or "fully applied" (row, table, and
+                -- index). Anything in between is a partial apply and fails verification.
                 ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32) = 0
                     AND to_regclass(@sourceControlPullRequests) IS NULL) OR
                 ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32) = 1
@@ -414,6 +426,7 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
+            // Columns 57 onward include the optional-032 check as the last column.
             Enumerable.Range(57, 30).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");

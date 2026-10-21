@@ -546,7 +546,9 @@ when Orchestrator migration `032_source_control_pull_request_records.sql` is
 applied. `coverage.recordedSince` reports that time, and
 `coverage.includesEarlierPullRequests` is always `false`. Older pull requests
 aren't recorded. Until migration 032 is applied, the route returns
-`503 pull_request_records_unavailable`, not an empty list. Migration 032 is
+`503 pull_request_records_unavailable`, not an empty list. An empty list would
+wrongly tell a client that the project has no pull requests; the 503 says the
+records don't exist yet. Migration 032 is
 code-only: startup, the default migrator, and the P1 initializer don't apply it.
 
 These routes are the data source for issue and pull request pickers. The web

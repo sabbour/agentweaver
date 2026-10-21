@@ -57,9 +57,13 @@ internal sealed class SourceControlOwnerStore(
     {
         ArgumentNullException.ThrowIfNull(pin);
         ArgumentNullException.ThrowIfNull(pullRequest);
+        // Store merged as its own state so the list can filter it. Providers report a merged pull
+        // request as closed, so the Merged flag wins. Any other provider state is rejected rather
+        // than stored as an unknown value.
         var state = pullRequest.Merged ? "merged" : pullRequest.State.ToLowerInvariant();
         if (state is not ("open" or "closed" or "merged"))
             throw new ArgumentException("The pull request state can't be recorded.", nameof(pullRequest));
+        // Provenance: record whether this run opened the pull request or found an existing one.
         var disposition = pullRequest.Disposition switch
         {
             SourceControlPullRequestDisposition.Created => "created",
@@ -70,7 +74,13 @@ internal sealed class SourceControlOwnerStore(
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         if (await SourceControlPullRequestRecords.ReadCoverageStartAsync(
                 connection, _schema, cancellationToken).ConfigureAwait(false) is null)
+            // Migration 032 isn't applied, so there is no table. Skip the write; the create or reuse
+            // result is still returned to the caller unchanged.
             return false;
+        // Upsert on the natural key. A retry or later reuse refreshes the provider fields. Two rules
+        // keep provenance stable: "created" is never downgraded to "reused", and recorded_at is set
+        // only on insert, so list order doesn't change. updated_at never goes below recorded_at,
+        // even if the database clock moves backward.
         await using var command = new NpgsqlCommand($"""
             INSERT INTO {PullRequestRecords} (
                 project_id, run_id, pin_id, provider_id, repository_owner, repository_name,
@@ -94,6 +104,8 @@ internal sealed class SourceControlOwnerStore(
                 END,
                 updated_at = greatest(clock_timestamp(), {PullRequestRecords}.recorded_at)
             """, connection);
+        // Project and run come from the accepted pin, not from the provider result, so a record is
+        // always tied to the run that owns the repository pin.
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, pin.AcceptedRun.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, pin.AcceptedRun.RunId);
         command.Parameters.AddWithValue("pin", NpgsqlDbType.Varchar, pin.PinId);

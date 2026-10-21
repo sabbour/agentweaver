@@ -84,8 +84,10 @@ public sealed class ProjectIssueReadStore
     /// <exception cref="CoordinationException">The value is not an accepted filter.</exception>
     public static string ParseStateFilter(string? value)
     {
+        // A missing filter means open issues, the usual picker case.
         if (value is null)
             return "open";
+        // Matching is exact and case-sensitive, so the cursor can compare the stored filter directly.
         if (!StateFilters.Contains(value))
             throw new CoordinationException("issue_state_filter_invalid", StatusCodes.Status400BadRequest);
         return value;
@@ -113,12 +115,19 @@ public sealed class ProjectIssueReadStore
         int pageSize,
         CancellationToken cancellationToken)
     {
+        // Validate inputs again here, because the store can be called without the endpoint.
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         CoordinationIdentity.ValidateIdentity(projectId, "project_id");
         state = ParseStateFilter(state);
         if (pageSize is < 1 or > ProjectRunReadStore.MaximumPageSize)
             throw new CoordinationException("page_size_invalid", StatusCodes.Status400BadRequest);
+        // A cursor is valid only for the same project, page size, and filter that issued it.
         var after = cursor is null ? null : DecodeCursor(projectId, pageSize, state, cursor);
+
+        // The join with issue_sync_projects limits rows to projects that have issue sync in the
+        // caller's tenant. Rows without an issue link and archived tasks are skipped. The keyset
+        // condition compares (number, task) as a tuple, so it matches the ORDER BY exactly and
+        // no row is skipped or repeated between pages.
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand($"""
@@ -136,11 +145,13 @@ public sealed class ProjectIssueReadStore
             """, connection);
         command.Parameters.AddWithValue("tenant", NpgsqlDbType.Text, tenantId);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+        // The filter value matches the stored lifecycle column. "all" is passed as NULL to turn the filter off.
         command.Parameters.AddWithValue(
             "lifecycle", NpgsqlDbType.Varchar, state == "all" ? DBNull.Value : state);
         command.Parameters.AddWithValue(
             "afterNumber", NpgsqlDbType.Bigint, (object?)after?.IssueNumber ?? DBNull.Value);
         command.Parameters.AddWithValue("afterTask", NpgsqlDbType.Varchar, (object?)after?.TaskId ?? DBNull.Value);
+        // Read one extra row. If it exists there is a next page; it is not returned.
         command.Parameters.AddWithValue("limit", NpgsqlDbType.Integer, pageSize + 1);
 
         var items = ImmutableArray.CreateBuilder<ProjectIssueSummary>(pageSize);
@@ -166,6 +177,8 @@ public sealed class ProjectIssueReadStore
                     reader.GetFieldValue<DateTimeOffset>(9)));
             }
         }
+        // The next cursor points after the last returned row and records the query shape,
+        // so it can't be replayed against a different filter or page size.
         var last = items.Count > 0 ? items[^1] : null;
         return new ProjectIssuePage(
             projectId,
@@ -182,6 +195,8 @@ public sealed class ProjectIssueReadStore
     private static IssueListCursor DecodeCursor(string projectId, int pageSize, string state, string value)
     {
         var cursor = ProjectListCursor.Decode<IssueListCursor>(value);
+        // Reject cursors from another version, ordering, project, page size, or filter, and
+        // reject key values that no stored row can have.
         if (cursor.Version != CursorVersion ||
             cursor.Order != CursorOrder ||
             cursor.ProjectId != projectId ||

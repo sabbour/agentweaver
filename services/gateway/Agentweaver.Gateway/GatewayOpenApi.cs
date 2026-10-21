@@ -360,6 +360,7 @@ internal static partial class GatewayOpenApi
                 "The owner rejected an unknown or repeated query key, unknown state, invalid cursor, " +
                 "or page size outside 1 through 100.");
         }
+        // Both stored lists share the owner's query, authority, and Projects failure responses.
         else if (route.OperationId is "listProjectIssues" or "listProjectPullRequests")
         {
             responses["400"] = ProblemResponse(
@@ -369,6 +370,8 @@ internal static partial class GatewayOpenApi
                 "The token lacks api.read or names another project, or the caller lacks current Projects " +
                 "read authority. The response contains no items.");
             responses["502"] = ProblemResponse("The Projects owner returned an invalid or failed authority response.");
+            // Only the pull request list depends on optional migration 032. Document its 503 so
+            // clients don't treat "not available" as an empty list.
             if (route.OperationId == "listProjectPullRequests")
                 responses["503"] = ProblemResponse(
                     "pull_request_records_unavailable: Orchestrator migration 032 isn't applied, so no pull " +
@@ -674,6 +677,7 @@ else if (route.OperationId is
             return new { type = "boolean", @default = false };
         if (operationId is "listProjectRuns" or "listChiefOfStaffConversations" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
+        // Publish the owner's real limits and defaults so generated clients validate the same way.
         if (operationId is "listProjectIssues" or "listProjectPullRequests" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
         if (operationId == "listProjectIssues" && name == "state")

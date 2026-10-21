@@ -44,10 +44,15 @@ public static class ProjectSourceControlEndpoints
         CancellationToken cancellationToken) =>
         CoordinationEndpoints.ExecuteAsync(async () =>
         {
+            // Set no-store first so error responses are not cached either.
             context.Response.Headers.CacheControl = "no-store";
+            // Validate all query input before any authority call or database read. Unknown or
+            // repeated keys fail here, so a typo can't silently fall back to a default filter.
             var query = ProjectRunEndpoints.ReadSingleValuedQuery(context.Request.Query, ListQueryNames);
             var state = ProjectIssueReadStore.ParseStateFilter(query.GetValueOrDefault("state"));
             var pageSize = ProjectRunEndpoints.ParsePageSize(query.GetValueOrDefault("pageSize"));
+            // Ask Projects for the caller's current read authority. Projects, not a token claim,
+            // decides the tenant, so the store can only read rows in that tenant and project.
             var authorization = await projects.ReadBacklogProjectAuthorityAsync(
                 context, projectId, write: false, cancellationToken).ConfigureAwait(false);
             var page = await store.ListAsync(
@@ -57,6 +62,9 @@ public static class ProjectSourceControlEndpoints
                 query.GetValueOrDefault("cursor"),
                 pageSize,
                 cancellationToken).ConfigureAwait(false);
+            // Check authority again after the read. If the caller lost permission while the read ran,
+            // the check throws 403 and the page is dropped. A tenant change also counts as a loss,
+            // because the page was read under the old tenant.
             var current = await projects.ReadBacklogProjectAuthorityAsync(
                 context, projectId, write: false, cancellationToken).ConfigureAwait(false);
             if (current.TenantId != authorization.TenantId)
@@ -84,12 +92,16 @@ public static class ProjectSourceControlEndpoints
         CancellationToken cancellationToken) =>
         CoordinationEndpoints.ExecuteAsync(async () =>
         {
+            // Same order as the issue list: no-store, then strict query validation before any read.
             context.Response.Headers.CacheControl = "no-store";
             var query = ProjectRunEndpoints.ReadSingleValuedQuery(context.Request.Query, ListQueryNames);
             var state = ProjectPullRequestReadStore.ParseStateFilter(query.GetValueOrDefault("state"));
             var pageSize = ProjectRunEndpoints.ParsePageSize(query.GetValueOrDefault("pageSize"));
+            // The run-list authority also reports a bound run. A run-bound token gets a BoundRunId,
+            // and the store then returns only that run's records.
             var authorization = await projects.ReadProjectReadAuthorityAsync(
                 context, projectId, cancellationToken).ConfigureAwait(false);
+            // The store returns 503 pull_request_records_unavailable when migration 032 isn't applied.
             var page = await store.ListAsync(
                 authorization.TenantId,
                 projectId,
@@ -98,6 +110,8 @@ public static class ProjectSourceControlEndpoints
                 query.GetValueOrDefault("cursor"),
                 pageSize,
                 cancellationToken).ConfigureAwait(false);
+            // Recheck after the read. A changed tenant or run binding means the page was read under
+            // authority the caller no longer has, so return 403 and drop the page.
             var current = await projects.ReadProjectReadAuthorityAsync(
                 context, projectId, cancellationToken).ConfigureAwait(false);
             if (current.TenantId != authorization.TenantId || current.BoundRunId != authorization.BoundRunId)
