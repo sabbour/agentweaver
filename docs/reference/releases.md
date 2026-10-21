@@ -105,6 +105,15 @@ SHA and manifest before publication. Product container images carry the exact
 source commit, Git tree, and component version in their OCI labels for both
 release and integration preparation.
 
+The release workflow builds only the service images whose version or build
+inputs changed since the last published release. The other images are reused:
+the new receipt points to their existing digest and original
+`<version>-<buildSha>` tag, and records the commit that built them. Reused
+images are never retagged. Deployment verifies them against that original
+build commit. A manual dispatch with `rebuild_all_images` rebuilds every image.
+See the [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#incremental-image-reuse)
+for the reuse rules and failure modes.
+
 Published images are immutable. An existing image that lacks the source-tree
 label cannot be relabeled in place; rebuild and publish a new image before it
 can pass the strict P1 source check.
