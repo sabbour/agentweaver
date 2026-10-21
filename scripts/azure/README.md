@@ -7,6 +7,17 @@ describes source receipts, target guards, and the separate #1784 runtime gate.
 
 ## Offline validation
 
+Issue sync adds Orchestrator `027_periodic_issue_sync.sql`, requiring the
+backlog contract's 026, and Identity Broker
+`20261021000100_AddIssueSyncGrants`. They are **unapplied code-only migrations**.
+Orchestrator requires exactly `SELECT, INSERT, UPDATE` on `issue_sync_projects`
+and `issue_sync_receipts`; Identity requires exactly `SELECT, INSERT, UPDATE`
+on `identity_broker.issue_sync_grants`. No new DELETE, default privilege,
+schema CREATE or authority function EXECUTE is granted. These database grants,
+the new Core plan hash, service TLS configuration, and live application-level
+issue-sync grant creation remain separate approval items. Source validation
+does not perform a migration, grant or deployment action.
+
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
 open/closed lifecycle and a unique repository issue identity. It takes an
 `ACCESS EXCLUSIVE` lock on `backlog_tasks` and blocks writes until commit.

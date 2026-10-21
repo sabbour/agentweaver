@@ -84,6 +84,18 @@ if (agentGovernancePolicyOptions is not null)
     builder.Services.AddSingleton(agentGovernancePolicyOptions);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(services => new IssueSyncStore(
+    services.GetRequiredService<NpgsqlDataSource>(), options.Schema));
+var issueSyncEnabled = IssueSyncServiceTransport.AddChannel(builder, IssueSyncAuthorityClient.Channel,
+    "Orchestrator:IssueSync:IdentityTls", "Orchestrator", "IdentityBroker", false);
+builder.Services.AddHttpClient(string.Empty)
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+if (issueSyncEnabled)
+{
+    builder.Services.AddScoped<IIssueSyncAuthority, IssueSyncAuthorityClient>();
+    builder.Services.AddScoped<IssueSyncEngine>();
+    builder.Services.AddHostedService<IssueSyncWorker>();
+}
 builder.Services.AddSingleton(services => new CoordinationOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
@@ -151,6 +163,8 @@ builder.Services.AddHttpClient<GitHubSourceControlAdapter>(client =>
     })
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddTransient<ISourceControlAdapter>(services =>
+    services.GetRequiredService<GitHubSourceControlAdapter>());
+builder.Services.AddTransient<ISourceControlIssueAdapter>(services =>
     services.GetRequiredService<GitHubSourceControlAdapter>());
 if (sourceControlWorkspaceRoot is not null)
     builder.Services.AddSingleton(new GitWorkspaceManager(sourceControlWorkspaceRoot));
@@ -252,6 +266,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
 });
 app.MapCoordinationEndpoints();
 app.MapBacklogEndpoints();
+app.MapIssueSync();
 app.MapSuspendResumeEndpoints();
 app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)

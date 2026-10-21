@@ -195,6 +195,7 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             "runtime_grant_operation_receipts", "copilot_connections", "copilot_connection_revisions",
             "repo_app_authorization_transactions",
             "repo_app_connections", "repo_app_installations", "repo_app_repository_selections",
+            "issue_sync_grants",
         };
         foreach (var table in tables)
         {

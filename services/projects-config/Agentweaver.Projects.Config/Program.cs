@@ -171,6 +171,8 @@ if (brokerRunBindingAudience is not null)
     brokerRunBindingAudienceUri = parsedBrokerAudience;
 }
 BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is not null);
+var issueSyncIdentity = Agentweaver.Identity.IssueSyncServiceTransport.AddChannel(builder,
+    IssueSyncAuthorityEndpoints.Channel, "ProjectsConfig:IssueSync:IdentityTls", "Projects", "IdentityBroker", true);
 
 builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(authorityUri.AbsoluteUri));
 builder.Services.AddScoped<ProjectAuthorizationOwner>();
@@ -239,6 +241,7 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapProjectConfigEndpoints(enableBrokerRunBinding: brokerRunBindingAudienceUri is not null);
+app.MapIssueSyncAuthority(issueSyncIdentity);
 app.MapSkillMarketplaceEndpoints();
 app.MapSkillContentEndpoints();
 app.Run();

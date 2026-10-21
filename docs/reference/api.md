@@ -12,6 +12,63 @@ For runtime settings, see [Runtime configuration](./runtime-configuration.md).
 The Gateway's `GET /openapi/v1.json` returns the versioned public schemas, which
 the [MCP tools](./mcp-tools.md) reference uses.
 
+## Periodic issue sync
+
+These routes do not require a run. They require an authenticated project Owner
+with `api.read` and `projects.admin`; run-bound and purpose-bound tokens are
+rejected. Gateway exposes them under `/api/v1`. Generated MCP tools prefix the
+operation IDs with `agentweaver_`.
+
+| Gateway route | Native owner | Operation ID |
+| --- | --- | --- |
+| `GET /api/v1/projects/{projectId}/issue-sync` | Orchestrator `GET /api/projects/{projectId}/issue-sync/` | `readIssueSync` |
+| `PUT /api/v1/projects/{projectId}/issue-sync` | Orchestrator `PUT /api/projects/{projectId}/issue-sync/` | `configureIssueSync` |
+| `POST /api/v1/projects/{projectId}/issue-sync/grants` | Identity same path without `/v1`, with trailing slash | `createIssueSyncGrant` |
+| `GET /api/v1/projects/{projectId}/issue-sync/grants/{grantId}` | Identity same path without `/v1` | `readIssueSyncGrant` |
+| `POST /api/v1/projects/{projectId}/issue-sync/grants/{grantId}/revoke` | Identity same path without `/v1` | `revokeIssueSyncGrant` |
+
+Create a grant with `{ "selectionCode": "<fresh Identity repository selection code>" }`
+after selecting the project's connected GitHub App repository. Identity consumes
+the owner-bound selection once and returns
+`{ grantId, project: { projectId, tenantId, creatorId, connectionId, repository: { owner, name } }, active }`.
+No credential appears in public responses. Secret-authenticated repositories
+cannot borrow run-token redemption for background sync.
+
+Configure with `{ expectedRevision, settings: { enabled, grantId,
+intervalSeconds, maxItems, maxCycleSeconds } }`. `expectedRevision` is zero on
+creation and the returned revision on edits. `intervalSeconds` is 30-86400,
+`maxItems` 1-100, and `maxCycleSeconds` 5-120 and no larger than the interval.
+A cycle reads one page of at most `maxItems` issues and reconciles at most
+`maxItems` tasks, within its deadline. Configuration and status return
+`projectId`, `tenantId`, `revision`, `settings`, safe `grantProof`, `nextCycleAt`,
+nullable `lastCycleAt`, `status`, nullable `errorCode`, `importPage`, and
+`taskCursor`. An unconfigured project returns 404, not fabricated status.
+Concurrent configuration/cycles return 409.
+
+Owners may disable sync even after its grant is revoked or the repository is
+unselected. Revocation returns `{ "revoked": true }` and prevents the next
+cycle; in-flight cycles also revalidate before effects. Current Owners may
+revoke another Owner's project grant. Grant reads validate the original
+creator's current authority. A changed repository does not reuse old mappings.
+
+Status is `configured`, `disabled`, `running`, `succeeded`, or `failed`.
+Failure codes include `issue_sync_grant_revoked`,
+`issue_sync_creator_not_owner`, `issue_sync_repository_not_selected`,
+`issue_sync_cycle_timeout`, provider-specific `issue_sync_provider_*`,
+and `issue_sync_create_outcome_pending`. Failures preserve confirmed progress
+and retry next cycle; uncertain external writes are not reported as success.
+See [reconciliation and recovery](../deep-dive/orchestration.md#periodic-repository-issue-sync).
+
+Private routes are not Gateway/MCP tools. Identity
+`POST /internal/issue-sync/grants/{grantId}/token` and
+`POST /internal/issue-sync/grants/{grantId}/validate` accept only the configured
+Orchestrator mTLS peer. Projects `POST /internal/issue-sync/project-authority`
+accepts only the Identity mTLS peer and `{ projectId, tenantId, creatorId }`.
+Projects' authenticated `GET /api/projects/{projectId}/issue-sync-owner`
+and `issue-sync-authority` provide live owner and selected-repository proofs.
+These routes never create run or secret grants. Webhooks and conflict prompts
+are out of scope.
+
 ## How to read this reference
 
 Some tables list a route prefix and its suffixes. Append a suffix to the prefix

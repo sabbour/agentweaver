@@ -27,6 +27,65 @@ selection and prerequisite evidence. See
 [Project backlog content](../reference/api.md#project-backlog-content) for
 the authorized routes, bounds, and lifecycle rules.
 
+## Periodic repository issue sync
+
+The optional `IssueSyncWorker` polls due project settings every five seconds.
+It runs at most 16 due projects per poll, serially, with a database advisory
+lock per project across service instances. Unconfigured and disabled projects
+are untouched. Each project cycle has its own persisted interval, item bound
+and deadline. It reads one bounded page of repository issues and reconciles
+at most `maxItems` backlog tasks; cursor progress survives restarts. A page
+includes closed issues for mapping recovery, but only previously unmapped
+**open** issues are imported. Pull requests are excluded.
+
+```mermaid
+sequenceDiagram
+    participant Worker as Orchestrator issue-sync worker
+    participant Identity as Identity Broker
+    participant Projects as Projects owner
+    participant GitHub
+    Worker->>Identity: Dedicated mTLS grant token request
+    Identity->>Projects: Dedicated mTLS current creator/tenant/project proof
+    Projects-->>Identity: Current Owner and selected repository
+    Identity-->>Worker: Single-cycle repository installation token
+    Worker->>GitHub: Bounded list, read, create or patch issues
+    Worker->>Identity: Revalidate grant before protected writes
+    Identity->>Projects: Recheck Owner and repository
+    Worker->>Worker: Revision-checked backlog write and durable baseline
+```
+
+The new `issue-sync` authority is not a run grant. Identity owns a revocable
+grant with one creator, tenant, project and selected GitHub App repository.
+It rechecks that the grant is active, the creator is still a current project
+Owner, and the repository/connection is still selected. The worker validates
+this evidence before effects and inside revision-checked backlog writes.
+GitHub credentials live only for a single cycle and are invalidated afterward;
+no user bearer token is saved. Existing run-token issuance is unchanged.
+
+Mappings live in the backlog's unique repository issue link and in sync
+receipts. Baselines support field-by-field three-way reconciliation: an
+unchanged local field follows GitHub; a changed local field wins, including
+simultaneous edits. Both sides can close and reopen work. This is a
+deterministic policy, not a conflict prompt. Archived tasks retain their
+mapping and are not exported or edited.
+
+Before creating an issue the worker persists a pending receipt and includes
+a stable HTML comment in the remote body. A lost response is recovered by
+finding that marker in subsequent bounded pages, including closed issues.
+It never blindly repeats an uncertain create. If a remote issue cannot be
+found after an uncertain write, status remains
+`issue_sync_create_outcome_pending`; it does not claim successful completion.
+Definitive rejections, transient reads and updates are retried on the next
+cycle. Partial writes are not rolled back remotely or labelled successful.
+Changing a project's connected repository fails closed rather than remapping
+existing work to another repository.
+
+The owner routes and exact settings bounds are documented in
+[the API reference](../reference/api.md#periodic-issue-sync).
+This is code-only capability: migration 027, the Identity grant migration,
+runtime grants and dedicated service TLS profiles require separate approval
+and have not been applied or deployed.
+
 | Source | Responsibility |
 | --- | --- |
 | `CoordinationEndpoints.cs` and `CoordinationOwnerStore.cs` | Session, decision, gate, message, turn, roots, fences, and outbox |

@@ -76,6 +76,21 @@ public static class GatewayRouteCatalog
 
         Add("GET", GatewayOwner.Projects, "/projects", "/api/projects/",
             "listProjects", "List projects", forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/issue-sync",
+            "/api/projects/{projectId}/issue-sync/", "readIssueSync", "Read periodic issue sync status",
+            forwardTenantSelector: true);
+        Add("PUT", GatewayOwner.Orchestrator, "/projects/{projectId}/issue-sync",
+            "/api/projects/{projectId}/issue-sync/", "configureIssueSync", "Enable, disable and bound periodic issue sync",
+            body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.IdentityBroker, "/projects/{projectId}/issue-sync/grants",
+            "/api/projects/{projectId}/issue-sync/grants/", "createIssueSyncGrant", "Create project issue-sync authority",
+            body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.IdentityBroker, "/projects/{projectId}/issue-sync/grants/{grantId}",
+            "/api/projects/{projectId}/issue-sync/grants/{grantId}", "readIssueSyncGrant", "Validate current issue-sync authority",
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.IdentityBroker, "/projects/{projectId}/issue-sync/grants/{grantId}/revoke",
+            "/api/projects/{projectId}/issue-sync/grants/{grantId}/revoke", "revokeIssueSyncGrant", "Revoke project issue-sync authority",
+            forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, "/projects", "/api/projects/",
             "createProject", "Create a project", body: true, forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}", "/api/projects/{projectId}",
