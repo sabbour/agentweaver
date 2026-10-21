@@ -462,10 +462,14 @@ can message existing sessions and request supported detach/archive actions.
 The Gateway does not expose journal object-content reads, so the UI displays
 opaque references rather than inventing transcript text.
 
-Run-produced-file browsing is unavailable. The run-bound artifact manifest,
-diff, and object-version producer needed to browse files after workspace
-changes has not been admitted. The Web client does not proxy a host filesystem
-or claim parity with older file endpoints.
+The run's **Changes** tab browses saved output captures through the Gateway.
+Choose a session, a capture, and a file. The tree and Source/Preview viewer
+reuse the 0.x components; capture selection is a new Gateway adapter. Files
+come from the saved manifest, not the current workspace or a host filesystem,
+and their size and SHA-256 are checked before display. The same browser lets
+you link a capture to a Priority. See [saved artifacts](./chief-of-staff.md#browse-saved-artifacts)
+for access, pagination, and error behavior. Issue and pull request pickers are
+still pending; this is not complete A2 acceptance.
 
 The run's **Run settings** tab shows the model reference and the allowed
 implementations for each platform component, in order. It doesn't show the

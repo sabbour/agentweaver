@@ -217,7 +217,8 @@ export function createFakeGateway(seed: Partial<FakeGatewayState> = {}) {
           projectId: body.projectId,
           runId: body.runId ?? conversation?.runId ?? undefined,
           conversationId: body.conversationId ?? undefined,
-          state: target?.state ?? conversation?.runState ?? undefined,
+          artifactId: body.artifactId ?? undefined,
+          state: body.kind === 'artifact' ? 'unavailable' : target?.state ?? conversation?.runState ?? undefined,
           createdAt: NOW,
         };
         return json(200, savePriority({ ...current, links: [...current.links, link], revision: current.revision + 1 }));

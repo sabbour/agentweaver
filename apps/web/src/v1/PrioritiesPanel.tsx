@@ -36,6 +36,7 @@ import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading } from './pageParts';
 import { useGatewayRunList } from './runListData';
 import { runState } from './runState';
+import { OutputCaptureBrowser } from './OutputCaptureBrowser';
 
 /** Shown after a Priority write returns a revision conflict and the panel reread it. */
 export const PRIORITY_CONFLICT_NOTICE = 'This Priority changed. Review the current values and try again.';
@@ -100,7 +101,7 @@ type Notice = { kind: 'conflict' } | { kind: 'error'; error: unknown };
 
 /**
  * Renders Priorities. `projects` feeds the run link picker; `conversations`
- * feeds the conversation link picker. Issue, pull request, and artifact links
+ * feeds the conversation link picker. Issue and pull request links
  * are shown when present but not offered, because the web app has no picker
  * source for them.
  */
@@ -378,6 +379,11 @@ function PriorityItem({ priority, index, count, notice, orderBusy, projects, pro
           {link.access === 'available' && link.projectId && link.runId && (link.kind === 'run' || link.kind === 'conversation') && (
             <Button size="small" appearance="secondary" onClick={() => navigate(runPath(link.projectId!, link.runId!))}>Open</Button>
           )}
+          {link.access === 'available' && link.projectId && link.runId && link.artifactId && link.kind === 'artifact' && (
+            <Button size="small" appearance="secondary" onClick={() => navigate(
+              `${runPath(link.projectId!, link.runId!)}?view=changes&captureId=${encodeURIComponent(link.artifactId!)}`,
+            )}>Open artifact</Button>
+          )}
           <Button size="small" appearance="subtle" disabled={busy} aria-label={`Remove link: ${KIND_LABELS[link.kind]}`} onClick={() => void run((token, tenant) =>
             gatewayClient.removeChiefOfStaffPriorityLink(token, id, link.linkId, priority.revision, tenant))}>Remove</Button>
         </div>
@@ -428,7 +434,7 @@ export function LinkSummary({ link, projectNames }: { link: ChiefOfStaffPriority
   );
 }
 
-/** Adds a run or conversation link through pickers. No identifier typing. */
+/** Run/conversation choices use unbound reads; capture browsing uses the chosen run's bound token. */
 function AddLinkForm({ priority, busy, projects, projectNames, conversations, run }: {
   priority: ChiefOfStaffPriority;
   busy: boolean;
@@ -439,11 +445,11 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
 }) {
   const styles = useStyles();
   const [open, setOpen] = useState(false);
-  const [kind, setKind] = useState<'run' | 'conversation'>('run');
+  const [kind, setKind] = useState<'run' | 'conversation' | 'artifact'>('run');
   const activeProjects = useMemo(() => (projects ?? []).filter((project) => project.state === 'active'), [projects]);
   const [pickedProject, setPickedProject] = useState('');
   const projectId = activeProjects.some((project) => project.projectId === pickedProject) ? pickedProject : activeProjects[0]?.projectId ?? '';
-  const runs = useGatewayRunList(open && kind === 'run' ? projectId : '');
+  const runs = useGatewayRunList(open && kind !== 'conversation' ? projectId : '');
   const [pickedRun, setPickedRun] = useState('');
   const runId = runs.items.some((item) => item.runId === pickedRun) ? pickedRun : runs.items[0]?.runId ?? '';
   const available = conversations.items.filter((item) => item.access === 'available' && item.projectId);
@@ -460,7 +466,7 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
   const ready = kind === 'run' ? Boolean(projectId && runId) : Boolean(conversation);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!ready) return;
+    if (!ready || kind === 'artifact') return;
     const body = kind === 'run'
       ? { expectedRevision: priority.revision, kind, projectId, runId }
       : { expectedRevision: priority.revision, kind, projectId: conversation!.projectId!, conversationId: conversation!.conversationId };
@@ -472,12 +478,13 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
     <form className={styles.form} aria-label={`Add link to ${label}`} onSubmit={submit}>
       <div className={styles.inline}>
         <Field label="Link type">
-          <Select value={kind} onChange={(_, data) => setKind(data.value as 'run' | 'conversation')}>
+          <Select value={kind} onChange={(_, data) => setKind(data.value as 'run' | 'conversation' | 'artifact')}>
             <option value="run">Run</option>
             <option value="conversation">Conversation</option>
+            <option value="artifact">Artifact</option>
           </Select>
         </Field>
-        {kind === 'run' && (
+        {kind !== 'conversation' && (
           <>
             <Field label="Project">
               <Select value={projectId} onChange={(_, data) => setPickedProject(data.value)}>
@@ -507,13 +514,20 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
           </Field>
         )}
       </div>
-      {kind === 'run' && activeProjects.length === 0 && <Text className={styles.meta}>No active projects.</Text>}
-      {kind === 'run' && projectId && runs.loading && <Text className={styles.meta}>Loading runs…</Text>}
-      {kind === 'run' && runs.error != null && <ErrorNotice code={errorCode(runs.error)}>{errorMessage(runs.error)}</ErrorNotice>}
-      {kind === 'run' && projectId && !runs.loading && runs.error == null && runs.items.length === 0 && <Text className={styles.meta}>No runs in this project.</Text>}
+      {kind !== 'conversation' && activeProjects.length === 0 && <Text className={styles.meta}>No active projects.</Text>}
+      {kind !== 'conversation' && projectId && runs.loading && <Text className={styles.meta}>Loading runs…</Text>}
+      {kind !== 'conversation' && runs.error != null && <ErrorNotice code={errorCode(runs.error)}>{errorMessage(runs.error)}</ErrorNotice>}
+      {kind !== 'conversation' && projectId && !runs.loading && runs.error == null && runs.items.length === 0 && <Text className={styles.meta}>No runs in this project.</Text>}
+      {kind !== 'conversation' && runs.loadMore && <Button onClick={runs.loadMore}>Load more runs</Button>}
       {kind === 'conversation' && available.length === 0 && <Text className={styles.meta}>No conversations to link.</Text>}
+      {kind === 'artifact' && projectId && runId && <OutputCaptureBrowser
+        projectId={projectId} runId={runId} busy={busy}
+        onSelect={(artifactId) => void run((token, tenant) => gatewayClient.addChiefOfStaffPriorityLink(
+          token, priority.priorityId, { expectedRevision: priority.revision, kind: 'artifact', projectId, runId, artifactId }, tenant,
+        )).then((saved) => { if (saved) setOpen(false); })}
+      />}
       <div className={styles.row}>
-        {ready && <Button appearance="primary" type="submit" disabled={busy}>Add link</Button>}
+        {kind !== 'artifact' && ready && <Button appearance="primary" type="submit" disabled={busy}>Add link</Button>}
         <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
       </div>
     </form>

@@ -150,23 +150,46 @@ you send appears in **Messages** after the agent records it.
   **Dropped**.
 - Add, check, and remove checklist items in place.
 - **Move up** and **Move down** change the order.
-- **Add link** links a run or a conversation. Choose a project and pick a run
-  from its run list, or pick one of your conversations. Issue, pull request,
-  and artifact links aren't offered, because the web app doesn't accept typed
-  IDs and they don't have a picker yet. The Gateway has no finite list route
-  for a project's repository issues or pull requests (only `POST /issues`,
-  `POST /pull-requests`, and `GET /pull-requests/{number}/reviews`). A Gateway
-  output-capture list (`listSourceControlOutputCaptures`) exists in pending
-  work but isn't integrated into the web app, so there's no artifact picker.
-  Existing links of those kinds show **Unavailable** as
-  their state.
+- **Add link** links a run, a conversation, or an artifact. Choose a project
+  and a run, or pick one of your conversations. For an artifact, choose a
+  session and a saved capture. Browse its files, then select **Link capture**.
+  The link saves the whole capture, not one file. You never need to type an ID.
+- Issue and pull request pickers are not available. Their list routes and
+  browser journeys remain pending, so A2 is still partial. Existing issue and
+  pull request links show **Unavailable** as their state.
 - Run and conversation links show the run state. A link you can't read shows
   **Unavailable** and its kind only. A deleted target shows **Not found**.
 
 If another change lands first, the web app rereads Priorities and shows **This
 Priority changed. Review the current values and try again.** Your edit stays in
 the form. An order conflict shows **The order changed. Review the current order
-and try again.** Editing a Priority never calls a run or gate endpoint.
+and try again.** Saving a Priority never sends a run or gate action.
+
+### Browse saved artifacts
+
+Open a run's **Changes** tab, or select **Open artifact** on a Priority link.
+Choose a session from the run's session list, then a **Saved capture**. A linked
+capture is selected when it appears in that session's loaded page. If it is
+not on the page, choose another session or select **Load more captures**.
+The service lists captures newest first.
+
+The detail view shows the saved branch, time, and file count. Select a file in
+the tree to read it. Markdown opens in **Preview**; select **Source** to read
+the text. Other text files open as source. Binary files are labeled **Binary
+file**. The client checks each file's size and SHA-256 against the saved
+manifest before showing its content.
+
+These are saved outputs, not the current workspace. Empty lists show **No saved
+captures**; failed or unknown runs may withhold captures. Read failures show an
+error and **Try again**. Changing run, session, capture, or confirmed access
+discards the old view and ignores late responses. The service rechecks read
+access on each request. Artifact links still have no lifecycle state, so their
+state badge is **Unavailable** even when the saved files can be opened.
+
+The file tree and Source/Preview viewer reuse the 0.x components. The saved
+capture list and Priority picker are new Gateway adapters, not 0.x parity.
+All capture and file reads use a token bound to the selected run. Saving a
+Priority link uses the caller's unbound token and does not start work.
 
 ### Flow
 

@@ -3,6 +3,31 @@ import { AgentweaverGatewayClient } from './api';
 import type { KnowledgeRecordTransferBundle } from './contracts';
 
 describe('Gateway API client', () => {
+  it('encodes capture routes, forwards paired cursors, and reads raw file bytes without ambient credentials', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ captures: [] })))
+      .mockResolvedValueOnce(new Response('{}'))
+      .mockResolvedValueOnce(new Response('saved text'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'output_capture_not_found' }), { status: 404 }));
+    const client = new AgentweaverGatewayClient('https://gateway.test/api/v1', fetcher);
+    await client.listSourceControlOutputCaptures('token', 'p/1', 'r/1', 's/1',
+      { capturedAt: '2026-10-20T12:00:00Z', captureId: 'c/1' }, 'tenant');
+    const listUrl = new URL(String(fetcher.mock.calls[0][0]));
+    expect(listUrl.pathname).toBe('/api/v1/projects/p%2F1/runs/r%2F1/source-control/sessions/s%2F1/output-captures');
+    expect(Object.fromEntries(listUrl.searchParams)).toEqual({ limit: '50', beforeCapturedAt: '2026-10-20T12:00:00Z', beforeCaptureId: 'c/1' });
+    await client.readSourceControlOutputCapture('token', 'p1', 'r1', 's1', 'c/1', 'tenant');
+    expect(String(fetcher.mock.calls[1][0])).toContain('/output-captures/c%2F1');
+    const bytes = await client.readSourceControlOutputCaptureFile('token', 'p1', 'r1', 's1', 'c1', 'docs/a & b.md', 'tenant');
+    expect(new TextDecoder().decode(bytes)).toBe('saved text');
+    expect(new URL(String(fetcher.mock.calls[2][0])).searchParams.get('path')).toBe('docs/a & b.md');
+    for (const [, init] of fetcher.mock.calls) {
+      expect(init?.credentials).toBe('omit');
+      expect(init?.cache).toBe('no-store');
+      expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant');
+    }
+    await expect(client.readSourceControlOutputCaptureFile('token', 'p1', 'r1', 's1', 'gone', 'file', 'tenant'))
+      .rejects.toMatchObject({ status: 404, code: 'output_capture_not_found' });
+  });
   it('does not send a request without a Broker access token', async () => {
     const fetcher = vi.fn<typeof fetch>();
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);

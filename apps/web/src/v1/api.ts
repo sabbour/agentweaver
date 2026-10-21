@@ -70,6 +70,8 @@ import type {
   SessionTurnContent,
   SessionTreeSnapshot,
   SourceControlRepositoryPinView,
+  SourceControlOutputCaptureDetail,
+  SourceControlOutputCapturePage,
   UsageRunTotals,
   VersionedProjectConfiguration,
 } from './contracts';
@@ -118,6 +120,7 @@ export async function sendGatewayRequest<T>(
   url: string,
   init: RequestInit = {},
   tenantSelector?: string | null,
+  readBody?: (response: Response) => Promise<T>,
 ): Promise<T> {
   if (!token) {
     throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
@@ -151,6 +154,7 @@ export async function sendGatewayRequest<T>(
     throw new GatewayError(response.status, body, problemMessage(body, response.status));
   }
   if (response.status === 204) return undefined as T;
+  if (readBody) return readBody(response);
   return await response.json() as T;
 }
 
@@ -807,6 +811,43 @@ export class AgentweaverGatewayClient {
       this.baseUrl,
       tenantSelector,
     );
+  }
+
+  /** Lists immutable captures for an authorized session, newest first. */
+  listSourceControlOutputCaptures(
+    token: string, projectId: string, runId: string, sessionId: string,
+    cursor: { capturedAt: string; captureId: string } | null = null,
+    tenantSelector?: string | null,
+  ): Promise<SourceControlOutputCapturePage> {
+    const query = new URLSearchParams({ limit: '50' });
+    if (cursor) {
+      query.set('beforeCapturedAt', cursor.capturedAt);
+      query.set('beforeCaptureId', cursor.captureId);
+    }
+    return this.request(token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures')}?${query}`,
+      {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Reads the capture manifest without accessing the current workspace. */
+  readSourceControlOutputCapture(
+    token: string, projectId: string, runId: string, sessionId: string, captureId: string,
+    tenantSelector?: string | null,
+  ): Promise<SourceControlOutputCaptureDetail> {
+    return this.request(token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId)}`,
+      {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Reads bytes, not JSON or executable HTML. The viewer checks the manifest digest before display. */
+  readSourceControlOutputCaptureFile(
+    token: string, projectId: string, runId: string, sessionId: string, captureId: string, path: string,
+    tenantSelector?: string | null,
+  ): Promise<ArrayBuffer> {
+    const query = new URLSearchParams({ path });
+    return sendGatewayRequest(this.fetcher, token,
+      `${this.baseUrl}/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'files')}?${query}`,
+      {}, tenantSelector, (response) => response.arrayBuffer());
   }
 
   /** Reads the effective provider and source-control selection for one run. */

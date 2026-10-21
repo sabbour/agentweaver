@@ -1052,6 +1052,53 @@ export interface SessionIdentity {
   sessionId: string;
 }
 
+/** Immutable produced-output metadata returned by the Source Control owner. */
+export interface SourceControlOutputCaptureSummary {
+  captureId: string;
+  eventId: string;
+  eventPosition: number;
+  capturedAt: string;
+  workspaceId: string;
+  branchName: string;
+  baseSha: string;
+  outputTreeSha: string;
+  manifestSha256: string;
+  manifestByteLength: number;
+  patchSha256: string;
+  patchByteLength: number;
+  packageByteLength: number;
+}
+
+/** Both cursor fields must be sent together on the next list read. */
+export interface SourceControlOutputCapturePage {
+  captures: SourceControlOutputCaptureSummary[];
+  nextBeforeCapturedAt?: string | null;
+  nextBeforeCaptureId?: string | null;
+}
+
+export interface SourceControlOutputFile {
+  path: string;
+  mode: string;
+  sha256: string;
+  byteLength: number;
+}
+
+export interface SourceControlOutputCaptureDetail {
+  capture: SourceControlOutputCaptureSummary;
+  manifest: {
+    contractVersion: number;
+    workspaceId: string;
+    runId: string;
+    repositoryId: string;
+    resourceGeneration: number;
+    workspaceIncarnationId: string;
+    branchName: string;
+    baseSha: string;
+    outputTreeSha: string;
+    files: SourceControlOutputFile[];
+  };
+}
+
 /** One coordination-tree node with parent, lifecycle, and execution-fence metadata. */
 export interface SessionTreeNode {
   identity: SessionIdentity;

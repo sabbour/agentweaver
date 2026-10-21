@@ -100,6 +100,7 @@ import { rememberRun } from './recentRuns';
 import { DecisionList } from './DecisionView';
 import { NewChatComposer } from './NewChatComposer';
 import { PlatformComponentsTable } from './PlatformComponentsTable';
+import { OutputCaptureBrowser } from './OutputCaptureBrowser';
 import { isRunFinished, runState } from './runState';
 import { DashboardPage } from './DashboardPage';
 import { OverviewPage } from './OverviewPage';
@@ -2752,6 +2753,7 @@ function RunPage() {
           )}
           {tab === 'changes' && (
             <div className="v1-stack">
+              <OutputCaptureBrowser projectId={projectId} runId={runId} initialCaptureId={searchParams.get('captureId') ?? undefined} />
               {currentSelection?.projectConfiguration.sourceControl?.authMode === 'githubApp' ? (
                 <RunGitHubAppPanel
                   projectId={projectId}
