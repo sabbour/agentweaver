@@ -150,6 +150,33 @@ Projects & Config. A run-bound token sees only its own run. The list reads
 persisted run records only. `title` and `goal` are `null` until a run start
 request stores them.
 
+## List project issues and pull requests
+
+Use `GET /api/v1/projects/{projectId}/source-control/issues` and
+`GET /api/v1/projects/{projectId}/source-control/pull-requests` to fill issue
+and pull request pickers. The Gateway forwards each request to the Orchestrator
+owner and returns its status and body with `Cache-Control: no-store`. Both
+lists read stored Agentweaver data. They don't call the source control provider.
+
+- `pageSize` defaults to 25 and accepts 1 through 100.
+- `cursor` continues from the previous page's `nextCursor`. Send the same
+  `state` and `pageSize` values with it.
+- `state` defaults to `open`. Issues also accept `closed` and `all`. Pull
+  requests also accept `closed`, `merged`, and `all`.
+
+The issue list returns issues that periodic issue sync linked to backlog tasks.
+It needs project or tenant read permission and rejects run-bound tokens. Items
+don't include an issue URL or author, because the backlog doesn't store them.
+
+The pull request list returns pull requests that the project's runs created or
+reused. It needs the same permission as the run list. It isn't a complete
+history: recording starts when Orchestrator migration 032 is applied, and the
+response reports that time in `coverage.recordedSince`. Before migration 032 is
+applied, the list returns `503 pull_request_records_unavailable` instead of an
+empty list.
+
+The web picker doesn't use these lists yet.
+
 ## Read project metrics and usage
 
 Send `GET /api/v1/projects/{projectId}/metrics` for run counts and a daily
@@ -215,18 +242,25 @@ Transfer version or
 team incompatibility returns `422`. These source routes do not establish
 deployment or a browser wizard.
 
-## Send Knowledge writes
+## Send idempotent writes
 
-The following Knowledge operations require exactly one `Idempotency-Key`
-header: `createKnowledgeRecord`, `updateKnowledgeRecord`,
-`restoreKnowledgeRecord`, `approveKnowledgeDecision`,
-`importKnowledgeRecords`, `promoteKnowledgeProposal`, and
-`rejectKnowledgeProposal`. Use a value of 1–128 ASCII letters or digits, or
-`.`, `_`, `-`, or `:`. Reuse the same key when retrying the same write.
+The following operations require exactly one `Idempotency-Key` header:
+
+- Runs: `createProjectRun` and `cancelProjectRun`.
+- Chief of Staff: `createChiefOfStaffPriority`.
+- Knowledge: `createKnowledgeRecord`, `updateKnowledgeRecord`,
+  `restoreKnowledgeRecord`, `approveKnowledgeDecision`,
+  `importKnowledgeRecords`, `promoteKnowledgeProposal`, and
+  `rejectKnowledgeProposal`.
+
+Use a value of 1–128 ASCII letters or digits, or `.`, `_`, `-`, or `:`. Reuse
+the same key when you retry the same write. Browser preflight allows the
+header only for these operations.
 
 The key provides idempotency only. It does not establish identity or authorize
-an operation. Knowledge rejects missing, duplicate, blank, and invalid keys.
+an operation. The owner rejects missing, duplicate, blank, and invalid keys.
 Reads, including `exportKnowledgeRecords`, do not require this header.
+`startProjectRun` does not take a key, because the owner replays start by run.
 
 ## Use the Identity Broker browser routes
 
@@ -334,10 +368,13 @@ Gateway request bodies are limited to 64 KiB by default. The Knowledge import
 endpoint accepts up to 1 MiB. Inline Skill preview and import each accept up to
 3 MiB. The MCP JSON-RPC envelope adds a separate 64 KiB allowance.
 
-The Gateway does not expose journal object-content reads or run-produced-file
-browsing in v1. The durable run-bound artifact manifest and object-version
-producer has not been admitted, so neither the Gateway nor the retained Web
-client claims host-file access or parity with older monolithic file routes.
+The Gateway does not expose journal object-content reads in v1. It exposes
+run-produced files only through the Source Control output-capture routes:
+capture, list, read, diff, and file. Each capture is a pinned, immutable copy
+of a run's workspace output, so neither the Gateway nor the retained Web client
+reads a host filesystem. The three read routes accept owner responses up to
+64 MiB, and the file route exposes the `X-Source-Control-Output-Sha256` header
+to browser callers.
 
 ## Build and test the host
 

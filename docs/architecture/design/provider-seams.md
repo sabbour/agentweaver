@@ -273,6 +273,10 @@ The defaults below describe the cutover path. A later provider is an extension p
 cutover. The owner names the service responsible for the adapter lifecycle; core enforcement can involve
 other services.
 
+To see which implementation is active in each area of a running deployment, use the
+[platform components report](../../guide/platform-components.md). A test in
+`tests/Agentweaver.Providers.Tests` keeps the area list of that report in sync with this table.
+
 | Seam | Purpose | Owning service | Azure/default adapter in 1.0 | Later adapters | Cardinality |
 | --- | --- | --- | --- | --- | --- |
 | Sessions | Journal, playback, and optional capture | Events & Sessions | Native Postgres journal | agentsessions capture sidecar | Exclusive authority, with optional capture mirror |

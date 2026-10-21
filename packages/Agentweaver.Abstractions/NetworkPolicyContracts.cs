@@ -304,7 +304,9 @@ public enum ProjectAuthorizationPermission
     AcceptRunSelection,
     ReadPlatformRuntimeDefaults,
     WritePlatformRuntimeDefaults,
-    AccessPrivateKnowledge
+    AccessPrivateKnowledge,
+    /// <summary>Cancel project runs as a current Contributor, Owner, or tenant administrator.</summary>
+    CancelRun
 }
 
 /// <summary>Permission plus role revision that produced the grant.</summary>

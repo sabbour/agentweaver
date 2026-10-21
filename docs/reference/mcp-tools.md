@@ -62,9 +62,20 @@ the configured Gateway.
 
 ## Tool index
 
-Every name below has the `agentweaver_` prefix. For example, the first entry is
+Every name below has the `agentweaver_` prefix. For example, `listProjects` is
 `agentweaver_listProjects`. These are the operation IDs in the checked-in
 `GatewayRouteCatalog`.
+
+### Caller attention
+
+| Operation ID | Purpose |
+| --- | --- |
+| `listUserNotifications` | Read pending attention across authorized projects and runs; supports cursor, page size, project filter and dismissed-item inclusion. |
+| `dismissUserNotification` | Dismiss a notification for the caller without resolving its gate. |
+
+These operations come from the same Gateway catalog as the existing tools.
+There is no separate Chief of Staff notification store or bell. See
+[Notifications](../guide/notifications.md).
 
 ### Projects and configuration
 
@@ -79,6 +90,7 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `getAuthorizationContext` | Read current tenant and effective authority. |
 | `getPlatformRuntimeDefaults` | Read platform defaults. |
 | `updatePlatformRuntimeDefaults` | Append platform defaults. |
+| `getPlatformComponents` | Read active platform components and their readiness. |
 | `acceptRunSelection` | Accept an immutable run selection. |
 | `getRunSelection` | Read the accepted selection. |
 
@@ -114,9 +126,11 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `previewMarketplaceSkill` | Validate selected content at the pinned commit. |
 | `importMarketplaceSkill` | Import the selected, previewed content. |
 | `previewSkillContent` | Validate submitted local content without importing. |
+| `packageSkillContent` | Turn uploaded files, a ZIP archive, or draft fields into skill candidates. |
 | `importProjectSkill` | Import validated local content. |
 | `updateProjectSkillAssignment` | Update project assignments at an expected configuration revision. |
 | `listProjectSkillInventory` | Read paginated revision metadata. |
+| `revokeProjectSkillRevision` | Revoke one imported skill revision with a reason. |
 
 ### Coordination
 
@@ -124,7 +138,19 @@ Revision checks stay inside `body`; no idempotency header is required.
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
 | `listProjectRuns` | List accepted project runs, newest first. |
+| `listProjectIssues` | List synced repository issues stored in the project backlog. |
+| `listProjectPullRequests` | List pull requests that project runs recorded after migration 032 was applied. |
 | `readProjectMetrics` | Read bounded project run counts and daily UTC activity from Orchestrator. |
+| `listChiefOfStaffConversations` | List my private Chief of Staff conversations. |
+| `bindChiefOfStaffConversation` | Bind a run I created to a Chief of Staff conversation. |
+| `getChiefOfStaffConversation` | Read one of my Chief of Staff conversations. |
+| `listChiefOfStaffPriorities` | List my ordered Priorities with resolved links. |
+| `createChiefOfStaffPriority` | Create a Priority. Requires `Idempotency-Key`. |
+| `reorderChiefOfStaffPriorities` | Reorder my Priorities at an expected order revision. |
+| `getChiefOfStaffPriority` | Read one Priority. |
+| `updateChiefOfStaffPriority` | Change a Priority at an expected revision. Never changes run state. |
+| `addChiefOfStaffPriorityLink` | Link a Priority to a run, conversation, issue, pull request, or artifact. |
+| `removeChiefOfStaffPriorityLink` | Remove a Priority link at an expected revision. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |
@@ -184,6 +210,11 @@ for metric definitions and differences from the 0.x dashboard.
 | `prepareSourceControlMergeIntent` | Request merge approval. |
 | `readSourceControlMergeIntent` | Read a merge intent. |
 | `executeSourceControlMergeIntent` | Execute an approved intent. |
+| `captureSourceControlWorkspaceOutput` | Capture the produced output of a workspace. |
+| `listSourceControlOutputCaptures` | List admitted output captures, newest first. |
+| `readSourceControlOutputCapture` | Read a capture and its file list. |
+| `readSourceControlOutputCaptureDiff` | Read the diff of a capture. |
+| `readSourceControlOutputCaptureFile` | Read one captured file. The tool returns the body as text. |
 
 ### Knowledge
 
@@ -207,6 +238,7 @@ for metric definitions and differences from the 0.x dashboard.
 | Operation ID | Purpose |
 | --- | --- |
 | `replayRunEvents` | Read a finite committed journal page. |
+| `readSessionTurnContent` | Read recorded turn text with current run-bound project authority. Excludes cache, configuration, and tool-result material. |
 | `readRunUsage` | Read run usage totals. |
 | `readProjectUsage` | Read persisted project usage grouped by model and agent. |
 

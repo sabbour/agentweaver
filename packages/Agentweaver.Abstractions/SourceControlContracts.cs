@@ -220,6 +220,27 @@ public sealed record SourceControlIssue(
     Uri HtmlUrl,
     string State);
 
+/// <summary>Repository issue content used by periodic synchronization, excluding pull requests.</summary>
+public sealed record SourceControlIssueContent(long Number, string Title, string Body, bool Closed);
+
+/// <summary>A bounded page; the continuation is a provider page number, not a remote URL.</summary>
+public sealed record SourceControlIssuePage(ImmutableArray<SourceControlIssueContent> Issues, int? NextPage);
+
+/// <summary>Issue read and reconciliation capability, separate from run orchestration operations.</summary>
+public interface ISourceControlIssueAdapter
+{
+    Task<SourceControlRepositoryNegotiation> NegotiateIssueRepositoryAsync(ProviderCandidate candidate,
+        SourceControlRepositoryIdentity repository, SecretCredential credential, bool issueWriteGranted,
+        CancellationToken cancellationToken);
+    Task VerifyCurrentIssueBindingAsync(SourceControlOperationContext context, CancellationToken cancellationToken);
+    Task<SourceControlIssuePage> ListIssuesAsync(SourceControlOperationContext context, int page,
+        int pageSize, CancellationToken cancellationToken);
+    Task<SourceControlIssueContent> ReadIssueAsync(SourceControlOperationContext context, long number,
+        CancellationToken cancellationToken);
+    Task<SourceControlIssueContent> UpdateIssueAsync(SourceControlOperationContext context,
+        SourceControlIssueContent issue, CancellationToken cancellationToken);
+}
+
 /// <summary>
 /// Pull-request creation request pinned to expected head and base commits so the adapter
 /// can reject an unexpected repository state before creating or reusing a PR.
@@ -242,6 +263,10 @@ public enum SourceControlPullRequestDisposition
 }
 
 /// <summary>Provider-returned pull request branches, commit pins, state, and disposition.</summary>
+/// <param name="Title">
+/// The provider's current title, or null when the provider didn't return one. Merge intents clear it,
+/// so their stored request data doesn't depend on a title that can change remotely.
+/// </param>
 public sealed record SourceControlPullRequest(
     long Number,
     Uri HtmlUrl,
@@ -251,7 +276,8 @@ public sealed record SourceControlPullRequest(
     string BaseBranch,
     string BaseSha,
     bool Merged,
-    SourceControlPullRequestDisposition Disposition);
+    SourceControlPullRequestDisposition Disposition,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Title = null);
 
 /// <summary>Normalized review decisions returned by a Source Control provider.</summary>
 public enum SourceControlReviewState
