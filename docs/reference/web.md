@@ -29,18 +29,24 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |
 | `src/v1/SkillsMarketplacePanel.tsx` | Marketplace sources, local upload, inventory, import, and assignment. |
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
-| `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP connection status, sign-in, refresh, and disconnect in project settings. |
+| `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP saved connection list, connection status, sign-in, refresh, and disconnect in project settings. |
 | `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. |
-| `src/v1/OverviewPage.tsx` | Cross-project home: projects, recent runs in this browser, and items that need input. |
-| `src/v1/DashboardPage.tsx` | Project dashboard: readiness from configuration, team and skills summaries, and quick actions. |
-| `src/v1/OrchestrationsPage.tsx` | Project run list with a status summary. |
-| `src/v1/RunList.tsx`, `src/v1/runListData.ts`, `src/v1/recentRuns.ts` | Shared run list and its data source. Today the source is the runs opened in this browser, per tenant, cleared on sign-out. |
+| `src/v1/OverviewPage.tsx` | Cross-project home: operations summary, recent projects, metrics for one selected project, recent runs, and items that need input. |
+| `src/v1/SessionsPage.tsx` | Runs across all visible projects, newest first, with **Load more** and **New session**. |
+| `src/v1/NewSessionPage.tsx`, `src/v1/pendingRun.ts` | New session: create a run, sign in silently for that run, and start it. The pending run is kept in session storage across the sign-in. |
+| `src/v1/StopRunButton.tsx` | **Stop run** with a confirmation dialog and one idempotency key per dialog. |
+| `src/v1/ProjectMetricsSections.tsx`, `src/v1/projectMetrics.ts` | Project run metrics and usage over 7, 30, or 90 days. Costs show one subtotal for each price unit and disposition and are never added together. |
+| `src/v1/DashboardPage.tsx` | Project dashboard: readiness from configuration, metrics and usage, recent runs, team summary, and quick actions. |
+| `src/v1/OrchestrationsPage.tsx` | Project **Active** and **Recent** run lists with a status summary. |
+| `src/v1/RunList.tsx`, `src/v1/runListData.ts` | Shared run list and its data source: the project run list API, with state filters and cursor paging. |
 | `src/v1/DecisionView.tsx`, `src/v1/decisionTitles.ts` | Shared decision view that rereads a gate before it approves or rejects. |
-| `src/v1/AttentionList.tsx`, `src/v1/runAttention.ts` | Items that need input, for Overview and the notification bell. |
+| `src/v1/AttentionList.tsx`, `src/v1/runAttention.ts` | Caller notifications across projects, for Overview and the notification bell: pending gates and backlog promotions, each with **Dismiss**. |
 | `src/v1/runState.ts` | State words for runs: Needs input, Open, Working, Done, and Unavailable. |
 | `src/v1/NewChatComposer.tsx` | Message composer with a stable idempotency key per draft. The run Chat tab uses it. |
 | `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
-| `src/v1/AgentsView.tsx` | Agents roster, filters, and the charter drawer. |
+| `src/v1/AgentsView.tsx`, `src/v1/AgentsTeamControls.tsx` | Agents roster, filters, the charter drawer, **Cast team**, **Add member**, pending team proposals, and team export and import. |
+| `src/v1/CastTeamPage.tsx`, `src/v1/castingData.ts` | Cast a team from a template or roles, review the proposal, and confirm or reject it. |
+| `src/v1/PlatformSettingsPage.tsx` | Read-only status of the 16 platform component areas for tenant and platform administrators. |
 | `src/v1/ProjectSettingsSections.tsx`, `src/v1/settingsSections.ts`, `src/v1/projectReadiness.ts` | Project settings rail, General, Access, Repository, Run limits, and Danger zone sections. |
 | `src/v1/ProjectMembers.tsx` | Access > Members on the project role-assignment API. Only tenant administrators see add and remove. |
 | `src/v1/ConfigurationFields.tsx` | Readable model, reasoning, credential, per-task model, and platform component implementation fields for project configuration. |
@@ -70,6 +76,10 @@ data hooks are not mounted.
 | `/projects/:projectId/knowledge`, `/projects/:projectId/memories` | `KnowledgePage`; `runId` and `agentId` query values prefill scope. |
 | `/projects/:projectId/team/:agentName/memory` | Redirect to Memories with `agentId` prefilled. |
 | `/settings` | Account settings: clear the session and manage the Repo App account. |
+| `/sessions` | `SessionsPage`. |
+| `/assistant` | `NewSessionPage`; `project` or `projectId` preselects the project. |
+| `/platform-settings` | `PlatformSettingsPage`. |
+| `/projects/:projectId/team/cast` | `CastTeamPage`. |
 | `/projects/:projectId/runs/:runId` | `RunPage`; `view` selects `chat`, `topology`, `approvals`, `activity`, `changes`, `usage`, or `selection` (**Run settings**). Missing or unknown values open `chat`. |
 | `/projects/:projectId/orchestrations/:runId` | Redirect to the corresponding run route. |
 | `/auth/callback` | Broker callback handling; popup callbacks bypass the main route tree. |
@@ -78,7 +88,7 @@ data hooks are not mounted.
 | `/auth/remote-mcp/oauth/callback` | Remote MCP OAuth popup callback, handled before the main route tree. |
 | `/console` | Redirect to `/assistant`. |
 | `/projects/:projectId/sessions` | Redirect to `/sessions`. |
-| `/sessions`, `/assistant`, `/platform-settings`, `/observability/*`, `/projects/:projectId/team/cast`, and the project `board`, `flow`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
+| `/observability/*` and the project `board`, `flow`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
 | Other paths | `UnavailablePage` with **Page not found**. |
 
 The production host serves `index.html` for client routes. Missing `/assets`

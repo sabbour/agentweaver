@@ -70,16 +70,20 @@ The client uses these routes:
 | Route | Purpose |
 | --- | --- |
 | `/` | Opens `/overview`. |
-| `/overview` | Read your projects, **Recent runs in this browser**, and the items that need your input. |
+| `/overview` | Read your projects, recent runs across your projects, metrics and usage for one project, and your notifications. |
+| `/sessions` | List runs across your projects, newest first, and start a new session. `/projects/:projectId/sessions` opens the same page. |
+| `/assistant` | Start a new session: choose a project and send the first message. `/console` opens the same page. |
 | `/projects` | Browse project tiles and create a project. Creating a project does not make you its owner. |
-| `/projects/:projectId` | Read the project **Dashboard**: setup readiness, recent runs, team, and quick actions. |
-| `/projects/:projectId/orchestrations` | Read this project's runs from this browser and open a run. |
-| `/projects/:projectId/team` | Read agents and edit an agent's role and charter. |
+| `/projects/:projectId` | Read the project **Dashboard**: setup readiness, metrics, usage, recent runs, team, and quick actions. |
+| `/projects/:projectId/orchestrations` | List this project's active and finished runs and open a run. |
+| `/projects/:projectId/team` | Read agents, edit an agent's role and charter, add a member, and export or import the team. |
+| `/projects/:projectId/team/cast` | Cast a team from a template or chosen roles, then review and confirm the proposal. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
 | `/projects/:projectId/skills` | Manage Skill sources, imported revisions, and agent assignments. |
 | `/projects/:projectId/memories` | Search and manage Knowledge records and transfer bundles for a run and an agent. `/knowledge` opens the same page. |
 | `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. The `view` query selects a tab, such as `?view=approvals`. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
+| `/platform-settings` | Read the platform component report. Only tenant and platform administrators can read it. |
 
 ## Navigate the client
 
@@ -87,10 +91,29 @@ The v1 client keeps the 0.x navigation rail, project switcher, floating content
 panel, gallery tiles, dialogs, typography, and theme. Its views use v1 service
 contracts instead of the 0.x API.
 
-The rail has **Overview** and **Projects**. **Overview** is the home page. It
-shows a summary of your projects, **Recent runs in this browser**, and **Needs
-attention**: the questions and approvals that need your input in the run you
-have open. The notification bell in the shell lists the same items.
+The rail has **Overview**, **Projects**, and **Sessions**. The **Sessions**
+group has a **New session** button. **Overview** is the home page. It shows:
+
+- An **Operations** card with active projects, archived projects, recent
+  runs, and items that need your input.
+- Your most recently updated projects.
+- Metrics and usage for one project. Choose another project in the section's
+  project picker.
+- **Recent runs** across your projects.
+- **Needs attention**: your notifications across all projects.
+
+The notification bell in the shell lists the same notifications. Its badge
+shows the number of pending notifications that the service reports. The
+client reads the list again every 30 seconds while the tab is visible. There
+are two kinds of item:
+
+- A pending question or approval in a run. Select it to open that run's
+  **Approvals** tab.
+- A backlog promotion, shown as **N subtasks created**. It links to the
+  project **Board**, which isn't available in this version.
+
+Each item has **Dismiss**. Dismissing hides the item for you only. It does not
+answer or resolve the request.
 
 Choose **Projects** to open the project gallery. Each tile shows the project
 state, revision, and your access: **Can edit**, **Can view**, or **No access**.
@@ -107,9 +130,9 @@ Within a project, use these destinations:
 
 | Destination | Route | What you can do |
 | --- | --- | --- |
-| Dashboard | `/projects/:projectId` | Read setup readiness from the saved configuration, team and skills summaries, and recent runs. Use quick actions to finish setup or open Orchestrations and Memories. |
-| Orchestrations | `/projects/:projectId/orchestrations` | Read this project's runs from this browser with a status summary. Select **Refresh** to reload. |
-| Agents | `/projects/:projectId/team` | Read the **Total**, **In the team**, and **Not in the team** counts. Filter the agent tiles. Open an agent to read its ID, team position, and skills, or edit its role and charter. |
+| Dashboard | `/projects/:projectId` | Read setup readiness from the saved configuration, metric tiles, the **Activity** chart, run totals, model and agent usage, recent runs, and the team. Use quick actions to finish setup or open Orchestrations and Memories. |
+| Orchestrations | `/projects/:projectId/orchestrations` | List the project's runs in **Active** and **Recent** sections, with a status summary. Select **Refresh** to reload. |
+| Agents | `/projects/:projectId/team` | Read the **Total**, **In the team**, and **Not in the team** counts. Filter the agent tiles. Open an agent to read its ID, team position, and skills, or edit its role and charter. Use **Cast team**, **Add member**, and **Sync**. |
 | Skills | `/projects/:projectId/skills` | Browse marketplace sources, preview and import Skills, read the inventory, and assign Skills to agents. |
 | Memories | `/projects/:projectId/memories` | Choose a run and an agent under **Show memories for**, then work with records and revisions. |
 
@@ -120,28 +143,97 @@ query parameters when they open the run.
 
 ### Find a run
 
-You don't type a run ID. A run appears in **Recent runs in this browser**
-after you open it once in this browser, for example from a link or a
-notification. The list appears on **Overview**, the project **Dashboard**, and
-**Orchestrations**. Each row has **Open** and **Remove**. **Remove** takes the
-run off the list only; the run doesn't change. An empty list shows **Runs you
-open appear here.** Signing out clears the list. The list is stored in this
-browser and holds only IDs and the last state read.
+You don't type a run ID. The client reads runs from the project run list:
 
-The service has no run list API, so the client can't list every run. It has no
-API to start a run, so the browser can't start a new chat or run. It has no
-project metrics API, so the Dashboard shows no metrics. **Agents** has no
-**Cast**, **Add**, or **Sync** controls, because the Gateway doesn't expose
-casting.
+- **Orchestrations** shows one project's runs in two sections. **Active**
+  holds runs that are working, open, or waiting for input. **Recent** holds
+  finished runs: done, failed, cancelled, or with an unknown outcome. Each
+  section loads more rows with **Load more**.
+- **Sessions** shows runs across all your projects, newest first, with a
+  project column. Select **Load more** to read the next page. If the client
+  can't read the runs of some projects, for example because you don't have
+  read access, a warning names those projects.
+- **Overview** and the project **Dashboard** show the newest runs.
+
+Each row has **Open**, which opens the run page.
+
+### Start a session
+
+Select **New session** in the rail or on **Sessions** to open `/assistant`.
+Choose a project, write the first message, and send it. The client then:
+
+1. Creates the run with the first message. The run uses the project's current
+   configuration revision.
+2. Gets a token bound to the new run. This sign-in is silent when the Identity
+   Broker allows it. If it needs you, the page shows **Sign in**.
+3. Starts the run and opens its **Chat** tab.
+
+The client keeps the created run in session storage. If the sign-in leaves the
+page, the client continues when you return. If a step fails, select **Try
+again**. Select **Dismiss** to drop the pending run from the page; the run
+stays listed in **Sessions**.
+
+### Stop a run
+
+While a run is open, the run page header shows **Stop run**. Select it, then
+confirm in the **Stop this run?** dialog. A retry after a failure sends the
+same request again, so the service stops the run only once. The button isn't
+shown for a finished run or a run whose state the service didn't report.
+
+### Read project metrics and usage
+
+The **Dashboard** and **Overview** show metrics for one project. Choose
+**Last 7 days**, **Last 30 days**, or **Last 90 days**. The range covers whole
+UTC days, including today so far. The service reports metrics per project
+only, so the client doesn't show totals across projects.
+
+- The tiles show active runs, runs that need input, runs in the range, and
+  success. **Success** is succeeded runs out of completed runs. With no
+  completed runs in the range, it shows a dash instead of 0.
+- The **Activity** chart shows created and completed runs per UTC day.
+- **Usage by model** and **Usage by agent** show runs, requests, token
+  counts, average duration, cost, and unpriced requests.
+- Costs appear as reported, one line for each price unit and disposition, for
+  example `1.25 USD · Estimate`. The client never adds or converts these
+  subtotals.
+
+A measurement that the service didn't record shows a dash, not 0.
+
+### Manage the team
+
+**Agents** has three team controls. Each change becomes a pending team
+proposal first. Nothing changes until someone confirms the proposal.
+
+- **Cast team** opens the **Cast a team** page. Pick a built-in template or
+  choose roles, then review the proposed agents. You can remove members before
+  you confirm. **Cast team** confirms the proposal and saves a new
+  configuration revision. **Reject** discards it.
+- **Add member** stages a proposal that adds one catalog role to the current
+  team, then opens it for review.
+- **Sync** has **Export team** and **Import team**. Export downloads the team
+  as a checked JSON file. Import accepts a team file from another project, up
+  to 1 MiB, and stages it as a proposal. The service checks the file format
+  and digest.
+
+**Pending team proposals** lists proposals that are not confirmed yet, with a
+link to review each one. If someone saved the configuration meanwhile, the
+page reads it again and asks you to retry.
+
+### Read platform components
+
+Tenant and platform administrators can open `/platform-settings`. The page
+lists all 16 platform component areas. For each area, it shows the owning
+service, its readiness, and the active and available implementations. The
+page shows each status exactly as the owner reported it. If an owner didn't
+report, the area reads **Status not reported**. Other users get a permission
+message.
 
 ### Unavailable destinations
 
-Board, Flow, Workspace, Workflows, Observability, Diagnostics, Heartbeat,
-Cluster, Assistant, Platform settings, and Sessions are not navigation choices.
-Their data isn't exposed by this client's v1 APIs. Old links show one **Not
-available in this version** page with a reason and a link back. Unknown
-addresses show **Page not found**. Neither page invents data or calls the old
-monolith.
+Board, Flow, Workspace, Workflows, Observability, Diagnostics, Heartbeat, and
+Cluster are not navigation choices. Their old links show one **Not available
+in this version** page with a reason and a link back. Unknown addresses show
+**Page not found**. Neither page invents data or calls the old monolith.
 
 See the [UI parity inventory](../reference/web-ui-parity.md) for the retained
 patterns, v1 adaptations, and remaining limits.
@@ -296,7 +388,7 @@ runtime-loaded status.
 
 The **Memories** page searches owner-reported result pages for the project,
 run, and agent you choose under **Show memories for**. The **Run** list holds
-the runs you opened in this browser. The **Agent** list holds the agents in
+up to 100 of the project's newest runs from the run list. The **Agent** list holds the agents in
 the project configuration. Kind tabs filter by **All**, **Memories**,
 **Decisions**, **Proposals**, or **Session context**. It displays immutable revision history and supports the
 owner-authorized operations implemented for the record type:
@@ -363,13 +455,16 @@ present them as an empty repository list or a disconnected account.
 
 ## Connect a Remote MCP tool service
 
-In project **Settings > Connections > Remote MCP**, enter the saved connection
-ID and select **Load connection**. The view shows the state returned by the
-service. It rejects responses for another project or connection.
+In project **Settings > Connections > Remote MCP**, the panel lists the
+project's saved connections, with **Load more connections** for the next page.
+Removed connections aren't listed. Pick a connection to fill its ID and the
+checksum of its saved setup, and to load its status. You can also enter a
+connection ID and select **Load connection**. The view shows the state
+returned by the service. It rejects responses for another project or
+connection.
 
-Use **Connection setup** for registration and authorization metadata. Enter
-the checksum from the saved project connection setup. The current API does
-not return a connection directory or that checksum. The browser does not
+Use **Connection setup** for registration and authorization metadata. The
+checksum comes from the saved connection list. The browser does not
 calculate a replacement checksum from its JSON formatting.
 
 Authorize opens the service-provided HTTPS address in a tracked popup. After
@@ -436,9 +531,8 @@ exact `/openapi/v1.json` path to Gateway, and exact `/mcp` and protected
 resource metadata paths to MCP on port 8443. These source manifests describe
 the intended route mapping; they do not establish a running portal or backend.
 
-The client opens runs you already opened in this browser, from a link, or from
-a notification. You don't type a run ID. The client can't start a new chat or
-run, and it can't list every run, because the service has no APIs for them. It does not expose run-root acceptance,
+The client lists runs from the project run list, starts new sessions, and
+stops runs. You don't type a run ID. It does not expose run-root acceptance,
 typed outcome/workflow/work-plan proposals, or child-session
 registration/spawn/fork controls, even where owner routes exist. The client
 can message existing sessions and request supported detach/archive actions.
@@ -452,11 +546,22 @@ offer the older 0.x file endpoints.
 
 The run's **Run settings** tab shows the model reference and the allowed
 implementations for each platform component, in order. It doesn't show the
-implementation that is running or a runtime SDK model ID, because the service
-has no platform components API. Usage
+implementation that is running or a runtime SDK model ID, because the run
+selection reports allowed choices only. **Platform settings** shows the active
+implementations for the deployment. Usage
 reports run totals without per-event model-binding details. The UI does not
 infer those identities from configuration or usage, and it does not replace
 missing measurements with zero.
+
+These 0.x features are not in this version:
+
+- The project **Board** page. Backlog promotion notifications link to it, and
+  the link opens the **Not available in this version** page.
+- The suggested skill marketplaces panel on **Skills**.
+- The **AI Formulate** and **Analyze** casting modes and the **Universe**
+  picker on **Cast a team**.
+- The count strip on **Memories**.
+- Metrics totaled across projects. **Overview** shows one project at a time.
 
 ## Expected result
 

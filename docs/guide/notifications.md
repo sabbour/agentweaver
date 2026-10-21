@@ -41,7 +41,9 @@ work that still needs input. Both views use the same source.
 
 All responses use `Cache-Control: no-store`. Polling is supported. Clients
 should keep one poller for the existing bell and attention list rather than
-create another notification surface.
+create another notification surface. The v1 web client polls every 30 seconds
+while the browser tab is visible, reads up to 50 items, and shows `count` on
+the bell badge. Each item has **Dismiss**.
 
 ## Dismiss a notification
 
@@ -71,7 +73,7 @@ Items sort newest first. Dismissals are stored per user, not globally.
 The only delivery channels are the in-app bell, toast and optional sound;
 there is no email, Teams, operating-system push or webhook delivery.
 
-The browser implementation polls every 20 seconds. The first successful read sets
+The 0.x browser implementation polls every 20 seconds. The first successful read sets
 the badge without showing a toast for every existing item. Newly observed IDs
 produce a toast and optional sound. Opening the bell marks items seen in
 browser memory. The sound preference uses browser storage, not server
@@ -84,8 +86,8 @@ division: browser seen and sound state do not become gate state.
 0.x also derives recent delegated-work promotion notices from persisted plans
 and the tasks they actually created. Those notices need the v1 task-promotion
 owner contract; they must not be synthesized from unrelated task creation.
-The pending-gate endpoint does not claim to implement that source. Follow
-[#2187](https://github.com/sabbour/agentweaver/issues/2187) for the remaining
-promotion-source integration and
-[#2176](https://github.com/sabbour/agentweaver/issues/2176) for repository issue
-synchronization. ADR 0001 does not drop these capabilities.
+The pending-gate endpoint does not return that source yet. The v1 web client
+already displays a backlog promotion item as **N subtasks created**, with a
+link to the project Board, when a response includes one. The Board page is not
+available in this version. Repository issue synchronization is also not
+available yet. ADR 0001 does not drop these capabilities.

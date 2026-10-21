@@ -6,8 +6,7 @@ context and the Memory provider. Records belong to the project and agent.
 
 ## Prerequisites
 
-- Open the run once in this browser so it appears in **Recent runs in this
-  browser**.
+- Have at least one run in the project.
 - Have current owner-granted access for the project and run.
 - Use a Broker token bound to the project and run.
 
@@ -18,8 +17,8 @@ service availability.
 ## Select scope and search
 
 1. Open **Memories** from a project.
-2. Under **Show memories for**, choose a **Run**. The list contains the runs
-   you opened in this browser.
+2. Under **Show memories for**, choose a **Run**. The list contains up to 100 of the
+   project's newest runs.
 3. Choose an **Agent**. The list contains the agents in the project
    configuration.
 4. Select **Show memories**.
@@ -32,7 +31,7 @@ service availability.
 8. Use **Previous page** and **Next page** to read more results. Select
    **Refresh** to read the results again.
 
-If you haven't opened a run in this browser, the page shows **No runs yet**
+If the project has no runs, the page shows **No runs yet**
 with a link to **Orchestrations**. You don't type a run ID.
 
 The page accepts `runId` and `agentId` query parameters. The **Memories for

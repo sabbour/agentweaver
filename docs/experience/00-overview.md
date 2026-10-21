@@ -12,7 +12,7 @@ checked-in web implementation; it does not confirm that a service is deployed.
 | Identity Broker | The OAuth service that signs you in and issues access tokens after checking current grants. |
 | Owner | The service responsible for validating an operation and storing its authoritative state. |
 | Project | The workspace scope for project configuration and access. |
-| Run | An existing execution within one project. The browser does not create or schedule runs yet. |
+| Run | One execution within one project. The browser can create, start, and stop runs. It does not schedule runs. |
 | Session | A node in a run's owner-reported session tree. |
 | Run-bound token | A Broker token authorized for one exact project and run pair. |
 
@@ -28,35 +28,37 @@ and the authorization checks behind Agentweaver scopes.
 ## What you can do
 
 1. [Sign in](./onboarding-auth.md) through the Identity Broker.
-2. Start on **Overview**. It shows your projects, the runs you opened in this
-   browser, and the items that need your input.
+2. Start on **Overview**. It shows your projects, metrics for one project,
+   recent runs, and the items that need your input.
 3. [Choose or create a project](./projects.md).
 4. [Edit project settings](./configuration.md), [manage skills](./skills.md),
    and [connect accounts](./connections.md).
-5. Open a run from **Recent runs in this browser**.
+5. [Start a session](./runs-sessions.md#start-a-new-chat) with **New session**,
+   or open a run from **Sessions** or a project's **Orchestrations**.
 6. [Inspect sessions and respond to requests](./runs-sessions.md).
 7. [Review memories](./knowledge.md) for a run and an agent.
 
-You don't type a run ID. A run appears in **Recent runs in this browser** after
-you open it once in this browser, for example from a link or a notification.
-The browser can't start a new chat or run, because the service has no API to
-start one. The browser also can't list every run in a project, because the
-service has no run list API. Use **Recent runs in this browser** instead.
+You don't type a run ID. The run lists read the service run list, newest
+first, and load more rows with **Load more**.
 
 ## Browser routes
 
 | Route | What you can do |
 | --- | --- |
 | `/` | Opens `/overview`. |
-| `/overview` | Read a summary of your projects, **Recent runs in this browser**, and **Needs attention**. |
+| `/overview` | Read a summary of your projects, metrics and usage for one project, **Recent runs**, and **Needs attention**. |
+| `/sessions` | List runs across your projects, newest first, and start a new session. |
+| `/assistant` | Start a new session: choose a project and write the first message. `/console` opens the same page. |
 | `/projects` | Browse project tiles and create a project. |
-| `/projects/:projectId` | Read the project **Dashboard**: setup readiness, recent runs, team, and quick actions. |
-| `/projects/:projectId/orchestrations` | Read this project's runs from this browser, grouped by state, and open a run. |
-| `/projects/:projectId/team` | Review the project's agents and edit an agent's charter. |
+| `/projects/:projectId` | Read the project **Dashboard**: setup readiness, run metrics, usage, recent runs, team, and quick actions. |
+| `/projects/:projectId/orchestrations` | List this project's **Active** and **Recent** runs and open a run. |
+| `/projects/:projectId/team` | Review the project's agents, edit a charter, add a member, and export or import the team. |
+| `/projects/:projectId/team/cast` | Cast a team from a template or a list of roles, then review and confirm it. |
 | `/projects/:projectId/skills` | Browse, preview, import, and assign Skills. |
 | `/projects/:projectId/memories` | Search, write, review, version, and transfer memories for a run and an agent. `/knowledge` opens the same page. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
+| `/platform-settings` | Read the status of the 16 platform component areas. Tenant and platform administrators only. |
 | `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. |
 
 The run page's `view` query parameter accepts `chat`, `topology`,
@@ -65,14 +67,20 @@ The run page's `view` query parameter accepts `chat`, `topology`,
 `/projects/:projectId/orchestrations/:runId` route redirects to the run route.
 
 Navigation hides 0.x destinations that have no v1 API: Board, Flow,
-Workspace, Workflows, Observability, Diagnostics, Heartbeat, Cluster,
-Assistant, Platform settings, and Sessions. Their old addresses open one
-**Not available in this version** page that explains why and links back.
-Unknown addresses show **Page not found**.
+Workspace, Workflows, Observability, Diagnostics, Heartbeat, and Cluster.
+Their old addresses open one **Not available in this version** page that
+explains why and links back. The old project sessions address opens
+**Sessions**. Unknown addresses show **Page not found**.
 
-The shell has a notification bell. It lists the questions and approvals that
-need your input in the run you have open. Select an item to open that run's
-**Approvals** tab.
+The shell has a notification bell. It lists your notifications across all
+projects:
+
+- A question or approval that needs your input. Select it to open that run's
+  **Approvals** tab.
+- A backlog promotion, shown as **N subtasks created**. It links to the
+  project Board, which is not available in this version.
+
+Select **Dismiss** to hide a notification for you only.
 
 ## Model defaults
 
