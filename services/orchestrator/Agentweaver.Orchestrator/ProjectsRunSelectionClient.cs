@@ -427,6 +427,62 @@ internal sealed class ProjectsRunSelectionClient(
     }
 
     /// <summary>
+    /// Reads fresh Projects authorization and requires project-level read access for a project-scoped read.
+    /// </summary>
+    /// <param name="context">The authenticated request whose bearer and tenant selector are forwarded to Projects.</param>
+    /// <param name="projectId">The project named by the request path.</param>
+    /// <param name="cancellationToken">Cancels the Projects call.</param>
+    /// <returns>The validated authorization context, including the tenant used to filter owner rows.</returns>
+    /// <exception cref="CoordinationException">The caller, token binding, owner response, or permission is invalid.</exception>
+    /// <remarks>
+    /// Accepts <c>readProjects</c> or <c>readRunSelection</c> on the project, or tenant-level <c>readProjects</c>.
+    /// A project-bound token must name the same project. A run-bound token remains bound to its run.
+    /// </remarks>
+    internal async Task<ProjectsAuthorizationContext> ReadProjectReadAuthorityAsync(
+        HttpContext context,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        CoordinationIdentity.RequireReadScope(context.User);
+        var boundProjects = context.User.FindAll("project_id").Take(2).ToArray();
+        var boundRuns = context.User.FindAll("run_id").Take(2).ToArray();
+        if (!HasAudience(context.User, options.Audience) ||
+            !HasAudience(context.User, options.ProjectsAudience) ||
+            boundProjects.Length > 1 || boundRuns.Length > 1 ||
+            (boundProjects.Length == 1 && boundProjects[0].Value != projectId) ||
+            (boundRuns.Length == 1 && boundProjects.Length == 0))
+            throw new CoordinationException("caller_binding_mismatch", StatusCodes.Status403Forbidden);
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        var bearer = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        var authorization = await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken)
+            .ConfigureAwait(false);
+        if (authorization.ContractVersion != 1 ||
+            authorization.Issuer != options.Issuer ||
+            authorization.ActorId != caller.Subject ||
+            string.IsNullOrWhiteSpace(authorization.TenantId) ||
+            (tenant is not null && authorization.TenantId != tenant) ||
+            authorization.MembershipRevision < 1 ||
+            (authorization.BoundProjectId is not null && authorization.BoundProjectId != projectId) ||
+            (authorization.BoundRunId is not null && authorization.BoundProjectId is null) ||
+            authorization.BoundProjectId != (boundProjects.Length == 1 ? boundProjects[0].Value : null) ||
+            authorization.BoundRunId != (boundRuns.Length == 1 ? boundRuns[0].Value : null) ||
+            authorization.EffectiveAuthority.IsDefault ||
+            !authorization.EffectiveAuthority.Any(authority =>
+                !authority.Permissions.IsDefault &&
+                ((authority.ResourceType == "project" && authority.ResourceId == projectId &&
+                    authority.Permissions.Any(permission =>
+                        permission.Permission is "readProjects" or "readRunSelection" &&
+                        permission.RoleRevision > 0)) ||
+                 (authority.ResourceType == "tenant" && authority.ResourceId == authorization.TenantId &&
+                    authority.Permissions.Any(permission =>
+                        permission.Permission == "readProjects" && permission.RoleRevision > 0)))))
+            throw new CoordinationException("project_read_permission_denied", StatusCodes.Status403Forbidden);
+        return authorization;
+    }
+
+    /// <summary>
     /// Resolves every reviewed remote-tool snapshot reference before accepting the selection contract.
     /// </summary>
     /// <exception cref="CoordinationException">Thrown when references are malformed, duplicated, outside the project, or unavailable.</exception>

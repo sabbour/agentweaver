@@ -96,7 +96,7 @@ test('Only the existing casting authority function receives direct runtime EXECU
 test('Core plan includes all 21 registered versions but never 017; source approval is not execution permission', () => {
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 29]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 29]);
   assert.equal(plan.executionRequirements.length, 6);
   assert.ok(plan.executionRequirements.some(item => item.includes('separate approval')));
   const replacementGrant = plan.executionRequirements.find(item =>
@@ -129,8 +129,9 @@ test('Initializer validates planned and installed mutation guards before it comm
   assert.ok(source.includes("has_column_privilege(@role, @table, @column, 'UPDATE')"));
   assert.doesNotMatch(source, /plan\.Services\.Any\(service => service\.Tables\.Any\(table => table\.MutationDenialRequired\)\)/);
   assert.doesNotMatch(source, /One-column row-lock grants still require reviewed mutation-denial source/);
-  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21,\\s*29\\]\\)'));
+  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21,\\s*22,\\s*29\\]\\)'));
   assert.ok(source.includes('21 => \\"row_lock_record_updates\\"'));
+  assert.ok(source.includes('22 => \\"run_list_completion\\"'));
   assert.ok(source.includes('29 => \\"spend_budget_exposure\\"'));
 });
 
@@ -158,15 +159,16 @@ test('Current source catalog preserves exact Core and Events versions and embedd
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 29])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 29])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
-      assert.ok(source.includes('(applied.Contains(29) && !applied.Contains(21))'));
+      assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
+      assert.ok(source.includes('(applied.Contains(29) && !applied.Contains(22))'));
       assert.ok(!source.includes('if (!applied.Contains(21))'));
       const allowed = source.match(/WHERE version NOT IN \(([\d, ]+)\)/);
       assert.deepEqual(allowed[1].split(',').map(Number), versions);
       assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
-      assert.ok(source.includes('Enumerable.Range(57, 13)'));
+      assert.ok(source.includes('Enumerable.Range(57, 16)'));
     } else {
       assert.ok(source.includes('private const int CurrentSchemaVersion = 8;'));
       assert.ok(source.includes('(applied.Contains(8) && !applied.Contains(7))'));

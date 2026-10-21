@@ -143,8 +143,10 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 21.
-These are 20 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16 and 18 through 22.
+These are 21 registered versions; version 17 remains excluded.
+Version 22 adds the run completion time. It needs no new grant because the
+runtime role already has table-level UPDATE on `accepted_runs`.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
 The plan retains 95 tables and eight exact row-lock columns.
 The plan contains five principal object IDs from the approved target snapshot.

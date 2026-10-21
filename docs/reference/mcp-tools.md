@@ -123,6 +123,7 @@ Revision checks stay inside `body`; no idempotency header is required.
 | Operation ID | Purpose |
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
+| `listProjectRuns` | List accepted project runs, newest first. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |
