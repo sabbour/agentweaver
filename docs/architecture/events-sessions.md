@@ -195,7 +195,8 @@ pin before it can price a source receipt. `RequireTrustedAzureByok` performs tha
 check. The receipt consumer applies the same source checks, without the dispatch
 message ID, to every receipt that claims Azure BYOK and rejects a failed claim, so
 untrusted usage never enters the ledger. Native SDK usage without a dispatch
-message ID is admitted as `Unpriced`. The default catalog has no Azure
+message ID is admitted as `Unpriced`. Events prices usage per dispatch, so it
+records this usage for token totals but doesn't assign it a cost. The default catalog has no Azure
 Cost provider, so admitted Azure BYOK usage stays `Unpriced`. Provisioned-throughput
 usage also remains `Unpriced` until trusted resource and time-window usage share
 is available.

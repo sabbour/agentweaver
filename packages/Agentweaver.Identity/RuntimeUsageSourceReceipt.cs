@@ -743,6 +743,10 @@ public static class RuntimeUsageSourceReceiptContract
 
     /// <summary>Reports whether a receipt claims Azure BYOK provenance without validating the claim.</summary>
     public static bool ClaimsAzureByok(RuntimeUsageSourceReceipt receipt) =>
+        // A receipt claims Azure BYOK when either side says so: the SDK source that the runtime
+        // reported, or the model binding pin that the owner registered. Checking both sides means a
+        // receipt can't avoid the provenance check by setting Azure on only one of them.
+        // Null-safe access lets callers run this before full validation.
         receipt?.Usage?.SdkSource is { SourceMode: "byok", ByokProvider.Type: "azure" } ||
         receipt?.Registration?.Binding?.ModelBindingPin?.ProviderType == "azure";
 
@@ -757,9 +761,18 @@ public static class RuntimeUsageSourceReceiptContract
     /// <exception cref="RuntimeAuthorizationException">Thrown with <c>runtime_byok_azure_provenance_invalid</c> when any fact does not match.</exception>
     public static TrustedAzureByokUsage RequireTrustedAzureByok(RuntimeUsageSourceReceipt receipt)
     {
+        // First prove the source facts: provider, deployment, configuration, and meter.
+        // This also recomputes and checks the receipt payload hash.
         var (pin, provider) = RequireAzureByokSource(receipt);
+
+        // Pricing and budget exposure are charged to one dispatch. Usage without a dispatch message ID,
+        // or with the empty GUID, can't be attributed to a dispatch, so it isn't trusted for pricing.
+        // The caller can still record that usage as Unpriced after RequireAzureByokProvenance passes.
         if (receipt.Usage.A2AMessageId is not { } dispatchId || dispatchId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
+
+        // Return the dispatch ID plus facts from the validated receipt and the pin. The configuration
+        // revision and hash come from the pin. The payload hash ties the result to the exact receipt.
         return new(receipt.ReceiptId, receipt.Registration.RuntimeInstanceId, receipt.Registration.Revision,
             dispatchId, provider.DeploymentId, pin.ConfigurationRevision, pin.ConfigurationHash,
             receipt.CanonicalPayloadHash);
@@ -778,17 +791,43 @@ public static class RuntimeUsageSourceReceiptContract
     private static (RuntimeModelBindingPin Pin, SdkByokProviderFacts Provider) RequireAzureByokSource(
         RuntimeUsageSourceReceipt receipt)
     {
+        // Validate checks the receipt version and usage binding, then recomputes the canonical payload
+        // hash. A changed registration or usage field no longer matches the hash and fails here, before
+        // any Azure-specific check runs. Validate throws its own error codes.
         Validate(receipt);
         var binding = receipt.Registration.Binding;
         var usage = receipt.Usage;
+
+        // Every Azure-specific failure below uses one error code so a caller can't learn which fact was wrong.
+
+        // The owner registered this runtime for BYOK with an Azure pin. The pin is the trusted record
+        // of the model and configuration that the owner accepted.
         if (binding.ModelSourceMode != ModelSourceMode.Byok ||
-            binding.ModelBindingPin is not { ProviderType: "azure", SourceMode: ModelSourceMode.Byok } pin ||
-            usage.SdkSource is not { SourceMode: "byok", ByokProvider: { Type: "azure" } provider } source ||
-            source.MeterSource != SdkMeterSources.ByokTokens || source.ModelMultiplier is not null ||
-            usage.ModelBinding.MeterSource != SdkMeterSources.ByokTokens ||
-            provider.DeploymentId != pin.ModelId || usage.ModelBinding.ModelId != pin.ModelId ||
-            provider.ConfigurationHash != pin.ConfigurationHash)
+            binding.ModelBindingPin is not { ProviderType: "azure", SourceMode: ModelSourceMode.Byok } pin)
             throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
+
+        // The runtime's SDK source reports Azure BYOK too. A source that reports hosted Copilot or
+        // another BYOK provider doesn't match the pin.
+        if (usage.SdkSource is not { SourceMode: "byok", ByokProvider: { Type: "azure" } provider } source)
+            throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
+
+        // BYOK usage is metered in raw tokens on both the source and the usage binding. A hosted
+        // premium-request multiplier never applies to BYOK, so its presence means the source is mixed.
+        if (source.MeterSource != SdkMeterSources.ByokTokens || source.ModelMultiplier is not null ||
+            usage.ModelBinding.MeterSource != SdkMeterSources.ByokTokens)
+            throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
+
+        // On Azure, the deployment name is the model ID that the pin records. The SDK deployment, the
+        // usage model, and the pin must all name the same deployment, so usage can't be billed against a
+        // different deployment's rates.
+        if (provider.DeploymentId != pin.ModelId || usage.ModelBinding.ModelId != pin.ModelId)
+            throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
+
+        // The configuration hash is a digest of the normalized model binding settings. A mismatch means
+        // the runtime reported a binding configuration that differs from the one the owner pinned.
+        if (provider.ConfigurationHash != pin.ConfigurationHash)
+            throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
+
         return (pin, provider);
     }
 

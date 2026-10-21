@@ -387,6 +387,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var receipt = new RuntimeUsageSourceReceipt(1, Guid.NewGuid(), registration, usage,
             RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
         // A distinct SDK event keeps the uncorrelated usage from reusing the correlated usage event ID.
+        // Reusing it with different content would be a ledger conflict, not a second event.
         var uncorrelatedEvent = Guid.NewGuid().ToString("D");
         var undispatched = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation with
         {
@@ -394,6 +395,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             SdkEventId = uncorrelatedEvent,
             A2AMessageId = null
         });
+        // Without a dispatch ID, the usage can't be priced.
         var untrusted = Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt with
             {
@@ -401,6 +403,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
                 CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(registration, undispatched)
             }));
         Assert.Equal("runtime_byok_azure_provenance_invalid", untrusted.Code);
+        // Events still admits it to the ledger as Unpriced so token totals stay complete.
         var uncorrelated = await NativeConsumer().AppendAsync(receipt with
         {
             ReceiptId = Guid.NewGuid(), Usage = undispatched,
@@ -421,6 +424,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
         Assert.False(totals.IsFullyPriced);
         Assert.Empty(totals.Amounts);
+        // Two Unpriced events of 17 input tokens each: the uncorrelated one and the correlated one.
         Assert.Equal(34, Assert.Single(totals.Agents).InputTokens);
     }
 
