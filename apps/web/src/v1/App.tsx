@@ -3088,7 +3088,7 @@ function AuthenticatedRoutes() {
     <Routes>
       <Route path="/" element={<Navigate to="/overview" replace />} />
       <Route path="/overview" element={<Shell><OverviewPage /></Shell>} />
-      <Route path="/sessions" element={<Shell><UnavailablePage title="Sessions" description="Starting and listing chat sessions needs a service update. Open a project, then choose a run in Orchestrations." /></Shell>} />
+      <Route path="/sessions" element={<Shell><NewChatPage title="Sessions" description="Your chats across projects. Open one to see its run and send follow-up messages." /></Shell>} />
       <Route path="/assistant" element={<Shell><NewChatPage /></Shell>} />
       <Route path="/console" element={<Navigate to="/assistant" replace />} />
       <Route path="/settings" element={<Shell><AccountSettingsPage /></Shell>} />

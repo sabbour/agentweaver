@@ -117,3 +117,25 @@ describe('AttentionList with notifications', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('Could not dismiss. Boom');
   });
 });
+
+describe('AttentionBell as the caller inbox', () => {
+  const notified: AttentionItem[] = [
+    { projectId: 'p1', runId: 'r2', sessionId: 's1', requestId: 'q1', kind: 'awaitingInput', prompt: 'Which branch?', notificationId: 'n1', stateVersion: 7 },
+    { projectId: 'p2', runId: 'r9', sessionId: 's3', requestId: 'a4', kind: 'awaitingApproval', prompt: 'Deploy?', notificationId: 'n2', stateVersion: 2 },
+  ];
+
+  it('counts gates across projects, offers Dismiss, and opens the pinned decision with no Open run button', async () => {
+    const dismiss = vi.fn().mockResolvedValue(undefined);
+    renderWithRouter(<AttentionBell attention={attention({ binding: null, source: 'notifications', items: notified, dismiss })} />);
+    const bell = screen.getByTestId('notification-bell');
+    expect(bell.getAttribute('aria-label')).toBe('Notifications, 2 need your input');
+    fireEvent.click(bell);
+    await screen.findByText('Deploy?');
+    expect(screen.queryByRole('button', { name: 'Open run' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Question in run r2' }));
+    expect(dismiss).toHaveBeenCalledWith(notified[0]);
+    fireEvent.click(screen.getByText('Deploy?'));
+    expect(screen.getByTestId('location').textContent)
+      .toBe('/projects/p2/runs/r9?view=approvals&requestId=a4&stateVersion=2');
+  });
+});

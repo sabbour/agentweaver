@@ -278,8 +278,14 @@ export function ConversationList({ conversations, projectNames }: {
   );
 }
 
-/** `/assistant`: New chat and My conversations. `?project=` preselects a project. */
-export function NewChatPage() {
+/**
+ * `/sessions` and `/assistant`: New chat and My conversations. `?project=` preselects a
+ * project. A chat left pending by an interrupted start resumes here, as on Overview.
+ */
+export function NewChatPage({
+  title = 'New chat',
+  description = 'Start a chat in one project. Its history stays with the run.',
+}: { title?: string; description?: string } = {}) {
   const styles = useStyles();
   const [params] = useSearchParams();
   const { projects, error } = useProjectChoices();
@@ -287,7 +293,7 @@ export function NewChatPage() {
   const projectNames = useMemo(() => new Map((projects ?? []).map((project) => [project.projectId, project.name])), [projects]);
   return (
     <div className={styles.page}>
-      <PageHeading title="New chat" description="Start a chat in one project. Its history stays with the run." breadcrumb={false} />
+      <PageHeading title={title} description={description} breadcrumb={false} />
       {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
       <NewChatPanel projects={projects} initialProjectId={params.get('project')} onChanged={conversations.reload} />
       <ConversationList conversations={conversations} projectNames={projectNames} />

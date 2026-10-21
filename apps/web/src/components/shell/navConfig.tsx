@@ -58,7 +58,7 @@ export interface NavSectionDef {
 export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
   { key: 'overview', label: 'Overview', icon: <Home24Regular />, path: '/overview', matchPrefixes: ['/overview', '/'] },
   { key: 'projects', label: 'Projects', icon: <Apps24Regular />, path: '/projects', matchPrefixes: ['/projects'] },
-  { key: 'sessions', label: 'Sessions', icon: <Chat24Regular />, path: '/sessions', matchPrefixes: ['/sessions'] },
+  { key: 'sessions', label: 'Sessions', icon: <Chat24Regular />, path: '/sessions', matchPrefixes: ['/sessions', '/assistant'] },
 ];
 
 // WORK / SQUAD / OPERATIONS / SYSTEM.

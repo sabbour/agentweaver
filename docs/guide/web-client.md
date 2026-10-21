@@ -71,7 +71,8 @@ The client uses these routes:
 | --- | --- |
 | `/` | Opens `/overview`. |
 | `/overview` | Chief of Staff home: **Priorities**, **Needs attention**, **New chat**, **My conversations**, your projects, and **Recent runs in this browser**. |
-| `/assistant` | **New chat** and **My conversations**. `?project=<projectId>` preselects a project. |
+| `/sessions` | **Sessions**: **New chat** and **My conversations** across projects. |
+| `/assistant` | **New chat** and **My conversations**. **New session** in the rail opens it. `?project=<projectId>` preselects a project. |
 | `/projects` | Browse project tiles and create a project. Creating a project does not make you its owner. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, recent runs, team, and quick actions. |
 | `/projects/:projectId/flow` | Read the project's work grouped as **Needs input**, **Open**, **Working**, and **Done**. |
@@ -89,11 +90,13 @@ The v1 client keeps the 0.x navigation rail, project switcher, floating content
 panel, gallery tiles, dialogs, typography, and theme. Its views use v1 service
 contracts instead of the 0.x API.
 
-The rail has **Overview** and **Projects**. **Overview** is the home page and
+The rail has **Overview**, **Sessions**, **Projects**, and **New session**. **Overview** is the home page and
 the Chief of Staff home. It shows your **Priorities**, **Needs attention** (the
 pending gates from your notifications), **New chat**, **My conversations**, a
 summary of your projects, and **Recent runs in this browser**. The notification
-bell in the shell lists the questions and approvals for the run you have open.
+bell in the shell is your attention inbox: the same pending gates across
+projects, with **Dismiss**. **Sessions** lists your chats; open one to send
+follow-up messages from the run page.
 For details, see [Chief of Staff](./chief-of-staff.md#use-the-web-app).
 
 Choose **Projects** to open the project gallery. Each tile shows the project
@@ -141,7 +144,7 @@ G4).
 ### Unavailable destinations
 
 Board, Workspace, Workflows, Observability, Diagnostics, Heartbeat,
-Cluster, Platform settings, and Sessions are not navigation choices.
+Cluster, and Platform settings are not navigation choices.
 Their data isn't exposed by this client's v1 APIs. Old links show one **Not
 available in this version** page with a reason and a link back. Unknown
 addresses show **Page not found**. Neither page invents data or calls the old

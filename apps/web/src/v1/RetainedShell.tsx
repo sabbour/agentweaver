@@ -9,7 +9,7 @@ import { resolveActiveKey } from '../components/shell/navConfig';
 import { PageContainer } from '../components/ui/PageContainer';
 import { AttentionBell } from './AttentionList';
 import { useAuth } from './AuthContext';
-import { useRunAttention } from './runAttention';
+import { useNotificationAttention } from './runAttention';
 import { gatewayClient } from './api';
 import type { ProjectSummary } from './contracts';
 import packageInfo from '../../package.json';
@@ -67,11 +67,16 @@ export function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
   );
 }
 
-/** Adapts Gateway data to the existing rail; no monolith API consumers are mounted. */
+/**
+ * Adapts Gateway data to the existing rail; no monolith API consumers are mounted.
+ * The bell is the caller's attention inbox: pending gates across projects, read from
+ * notifications with the unbound token, the same items Overview shows. Answering a gate
+ * still happens on the run page with a run-bound token.
+ */
 export function RetainedShell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const { session, apiCall } = useAuth();
-  const attention = useRunAttention();
+  const attention = useNotificationAttention();
   const match = useMatch('/projects/:projectId/*');
   const projectId = match?.params.projectId;
   const [directory, setDirectory] = useState<{
@@ -100,9 +105,9 @@ export function RetainedShell({ children }: { children: ReactNode }) {
   return (
     <div className="aw-app-shell">
       <LeftNavView
-        visibleGlobalKeys={['overview', 'projects']}
+        visibleGlobalKeys={['overview', 'sessions', 'projects']}
         visibleProjectKeys={['dashboard', 'flow', 'orchestrations', 'agents', 'skills', 'memories']}
-        showNewSession={false}
+        showNewSession
         projectId={projectId}
         pathname={location.pathname}
         activeKey={location.pathname.includes('/knowledge') ? 'memories'

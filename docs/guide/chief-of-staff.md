@@ -95,13 +95,14 @@ Flow groups the user's work into **Needs input**, **Open**, **Working**, and
 
 ## Use the web app
 
-The web app shows Chief of Staff on **Overview** (`/overview`) and on each
-project's **Flow** page.
+The web app shows Chief of Staff on **Overview** (`/overview`), on **Sessions**
+(`/sessions`), in the notification bell, and on each project's **Flow** page.
 
 ### Start a chat
 
-1. On **Overview**, go to **New chat**. `/assistant` opens the same panel with
-   **My conversations**; `?project=<projectId>` preselects a project.
+1. On **Overview** or **Sessions**, go to **New chat**. **New session** in the
+   navigation opens `/assistant`, the same panel; `?project=<projectId>`
+   preselects a project.
 1. Under **Project**, choose an active project. You don't type an ID.
 1. Enter the first message and select **Send**.
 
@@ -111,14 +112,26 @@ same draft twice, or retrying after a lost response, creates one run. The
 browser saves only the project, run, and root session IDs until start
 finishes, so a reload or a sign-in redirect resumes the same chat. If sign-in
 for the run needs your input, select **Sign in and start**. If start fails,
-select **Retry start**. The chat history stays on the run page.
+select **Retry start**. A start interrupted by a closed tab or a lost connection
+resumes the next time you open **Overview** or **Sessions** in the same tab.
 
 ### My conversations
 
-**My conversations** lists the chats you started, newest first, with the run
-state. Select **Open** to open the run page. A chat that was created but not
+**My conversations** on **Overview** and **Sessions** lists the chats you
+started, newest first, with the run state. The service stores the list for you
+only, so it's the same after a reload, on another device, or after you sign in
+again. Select **Open** to open the run page. A chat that was created but not
 started shows **Not started** and a **Start** button. A conversation in a
 project you can no longer read shows **Unavailable** and no project content.
+
+### Continue a chat
+
+On the run page, the **Chat** tab lists the run's activity and has a composer.
+Enter a message and select **Send** to message the run's coordinator. The web
+app sends it with a token bound to that run and one idempotency key per draft,
+so a repeated send delivers one message. The service doesn't return message
+text in the run's activity, so the first message and follow-ups show only on
+the page that sent them. The conversation title comes from the first message.
 
 ### Priorities
 
@@ -131,8 +144,10 @@ project you can no longer read shows **Unavailable** and no project content.
 - **Move up** and **Move down** change the order.
 - **Add link** links a run or a conversation. Choose a project and pick a run
   from its run list, or pick one of your conversations. Issue, pull request,
-  and artifact links aren't offered because the web app has no picker for
-  them. Existing links of those kinds show **Unavailable** as their state.
+  and artifact links aren't offered: the Gateway has no route that lists a
+  project's issues, pull requests, or run artifacts, and the web app doesn't
+  accept typed IDs. Existing links of those kinds show **Unavailable** as
+  their state.
 - Run and conversation links show the run state. A link you can't read shows
   **Unavailable** and its kind only. A deleted target shows **Not found**.
 
@@ -157,6 +172,16 @@ Open a project and choose **Flow** (`/projects/:projectId/flow`).
 Before it approves, rejects, or answers, the decision view rereads the gate.
 If the gate is gone or its state version changed, it shows **This request
 changed since you opened it. Nothing was sent. Review it and try again.**
+
+### Notification bell
+
+The bell in the navigation is your attention inbox across projects. It lists
+the same pending gates as **Overview**, read from your notifications with an
+unbound token, and hides dismissed ones. Select an item to open its decision
+on the run page, where you approve, reject, or answer with a token bound to
+that run. Select **Dismiss** to hide an item from the bell and Overview. Flow
+still lists it while the gate is pending. Backlog promotion notifications don't
+appear in the bell.
 
 ## Deployment
 
