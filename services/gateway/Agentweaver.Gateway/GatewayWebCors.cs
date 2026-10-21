@@ -58,6 +58,7 @@ public static class GatewayWebCors
     private static bool RequiresIdempotencyKey(string operationId) => operationId is
         "createProjectRun" or
         "cancelProjectRun" or
+        "createChiefOfStaffPriority" or
         "createKnowledgeRecord" or
         "updateKnowledgeRecord" or
         "restoreKnowledgeRecord" or

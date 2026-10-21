@@ -47,6 +47,27 @@ public sealed class GatewayProjectRunRegressionTests
             .TryGetProperty("firstMessage", out _));
     }
 
+    [Fact]
+    public async Task HistoricalTurnReadUsesEventsOwnerAndExposesOnlyTextAndIdentity()
+    {
+        await using var gateway = await StartAsync();
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        var operation = root.GetProperty("paths")
+            .GetProperty("/api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}")
+            .GetProperty("get");
+        Assert.Equal("readSessionTurnContent", operation.GetProperty("operationId").GetString());
+        Assert.Equal("Events", operation.GetProperty("x-agentweaver-owner").GetString());
+        var parameters = operation.GetProperty("parameters").EnumerateArray().ToArray();
+        Assert.Contains(parameters, parameter => parameter.GetProperty("name").GetString() == "X-Agentweaver-Tenant");
+        Assert.DoesNotContain(parameters, parameter => parameter.GetProperty("name").GetString() == "kind");
+        var properties = root.GetProperty("components").GetProperty("schemas")
+            .GetProperty("SessionTurnContent").GetProperty("properties");
+        Assert.Equal(new[] { "eventId", "identity", "text" }, properties.EnumerateObject().Select(p => p.Name));
+    }
+
     [Theory]
     [InlineData("/api/v1/projects/p/runs", true)]
     [InlineData("/api/v1/projects/p/runs/r/cancel", true)]

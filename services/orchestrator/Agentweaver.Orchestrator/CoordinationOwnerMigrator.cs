@@ -18,7 +18,7 @@ public static class CoordinationOwnerMigrator
     /// </summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23])];
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -63,7 +63,7 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -84,7 +84,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(20) && !applied.Contains(19)) ||
             (applied.Contains(21) && !applied.Contains(20)) ||
             (applied.Contains(22) && !applied.Contains(21)) ||
-            (applied.Contains(23) && !applied.Contains(22)))
+            (applied.Contains(23) && !applied.Contains(22)) ||
+            (applied.Contains(24) && !applied.Contains(23)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         foreach (var version in SupportedVersions.Where(version => !applied.Contains(version)))
         {
@@ -112,6 +113,7 @@ public static class CoordinationOwnerMigrator
                 21 => "row_lock_record_updates",
                 22 => "run_list_completion",
                 23 => "project_run_requests",
+                24 => "chief_of_staff",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -163,7 +165,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -245,10 +247,20 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@projectRunRequests) IS NOT NULL,
                 to_regclass(@projectRunCancellations) IS NOT NULL,
                 EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(@runs)
-                    AND attname = 'cancelled_at' AND attnum > 0 AND NOT attisdropped)
+                    AND attname = 'cancelled_at' AND attnum > 0 AND NOT attisdropped),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 24) = 1,
+                to_regclass(@chiefOfStaffConversations) IS NOT NULL,
+                to_regclass(@chiefOfStaffPriorities) IS NOT NULL,
+                to_regclass(@chiefOfStaffPriorityLinks) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");
+        command.Parameters.AddWithValue(
+            "chiefOfStaffConversations", NpgsqlDbType.Text, $"{schema}.chief_of_staff_conversations");
+        command.Parameters.AddWithValue(
+            "chiefOfStaffPriorities", NpgsqlDbType.Text, $"{schema}.chief_of_staff_priorities");
+        command.Parameters.AddWithValue(
+            "chiefOfStaffPriorityLinks", NpgsqlDbType.Text, $"{schema}.chief_of_staff_priority_links");
         command.Parameters.AddWithValue("projectRunRequests", NpgsqlDbType.Text, $"{schema}.project_run_requests");
         command.Parameters.AddWithValue(
             "projectRunCancellations", NpgsqlDbType.Text, $"{schema}.project_run_cancellations");
@@ -324,7 +336,7 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
-            Enumerable.Range(57, 17).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(57, 21).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }
