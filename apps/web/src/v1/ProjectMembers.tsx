@@ -4,9 +4,9 @@
  * `revokeProjectRoleAssignment`). Reading needs TenantAdmin or the project
  * Owner. Adding and removing need TenantAdmin with admin scope, which the
  * authorization context reports as a tenant-wide "Change project settings"
- * permission; other callers see the list without change controls. When the
- * service does not offer the list yet, the panel says so and Access shows only
- * the caller's own permissions.
+ * permission; other callers see the list without change controls. Adding sends
+ * exactly a principal ID and a role; removing sends the assignment revision that
+ * was shown, so a concurrent change is rejected instead of overwritten.
  */
 import { Badge, Button, Field, Input, Select, Text } from '@fluentui/react-components';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
@@ -27,11 +27,15 @@ const ROLE_LABELS: Record<ProjectRole, string> = {
 
 /** Plain text for role-assignment failures the user can act on. */
 function changeError(reason: unknown): string {
-  // Only gateway errors carry a status and error code. Map the known ones to a
-  // next step. Anything else falls through to the generic message.
+  // Map known service answers to plain advice. Check specific error codes before
+  // the generic 403, because a more exact reason is more useful to the user.
   if (reason instanceof GatewayError) {
-    // 503 means the role-assignment backend is not configured on this deployment.
-    if (reason.status === 503) return 'Role changes aren\'t available yet. An operator must finish setting up the service.';
+    // 503 means the member store cannot be reached or is not configured.
+    if (reason.status === 503) return 'Member changes are not available right now. Try again later.';
+    if (reason.code === 'principal_not_found') return 'No user or service account has this ID. Check the ID and try again.';
+    if (reason.code === 'invalid_principal_id') return 'Enter a valid user or service account ID.';
+    if (reason.code === 'invalid_project_role') return 'Pick one of the listed roles.';
+    if (reason.code === 'not_found') return 'This project or member no longer exists. Reload the list.';
     if (reason.code === 'role_assignment_exists') return 'This member already has that role.';
     if (reason.code === 'last_project_owner') return 'A project needs at least one owner. Add another owner first.';
     if (reason.code === 'revision_conflict') return 'Someone else changed this member. Reload and try again.';
@@ -134,8 +138,9 @@ export function ProjectMembersPanel({ projectId, canManage }: { projectId: strin
   if (loading && !list) body = <Loading label="Loading members" />;
   else if (loadError instanceof GatewayError && loadError.status === 403)
     body = <Text>Only a tenant administrator or a project owner can see the member list.</Text>;
-  else if (loadError instanceof GatewayError && (loadError.status === 404 || loadError.status === 405 || loadError.status === 501))
-    body = <Text>The member list isn&apos;t available in this version of the service.</Text>;
+  // 404 means the project does not exist or the caller cannot see it.
+  else if (loadError instanceof GatewayError && loadError.status === 404)
+    body = <Text>This project was not found. It may have been deleted.</Text>;
   else if (loadError != null)
     body = <ErrorNotice code={errorCode(loadError)}>{errorMessage(loadError)}</ErrorNotice>;
   else if (list) body = (

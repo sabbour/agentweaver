@@ -10,6 +10,8 @@ import { gatewayClient } from './api';
 import type {
   ProjectAuthorizationContextResponse,
   ProjectAuthorizationPermission,
+  ProjectIssuePage,
+  ProjectPullRequestPage,
   ProjectSummary,
   VersionedProjectConfiguration,
 } from './contracts';
@@ -116,6 +118,27 @@ export function useProjectConfiguration(projectId: string): Loaded<VersionedProj
   return useScopedLoad(
     `configuration:${projectId}`,
     projectId ? (token, tenant) => gatewayClient.getProjectConfiguration(token, projectId, tenant) : null,
+    (value) => value.projectId === projectId,
+  );
+}
+
+/**
+ * Reads the first page of pull requests that project runs recorded, newest first.
+ * The read uses stored records only; it makes no call to the repository host.
+ */
+export function useProjectPullRequests(projectId: string, pageSize = 20): Loaded<ProjectPullRequestPage> {
+  return useScopedLoad(
+    `pull-requests:${projectId}:${pageSize}`,
+    projectId ? (token, tenant) => gatewayClient.listProjectPullRequests(token, projectId, { state: 'all', pageSize }, tenant) : null,
+    (value) => value.projectId === projectId,
+  );
+}
+
+/** Reads the first page of open repository issues synced into the project backlog. */
+export function useProjectIssues(projectId: string, pageSize = 20): Loaded<ProjectIssuePage> {
+  return useScopedLoad(
+    `issues:${projectId}:${pageSize}`,
+    projectId ? (token, tenant) => gatewayClient.listProjectIssues(token, projectId, { state: 'open', pageSize }, tenant) : null,
     (value) => value.projectId === projectId,
   );
 }

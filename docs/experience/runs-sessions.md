@@ -6,21 +6,35 @@ is a node in the run's owner-reported tree.
 
 ## Prerequisites
 
-- Open the run once in this browser, for example from a link or a
-  notification. After that, it appears in **Recent runs in this browser**.
 - Sign in with a Broker token bound to that project and run.
 - To create a chat, have the project Orchestrator role (`acceptRunSelection`).
   Owner or Contributor alone receives `403`. A tenant admin grants the role through
   `/api/v1/projects/{projectId}/role-assignments`.
+- Create requests need a token that requests `api.read` and
+  `projects.orchestrator` and is not bound to a run.
 
-Open the run from **Overview**, the project **Dashboard**, or
-**Orchestrations**. The app signs in to the run silently. You don't type a run
-ID. If the silent sign-in fails, select **Sign in for this project and run**.
+Open a run from **Sessions**, **Overview**, the project **Dashboard**, or
+**Orchestrations**. These lists read the project run list. The app signs in to
+the run silently. You don't type a run ID. If the silent sign-in fails, select
+**Sign in for this project and run**.
 
 ## Start a new chat
 
+In the browser, select **New session** in the rail or on **Sessions**:
+
+1. Choose a project.
+2. Write the first message and send it.
+
+The app creates the run, signs in for that run without a prompt when it can,
+starts the run, and opens its **Chat** tab. If the run sign-in needs you, the
+page shows **Sign in**. The app keeps the created run in session storage, so it
+continues after a sign-in that leaves the page. If a step fails, select **Try
+again**. **Dismiss** drops the pending run from the page; the run stays listed
+in **Sessions**.
+
 A new chat creates a run with a saved first message. Starting it is a
-two-step flow, because the run ID does not exist until create returns.
+two-step flow, because the run ID does not exist until create returns. The
+app follows these steps, and other clients can do the same:
 
 1. Send `POST /api/v1/projects/{projectId}/runs` with an `Idempotency-Key`
    header and a token that is not bound to a run. The body has `firstMessage`,
@@ -48,7 +62,12 @@ retry start with the same run ID.
 
 ## Cancel a run
 
-Send `POST /api/v1/projects/{projectId}/runs/{runId}/cancel` with an
+In the browser, open the run and select **Stop run** in the page header, then
+confirm in the **Stop this run?** dialog. The button appears only while the
+run is idle, active, or blocked. A retry after a failure reuses the same idempotency key, so the
+service treats both requests as one stop.
+
+Other clients send `POST /api/v1/projects/{projectId}/runs/{runId}/cancel` with an
 `Idempotency-Key` header, a token that is not bound to a run, and an optional
 `reason` of up to 2,048 characters. The caller needs a current project
 Contributor or Owner role, or the tenant administrator role. The caller does
@@ -107,18 +126,15 @@ In **Changes**, use **GitHub App repository access** to
 
 The service accepts messages only between sessions of the run. The app sends
 the message from another active session: the coordinator, or the first active
-session when you message the coordinator. Direct messages from you to the
-coordinator need a service API that doesn't exist yet.
+session when you message the coordinator. You can't message the
+coordinator directly, because the service has no API for messages from a user.
 
 **Expected result:** The page shows **Message accepted.** and lists the
 message under the composer. The list is local to the page; reloading clears
 it. The receipt does not prove delivery or completion. If a send fails and you
 retry the same text, the app reuses the same request, so the message isn't
-sent twice. The **Messages** panel shows the message text after the run
-records it.
-
-To start a new chat, use **New chat** on **Overview**. See
-[Start a chat](../guide/chief-of-staff.md#start-a-chat).
+sent twice. The journal contains typed events and opaque object references;
+the page has no message-content reader.
 
 ## Answer a gate
 
@@ -136,8 +152,9 @@ no longer the pending one.** A `409` response causes the app to reload owner
 state without assuming that the decision was applied.
 
 You can also open a pending request from the notification bell or from
-**Needs attention** on **Overview**. Both list requests from the run you have
-open.
+**Needs attention** on **Overview**. Both list your notifications across all
+projects. **Dismiss** hides a notification for you only; it doesn't answer
+the request.
 
 **Expected result:** The owner reports whether it accepted the request. A
 refreshed snapshot, not the receipt, shows the resulting gate state.
@@ -182,6 +199,7 @@ All versioned routes use the Gateway. The common prefix is
 | Operation | Method and path after the prefix | Owner in source |
 | --- | --- | --- |
 | Create run | `POST /` (empty suffix) | Orchestrator |
+| List runs | `GET /` (empty suffix) with optional `state`, `cursor`, and `pageSize` | Orchestrator |
 | Start run | `POST /{runId}/start` | Orchestrator |
 | Cancel run | `POST /{runId}/cancel` | Orchestrator |
 | Run snapshot | `GET /{runId}/coordination/status` | Orchestrator |

@@ -62,6 +62,13 @@ export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
   { key: 'sessions', label: 'Sessions', icon: <Chat24Regular />, path: '/sessions', matchPrefixes: ['/sessions', '/assistant'] },
 ];
 
+// Active keys for rail controls that are not nav links. The New session
+// button and the Settings menu button show as selected for these keys.
+/** Active key that highlights the New session button. */
+export const NEW_SESSION_NAV_KEY = 'new-session';
+/** Active key that highlights the Settings menu button. */
+export const SETTINGS_NAV_KEY = 'settings';
+
 // WORK / SQUAD / OPERATIONS / SYSTEM.
 /** Section and item definitions used to construct the main navigation. */
 export const NAV_SECTIONS: NavSectionDef[] = [

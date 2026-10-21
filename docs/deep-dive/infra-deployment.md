@@ -46,6 +46,13 @@ Its separate Kustomize overlay resolves migration DNS and TCP 5432 egress to
 the exact `agentweaver-pg.postgres.database.azure.com` host; the guarded root
 release apply does not include that Job or policy.
 
+Orchestrator migration 032, which adds Source Control pull request records,
+is optional and code-only. The default migrator, startup verification, and the
+P1 initializer don't apply it, and the owner starts and serves its routes
+without it. The project pull request list returns
+`503 pull_request_records_unavailable` until a separately approved step applies
+032 and its grants. See the [Azure tooling notes](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md).
+
 ## Understand the Azure foundation
 
 `main.bicep` is an Azure infrastructure-as-code template. It targets a
@@ -131,7 +138,9 @@ tree. `deploy-integration.mjs` verifies that receipt and registry provenance
 before rendering or applying the composition.
 
 The release workflow prepares independently versioned packages and images
-from exact source. Publication is a separate confirmed operation. Deployment
+from exact source. It rebuilds only images whose version or input fingerprint
+changed since the last published release, and reuses the others by their
+original digest and build provenance. Publication is a separate confirmed operation. Deployment
 consumes an already-published `v1.x.y` release, its manifest, and publication
 receipt.
 

@@ -52,8 +52,9 @@ database credentials while collecting evidence.
 
 ## Diagnose an indeterminate P1 project setup
 
-The P1 API and MCP runners set up and clean up their fixture project through
-the public Gateway API with the signed-in setup token:
+The P1 acceptance harness runs API and MCP checks against a deployment.
+Its runners set up and clean up their fixture project through the public
+Gateway API with the signed-in setup token:
 
 1. `createProject` creates a project named `p1-<invocation-uuid>`.
 2. `assignProjectRole` assigns the setup actor the Owner role, then the

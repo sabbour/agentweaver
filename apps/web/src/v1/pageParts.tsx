@@ -78,6 +78,8 @@ export function ProjectBreadcrumb({ projectId, page }: { projectId: string; page
     <nav className={styles.breadcrumb} aria-label="Breadcrumb">
       <Link to="/projects" className={styles.breadcrumbLink}>Projects</Link>
       <span aria-hidden="true">/</span>
+      {/* On a sub-page the project name is a link and the page name is current.
+          On the project home the project name itself is current. */}
       {page ? (
         <>
           <Link to={`/projects/${encodeURIComponent(projectId)}`} className={styles.breadcrumbLink}>{name}</Link>

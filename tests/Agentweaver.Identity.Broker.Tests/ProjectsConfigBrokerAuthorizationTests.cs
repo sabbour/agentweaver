@@ -1583,6 +1583,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 var originalMemory = page.GetByText("Original browser memory");
                 try
                 {
+                    // Exact match: the run sign-in button also starts with "Sign in".
                     await page.GetByRole(
                         AriaRole.Button,
                         new() { Name = "Sign in", Exact = true }).ClickAsync();

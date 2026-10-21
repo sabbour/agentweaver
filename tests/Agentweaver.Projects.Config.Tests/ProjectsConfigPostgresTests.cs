@@ -659,6 +659,204 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
+    public async Task MarketplaceImportFeedsAssignmentAndRuntimeAndSurvivesSourceRemoval()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var configurations = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "marketplace-runtime-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, "marketplace-runtime-owner-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var platformAdmin = await SeedCallerAsync(
+            db, authorityStore, "marketplace-runtime-platform-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var defaultsHead = await configurations.GetPlatformRuntimeDefaultsAsync(
+            platformAdmin, CancellationToken.None);
+        var defaults = await configurations.UpdatePlatformRuntimeDefaultsAsync(
+            platformAdmin, defaultsHead.Revision, PlatformDefaults(), CancellationToken.None);
+        var project = await configurations.CreateProjectAsync(owner, "Marketplace runtime", CancellationToken.None);
+        var configuration = await configurations.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            ProjectSettings() with
+            {
+                AgentCharters =
+                [
+                    new ProjectAgentCharter("agent-one", "Agent One", "assistant", "Agent one test charter."),
+                ],
+                Casting = [new ProjectAgentCast("agent-one", "assistant", 0)],
+            },
+            CancellationToken.None);
+        var sources = new ProjectMarketplaceSourceService(
+            new MarketplaceSourceStore(db), configurations, TimeProvider.System);
+        var source = await sources.CreateAsync(
+            owner,
+            project.ProjectId,
+            new CreateMarketplaceSourceRequest { Repository = "contoso/skills", Subpath = "skills" },
+            CancellationToken.None);
+
+        const string commitSha = "0123456789abcdef0123456789abcdef01234567";
+        // The fake repository has two skills. The second one lets the test reuse an idempotency key
+        // with different content.
+        var markdown = Encoding.UTF8.GetBytes(
+            "---\nname: runtime-skill\ndescription: A marketplace skill for runtime delivery.\n---\nUse the marketplace instructions.");
+        var otherMarkdown = Encoding.UTF8.GetBytes(
+            "---\nname: other-skill\ndescription: A different marketplace skill.\n---\nUse the other instructions.");
+        var resource = Encoding.UTF8.GetBytes("Marketplace reference bytes.");
+        using var httpClient = new HttpClient(new MarketplaceTestHandler(request =>
+        {
+            // Serve the pinned tree and raw files from memory. Any other request fails the test, so the
+            // flow can't read an unpinned ref or an unexpected path.
+            var uri = request.RequestUri!;
+            if (uri.Host == "api.github.com" && uri.AbsolutePath.EndsWith($"/git/trees/{commitSha}", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        $$"""{"truncated":false,"tree":[{"path":"skills/runtime/SKILL.md","type":"blob","mode":"100644","size":{{markdown.Length}}},{"path":"skills/runtime/docs/reference.md","type":"blob","mode":"100644","size":{{resource.Length}}},{"path":"skills/other/SKILL.md","type":"blob","mode":"100644","size":{{otherMarkdown.Length}}}]}""",
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            if (uri.Host == "raw.githubusercontent.com" &&
+                uri.AbsolutePath.EndsWith($"/{commitSha}/skills/runtime/SKILL.md", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(markdown) };
+            if (uri.Host == "raw.githubusercontent.com" &&
+                uri.AbsolutePath.EndsWith($"/{commitSha}/skills/runtime/docs/reference.md", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(resource) };
+            if (uri.Host == "raw.githubusercontent.com" &&
+                uri.AbsolutePath.EndsWith($"/{commitSha}/skills/other/SKILL.md", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(otherMarkdown) };
+            throw new InvalidOperationException($"Unexpected marketplace request: {uri}");
+        }));
+        var content = new SkillContentService(
+            db,
+            new SkillContentObjectStore(new SkillTestObjectStore()),
+            configurations,
+            TimeProvider.System);
+        var marketplace = new ProjectMarketplaceSkillContentService(
+            sources, new SkillMarketplaceBrowseService(httpClient, new MarketplaceSourceStore(db)), content);
+        // The endpoints pass these callbacks to recheck read or write authority and the source revision
+        // just before content is read. The test passes the same checks directly.
+        async Task VerifyReadAsync(CancellationToken cancellationToken) =>
+            _ = await sources.GetForBrowseAsync(
+                owner, project.ProjectId, source.SourceId, source.Revision, cancellationToken);
+        async Task VerifyWriteAsync(CancellationToken cancellationToken) =>
+            _ = await sources.GetForImportAsync(
+                owner, project.ProjectId, source.SourceId, source.Revision, cancellationToken);
+        Task<SkillContentPreview> PreviewAsync(string selectedPath) => marketplace.PreviewAsync(
+            owner,
+            project.ProjectId,
+            source.SourceId,
+            new MarketplaceSkillPreviewRequest
+            {
+                ExpectedSourceRevision = source.Revision,
+                ResolvedCommitSha = commitSha,
+                SelectedPath = selectedPath,
+            },
+            VerifyReadAsync,
+            CancellationToken.None);
+
+        var preview = await PreviewAsync("skills/runtime");
+        var import = new MarketplaceSkillImportRequest
+        {
+            ExpectedSourceRevision = source.Revision,
+            ResolvedCommitSha = commitSha,
+            SelectedPath = "skills/runtime",
+            IdempotencyKey = "marketplace-runtime-" + suffix,
+            ExpectedContentDigest = preview.ContentDigest,
+        };
+        var receipt = await marketplace.ImportAsync(
+            owner, project.ProjectId, source.SourceId, import, VerifyWriteAsync, CancellationToken.None);
+
+        var otherPreview = await PreviewAsync("skills/other");
+        // Reuse the idempotency key with a different skill. The import must fail with a conflict and
+        // must not store a second revision.
+        var reusedKey = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            marketplace.ImportAsync(
+                owner,
+                project.ProjectId,
+                source.SourceId,
+                import with { SelectedPath = "skills/other", ExpectedContentDigest = otherPreview.ContentDigest },
+                VerifyWriteAsync,
+                CancellationToken.None));
+        Assert.Equal("skill_import_idempotency_conflict", reusedKey.Code);
+        Assert.Equal(1, await db.SkillContentRevisions.CountAsync(item => item.ProjectId == project.ProjectId));
+
+        var assigned = await content.UpdateAsync(
+            owner,
+            project.ProjectId,
+            new SkillAssignmentUpdateRequest(
+                configuration.Revision,
+                receipt.SkillId,
+                receipt.Revision,
+                receipt.ContentDigest,
+                Enabled: true,
+                Order: 0,
+                ["agent-one"]),
+            CancellationToken.None);
+        var membership = await SeedMembershipAsync(
+            authorityStore, "marketplace-runtime-orchestrator-" + suffix, tenantId);
+        // Accept a run as the Orchestrator. The run pins the assignment revision that now includes
+        // the imported skill.
+        await authorityStore.AssignRoleAsync(
+            membership,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator,
+            "fixture");
+        var runId = "marketplace-run-" + suffix;
+        var runCaller = await new ProjectAuthorizationOwner(
+                db, new ProjectsConfigIdentityOptions(TestIssuer))
+            .ResolveAsync(
+                new ClaimsPrincipal(new ClaimsIdentity(
+                [
+                    new Claim("sub", "marketplace-runtime-orchestrator-" + suffix),
+                    new Claim("scope", "api.read projects.orchestrator"),
+                    new Claim("project_id", project.ProjectId),
+                    new Claim("run_id", runId),
+                ], "test")),
+                [tenantId],
+                CancellationToken.None);
+        await configurations.AcceptRunSelectionAsync(
+            runCaller,
+            project.ProjectId,
+            runId,
+            RunRequest(assigned.Revision, defaults.Revision),
+            CancellationToken.None);
+
+        // Remove the source. New preview and import calls must fail, but the accepted run must still
+        // receive the bytes that were imported before the removal.
+        await sources.RemoveAsync(
+            owner, project.ProjectId, source.SourceId, source.Revision, CancellationToken.None);
+        var removedPreview = await Assert.ThrowsAsync<MarketplaceSourceException>(() =>
+            PreviewAsync("skills/runtime"));
+        Assert.Equal("marketplace_source_not_found", removedPreview.Code);
+        var removedImport = await Assert.ThrowsAsync<MarketplaceSourceException>(() =>
+            marketplace.ImportAsync(
+                owner,
+                project.ProjectId,
+                source.SourceId,
+                import with { IdempotencyKey = "marketplace-runtime-removed-" + suffix },
+                VerifyWriteAsync,
+                CancellationToken.None));
+        Assert.Equal("marketplace_source_not_found", removedImport.Code);
+
+        var delivered = Assert.Single(await content.ReadAcceptedRunSkillsAsync(
+            runCaller, project.ProjectId, runId, "agent-one", CancellationToken.None));
+        Assert.Equal(receipt.SkillId, delivered.SkillId);
+        Assert.Equal(receipt.Revision, delivered.Revision);
+        Assert.Equal(preview.ContentDigest, delivered.ContentDigest);
+        Assert.Equal("Use the marketplace instructions.", delivered.Instructions);
+        var deliveredResource = Assert.Single(delivered.Resources);
+        Assert.Equal("docs/reference.md", deliveredResource.RelativePath);
+        Assert.Equal(resource, deliveredResource.Content.ToArray());
+    }
+
+    [Fact]
     public async Task PersistsMeterKeyedCostCandidatesAndRejectsMissingDuplicateOrUnknownSources()
     {
         var catalog = ProviderCatalogConfiguration.Load(new ConfigurationBuilder()
@@ -1999,6 +2197,77 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.Equal(ProjectCastingProposalState.Confirmed, confirmed.State);
         Assert.Equal("reviewed-workflow", confirmed.Result?.DefaultWorkflowId);
         Assert.Equal(ordinaryUpdate.Configuration.Skills.ToArray(), confirmed.Result?.Skills.ToArray());
+    }
+
+    [Fact]
+    public async Task BlueprintCastingProposalStagesInlineBlueprintAndRejectsUnavailableBuiltIn()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "blueprint-casting-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "blueprint-casting-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(owner, "Blueprint casting", CancellationToken.None);
+        var current = await service.GetProjectConfigurationAsync(
+            owner, project.ProjectId, null, CancellationToken.None);
+
+        // A built-in whose workflows aren't registered yet can't be staged.
+        var unavailable = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.CreateBlueprintCastingProposalAsync(
+                owner,
+                project.ProjectId,
+                current.Revision,
+                "blueprint-software-development",
+                null,
+                CancellationToken.None));
+        Assert.Equal("blueprint_unavailable", unavailable.Code);
+
+        // A valid inline blueprint (two catalog roles, the default workflow) is staged as a proposal.
+        var proposal = (await service.CreateBlueprintCastingProposalAsync(
+            owner,
+            project.ProjectId,
+            current.Revision,
+            null,
+            new BlueprintDefinition
+            {
+                Id = "inline-team",
+                Name = "Inline team",
+                Roster = ["backend-engineer", "qa-engineer"],
+                Workflows = ["default"],
+                ReviewPolicy = "default",
+                SandboxProfile = "default",
+            },
+            CancellationToken.None)).Proposal;
+
+        // The pending draft casts the roster and references the blueprint's workflow. The default sandbox
+        // leaves egress unset.
+        Assert.Equal(ProjectCastingProposalState.Pending, proposal.State);
+        Assert.Equal(new[] { "backend-engineer", "qa-engineer" }, proposal.Draft.Casting.Select(item => item.AgentId));
+        Assert.Equal(
+            new[] { new BlueprintWorkflowReference("inline-team", "default") },
+            proposal.Draft.BlueprintWorkflowReferences);
+        Assert.Equal("default", proposal.Draft.DefaultWorkflowId);
+        Assert.Null(proposal.Draft.EgressNarrowing);
+        // Staging a proposal doesn't change the live configuration.
+        var unchanged = await service.GetProjectConfigurationAsync(
+            owner, project.ProjectId, null, CancellationToken.None);
+        Assert.Equal(current.Revision, unchanged.Revision);
+
+        // Confirming applies the draft, including the new default workflow.
+        var confirmed = await service.ConfirmCastingProposalAsync(
+            owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+        Assert.Equal(ProjectCastingProposalState.Confirmed, confirmed.State);
+        Assert.Equal("default", confirmed.Result?.DefaultWorkflowId);
     }
 
     [Fact]

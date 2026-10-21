@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "1.0.0-draft",
+  "mediaType": "application/vnd.agentsuite.manifest.v1+json",
+  "name": "minimal",
+  "agents": [
+    {
+      "id": "writer",
+      "path": "agents/writer.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.agent.v1+json",
+        "digest": "sha256:2fe4605b0a28a5cebebb3e351c7288cb9a1dee03205a5f380afbad2d735cc274",
+        "size": 365
+      }
+    }
+  ],
+  "toolProviderCatalog": {
+    "id": "catalog",
+    "path": "tool-providers/catalog.json",
+    "descriptor": {
+      "mediaType": "application/vnd.agentsuite.tool.provider.catalog.v1+json",
+      "digest": "sha256:933283a1fa90fd488db3f872fb89dc1572a5f638bf0a81514a542333e310ef95",
+      "size": 121
+    }
+  },
+  "compositions": [
+    {
+      "agent": "writer",
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "path": "compositions/writer-linux-amd64.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.composition.v1+json",
+        "digest": "sha256:c19a6173a3bad6723b5f4c36f49c8ee21afbd65317d9c9c4275ebd130b2223d5",
+        "size": 202
+      }
+    }
+  ],
+  "buildProfiles": [
+    {
+      "id": "default",
+      "path": "build-profiles/default.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.build.profile.v1+json",
+        "digest": "sha256:a7e6136d7e7daf2fcd7e61a149000382032dcbf140f2dda1076d2ee85d0a62cd",
+        "size": 820
+      }
+    }
+  ]
+}

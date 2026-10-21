@@ -85,6 +85,27 @@ public static class ProjectCastingCatalog
             "Evaluates agent behavior for safety, alignment, and policy compliance.",
             ["Review agent behavior for safety and alignment risks", "Verify compliance with applicable policies", "Red-team prompts and flows for failure modes"],
             ["Does not implement agent features", "Does not waive safety requirements"]),
+        // Roles below are needed by the built-in blueprints ported from 0.x.
+        Role("agent-architect", "Agent Architect",
+            "Designs the architecture and orchestration of AI agent systems.",
+            ["Design agent topologies and orchestration patterns", "Define tool interfaces and integration boundaries", "Set guardrails for agent autonomy and scope"],
+            ["Does not author end-user prompts in detail", "Does not bypass safety review"]),
+        Role("prompt-engineer", "Prompt Engineer",
+            "Designs and refines prompts and instructions that drive agent behavior.",
+            ["Author and iterate on prompts and system instructions", "Tune behavior against defined objectives", "Document prompt rationale and tradeoffs"],
+            ["Does not change agent architecture unilaterally", "Does not skip safety evaluation of new prompts"]),
+        Role("agent-evaluator", "Agent Evaluator",
+            "Measures agent quality through evaluations, benchmarks, and metrics.",
+            ["Design and run evaluation suites for agents", "Track quality metrics over time", "Report regressions and quality trends"],
+            ["Does not define agent architecture", "Does not approve safety sign-off"]),
+        Role("product-marketing-manager", "Product Marketing Manager",
+            "Owns positioning, messaging, and release communication that connect the product to its audience.",
+            ["Define positioning and messaging for the product and its features", "Plan and coordinate go-to-market and launch activities", "Produce release announcements and customer-facing narratives", "Analyze audience segments and competitive context", "Align messaging with actual product capabilities"],
+            ["Does not define product scope or roadmap priorities", "Does not author technical reference documentation", "Does not claim capabilities the product does not deliver", "Does not make engineering or design decisions"]),
+        Role("ux-designer", "UX Designer",
+            "Designs the interaction, structure, and visual system of the product so it is usable, accessible, and coherent.",
+            ["Design end-to-end interaction flows and screen states", "Define information architecture and navigation", "Maintain a consistent visual language and design system", "Ensure accessibility and usability across the experience", "Specify design intent clearly for implementation"],
+            ["Does not implement production frontend code", "Does not define product scope or priorities unilaterally", "Does not finalize designs that fail accessibility expectations", "Does not own backend behavior or data contracts"]),
     ];
 
     private static readonly ImmutableArray<ProjectCastingTemplateDefinition> TemplateDefinitions =
@@ -199,22 +220,23 @@ public static class ProjectCastingCatalog
     }
 
     /// <summary>Formats a role summary, responsibilities, and boundaries as the charter text.</summary>
-    private static string BuildCharter(ProjectCastingRoleDefinition role)
+    internal static string BuildCharter(ProjectCastingRoleDefinition role)
     {
+        // Use "\n" on every host so charters and the packages built from them are the same everywhere.
         var charter = new StringBuilder(role.Summary);
-        charter.AppendLine();
-        charter.AppendLine();
-        charter.AppendLine("Responsibilities:");
+        charter.Append("\n\nResponsibilities:\n");
+        // One bullet line per responsibility, then a blank line before the boundaries section.
         foreach (var responsibility in role.Responsibilities)
-            charter.Append("- ").AppendLine(responsibility);
-        charter.AppendLine();
-        charter.AppendLine("Boundaries:");
+            charter.Append("- ").Append(responsibility).Append('\n');
+        charter.Append("\nBoundaries:\n");
         foreach (var boundary in role.Boundaries)
-            charter.Append("- ").AppendLine(boundary);
+            charter.Append("- ").Append(boundary).Append('\n');
+        // Drop the trailing newline so the charter ends on its last bullet.
         return charter.ToString().TrimEnd();
     }
 
-    private static bool IsReservedRole(string roleId) =>
+    /// <summary>Returns whether a role ID belongs to orchestration and cannot be cast.</summary>
+    internal static bool IsReservedRole(string roleId) =>
         roleId.Equals("scribe", StringComparison.OrdinalIgnoreCase) ||
         roleId.Equals("work-monitor", StringComparison.OrdinalIgnoreCase) ||
         roleId.Equals("coordinator", StringComparison.OrdinalIgnoreCase) ||

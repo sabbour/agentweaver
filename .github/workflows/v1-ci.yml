@@ -439,6 +439,9 @@ jobs:
         run: |
           dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --locked-mode
           dotnet restore apps/web/host/Agentweaver.Web.Host.csproj --locked-mode
+      - name: Verify locked P1 PostgreSQL initializer dependencies
+        if: ${{ !cancelled() && needs.changes.outputs.node == 'true' }}
+        run: dotnet restore tools/P1PostgresInitializer/P1PostgresInitializer.csproj --locked-mode
       - uses: actions/download-artifact@v4
         if: ${{ !cancelled() && needs.changes.outputs.node == 'true' }}
         with:

@@ -15,7 +15,7 @@ import {
   PanelLeftExpand24Regular,
   Settings24Regular,
 } from '@fluentui/react-icons';
-import { GLOBAL_NAV_ITEMS, NAV_SECTIONS, navItemPath } from './navConfig';
+import { GLOBAL_NAV_ITEMS, NAV_SECTIONS, NEW_SESSION_NAV_KEY, SETTINGS_NAV_KEY, navItemPath } from './navConfig';
 import { useAppVersion } from '../../hooks/useAppVersion';
 import { NotificationBell } from './NotificationBell';
 import { ProjectSwitcher } from './ProjectSwitcher';
@@ -187,6 +187,11 @@ export function LeftNavView({
   };
 
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  // The New session and Settings buttons show as selected on their own pages,
+  // like the nav links, so those pages do not fall back to Overview.
+  const newSessionSelected = activeKey === NEW_SESSION_NAV_KEY;
+  const settingsSelected = activeKey === SETTINGS_NAV_KEY;
+  const newSessionClassName = `aw-nav-action-button${newSessionSelected ? ' aw-nav-action-button--selected' : ''}`;
 
   const goTo = (path: string) => {
     setSettingsMenuOpen(false);
@@ -296,6 +301,8 @@ export function LeftNavView({
                   appearance="subtle"
                   icon={<Settings24Regular />}
                   aria-label="Settings"
+                  aria-current={settingsSelected ? 'page' : undefined}
+                  className={settingsSelected ? 'aw-nav-action-button--selected' : undefined}
                   data-testid="settings-menu-button"
                 />
               </Tooltip>
@@ -384,13 +391,14 @@ export function LeftNavView({
             {collapsed ? (
               <div role="group" aria-label="Sessions" className="aw-nav-section" style={{ gap: '2px' }}>
                 {renderGlobalItem(globalSessionsItem)}
-                {showNewSession && <Tooltip content="New chat" relationship="label" positioning="after">
+                {showNewSession && <Tooltip content="New session" relationship="label" positioning="after">
                   <Button
                     appearance="subtle"
                     icon={<AddRegular />}
-                    aria-label="New chat"
+                    aria-label="New session"
+                    aria-current={newSessionSelected ? 'page' : undefined}
                     onClick={startNewSession}
-                    className="aw-nav-action-button"
+                    className={newSessionClassName}
                   />
                 </Tooltip>}
               </div>
@@ -407,13 +415,14 @@ export function LeftNavView({
                     <span className="aw-nav-item__icon" aria-hidden="true">{globalSessionsItem.icon}</span>
                     <span className="aw-nav-item__label">{globalSessionsItem.label}</span>
                   </Link>
-                  {showNewSession && <Tooltip content="New chat" relationship="label" positioning="after">
+                  {showNewSession && <Tooltip content="New session" relationship="label" positioning="after">
                     <Button
                       appearance="subtle"
                       icon={<AddRegular />}
-                      aria-label="New chat"
+                      aria-label="New session"
+                      aria-current={newSessionSelected ? 'page' : undefined}
                       onClick={startNewSession}
-                      className="aw-nav-action-button"
+                      className={newSessionClassName}
                     />
                   </Tooltip>}
                 </div>
@@ -443,6 +452,8 @@ export function LeftNavView({
 
       {/* Footer: signed-in identity. Status and version appear in its menu footer. */}
       <div className="aw-rail-footer">
+        {/* The caller decides which identity control to show. The rail passes
+            the status dot and version badge so they keep the 0.x footer layout. */}
         {identity(collapsed, (
             <>
               <StatusDot />

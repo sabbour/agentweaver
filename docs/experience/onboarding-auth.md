@@ -37,8 +37,8 @@ choice.
 ## Open an existing run
 
 You don't type a run ID. Open a run from a link or a notification, or select
-**Open** next to a run in **Recent runs in this browser** on **Overview**, the
-project **Dashboard**, or **Orchestrations**.
+**Open** next to a run on **Sessions**, **Overview**, the project
+**Dashboard**, or **Orchestrations**.
 
 1. Open the run. The page shows **Opening this run…** while the app signs in
    to the run silently.
@@ -53,15 +53,13 @@ choose a run that your current sign-in doesn't cover.
 
 **Expected result:** The run page loads only when your sign-in matches the
 project and run in the address. The page then reads owner snapshots,
-committed journal events, and usage. The run is added to **Recent runs in this
-browser**.
+committed journal events, and usage.
 
 ## Sign out
 
 Select **Account** in the navigation rail, then select **Sign out**. You can
 also select **Sign out** in **Account settings** (`/settings`). The app clears
-its in-memory session, its current authorization context, and the **Recent
-runs in this browser** list. It does not disconnect GitHub connections or sign
+its in-memory session and its current authorization context. It does not disconnect GitHub connections or sign
 you out of the external identity provider.
 
 After you sign out, the app shows the sign-in card. If you reload the page

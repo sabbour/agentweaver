@@ -4,17 +4,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { AttentionBell, AttentionList } from './AttentionList';
 import type { AttentionItem, RunAttention } from './runAttention';
 
+const createdAt = new Date(Date.now() - 5 * 60_000).toISOString();
+
 const items: AttentionItem[] = [
-  { projectId: 'p1', runId: 'r1', sessionId: 's1', requestId: 'q1', kind: 'awaitingInput', prompt: 'Which branch?' },
-  { projectId: 'p1', runId: 'r1', sessionId: 's2', requestId: 'a1', kind: 'awaitingPlanApproval', prompt: null },
+  { notificationId: 'n1', source: 'pendingGate', projectId: 'p1', runId: 'r1', sessionId: 's1', createdAt, requestId: 'q1', kind: 'awaitingInput', prompt: 'Which branch?' },
+  { notificationId: 'n2', source: 'pendingGate', projectId: 'p2', runId: 'r2', sessionId: 's2', createdAt, requestId: 'a1', kind: 'awaitingPlanApproval', prompt: null },
 ];
 
-/** Builds a RunAttention value bound to run r1, with no items unless overridden. */
 function attention(overrides: Partial<RunAttention> = {}): RunAttention {
-  return { binding: { projectId: 'p1', runId: 'r1' }, items: [], loading: false, error: null, reload: vi.fn(), ...overrides };
+  return {
+    items: [], count: 0, loading: false, error: null, reload: vi.fn(), dismiss: vi.fn(() => Promise.resolve()), dismissError: null,
+    ...overrides,
+  };
 }
 
-/** Prints the current route so tests can check where a click navigated. */
 function LocationProbe() {
   const location = useLocation();
   return <p data-testid="location">{`${location.pathname}${location.search}`}</p>;
@@ -30,118 +33,91 @@ function renderWithRouter(element: React.ReactElement) {
 }
 
 describe('AttentionList', () => {
-  it('asks the user to open a run when no run is bound', () => {
-    renderWithRouter(<AttentionList attention={attention({ binding: null })} />);
-    expect(screen.getByText('Open a run to see what needs your input.')).toBeTruthy();
-  });
-
   it('shows an error before the loading state', () => {
-    // A background re-poll can be loading while the last read failed; the error must stay visible.
     renderWithRouter(<AttentionList attention={attention({ error: new Error('Boom'), loading: true })} />);
-    expect(screen.getByRole('alert').textContent).toBe('Could not check the open run. Boom');
+    expect(screen.getByRole('alert').textContent).toBe('Could not load notifications. Boom');
   });
 
   it('shows the loading and empty states', () => {
     const { unmount } = renderWithRouter(<AttentionList attention={attention({ loading: true })} />);
-    expect(screen.getByText('Checking the open run…')).toBeTruthy();
+    expect(screen.getByText('Loading notifications…')).toBeTruthy();
     unmount();
     renderWithRouter(<AttentionList attention={attention()} />);
-    expect(screen.getByText('Nothing needs your input in the open run.')).toBeTruthy();
+    expect(screen.getByText('Nothing needs your attention.')).toBeTruthy();
   });
 
-  it('lists each item with its title and prompt and opens the Approvals view', () => {
+  it('lists items from several projects with names, prompts, and time, and opens the Approvals view', () => {
     const onNavigate = vi.fn();
-    renderWithRouter(<AttentionList attention={attention({ items })} onNavigate={onNavigate} />);
-    const list = screen.getByRole('list', { name: 'Needs your input' });
-    const entries = within(list).getAllByRole('listitem');
+    renderWithRouter(
+      <AttentionList attention={attention({ items, count: 2 })} projectNames={new Map([['p1', 'Alpha']])} onNavigate={onNavigate} />,
+    );
+    const entries = within(screen.getByRole('list', { name: 'Needs your attention' })).getAllByRole('listitem');
     expect(entries).toHaveLength(2);
     expect(within(entries[0]).getByText('Question')).toBeTruthy();
     expect(within(entries[0]).getByText('Which branch?')).toBeTruthy();
+    expect(within(entries[0]).getByText('Alpha · Run r1')).toBeTruthy();
+    expect(within(entries[0]).getByText('5m ago')).toBeTruthy();
     expect(within(entries[1]).getByText('Approve the work plan')).toBeTruthy();
-    expect(within(entries[1]).getByText('Run r1')).toBeTruthy();
-    fireEvent.click(entries[1]);
+    // Without a known name the project ID is shown.
+    expect(within(entries[1]).getByText('p2 · Run r2')).toBeTruthy();
+    fireEvent.click(within(entries[1]).getByRole('link'));
     expect(onNavigate).toHaveBeenCalled();
-    expect(screen.getByTestId('location').textContent).toBe('/projects/p1/runs/r1?view=approvals');
+    expect(screen.getByTestId('location').textContent).toBe('/projects/p2/runs/r2?view=approvals');
+  });
+
+  it('shows backlog promotions as created subtasks that open the project Board', () => {
+    const promotions: AttentionItem[] = [
+      { notificationId: 'm1', source: 'backlogPromoted', projectId: 'p 1', runId: 'r1', sessionId: 's1', createdAt, promotionId: 'm1', taskCount: 1 },
+      { notificationId: 'm2', source: 'backlogPromoted', projectId: 'p 1', runId: 'r2', sessionId: 's2', createdAt, promotionId: 'm2', taskCount: 3 },
+    ];
+    renderWithRouter(<AttentionList attention={attention({ items: promotions, count: 2 })} />);
+    const entries = within(screen.getByRole('list', { name: 'Needs your attention' })).getAllByRole('listitem');
+    expect(within(entries[0]).getByText('1 subtask created')).toBeTruthy();
+    expect(within(entries[1]).getByText('3 subtasks created')).toBeTruthy();
+    fireEvent.click(within(entries[1]).getByRole('link'));
+    expect(screen.getByTestId('location').textContent).toBe('/projects/p%201/board');
+  });
+
+  it('dismisses one item without following its link', () => {
+    const dismiss = vi.fn(() => Promise.resolve());
+    renderWithRouter(<AttentionList attention={attention({ items, count: 2, dismiss })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss notification: Question' }));
+    expect(dismiss).toHaveBeenCalledWith('n1');
+    expect(screen.getByTestId('location').textContent).toBe('/start');
+  });
+
+  it('shows a dismiss failure and notes when more items exist than shown', () => {
+    renderWithRouter(<AttentionList attention={attention({ items, count: 9, dismissError: new Error('Denied') })} />);
+    expect(screen.getByRole('alert').textContent).toBe('Could not dismiss the notification. Denied');
+    expect(screen.getByText('Showing the newest 2 of 9.')).toBeTruthy();
   });
 });
 
 describe('AttentionBell', () => {
-  it('labels the bell with the number of pending items', () => {
-    const { unmount } = renderWithRouter(<AttentionBell attention={attention({ items })} />);
-    expect(screen.getByTestId('notification-bell').getAttribute('aria-label')).toBe('Notifications, 2 need your input');
+  it('labels the bell with the service count, not the page length', () => {
+    const { unmount } = renderWithRouter(<AttentionBell attention={attention({ items, count: 12 })} />);
+    expect(screen.getByTestId('notification-bell').getAttribute('aria-label')).toBe('Notifications, 12 need your attention');
+    expect(screen.getByText('12')).toBeTruthy();
     unmount();
-    renderWithRouter(<AttentionBell attention={attention({ items: items.slice(0, 1) })} />);
-    expect(screen.getByTestId('notification-bell').getAttribute('aria-label')).toBe('Notifications, 1 needs your input');
+    renderWithRouter(<AttentionBell attention={attention({ items: items.slice(0, 1), count: 1 })} />);
+    expect(screen.getByTestId('notification-bell').getAttribute('aria-label')).toBe('Notifications, 1 needs your attention');
   });
 
-  it('uses a plain label without pending items and opens the bound run', async () => {
-    renderWithRouter(<AttentionBell attention={attention()} />);
+  it('hides the badge on error and shows the error in the panel', async () => {
+    renderWithRouter(<AttentionBell attention={attention({ count: 3, error: new Error('Boom') })} />);
     const bell = screen.getByTestId('notification-bell');
     expect(bell.getAttribute('aria-label')).toBe('Notifications');
+    expect(screen.queryByText('3')).toBeNull();
     fireEvent.click(bell);
-    expect(await screen.findByText('Nothing needs your input in the open run.')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Open run' }));
-    expect(screen.getByTestId('location').textContent).toBe('/projects/p1/runs/r1');
-  });
-});
-describe('AttentionList with notifications', () => {
-  const notified: AttentionItem[] = [
-    { projectId: 'p1', runId: 'r2', sessionId: 's1', requestId: 'q1', kind: 'awaitingInput', prompt: 'Which branch?', notificationId: 'n1', stateVersion: 7 },
-  ];
-
-  it('needs no bound run and uses notification wording', () => {
-    const { unmount } = renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', loading: true })} />);
-    expect(screen.getByText('Checking notifications…')).toBeTruthy();
-    unmount();
-    renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications' })} />);
-    expect(screen.getByText('Nothing needs your input.')).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not load notifications. Boom');
   });
 
-  it('opens the decision pinned to the notified request and state version', () => {
-    renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', items: notified })} />);
+  it('closes the panel when an item link is followed', async () => {
+    renderWithRouter(<AttentionBell attention={attention({ items, count: 2 })} projectNames={new Map([['p1', 'Alpha']])} />);
+    fireEvent.click(screen.getByTestId('notification-bell'));
+    expect(await screen.findByText('Alpha · Run r1')).toBeTruthy();
     fireEvent.click(screen.getByText('Which branch?'));
-    // The link carries the request and version so the decision view can reject a gate that changed.
-    expect(screen.getByTestId('location').textContent)
-      .toBe('/projects/p1/runs/r2?view=approvals&requestId=q1&stateVersion=7');
-  });
-
-  it('offers Dismiss only when the source supports it', async () => {
-    const dismiss = vi.fn().mockResolvedValue(undefined);
-    const { unmount } = renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', items: notified })} />);
-    expect(screen.queryByRole('button', { name: /Dismiss/ })).toBeNull();
-    unmount();
-    renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', items: notified, dismiss })} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Question in run r2' }));
-    expect(dismiss).toHaveBeenCalledWith(notified[0]);
-  });
-
-  it('shows a failed dismiss', async () => {
-    const dismiss = vi.fn().mockRejectedValue(new Error('Boom'));
-    renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', items: notified, dismiss })} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Question in run r2' }));
-    expect((await screen.findByRole('alert')).textContent).toBe('Could not dismiss. Boom');
-  });
-});
-
-describe('AttentionBell as the caller inbox', () => {
-  const notified: AttentionItem[] = [
-    { projectId: 'p1', runId: 'r2', sessionId: 's1', requestId: 'q1', kind: 'awaitingInput', prompt: 'Which branch?', notificationId: 'n1', stateVersion: 7 },
-    { projectId: 'p2', runId: 'r9', sessionId: 's3', requestId: 'a4', kind: 'awaitingApproval', prompt: 'Deploy?', notificationId: 'n2', stateVersion: 2 },
-  ];
-
-  it('counts gates across projects, offers Dismiss, and opens the pinned decision with no Open run button', async () => {
-    const dismiss = vi.fn().mockResolvedValue(undefined);
-    renderWithRouter(<AttentionBell attention={attention({ binding: null, source: 'notifications', items: notified, dismiss })} />);
-    const bell = screen.getByTestId('notification-bell');
-    expect(bell.getAttribute('aria-label')).toBe('Notifications, 2 need your input');
-    fireEvent.click(bell);
-    await screen.findByText('Deploy?');
-    // The inbox spans runs, so there is no single run to open.
-    expect(screen.queryByRole('button', { name: 'Open run' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Question in run r2' }));
-    expect(dismiss).toHaveBeenCalledWith(notified[0]);
-    fireEvent.click(screen.getByText('Deploy?'));
-    expect(screen.getByTestId('location').textContent)
-      .toBe('/projects/p2/runs/r9?view=approvals&requestId=a4&stateVersion=2');
+    expect(screen.getByTestId('location').textContent).toBe('/projects/p1/runs/r1?view=approvals');
+    expect(screen.queryByText('Alpha · Run r1')).toBeNull();
   });
 });

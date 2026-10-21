@@ -1,178 +1,280 @@
 /**
- * Data adapters for the shared run list. `useBrowserRunList` reads runs the user
- * opened in this browser. `useGatewayRunList` reads the project run list
- * (`GET /api/v1/projects/{projectId}/runs`) and returns the same
- * `RunListData` shape, so callers keep the same layout.
+ * Data adapters for the shared run list. They read the project run list from
+ * the service and return one `RunListData` shape, so every page that shows
+ * runs (Orchestrations, Sessions, Dashboard, Overview, Memories) uses the same
+ * rows and paging.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { GatewayError, gatewayClient } from './api';
 import { useAuth } from './AuthContext';
-import { gatewayClient } from './api';
-import type { ProjectRunPage, ProjectRunStateFilter, ProjectRunSummary } from './contracts';
-import { forgetRun, readRecentRuns } from './recentRuns';
+import type { ProjectRunPage, ProjectRunStateFilter, ProjectRunSummary, ProjectSummary } from './contracts';
+import { errorMessage } from './errors';
 
-/** One row in a run list, independent of where the data came from. */
+/** Page size the service uses when the client does not send one. */
+export const DEFAULT_RUN_PAGE_SIZE = 25;
+
+/** One row in a run list. */
 export interface RunListItem {
   projectId: string;
   runId: string;
+  /** Text shown for the run: title, then goal, then root session ID, then run ID. */
+  label: string;
   executionState: string | null;
   /** Time shown in the row and the meaning of that time. */
   time: { label: string; value: string };
-  /** Run title stored by the start request. Null or absent shows the run ID. */
-  title?: string | null;
-  /** Extra short facts shown under the title, such as the pull request state. */
-  notes?: string[];
 }
 
-/** Rows plus how to remove one, for the active data adapter. */
+/** Rows, request state, and paging for one run list. */
 export interface RunListData {
   items: RunListItem[];
-  /** Removes a row from the source when the source supports it. */
-  remove?: (item: RunListItem) => void;
-  /** Reads the source again. */
+  /** True while the first page loads, or reloads after Refresh. */
+  loading: boolean;
+  /** Last request failure, or null. Rows from earlier pages stay in `items`. */
+  error: unknown;
+  /** True when the service has more rows after the loaded ones. */
+  hasMore: boolean;
+  /** True while the next page loads. */
+  loadingMore: boolean;
+  /** Loads the next page and adds its rows. Does nothing when there is no next page. */
+  loadMore: () => void;
+  /** Reads the first page again and drops any extra pages. */
   reload: () => void;
-  /** `browser` rows carry the state seen when last opened; `service` rows carry the current state. Defaults to `browser`. */
-  stateSource?: 'browser' | 'service';
-  /** True until the first read finishes. */
-  loading?: boolean;
-  /** Last read failure, if any. */
-  error?: unknown;
-  /** Reads the next page when the source has one. */
-  loadMore?: () => void;
+}
+
+/** Run list that spans projects, with names for the project column. */
+export interface CrossProjectRunListData extends RunListData {
+  projectNames: ReadonlyMap<string, string>;
+  /** Names of projects whose runs could not be read, for example without read access. */
+  unreadableProjects: string[];
+}
+
+/** Options for one project's run list. */
+export interface ProjectRunListOptions {
+  /** States to include. Omit for every state. `open` and `terminal` are accepted. */
+  states?: ProjectRunStateFilter[];
+  /** Rows per page, 1 to 100. */
+  pageSize?: number;
 }
 
 /**
- * Reads the browser-local run list for the signed-in tenant. Pass a project ID
- * to limit rows to one project.
+ * Returns the text shown for a run. The order is title, then goal, then
+ * "Run" with the first 8 characters of the run ID. Blank values are skipped so
+ * a row never shows empty text. The root session ID is not used, because it is
+ * the same agent name, such as "coordinator", for many runs.
  */
-export function useBrowserRunList(projectId?: string): RunListData {
-  const { authorizationContext } = useAuth();
-  const tenantId = authorizationContext?.tenantId;
-  // localStorage does not notify React of changes, so a generation counter
-  // forces the list to be read again after remove or reload.
-  const [generation, setGeneration] = useState(0);
-  const remove = useCallback((item: RunListItem) => {
-    // Without a tenant there is no storage key, so there is nothing to remove.
-    if (!tenantId) return;
-    forgetRun(tenantId, item.projectId, item.runId);
-    setGeneration((value) => value + 1);
-  }, [tenantId]);
-  const reload = useCallback(() => setGeneration((value) => value + 1), []);
-  const items = useMemo(() => {
-    // `generation < 0` is never true. Reading `generation` here makes it a real
-    // dependency, so the memo re-reads storage when it changes.
-    if (!tenantId || generation < 0) return [];
-    return readRecentRuns(tenantId, projectId).map((run) => ({
-      projectId: run.projectId,
-      runId: run.runId,
-      executionState: run.executionState,
-      time: { label: 'Last opened', value: run.lastOpenedAt },
-    }));
-  }, [tenantId, projectId, generation]);
-  return { items, remove, reload };
+export function runDisplayLabel(run: Pick<ProjectRunSummary, 'runId' | 'title' | 'goal'>): string {
+  for (const value of [run.title, run.goal]) {
+    const text = value?.trim();
+    if (text) return text;
+  }
+  return `Run ${run.runId.slice(0, 8)}`;
 }
 
-/** Maps one Gateway run summary to a run list row. */
-export function gatewayRunListItem(projectId: string, run: ProjectRunSummary): RunListItem {
+/** Converts one service run summary to a list row. */
+export function toRunListItem(projectId: string, run: ProjectRunSummary): RunListItem {
   return {
     projectId,
     runId: run.runId,
+    label: runDisplayLabel(run),
     executionState: run.state,
-    title: run.title,
-    // A finished run shows when it ended. A run still going shows its last update.
-    time: run.completedAt
-      ? { label: 'Ended', value: run.completedAt }
-      : { label: 'Updated', value: run.updatedAt },
+    time: { label: 'Started', value: run.createdAt },
   };
 }
 
-/** Page size for Gateway run list reads; the Gateway accepts 1–100. */
-export const GATEWAY_RUN_PAGE_SIZE = 100;
+/**
+ * Formats a run list failure for display. A 403 means the user cannot read
+ * runs in the project, so it gets a plain message instead of the raw error.
+ */
+export function runListErrorMessage(error: unknown): string {
+  if (error instanceof GatewayError && error.status === 403) return 'You do not have permission to read runs in this project.';
+  return errorMessage(error);
+}
+
+/** Time of a row in milliseconds, for sorting. An unreadable time sorts last. */
+function rowTime(item: RunListItem): number {
+  const parsed = Date.parse(item.time.value);
+  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+}
 
 /**
- * Reads one project's runs from the Gateway with the unbound session, newest
- * first. The first page loads on mount and on `reload`; `loadMore` appends the
- * next page while the Gateway returns a cursor. An empty `projectId` reads nothing.
+ * Adds new rows to existing rows. A run already in the list keeps one row with
+ * the newer data, because a run can move between pages while the user pages.
+ * When `sort` is set, rows are sorted newest first.
  */
-export function useGatewayRunList(projectId: string, state?: ProjectRunStateFilter[]): RunListData {
-  const { session, apiCall } = useAuth();
-  // Join the state filter into a string so it is a stable dependency even if the
-  // caller passes a new array each render.
-  const stateKey = state?.join(',') ?? '';
-  // Only "signed in or not" is part of the scope, not the token itself. A token
-  // refresh then keeps the loaded pages instead of resetting the list.
-  const scope = JSON.stringify([session?.accessToken ? 'signed-in' : null, projectId, stateKey]);
-  const [result, setResult] = useState<{
-    scope: string; items: RunListItem[]; nextCursor: string | null; error: unknown; loaded: boolean;
-  }>({ scope: '', items: [], nextCursor: null, error: null, loaded: false });
-  // Bumping the generation reloads the first page.
-  const [generation, setGeneration] = useState(0);
-  // Latest scope, read by async callbacks to detect stale responses.
-  const scopeRef = useRef(scope);
-  useEffect(() => { scopeRef.current = scope; }, [scope]);
+export function mergeRunItems(current: RunListItem[], added: RunListItem[], sort = false): RunListItem[] {
+  const byKey = new Map(current.map((item) => [`${item.projectId}/${item.runId}`, item]));
+  for (const item of added) byKey.set(`${item.projectId}/${item.runId}`, item);
+  const merged = [...byKey.values()];
+  if (sort) merged.sort((a, b) => rowTime(b) - rowTime(a));
+  return merged;
+}
 
-  /** Reads one page. A null cursor reads the first page. */
-  const readPage = useCallback(async (cursor: string | null): Promise<ProjectRunPage> => apiCall(
-    (token, tenant) => gatewayClient.listProjectRuns(token, projectId, {
-      // Turn the joined key back into the filter list; an empty key means no filter.
-      state: stateKey ? stateKey.split(',') as ProjectRunStateFilter[] : undefined,
-      cursor,
-      pageSize: GATEWAY_RUN_PAGE_SIZE,
-    }, tenant),
-    // `null` binding: the project run list uses the unbound session token.
-    null,
-  ), [apiCall, projectId, stateKey]);
+interface ListState {
+  /** Request key the rows belong to. Rows for another key are not shown. */
+  key: string;
+  items: RunListItem[];
+  /** Next cursor per project. A missing or null entry means no more pages. */
+  cursors: Record<string, string | null>;
+  unreadable: string[];
+  error: unknown;
+}
+
+const EMPTY_STATE: ListState = { key: '', items: [], cursors: {}, unreadable: [], error: null };
+
+/**
+ * Shared paging engine for one or more projects. `projects` is the list of
+ * project IDs to read. `fetchPage` reads one page for one project. A change to
+ * `key` or `trigger`, or a call to `reload`, reads the first page of every
+ * project again.
+ */
+function usePagedRunList(
+  key: string | null,
+  projects: readonly string[],
+  trigger: unknown,
+  fetchPage: (projectId: string, cursor: string | null) => Promise<ProjectRunPage>,
+  projectName: (projectId: string) => string,
+): RunListData & { unreadableProjects: string[] } {
+  const [list, setList] = useState<ListState>(EMPTY_STATE);
+  const [pending, setPending] = useState<'first' | 'more' | null>(null);
+  const [generation, setGeneration] = useState(0);
+  // Each first-page request gets a new number. A response whose number is not
+  // the latest belongs to an old project, filter, or refresh and is dropped.
+  const latest = useRef(0);
+  const sort = projects.length > 1;
 
   useEffect(() => {
-    if (!projectId) return undefined;
-    // `active` turns false on cleanup so a late first page is ignored.
-    let active = true;
+    // No key means the caller has nothing to read yet, for example while the
+    // project list loads.
+    if (key === null) return;
+    const request = ++latest.current;
+    // Start in a zero-delay timer so state updates stay out of the effect body.
     const timer = window.setTimeout(() => {
-      void readPage(null).then((page) => {
-        // The first page replaces the whole list, dropping any pages loaded before.
-        if (active && scopeRef.current === scope) setResult({
-          scope, items: page.items.map((run) => gatewayRunListItem(projectId, run)), nextCursor: page.nextCursor, error: null, loaded: true,
+      setPending('first');
+      void Promise.allSettled(projects.map((projectId) => fetchPage(projectId, null))).then((results) => {
+        if (request !== latest.current) return;
+        const cursors: Record<string, string | null> = {};
+        const unreadable: string[] = [];
+        let items: RunListItem[] = [];
+        let firstError: unknown = null;
+        results.forEach((result, index) => {
+          const projectId = projects[index];
+          if (result.status === 'fulfilled') {
+            items = mergeRunItems(items, result.value.items.map((run) => toRunListItem(projectId, run)), sort);
+            cursors[projectId] = result.value.nextCursor ?? null;
+          } else {
+            unreadable.push(projectName(projectId));
+            firstError ??= result.reason;
+          }
         });
-      }, (reason: unknown) => {
-        if (active && scopeRef.current === scope)
-          setResult({ scope, items: [], nextCursor: null, error: reason, loaded: true });
+        // Report an error only when nothing could be read. When some projects
+        // fail and others succeed, the caller shows `unreadableProjects`.
+        const error = results.length > 0 && unreadable.length === results.length ? firstError : null;
+        setList((current) => {
+          // A failed refresh keeps the rows already on screen for the same key.
+          if (error && current.key === key) return { ...current, error };
+          return { key, items, cursors, unreadable, error };
+        });
+        setPending(null);
       });
     }, 0);
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [projectId, readPage, scope, generation]);
+    return () => window.clearTimeout(timer);
+  }, [key, projects, trigger, fetchPage, projectName, sort, generation]);
+
+  const listMatches = key !== null && list.key === key;
+  // Projects that still have a next page, with their cursors.
+  const openCursors = useMemo(
+    () => (listMatches
+      ? Object.entries(list.cursors).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+      : []),
+    [listMatches, list.cursors],
+  );
+
+  const loadMore = useCallback(() => {
+    // Ignore the click while another request runs or when there is no next page.
+    if (pending || openCursors.length === 0) return;
+    const request = latest.current;
+    setPending('more');
+    void Promise.allSettled(openCursors.map(([projectId, cursor]) => fetchPage(projectId, cursor))).then((results) => {
+      // A refresh or a filter change started after this click; drop the result.
+      if (request !== latest.current) return;
+      setList((current) => {
+        const cursors = { ...current.cursors };
+        let items = current.items;
+        let error: unknown = null;
+        results.forEach((result, index) => {
+          const [projectId] = openCursors[index];
+          if (result.status === 'fulfilled') {
+            items = mergeRunItems(items, result.value.items.map((run) => toRunListItem(projectId, run)), sort);
+            cursors[projectId] = result.value.nextCursor ?? null;
+          } else {
+            // Keep the cursor so the next click tries this page again.
+            error ??= result.reason;
+          }
+        });
+        return { ...current, items, cursors, error };
+      });
+      setPending(null);
+    });
+  }, [pending, openCursors, fetchPage, sort]);
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
-  const current = result.scope === scope;
-  const nextCursor = current ? result.nextCursor : null;
-  /** Appends the next page to the list. */
-  const loadMore = useCallback(() => {
-    if (!nextCursor) return;
-    void readPage(nextCursor).then((page) => {
-      // Ignore the page if the project, filter, or sign-in changed meanwhile.
-      if (scopeRef.current !== scope) return;
-      // Append only if the list is still at the same cursor. If a reload or another
-      // loadMore already moved it, appending would add duplicate or out-of-order rows.
-      setResult((previous) => previous.scope !== scope || previous.nextCursor !== nextCursor ? previous : {
-        ...previous,
-        items: [...previous.items, ...page.items.map((run) => gatewayRunListItem(projectId, run))],
-        nextCursor: page.nextCursor,
-        error: null,
-      });
-    }, (reason: unknown) => {
-      // A failed next page keeps the rows already shown and only records the error.
-      if (scopeRef.current === scope) setResult((previous) => ({ ...previous, error: reason }));
-    });
-  }, [nextCursor, projectId, readPage, scope]);
 
   return {
-    items: current ? result.items : [],
+    items: listMatches ? list.items : [],
+    // Before the first response for this key arrives, the list is loading.
+    loading: key !== null && (pending === 'first' || !listMatches),
+    error: listMatches ? list.error : null,
+    hasMore: openCursors.length > 0,
+    loadingMore: pending === 'more',
+    loadMore,
     reload,
-    stateSource: 'service',
-    loading: Boolean(projectId) && !(current && result.loaded),
-    error: current ? result.error : null,
-    // Only offer "load more" while the Gateway reports another page.
-    loadMore: nextCursor ? loadMore : undefined,
+    unreadableProjects: listMatches ? list.unreadable : [],
   };
+}
+
+/**
+ * Reads one project's runs from the service, newest first, with paging. The
+ * call uses the unbound project token. An empty project ID reads nothing.
+ */
+export function useProjectRunList(projectId: string, options: ProjectRunListOptions = {}): RunListData {
+  const { apiCall } = useAuth();
+  // Join the states into a string so a new array with the same values does not
+  // start a new request.
+  const statesKey = (options.states ?? []).join(',');
+  const pageSize = options.pageSize ?? DEFAULT_RUN_PAGE_SIZE;
+  const key = projectId ? JSON.stringify([projectId, statesKey, pageSize]) : null;
+  const projects = useMemo(() => (projectId ? [projectId] : []), [projectId]);
+  const fetchPage = useCallback((id: string, cursor: string | null) => {
+    const states = statesKey ? statesKey.split(',') as ProjectRunStateFilter[] : undefined;
+    // Send the cursor back unchanged with the same states and page size.
+    return apiCall((token, tenant) => gatewayClient.listProjectRuns(token, id, { states, cursor, pageSize }, tenant), null);
+  }, [apiCall, statesKey, pageSize]);
+  const projectName = useCallback((id: string) => id, []);
+  return usePagedRunList(key, projects, null, fetchPage, projectName);
+}
+
+/**
+ * Reads the newest runs of every project in `projects` and merges them newest
+ * first. Load more reads the next page of each project that has one. Pass
+ * null while the project list loads. Each new `projects` array reads again,
+ * so refreshing the project list also refreshes the runs.
+ */
+export function useCrossProjectRunList(projects: ProjectSummary[] | null, pageSize = 10): CrossProjectRunListData {
+  const { apiCall } = useAuth();
+  // Join the IDs into a string so the ID array keeps its identity while the
+  // same projects are listed.
+  const idsKey = (projects ?? []).map((project) => project.projectId).join('\n');
+  const ids = useMemo(() => (idsKey ? idsKey.split('\n') : []), [idsKey]);
+  const key = projects ? JSON.stringify([idsKey, pageSize]) : null;
+  const projectNames = useMemo(
+    () => new Map((projects ?? []).map((project) => [project.projectId, project.name])) as ReadonlyMap<string, string>,
+    [projects],
+  );
+  const fetchPage = useCallback(
+    (projectId: string, cursor: string | null) =>
+      apiCall((token, tenant) => gatewayClient.listProjectRuns(token, projectId, { cursor, pageSize }, tenant), null),
+    [apiCall, pageSize],
+  );
+  const projectName = useCallback((id: string) => projectNames.get(id) ?? id, [projectNames]);
+  return { ...usePagedRunList(key, ids, projects, fetchPage, projectName), projectNames };
 }

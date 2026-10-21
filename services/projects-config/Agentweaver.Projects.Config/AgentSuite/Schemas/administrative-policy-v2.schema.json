@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/administrative-policy-v2.schema.json",
+  "title": "AgentSuite network-only administrative policy v2",
+  "description": "Omitted network imposes no additional restriction. Supplied tuple set intersects the suite set; explicit empty denies all.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "network": {
+      "$ref": "#/$defs/network"
+    }
+  },
+  "$defs": {
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "egressAllow"
+      ],
+      "properties": {
+        "egressAllow": {
+          "type": "array",
+          "maxItems": 4096,
+          "description": "Tuple set: explicit empty list denies all. Input duplicates/order normalize; no implicit allowances.",
+          "items": {
+            "$ref": "#/$defs/endpoint"
+          }
+        }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "address",
+        "protocol",
+        "port"
+      ],
+      "properties": {
+        "address": {
+          "type": "string",
+          "description": "Exact canonical dotted-decimal IPv4 literal, not CIDR, DNS, wildcard or range.",
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"
+        },
+        "protocol": {
+          "const": "TCP"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    }
+  }
+}

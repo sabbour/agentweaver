@@ -1,16 +1,21 @@
 import { Badge, Button, Field, Input, MessageBar, MessageBarBody } from '@fluentui/react-components';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
 import { gatewayClient } from './api';
 import { isRemoteMcpOAuthConsentPreparation, isRemoteMcpOAuthManagementStatus } from './contracts';
-import type { RemoteMcpOAuthManagementStatus } from './contracts';
+import type { RemoteMcpConnectionDirectoryEntry, RemoteMcpOAuthManagementStatus } from './contracts';
+import { errorMessage } from './errors';
+
+/** How many saved connections to read per directory page. */
+const DIRECTORY_PAGE_SIZE = 25;
 
 /**
- * Manages one owner-held Remote MCP connection, identified by its exact ID.
- * The panel loads, registers, authorizes, refreshes, and disconnects the
- * connection. It never asks for passwords or tokens; sign-in happens on the
- * external service in a popup window.
+ * Manages one saved Remote MCP connection for this project. The project's
+ * saved connections are listed so the user picks one instead of typing its ID.
+ * The picked connection's status can be loaded, and it can be registered,
+ * signed in, refreshed, or disconnected. The browser never sees or
+ * collects passwords or tokens; the sign-in service keeps them.
  */
 export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
   projectId: string; configurationRevision: number | null;
@@ -26,70 +31,115 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [signInStarted, setSignInStarted] = useState(false);
-  // The open sign-in popup, so it can be closed when the user moves on.
+  // Saved connections from the project directory, read one page at a time.
+  const [directory, setDirectory] = useState<RemoteMcpConnectionDirectoryEntry[] | null>(null);
+  const [nextConnectionId, setNextConnectionId] = useState<string | null>(null);
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  // The sign-in popup we opened, so it can be closed when it is no longer valid.
   const popup = useRef<Window | null>(null);
-  // Request counter. Every new request or ID change increases it. A response
-  // is applied only if the counter still matches the value from when the
-  // request started; otherwise the response is stale and is ignored.
+  // Counter for the latest request. Responses from older requests are ignored.
   const generation = useRef(0);
-  // On unmount, invalidate any in-flight response and close the popup.
+  // On unmount, ignore any request still in flight and close an open sign-in popup.
   useEffect(() => () => {
     generation.current += 1;
     popup.current?.close();
     popup.current = null;
   }, []);
 
-  // Only show status that belongs to the ID in the input and to this project.
-  // This hides an old result while the user types a different ID.
+  // Use the loaded status only while it still matches the typed connection ID and this project.
+  // Editing the ID hides the old status right away.
   const current = status?.connectionId === connectionId && status.projectId === projectId ? status : null;
-  // The checksum must be exactly 64 lowercase hex characters (a SHA-256 digest).
+  // Client-side format checks: the checksum is a lowercase SHA-256 hex string and the ID is a UUID.
+  // They only enable buttons; the service does the real validation.
   const checksumValid = /^[a-f0-9]{64}$/.test(checksum);
-  // Connection IDs are UUIDs. Checking the format first avoids a pointless request.
   const connectionValid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(connectionId);
-  // The connection is usable for authorize and refresh only when the server says
-  // its setup matches the current configuration, and that configuration is the
-  // same revision this page has loaded. Otherwise the user could consent to an
-  // outdated setup.
+  // The connection may be authorized or refreshed only if the service says its
+  // stored setup matches the project's current configuration revision.
   const configured = Boolean(current?.currentConfigurationMatches && current.currentConfigurationRevision === configurationRevision);
 
   /** Rejects cross-project or malformed responses before showing connection state. */
-  const accept = (result: RemoteMcpOAuthManagementStatus) => {
-    // Treat a response for another project or connection as an error, so the
-    // panel never shows state the user did not ask for.
-    if (!isRemoteMcpOAuthManagementStatus(result) || result.projectId !== projectId || result.connectionId !== connectionId)
+  const accept = (result: RemoteMcpOAuthManagementStatus, expectedId: string) => {
+    if (!isRemoteMcpOAuthManagementStatus(result) || result.projectId !== projectId || result.connectionId !== expectedId)
       throw new Error('The service returned a different or invalid connection.');
     setStatus(result);
   };
 
   /**
-   * Runs one status-returning request (load, register, refresh, or disconnect)
-   * and applies the result only if no newer request has started since.
+   * Runs one connection request and shows its result if it is still the latest
+   * request. `expectedId` is the connection the response must be for.
    */
-  const run = async (operation: () => Promise<RemoteMcpOAuthManagementStatus>) => {
+  const run = async (operation: () => Promise<RemoteMcpOAuthManagementStatus>, expectedId = connectionId) => {
     const request = ++generation.current;
     setBusy(true);
     setError(null);
     try {
       const result = await operation();
-      // accept() can throw for a mismatched response. The catch below shows that error.
-      if (request === generation.current) accept(result);
+      // accept() throws for a wrong or malformed response, which lands in the catch below.
+      if (request === generation.current) accept(result, expectedId);
     } catch (reason) {
       if (request === generation.current) setError(reason instanceof Error ? reason.message : 'The connection request failed. Try again.');
     } finally {
-      // A newer request owns the busy flag, so only the latest one clears it.
       if (request === generation.current) setBusy(false);
     }
   };
 
   /**
-   * Starts OAuth sign-in. Opens a blank popup first, asks the server to prepare
-   * consent, then sends the popup to the returned sign-in address.
+   * Reads one page of the project's saved connections. Without `after` it
+   * starts over; with it, the page is added to the list already shown.
    */
+  const loadDirectory = useCallback(async (after?: string) => {
+    setDirectoryLoading(true);
+    setDirectoryError(null);
+    try {
+      const page = await apiCall((token, tenant) => gatewayClient.listRemoteMcpConnections(
+        token, projectId, after ? { pageSize: DIRECTORY_PAGE_SIZE, after } : { pageSize: DIRECTORY_PAGE_SIZE }, tenant,
+      ), null);
+      // Removed connections cannot be used, so they are not offered.
+      const usable = page.connections.filter((entry) => entry.state !== 'removed');
+      setDirectory((previous) => (after && previous ? [...previous, ...usable] : usable));
+      setNextConnectionId(page.nextConnectionId);
+    } catch (reason) {
+      setDirectoryError(errorMessage(reason));
+    } finally {
+      setDirectoryLoading(false);
+    }
+  }, [apiCall, projectId]);
+
+  useEffect(() => {
+    // Load on the next tick so state updates stay out of the effect body.
+    const timer = window.setTimeout(() => void loadDirectory(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadDirectory]);
+
+  /** Starts over with a different connection ID, dropping anything that belonged to the old one. */
+  const switchConnection = (nextId: string) => {
+    // Ignore in-flight requests and close any sign-in popup for the old connection.
+    generation.current += 1;
+    popup.current?.close();
+    popup.current = null;
+    setConnectionId(nextId);
+    setStatus(null);
+    setError(null);
+    setSignInStarted(false);
+  };
+
+  /** Picks a listed connection: fills its ID and saved checksum, then loads its status. */
+  const choose = (entry: RemoteMcpConnectionDirectoryEntry) => {
+    switchConnection(entry.connectionId);
+    // The directory reports the checksum of the saved setup, so it does not need to be typed.
+    setChecksum(entry.configurationSha256);
+    void run(() => apiCall(
+      (token, tenant) => gatewayClient.getRemoteMcpOAuthConnection(token, entry.connectionId, tenant), null,
+    ), entry.connectionId);
+  };
+
+  /** Asks the service for a sign-in address and sends the popup there. */
   const authorize = async () => {
-    // The button is disabled in these cases too. This guard also narrows types.
     if (!current || !configured || !checksumValid || configurationRevision === null) return;
-    // Open the popup now, while still inside the click handler. Browsers block
-    // popups opened after an await. A unique window name avoids reusing an old window.
+    // Open the popup first, while we are still inside the click handler. Browsers
+    // block popups opened later, after an await. It starts blank and gets its real
+    // address once the service answers. The random name keeps each attempt in its own window.
     const opened = window.open('about:blank', `agentweaver-remote-mcp-${crypto.randomUUID()}`, 'popup,width=600,height=760');
     if (!opened) {
       setError('The sign-in window was blocked. Allow popups and try again.');
@@ -132,19 +182,52 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
     }
   };
   return (
-    <PageSection title="Remote MCP" description="Connect an external tool service. Enter its saved connection ID to read current status. Passwords and tokens stay with the sign-in service.">
-      <Field label="Remote MCP connection ID">
-        <Input value={connectionId} disabled={busy} onChange={(_, data) => {
-          // A new ID starts over: ignore pending responses for the old ID, close
-          // its sign-in popup, and clear its status and messages.
-          generation.current += 1;
-          popup.current?.close();
-          popup.current = null;
-          setConnectionId(data.value);
-          setStatus(null);
-          setError(null);
-          setSignInStarted(false);
-        }} />
+    <PageSection title="Remote MCP" description="Connect an external tool service. Choose a saved connection to read its current status. Passwords and tokens stay with the sign-in service.">
+      {directoryError && <MessageBar intent="error"><MessageBarBody>{directoryError}</MessageBarBody></MessageBar>}
+      {directory === null
+        ? directoryLoading && <p className="v1-muted">Loading saved connections�</p>
+        : directory.length === 0
+          ? <p className="v1-muted">This project has no saved Remote MCP connections.</p>
+          : (
+            <div className="v1-table-wrap">
+              <table className="v1-table">
+                <caption>Saved connections</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Address</th>
+                    <th scope="col">State</th>
+                    <th scope="col">Tools</th>
+                    <th scope="col"><span className="v1-visually-hidden">Action</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {directory.map((entry) => (
+                    <tr key={entry.connectionId}>
+                      <th scope="row">{entry.displayName}</th>
+                      <td><code>{entry.endpointUri}</code></td>
+                      <td><Badge appearance="outline">{entry.state}</Badge></td>
+                      {/* The tool count is known only after the service has read the tool list. */}
+                      <td>{entry.discoveryRevision === null ? <span className="v1-muted">Not read yet</span> : entry.toolCount}</td>
+                      <td>
+                        <Button size="small" disabled={busy} aria-label={`Select ${entry.displayName}`} onClick={() => choose(entry)}>
+                          {entry.connectionId === connectionId ? 'Selected' : 'Select'}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      <div className="v1-actions">
+        {nextConnectionId && (
+          <Button disabled={directoryLoading} onClick={() => void loadDirectory(nextConnectionId)}>Load more connections</Button>
+        )}
+        <Button disabled={directoryLoading} onClick={() => void loadDirectory()}>{directoryLoading ? 'Loading�' : 'Refresh list'}</Button>
+      </div>
+      <Field label="Remote MCP connection ID" hint="Filled in when you select a saved connection. Type an ID only to register a new connection.">
+        <Input value={connectionId} disabled={busy} onChange={(_, data) => switchConnection(data.value)} />
       </Field>
       <Button disabled={busy || !connectionValid} onClick={() => void run(() => apiCall(
         (token, tenant) => gatewayClient.getRemoteMcpOAuthConnection(token, connectionId, tenant), null,
@@ -169,9 +252,9 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
       <details>
         <summary>Connection setup</summary>
         <div className="v1-form">
-          <p className="v1-muted">Use the checksum from the saved project connection setup. This version cannot discover connections or their checksums automatically.</p>
+          <p className="v1-muted">Selecting a saved connection fills in its checksum. For a new connection, use the checksum from the saved project connection setup.</p>
           <Field label="Configuration checksum"><Input value={checksum} disabled={busy} onChange={(_, data) => setChecksum(data.value)} /></Field>
-          {/* A loaded connection can be authorized. Until one is loaded, show the form that registers a new connection. */}
+          {/* With a loaded connection, offer sign-in. Without one, offer to register the typed ID as a new connection. */}
           {current
             ? <Button disabled={busy || !configured || !checksumValid} onClick={() => void authorize()}>Authorize tool service</Button>
             : <>

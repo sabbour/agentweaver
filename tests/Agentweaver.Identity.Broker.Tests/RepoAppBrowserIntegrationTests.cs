@@ -192,6 +192,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         WaitUntil = WaitUntilState.Commit,
                         Timeout = 15_000,
                     });
+                // Exact match: other buttons on later pages also start with "Sign in".
                 await page.GetByRole(
                     AriaRole.Button,
                     new() { Name = "Sign in", Exact = true }).ClickAsync();

@@ -1,7 +1,8 @@
 /**
  * Maps owner execution states to the four work-state words used by Flow,
  * Orchestrations, Overview, and the run page: Needs input, Open, Working, and
- * Done. Failure and missing data stay separate so they are never shown as done.
+ * Done. Failure, cancellation, and missing data stay separate so they are
+ * never shown as done.
  */
 
 /** User-facing run state. */
@@ -11,13 +12,12 @@ export type RunStateLabel = 'Needs input' | 'Open' | 'Working' | 'Done' | 'Faile
 export type RunStateColor = 'warning' | 'informative' | 'brand' | 'success' | 'danger' | 'severe' | 'subtle';
 
 /**
- * Converts an Orchestrator `executionState` (`idle`, `active`, `blocked`,
- * `completed`, `failed`, `cancelled`, `indeterminate`) to a label and color. Any other or
- * missing value is `Unavailable`.
+ * Converts a run state (`idle`, `active`, `blocked`, `completed`, `failed`,
+ * `cancelled`, `indeterminate`) to a label and color. Any other or missing
+ * value is `Unavailable`.
  */
 export function runState(executionState: string | null | undefined): { label: RunStateLabel; color: RunStateColor } {
   switch (executionState) {
-    // `blocked` means a session is waiting on a person, so the user sees Needs input.
     case 'blocked': return { label: 'Needs input', color: 'warning' };
     case 'idle': return { label: 'Open', color: 'informative' };
     case 'active': return { label: 'Working', color: 'brand' };

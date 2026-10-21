@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
   submitBrokerConsent: vi.fn(),
 }));
 
-vi.mock('./authProtocol', () => ({
+vi.mock('./authProtocol', async (importOriginal) => ({
+  // The real decoder, so a session gets the name from the ID token the Broker returns.
+  displayNameFromIdToken: (await importOriginal<typeof import('./authProtocol')>()).displayNameFromIdToken,
   buildAuthorizeUrl: mocks.buildAuthorizeUrl,
   clearAuthorizationTransaction: vi.fn(),
   defaultAuthorizationConfig: () => ({
@@ -174,6 +176,7 @@ function Harness() {
       <output>ensure:{ensured}</output>
       <output>unbound:{unboundToken}</output>
       <output>{auth.session?.accessToken ?? 'signed-out'}</output>
+      <output>name:{auth.session?.displayName ?? 'none'}</output>
       <output>{auth.restoringSession ? 'restoring' : 'not-restoring'}</output>
       <output>{auth.error ?? 'no-auth-error'}</output>
       <output>context:{auth.authorizationContext?.tenantId ?? 'none'}</output>
@@ -326,10 +329,24 @@ describe('Broker refresh coordination', () => {
     expect(window.open).toHaveBeenCalledOnce();
   });
 
-  // When the Broker needs the user for the run session, nothing about the current sign-in
-  // may change: same token, no error, and the 'signed in before' marker is kept.
-  it('keeps the current session when the silent run sign-in needs the user', async () => {
+  it('takes the display name from the ID token and keeps it for run sessions and refreshes', async () => {
+    const claims = btoa(JSON.stringify({ sub: 'user-1', name: 'Ada Lovelace' })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce({ ...token('access-1', 'refresh-1'), id_token: `e30.${claims}.sig` });
     render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+    expect(screen.getByText('name:Ada Lovelace')).toBeTruthy();
+
+    // A run-bound token without an ID token belongs to the same person, so the name stays.
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('access-run', 'refresh-run'));
+    fireEvent.click(screen.getByRole('button', { name: 'Ensure run session' }));
+    await completeSilentSignIn({ code: 'run-code' });
+    await screen.findByText('access-run');
+    expect(screen.getByText('name:Ada Lovelace')).toBeTruthy();
+  });
+
+  it('keeps the current session when the silent run sign-in needs the user', async () => {    render(<AuthProvider><Harness /></AuthProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await completePopupSignIn();
     await screen.findByText('access-1');

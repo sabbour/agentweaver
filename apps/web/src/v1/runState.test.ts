@@ -8,13 +8,12 @@ describe('runState', () => {
     expect(runState('active')).toEqual({ label: 'Working', color: 'brand' });
     expect(runState('completed')).toEqual({ label: 'Done', color: 'success' });
     expect(runState('failed')).toEqual({ label: 'Failed', color: 'danger' });
-    expect(runState('indeterminate')).toEqual({ label: 'Outcome unknown', color: 'severe' });
     expect(runState('cancelled')).toEqual({ label: 'Cancelled', color: 'subtle' });
+    expect(runState('indeterminate')).toEqual({ label: 'Outcome unknown', color: 'severe' });
   });
 
   it('shows missing or unknown states as Unavailable, never as Done', () => {
-    // Matching is exact and case-sensitive, so upper-case values are unknown too.
-    for (const value of [null, undefined, '', 'CANCELLED', 'COMPLETED'])
+    for (const value of [null, undefined, '', 'canceled', 'COMPLETED'])
       expect(runState(value)).toEqual({ label: 'Unavailable', color: 'subtle' });
   });
 

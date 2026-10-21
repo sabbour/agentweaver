@@ -56,8 +56,8 @@ export function ConfigurationHistory({ projectId, currentRevision }: { projectId
         <Button disabled={busy} onClick={() => void load()}>{busy ? 'Loading revision…' : 'View revision'}</Button>
       </div>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {/* Old revisions are shown read-only, and onChange does nothing, so they can never be saved from here. */}
       {snapshot && <PageSection title={`Configuration revision ${snapshot.revision}`}>
-        {/* Reuse the editor fields in read-only mode. The empty onChange ignores edits, so history never changes the current draft. */}
         <ConfigurationFields configuration={snapshot.configuration} onChange={() => {}} readOnly />
         <dl className="v1-detail-list">
           <div><dt>Agents</dt><dd>{snapshot.configuration.agentCharters.map((agent) => agent.name).join(', ') || 'None'}</dd></div>

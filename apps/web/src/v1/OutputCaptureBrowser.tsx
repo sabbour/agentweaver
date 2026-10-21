@@ -126,7 +126,8 @@ function CaptureList({ projectId, runId, sessionId, initialCaptureId, onSelect, 
   // Reads one page. The cursor is the (capturedAt, captureId) pair of the last
   // capture already shown; null reads the newest page.
   const readPage = useCallback((cursor: { capturedAt: string; captureId: string } | null) =>
-    apiCall((token, tenant) => gatewayClient.listSourceControlOutputCaptures(token, projectId, runId, sessionId, cursor, tenant),
+    apiCall((token, tenant) => gatewayClient.listRunOutputCaptures(token, projectId, runId, sessionId,
+      { limit: 50, beforeCapturedAt: cursor?.capturedAt, beforeCaptureId: cursor?.captureId }, tenant),
       { projectId, runId }), [apiCall, projectId, runId, sessionId]);
   const firstRead = useCallback(() => readPage(null), [readPage]);
   const first = useRead(firstRead);
@@ -191,7 +192,7 @@ function CaptureDetail({ projectId, runId, sessionId, captureId, onSelect, busy 
   const { apiCall } = useAuth();
   const read = useCallback(async () => {
     const detail = await apiCall((token, tenant) =>
-      gatewayClient.readSourceControlOutputCapture(token, projectId, runId, sessionId, captureId, tenant), { projectId, runId });
+      gatewayClient.readSourceControlOutputCapture(token, projectId, runId, sessionId, captureId, tenant ?? ''), { projectId, runId });
     // The capture and its manifest must describe the same run, workspace and
     // output tree. If they do not, refuse to show it.
     if (detail.capture.captureId !== captureId || detail.manifest.runId !== runId ||
@@ -206,10 +207,10 @@ function CaptureDetail({ projectId, runId, sessionId, captureId, onSelect, busy 
     // Only read paths listed in the manifest; the manifest holds the expected size and hash.
     const file = result.data?.manifest.files.find((entry) => entry.path === filePath);
     if (!file) throw new Error('This file is no longer in the capture. Choose it again.');
-    const bytes = await apiCall((token, tenant) => gatewayClient.readSourceControlOutputCaptureFile(
-      token, projectId, runId, sessionId, captureId, filePath, tenant), { projectId, runId });
+    const { bytes } = await apiCall((token, tenant) => gatewayClient.readSourceControlOutputCaptureFile(
+      token, projectId, runId, sessionId, captureId, filePath, tenant ?? ''), { projectId, runId });
     // Verify the bytes before showing them: size and SHA-256 must match the manifest.
-    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes));
     // Hex-encode the digest to compare with the manifest's lowercase hex hash.
     const hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
     if (bytes.byteLength !== file.byteLength || hash !== file.sha256)

@@ -17,6 +17,8 @@ public sealed class RemoteMcpConnectionEndpointRegistrationTests
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddAuthorization();
         builder.Services.AddScoped<RemoteMcpConnectionStore>();
+        builder.Services.AddSingleton<IRemoteMcpDiscoverySource, UnavailableRemoteMcpDiscoverySource>();
+        builder.Services.AddScoped<RemoteMcpDiscoveryService>();
         await using var app = builder.Build();
 
         app.MapRemoteMcpConnectionEndpoints();

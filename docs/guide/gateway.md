@@ -60,6 +60,7 @@ Set the following configuration before you start the host:
 | `Gateway:Owners:Knowledge` | HTTPS service root for Knowledge. |
 | `Gateway:Owners:Events` | HTTPS service root for Events. |
 | `Gateway:Owners:IdentityBrokerAddress` | HTTPS service root for the Identity Broker. |
+| `Gateway:Owners:Environment` | Optional HTTPS service root for Environment. Without it, Environment routes return 503 `owner_not_configured`. |
 | `Gateway:WebOrigin` | The Web application's exact HTTPS origin, for example `https://portal.<managed-domain>`. |
 | `Gateway:OwnerRequestTimeoutSeconds` | Finite timeout from 1 through 120 seconds. The default is 15 seconds. |
 
@@ -150,6 +151,33 @@ Projects & Config. A run-bound token sees only its own run. The list reads
 persisted run records only. `title` and `goal` are `null` until a run start
 request stores them.
 
+## List project issues and pull requests
+
+Use `GET /api/v1/projects/{projectId}/source-control/issues` and
+`GET /api/v1/projects/{projectId}/source-control/pull-requests` to fill issue
+and pull request pickers. The Gateway forwards each request to the Orchestrator
+owner and returns its status and body with `Cache-Control: no-store`. Both
+lists read stored Agentweaver data. They don't call the source control provider.
+
+- `pageSize` defaults to 25 and accepts 1 through 100.
+- `cursor` continues from the previous page's `nextCursor`. Send the same
+  `state` and `pageSize` values with it.
+- `state` defaults to `open`. Issues also accept `closed` and `all`. Pull
+  requests also accept `closed`, `merged`, and `all`.
+
+The issue list returns issues that periodic issue sync linked to backlog tasks.
+It needs project or tenant read permission and rejects run-bound tokens. Items
+don't include an issue URL or author, because the backlog doesn't store them.
+
+The pull request list returns pull requests that the project's runs created or
+reused. It needs the same permission as the run list. It isn't a complete
+history: recording starts when Orchestrator migration 032 is applied, and the
+response reports that time in `coverage.recordedSince`. Before migration 032 is
+applied, the list returns `503 pull_request_records_unavailable` instead of an
+empty list.
+
+The web picker doesn't use these lists yet.
+
 ## Read project metrics and usage
 
 Send `GET /api/v1/projects/{projectId}/metrics` for run counts and a daily
@@ -213,7 +241,20 @@ the complete body before forwarding, including requests without
 `Content-Length`. Larger bodies return `413` without contacting the owner.
 Transfer version or
 team incompatibility returns `422`. These source routes do not establish
-deployment or a browser wizard.
+deployment. The web client uses them on **Agents** and the **Cast a team** page.
+
+## List Remote MCP connections
+
+`GET /api/v1/projects/{projectId}/remote-mcp/connections` lists the project's
+Remote MCP connections. The Gateway forwards the request to the Environment
+`/api/projects/{projectId}/remote-mcp/directory` route with the bearer token
+and tenant selector. It accepts `pageSize` (1 through 100, default 50) and
+`after`, the last connection ID of the previous page. Each entry includes the
+configuration revision, the configuration SHA-256, the state, the Identity
+binding flag, and the current discovery revision and catalog SHA-256. Entries
+never include credentials, tokens, or tool schemas. Environment requires
+current `ReadProjects` authority. For the full contract, see
+[Remote MCP connections](../architecture/remote-mcp-connections.md).
 
 ## Send idempotent writes
 
@@ -284,6 +325,14 @@ the Gateway does not exchange or mint another token. These routes are not MCP
 tools.
 
 ## Connect an MCP client
+
+Download the operator definition from `GET /agents/agentweaver.agent.md` on the
+Gateway and save it as `.github/agents/agentweaver.agent.md` in your repository.
+This anonymous route returns `text/markdown; charset=utf-8` and is excluded from
+OpenAPI and the MCP catalog. Unlike 0.x, which wrote the definition to a local
+project folder when missing, v1 provides a download only. It does not write into
+run checkouts because that would add an unrequested file to run diffs and pull
+requests.
 
 The separate `Agentweaver.Mcp` host exposes Streamable HTTP at `POST /mcp`.
 Its `tools/list` catalog comes from the Gateway's OpenAPI document; `tools/call`

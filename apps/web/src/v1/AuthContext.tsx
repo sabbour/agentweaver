@@ -12,6 +12,7 @@ import {
   buildAuthorizeUrl,
   clearAuthorizationTransaction,
   defaultAuthorizationConfig,
+  displayNameFromIdToken,
   exchangeAuthorizationCode,
   isConsentPrompt,
   parseAuthorizationCallbackMessage,
@@ -41,6 +42,8 @@ interface AuthSession {
   refreshToken?: string;
   expiresAt: number;
   binding: RunBinding | null;
+  /** Display name from the ID token, or null when the Broker sent none. Shown in the persona menu. */
+  displayName: string | null;
 }
 
 /** Tenant authorization values confirmed by the Projects owner. */
@@ -164,6 +167,7 @@ function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + token.expires_in * 1000,
     binding,
+    displayName: displayNameFromIdToken(token.id_token),
   };
 }
 
@@ -254,15 +258,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [setActiveSession]);
 
   /** Stores a new session for its binding; `mode` decides whether others are kept and it becomes active. */
-  const storeSession = useCallback((next: AuthSession, mode: SessionMode) => {
-    // 'replace' starts over with only this session.
+  const storeSession = useCallback((stored: AuthSession, mode: SessionMode) => {
     if (mode === 'replace') {
-      setSession(next);
+      setSession(stored);
       return;
     }
+    // Sessions kept side by side belong to the same signed-in person. A run-bound token
+    // without an ID token keeps the name the active session already shows.
+    const next = !stored.displayName && sessionRef.current?.displayName
+      ? { ...stored, displayName: sessionRef.current.displayName }
+      : stored;
+    // A new token for the same binding replaces the old one in the map.
     sessionsRef.current.set(bindingKey(next.binding), next);
-    // Otherwise keep the other sessions and add this one. Activate it when asked to, or when
-    // the page is already showing the same run, so the page moves to the newer token.
+    // In `store` mode we still activate when the active session is already bound to this
+    // same run: the page is using that run, so it must switch to the newer token.
     if (mode === 'activate' || sessionRef.current?.binding && sameBinding(sessionRef.current.binding, next.binding))
       setActiveSession(next);
   }, [setActiveSession, setSession]);
@@ -285,8 +294,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [storeSession]);
 
   /**
-   * Reads a callback URL. Returns false when it holds neither a code nor an error yet,
-   * throws on an error or a wrong `state`, and finishes sign-in on a code.
+   * Reads a Broker redirect URL for this transaction. Returns false when the URL holds no
+   * result, throws when the Broker reported an error, and stores the session otherwise.
    */
   const consumeAuthorizationResponse = useCallback(async (
     responseUrl: string,
@@ -641,16 +650,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [setActiveSession, setSession]);
 
   /**
-   * Refreshes the session held for `current`'s binding. Returns the new session, a
-   * newer one that already replaced it, or null when the binding has no session left.
+   * Refreshes one held session's token. Returns the new session, the newer session that
+   * already replaced it, or null when the session was dropped.
    */
   const refresh = useCallback((current: AuthSession): Promise<AuthSession | null> => {
     const key = bindingKey(current.binding);
+    // Someone already replaced this session (refresh or new sign-in): use the newer one.
     const latest = sessionsRef.current.get(key) ?? null;
-    // Someone already replaced or dropped this session. Use what is held now.
     if (latest !== current) return Promise.resolve(latest);
+    // Share an in-flight refresh so parallel 401s do not spend the refresh token twice.
     const inFlight = refreshPromisesRef.current.get(key);
-    // Join a refresh already running for this exact session.
     if (inFlight?.session === current) return inFlight.promise;
     const refreshToken = current.refreshToken;
     if (!refreshToken) {
@@ -660,18 +669,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const promise = (async (): Promise<AuthSession | null> => {
       try {
         const refreshed = await refreshBrokerToken(defaultAuthorizationConfig(), refreshToken);
+        // The refreshed token keeps the same binding as the session it replaces.
         const next = sessionFromToken(refreshed, current.binding);
-        // Some refresh answers omit a new refresh token; keep the old one in that case.
+        // Keep the old refresh token if the Broker did not rotate it.
         if (!next.refreshToken) next.refreshToken = refreshToken;
-        // The held session changed while we waited (sign-out or a new sign-in). Do not
-        // overwrite it with this older result.
+        // A refresh response may omit the ID token; the person has not changed, so keep the name.
+        if (!next.displayName) next.displayName = current.displayName;
+        // Sign-out or a new sign-in happened while we waited: do not put the old session back.
         if (sessionsRef.current.get(key) !== current) return sessionsRef.current.get(key) ?? null;
         sessionsRef.current.set(key, next);
-        // Update the page's active session only if it was the one refreshed.
         if (sessionRef.current === current) setActiveSession(next);
         return next;
       } catch (reason) {
-        // Same check on failure: never drop a session that already replaced this one.
         if (sessionsRef.current.get(key) !== current) return sessionsRef.current.get(key) ?? null;
         dropSession(current, reason instanceof Error ? reason.message : 'Your sign-in expired. Sign in again.');
         return null;

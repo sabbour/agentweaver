@@ -1,41 +1,46 @@
 import { Badge, Button, Divider, MessageBar, MessageBarBody, Popover, PopoverSurface, PopoverTrigger, Text, mergeClasses } from '@fluentui/react-components';
 import { ChevronDownRegular, PersonRegular, SignOutRegular } from '@fluentui/react-icons';
 import { useIdentityMenuStyles } from '../components/identityMenuStyles';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLocation, useMatch } from 'react-router-dom';
 import { LeftNavView } from '../components/shell/LeftNav';
 import { ProjectSwitcherView } from '../components/shell/ProjectSwitcher';
-import { resolveActiveKey } from '../components/shell/navConfig';
+import { NEW_SESSION_NAV_KEY, SETTINGS_NAV_KEY, resolveActiveKey } from '../components/shell/navConfig';
 import { PageContainer } from '../components/ui/PageContainer';
 import { AttentionBell } from './AttentionList';
 import { useAuth } from './AuthContext';
-import { useNotificationAttention } from './runAttention';
+import { RunAttentionProvider, useSharedRunAttention } from './RunAttentionContext';
+import { StartTaskAction } from './StartTaskAction';
 import { gatewayClient } from './api';
 import type { ProjectSummary } from './contracts';
 import packageInfo from '../../package.json';
 
 /**
  * Keeps the 0.x persona trigger and menu layout without requesting legacy identity APIs.
- * The Broker token carries no display name, so the label stays "Account". The 0.x status
- * dot polls a legacy health route, so the menu footer shows only the version badge.
+ * The label is the display name from the Broker ID token (`name`, else `preferred_username`);
+ * when the token carries neither, it stays "Account". The 0.x status dot polls a legacy
+ * health route, so the menu footer shows only the version badge.
  */
 export function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
-  const { signOut } = useAuth();
+  const { session, signOut } = useAuth();
   const styles = useIdentityMenuStyles();
+  const displayName = session?.displayName ?? null;
+  const label = displayName ?? 'Account';
   return (
     <Popover positioning="above-start">
       <PopoverTrigger disableButtonEnhancement>
         <Button
           appearance="transparent"
           type="button"
-          aria-label="Account"
+          // Keep "Account" in the accessible name so the control is findable either way.
+          aria-label={displayName ? `Account: ${displayName}` : 'Account'}
           className={collapsed ? mergeClasses(styles.trigger, styles.triggerCollapsed) : styles.trigger}
         >
           <span className={collapsed ? mergeClasses(styles.triggerInner, styles.triggerInnerCollapsed) : styles.triggerInner}>
             <span className={styles.fallbackAvatar} aria-hidden="true"><PersonRegular /></span>
             {!collapsed && (
               <>
-                <Text className={styles.label}>Account</Text>
+                <Text className={styles.label}>{label}</Text>
                 <ChevronDownRegular className={styles.chevron} aria-hidden="true" />
               </>
             )}
@@ -45,7 +50,7 @@ export function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
       <PopoverSurface>
         <div className={styles.popover}>
           <div className={styles.section}>
-            <Text weight="semibold">Signed in</Text>
+            <Text weight="semibold">{displayName ? `Signed in as ${displayName}` : 'Signed in'}</Text>
           </div>
           <Divider />
           <div className={styles.footer} data-testid="identity-menu-footer">
@@ -67,21 +72,39 @@ export function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
   );
 }
 
+/** The rail bell. It reads the shared notifications state from RunAttentionProvider. */
+function SharedAttentionBell({ projectNames }: { projectNames: ReadonlyMap<string, string> }) {
+  const attention = useSharedRunAttention();
+  return <AttentionBell attention={attention} projectNames={projectNames} />;
+}
+
 /**
- * Adapts Gateway data to the existing rail; no monolith API consumers are mounted.
- * The bell is the caller's attention inbox: pending gates across projects, read from
- * notifications with the unbound token, the same items Overview shows. Answering a gate
- * still happens on the run page with a run-bound token.
+ * Picks the rail item to highlight. v1 routes that the shared nav config does
+ * not know are mapped here, so they never fall back to Overview.
  */
+function shellActiveKey(pathname: string, projectId: string | undefined): string {
+  // The new session page highlights the New session button.
+  if (pathname === '/assistant') return NEW_SESSION_NAV_KEY;
+  // Settings pages highlight the Settings menu button.
+  if (pathname === '/platform-settings' || pathname === '/settings') return SETTINGS_NAV_KEY;
+  // Knowledge pages highlight Memories, and run pages highlight Orchestrations.
+  if (pathname.includes('/knowledge')) return 'memories';
+  if (pathname.includes('/runs/')) return 'orchestrations';
+  return resolveActiveKey(pathname, projectId);
+}
+
+/** Adapts Gateway data to the existing rail; no monolith API consumers are mounted. */
 export function RetainedShell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const { session, apiCall } = useAuth();
-  const attention = useNotificationAttention();
   const match = useMatch('/projects/:projectId/*');
-  // Undefined outside project routes, which hides the project part of the rail.
   const projectId = match?.params.projectId;
-  // The project list for the switcher, tagged with the access token it was
-  // loaded with. A list from an older token is treated as not loaded.
+  // The new session page carries its project in `?project=`. The switcher
+  // shows that project, so it matches the project the page starts in.
+  const switcherProjectId = projectId
+    ?? (location.pathname === '/assistant' ? new URLSearchParams(location.search).get('project') ?? undefined : undefined);
+  // The loaded project list is tagged with the access token it was loaded
+  // with. After sign-out or a token change, the old list is ignored.
   const [directory, setDirectory] = useState<{
     scope: string;
     projects: ProjectSummary[];
@@ -110,49 +133,59 @@ export function RetainedShell({ children }: { children: ReactNode }) {
     return () => { active = false; };
   }, [apiCall, scope, projectId]);
 
-  // Use the list only if it was loaded for the current token. While a new list
-  // loads, this is null and the switcher shows its loading state.
+  // Use the list only if it was loaded with the current token. Otherwise treat
+  // it as still loading.
   const current = directory?.scope === scope ? directory : null;
+  // Project names for the bell items. Unknown projects show their ID.
+  const projectNames = useMemo(
+    () => new Map((current?.projects ?? []).map((project) => [project.projectId, project.name])),
+    [current],
+  );
   return (
-    <div className="aw-app-shell">
-      <LeftNavView
-        // Show only the rail entries that have v1 pages.
-        visibleGlobalKeys={['overview', 'sessions', 'projects']}
-        visibleProjectKeys={['dashboard', 'flow', 'orchestrations', 'agents', 'skills', 'memories']}
-        showNewSession
-        projectId={projectId}
-        pathname={location.pathname}
-        // v1 routes that the shared nav config does not know: knowledge pages
-        // belong to Memories, and run pages belong to Orchestrations.
-        activeKey={location.pathname.includes('/knowledge') ? 'memories'
-          : location.pathname.includes('/runs/') ? 'orchestrations'
-          : resolveActiveKey(location.pathname, projectId)}
-        version={packageInfo.version}
-        projectSwitcher={(
-          <ProjectSwitcherView
-            projectId={projectId}
-            pathname={location.pathname}
-            // The switcher was written for the older API, so map to its field names.
-            projects={(current?.projects ?? []).map((project) => ({ project_id: project.projectId, name: project.name }))}
-            loading={!current}
-            // Sign-in failures are handled by the auth layer, not by the switcher.
-            authError={false}
-            loadError={Boolean(current?.error)}
-          />
-        )}
-        identity={(collapsed) => <BrokerIdentity collapsed={collapsed} />}
-        notifications={<AttentionBell attention={attention} />}
-      />
-      <div className="aw-shell-canvas">
-        <main className="aw-shell-content" aria-label="Main content">
-          <div className="aw-shell-scroll">
-            <PageContainer>
-              {current?.error && <MessageBar intent="error"><MessageBarBody>{current.error}</MessageBarBody></MessageBar>}
-              {children}
-            </PageContainer>
-          </div>
-        </main>
+    // One provider for the bell and the page, so they share one notifications
+    // state and one poll. A dismiss in either place shows in both.
+    <RunAttentionProvider>
+      <div className="aw-app-shell">
+        {/* The rail shows the 0.x pages, plus the Sessions group with its New
+            session button. Operations pages show what current reads support. */}
+        <LeftNavView
+          visibleGlobalKeys={['overview', 'projects', 'sessions']}
+          visibleProjectKeys={['dashboard', 'board', 'flow', 'orchestrations', 'workspace', 'agents', 'skills', 'memories', 'workflows', 'observability', 'diagnostics', 'heartbeat', 'cluster']}
+          showNewSession
+          projectId={projectId}
+          pathname={location.pathname}
+          activeKey={shellActiveKey(location.pathname, projectId)}
+          version={packageInfo.version}
+          projectSwitcher={(
+            <ProjectSwitcherView
+              projectId={switcherProjectId}
+              pathname={location.pathname}
+              // Map v1 project summaries to the switcher's 0.x shape.
+              projects={(current?.projects ?? []).map((project) => ({ project_id: project.projectId, name: project.name }))}
+              loading={!current}
+              // Sign-in problems are handled by the auth layer, so the switcher
+              // never shows its own sign-in error here.
+              authError={false}
+              loadError={Boolean(current?.error)}
+            />
+          )}
+          identity={(collapsed) => <BrokerIdentity collapsed={collapsed} />}
+          notifications={<SharedAttentionBell projectNames={projectNames} />}
+        />
+        <div className="aw-shell-canvas">
+          <main className="aw-shell-content" aria-label="Main content">
+            {/* 0.x placed Start task above the page. Inside a project it adds a task
+                to that project's backlog; outside a project there is no target, so it is hidden. */}
+            {projectId && <StartTaskAction projectId={projectId} projectName={projectNames.get(projectId)} />}
+            <div className="aw-shell-scroll">
+              <PageContainer>
+                {current?.error && <MessageBar intent="error"><MessageBarBody>{current.error}</MessageBarBody></MessageBar>}
+                {children}
+              </PageContainer>
+            </div>
+          </main>
+        </div>
       </div>
-    </div>
+    </RunAttentionProvider>
   );
 }

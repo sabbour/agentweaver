@@ -34,7 +34,7 @@ import type {
 } from './contracts';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading } from './pageParts';
-import { useGatewayRunList } from './runListData';
+import { useProjectRunList } from './runListData';
 import { runState } from './runState';
 import { OutputCaptureBrowser } from './OutputCaptureBrowser';
 
@@ -506,7 +506,7 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
   const projectId = activeProjects.some((project) => project.projectId === pickedProject) ? pickedProject : activeProjects[0]?.projectId ?? '';
   // Read runs only while the form is open and a run list is needed. An empty
   // project id tells the hook to skip the request.
-  const runs = useGatewayRunList(open && kind !== 'conversation' ? projectId : '');
+  const runs = useProjectRunList(open && kind !== 'conversation' ? projectId : '');
   const [pickedRun, setPickedRun] = useState('');
   const runId = runs.items.some((item) => item.runId === pickedRun) ? pickedRun : runs.items[0]?.runId ?? '';
   // Only conversations the caller can still read, and that have a project, can be linked.
@@ -558,7 +558,7 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
               <Field label="Run">
                 <Select value={runId} onChange={(_, data) => setPickedRun(data.value)}>
                   {runs.items.map((item) => (
-                    <option key={item.runId} value={item.runId}>{`${item.title || `Run ${item.runId}`} · ${runState(item.executionState).label}`}</option>
+                    <option key={item.runId} value={item.runId}>{`${item.label} · ${runState(item.executionState).label}`}</option>
                   ))}
                 </Select>
               </Field>

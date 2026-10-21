@@ -137,6 +137,7 @@ export function useRunJournal(
             updateState((current) => ({ ...current, loading: false }));
           }
 
+          // Step 2: follow the live stream from the cursor until it ends or fails.
           try {
             updateState((current) => ({ ...current, connected: true, error: null }));
             for await (const frame of gatewayClient.streamEvents(

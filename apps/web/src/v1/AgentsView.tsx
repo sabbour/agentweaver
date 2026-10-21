@@ -1,24 +1,27 @@
 /**
- * Agents in the 0.x Team layout: metric row, filter tabs, agent tiles, and a
- * detail drawer with Overview and Charter tabs. Agents come from the project
+ * Agents page: header with the 0.x Add member, Sync, and Cast team controls,
+ * pending team proposals, a metric row, filter tabs, agent tiles, and a detail
+ * drawer with Overview and Charter tabs. Agents come from the project
  * configuration's `agentCharters`; "In the team" means the agent has a casting
- * entry. Charter edits save a new configuration revision. Casting, adding, and
- * removing agents need casting support in the Gateway, which does not exist yet,
- * so they are not shown.
+ * entry. Charter edits save a new configuration revision. Team changes (cast,
+ * add, import) become casting proposals that apply only when confirmed.
  */
 import {
   Badge, Button, DrawerBody, DrawerHeader, DrawerHeaderTitle, Field, Input, OverlayDrawer,
   Tab, TabList, Text, Textarea, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Dismiss24Regular } from '@fluentui/react-icons';
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Dismiss24Regular, People24Regular } from '@fluentui/react-icons';
+import { useState, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { MetricRow } from '../components/ui/Metric';
 import { PageSection } from '../components/ui/PageSection';
 import { EmptyState } from '../components/ui/States';
 import { Tile, TileGrid } from '../components/ui/TileGrid';
+import { AddMemberDialog, PendingProposals, TeamSyncPanel } from './AgentsTeamControls';
+import { castPath } from './castingData';
 import type { ProjectConfiguration } from './contracts';
+import { PageHeading } from './pageParts';
 
 type Filter = 'all' | 'team' | 'other';
 type Charter = ProjectConfiguration['agentCharters'][number];
@@ -128,31 +131,79 @@ function AgentDetail({ projectId, agent, configuration, readOnly, onClose, onSav
   );
 }
 
-/** Renders the project's agents. `onSave` resolves true when the new revision is saved. */
-export function AgentsView({ projectId, configuration, readOnly, onSave }: {
+/**
+ * Renders the Agents page for a loaded configuration. `onSave` resolves true
+ * when the new revision is saved. `status` holds page messages shown under the
+ * header, and `onReload` re-reads the configuration after a revision conflict.
+ */
+export function AgentsView({ projectId, configuration, configurationRevision, readOnly, onSave, status, onReload }: {
   projectId: string;
   configuration: ProjectConfiguration;
+  configurationRevision: number;
   readOnly: boolean;
   onSave: (next: ProjectConfiguration) => Promise<boolean>;
+  status?: ReactNode;
+  onReload?: () => void;
 }) {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<Filter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Agent ids that have a casting entry, i.e. are in the team.
+  const [showSync, setShowSync] = useState(false);
+  // IDs of agents with a casting entry, meaning they are in the team.
   const cast = new Set(configuration.casting.map((item) => item.agentId));
   const agents = configuration.agentCharters;
   const teamCount = agents.filter((agent) => cast.has(agent.agentId)).length;
-  // 'all' shows everyone. Otherwise keep agents whose team membership matches the
-  // tab: 'team' wants members, 'other' wants non-members.
+  // "all" shows everyone. "team" keeps cast agents and "other" keeps the rest.
   const visible = agents.filter((agent) => filter === 'all' || (filter === 'team') === cast.has(agent.agentId));
-  // Look the agent up by id on each render, so the drawer closes on its own if
-  // the agent disappears from a newer configuration.
+  // Look the agent up by ID on every render, so the drawer shows the latest saved
+  // configuration and closes if the agent no longer exists.
   const selected = agents.find((agent) => agent.agentId === selectedId) ?? null;
+  const openCast = () => navigate(castPath(projectId));
+
+  // 0.x header controls. They stay off while a configuration save is running,
+  // because proposals are fenced to the revision shown here.
+  const header = (
+    <PageHeading
+      title="Agents"
+      description="The cast working on this project."
+      page="Agents"
+      actions={<>
+        <AddMemberDialog
+          projectId={projectId}
+          configuration={configuration}
+          configurationRevision={configurationRevision}
+          disabled={readOnly}
+          onConflict={onReload}
+        />
+        <Button appearance="secondary" onClick={() => setShowSync((value) => !value)}>{showSync ? 'Hide sync' : 'Sync'}</Button>
+        <Button appearance="primary" icon={<People24Regular />} disabled={readOnly} onClick={openCast}>Cast team</Button>
+      </>}
+    />
+  );
+  const top = (
+    <>
+      {header}
+      {status}
+      {showSync && <TeamSyncPanel projectId={projectId} configurationRevision={configurationRevision} onConflict={onReload} />}
+      <PendingProposals projectId={projectId} />
+    </>
+  );
 
   if (agents.length === 0) {
-    return <EmptyState title="No agents yet" description="This project has no agent charters. Add them in Project settings, Advanced." />;
+    return (
+      <>
+        {top}
+        <EmptyState
+          title="No team yet"
+          description="Cast a team to get started. Pick a template or roles, then review the proposed agents before they apply."
+          action={<Button appearance="primary" disabled={readOnly} onClick={openCast}>Cast team</Button>}
+        />
+      </>
+    );
   }
   return (
     <>
+      {top}
       <MetricRow items={[
         { label: 'Total', value: agents.length },
         { label: 'In the team', value: teamCount },

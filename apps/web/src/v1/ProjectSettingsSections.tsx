@@ -76,17 +76,17 @@ export function GeneralSection({ project, onUpdated }: { project: ProjectSummary
 }
 
 /**
- * Shows what the signed-in user can do in this project, followed by the
- * project member list.
+ * Shows what the signed-in user can do in this project, followed by the project
+ * members panel. Member change controls appear only for tenant administrators.
  */
 export function AccessSection({ projectId }: { projectId: string }) {
   const context = useAuthorizationContext();
-  // Until the authorization context loads, show no permissions instead of guessing.
+  // Keep only the permissions that apply to this project: project, tenant-wide, or platform grants.
   const permissions = context.data ? permissionsForProject(context.data, projectId) : [];
-  // The server reports a tenant-wide "Change project settings" permission only
-  // for a tenant administrator with admin scope. That is the only role allowed
-  // to add or remove members, so it gates the change controls. The server still
-  // checks the role on every change; this flag only hides controls that would fail.
+  // The service reports a tenant-wide "Change project settings" permission only for
+  // a tenant administrator with admin scope. That is also the only role that can
+  // add or remove members, so it decides whether the member controls appear.
+  // The service still checks every change; this flag only hides controls.
   const canManageMembers = permissions.some((item) => item.scope === 'tenant' && item.permission === 'writeProjects');
   return (
     <>
@@ -108,6 +108,7 @@ export function AccessSection({ projectId }: { projectId: string }) {
           </ul>
         ))}
     </PageSection>
+    {/* Show members only after permissions load, so the panel knows whether to show change controls. */}
     {context.data && <ProjectMembersPanel projectId={projectId} canManage={canManageMembers} />}
     </>
   );

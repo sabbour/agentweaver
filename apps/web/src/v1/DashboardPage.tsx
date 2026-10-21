@@ -1,19 +1,22 @@
 /**
  * Project Dashboard in the 0.x layout: breadcrumb header with update time and
- * Refresh, a status card with quick actions and summary tiles, recent runs, and
- * the team. Values come from the project summary, the saved configuration, and
- * the browser's recent runs. Run metrics and activity charts wait for a
- * metrics contract the service does not offer yet.
+ * Refresh, a status card with quick actions and run metric tiles, the Activity
+ * chart with its range selector, run totals, model and agent usage, recent runs,
+ * and the team. Setup comes from the saved configuration. Tiles, the chart, and
+ * usage come from the project metrics and usage reads for the selected range.
  */
 import { Badge, Button, Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
+import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
 import { useProjectConfiguration, useProjectSummary } from './projectData';
+import { metricTiles, useProjectMetrics, type MetricsRangeKey } from './projectMetrics';
+import { ProjectMetricsSections } from './ProjectMetricsSections';
 import { projectReadiness } from './projectReadiness';
 import { RunList } from './RunList';
-import { useBrowserRunList } from './runListData';
+import { runListErrorMessage, useProjectRunList } from './runListData';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXL },
@@ -120,28 +123,33 @@ export function DashboardPage() {
   const { projectId = '' } = useParams();
   const project = useProjectSummary(projectId);
   const configuration = useProjectConfiguration(projectId);
-  const runs = useBrowserRunList(projectId);
+  // The newest runs for the Recent runs list.
+  const runs = useProjectRunList(projectId, { pageSize: 5 });
+  // Metric tiles, the chart, and usage share one range. 30 days matches the service default.
+  const [range, setRange] = useState<MetricsRangeKey>('30d');
+  const metrics = useProjectMetrics(projectId || null, range);
   const base = `/projects/${encodeURIComponent(projectId)}`;
-  // Recent runs come from browser storage, which has nothing to re-read here,
-  // so Refresh only reloads the two service reads.
-  const refresh = () => { project.reload(); configuration.reload(); };
+  // Refresh re-reads the summary, the saved configuration, the run list, and metrics.
+  const refresh = () => { project.reload(); configuration.reload(); runs.reload(); metrics.reload(); };
   const loading = project.loading || configuration.loading;
-  // Show the first error found; the summary error wins over the configuration error.
+  // Show one error at a time. A summary error is shown before a configuration error.
   const error = project.error ?? configuration.error;
   const config = configuration.data?.configuration;
-  // Readiness needs the configuration. Until it loads, the status card is not shown.
+  // Readiness needs the configuration. An archived project gets the archived
+  // status card no matter how complete its setup is.
   const readiness = config ? projectReadiness(config, project.data?.state === 'archived') : null;
-  // These counts use the state seen when each run was last opened in this browser,
-  // so they can be out of date. The tile text says so.
-  const needsInput = runs.items.filter((run) => run.executionState === 'blocked').length;
-  const working = runs.items.filter((run) => run.executionState === 'active').length;
-  const enabledSkills = config?.skills.filter((skill) => skill.enabled).length ?? 0;
+  const tiles = metricTiles(metrics.metrics, range, metrics.loading);
+  // Agent IDs in usage map to the team's display names. Unknown IDs show as is.
+  const agentNames = useMemo(
+    () => new Map((config?.agentCharters ?? []).map((agent) => [agent.agentId, agent.name])),
+    [config],
+  );
 
   return (
     <div className={styles.root}>
       <PageHeading
         title="Dashboard"
-        description="Project setup, recent runs, and the team for this project."
+        description="Active work, completed runs, and model and agent usage for this project."
         actions={(
           <div className={styles.headerActions}>
             {configuration.loadedAt && <Text className={styles.generated}>Updated {configuration.loadedAt.toLocaleTimeString()}</Text>}
@@ -150,6 +158,7 @@ export function DashboardPage() {
         )}
       />
       {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
+      {/* Show the spinner only until the first configuration arrives. A refresh keeps the old cards visible. */}
       {loading && !readiness && <Loading label="Loading dashboard" />}
       {readiness && config && configuration.data && (
         <>
@@ -172,45 +181,39 @@ export function DashboardPage() {
                 <Link to={`${base}/${readiness.primaryAction.path}`} className={mergeClasses(styles.actionLink, styles.primaryActionLink)}>
                   {readiness.primaryAction.label}
                 </Link>
+                {/* Skip the extra Orchestrations link when the primary action already goes there. */}
                 {readiness.primaryAction.path !== 'orchestrations' && <Link to={`${base}/orchestrations`} className={styles.actionLink}>Open Orchestrations</Link>}
                 <Link to={`${base}/memories`} className={styles.actionLink}>Open Memories</Link>
               </div>
             </div>
             <div className={styles.summaryGrid} aria-label="Project summary">
-              <Link to={`${base}/orchestrations`} className={styles.summaryTile}>
-                <Text className={styles.summaryLabel}>Recent runs</Text>
-                <Text className={styles.summaryValue}>{runs.items.length}</Text>
-                <Text className={styles.summaryMeta}>Opened in this browser</Text>
-              </Link>
-              <Link to={`${base}/orchestrations`} className={styles.summaryTile}>
-                <Text className={styles.summaryLabel}>Needs input</Text>
-                <Text className={styles.summaryValue}>{needsInput}</Text>
-                <Text className={styles.summaryMeta}>{working} working when last opened</Text>
-              </Link>
-              <Link to={`${base}/team`} className={styles.summaryTile}>
-                <Text className={styles.summaryLabel}>Agents</Text>
-                <Text className={styles.summaryValue}>{config.agentCharters.length}</Text>
-                <Text className={styles.summaryMeta}>{config.casting.length} in casting order</Text>
-              </Link>
-              <Link to={`${base}/skills`} className={styles.summaryTile}>
-                <Text className={styles.summaryLabel}>Skills</Text>
-                <Text className={styles.summaryValue}>{enabledSkills}</Text>
-                <Text className={styles.summaryMeta}>Enabled in this project</Text>
-              </Link>
+              {/* Each tile opens Orchestrations, where the runs behind the count are listed. */}
+              {tiles.map((tile) => (
+                <Link key={tile.key} to={`${base}/orchestrations`} className={styles.summaryTile}>
+                  <Text className={styles.summaryLabel}>{tile.label}</Text>
+                  <Text className={styles.summaryValue}>{tile.value}</Text>
+                  <Text className={styles.summaryMeta}>{tile.meta}</Text>
+                </Link>
+              ))}
             </div>
           </section>
+          <ProjectMetricsSections data={metrics} range={range} onRangeChange={setRange} agentNames={agentNames} />
           <div className={styles.mainGrid}>
-            <RunList
-              title="Recent runs in this browser"
-              description="Runs you opened in this project. A full run list needs a service update."
-              data={runs}
-              emptyText="Runs you open appear here."
-              limit={5}
-            />
+            <div>
+              {runs.error != null && <ErrorNotice code={errorCode(runs.error)}>{runListErrorMessage(runs.error)}</ErrorNotice>}
+              <RunList
+                title="Recent runs"
+                description="The newest runs in this project."
+                data={runs}
+                emptyText={runs.loading ? 'Loading runs…' : 'No runs yet.'}
+                limit={5}
+              />
+            </div>
             <aside className={styles.panel} aria-labelledby="dashboard-team-title">
               <Text as="h2" id="dashboard-team-title" className={styles.panelTitle}>Team</Text>
               {config.agentCharters.length === 0 ? <Text className={styles.muted}>No agents yet. Add agents in Agents.</Text> : (
                 <ul className={styles.teamList}>
+                  {/* Show at most eight agents here; the Agents page lists them all. */}
                   {config.agentCharters.slice(0, 8).map((agent) => (
                     <li key={agent.agentId} className={styles.teamRow}>
                       <Text weight="semibold">{agent.name}</Text>

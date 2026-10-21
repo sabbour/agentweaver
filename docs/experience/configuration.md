@@ -43,7 +43,7 @@ already started keep their settings.**
 Model references and provider IDs are opaque identifiers. Use IDs already in
 the project or returned by owner APIs. Enter secret references, not credential
 values. The form doesn't provide a provider or model catalog picker. For
-provider selection and configuration guidance, see the planned
+provider selection and configuration guidance, see the
 [provider configuration guide](../guide/configure-providers.md).
 
 ### Change the default model
@@ -95,7 +95,7 @@ changes before you assign a skill.
 | Unknown `section` value | The page opens **General**. |
 
 Project configuration is separate from web-host runtime settings. For runtime
-settings, see the planned [runtime configuration reference](../reference/runtime-configuration.md).
+settings, see the [runtime configuration reference](../reference/runtime-configuration.md).
 
 ## Requests
 

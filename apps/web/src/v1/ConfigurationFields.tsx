@@ -18,9 +18,12 @@ function reasoning(value: string): ReasoningEffort | null {
 }
 
 /**
- * Readable settings preserve every unedited field. Changing the default model clears a saved
- * credential pin; returning to the saved model restores it. `part` limits the output to the
- * model fields or the platform component implementation fields; omit it to show both.
+ * Form fields for model defaults, per-task models, and platform component
+ * implementations. Each change copies the whole configuration and replaces only
+ * the edited field, so fields this form does not show are kept as they were.
+ * Changing the default model clears a saved credential; switching back to the
+ * saved model restores it. `part` limits the output to the model fields or the
+ * platform component implementation fields; omit it to show both.
  */
 export function ConfigurationFields({ configuration, onChange, readOnly = false, savedSelection, part }: {
   configuration: ProjectConfiguration;
@@ -133,6 +136,7 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
         })}
       </PageSection>
       </>}
+      {/* Implementation choices can only be edited, not added: the list shows the overrides already saved. */}
       {part !== 'models' && <PageSection title="Platform component implementations" description="Choose which implementation a platform component uses in this project. Enter saved implementation IDs; this version does not list the choices.">
         {configuration.providerOverrides.map((provider, index) => (
           <Field key={`${provider.seam}-${index}`} label={`${provider.seam} implementation`}>

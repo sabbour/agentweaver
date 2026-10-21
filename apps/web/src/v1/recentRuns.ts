@@ -1,6 +1,6 @@
 /**
- * Browser-local list of runs the signed-in user opened, used until the Gateway
- * exposes a run list. Entries hold identifiers and the last state the
+ * Browser-local list of runs the signed-in user opened. It exists because the
+ * server has no run-list API yet. Entries hold identifiers and the last state the
  * run page saw, never tokens or run content. Storage is keyed by tenant so one
  * tenant's runs never appear in another, and sign-out removes every entry.
  */

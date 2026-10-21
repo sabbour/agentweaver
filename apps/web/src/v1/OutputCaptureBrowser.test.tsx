@@ -39,10 +39,14 @@ beforeEach(() => {
     logicalTurnOrdinal: 1, executionState: 'active', stateVersion: 1,
   });
   vi.spyOn(gatewayClient, 'getSessionTree').mockResolvedValue(tree);
-  vi.spyOn(gatewayClient, 'listSourceControlOutputCaptures').mockResolvedValue({ captures: [detail.capture] });
+  vi.spyOn(gatewayClient, 'listRunOutputCaptures').mockResolvedValue({
+    captures: [detail.capture], nextBeforeCapturedAt: null, nextBeforeCaptureId: null,
+  });
   vi.spyOn(gatewayClient, 'readSourceControlOutputCapture').mockResolvedValue(detail);
   // By default the file bytes match the manifest hash and length.
-  vi.spyOn(gatewayClient, 'readSourceControlOutputCaptureFile').mockResolvedValue(new TextEncoder().encode(capturedText).buffer);
+  vi.spyOn(gatewayClient, 'readSourceControlOutputCaptureFile').mockResolvedValue({
+    bytes: new TextEncoder().encode(capturedText), sha256: detail.manifest.files[0].sha256,
+  });
 });
 
 /** Picks capture-1 and waits for its details to load. */
@@ -73,22 +77,22 @@ describe('OutputCaptureBrowser', () => {
   });
 
   it('loads the next capture page with both cursor fields and preserves previous choices', async () => {
-    vi.mocked(gatewayClient.listSourceControlOutputCaptures)
+    vi.mocked(gatewayClient.listRunOutputCaptures)
       .mockResolvedValueOnce({ captures: [detail.capture], nextBeforeCapturedAt: detail.capture.capturedAt, nextBeforeCaptureId: 'capture-1' })
-      .mockResolvedValueOnce({ captures: [captureDetail('r-1', 'capture-2').capture] });
+      .mockResolvedValueOnce({ captures: [captureDetail('r-1', 'capture-2').capture], nextBeforeCapturedAt: null, nextBeforeCaptureId: null });
     render(<OutputCaptureBrowser projectId="p1" runId="r-1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Load more captures' }));
     await waitFor(() => expect(screen.getAllByRole('option').some((option) => option.getAttribute('value') === 'capture-2')).toBe(true));
-    expect(gatewayClient.listSourceControlOutputCaptures).toHaveBeenLastCalledWith(
-      'bound-token', 'p1', 'r-1', 'root', { capturedAt: detail.capture.capturedAt, captureId: 'capture-1' }, 'tenant-1');
+    expect(gatewayClient.listRunOutputCaptures).toHaveBeenLastCalledWith(
+      'bound-token', 'p1', 'r-1', 'root', { limit: 50, beforeCapturedAt: detail.capture.capturedAt, beforeCaptureId: 'capture-1' }, 'tenant-1');
     expect(screen.getAllByRole('option').some((option) => option.getAttribute('value') === 'capture-1')).toBe(true);
   });
 
   it('shows empty and failed lists explicitly and retries a denied list without stale choices', async () => {
     // First list read is denied; the retry returns an empty list.
-    vi.mocked(gatewayClient.listSourceControlOutputCaptures)
+    vi.mocked(gatewayClient.listRunOutputCaptures)
       .mockRejectedValueOnce(new GatewayError(403, { error: 'project_read_permission_denied' }, 'You can no longer read this project.'))
-      .mockResolvedValueOnce({ captures: [] });
+      .mockResolvedValueOnce({ captures: [], nextBeforeCapturedAt: null, nextBeforeCaptureId: null });
     render(<OutputCaptureBrowser projectId="p1" runId="r-1" />);
     await screen.findByRole('alert');
     expect(screen.queryByLabelText('Saved capture')).toBeNull();
@@ -98,7 +102,9 @@ describe('OutputCaptureBrowser', () => {
 
   it('does not display bytes whose hash or length differs from the manifest', async () => {
     // The server returns different bytes than the manifest describes.
-    vi.mocked(gatewayClient.readSourceControlOutputCaptureFile).mockResolvedValue(new TextEncoder().encode('tampered bytes').buffer);
+    vi.mocked(gatewayClient.readSourceControlOutputCaptureFile).mockResolvedValue({
+      bytes: new TextEncoder().encode('tampered bytes'), sha256: detail.manifest.files[0].sha256,
+    });
     render(<OutputCaptureBrowser projectId="p1" runId="r-1" />);
     await selectCapture();
     await openFile();

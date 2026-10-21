@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   tenantSelector: 'tenant-1',
   completeRemoteMcpOAuthCallback: vi.fn(),
   listProjects: vi.fn(),
+  listProjectRuns: vi.fn(),
+  getProjectMetrics: vi.fn(),
+  getProjectUsage: vi.fn(),
   getProject: vi.fn(),
   getProjectConfiguration: vi.fn(),
   updateProjectConfiguration: vi.fn(),
@@ -25,8 +28,6 @@ const mocks = vi.hoisted(() => ({
   listProjectSkillInventory: vi.fn(),
   updateSkillAssignment: vi.fn(),
   getRunStatus: vi.fn(),
-  // Run pages list saved output captures. Default to none so unrelated tests need no setup.
-  listSourceControlOutputCaptures: vi.fn().mockResolvedValue({ captures: [] }),
   getRunSelection: vi.fn(),
   getRunUsage: vi.fn(),
   getRepoAppStatus: vi.fn(),
@@ -37,6 +38,8 @@ const mocks = vi.hoisted(() => ({
   useRealRepoAppClient: false,
   repoAppFetch: vi.fn<typeof fetch>(),
   pinSourceControlRepository: vi.fn(),
+  listRunOutputCaptures: vi.fn(),
+  readRunOutputCaptureDiff: vi.fn(),
   beginRepoAppInstallationSetup: vi.fn(),
   getSessionTree: vi.fn(),
   getSessionStatus: vi.fn(),
@@ -57,12 +60,23 @@ const mocks = vi.hoisted(() => ({
   getAuthorizationContext: vi.fn(),
   listProjectRoleAssignments: vi.fn(),
   createProject: vi.fn(),
+  readProjectBacklog: vi.fn(),
+  captureBacklogTask: vi.fn(),
+  listProjectIssues: vi.fn(),
+  listProjectPullRequests: vi.fn(),
+  getPlatformComponents: vi.fn(),
+  listMarketplaceDefinitions: vi.fn(),
+  packageSkillContent: vi.fn(),
+  revokeProjectSkillRevision: vi.fn(),
 }));
 
 vi.mock('./api', () => ({
   gatewayClient: {
     completeRemoteMcpOAuthCallback: mocks.completeRemoteMcpOAuthCallback,
     listProjects: mocks.listProjects,
+    listProjectRuns: mocks.listProjectRuns,
+    getProjectMetrics: mocks.getProjectMetrics,
+    getProjectUsage: mocks.getProjectUsage,
     getProject: mocks.getProject,
     getProjectConfiguration: mocks.getProjectConfiguration,
     updateProjectConfiguration: mocks.updateProjectConfiguration,
@@ -78,10 +92,11 @@ vi.mock('./api', () => ({
     listProjectSkillInventory: mocks.listProjectSkillInventory,
     updateSkillAssignment: mocks.updateSkillAssignment,
     getRunStatus: mocks.getRunStatus,
-    listSourceControlOutputCaptures: mocks.listSourceControlOutputCaptures,
     getRunSelection: mocks.getRunSelection,
     getRunUsage: mocks.getRunUsage,
     pinSourceControlRepository: mocks.pinSourceControlRepository,
+    listRunOutputCaptures: mocks.listRunOutputCaptures,
+    readRunOutputCaptureDiff: mocks.readRunOutputCaptureDiff,
     getSessionTree: mocks.getSessionTree,
     getSessionStatus: mocks.getSessionStatus,
     getDecisions: mocks.getDecisions,
@@ -101,6 +116,14 @@ vi.mock('./api', () => ({
     getAuthorizationContext: mocks.getAuthorizationContext,
     listProjectRoleAssignments: mocks.listProjectRoleAssignments,
     createProject: mocks.createProject,
+    readProjectBacklog: mocks.readProjectBacklog,
+    captureBacklogTask: mocks.captureBacklogTask,
+    listProjectIssues: mocks.listProjectIssues,
+    listProjectPullRequests: mocks.listProjectPullRequests,
+    getPlatformComponents: mocks.getPlatformComponents,
+    listMarketplaceDefinitions: mocks.listMarketplaceDefinitions,
+    packageSkillContent: mocks.packageSkillContent,
+    revokeProjectSkillRevision: mocks.revokeProjectSkillRevision,
   },
   GatewayError: class GatewayError extends Error {
     status: number;
@@ -186,7 +209,7 @@ vi.mock('./config', async (importOriginal) => {
 
 import App from './App';
 import { GatewayError } from './api';
-import { clearRecentRuns, rememberRun } from './recentRuns';
+import { clearRecentRuns } from './recentRuns';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -397,9 +420,18 @@ describe('v1 web project scoping', () => {
     mocks.tenantSelector = 'tenant-1';
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
     mocks.listProjects.mockReset().mockResolvedValue([]);
+    mocks.listProjectRuns.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, items: [], nextCursor: null }));
+    // Metrics and usage start empty so the dashboard and overview render without data.
+    mocks.getProjectMetrics.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, from: '2026-01-01T00:00:00Z', to: '2026-01-31T00:00:00Z', activeRuns: 0, blockedRuns: 0, runsInRange: 0, runsTotal: 0, completedRuns: 0, succeededRuns: 0, series: [] }));
+    mocks.getProjectUsage.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, from: '2026-01-01T00:00:00Z', to: '2026-01-31T00:00:00Z', usageByModel: [], usageByAgent: [] }));
     mocks.createProject.mockReset();
-    // Any project id loads a valid project and configuration, so pages that
-    // read the current project render without per-test setup.
+    mocks.listProjectPullRequests.mockReset().mockImplementation(async (_token: string, projectId: string) => ({
+      projectId, coverage: { recordedSince: '2026-01-01T00:00:00Z', includesEarlierPullRequests: false }, items: [], nextCursor: null,
+    }));
+    mocks.getPlatformComponents.mockReset().mockResolvedValue({ observedAt: '2026-01-01T00:00:00Z', areas: [] });
+    mocks.listMarketplaceDefinitions.mockReset().mockResolvedValue([]);
+    mocks.packageSkillContent.mockReset();
+    mocks.revokeProjectSkillRevision.mockReset();
     mocks.getProject.mockReset().mockImplementation(async (_token: string, projectId: string) => projectSummary(projectId, 'Fixture project'));
     mocks.getProjectConfiguration.mockReset().mockImplementation(async (_token: string, projectId: string) => projectConfiguration(projectId, 1));
     mocks.updateProjectConfiguration.mockReset();
@@ -434,6 +466,9 @@ describe('v1 web project scoping', () => {
     mocks.useRealRepoAppClient = false;
     mocks.repoAppFetch.mockReset();
     mocks.pinSourceControlRepository.mockReset();
+    mocks.listRunOutputCaptures.mockReset();
+    mocks.listRunOutputCaptures.mockResolvedValue({ captures: [], nextBeforeCapturedAt: null, nextBeforeCaptureId: null });
+    mocks.readRunOutputCaptureDiff.mockReset();
     mocks.beginRepoAppInstallationSetup.mockReset();
     mocks.getSessionTree.mockReset();
     mocks.getSessionStatus.mockReset();
@@ -468,6 +503,9 @@ describe('v1 web project scoping', () => {
       }],
     });
     mocks.listProjectRoleAssignments.mockReset().mockResolvedValue({ projectId: 'p1', assignments: [] });
+    mocks.readProjectBacklog.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, revision: 1, tasks: [], dependencies: [] }));
+    mocks.captureBacklogTask.mockReset();
+    mocks.listProjectIssues.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, items: [], nextCursor: null }));
     mocks.streamEvents.mockReset();
     mocks.streamEvents.mockImplementation(() => {
       throw new Error('The event stream is not used by this test.');
@@ -542,29 +580,99 @@ describe('v1 web project scoping', () => {
     const nav = screen.getByRole('navigation', { name: 'Primary navigation' });
     expect(within(nav).getByRole('link', { name: 'Orchestrations' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Skills' })).toBeTruthy();
-    expect(within(nav).getByRole('link', { name: 'Flow' })).toBeTruthy();
-    // 0.x pages that this version does not support must not appear as links.
-    for (const name of ['Board', 'Workspace', 'Workflows', 'Observability', 'Diagnostics', 'Heartbeat', 'Cluster']) {
-      expect(within(nav).queryByRole('link', { name })).toBeNull();
+    expect(within(nav).getByRole('link', { name: 'Board' }).getAttribute('href')).toBe('/projects/p1/board');
+    for (const name of ['Flow', 'Workspace', 'Workflows', 'Observability', 'Diagnostics', 'Heartbeat', 'Cluster']) {
+      expect(within(nav).getByRole('link', { name })).toBeTruthy();
     }
-    // The collapse state is exposed on the nav so styles and tests can read it.
     fireEvent.click(screen.getByRole('button', { name: 'Collapse navigation' }));
     expect(nav.getAttribute('data-collapsed')).toBe('true');
     fireEvent.click(screen.getByRole('button', { name: 'Expand navigation' }));
     expect(nav.getAttribute('data-collapsed')).toBe('false');
   });
 
-  it.each(['board', 'workspace', 'workflows', 'observability/traces', 'diagnostics', 'heartbeat', 'cluster'])(
-    'explains unsupported old %s links without pretending the route is Projects',
-    async (path) => {
-      window.history.replaceState({}, '', `/projects/p1/${path}`);
-      render(<App />);
-      expect(await screen.findByText('Not available in this version')).toBeTruthy();
-      expect(screen.getByRole('link', { name: 'Open Dashboard' }).getAttribute('href')).toBe('/projects/p1');
-      // The address stays as typed, so the user can see which old link they followed.
-      expect(window.location.pathname).toBe(`/projects/p1/${path}`);
-    },
-  );
+  it.each([
+    ['flow', 'Open runs'],
+    ['workspace', 'Pull requests'],
+    ['workflows', 'Saved workflow references'],
+    ['observability/traces', 'Recent runs'],
+    ['diagnostics', 'Areas that are not ready'],
+    ['heartbeat', 'Active and blocked runs'],
+    ['cluster', 'Platform components'],
+  ])('opens the %s page with its supported parts and names what is missing', async (path, section) => {
+    window.history.replaceState({}, '', `/projects/p1/${path}`);
+    render(<App />);
+    expect(await screen.findByText(section)).toBeTruthy();
+    expect(screen.getByText('Not available in this version')).toBeTruthy();
+    expect(window.location.pathname).toBe(`/projects/p1/${path}`);
+  });
+
+  it('reads recorded pull requests and synced issues for the Workspace page', async () => {
+    mocks.listProjectIssues.mockResolvedValue({
+      projectId: 'p1',
+      items: [{ taskId: 't1', taskState: 'backlog', providerId: 'github', repository: { owner: 'octo', name: 'repo' }, number: 7, title: 'Fix login', state: 'open', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }],
+      nextCursor: null,
+    });
+    window.history.replaceState({}, '', '/projects/p1/workspace');
+    render(<App />);
+    expect(await screen.findByText('#7 Fix login')).toBeTruthy();
+    expect(await screen.findByText('No run has opened a pull request yet.')).toBeTruthy();
+    expect(mocks.listProjectPullRequests).toHaveBeenCalledWith('broker-token', 'p1', { state: 'all', pageSize: 20 }, 'tenant-1');
+    expect(mocks.listProjectIssues).toHaveBeenCalledWith('broker-token', 'p1', { state: 'open', pageSize: 20 }, 'tenant-1');
+  });
+
+  it('explains a 403 for the platform report on the Cluster page', async () => {
+    mocks.getPlatformComponents.mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    window.history.replaceState({}, '', '/projects/p1/cluster');
+    render(<App />);
+    expect(await screen.findByText('Only tenant or platform administrators can view platform components.')).toBeTruthy();
+  });
+
+  it('counts backlog tasks by Board column on the Flow page', async () => {
+    const task = (taskId: string, state: string, extra: Record<string, unknown> = {}) => ({
+      reference: { projectId: 'p1', taskId }, revision: 1, state, isArchived: false,
+      isAutomationInvocationPending: false, title: taskId, description: null, lifecycle: 'open', repositoryIssue: null, ...extra,
+    });
+    mocks.readProjectBacklog.mockResolvedValue({
+      projectId: 'p1',
+      revision: 2,
+      tasks: [task('a', 'backlog'), task('b', 'ready'), task('c', 'claimed'), task('d', 'ready', { lifecycle: 'closed' }), task('e', 'backlog', { isArchived: true })],
+      dependencies: [],
+    });
+    window.history.replaceState({}, '', '/projects/p1/flow');
+    render(<App />);
+    const list = await screen.findByLabelText('Tasks by stage');
+    await waitFor(() => expect(within(list).getAllByText('1')).toHaveLength(4));
+    expect(within(list).getByText('Done')).toBeTruthy();
+  });
+
+  it('opens the project Board from its address and adds a task through Start task', async () => {
+    const task = (taskId: string, title: string, revision: number) => ({
+      reference: { projectId: 'p1', taskId }, revision, state: 'backlog', isArchived: false,
+      isAutomationInvocationPending: false, title, description: null, lifecycle: 'open', repositoryIssue: null,
+    });
+    mocks.readProjectBacklog.mockResolvedValue({ projectId: 'p1', revision: 3, tasks: [task('t1', 'Existing task', 1)], dependencies: [] });
+    mocks.captureBacklogTask.mockImplementation(async (_token: string, projectId: string, request: { taskId: string; content: { title: string } }) => {
+      // After the capture, reads return the graph with the new task.
+      const graph = { projectId, revision: 4, tasks: [task('t1', 'Existing task', 1), task(request.taskId, request.content.title, 1)], dependencies: [] };
+      mocks.readProjectBacklog.mockResolvedValue(graph);
+      return graph;
+    });
+    window.history.replaceState({}, '', '/projects/p1/board');
+    render(<App />);
+    const backlog = await screen.findByTestId('column-backlog');
+    expect(await within(backlog).findByText('Existing task')).toBeTruthy();
+    expect(screen.queryByText('Not available in this version')).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start task' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'New task title' }), { target: { value: 'Write release notes' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(mocks.captureBacklogTask).toHaveBeenCalledWith(
+      'broker-token', 'p1', expect.objectContaining({ content: { title: 'Write release notes' }, expectedGraphRevision: 3 }), 'tenant-1'));
+    expect(await within(screen.getByTestId('column-backlog')).findByText('Write release notes')).toBeTruthy();
+    expect(window.location.pathname).toBe('/projects/p1/board');
+  });
 
   it('distinguishes unknown addresses from unavailable legacy features', async () => {
     window.history.replaceState({}, '', '/unknown-page');
@@ -1332,15 +1440,20 @@ describe('v1 web project scoping', () => {
     expect([projectId, runId, sender, recipient, text]).toEqual(['p1', 'r1', 's2', 's1', 'Status?']);
   });
 
-  it('lists runs opened in this browser in Orchestrations and opens one on Chat', async () => {
+  it('lists project runs in Orchestrations and opens one on Chat', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
-    // Orchestrations lists runs this browser opened before, kept per tenant.
-    rememberRun('tenant-1', { projectId: 'p1', runId: 'r1', executionState: 'running' });
+    mocks.listProjectRuns.mockImplementation(async (_token: string, projectId: string, options: { states?: string[] }) => ({
+      projectId,
+      nextCursor: null,
+      items: options.states?.includes('open')
+        ? [{ runId: 'r1', title: 'Fix the build', state: 'active', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', startedBy: { issuer: 'https://issuer.test', subject: 'user' } }]
+        : [],
+    }));
     window.history.replaceState({}, '', '/projects/p1/orchestrations');
     render(<App />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Open run r1' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Open run Fix the build' }));
 
     const chatTab = await screen.findByRole('tab', { name: 'Chat' });
     await waitFor(() => expect(chatTab.getAttribute('aria-selected')).toBe('true'));
@@ -1544,6 +1657,35 @@ describe('v1 web project scoping', () => {
     );
   });
 
+  it('lists produced files on the Changes tab and shows the patch of one file set', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const capture = {
+      captureId: 'cap-1', eventId: 'e1', eventPosition: 4, capturedAt: '2026-10-08T00:00:00Z',
+      workspaceId: 'w1', branchName: 'agent/feature', baseSha: 'abcdef1234567', outputTreeSha: 't1',
+      manifestSha256: 'm', manifestByteLength: 10, patchSha256: 'p', patchByteLength: 2048, packageByteLength: 4096,
+    };
+    mocks.listRunOutputCaptures.mockResolvedValue({ captures: [capture], nextBeforeCapturedAt: null, nextBeforeCaptureId: null });
+    mocks.readRunOutputCaptureDiff.mockResolvedValue({ capture, patch: '+added line' });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
+    render(<App />);
+
+    expect(await screen.findByText('agent/feature')).toBeTruthy();
+    expect(mocks.listRunOutputCaptures).toHaveBeenCalledWith('broker-token', 'p1', 'r1', 's1', { limit: 20 }, 'tenant-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Show changes' }));
+    expect(await screen.findByLabelText('Changes on agent/feature')).toHaveProperty('textContent', expect.stringContaining('added line'));
+    expect(mocks.readRunOutputCaptureDiff).toHaveBeenCalledWith('broker-token', 'p1', 'r1', 's1', 'cap-1', 'tenant-1');
+  });
+
+  it('explains when produced files are hidden for this run', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    mocks.listRunOutputCaptures.mockRejectedValue(new GatewayError(404, { code: 'source_control_output_capture_unavailable' }, 'Not found'));
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
+    render(<App />);
+
+    expect(await screen.findByText(/The files of this run are not available/)).toBeTruthy();
+  });
   it('does not claim the Repo App is disconnected when its status owner is unavailable', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
@@ -1749,7 +1891,7 @@ describe('v1 web project scoping', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill', hidden: true }));
     await screen.findByLabelText('Marketplace skill preview');
     fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill', hidden: true }));
-    await screen.findByText(/The Skills owner imported Sample skill at revision 2/);
+    await screen.findByText('Imported Sample skill at revision 2.');
 
     expect(mocks.previewMarketplaceSkillContent).toHaveBeenCalledWith(
       'broker-token',
@@ -1775,7 +1917,6 @@ describe('v1 web project scoping', () => {
       }),
       'tenant-1',
     );
-    expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
   });
 
   it('keeps Skills separate from configuration editing while assignment is pending', async () => {
@@ -1814,6 +1955,9 @@ describe('v1 web project scoping', () => {
       resourceCount: 0,
       totalBytes: 14,
     });
+    mocks.packageSkillContent.mockResolvedValue({
+      skills: [{ location: '.', candidate: { skillMarkdown: '# Sample skill', resources: [] }, preview: null, error: null, skippedPaths: [] }],
+    });
     mocks.importSkillContent.mockResolvedValue({
       ...assignment,
       skillId: 'skill-1',
@@ -1826,19 +1970,16 @@ describe('v1 web project scoping', () => {
     render(<App />);
 
     await screen.findByRole('tab', { name: 'Catalog' });
-    // The Skills page has no raw configuration editor, so a pending
-    // assignment cannot race with an unsaved configuration edit.
     expect(screen.queryByLabelText('Typed ProjectConfiguration JSON')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Import skill' }));
-    fireEvent.change(await screen.findByLabelText('Skill folder or files'), {
+    fireEvent.change(await screen.findByLabelText('Skill files or ZIP'), {
       target: { files: [new File(['# Sample skill'], 'SKILL.md', { type: 'text/markdown' })] },
     });
     // See the marketplace test: happy-dom can mark the open dialog aria-hidden.
-    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files', hidden: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check skill files', hidden: true }));
     await screen.findByText('sha256:sample');
     fireEvent.click(screen.getByRole('button', { name: 'Import skill to project', hidden: true }));
-    await screen.findByText(/The Skills owner imported Sample skill at revision 1/);
-    // Close the import dialog to get back to the agent list.
+    await screen.findByText('Imported Sample skill at revision 1.');
     fireEvent.click(screen.getByRole('button', { name: 'Close', hidden: true }));
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Agent One' }));
     fireEvent.click(screen.getByRole('button', { name: 'Assign to selected agents' }));
@@ -1853,8 +1994,7 @@ describe('v1 web project scoping', () => {
       await pendingAssignment.promise;
     });
 
-    await screen.findByText(/saved this assignment in configuration revision 5/);
-    // Still one call after the save completes: nothing was resent.
+    await screen.findByText(/Saved this assignment in configuration revision 5/);
     expect(mocks.updateSkillAssignment).toHaveBeenCalledOnce();
   });
 
