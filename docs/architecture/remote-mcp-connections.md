@@ -138,7 +138,7 @@ Identity owns delegated OAuth credentials. `POST /internal/connections/remote-mc
 
 The response never contains token values, secret identifiers, or secret versions. Identity checks project read authority before and after the Environment read, then reads the connection row again. A refresh, rotation, or disconnect during those waits returns `CredentialChanged`. The route never refreshes or recovers a credential.
 
-`RemoteMcpRemoteUse.Admit` combines Environment invocation validity with Identity credential validity. It allows a call only when Environment allows the reviewed connection and, for delegated OAuth, Identity reports a valid credential at the same configuration revision and checksum. A disconnected or revoked credential blocks use even when the Environment connection stays enabled. Reviewed tool snapshots (#1925) and trusted transport (#1929) call `Admit` immediately before each send.
+`RemoteMcpRemoteUse.Admit` combines Environment invocation validity with Identity credential validity. It allows a call only when Environment allows the reviewed connection and, for delegated OAuth, Identity reports a valid credential at the same configuration revision and checksum. A disconnected or revoked credential blocks use even when the Environment connection stays enabled. Any component that sends a request to a remote MCP server, such as the runtime that runs reviewed tool snapshots or the network path that carries the request, calls `Admit` immediately before each send. A decision from an earlier call is never reused, because a credential can be revoked or a configuration can change between calls.
 
 Disconnect clears Identity's local token references. It does not call a provider revocation endpoint.
 

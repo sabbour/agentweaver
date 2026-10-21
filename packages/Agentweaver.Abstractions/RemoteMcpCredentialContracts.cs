@@ -62,14 +62,19 @@ public static class RemoteMcpRemoteUse
         RemoteMcpCredentialValidity? credential)
     {
         ArgumentNullException.ThrowIfNull(invocation);
+        // Environment decides first. If it denies the call, report its reason and ignore the credential.
         if (!invocation.Allowed)
             return new(false, invocation.Denial, RemoteMcpCredentialDenial.None);
+        // A connection without delegated OAuth has no user credential to check.
         if (!invocation.CredentialValidityRequired)
             return new(true, RemoteMcpInvocationDenial.None, RemoteMcpCredentialDenial.None);
+        // Delegated OAuth needs an Identity answer. A missing answer fails closed rather than skipping the check.
         if (credential is null)
             return new(false, RemoteMcpInvocationDenial.None, RemoteMcpCredentialDenial.CredentialValidityMissing);
         if (!credential.Valid)
             return new(false, RemoteMcpInvocationDenial.None, credential.Denial);
+        // Environment and Identity are read separately, so the configuration can change between the
+        // two reads. Both answers must name the same configuration revision and checksum.
         var reference = invocation.CurrentReference;
         if (reference is null ||
             reference.ConfigurationRevision != credential.ConfigurationRevision ||

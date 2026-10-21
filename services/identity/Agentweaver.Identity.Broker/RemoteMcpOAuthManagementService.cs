@@ -300,17 +300,27 @@ internal sealed class RemoteMcpOAuthManagementService(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(input);
+        // Reject malformed input before any database or owner call. Revisions start at 1, and
+        // checksums are lowercase SHA-256 hex to match how Environment reports them.
         if (connectionId == Guid.Empty || input.ExpectedConfigurationRevision < 1 ||
             !IsLowerHexHash(input.ExpectedConfigurationSha256))
             throw new RemoteMcpOAuthManagementException(
                 "remote_mcp_request_invalid", StatusCodes.Status400BadRequest);
 
+        // Find the caller's own row. Another user's connection returns not found, so this route
+        // can't reveal whether someone else is connected.
         var row = await FindOwnedConnectionAsync(issuer, actorId, connectionId, cancellationToken)
             .ConfigureAwait(false);
+        // The caller must be able to read the project now, not only when the credential was created.
         await RequireReadProjectsAsync(actor, issuer, actorId, row, cancellationToken).ConfigureAwait(false);
+        // Environment owns the configuration. Read its current revision and checksum, so the answer
+        // reflects the connection as it is now and not as Identity last saw it.
         var currentConfiguration = await ReadCurrentConfigurationAsync(
             actor, row, cancellationToken).ConfigureAwait(false);
+        // Check authority again. The Environment call can take time, and access can be removed during it.
         await RequireReadProjectsAsync(actor, issuer, actorId, row, cancellationToken).ConfigureAwait(false);
+        // Read the row again. A refresh, rotation, or disconnect that ran during the waits above
+        // changes the row, and the pure rules below turn that into CredentialChanged.
         var latest = await FindOwnedConnectionAsync(issuer, actorId, connectionId, cancellationToken)
             .ConfigureAwait(false);
         return EvaluateCredentialValidity(row, latest, currentConfiguration, input, time.GetUtcNow());
@@ -328,26 +338,38 @@ internal sealed class RemoteMcpOAuthManagementService(
         RemoteMcpCredentialValidityRequest input,
         DateTimeOffset now)
     {
+        // Every answer reports the latest row's revisions. Only a valid answer includes the expiry,
+        // so a denial doesn't suggest that a usable token exists.
         RemoteMcpCredentialValidity Result(RemoteMcpCredentialDenial denial) =>
             new(denial == RemoteMcpCredentialDenial.None, denial,
                 latest.ConnectionRevision, latest.CredentialRevision,
                 latest.ConfigurationRevision, latest.EnvironmentConfigurationHash,
                 denial == RemoteMcpCredentialDenial.None ? latest.AccessTokenExpiresAt : null);
 
+        // The two reads must match. Any difference means the credential moved while authority and
+        // configuration were being checked, so neither check applies to the current credential.
+        // The access token secret version catches a token rotation that kept the other revisions.
         if (latest.ConnectionRevision != row.ConnectionRevision ||
             latest.CredentialRevision != row.CredentialRevision ||
             latest.State != row.State ||
             latest.ConfigurationRevision != row.ConfigurationRevision ||
             latest.AccessTokenSecretVersion != row.AccessTokenSecretVersion)
             return Result(RemoteMcpCredentialDenial.CredentialChanged);
+        // Environment no longer has the connection, or has removed it. A credential for it is never usable.
         if (configuration is null ||
             configuration.ConnectionState.Equals("removed", StringComparison.Ordinal))
             return Result(RemoteMcpCredentialDenial.ConnectionRemoved);
+        // Three configurations must agree: the one the caller reviewed, the one the credential was
+        // granted for, and the one Environment reports now. A credential granted for a different
+        // endpoint or resource must not be sent to the current one.
         if (input.ExpectedConfigurationRevision != latest.ConfigurationRevision ||
             !string.Equals(input.ExpectedConfigurationSha256, latest.EnvironmentConfigurationHash,
                 StringComparison.Ordinal) ||
             !IsCurrentConfiguration(latest, configuration))
             return Result(RemoteMcpCredentialDenial.ConfigurationChanged);
+        // Map the credential state to a denial. Only an authorized credential with a stored access
+        // token that hasn't expired is valid. This check never refreshes an expired token; the
+        // caller runs the refresh flow and asks again.
         return latest.State switch
         {
             RemoteMcpOAuthConnectionState.NotConnected => Result(RemoteMcpCredentialDenial.NotConnected),
@@ -357,13 +379,17 @@ internal sealed class RemoteMcpOAuthManagementService(
                 Result(RemoteMcpCredentialDenial.RefreshIndeterminate),
             RemoteMcpOAuthConnectionState.Disconnected => Result(RemoteMcpCredentialDenial.Disconnected),
             RemoteMcpOAuthConnectionState.Revoked => Result(RemoteMcpCredentialDenial.Revoked),
+            // Authorized with no stored token reference means the credential can't be used. Treat it
+            // as not connected rather than trusting the state alone.
             RemoteMcpOAuthConnectionState.Authorized when
                 latest.AccessTokenSecretId is null || latest.AccessTokenSecretVersion is null =>
                 Result(RemoteMcpCredentialDenial.NotConnected),
+            // A missing expiry is treated as expired, so an unknown lifetime fails closed.
             RemoteMcpOAuthConnectionState.Authorized when
                 latest.AccessTokenExpiresAt is not { } expiresAt || expiresAt <= now =>
                 Result(RemoteMcpCredentialDenial.Expired),
             RemoteMcpOAuthConnectionState.Authorized => Result(RemoteMcpCredentialDenial.None),
+            // A state added later is denied until these rules handle it.
             _ => Result(RemoteMcpCredentialDenial.NotConnected)
         };
     }

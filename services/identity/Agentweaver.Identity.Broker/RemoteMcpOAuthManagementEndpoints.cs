@@ -31,6 +31,7 @@ public static class RemoteMcpOAuthManagementEndpoints
         routes.MapGet("/{connectionId:guid}", (HttpContext context, Guid connectionId) =>
             ExecuteAsync(context, (service, actor, issuer, actorId) =>
                 service.ReadStatusAsync(actor, issuer, actorId, connectionId, context.RequestAborted)));
+        // Read-only check. It takes no idempotency key because it changes no state.
         routes.MapPost("/{connectionId:guid}/validity",
             (HttpContext context, Guid connectionId, RemoteMcpCredentialValidityRequest input) =>
                 ExecuteAsync(context, (service, actor, issuer, actorId) =>
