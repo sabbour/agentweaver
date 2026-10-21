@@ -307,6 +307,12 @@ dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~
 
 ### Applying later approved migrations
 
+For routine updates, use the
+[database maintenance runner](../../docs/guide/database-maintenance.md)
+(`npm run db:maintenance`). It runs the migrations as in-cluster Jobs and needs
+no tunnel. After its one-time schema ownership handover, the operator no longer
+owns the P1 schemas, and the two modes below fail their ownership checks.
+
 Use these modes for a database that is already initialized. Neither needs a
 prior receipt, recreates roles or schemas, resets data, or reruns the Identity
 Broker bootstrap. Both still require a clean checkout whose `HEAD` matches the

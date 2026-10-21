@@ -46,6 +46,12 @@ Its separate Kustomize overlay resolves migration DNS and TCP 5432 egress to
 the exact `agentweaver-pg.postgres.database.azure.com` host; the guarded root
 release apply does not include that Job or policy.
 
+The Orchestrator and Events and Sessions migrations run as Jobs from the
+`migrations/p1-postgres/` overlay under the P1 migration identity. One
+command, `npm run db:maintenance`, runs the Broker and P1 Jobs, checks that
+the running service images support the new schema, and writes a receipt. See
+[Database maintenance](../guide/database-maintenance.md).
+
 Orchestrator migration 032, which adds Source Control pull request records,
 is optional and code-only. The default migrator, startup verification, and the
 P1 initializer don't apply it, and the owner starts and serves its routes

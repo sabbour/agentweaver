@@ -203,6 +203,18 @@ See the [operator initialization procedure](https://github.com/sabbour/agentweav
 the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 and the [source-test boundary](../guide/testing).
 
+### P1 migration identity
+
+`infra/bicep/p1-postgres-migration-identity.bicep` defines one more identity,
+`agentweaver-id-p1-postgres-migration`, federated only to the
+`p1-postgres-migration` ServiceAccount in `agentweaver`. It has no Azure
+resource role. After a one-time ownership handover it owns the `orchestrator`
+and `events_sessions` schemas, so migration Jobs run in the cluster under their
+own egress policy instead of through an operator tunnel. The
+[database maintenance runner](../guide/database-maintenance.md) deploys this
+template, applies the ServiceAccount and egress policy, performs the handover
+once, and runs the migration Jobs.
+
 ## Network and acceptance checks
 
 The canonical Identity PostgreSQL grant definition includes the four runtime

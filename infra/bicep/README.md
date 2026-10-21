@@ -133,6 +133,13 @@ Storage Blob Data Contributor only on the private `session-material` container.
 It does not grant that identity access to the storage account or other
 containers.
 
+`p1-postgres-migration-identity.bicep` defines the P1 migration identity,
+`agentweaver-id-p1-postgres-migration`, and one federated credential for the
+`agentweaver:p1-postgres-migration` ServiceAccount. It assigns no Azure role.
+Its parameters are `namePrefix`, `tags`, and the 40-character `sourceSha`. The
+[database maintenance runner](../../docs/guide/database-maintenance.md) deploys
+it to the existing resource group. A rerun changes nothing.
+
 Projects & Config applies migrations as its schema owner. After migration
 `20261009021400_AddCastingAuthorityLockFunction` is applied, an approved
 operator can grant the runtime role `EXECUTE` on the exact casting

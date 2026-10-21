@@ -221,6 +221,25 @@ grants without a manual `GRANT`. Rerunning an older migration image does not.
 The guarded operator bootstrap can also apply the canonical grant file after
 migration; it changes all listed table grants, not just history access.
 
+### P1 migration Job settings
+
+The [database maintenance runner](../guide/database-maintenance.md) runs the
+Orchestrator and Events & Sessions images with `--migrate` as Kubernetes Jobs.
+The Jobs in `deploy/k8s/migrations/p1-postgres` set these keys. `<Service>` is
+`Orchestrator` or `EventsAndSessions`.
+
+| Key | Contract | Default and how to obtain it |
+| --- | --- | --- |
+| `ConnectionStrings__OrchestratorMigration`, `ConnectionStrings__EventsAndSessionsMigration` | Password-free connection string whose user is `agentweaver-id-p1-postgres-migration`, the schema owner after the ownership handover. | No default. The kustomization sets the server name. |
+| `<Service>__Migration__WorkloadIdentity__TenantId`, `__ClientId`, `__TokenFilePath` | Workload identity of the `p1-postgres-migration` ServiceAccount. | The runner sets the client ID from its identity deployment. The manifest holds a zero placeholder that is never applied. |
+| `<Service>__Migration__RuntimeRole` | Runtime role that receives the planned grants: `agentweaver-id-orchestrator` or `agentweaver-id-events-and-sessions`. Optional. | Set by the Job manifest. Without it, `--migrate` applies migrations only. |
+| `<Service>__Migration__PlanSha256` | SHA-256 of the reviewed plan embedded in the image. Required when the runtime role is set. | Set by the Job manifest. The run fails before it connects when the hash, role, schema, or compiled migration catalog differs from the plan. |
+
+With the runtime role set, a run applies only the grants the plan names, reads
+each grant back, and prints one `P1_POSTGRES_RUNTIME_GRANTS_VERIFIED` line with
+the service, schema, role, plan hash, and applied versions. The runner requires
+that line.
+
 ## Identity Broker settings
 
 The `identity-broker-runtime-config.json` map supplies the issuer, upstream
