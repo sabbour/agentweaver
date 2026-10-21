@@ -19,10 +19,10 @@ the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`ba035fd7a50bc742e7e550676e2ba7d7e88e3f9729bdd9537017781a1940e898`.
+`899871e2030bf1b887a337868561ee3754b723e57169565b0981930ddd979fd1`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-30. Version 027 requires 026 only.
+placeholder. The Core list is 1-16, 18-31. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
 027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
 plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
