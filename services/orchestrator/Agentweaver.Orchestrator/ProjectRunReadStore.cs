@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
 using NpgsqlTypes;
@@ -80,6 +81,18 @@ public sealed class ProjectRunReadStore
     private readonly string _runs;
     private readonly string _sessions;
 
+    /// <summary>The canonical derived state shared by run lists and project metrics.</summary>
+    private const string DerivedStateSql = """
+        CASE
+            WHEN r.execution_state IN ('failed', 'indeterminate', 'cancelled') THEN r.execution_state
+            WHEN root.lifecycle_state = 'completed' THEN 'completed'
+            WHEN root.lifecycle_state = 'cancelled' THEN 'cancelled'
+            WHEN root.turn_state IN ('active', 'presenting') THEN 'active'
+            WHEN root.turn_state = 'blocked' THEN 'blocked'
+            ELSE 'idle'
+        END
+        """;
+
     /// <summary>
     /// Creates a reader over the coordination owner schema.
     /// </summary>
@@ -156,14 +169,7 @@ public sealed class ProjectRunReadStore
             FROM (
                 SELECT r.run_id, root.session_id AS root_session_id, r.created_at, r.updated_at,
                     r.completed_at, r.accepted_by_issuer, r.accepted_by_subject,
-                    CASE
-                        WHEN r.execution_state IN ('failed', 'indeterminate', 'cancelled') THEN r.execution_state
-                        WHEN root.lifecycle_state = 'completed' THEN 'completed'
-                        WHEN root.lifecycle_state = 'cancelled' THEN 'cancelled'
-                        WHEN root.turn_state IN ('active', 'presenting') THEN 'active'
-                        WHEN root.turn_state = 'blocked' THEN 'blocked'
-                        ELSE 'idle'
-                    END AS state
+                    {DerivedStateSql} AS state
                 FROM {_runs} AS r
                 LEFT JOIN {_sessions} AS root
                     ON root.project_id = r.project_id AND root.run_id = r.run_id
@@ -219,9 +225,71 @@ public sealed class ProjectRunReadStore
                 : null);
     }
 
-    /// <summary>
-    /// Encodes the cursor version, order, query shape, and last row into an opaque URL-safe string.
-    /// </summary>
+    /// <summary>Aggregates one authorized project's persisted runs in a single statement snapshot.</summary>
+    public async Task<ProjectMetrics> ReadMetricsAsync(
+        string tenantId, string projectId, string? boundRunId, ProjectMetricsRange range,
+        CancellationToken cancellationToken)
+    {
+        CoordinationIdentity.ValidateIdentity(projectId, "project_id");
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            WITH runs AS MATERIALIZED (
+                SELECT r.created_at, r.completed_at, {DerivedStateSql} AS state
+                FROM {_runs} r
+                LEFT JOIN {_sessions} root ON root.project_id = r.project_id AND root.run_id = r.run_id
+                    AND root.parent_session_id IS NULL
+                WHERE r.tenant_id = @tenant AND r.project_id = @project
+                    AND (@run::varchar IS NULL OR r.run_id = @run)
+            ), totals AS (
+                SELECT count(*) FILTER (WHERE state = 'active') AS active,
+                    count(*) FILTER (WHERE state = 'blocked') AS blocked,
+                    count(*) FILTER (WHERE created_at >= @from AND created_at < @to) AS in_range,
+                    count(*) AS total,
+                    count(*) FILTER (WHERE state = ANY(@terminal) AND completed_at >= @from
+                        AND completed_at < @to) AS completed,
+                    count(*) FILTER (WHERE state = 'completed' AND completed_at >= @from
+                        AND completed_at < @to) AS succeeded
+                FROM runs
+            ), daily AS (
+                SELECT (created_at AT TIME ZONE 'UTC')::date AS day, count(*) AS created, 0::bigint AS completed
+                FROM runs WHERE created_at >= @from AND created_at < @to GROUP BY 1
+                UNION ALL
+                SELECT (completed_at AT TIME ZONE 'UTC')::date, 0::bigint, count(*)
+                FROM runs WHERE state = ANY(@terminal) AND completed_at >= @from AND completed_at < @to
+                GROUP BY 1
+            )
+            SELECT active, blocked, in_range, total, totals.completed, succeeded,
+                COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                    'date', to_char(day, 'YYYY-MM-DD'), 'created', created, 'completed', completed) ORDER BY day)
+                    FROM (SELECT day, sum(created)::bigint AS created, sum(completed)::bigint AS completed
+                        FROM daily GROUP BY day) d), '[]'::jsonb)::text
+            FROM totals
+            """, connection);
+        command.Parameters.AddWithValue("tenant", tenantId);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, (object?)boundRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("from", range.From);
+        command.Parameters.AddWithValue("to", range.To);
+        command.Parameters.AddWithValue("terminal", TerminalStates.ToArray());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        var days = JsonSerializer.Deserialize<ProjectMetricsDay[]>(reader.GetString(6),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        var counts = days.ToDictionary(day => day.Date, StringComparer.Ordinal);
+        var series = new List<ProjectMetricsDay>();
+        var firstDay = range.From.UtcDateTime.Date;
+        var dayCount = range.From == range.To ? 0 : (int)Math.Ceiling((range.To.UtcDateTime - firstDay).TotalDays);
+        for (var index = 0; index < dayCount; index++)
+        {
+            var day = firstDay.AddDays(index);
+            var date = day.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            series.Add(counts.GetValueOrDefault(date) ?? new ProjectMetricsDay(date, 0, 0));
+        }
+        return new(projectId, range.From, range.To, reader.GetInt64(0), reader.GetInt64(1),
+            reader.GetInt64(2), reader.GetInt64(3), reader.GetInt64(4), reader.GetInt64(5), series);
+    }
+
+    /// <summary>Encodes the cursor version, order, query shape, and last row into an opaque URL-safe string.</summary>
     private static string EncodeCursor(RunListCursor cursor)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(cursor, CursorJsonOptions);

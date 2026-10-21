@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using Agentweaver.Orchestrator;
+using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
 using Xunit;
@@ -36,6 +37,47 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{_schema}\" CASCADE", connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>Checks inclusive creation, exclusive completion, UTC daily buckets, and all terminal outcomes.</summary>
+    [Fact]
+    public async Task MetricsCountBoundaryDatesAndShareDerivedStates()
+    {
+        var start = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var old = await AcceptRunAsync("tenant-1", start.AddDays(-1));
+        var active = await AcceptRunAsync("tenant-1", start);
+        var blocked = await AcceptRunAsync("tenant-1", start.AddHours(1));
+        var end = await AcceptRunAsync("tenant-1", start.AddDays(2));
+        await ExecuteAsync($"UPDATE \"{_schema}\".coordination_sessions SET turn_state = 'presenting' WHERE run_id = @run AND parent_session_id IS NULL", active);
+        await ExecuteAsync($"UPDATE \"{_schema}\".coordination_sessions SET turn_state = 'blocked' WHERE run_id = @run AND parent_session_id IS NULL", blocked);
+        await ExecuteAsync($"UPDATE \"{_schema}\".coordination_sessions SET lifecycle_state = 'completed' WHERE run_id = @run AND parent_session_id IS NULL", old);
+        await ExecuteAsync($"UPDATE \"{_schema}\".accepted_runs SET completed_at = '2026-10-01T00:00:00Z' WHERE run_id = @run", old);
+        foreach (var state in new[] { "failed", "indeterminate" })
+        {
+            var run = await AcceptRunAsync("tenant-1", start.AddHours(2));
+            await ExecuteAsync($"UPDATE \"{_schema}\".accepted_runs SET execution_state = '{state}', execution_cause_code = 'test', execution_reference = 'test', completed_at = '2026-10-02T23:59:59Z' WHERE run_id = @run", run);
+        }
+        var cancelled = await AcceptRunAsync("tenant-1", start.AddHours(2));
+        await ExecuteAsync($"UPDATE \"{_schema}\".coordination_sessions SET lifecycle_state = 'cancelled' WHERE run_id = @run AND parent_session_id IS NULL", cancelled);
+        await ExecuteAsync($"UPDATE \"{_schema}\".accepted_runs SET completed_at = '2026-10-02T23:59:59Z' WHERE run_id = @run", cancelled);
+        await ExecuteAsync($"UPDATE \"{_schema}\".coordination_sessions SET lifecycle_state = 'completed' WHERE run_id = @run AND parent_session_id IS NULL", end);
+        await ExecuteAsync($"UPDATE \"{_schema}\".accepted_runs SET completed_at = '2026-10-03T00:00:00Z' WHERE run_id = @run", end);
+        await AcceptRunAsync("tenant-2", start);
+
+        var range = new ProjectMetricsRange(start, start.AddDays(2));
+        var result = await _store.ReadMetricsAsync("tenant-1", Project, null, range, default);
+        Assert.Equal((1L, 1L, 5L, 7L, 4L, 1L),
+            (result.ActiveRuns, result.BlockedRuns, result.RunsInRange, result.RunsTotal,
+                result.CompletedRuns, result.SucceededRuns));
+        Assert.Equal([new("2026-10-01", 5, 1), new ProjectMetricsDay("2026-10-02", 0, 3)], result.Series);
+        var bound = await _store.ReadMetricsAsync("tenant-1", Project, old, range, default);
+        Assert.Equal((1L, 0L, 1L), (bound.RunsTotal, bound.RunsInRange, bound.CompletedRuns));
+        Assert.Equal(0, (await _store.ReadMetricsAsync("tenant-2", Project, old, range, default)).RunsTotal);
+        var empty = await _store.ReadMetricsAsync("tenant-1", "empty-project", null, range, default);
+        Assert.Equal(0, empty.RunsTotal);
+        Assert.All(empty.Series, day => Assert.Equal((0L, 0L), (day.Created, day.Completed)));
+        Assert.Empty((await _store.ReadMetricsAsync("tenant-1", Project, null,
+            new(start.AddHours(1), start.AddHours(1)), default)).Series);
     }
 
     [Fact]

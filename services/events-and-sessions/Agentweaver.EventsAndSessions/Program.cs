@@ -104,8 +104,11 @@ builder.Services.AddSingleton(new ProjectsAuthorizationContextOptions(
     projectsAuthorization["OwnerBaseAddress"],
     projectsAuthorization["Audience"],
     issuerUri.AbsoluteUri));
+// Preserve the established named transport for both exact-run and project-read clients.
 builder.Services.AddHttpClient<IProjectsAuthorizationContextClient, ProjectsAuthorizationContextClient>()
-    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler)
+    .AddTypedClient<ProjectsAuthorizationContextClient>();
+builder.Services.AddSingleton<ProjectUsageReadStore>();
 var coordinationOwner = builder.Configuration.GetSection("EventsAndSessions:OrchestratorOwner");
 builder.Services.AddSingleton(new CoordinationOwnerClientOptions(
     coordinationOwner["OwnerBaseAddress"],
@@ -251,6 +254,8 @@ app.MapGet("/health/ready", async (CancellationToken ct) =>
     }
 });
 app.MapEventsAndSessionsEndpoints();
+// Project usage reads are available even when native usage ingestion is disabled.
+app.MapProjectUsageEndpoints();
 app.MapAcceptedEffectEndpoints();
 app.MapAddressedMessageEndpoints();
 if (nativeUsageEnabled)
