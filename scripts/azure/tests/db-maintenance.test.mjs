@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CONNECTIVITY_MARKER, DB_MAINTENANCE_TARGET, LOCK_NAME, describeEgressDrift, MIGRATION_IDENTITY, REVIEWED_PLAN_SHA256, STATE_NAME,
-  connectivityProbeJob, imageReference, parseDbMaintenanceArgs, prepareJob, runDbMaintenance, verifyGrantsMarker,
+  connectivityProbeJob, imageReference, loadSchemaSupport, parseDbMaintenanceArgs, planServiceOrder, prepareJob, runDbMaintenance,
+  verifyGrantsMarker,
 } from '../lib/db-maintenance.mjs';
 import { p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
@@ -88,7 +89,24 @@ function world({ lease, drift = false, state, jobOutcome = () => 'Complete', log
       appImages[rest[1].slice('deployment/'.length)] = rest[2].slice(rest[2].indexOf('=') + 1);
       return ok();
     }
-    if (action === 'rollout') return rolloutFails ? fail('deployment exceeded its progress deadline') : ok();
+    if (action === 'rollout') {
+      const name = rest[1].slice('deployment/'.length);
+      return (typeof rolloutFails === 'function' ? rolloutFails(name) : rolloutFails)
+        ? fail('deployment exceeded its progress deadline') : ok();
+    }
+    if (action === 'patch') {
+      // kubectl patch configmap <name> --type merge -p {"data":{...}}; null removes a key.
+      const key = `${rest[0]}/${rest[1]}`;
+      const object = cluster.get(key);
+      if (!object) return fail(`NotFound: ${key}`);
+      const data = { ...(object.data ?? {}) };
+      for (const [name, value] of Object.entries(JSON.parse(rest[rest.indexOf('-p') + 1]).data)) {
+        if (value === null) delete data[name];
+        else data[name] = value;
+      }
+      cluster.set(key, { ...object, data });
+      return ok(`${key} patched`);
+    }
     if (action === 'create' || action === 'apply') {
       const object = JSON.parse(settings.input);
       const key = `${object.kind.toLowerCase()}/${object.metadata.name}`;
@@ -442,18 +460,33 @@ test('services on older images block the run unless the runner deploys the match
     assert.deepEqual(fake.receipts[0].receipt.appImages.map(app => [app.deployment, app.status]),
       [['orchestrator', 'match'], ['events-and-sessions', 'mismatch']]);
   } finally { fake.done(); }
-  assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--deploy-apps', '--allow-app-image-mismatch']),
-    /cannot be used together/);
+  // The planned-gap refusal happens in preflight, before the lock or any Job.
+  assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
+  assert.equal(fake.receipts[0].receipt.serviceOrder.order, 'planned-readiness-gap');
+  // There is no switch to migrate and leave services on images that reject the schema.
+  assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--allow-app-image-mismatch']), /Unknown argument/);
 });
 
-test('--deploy-apps migrates first, then rolls only mismatched services and waits for readiness', async () => {
+test('a planned readiness gap migrates, deploys the matching digests in the same run, and records the gap', async () => {
   const fake = appWorld();
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
       receiptDir: fake.receiptDir }, fake.deps);
     assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.serviceOrder.order, 'planned-readiness-gap');
+    assert.deepEqual(receipt.serviceOrder.services.map(service => [service.deployment, service.action]),
+      [['orchestrator', 'none'], ['events-and-sessions', 'gap']]);
     const names = receipt.steps.map(step => step.name);
     assert.ok(names.indexOf('events-and-sessions-migrated') < names.indexOf('app-image-set'));
+    assert.ok(names.indexOf('app-ready') < names.indexOf('roll-forward-cleared'));
+    assert.deepEqual(receipt.readinessGap, { planned: true, deployments: ['events-and-sessions'],
+      startedAt: '2026-10-22T10:00:00.123Z', endedAt: '2026-10-22T10:00:00.123Z', durationSeconds: 0 });
+    // The state keeps the new schema versions and no roll-forward record.
+    const data = fake.cluster.get(`configmap/${STATE_NAME}`).data;
+    assert.equal(data['orchestrator.schema'], String(Math.max(...plan.coreVersions)));
+    assert.equal(data['events-and-sessions.schema'], String(Math.max(...plan.eventsVersions)));
+    assert.equal(data.handoverPrincipalObjectId, PRINCIPAL_ID);
+    assert.ok(!Object.keys(data).some(key => key.startsWith('rollForward.')));
     assert.deepEqual(receipt.steps.filter(step => step.name === 'app-image-set').map(step => step.deployment),
       ['events-and-sessions']);
     assert.deepEqual(receipt.steps.filter(step => step.name === 'app-ready').map(step => step.deployment),
@@ -517,7 +550,7 @@ test('--apps-only is safe to rerun and rejects flags that reach the database', a
     assert.equal(receipt.steps.filter(step => step.name === 'app-ready').length, 2);
   } finally { fake.done(); }
   for (const flag of [['--broker-digest', digest('c')], ['--reconcile-broker-egress'], ['--deploy-apps'],
-    ['--allow-app-image-mismatch'], ['--handover', 'skip'], ['--postgres-admin', 'a@example.test']])
+    ['--handover', 'skip'], ['--postgres-admin', 'a@example.test']])
     assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--apps-only', ...flag]), /--apps-only cannot be combined/);
 });
 
@@ -540,6 +573,118 @@ test('the connectivity probe runs under the migration egress label with no token
   assert.match(pod.containers[0].image, /@sha256:[0-9a-f]{64}$/);
   assert.match(pod.containers[0].command[2], new RegExp(CONNECTIVITY_MARKER));
 });
+const support = (orchestrator = {}, events = {}) => loadSchemaSupport(JSON.stringify({
+  images: { 'Agentweaver.Orchestrator': orchestrator, 'Agentweaver.EventsAndSessions': events } }));
+const apps = (running, expected = 'b') => [
+  { deployment: 'orchestrator', component: 'Agentweaver.Orchestrator', status: 'match',
+    expected: imageReference('Agentweaver.Orchestrator', digest('a')), running: imageReference('Agentweaver.Orchestrator', digest('a')) },
+  { deployment: 'events-and-sessions', component: 'Agentweaver.EventsAndSessions', status: 'mismatch',
+    expected: imageReference('Agentweaver.EventsAndSessions', digest(expected)),
+    running: imageReference('Agentweaver.EventsAndSessions', digest(running)) },
+];
+const schemas = { orchestrator: 33, 'events-and-sessions': 9 };
+
+test('the service order follows the schema ranges of the running and target images', () => {
+  const order = (catalog, current) => planServiceOrder({ appImages: apps('e'), support: support({}, catalog),
+    targetSchema: schemas, currentSchema: { orchestrator: 31, 'events-and-sessions': current } });
+  // The running image accepts the target schema: migrate first; deploying is optional.
+  let result = order({ [digest('e')]: { minSchema: 8, maxSchema: 9 } }, 8);
+  assert.equal(result.order, 'migrate-first');
+  assert.equal(result.services[1].action, 'migrate-first');
+  // The target image accepts the current schema: deploy first, so the service stays ready.
+  result = order({ [digest('b')]: { minSchema: 8, maxSchema: 9 } }, 8);
+  assert.equal(result.order, 'deploy-first');
+  assert.equal(result.services[1].action, 'deploy-first');
+  // Neither image accepts the other's schema: a planned readiness gap, not an error.
+  result = order({ [digest('e')]: { minSchema: 8, maxSchema: 8 }, [digest('b')]: { minSchema: 9, maxSchema: 9 } }, 8);
+  assert.equal(result.order, 'planned-readiness-gap');
+  assert.equal(result.services[1].action, 'gap');
+  // Unknown images and an unrecorded current schema never assume compatibility.
+  assert.equal(order({}, undefined).order, 'planned-readiness-gap');
+  assert.equal(order({}, 8).services[1].targetSupports.minSchema, 9);
+  // A matching service needs no action.
+  assert.equal(result.services[0].action, 'none');
+  // A catalog entry that rejects the reviewed plan's own target schema stops the run.
+  assert.throws(() => order({ [digest('b')]: { minSchema: 7, maxSchema: 8 } }, 8), /does not accept schema 9 from the reviewed plan/);
+});
+
+test('the schema support catalog rejects malformed entries and the shipped catalog loads', () => {
+  for (const range of [{ minSchema: 9, maxSchema: 8 }, { minSchema: 0, maxSchema: 1 }, { minSchema: '8', maxSchema: 9 }, null])
+    assert.throws(() => support({ [digest('a')]: range }), /is malformed/);
+  assert.throws(() => support({ 'sha256:abc': { minSchema: 1, maxSchema: 2 } }), /is malformed/);
+  const shipped = loadSchemaSupport(readFileSync('scripts/azure/lib/db-schema-support.json', 'utf8'));
+  assert.deepEqual(Object.keys(shipped), ['Agentweaver.Orchestrator', 'Agentweaver.EventsAndSessions']);
+});
+
+test('deploy-first moves a service to an image that accepts the current schema before any migration Job', async () => {
+  const fake = appWorld({ state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
+    data: { handoverPrincipalObjectId: PRINCIPAL_ID, 'events-and-sessions.schema': '8' } } });
+  fake.deps.schemaSupport = support({}, { [digest('b')]: { minSchema: 8, maxSchema: 9 } });
+  try {
+    const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
+      receiptDir: fake.receiptDir }, fake.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.serviceOrder.order, 'deploy-first');
+    assert.equal(receipt.readinessGap, undefined);
+    const names = receipt.steps.map(step => step.name);
+    assert.ok(names.indexOf('app-image-set') < names.indexOf('app-ready'));
+    assert.ok(names.indexOf('app-ready') < names.indexOf('orchestrator-migrated'));
+    assert.equal(names.filter(name => name === 'app-image-set').length, 1);
+  } finally { fake.done(); }
+});
+
+test('migrate-first keeps a running image that accepts the target schema when no deploy is asked for', async () => {
+  const fake = appWorld();
+  fake.deps.schemaSupport = support({}, { [digest('e')]: { minSchema: 8, maxSchema: 9 } });
+  try {
+    const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
+      receiptDir: fake.receiptDir }, fake.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.serviceOrder.order, 'migrate-first');
+    assert.ok(!receipt.steps.some(step => step.name === 'app-image-set'));
+    assert.deepEqual(receipt.steps.filter(step => step.name === 'app-ready').map(step => step.image),
+      [imageReference('Agentweaver.Orchestrator', digest('a')), imageReference('Agentweaver.EventsAndSessions', digest('e'))]);
+  } finally { fake.done(); }
+});
+
+test('a readiness timeout after the migration only rolls forward to the same digests', async () => {
+  let unready = true;
+  const fake = appWorld({ rolloutFails: name => unready && name === 'events-and-sessions' });
+  try {
+    const args = [...baseArgs, '--execute', '--deploy-apps', '--readiness-timeout-seconds', '60'];
+    await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs(args), receiptDir: fake.receiptDir }, fake.deps),
+      /events-and-sessions did not become ready within 60 seconds[\s\S]*Do not roll back; rerun the same command to roll forward/);
+    const failed = fake.receipts[0].receipt;
+    assert.equal(failed.result, 'failed');
+    assert.equal(failed.readinessGap.startedAt, '2026-10-22T10:00:00.123Z');
+    assert.equal(failed.readinessGap.endedAt, undefined);
+    assert.equal(failed.cleanup.lock, true);
+    const expected = imageReference('Agentweaver.EventsAndSessions', digest('b'));
+    const data = fake.cluster.get(`configmap/${STATE_NAME}`).data;
+    assert.equal(data['rollForward.events-and-sessions'], expected);
+    assert.equal(data['rollForward.runId'], 'abcdef123456');
+
+    // Other digests, including the old image, are refused before the lock.
+    for (const other of ['e', 'f']) {
+      const before = fake.calls.length;
+      const otherArgs = [...args];
+      otherArgs[3] = digest(other);
+      await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs(otherArgs), receiptDir: fake.receiptDir }, fake.deps),
+      /must roll forward[\s\S]*events-and-sessions=.*sha256:b{64}[\s\S]*Rolling back to older images is not supported/);
+      assert.ok(!fake.calls.slice(before).some(call => call.args[4] === 'create' || call.args[4] === 'set'));
+    }
+
+    // The same command rolls forward and clears the record; no old image is ever set.
+    unready = false;
+    const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs(args), receiptDir: fake.receiptDir }, fake.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.rollForward.pendingFromRun, 'abcdef123456');
+    assert.ok(receipt.steps.some(step => step.name === 'roll-forward-cleared'));
+    assert.ok(!Object.keys(fake.cluster.get(`configmap/${STATE_NAME}`).data).some(key => key.startsWith('rollForward.')));
+    assert.ok(fake.calls.filter(call => call.args[4] === 'set').every(call => call.args.at(-1).endsWith(digest('b'))));
+  } finally { fake.done(); }
+});
+
 const recordedState = { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } };
 
 test('a workflow identity runs without Azure deployment rights once setup is done', async () => {

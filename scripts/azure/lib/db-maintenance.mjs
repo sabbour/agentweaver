@@ -38,6 +38,8 @@ const P1_DIRECTORY = join('deploy', 'k8s', 'migrations', 'p1-postgres');
 const BROKER_DIRECTORY = join('deploy', 'k8s', 'migrations', 'identity-broker');
 const IDENTITY_TEMPLATE = join('infra', 'bicep', 'p1-postgres-migration-identity.bicep');
 const PLAN_FILE = join('scripts', 'azure', 'lib', 'p1-postgres-plan.json');
+// Reviewed list of published service digests and the schema versions each one accepts.
+const SCHEMA_SUPPORT_FILE = join('scripts', 'azure', 'lib', 'db-schema-support.json');
 // Projects whose locked restore must succeed before anything runs: the shared persistence code
 // in the Jobs and the handover, the Broker verifier, and the relay used by the handover.
 const LOCKED_PROJECTS = [
@@ -55,17 +57,18 @@ const PERMISSIONS = [
   ['get', 'ciliumnetworkpolicies.cilium.io'], ['patch', 'ciliumnetworkpolicies.cilium.io'],
   ['create', 'ciliumnetworkpolicies.cilium.io'], ['get', 'deployments.apps'],
 ];
-// Apps-only needs just the lock and the two Deployments.
+// Apps-only needs the lock, the two Deployments, and the state ConfigMap for roll-forward.
 const APP_PERMISSIONS = [
   ['create', 'leases.coordination.k8s.io'], ['get', 'leases.coordination.k8s.io'],
   ['delete', 'leases.coordination.k8s.io'], ['get', 'deployments.apps'], ['patch', 'deployments.apps'],
+  ['get', 'configmaps'], ['create', 'configmaps'], ['patch', 'configmaps'],
 ];
-// Each Job: its kustomize name, the image, and the reviewed versions its marker must report.
+// Each Job: its kustomize name, the image, and the plan field whose versions its marker must report.
 const P1_JOBS = [
   { key: 'orchestrator', jobName: 'orchestrator-migration', component: 'Agentweaver.Orchestrator',
-    digestOption: 'orchestratorDigest', schema: 'orchestrator' },
+    digestOption: 'orchestratorDigest', schema: 'orchestrator', planVersions: 'coreVersions' },
   { key: 'events-and-sessions', jobName: 'events-and-sessions-migration', component: 'Agentweaver.EventsAndSessions',
-    digestOption: 'eventsDigest', schema: 'events_sessions' },
+    digestOption: 'eventsDigest', schema: 'events_sessions', planVersions: 'eventsVersions' },
 ];
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const GUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -82,14 +85,14 @@ Without --execute the runner only checks preconditions and prints what it would 
   --handover auto|always|skip   Schema ownership handover. auto runs it once and records it. Default auto.
   --postgres-admin <upn>        Entra PostgreSQL administrator for the handover. Default: signed-in user.
   --reconcile-broker-egress     Re-apply the repository Broker egress policy when it has drifted.
-  --deploy-apps                 After the migrations, roll the Orchestrator and EventsAndSessions
-                                Deployments to the same digests and wait until they are ready.
+  --deploy-apps                 Roll the Orchestrator and EventsAndSessions Deployments to the same
+                                digests in this run, before or after the migrations as the schema
+                                support of each image requires, and wait until they are ready.
   --apps-only                   Skip identity, handover, and migration Jobs. Only roll the two
                                 Deployments to the given digests under the lock and wait until they
                                 are ready. Use it when the schema is already migrated and services are
                                 unready because they still run older images.
-  --allow-app-image-mismatch    Migrate even though running services use other images and are not
-                                deployed here. They stay unready until the matching release is deployed.
+  --readiness-timeout-seconds <n>  Wait for each service rollout. Default 600.
   --prepare-only                Stop after the identity, ServiceAccount, egress, and handover. No
                                 digests, probes, or migration Jobs. The setup command uses it.
   --release-lock <runId>        Remove a lock left by a crashed run with that exact run ID, then exit.
@@ -99,19 +102,19 @@ Without --execute the runner only checks preconditions and prints what it would 
 
 /** Parses flags. Unknown or malformed flags stop the run before anything else happens. */
 export function parseDbMaintenanceArgs(argv) {
-  const options = { execute: false, handover: 'auto', reconcileBrokerEgress: false, allowAppImageMismatch: false, deployApps: false, appsOnly: false, prepareOnly: false,
-    receiptDir: join(homedir(), '.agentweaver', 'db-maintenance'), jobTimeoutSeconds: 900, help: false };
+  const options = { execute: false, handover: 'auto', reconcileBrokerEgress: false, deployApps: false, appsOnly: false, prepareOnly: false,
+    receiptDir: join(homedir(), '.agentweaver', 'db-maintenance'), jobTimeoutSeconds: 900, readinessTimeoutSeconds: 600, help: false };
   const valued = new Map([
     ['--orchestrator-digest', 'orchestratorDigest'], ['--events-digest', 'eventsDigest'],
     ['--broker-digest', 'brokerDigest'], ['--handover', 'handover'], ['--postgres-admin', 'postgresAdmin'],
     ['--release-lock', 'releaseLock'], ['--receipt-dir', 'receiptDir'], ['--job-timeout-seconds', 'jobTimeoutSeconds'],
+    ['--readiness-timeout-seconds', 'readinessTimeoutSeconds'],
   ]);
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--execute') options.execute = true;
     else if (arg === '--reconcile-broker-egress') options.reconcileBrokerEgress = true;
-    else if (arg === '--allow-app-image-mismatch') options.allowAppImageMismatch = true;
     else if (arg === '--deploy-apps') options.deployApps = true;
     else if (arg === '--apps-only') options.appsOnly = true;
     else if (arg === '--prepare-only') options.prepareOnly = true;
@@ -128,6 +131,9 @@ export function parseDbMaintenanceArgs(argv) {
   options.jobTimeoutSeconds = Number(options.jobTimeoutSeconds);
   if (!Number.isInteger(options.jobTimeoutSeconds) || options.jobTimeoutSeconds < 60 || options.jobTimeoutSeconds > 3600)
     throw new Error('--job-timeout-seconds must be an integer from 60 to 3600.');
+  options.readinessTimeoutSeconds = Number(options.readinessTimeoutSeconds);
+  if (!Number.isInteger(options.readinessTimeoutSeconds) || options.readinessTimeoutSeconds < 60 || options.readinessTimeoutSeconds > 3600)
+    throw new Error('--readiness-timeout-seconds must be an integer from 60 to 3600.');
   if (!['auto', 'always', 'skip'].includes(options.handover))
     throw new Error('--handover must be auto, always, or skip.');
   if (options.releaseLock !== undefined) {
@@ -140,7 +146,7 @@ export function parseDbMaintenanceArgs(argv) {
     const conflicting = [
       [options.orchestratorDigest !== undefined, '--orchestrator-digest'], [options.eventsDigest !== undefined, '--events-digest'],
       [options.brokerDigest !== undefined, '--broker-digest'], [options.deployApps, '--deploy-apps'],
-      [options.allowAppImageMismatch, '--allow-app-image-mismatch'], [options.appsOnly, '--apps-only'],
+      [options.appsOnly, '--apps-only'],
     ].filter(([present]) => present).map(([, flag]) => flag);
     if (conflicting.length) throw new Error(`--prepare-only cannot be combined with ${conflicting.join(', ')}.`);
     return options;
@@ -149,15 +155,12 @@ export function parseDbMaintenanceArgs(argv) {
     if (!DIGEST.test(options[key] ?? '')) throw new Error(`${option} must be an exact sha256 image digest.`);
   if (options.brokerDigest !== undefined && !DIGEST.test(options.brokerDigest))
     throw new Error('--broker-digest must be an exact sha256 image digest.');
-  // The two flags give opposite answers to the same question, so accepting both would hide intent.
-  if (options.deployApps && options.allowAppImageMismatch)
-    throw new Error('--deploy-apps and --allow-app-image-mismatch cannot be used together.');
   // Apps-only touches nothing in the database or its network path, so every flag that would
   // reach those is rejected rather than silently ignored.
   if (options.appsOnly) {
     const conflicting = [
       [options.brokerDigest !== undefined, '--broker-digest'], [options.reconcileBrokerEgress, '--reconcile-broker-egress'],
-      [options.deployApps, '--deploy-apps'], [options.allowAppImageMismatch, '--allow-app-image-mismatch'],
+      [options.deployApps, '--deploy-apps'],
       [argv.some(arg => arg === '--handover' || arg.startsWith('--handover=')), '--handover'],
       [options.postgresAdmin !== undefined, '--postgres-admin'],
     ].filter(([present]) => present).map(([, flag]) => flag);
@@ -223,8 +226,68 @@ function checkAppImages(kubectl, options) {
     const running = result.status === 0 ? result.stdout.trim() || undefined : undefined;
     // A missing Deployment has no pods whose readiness a schema move could break.
     const status = running === undefined ? 'absent' : running === expected ? 'match' : 'mismatch';
-    return { deployment: job.key, expected, running, status };
+    return { deployment: job.key, component: job.component, expected, running, status };
   });
+}
+
+/**
+ * Parses the reviewed schema-support catalog. Each entry maps a published digest to the lowest
+ * and highest schema version that image's readiness check accepts. A schema version is the
+ * highest applied migration of that service. Malformed entries fail the run, because a wrong
+ * range could pick an order that leaves services unready.
+ */
+export function loadSchemaSupport(text) {
+  const parsed = JSON.parse(text);
+  const support = {};
+  for (const job of P1_JOBS) {
+    const entries = parsed.images?.[job.component] ?? {};
+    support[job.component] = {};
+    for (const [digest, range] of Object.entries(entries)) {
+      if (!DIGEST.test(digest) || !Number.isInteger(range?.minSchema) || !Number.isInteger(range?.maxSchema) ||
+          range.minSchema < 1 || range.minSchema > range.maxSchema)
+        throw new Error(`Schema support entry ${job.component} ${digest} is malformed.`);
+      support[job.component][digest] = { minSchema: range.minSchema, maxSchema: range.maxSchema };
+    }
+  }
+  return support;
+}
+
+/**
+ * Chooses, for each service on another image, when to deploy its target image so it stays ready:
+ * - migrate-first: the running image accepts the target schema, so the migration does not affect
+ *   it, and the deploy (if any) can follow.
+ * - deploy-first: the target image accepts the current schema, so deploying before the migration
+ *   keeps the service ready on both sides.
+ * - gap: neither image accepts the other's schema. The service is unready from the migration
+ *   until its target image is ready. This is a planned readiness gap, not an error.
+ * An image missing from the catalog accepts only its own schema: for a target image that is the
+ * target schema, and for a running image nothing is assumed. The current schema comes from the
+ * state ConfigMap; when it was never recorded, deploy-first is not chosen.
+ */
+export function planServiceOrder({ appImages, support, targetSchema, currentSchema }) {
+  const within = (range, version) => range !== undefined && version !== undefined &&
+    version >= range.minSchema && version <= range.maxSchema;
+  const services = appImages.map(app => {
+    const target = targetSchema[app.deployment];
+    const current = currentSchema[app.deployment];
+    const catalog = support[app.component] ?? {};
+    const targetDigest = app.expected.slice(app.expected.indexOf('@') + 1);
+    const targetSupports = catalog[targetDigest] ?? { minSchema: target, maxSchema: target };
+    // A catalog entry that rejects the plan's own schema means the catalog and plan disagree.
+    if (!within(targetSupports, target))
+      throw new Error(`The catalog says ${app.deployment} ${targetDigest} does not accept schema ${target} from the reviewed plan.`);
+    const runningDigest = app.running?.includes('@') ? app.running.slice(app.running.indexOf('@') + 1) : undefined;
+    const runningSupports = runningDigest ? catalog[runningDigest] : undefined;
+    const action = app.status !== 'mismatch' ? 'none'
+      : within(runningSupports, target) ? 'migrate-first'
+        : within(targetSupports, current) ? 'deploy-first'
+          : 'gap';
+    return { deployment: app.deployment, action, currentSchema: current ?? null, targetSchema: target,
+      runningSupports: runningSupports ?? null, targetSupports };
+  });
+  const order = services.some(service => service.action === 'gap') ? 'planned-readiness-gap'
+    : services.some(service => service.action === 'deploy-first') ? 'deploy-first' : 'migrate-first';
+  return { order, services };
 }
 
 /**
@@ -459,7 +522,14 @@ export async function runDbMaintenance(options, overrides = {}) {
       return receipt;
     }
 
-    // 8. Migration identity and handover state, read-only. A person can create the identity and
+    // 8. State ConfigMap: the recorded handover principal, the schema versions recorded by earlier
+    // runs, and any roll-forward a failed run left behind. Read once, here, for every mode.
+    const stateRead = kubectl(['get', 'configmap', STATE_NAME, '-o', 'json']);
+    if (stateRead.status !== 0 && !/NotFound/i.test(stateRead.stderr ?? ''))
+      throw new Error(`Could not read ${STATE_NAME}: ${redact((stateRead.stderr ?? '').trim())}`);
+    const stateData = stateRead.status === 0 ? JSON.parse(stateRead.stdout).data ?? {} : {};
+
+    // Migration identity and handover state, read-only. A person can create the identity and
     // run the handover; a workload identity, such as the workflow's, cannot. The handover needs the
     // PostgreSQL Entra administrator, because only that role can create the PostgreSQL principal
     // and only the current owner may give its objects away. So a run that would need either step
@@ -468,10 +538,7 @@ export async function runDbMaintenance(options, overrides = {}) {
     let handoverNeeded = false;
     if (!options.appsOnly) {
       identityState = readMigrationIdentity(exec, target);
-      const state = kubectl(['get', 'configmap', STATE_NAME, '-o', 'json']);
-      if (state.status !== 0 && !/NotFound/i.test(state.stderr ?? ''))
-        throw new Error(`Could not read ${STATE_NAME}: ${redact((state.stderr ?? '').trim())}`);
-      const recorded = state.status === 0 ? JSON.parse(state.stdout).data?.handoverPrincipalObjectId : undefined;
+      const recorded = stateData.handoverPrincipalObjectId;
       handoverNeeded = options.handover === 'always' ||
         (options.handover === 'auto' && (!identityState.exists || recorded !== identityState.principalObjectId));
       const signedInAsUser = account.user?.type === 'user';
@@ -482,30 +549,69 @@ export async function runDbMaintenance(options, overrides = {}) {
       step('migration-identity-checked', { ready: identityState.ready, handoverNeeded });
     }
 
-    // 9. Running services: their readiness check verifies the schema, so moving the schema under
-    // services on other images makes them unready. With --deploy-apps the runner rolls them to the
-    // matching digests right after the migrations. Otherwise it blocks, unless the operator accepts
-    // the gap and deploys the matching release right after. Prepare-only does not move the schema.
+    // 9. Running services and the order of deploy and migrate. Each service's readiness check
+    // accepts only a range of schema versions, so the runner compares the running image, the
+    // target image, the current schema, and the target schema, and picks the order that keeps
+    // each service ready (see planServiceOrder). Prepare-only does not move the schema.
     receipt.appImages = options.prepareOnly ? [] : checkAppImages(kubectl, options);
-    const mismatched = receipt.appImages.filter(entry => entry.status === 'mismatch');
-    for (const app of mismatched)
+    for (const app of receipt.appImages.filter(entry => entry.status === 'mismatch'))
       log(`Deployment ${app.deployment} runs ${app.running}, not ${app.expected}.`);
+
+    // Roll-forward guard: a run that moved the schema and then failed to bring the services up
+    // recorded the images it was deploying. Until they are ready, only those images may be
+    // deployed. Older images reject the new schema, so rolling back is never an option.
+    const pendingImages = Object.fromEntries(P1_JOBS.filter(job => stateData[`rollForward.${job.key}`])
+      .map(job => [job.key, stateData[`rollForward.${job.key}`]]));
+    if (!options.prepareOnly && Object.keys(pendingImages).length) {
+      const differing = receipt.appImages.filter(app => pendingImages[app.deployment] && pendingImages[app.deployment] !== app.expected);
+      if (differing.length)
+        throw new Error(`Run ${stateData['rollForward.runId']} migrated the schema and must roll forward. ` +
+          `Rerun with the same digests: ${differing.map(app => `${app.deployment}=${pendingImages[app.deployment]}`).join(', ')}. ` +
+          'Rolling back to older images is not supported.');
+      receipt.rollForward = { pendingFromRun: stateData['rollForward.runId'], images: pendingImages };
+    }
+
+    const plan = JSON.parse(readFileSync(join(repoRoot, PLAN_FILE), 'utf8'));
+    let ordering = { order: 'migrate-first', services: [] };
     if (options.appsOnly) {
       // Apps-only rolls existing Deployments; it never creates one, so a missing one is an error.
       const absent = receipt.appImages.filter(entry => entry.status === 'absent');
       if (absent.length)
         throw new Error(`Deployment ${absent.map(app => app.deployment).join(', ')} does not exist. ` +
           'Install the services with the release deploy path first.');
-    } else if (mismatched.length && !options.deployApps && !options.allowAppImageMismatch)
-      throw new Error(`Running services use other images (${mismatched.map(app => app.deployment).join(', ')}). ` +
-        'Migrating would make them unready. Rerun with --deploy-apps to roll them to the same digests after ' +
-        'the migrations, or deploy the matching release first.');
-    if (mismatched.length && options.allowAppImageMismatch)
-      receipt.followUp = 'Deploy the release that matches the migrated digests.';
-    step('app-images-checked', { mismatched: mismatched.map(app => app.deployment) });
+    } else if (!options.prepareOnly) {
+      const support = deps.schemaSupport ?? loadSchemaSupport(readFileSync(join(repoRoot, SCHEMA_SUPPORT_FILE), 'utf8'));
+      const targetSchema = Object.fromEntries(P1_JOBS.map(job => [job.key, Math.max(...plan[job.planVersions])]));
+      // Unrecorded or malformed versions count as unknown, which only removes the deploy-first choice.
+      const currentSchema = Object.fromEntries(P1_JOBS.map(job => {
+        const value = Number(stateData[`${job.key}.schema`]);
+        return [job.key, Number.isInteger(value) && value > 0 ? value : undefined];
+      }));
+      ordering = planServiceOrder({ appImages: receipt.appImages, support, targetSchema, currentSchema });
+      receipt.serviceOrder = ordering;
+      // Deploy-first and a planned gap both depend on deploying the target images in this run.
+      // Without --deploy-apps the run would leave a service unready, so it stops here.
+      const needsDeploy = ordering.services.filter(service => ['deploy-first', 'gap'].includes(service.action));
+      if (needsDeploy.length && !options.deployApps)
+        throw new Error(`Running services use other images (${needsDeploy.map(service => service.deployment).join(', ')}) ` +
+          'that do not accept the target schema. ' +
+          (ordering.order === 'planned-readiness-gap'
+            ? 'This run has a planned readiness gap, so it must deploy the matching digests right after the migrations. '
+            : 'The target images accept the current schema, so this run must deploy them before the migrations. ') +
+          'Rerun with --deploy-apps.');
+      if (ordering.order === 'planned-readiness-gap')
+        log(`Planned readiness gap: ${ordering.services.filter(service => service.action === 'gap')
+          .map(service => service.deployment).join(', ')} will be unready from the migration until the matching images are ready.`);
+    }
+    step('app-images-checked', { order: ordering.order,
+      mismatched: receipt.appImages.filter(entry => entry.status === 'mismatch').map(app => app.deployment) });
+    const deployFirst = ordering.services.filter(service => service.action === 'deploy-first').map(service => service.deployment);
+    const deployAfter = options.deployApps
+      ? ordering.services.filter(service => ['migrate-first', 'gap'].includes(service.action)).map(service => service.deployment) : [];
 
     if (!options.execute) {
       // Dry run ends here, with the plan of record for an execute run.
+      const mismatched = receipt.appImages.filter(entry => entry.status === 'mismatch');
       receipt.plannedSteps = options.appsOnly
         ? ['lock', ...(mismatched.length ? ['deploy-apps'] : []), 'readiness', 'cleanup', 'receipt']
         : options.prepareOnly
@@ -515,10 +621,10 @@ export async function runDbMaintenance(options, overrides = {}) {
           : [
           'lock', `migration-identity-${identityState.ready ? 'verified' : 'deploy'}`, 'serviceaccount-and-egress',
           ...(receipt.brokerEgressDrift && options.reconcileBrokerEgress ? ['broker-egress-reconcile'] : []),
-          `handover-${handoverNeeded ? 'run' : 'skip'}`, 'connectivity-probes', ...(options.brokerDigest ? ['broker-job'] : []),
-          'orchestrator-job', 'events-and-sessions-job',
-          ...(options.deployApps ? ['deploy-apps'] : []), ...(options.allowAppImageMismatch ? [] : ['readiness']),
-          'cleanup', 'receipt',
+          `handover-${handoverNeeded ? 'run' : 'skip'}`, 'connectivity-probes',
+          ...(deployFirst.length ? ['deploy-apps-before-migrations'] : []),
+          ...(options.brokerDigest ? ['broker-job'] : []), 'orchestrator-job', 'events-and-sessions-job',
+          ...(deployAfter.length ? ['deploy-apps-after-migrations'] : []), 'readiness', 'cleanup', 'receipt',
         ];
       log(`Dry run passed. With --execute the runner would: ${receipt.plannedSteps.join(', ')}.`);
       receipt.result = 'dry-run-passed';
@@ -541,35 +647,61 @@ export async function runDbMaintenance(options, overrides = {}) {
     lockHeld = true;
     step('lock-acquired', { lease: LOCK_NAME });
 
-    // Rolls mismatched services to the pinned digests, then waits for every existing one to be
-    // ready on exactly that image. The order is migrate, then deploy: the new images verify the
-    // new schema at readiness, and the old images already fail against it, so deploying first
-    // would not avoid the gap. Only the image changes; the rest of each Deployment is kept.
-    // Readiness is the end-to-end check: each service's readiness probe verifies the schema it
-    // expects, so a ready rollout on the pinned image proves the image and the database agree.
-    const rollApps = ({ deploy, wait }) => {
-      for (const app of receipt.appImages.filter(entry => entry.status === 'mismatch' && deploy)) {
-        // Only the service container, which is named after its Deployment, gets the new image.
-        // A future sidecar or init container keeps its own image.
+    // Merges keys into the state ConfigMap, creating it when missing. A null value removes a key.
+    // A merge patch keeps every key this call does not name, so the handover record, the schema
+    // versions, and the roll-forward record never overwrite one another.
+    const updateState = (data, action) => {
+      const existing = kubectl(['get', 'configmap', STATE_NAME, '-o', 'name']);
+      if (existing.status === 0) {
+        must(kubectl(['patch', 'configmap', STATE_NAME, '--type', 'merge', '-p', JSON.stringify({ data })]), action);
+        return;
+      }
+      if (!/NotFound/i.test(existing.stderr ?? '')) throw new Error(`${action}: ${redact((existing.stderr ?? '').trim())}`);
+      must(kubectl(['create', '-f', '-'], { input: JSON.stringify({ apiVersion: 'v1', kind: 'ConfigMap',
+        metadata: { name: STATE_NAME, namespace: target.namespace },
+        data: Object.fromEntries(Object.entries(data).filter(([, value]) => value !== null)) }) }), action);
+    };
+    const clearRollForward = () => {
+      updateState(Object.fromEntries([...P1_JOBS.map(job => `rollForward.${job.key}`), 'rollForward.runId', 'rollForward.since']
+        .map(key => [key, null])), 'Could not clear the roll-forward record');
+      step('roll-forward-cleared');
+    };
+
+    // Sets the pinned image on the named Deployments. Only the service container, which is named
+    // after its Deployment, changes; a future sidecar or init container keeps its own image.
+    const deployImages = deployments => {
+      for (const app of receipt.appImages.filter(entry => deployments.includes(entry.deployment))) {
         must(kubectl(['set', 'image', `deployment/${app.deployment}`, `${app.deployment}=${app.expected}`]),
           `Could not set the image of Deployment ${app.deployment}`);
         step('app-image-set', { deployment: app.deployment, from: app.running, to: app.expected });
+        app.deployed = true;
       }
-      if (!wait) return;
+    };
+    // Waits, within the readiness time limit, until every existing service is ready on the image
+    // it should run: the pinned digest when this run deployed it, otherwise the image it ran.
+    // Readiness is the end-to-end check, because each readiness probe verifies its schema.
+    // After the schema moved, a failure tells the operator to roll forward, never back.
+    const waitReady = ({ afterMigration }) => {
       for (const app of receipt.appImages.filter(entry => entry.status !== 'absent')) {
-        must(kubectl(['rollout', 'status', `deployment/${app.deployment}`, `--timeout=${options.jobTimeoutSeconds}s`]),
-          `Deployment ${app.deployment} did not become ready`);
+        const wanted = app.deployed || app.status === 'match' ? app.expected : app.running;
+        const rollout = kubectl(['rollout', 'status', `deployment/${app.deployment}`, `--timeout=${options.readinessTimeoutSeconds}s`]);
+        if (rollout.status !== 0)
+          throw new Error(`Deployment ${app.deployment} did not become ready within ${options.readinessTimeoutSeconds} seconds: ` +
+            `${redact((rollout.stderr || rollout.stdout || '').trim())}` + (afterMigration
+            ? '. The schema is already migrated. Do not roll back; rerun the same command to roll forward to the same digests.' : ''));
         const image = must(kubectl(['get', 'deployment', app.deployment, '-o',
           'jsonpath={.spec.template.spec.containers[0].image}']), `Could not read Deployment ${app.deployment}`).stdout.trim();
-        if (image !== app.expected) throw new Error(`Deployment ${app.deployment} runs ${image}, not ${app.expected}.`);
+        if (image !== wanted) throw new Error(`Deployment ${app.deployment} runs ${image}, not ${wanted}.`);
         step('app-ready', { deployment: app.deployment, image });
       }
     };
 
     // Apps-only: the schema is already where these images expect it, so only the services move.
-    // A rerun on matching images just re-checks readiness.
+    // A rerun on matching images just re-checks readiness. Success clears any roll-forward record.
     if (options.appsOnly) {
-      rollApps({ deploy: true, wait: true });
+      deployImages(receipt.appImages.filter(entry => entry.status === 'mismatch').map(app => app.deployment));
+      waitReady({ afterMigration: Object.keys(pendingImages).length > 0 });
+      if (Object.keys(pendingImages).length) clearRollForward();
       receipt.result = 'succeeded';
       return receipt;
     }
@@ -634,12 +766,8 @@ export async function runDbMaintenance(options, overrides = {}) {
         p1OwnershipHandover: { migrationPrincipalObjectId: deployment.principalObjectId },
       });
       receipt.handover = { readback: relay.p1OwnershipHandover?.readback, relayCleanup: relay.cleanup };
-      must(kubectl(['apply', '--server-side', '--field-manager', 'agentweaver-db-maintenance', '-f', '-'], {
-        input: JSON.stringify({ apiVersion: 'v1', kind: 'ConfigMap',
-          metadata: { name: STATE_NAME, namespace: target.namespace },
-          data: { handoverPrincipalObjectId: deployment.principalObjectId, handoverRunId: runId,
-            handoverAt: deps.now().toISOString() } }),
-      }), 'Could not record the handover state');
+      updateState({ handoverPrincipalObjectId: deployment.principalObjectId, handoverRunId: runId,
+        handoverAt: deps.now().toISOString() }, 'Could not record the handover state');
       step('ownership-handover-verified');
     } else {
       step('ownership-handover-skipped', { reason: options.handover === 'skip' ? 'requested' : 'already recorded' });
@@ -670,16 +798,35 @@ export async function runDbMaintenance(options, overrides = {}) {
       step('connectivity-verified', { workload, canonicalNames });
     }
 
+    // Deploy-first services move to images that accept the current schema, so they stay ready
+    // through the migration. They must be ready before any Job runs; if they are not, nothing in
+    // the database has changed yet, unless an earlier run already moved it (roll-forward record).
+    if (deployFirst.length) {
+      deployImages(deployFirst);
+      waitReady({ afterMigration: Object.keys(pendingImages).length > 0 });
+    }
+
     // Migration Jobs run one at a time, in prerequisite order: Broker, Core, Events.
-    const plan = JSON.parse(readFileSync(join(repoRoot, PLAN_FILE), 'utf8'));
     const jobs = [
       ...(options.brokerDigest ? [{ key: 'identity-broker', template: brokerJobTemplate,
         image: imageReference('Agentweaver.Identity.Broker', options.brokerDigest) }] : []),
       ...P1_JOBS.map(job => ({ ...job, template: pick(p1Resources, 'Job', job.jobName),
         image: imageReference(job.component, options[job.digestOption]), clientId: deployment.clientId,
-        versions: job.key === 'orchestrator' ? plan.coreVersions : plan.eventsVersions })),
+        versions: plan[job.planVersions] })),
     ];
     for (const job of jobs) {
+      if (job.key === P1_JOBS[0].key) {
+        // Before the schema moves, record the images this run will deploy afterwards. If the run
+        // then stops, the next run may only roll forward to these images.
+        if (deployAfter.length)
+          updateState({ ...Object.fromEntries(receipt.appImages.filter(app => deployAfter.includes(app.deployment))
+            .map(app => [`rollForward.${app.deployment}`, app.expected])), 'rollForward.runId': runId,
+          'rollForward.since': deps.now().toISOString() }, 'Could not record the roll-forward images');
+        // A planned readiness gap starts when the owner schema starts to move.
+        if (ordering.order === 'planned-readiness-gap')
+          receipt.readinessGap = { planned: true, deployments: ordering.services.filter(service => service.action === 'gap')
+            .map(service => service.deployment), startedAt: deps.now().toISOString() };
+      }
       const name = `${job.template.metadata.name}-${runId}`;
       const manifest = prepareJob(job.template, { name, image: job.image, runId, clientId: job.clientId });
       must(kubectl(['create', '-f', '-'], { input: JSON.stringify(manifest) }), `Could not create Job ${name}`);
@@ -691,8 +838,22 @@ export async function runDbMaintenance(options, overrides = {}) {
       const marker = job.versions ? verifyGrantsMarker(logs, { service: job.key, schema: job.schema, versions: job.versions }) : undefined;
       step(`${job.key}-migrated`, { job: name, image: job.image, ...(marker ? { marker } : {}) });
     }
+    // The verified markers prove each schema now equals the plan, so record its version. Later
+    // runs use it to tell whether a target image accepts the current schema.
+    updateState(Object.fromEntries(P1_JOBS.map(job => [`${job.key}.schema`, String(Math.max(...plan[job.planVersions]))])),
+      'Could not record the schema versions');
 
-    rollApps({ deploy: options.deployApps, wait: !options.allowAppImageMismatch });
+    // Services that follow the migration: those whose running image already accepts the new
+    // schema (no gap) and those in a planned readiness gap. Then every service must be ready.
+    deployImages(deployAfter);
+    // A failure here leaves the gap open in the receipt (no end time) and the roll-forward record
+    // in place, so the next run can only finish the same deploy.
+    waitReady({ afterMigration: true });
+    if (receipt.readinessGap) {
+      receipt.readinessGap.endedAt = deps.now().toISOString();
+      receipt.readinessGap.durationSeconds = (Date.parse(receipt.readinessGap.endedAt) - Date.parse(receipt.readinessGap.startedAt)) / 1000;
+    }
+    if (deployAfter.length || Object.keys(pendingImages).length) clearRollForward();
     receipt.result = 'succeeded';
   } catch (error) {
     primaryError = error;

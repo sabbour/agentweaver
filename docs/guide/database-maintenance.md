@@ -131,7 +131,7 @@ From the GitHub CLI:
 gh workflow run v1-db-maintenance.yml --ref v1 `
   -f orchestrator_digest=sha256:<orchestrator> `
   -f events_digest=sha256:<events-and-sessions> `
-  -f services=deploy-after-migrate `
+  -f services=deploy `
   -f execute=true
 ```
 
@@ -139,20 +139,70 @@ Only one workflow run executes at a time.
 
 ## Keep services ready
 
-Each service's readiness check verifies the schema it expects. If you migrate
-the database while a service runs an older image, that service becomes unready.
-The runner therefore reads the running images before it changes anything:
+The Orchestrator and EventsAndSessions services check their schema version at
+startup and on `/health/ready`. Each image accepts only a range of schema
+versions. If the database moves outside that range, the service becomes
+unready.
+
+The runner reads the running images before it changes anything. It compares
+each image's accepted range with the current schema and the target schema, and
+picks one order:
+
+| Order | When | What the runner does |
+| --- | --- | --- |
+| Migrate first | The running image accepts the target schema. | Migrates. With `--deploy-apps`, then sets the new image. |
+| Deploy first | The new image accepts the current schema. | Sets the new image and waits until it is ready, then migrates. Needs `--deploy-apps`. |
+| Planned readiness gap | Neither image accepts the other's schema. | Migrates, then sets the new image in the same run and waits until it is ready. Needs `--deploy-apps`. |
+
+The options are:
 
 | Option | Workflow `services` | Behavior |
 | --- | --- | --- |
-| None | `block` | Stops before any change when a service runs a different image. |
-| `--deploy-apps` | `deploy-after-migrate` | Migrates, then sets the new image on each mismatched Deployment and waits until both services are ready. |
+| None | `block` | Stops before any change when a service would need a new image to stay ready. |
+| `--deploy-apps` | `deploy` | Sets the given digests in the order above and waits until both services are ready. |
 | `--apps-only` | `apps-only` | Skips every database step. Only rolls the Deployments to the given digests under the lock and waits until they are ready. |
-| `--allow-app-image-mismatch` | Not offered | Migrates and leaves services as they are. The receipt records that the matching release still needs to be deployed. |
 
-The order is always migrate, then deploy. New images fail readiness against the
-old schema, and old images fail it against the new one, so deploying first
-does not avoid the gap.
+### Schema ranges
+
+The accepted ranges live in `scripts/azure/lib/db-schema-support.json`. Each
+entry maps a published image digest to its lowest and highest schema version.
+A schema version is the highest applied migration of that service. When you
+publish an owner image, add its digest and range in the same change as the
+migration it supports.
+
+An image that is not listed is treated with care. A new image accepts only the
+target schema. A running image accepts nothing the runner can rely on. So a
+run with unlisted images takes the planned-gap path. The runner records each
+schema version in its state after a run, and uses it to decide whether a new
+image accepts the current schema. The run fails if the catalog says the new
+image rejects the target schema of the reviewed plan.
+
+### Planned readiness gap
+
+Some migrations have no order that keeps a service ready. For example, when the
+current images reject the new schema and the new images reject the old one,
+the service is unready for a short time. This is expected, not an error. The
+runner:
+
+1. Logs the planned gap and records it in the receipt before it changes anything.
+2. Refuses to migrate without `--deploy-apps`, because the matching images
+   must follow in the same run.
+3. Records the images it will deploy in its state, then runs the migration Jobs.
+4. Sets the matching images right away and waits until each service is ready,
+   within `--readiness-timeout-seconds` (default 600).
+5. Writes the gap's start, end, and length in seconds to `readinessGap` in the
+   receipt.
+
+### Roll forward only
+
+After the schema has moved, the old images cannot run on it. The runner never
+sets an older image. If the deploy or the readiness wait fails, the run stops,
+reports the failure, and keeps the gap open in the receipt (no end time). The
+state still holds the images it was deploying.
+
+Run the same command again to finish. The next run accepts only those same
+digests. It refuses other digests, including the old ones, before it takes the
+lock. When the services are ready, it clears the record.
 
 When migrations have already been applied and services are unready, roll the
 services to the release that matches the schema:
@@ -183,7 +233,8 @@ folder.
 
 The receipt records the source commit, the operator, each step with its time,
 the resolved private link name, each Job's grants marker, the service images
-before and after, the cleanup result, and the error when the run fails.
+before and after, the chosen service order, any planned readiness gap, the
+cleanup result, and the error when the run fails.
 
 ## Recover from a failed run
 

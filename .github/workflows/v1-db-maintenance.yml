@@ -33,13 +33,14 @@ on:
         type: boolean
       services:
         description: >-
-          Running Orchestrator and EventsAndSessions services. block stops when they run other images;
-          deploy-after-migrate rolls them to the same digests after the migrations; apps-only skips all
-          database steps and only rolls them (for a schema that is already migrated).
+          Running Orchestrator and EventsAndSessions services. block stops when a service must move to
+          stay ready; deploy also sets the given digests, before or after the migrations as the schema
+          ranges require; apps-only skips all database steps and only rolls them (for a schema that is
+          already migrated).
         required: true
         default: block
         type: choice
-        options: [block, deploy-after-migrate, apps-only]
+        options: [block, deploy, apps-only]
       execute:
         description: Apply changes. Leave off for a read-only preflight.
         required: true
@@ -103,7 +104,7 @@ jobs:
             args+=(--handover "$HANDOVER")
             if [ -n "$BROKER_DIGEST" ]; then args+=(--broker-digest "$BROKER_DIGEST"); fi
             if [ "$RECONCILE" = "true" ]; then args+=(--reconcile-broker-egress); fi
-            if [ "$SERVICES" = "deploy-after-migrate" ]; then args+=(--deploy-apps); fi
+            if [ "$SERVICES" = "deploy" ]; then args+=(--deploy-apps); fi
           fi
           if [ "$EXECUTE" = "true" ]; then args+=(--execute); fi
           npm run db:maintenance -- "${args[@]}"
