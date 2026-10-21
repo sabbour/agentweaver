@@ -195,7 +195,8 @@ The image job retains source-bound Probe, Broker and AgentHost image checks,
 the pinned native runtime and isolated native prompt-capacity tests.
 
 .NET projects run concurrently, with four deterministic method shards for
-Broker and verified per-shard TRX receipts. NuGet, Chromium, and exact-key
+Broker, balanced by committed measured method durations, and verified
+per-shard TRX receipts. NuGet, Chromium, and exact-key
 installed web dependency caches avoid
 repeated downloads and installs, without caching mutable databases, browser contexts, or build output.
 PR, push, and manual CI runs never collect coverage. The weekly

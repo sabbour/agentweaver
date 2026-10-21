@@ -139,31 +139,147 @@ exposes project configuration and run-selection operations.
 | GET | `/` | Read; unbound token | List visible tenant projects. | Yes, empty suffix |
 | GET | `/{projectId}` | Read; exact signed run when `runId` is supplied | Read project metadata. | Yes |
 | PATCH | `/{projectId}` | Admin | Update name and lifecycle at `expectedRevision`. | Yes |
+| GET | `/{projectId}/role-assignments` | Read; unbound token, TenantAdmin or project Owner | List active project role assignments. | Yes |
+| POST | `/{projectId}/role-assignments` | Admin; unbound token, TenantAdmin | Assign a project role to a tenant member. | Yes |
+| DELETE | `/{projectId}/role-assignments/{assignmentId:guid}` | Admin; unbound token, TenantAdmin | Revoke an assignment at `expectedRevision`. | Yes |
 | GET | `/{projectId}/configuration` | Read | Read current or requested `revision`. | Yes |
 | PUT | `/{projectId}/configuration` | Admin | Append validated configuration. | Yes |
-| POST | `/{projectId}/casting/proposals` | Admin | Create a reviewed casting proposal. | No |
-| POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | No |
-| POST | `/{projectId}/casting/proposals/manual` | Admin | Create a manual proposal. | No |
-| GET | `/{projectId}/casting/proposals` | Read | List proposals. | No |
-| GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | No |
-| PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | No |
-| POST | `/{projectId}/casting/proposals/{proposalId:guid}/confirm` | Admin | Confirm reviewed casting. | No |
-| POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | No |
-| GET | `/{projectId}/casting/export` | Admin | Export casting configuration. | No |
-| POST | `/{projectId}/casting/import` | Admin | Validate and import casting. | No |
+| POST | `/{projectId}/casting/proposals` | Admin | Stage a complete configuration draft for review. | Yes |
+| POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | Yes |
+| POST | `/{projectId}/casting/proposals/manual` | Admin | Create a manual proposal. | Yes |
+| GET | `/{projectId}/casting/proposals` | Read | List proposals with optional `limit` (1–100, default 50). | Yes |
+| GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | Yes |
+| PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | Yes |
+| POST | `/{projectId}/casting/proposals/{proposalId:guid}/confirm` | Admin | Confirm reviewed casting. | Yes |
+| POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | Yes |
+| GET | `/{projectId}/casting/export` | Admin | Export current casting or optional positive `revision`. | Yes |
+| POST | `/{projectId}/casting/import` | Admin | Stage a digest-checked transfer; request body limit 1 MiB. | Yes |
 | PUT | `/{projectId}/runs/{runId}/selection` | Selection | Accept an immutable run selection. | Yes |
 | GET | `/{projectId}/runs/{runId}/selection` | Selection | Read the accepted selection. | Yes |
+
+### Project role assignments
+
+These routes manage who holds the Owner, Contributor, Viewer, and
+Orchestrator roles on one project. Gateway operation IDs are
+`listProjectRoleAssignments`, `assignProjectRole`, and
+`revokeProjectRoleAssignment`. Every response sets `Cache-Control: no-store`.
+None of the routes accept idempotency keys. A repeated assign request returns
+`409 role_assignment_exists`, and a repeated revoke request returns
+`409 revision_conflict`.
+
+**Authorization.** The request token must be unbound: no project, run, or
+purpose binding.
+
+- To list, the caller needs the `api.read` scope and either the current
+  TenantAdmin role for the tenant or the Owner role on the project.
+- To assign or revoke, the caller needs the `api.read` and `projects.admin`
+  scopes and the current TenantAdmin role. A project Owner can't change
+  roles. The service share-locks the caller's membership and checks the
+  exact TenantAdmin assignment and revision in the same serializable
+  transaction as the change. Each change writes an `authority_audit` row in
+  that transaction.
+
+**List.** `GET /api/v1/projects/{projectId}/role-assignments` accepts no query
+parameters and returns `200` with only active assignments:
+
+```json
+{
+  "projectId": "string",
+  "assignments": [
+    {
+      "assignmentId": "uuid",
+      "principalId": "string",
+      "role": "owner | contributor | viewer | orchestrator",
+      "revision": 1,
+      "createdBy": "string",
+      "createdAt": "date-time"
+    }
+  ]
+}
+```
+
+`principalId` is the member's subject under the caller's issuer.
+`createdBy` is the subject of the tenant admin who made the assignment.
+Assignments are sorted by role, then by `principalId`.
+
+**Assign.** `POST /api/v1/projects/{projectId}/role-assignments` accepts a
+strict JSON body and no query parameters:
+
+```json
+{ "principalId": "string", "role": "owner | contributor | viewer | orchestrator" }
+```
+
+The principal must have an active membership in the caller's tenant. The
+route returns `201` with a `Location` header and this body:
+
+```json
+{
+  "assignmentId": "uuid",
+  "projectId": "string",
+  "principalId": "string",
+  "role": "orchestrator",
+  "state": "active",
+  "revision": 1,
+  "grantedBy": "string",
+  "grantedAt": "date-time",
+  "revokedBy": null,
+  "revokedAt": null
+}
+```
+
+**Revoke.** `DELETE /api/v1/projects/{projectId}/role-assignments/{assignmentId}?expectedRevision=N`
+requires one unsigned integer `expectedRevision`. It returns `200` with the
+same assignment shape, with `state` set to `revoked` and the revision
+increased by one. The last active Owner of an active project can't be
+revoked. After the project is archived, a tenant admin can revoke its last
+Owner.
+
+| Status | Problem code | Meaning |
+| --- | --- | --- |
+| `400` | `invalid_request`, `invalid_project_role`, `invalid_principal_id`, `invalid_expected_revision` | The query, role, principal ID, or revision isn't valid. |
+| `403` | `forbidden` | The token or current role doesn't allow the operation. |
+| `404` | `not_found`, `principal_not_found` | The project, assignment, or tenant member doesn't exist for the caller. |
+| `409` | `role_assignment_exists`, `project_archived`, `last_project_owner`, `revision_conflict` | The current state doesn't allow the change. |
+| `503` | `role_assignment_unavailable` | The runtime database grants for assign and revoke aren't applied. See [Runtime authority writes](runtime-configuration.md#runtime-authority-writes). |
+
+> [!NOTE]
+> The web client's existing `assignProjectRole` and `revokeProjectRoleAssignment`
+> calls in `apps/web/src/api/client.ts` send snake_case fields and read a
+> `GET /projects/{projectId}/access` route that doesn't exist. The web client
+> must use the contract on this page.
 
 ### Catalog and platform routes
 
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | GET | `/api/authorization/context` | Bearer; `api.read`, non-purpose token | Read current authority. | `/api/v1/authorization/context` |
-| GET | `/api/casting/templates` | Bearer | Read built-in casting templates. | No |
-| GET | `/api/catalog/roles` | Bearer | Read built-in roles. | No |
+| GET | `/api/casting/templates` | Bearer | Read built-in casting templates. | `/api/v1/casting/templates` |
+| GET | `/api/catalog/roles` | Bearer | Read built-in roles. | `/api/v1/catalog/roles` |
 | GET | `/api/platform/runtime-defaults/` | `api.read`, `projects.admin`, unbound PlatformAdmin | Read platform runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | PUT | `/api/platform/runtime-defaults/` | Same PlatformAdmin authority | Append runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
+
+### Casting through the Gateway
+
+All casting routes forward the original bearer and optional
+`X-Agentweaver-Tenant` selector to Projects & Config. The owner enforces
+`ReadProjects` for proposal reads and `WriteProjects` for mutations **and
+export**. Writes and export require `api.read`, `projects.admin`, and current
+TenantAdmin or project Owner authority. Catalog reads require authentication.
+No new roles or idempotency headers are introduced.
+
+Create requests carry `expectedConfigurationRevision` and either `draft`,
+`templateId`, or `roleIds`. Patch carries `expectedDraftRevision` and `draft`.
+Confirm and reject carry `expectedDraftRevision`. Confirmation also checks the
+proposal's base configuration revision. A stale revision returns `409`; rejection
+does not change configuration. Import accepts `expectedConfigurationRevision`
+and `transfer` and creates a pending proposal, not an applied configuration.
+Gateway and owner import request bodies are limited to 1,048,576 bytes.
+Unsupported transfer versions or incompatible teams return `422`.
+
+See [casting contracts](./contracts.md#casting-proposals-and-transfers) for
+response fields and [Use the Gateway](../guide/gateway.md#review-project-casting)
+for the review sequence.
 
 ### Skills
 

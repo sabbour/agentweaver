@@ -120,6 +120,10 @@ Use these routes to browse and select Skills:
   `expectedSourceRevision`; selected-content preview and import reject query
   parameters.
 - Inline Skill preview and import request bodies are limited to 3 MiB.
+  The Gateway buffers every explicitly bounded route before contacting its
+  owner, including these skill-content routes and requests without
+  `Content-Length`. Oversized requests return `413` with
+  `request_body_too_large` and are not forwarded.
   Marketplace-selected preview and import use the same request-body limit.
 
 The owner remains authoritative for permission checks, revision validation,
@@ -145,6 +149,46 @@ The owner checks the caller's current project or tenant read permission with
 Projects & Config. A run-bound token sees only its own run. The list reads
 persisted run records only. `title` and `goal` are `null` until a run start
 request stores them.
+
+## Review project casting
+
+Casting routes use the Projects & Config owner. The Gateway forwards the
+validated bearer and optional `X-Agentweaver-Tenant` selector without granting
+authority. Proposal reads require current `ReadProjects`; mutations and export
+require current `WriteProjects`, including `api.read` and `projects.admin`.
+Catalog reads require an authenticated bearer.
+
+1. Read `GET /api/v1/casting/templates` or `GET /api/v1/catalog/roles`.
+2. Read the current project configuration revision.
+3. Send `POST /api/v1/projects/{projectId}/casting/proposals/scenario` with
+   `expectedConfigurationRevision` and `templateId`. For manual selection, use
+   `/proposals/manual` with `roleIds`. To supply a complete draft, use
+   `/proposals` with `draft`.
+4. Review the returned pending proposal. List proposals with `GET /proposals`
+   and optional `limit` (1 through 100, default 50). Read or patch one at
+   `/proposals/{proposalId}`; patch requires `expectedDraftRevision` and `draft`.
+5. Send `POST /proposals/{proposalId}/confirm` or `/reject` with
+   `expectedDraftRevision`. Confirmation appends a configuration revision;
+   rejection leaves configuration unchanged.
+
+The proposal paths in steps 4 and 5 are relative to
+`/api/v1/projects/{projectId}/casting`. A stale draft or base configuration
+revision returns `409`. Read the latest state and review it again; do not
+automatically confirm a replacement draft. Casting uses revision checks in
+request bodies, not an `Idempotency-Key` header.
+The owner returns `403` when the caller lacks current `WriteProjects`
+authority for a casting write, including confirm, reject, and import.
+
+To transfer a team, read `/casting/export` under the project path, optionally
+with a positive `revision`. Send the returned transfer to `/casting/import`
+with the target `expectedConfigurationRevision`. Import checks the format and
+digest and stages a proposal for review. It does not apply the team. Both the
+Gateway and owner limit import request bodies to 1 MiB. The Gateway checks
+the complete body before forwarding, including requests without
+`Content-Length`. Larger bodies return `413` without contacting the owner.
+Transfer version or
+team incompatibility returns `422`. These source routes do not establish
+deployment or a browser wizard.
 
 ## Send Knowledge writes
 
