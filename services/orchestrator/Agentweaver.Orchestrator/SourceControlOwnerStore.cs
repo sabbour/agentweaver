@@ -38,6 +38,92 @@ internal sealed class SourceControlOwnerStore(
     private string Intents => $"{_schema}.source_control_merge_intents";
     private string Grants => $"{_schema}.executable_action_grants";
     private string OutputCaptures => $"{_schema}.source_control_output_captures";
+    private string PullRequestRecords => $"{_schema}.source_control_pull_requests";
+
+    /// <summary>
+    /// Records a pull request that the pinned run created or reused, for the stored project pull request list.
+    /// </summary>
+    /// <returns>True when the row was written; false when migration 032 isn't applied yet.</returns>
+    /// <remarks>
+    /// The write is an upsert keyed by project, run, pin, and pull request number, so a retried create or
+    /// reuse is idempotent. It refreshes the title, URL, state, branches, and commits. A row recorded as
+    /// <c>created</c> stays <c>created</c>, and <c>recorded_at</c> never changes. State is <c>merged</c>
+    /// when the provider reports a merge, and otherwise the provider's open or closed state.
+    /// </remarks>
+    public async Task<bool> RecordPullRequestAsync(
+        SourceControlRepositoryPin pin,
+        SourceControlPullRequest pullRequest,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(pin);
+        ArgumentNullException.ThrowIfNull(pullRequest);
+        // Store merged as its own state so the list can filter it. Providers report a merged pull
+        // request as closed, so the Merged flag wins. Any other provider state is rejected rather
+        // than stored as an unknown value.
+        var state = pullRequest.Merged ? "merged" : pullRequest.State.ToLowerInvariant();
+        if (state is not ("open" or "closed" or "merged"))
+            throw new ArgumentException("The pull request state can't be recorded.", nameof(pullRequest));
+        // Provenance: record whether this run opened the pull request or found an existing one.
+        var disposition = pullRequest.Disposition switch
+        {
+            SourceControlPullRequestDisposition.Created => "created",
+            SourceControlPullRequestDisposition.Reused => "reused",
+            _ => throw new ArgumentException("Only created or reused pull requests are recorded.", nameof(pullRequest))
+        };
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        if (await SourceControlPullRequestRecords.ReadCoverageStartAsync(
+                connection, _schema, cancellationToken).ConfigureAwait(false) is null)
+            // Migration 032 isn't applied, so there is no table. Skip the write; the create or reuse
+            // result is still returned to the caller unchanged.
+            return false;
+        // Upsert on the natural key. A retry or later reuse refreshes the provider fields. Two rules
+        // keep provenance stable: "created" is never downgraded to "reused", and recorded_at is set
+        // only on insert, so list order doesn't change. updated_at never goes below recorded_at,
+        // even if the database clock moves backward.
+        await using var command = new NpgsqlCommand($"""
+            INSERT INTO {PullRequestRecords} (
+                project_id, run_id, pin_id, provider_id, repository_owner, repository_name,
+                pull_request_number, html_url, title, state, head_branch, head_sha, base_branch, base_sha,
+                disposition, recorded_at, updated_at)
+            VALUES (
+                @project, @run, @pin, @provider, @owner, @name,
+                @number, @url, @title, @state, @headBranch, @headSha, @baseBranch, @baseSha,
+                @disposition, clock_timestamp(), clock_timestamp())
+            ON CONFLICT (project_id, run_id, pin_id, pull_request_number) DO UPDATE SET
+                html_url = EXCLUDED.html_url,
+                title = EXCLUDED.title,
+                state = EXCLUDED.state,
+                head_branch = EXCLUDED.head_branch,
+                head_sha = EXCLUDED.head_sha,
+                base_branch = EXCLUDED.base_branch,
+                base_sha = EXCLUDED.base_sha,
+                disposition = CASE
+                    WHEN {PullRequestRecords}.disposition = 'created' THEN 'created'
+                    ELSE EXCLUDED.disposition
+                END,
+                updated_at = greatest(clock_timestamp(), {PullRequestRecords}.recorded_at)
+            """, connection);
+        // Project and run come from the accepted pin, not from the provider result, so a record is
+        // always tied to the run that owns the repository pin.
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, pin.AcceptedRun.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, pin.AcceptedRun.RunId);
+        command.Parameters.AddWithValue("pin", NpgsqlDbType.Varchar, pin.PinId);
+        command.Parameters.AddWithValue("provider", NpgsqlDbType.Varchar, pin.ProviderBinding.ProviderId);
+        command.Parameters.AddWithValue("owner", NpgsqlDbType.Varchar, pin.Repository.Owner);
+        command.Parameters.AddWithValue("name", NpgsqlDbType.Varchar, pin.Repository.Name);
+        command.Parameters.AddWithValue("number", NpgsqlDbType.Bigint, pullRequest.Number);
+        command.Parameters.AddWithValue("url", NpgsqlDbType.Varchar, pullRequest.HtmlUrl.AbsoluteUri);
+        command.Parameters.AddWithValue("title", NpgsqlDbType.Text, (object?)pullRequest.Title ?? DBNull.Value);
+        command.Parameters.AddWithValue("state", NpgsqlDbType.Varchar, state);
+        command.Parameters.AddWithValue("headBranch", NpgsqlDbType.Varchar, pullRequest.HeadBranch);
+        command.Parameters.AddWithValue("headSha", NpgsqlDbType.Varchar, pullRequest.HeadSha);
+        command.Parameters.AddWithValue("baseBranch", NpgsqlDbType.Varchar, pullRequest.BaseBranch);
+        command.Parameters.AddWithValue("baseSha", NpgsqlDbType.Varchar, pullRequest.BaseSha);
+        command.Parameters.AddWithValue("disposition", NpgsqlDbType.Varchar, disposition);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
 
     /// <summary>
     /// Creates a stable bounded merge-intent identifier from project, run, session, and idempotency key without embedding the key.

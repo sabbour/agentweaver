@@ -463,6 +463,131 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
     }
 
     [Fact]
+    public async Task RecordsCreatedAndReusedPullRequestsOnlyAfterOptionalMigrationAndListsThemByProvenance()
+    {
+        var schema = "source_control_" + Guid.NewGuid().ToString("N");
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, schema);
+        try
+        {
+            var actor = new CoordinationActor("https://identity.example/", Guid.NewGuid().ToString("D"));
+            var (firstPin, sourceStore) = await PersistRunPinAsync(schema, actor, "tenant-1");
+            var list = new ProjectPullRequestReadStore(fixture.DataSource, schema);
+            Assert.False(await sourceStore.RecordPullRequestAsync(
+                firstPin, PullRequest() with { Disposition = SourceControlPullRequestDisposition.Created },
+                CancellationToken.None));
+            Assert.Equal("pull_request_records_unavailable", (await Assert.ThrowsAsync<CoordinationException>(
+                () => list.ListAsync("tenant-1", "project-1", null, "all", null, 25, default))).Code);
+
+            await CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync(fixture.DataSource, schema);
+            await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, schema);
+            var (secondPin, _) = await PersistRunPinAsync(schema, actor, "tenant-1");
+            var (otherTenantPin, _) = await PersistRunPinAsync(schema, actor, "tenant-2");
+
+            Assert.True(await sourceStore.RecordPullRequestAsync(firstPin, PullRequest() with
+            {
+                Title = "First title",
+                Disposition = SourceControlPullRequestDisposition.Created
+            }, CancellationToken.None));
+            var created = Assert.Single((await list.ListAsync(
+                "tenant-1", "project-1", null, "all", null, 25, default)).Items);
+            Assert.True(await sourceStore.RecordPullRequestAsync(firstPin, PullRequest() with
+            {
+                Title = "Updated title",
+                State = "closed",
+                HeadSha = new string('c', 40),
+                Disposition = SourceControlPullRequestDisposition.Reused
+            }, CancellationToken.None));
+            Assert.True(await sourceStore.RecordPullRequestAsync(secondPin, PullRequest() with
+            {
+                Number = 13,
+                HtmlUrl = new Uri("https://github.com/octo/repo/pull/13"),
+                State = "closed",
+                Merged = true,
+                Disposition = SourceControlPullRequestDisposition.Reused
+            }, CancellationToken.None));
+            Assert.True(await sourceStore.RecordPullRequestAsync(otherTenantPin, PullRequest() with
+            {
+                Number = 14,
+                HtmlUrl = new Uri("https://github.com/octo/repo/pull/14"),
+                Disposition = SourceControlPullRequestDisposition.Created
+            }, CancellationToken.None));
+            await Assert.ThrowsAsync<ArgumentException>(() => sourceStore.RecordPullRequestAsync(
+                firstPin, PullRequest(), CancellationToken.None));
+
+            var first = await list.ListAsync("tenant-1", "project-1", null, "all", null, 1, default);
+            var merged = Assert.Single(first.Items);
+            Assert.Equal(13, merged.Number);
+            Assert.Equal("merged", merged.State);
+            Assert.Equal("reused", merged.Disposition);
+            Assert.Equal(secondPin.AcceptedRun.RunId, merged.RunId);
+            Assert.Null(merged.Title);
+            Assert.False(first.Coverage.IncludesEarlierPullRequests);
+            Assert.True(first.Coverage.RecordedSince <= merged.RecordedAt);
+            Assert.NotNull(first.NextCursor);
+
+            var second = await list.ListAsync("tenant-1", "project-1", null, "all", first.NextCursor, 1, default);
+            var reused = Assert.Single(second.Items);
+            Assert.Null(second.NextCursor);
+            Assert.Equal(12, reused.Number);
+            Assert.Equal("Updated title", reused.Title);
+            Assert.Equal("closed", reused.State);
+            Assert.Equal(new string('c', 40), reused.HeadSha);
+            Assert.Equal("created", reused.Disposition);
+            Assert.Equal(created.RecordedAt, reused.RecordedAt);
+            Assert.True(reused.UpdatedAt >= reused.RecordedAt);
+            Assert.Equal(firstPin.AcceptedRun.RunId, reused.RunId);
+            Assert.Equal(new ProjectSourceControlRepository("octo", "repo"), reused.Repository);
+            Assert.Equal(new Uri("https://github.com/octo/repo/pull/12"), reused.HtmlUrl);
+            Assert.Equal(("feature", "main", new string('b', 40)), (reused.HeadBranch, reused.BaseBranch, reused.BaseSha));
+
+            Assert.Empty((await list.ListAsync("tenant-1", "project-1", null, "open", null, 25, default)).Items);
+            Assert.Equal([12L], (await list.ListAsync("tenant-1", "project-1", null, "closed", null, 25, default))
+                .Items.Select(item => item.Number));
+            Assert.Equal([13L], (await list.ListAsync("tenant-1", "project-1", null, "merged", null, 25, default))
+                .Items.Select(item => item.Number));
+            Assert.Equal([12L], (await list.ListAsync(
+                "tenant-1", "project-1", firstPin.AcceptedRun.RunId, "all", null, 25, default))
+                .Items.Select(item => item.Number));
+            Assert.Equal([14L], (await list.ListAsync("tenant-2", "project-1", null, "all", null, 25, default))
+                .Items.Select(item => item.Number));
+
+            foreach (var mismatch in new Func<Task>[]
+            {
+                () => list.ListAsync("tenant-1", "project-1", null, "all", first.NextCursor, 2, default),
+                () => list.ListAsync("tenant-1", "project-1", null, "closed", first.NextCursor, 1, default),
+                () => list.ListAsync("tenant-1", "project-2", null, "all", first.NextCursor, 1, default)
+            })
+                Assert.Equal("cursor_invalid", (await Assert.ThrowsAsync<CoordinationException>(mismatch)).Code);
+        }
+        finally
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", connection);
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+
+    private async Task<(SourceControlRepositoryPin Pin, SourceControlOwnerStore Store)> PersistRunPinAsync(
+        string schema, CoordinationActor actor, string tenantId)
+    {
+        var selection = CreateSelection(actor, tenantId);
+        var identity = new SessionIdentity(selection.Selection.ProjectId, selection.Selection.RunId, "root");
+        await new CoordinationOwnerStore(fixture.DataSource, schema).AcceptRootAsync(
+            actor, selection, identity.SessionId, CancellationToken.None);
+        var providerCatalog = CreateSourceControlCatalog();
+        var providerResolver = new ProviderResolver(providerCatalog);
+        var selectionContexts = new CoordinatorRunSelectionContextStore(
+            fixture.DataSource, schema, providerCatalog, providerResolver, []);
+        var decisions = new CoordinatorDecisionOwnerStore(
+            fixture.DataSource, schema, selectionContexts, TimeProvider.System);
+        var current = await decisions.InitializeRootAsync(actor, identity, selection, CancellationToken.None);
+        var pin = CreatePin(CreateAcceptedRun(actor, identity, selection, current.State.Fence), providerResolver);
+        var store = new SourceControlOwnerStore(fixture.DataSource, schema, providerCatalog, providerResolver);
+        return (await store.PersistRepositoryPinAsync(
+            actor, identity, selection, pin, current.StateVersion, CancellationToken.None), store);
+    }
+
+    [Fact]
     public async Task PersistsGitHubAppIssueWriteGrantAcrossOwnerStoreReadback()
     {
         var schema = "source_control_app_" + Guid.NewGuid().ToString("N");
@@ -555,7 +680,7 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
         return false;
     }
 
-    private static AuthorizedRunSelection CreateSelection(CoordinationActor actor)
+    private static AuthorizedRunSelection CreateSelection(CoordinationActor actor, string tenantId = "tenant-1")
     {
         using var document = JsonDocument.Parse("""{"source":"projects-config"}""");
         var runId = Guid.NewGuid().ToString("D");
@@ -573,7 +698,7 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                 1,
                 actor.Issuer,
                 actor.Subject,
-                "tenant-1",
+                tenantId,
                 1,
                 effective.ProjectId,
                 effective.RunId,

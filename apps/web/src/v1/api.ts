@@ -1,5 +1,5 @@
 import { gatewayBaseUrl } from './config';
-import { isProjectAuthorizationContextResponse } from './contracts';
+import { isProjectAuthorizationContextResponse, isRemoteMcpConnectionDirectoryPage } from './contracts';
 import type {
   CopilotAuthorizationCallback,
   CopilotConnectionBegin,
@@ -37,6 +37,7 @@ import type {
   SkillContentImportRequest,
   SkillContentPreview,
   ProjectSummary,
+  RemoteMcpConnectionDirectoryPage,
   RemoteMcpOAuthCallbackRequest,
   RemoteMcpOAuthConsentPreparation,
   RemoteMcpOAuthConsentRequest,
@@ -469,6 +470,33 @@ export class AgentweaverGatewayClient {
       this.baseUrl,
       tenantSelector,
     );
+  }
+
+  /** Lists the project's Remote MCP connections with configuration checksums. */
+  async listRemoteMcpConnections(
+    token: string,
+    projectId: string,
+    options: { pageSize?: number; after?: string } = {},
+    tenantSelector?: string | null,
+  ): Promise<RemoteMcpConnectionDirectoryPage> {
+    // Send only the paging options the caller set, so the Gateway applies its own defaults.
+    const query = new URLSearchParams();
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    if (options.after !== undefined) query.set('after', options.after);
+    const suffix = query.toString();
+    const page = await this.request<unknown>(
+      token,
+      `/projects/${encodeSegments(projectId, 'remote-mcp', 'connections')}${suffix ? `?${suffix}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    // Check the response shape before use. A malformed owner response is reported as a 502, the same
+    // as other owner failures, rather than reaching the UI as untyped data.
+    if (!isRemoteMcpConnectionDirectoryPage(page)) {
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The Remote MCP connection list is not valid.');
+    }
+    return page;
   }
 
   /** Changes a skill assignment and returns the resulting versioned configuration. */

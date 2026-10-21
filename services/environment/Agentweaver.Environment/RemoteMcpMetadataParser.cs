@@ -144,8 +144,48 @@ internal static class RemoteMcpMetadataParser
             selectedEndpoint);
     }
 
-    /// <summary>Validates and pins a bounded tools/list response, rejecting duplicate names and invalid schemas.</summary>
+    /// <summary>
+    /// Validates and pins a complete single-page tools/list response. A response that has a
+    /// nextCursor is rejected, because a partial catalog must never be pinned.
+    /// </summary>
     internal static RemoteMcpParsedToolCatalog ParseToolsList(ReadOnlyMemory<byte> utf8Json)
+    {
+        // This entry point is for callers that have exactly one page. A continuation cursor means the
+        // server holds more tools, and pinning only the first page would hide them from review.
+        var page = ParseToolsListPage(utf8Json);
+        if (page.NextCursor is not null)
+            throw Invalid("MCP tools/list response has more pages; use paged discovery.");
+        return BuildCatalog(page.Tools);
+    }
+
+    /// <summary>Combines validated tools/list pages into one sorted, digest-pinned catalog.</summary>
+    internal static RemoteMcpParsedToolCatalog BuildCatalog(IEnumerable<RemoteMcpToolSchemaPin> tools)
+    {
+        ArgumentNullException.ThrowIfNull(tools);
+        // Sort by ordinal name so the digest doesn't depend on the order the server returned pages or tools.
+        var orderedTools = tools.OrderBy(tool => tool.Name, StringComparer.Ordinal).ToImmutableArray();
+        // Each page is checked on its own, so check the combined total here too.
+        if (orderedTools.Length > MaximumTools)
+            throw Invalid("MCP tools/list result exceeded the tool limit.");
+        // After sorting, duplicates sit next to each other. A name repeated across pages is rejected,
+        // because a reviewer can't tell which definition a call would use.
+        for (var index = 1; index < orderedTools.Length; index++)
+        {
+            if (string.Equals(orderedTools[index - 1].Name, orderedTools[index].Name, StringComparison.Ordinal))
+                throw Invalid("MCP tools/list result contains duplicate tool names.");
+        }
+
+        // The catalog digest covers each name and tool revision. A NUL separates name from revision and a
+        // newline separates tools; neither can appear in a valid name, so two catalogs can't share material.
+        var catalogMaterial = string.Join(
+            '\n',
+            orderedTools.Select(tool => $"{tool.Name}\0{tool.ToolRevision}"));
+        var catalogDigest = RemoteMcpDigest.Sha256(Encoding.UTF8.GetBytes(catalogMaterial));
+        return new(orderedTools, catalogDigest);
+    }
+
+    /// <summary>Validates one bounded tools/list page and returns its tools and optional continuation cursor.</summary>
+    internal static RemoteMcpToolsListPage ParseToolsListPage(ReadOnlyMemory<byte> utf8Json)
     {
         using var document = ParseDocument(utf8Json);
         var root = RequireObject(document.RootElement, "MCP tools/list response");
@@ -183,12 +223,22 @@ internal static class RemoteMcpMetadataParser
             tools.Add(new(name, description, schemaJson, schemaDigest, toolRevision));
         }
 
-        var orderedTools = tools.OrderBy(tool => tool.Name, StringComparer.Ordinal).ToImmutableArray();
-        var catalogMaterial = string.Join(
-            '\n',
-            orderedTools.Select(tool => $"{tool.Name}\0{tool.ToolRevision}"));
-        var catalogDigest = RemoteMcpDigest.Sha256(Encoding.UTF8.GetBytes(catalogMaterial));
-        return new(orderedTools, catalogDigest);
+        // A missing or null nextCursor ends paging. A present cursor is sent back to the server on the
+        // next request, so it gets the same length and control-character limits as a caller cursor.
+        string? nextCursor = null;
+        if (result.TryGetProperty("nextCursor", out var cursor) && cursor.ValueKind != JsonValueKind.Null)
+        {
+            if (cursor.ValueKind != JsonValueKind.String)
+                throw Invalid("MCP tools/list nextCursor must be a string or null.");
+            nextCursor = cursor.GetString();
+            if (nextCursor is { Length: > MaximumCursorLength } || nextCursor?.Any(char.IsControl) == true)
+                throw Invalid("MCP tools/list nextCursor exceeded its length limit or contained control characters.");
+            // Some servers send an empty string on the last page. Treat it as the end of paging.
+            if (string.IsNullOrEmpty(nextCursor))
+                nextCursor = null;
+        }
+
+        return new(tools.ToImmutable(), nextCursor);
     }
 
     private static JsonDocument ParseDocument(ReadOnlyMemory<byte> utf8Json)
@@ -287,6 +337,11 @@ internal sealed record RemoteMcpRegistryServerSelection(
     RemoteMcpRegistryServerPin Server,
     ImmutableArray<string> AdvertisedEndpoints,
     string SelectedEndpointUri);
+
+/// <summary>One validated tools/list page and its optional continuation cursor.</summary>
+internal sealed record RemoteMcpToolsListPage(
+    ImmutableArray<RemoteMcpToolSchemaPin> Tools,
+    string? NextCursor);
 
 /// <summary>Validated tool schemas and the digest used to pin one Remote MCP discovery result.</summary>
 internal sealed record RemoteMcpParsedToolCatalog(

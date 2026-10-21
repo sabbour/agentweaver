@@ -7,6 +7,67 @@ describes source receipts, target guards, and the separate #1784 runtime gate.
 
 ## Offline validation
 
+Issue sync adds Orchestrator `027_periodic_issue_sync.sql`, requiring the
+backlog contract's 026, and Identity Broker
+`20261021000100_AddIssueSyncGrants`. They are **unapplied code-only migrations**.
+Orchestrator requires exactly `SELECT, INSERT, UPDATE` on `issue_sync_projects`
+and `issue_sync_receipts`; Identity requires exactly `SELECT, INSERT, UPDATE`
+on `identity_broker.issue_sync_grants`, and `SELECT, INSERT` only on
+`identity_broker.issue_sync_mint_audit`. No new DELETE, default privilege,
+schema CREATE or authority function EXECUTE is granted. These database grants,
+the new Core plan hash, service TLS configuration, and live application-level
+issue-sync grant creation remain separate approval items. Source validation
+does not perform a migration, grant or deployment action.
+The offline plan hash for this source catalog is
+`ba035fd7a50bc742e7e550676e2ba7d7e88e3f9729bdd9537017781a1940e898`.
+It is not an approval receipt. The runner uses its explicit registered version
+list, not contiguous numbering; the absent 017 does not require a
+placeholder. The Core list is 1-16, 18-30. Version 027 requires 026 only.
+Version 028 adds the append-only `guardrails_evaluations` table. It requires
+027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
+plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
+**unapplied code-only migration**.
+Version 029 adds the `spend_budget_reservations` and
+`spend_budget_accounting_cursors` tables for spend budget enforcement. It
+requires 028 and needs exactly `SELECT, INSERT, UPDATE` on both tables, with no
+DELETE. It is an **unapplied code-only migration**.
+
+Orchestrator migration `032_source_control_pull_request_records.sql` adds the
+`source_control_pull_requests` table for the project pull request list. It
+requires migration 012. It is an **unapplied code-only migration** that is
+**not** in the Core list, the default migrator, startup, or the P1 initializer,
+so the plan hash above doesn't change. Startup verification accepts a schema
+with or without it, but not a partial apply. The only apply path is
+`CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync`, which nothing calls
+yet. Applying it needs separate live approval and the planned grant of exactly
+`SELECT, INSERT, UPDATE` on `orchestrator.source_control_pull_requests`. Until
+then, the pull request list returns `503 pull_request_records_unavailable`.
+
+Orchestrator migration `026_backlog_task_content.sql` adds task content,
+open/closed lifecycle and a unique repository issue identity. It requires
+migration 021 and has no schema dependency on migration 025, which requires
+only migration 002. The migrator applies missing registered versions in
+ascending order. It takes an
+`ACCESS EXCLUSIVE` lock on `backlog_tasks` and blocks writes until commit.
+It adds no tables or runtime privileges: existing `SELECT, INSERT, UPDATE`
+grants on `backlog_tasks` and `backlog_projects` remain sufficient.
+The Core version list changes the PostgreSQL plan hash. Applying migration
+026, reconciling existing grants, and accepting the new exact plan hash are
+separate, unapplied operator steps that require approval. Source checks do
+not authorize or perform them.
+
+Orchestrator migration `030_backlog_task_origin.sql` adds the
+`backlog_plan_promotions` and `backlog_task_origins` tables. They record
+each promotion of a confirmed work plan into backlog tasks and the origin of
+each promoted task. The migration does not alter `backlog_tasks`. Its foreign
+keys take `SHARE ROW EXCLUSIVE` locks on `backlog_projects`,
+`backlog_tasks`, and `coordination_sessions`, which block writes to those
+tables until commit. The plan grants the orchestrator role exactly
+`SELECT, INSERT` on both new tables, with no `UPDATE`, `DELETE`, or default
+privileges. Migration 030 must be applied before the promotion routes work.
+Applying it, granting those privileges, and accepting the new exact plan hash
+are separate operator steps that require approval.
+
 Run these commands from the repository root:
 
 ```powershell
@@ -97,8 +158,24 @@ This command is an operator procedure, not a command run by local source checks
 or by merging a pull request. The template requires the storage account and
 identity to exist before deployment.
 
-### P1 PostgreSQL initializer source proposal
+### P1 PostgreSQL initializer status
 
+The approved database is already initialized. The operator record shows that
+`--continue-after-projects-config` completed on 2026-10-15 and reached its final
+stage, `continuation_all_runtime_grants_committed`. That run used source
+`c24d0000fe5fc6163e4f38594c39dff782d3a46d`, Core merge
+`b9ff7debcb00417d64e00200a5e583d0e141583d`, and plan hash
+`a056bf074940b858b7eb05c78c7e96e2e6663d5b7ea291d99997eaccbbf073c8`.
+
+That plan is older than the current migration catalog. Treat it as the
+starting state only: it does not show that any later migration ran. To see the
+live versions, use `--inspect`. To add later approved versions, use
+`--apply-pending-migrations`, described in
+[Applying later approved migrations](#applying-later-approved-migrations).
+Never run `--initialize` against this database, because it requires an empty
+target.
+
+The attempts below preceded that run and are kept as history.
 Earlier initializer attempts did not complete successfully against the approved database.
 An earlier attempt from source `8476c16337fa015031124196d57979159eca1958`
 stopped during live preflight after recording `fresh_target_checked`, before
@@ -143,10 +220,40 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 21.
-These are 20 registered versions; version 17 remains excluded.
-Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan retains 95 tables and eight exact row-lock columns.
+The source catalog requires Core versions 1 through 16 and 18 through 30.
+These are 29 registered versions; version 17 remains excluded.
+Version 22 adds the run completion time. It needs no new grant because the
+runtime role already has table-level UPDATE on `accepted_runs`.
+Version 23 adds durable interactive requests, cancellation receipts,
+`cancelled_at`, and the `cancelled` state. Its runtime grants are
+`SELECT,INSERT,UPDATE` on `project_run_requests` and `SELECT,INSERT` on
+`project_run_cancellations`. Its execution-state CHECK validation scans
+`accepted_runs`. Its `ACCESS EXCLUSIVE` lock blocks reads and writes to `accepted_runs`
+until the migration transaction commits. It doesn't alter `sessions` or build indexes on
+existing tables. Review the table size and plan a write pause.
+Version 24 adds private Chief of Staff conversations and Priorities in four new,
+empty tables. It doesn't alter or scan existing tables. Its runtime grants are
+`SELECT,INSERT` on `chief_of_staff_conversations`, `SELECT,INSERT,UPDATE` on
+`chief_of_staff_priority_lists` and `chief_of_staff_priorities`, and
+`SELECT,INSERT,DELETE` on `chief_of_staff_priority_links`.
+Version 25 adds the empty `user_notification_dismissals` table. Its only
+predecessor is version 2, which creates `coordinator_gates`. It doesn't alter or
+scan existing tables. Its runtime grant is `SELECT,INSERT` on that table.
+Version 26 adds backlog task content columns and a unique repository issue index.
+It requires version 21, adds no tables or grants, and blocks writes to
+`backlog_tasks` until commit.
+Version 30 adds the empty `backlog_plan_promotions` and `backlog_task_origins`
+tables. It requires version 26 and doesn't alter existing tables. The migrator
+applies it after version 29 because it follows catalog order. Its foreign keys
+take `SHARE ROW EXCLUSIVE` locks that block writes to `backlog_projects`,
+`backlog_tasks`, and `coordination_sessions` until commit. Its runtime grant is
+`SELECT,INSERT` on each new table.
+Events requires versions 1 through 9 and preserves the earlier version-2 layout.
+The initializer compares each plan catalog with the migrator's compiled
+`SupportedVersions` list instead of matching migrator source text.
+The plan lists 109 tables and eight exact row-lock columns.
+Applying migrations or grants, or running initialization with the new plan hash,
+requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved
@@ -191,6 +298,57 @@ Run the continuation checks against a disposable PostgreSQL container:
 ```powershell
 dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresContinuationPostgresTests
 ```
+
+### Applying later approved migrations
+
+Use these modes for a database that is already initialized. Neither needs a
+prior receipt, recreates roles or schemas, resets data, or reruns the Identity
+Broker bootstrap. Both still require a clean checkout whose `HEAD` matches the
+fetched `origin/v1`. The script passes that commit to the initializer as the
+source, together with the plan hash computed from it.
+
+`--inspect` is read-only. Both database sessions run with
+`default_transaction_read_only=on`, and the tool checks that setting before it
+reads. It reports the plan principals, Entra service principals, database
+grants, and Identity Broker history. For each service it reports schema owner
+and ACL, migration history, planned, pending, and unplanned versions, relations
+with runtime privileges, and missing planned relations. It writes no receipt and
+ends with `P1_POSTGRES_INSPECTION_FINISHED writes=false`. It takes no Core
+merge SHA.
+
+```powershell
+node scripts\azure\bootstrap-p1-postgres.mjs --inspect --execute
+```
+
+`--apply-pending-migrations` requires `--max-core-version` and
+`--max-events-version`. Each maximum must equal the highest version in the plan,
+and the plan must equal the migrator's compiled catalog. A source with a later
+migration therefore fails closed instead of applying it, because the migrators
+apply every missing catalog version. Before any write, the mode checks:
+
+- the five runtime roles, object-ID mappings, and operator memberships;
+- each runtime role's exact database `CONNECT`;
+- each service schema's owner and ACL;
+- that every existing relation is planned, operator-owned, and within its
+  planned runtime privileges;
+- that Core and Events histories are exact prefixes of the plan, with no gaps
+  or unplanned versions. Other services must already match the plan exactly.
+
+Add `--dry-run` to stop after these checks; it prints the pending versions and
+`P1_POSTGRES_PENDING_MIGRATIONS_DRY_RUN writes=false`. Without `--dry-run`, the
+mode applies only the pending versions and verifies each migrated history and
+object inventory. It then applies the exact plan grants in one transaction,
+reads back every ACL before commit, and writes a new receipt under `Temp`. It
+ends with `P1_POSTGRES_PENDING_MIGRATIONS_APPLIED`. That marker does not prove
+runtime identity or deployment.
+
+```powershell
+node scripts\azure\bootstrap-p1-postgres.mjs --apply-pending-migrations --dry-run --max-core-version <highest-core> --max-events-version <highest-events> --core-merge-sha <sha> --execute
+node scripts\azure\bootstrap-p1-postgres.mjs --apply-pending-migrations --max-core-version <highest-core> --max-events-version <highest-events> --core-merge-sha <sha> --execute
+```
+
+Run `--inspect` again after applying, and prove each new version from the live
+history.
 
 The source preflight rejects incompatible PUBLIC privileges before the first write.
 It also rejects default grants to unrelated principals and an inherited-only

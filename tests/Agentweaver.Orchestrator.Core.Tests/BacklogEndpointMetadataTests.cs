@@ -26,6 +26,8 @@ public sealed class BacklogEndpointMetadataTests
             throw new InvalidOperationException("Endpoint metadata must not resolve services."));
         builder.Services.AddSingleton<EventsAddressedMessageClient>(_ =>
             throw new InvalidOperationException("Endpoint metadata must not resolve services."));
+        builder.Services.AddSingleton<CoordinatorRunSelectionContextStore>(_ =>
+            throw new InvalidOperationException("Endpoint metadata must not resolve services."));
         using var app = builder.Build();
         app.MapBacklogEndpoints();
 
@@ -44,5 +46,12 @@ public sealed class BacklogEndpointMetadataTests
             endpoint.Metadata.GetMetadata<IAcceptsMetadata>());
         Assert.Equal(typeof(BacklogGraphRevisionRequest), accepts.RequestType);
         Assert.False(accepts.IsOptional);
+
+        var promotion = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => route.RoutePattern.RawText == "/api/projects/{projectId}/runs/{runId}/backlog/promotions");
+        Assert.Equal(typeof(PromoteBacklogWorkPlanRequest),
+            promotion.Metadata.GetMetadata<IAcceptsMetadata>()!.RequestType);
     }
 }
