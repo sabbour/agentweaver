@@ -131,6 +131,46 @@ public sealed class AgentSessionsRecordVerifierTests
     }
 
     [Fact]
+    public void UnknownTopLevelFieldFailsEvenWithTheStoredHash()
+    {
+        var parent = Load("parent.json");
+        var records = parent.Records.ToList();
+        // Field 999, wire type varint, value 1. The stored content_hash stays unchanged.
+        var bytes = Convert.FromBase64String(records[2].Event).Concat(new byte[] { 0xB8, 0x3E, 0x01 }).ToArray();
+        Assert.Equal(Decode(records[2]).ExecutionId, Event.Parser.ParseFrom(bytes).ExecutionId);
+        records[2] = records[2] with { Event = Convert.ToBase64String(bytes) };
+        var result = AgentSessionsRecordVerifier.Verify(parent with { Records = records });
+        Assert.Equal(("unknown_field", 3L), (result.Code, result.Seq));
+    }
+
+    [Fact]
+    public void UnknownNestedFieldFailsEvenWithTheStoredHash()
+    {
+        var child = Load("child.json");
+        var records = child.Records.ToList();
+        var index = records.FindIndex(record => Decode(record).Lifecycle is not null);
+        Assert.True(index >= 0);
+        var ev = Decode(records[index]);
+        var nested = ev.Lifecycle.ToByteArray().Concat(new byte[] { 0xB8, 0x3E, 0x01 }).ToArray();
+        ev.Lifecycle = null;
+        using var stream = new MemoryStream();
+        var output = new CodedOutputStream(stream);
+        ev.WriteTo(output);
+        output.WriteTag(Event.LifecycleFieldNumber, WireFormat.WireType.LengthDelimited);
+        output.WriteBytes(ByteString.CopyFrom(nested));
+        output.Flush();
+        records[index] = records[index] with { Event = Convert.ToBase64String(stream.ToArray()) };
+        var result = AgentSessionsRecordVerifier.Verify(child with { Records = records });
+        Assert.Equal(("unknown_field", index + 1L), (result.Code, result.Seq));
+    }
+
+    [Fact]
+    public void ReferenceFixturesHaveNoUnknownFields()
+    {
+        Assert.True(AgentSessionsRecordVerifier.VerifyFork(Load("parent.json"), Load("child.json")).Verified);
+    }
+
+    [Fact]
     public void RehashingOneRecordBreaksTheNextLink()
     {
         var parent = Load("parent.json");

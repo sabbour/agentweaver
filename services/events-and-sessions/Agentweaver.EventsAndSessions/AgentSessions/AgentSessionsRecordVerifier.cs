@@ -95,6 +95,8 @@ public sealed record AgentSessionsVerification(
 /// Independent, non-Go verifier for AgentSessions record chains. It decodes the stored protobuf
 /// <c>Event</c>, renders proto3 JSON with proto field names, enum names, and no unpopulated fields,
 /// and hashes the RFC 8785 canonical form of <c>{"event":…,"prev_hash":…,"seq":"…"}</c>.
+/// Because that projection omits unknown protobuf fields, stored event bytes that carry any field the
+/// pinned schema does not define fail with <c>unknown_field</c> instead of verifying.
 /// </summary>
 /// <remarks>
 /// The chain is unkeyed. Verification proves the records are internally consistent from sequence 1.
@@ -108,6 +110,8 @@ public static class AgentSessionsRecordVerifier
 
     private static readonly JsonFormatter ProtoJson =
         new(JsonFormatter.Settings.Default.WithPreserveProtoFieldNames(true).WithFormatDefaultValues(false));
+
+    private static readonly MessageParser<Event> DiscardUnknownParser = Event.Parser.WithDiscardUnknownFields(true);
 
     private static readonly JsonSerializerOptions DocumentOptions = new()
     {
@@ -196,8 +200,8 @@ public static class AgentSessionsRecordVerifier
                 return AgentSessionsVerification.Fail("invalid_encoding", "Hashes must be 64 lowercase hex characters.", seq, index);
             if (record.PrevHash != previous)
                 return AgentSessionsVerification.Fail("link", $"prev_hash does not match the content_hash of seq {seq - 1}.", seq, index);
-            if (!TryDecodeEvent(record.Event, out var ev, out var decodeError))
-                return AgentSessionsVerification.Fail("invalid_encoding", decodeError, seq, index);
+            if (!TryDecodeEvent(record.Event, out var ev, out var decodeCode, out var decodeError))
+                return AgentSessionsVerification.Fail(decodeCode, decodeError, seq, index);
             if (ev.Kind == EventKind.EventParked)
                 return AgentSessionsVerification.Fail("transport_event", "EVENT_PARKED is transport-only and is never journaled.", seq, index);
             string computed;
@@ -251,9 +255,10 @@ public static class AgentSessionsRecordVerifier
         return childResult;
     }
 
-    private static bool TryDecodeEvent(string base64, out Event ev, out string error)
+    private static bool TryDecodeEvent(string base64, out Event ev, out string code, out string error)
     {
         ev = new Event();
+        code = "invalid_encoding";
         error = string.Empty;
         var bytes = new byte[base64.Length];
         if (!Convert.TryFromBase64String(base64, bytes, out var written) || Convert.ToBase64String(bytes, 0, written) != base64)
@@ -269,6 +274,16 @@ public static class AgentSessionsRecordVerifier
         try
         {
             ev = Event.Parser.ParseFrom(bytes, 0, written);
+            // Proto3 JSON omits unknown fields, so the content hash does not cover them. Compare with a parse
+            // that drops unknown fields at every depth and reject any difference, so extra bytes cannot hide
+            // behind a valid hash.
+            var known = DiscardUnknownParser.ParseFrom(bytes, 0, written);
+            if (known.CalculateSize() != ev.CalculateSize())
+            {
+                code = "unknown_field";
+                error = "Event bytes contain fields that agentsessions.v1.Event does not define.";
+                return false;
+            }
             return true;
         }
         catch (InvalidProtocolBufferException exception)

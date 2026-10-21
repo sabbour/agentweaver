@@ -59,7 +59,9 @@ Google.Protobuf runtime, and the shared RFC 8785 implementation in
 
 1. Checks that `seq` runs from 1 with no gap, duplicate, or reordering.
 1. Checks that `prev_hash` equals the previous record's `content_hash`, or is empty for seq 1.
-1. Decodes `event` as protobuf and rejects transport-only `EVENT_PARKED` events.
+1. Decodes `event` as protobuf and rejects transport-only `EVENT_PARKED` events. It also rejects
+   event bytes that carry a field the pinned schema doesn't define, at any nesting depth. The
+   proto3 JSON form omits unknown fields, so the content hash doesn't cover them.
 1. Computes `hex(SHA-256(JCS({"event": proto3JSON(event), "prev_hash": prev, "seq": "N"})))` and
    compares it with `content_hash`. The proto3 JSON form keeps proto field names, omits default
    values, and keeps presence for `optional` fields, so `input_count: 0` and an absent
@@ -69,8 +71,8 @@ Google.Protobuf runtime, and the shared RFC 8785 implementation in
    parent's records, ignoring `fence`.
 
 The verifier stops at the first failure and reports one stable code: `unsupported_format`,
-`unsupported_source`, `invalid_document`, `empty`, `too_large`, `invalid_encoding`, `sequence`,
-`link`, `transport_event`, `content_hash`, `fork_marker`, `fork_lineage`, `fork_prefix`, or
+`unsupported_source`, `invalid_document`, `empty`, `too_large`, `invalid_encoding`, `unknown_field`,
+`sequence`, `link`, `transport_event`, `content_hash`, `fork_marker`, `fork_lineage`, `fork_prefix`, or
 `head_mismatch`.
 
 The tests reproduce every golden vector in the pinned upstream `hack/verify_chain.py` and an
