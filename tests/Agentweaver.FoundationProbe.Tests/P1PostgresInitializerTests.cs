@@ -434,6 +434,127 @@ public sealed class P1PostgresInitializerTests
             output.IndexOf("IOException", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void MigrationCatalogMustEqualCompiledSourceAndEndAtTheApprovedMaximum()
+    {
+        int[] core = [.. Enumerable.Range(1, 16), 18, 19, 20, 21, 22, 23];
+        InitializerChecks.AssertMigrationCatalog(core, core, null, "Core");
+        InitializerChecks.AssertMigrationCatalog(core, core, 23, "Core");
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertMigrationCatalog(core, core, 22, "Core"));
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertMigrationCatalog(core, [.. core, 24], 23, "Core"));
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertMigrationCatalog([.. core, 24], [.. core, 24], 23, "Core"));
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertMigrationCatalog(null, core, 23, "Core"));
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertMigrationCatalog([2, 1], [2, 1], 1, "Events"));
+    }
+
+    [Fact]
+    public void PendingVersionsRequireLiveHistoryToBeAnExactPlanPrefix()
+    {
+        int[] core = [.. Enumerable.Range(1, 16), 18, 19, 20, 21, 22, 23];
+        Assert.Equal([22, 23], InitializerChecks.PendingMigrationVersions(core, core[..^2], "Core"));
+        Assert.Equal([9], InitializerChecks.PendingMigrationVersions(
+            [.. Enumerable.Range(1, 9)], [8, 7, 6, 5, 4, 3, 2, 1], "Events"));
+        Assert.Empty(InitializerChecks.PendingMigrationVersions(core, core, "Core"));
+        int[][] invalid =
+        [
+            [.. core, 24],
+            [.. Enumerable.Range(1, 17)],
+            [1, 2, 4],
+            [1, 1, 2],
+            [2, 3],
+        ];
+        foreach (var applied in invalid)
+            Assert.Throws<InvalidOperationException>(() =>
+                InitializerChecks.PendingMigrationVersions(core, applied, "Core"));
+    }
+
+    [Fact]
+    public void IncrementalContinuationRequiresEachRuntimeRolesExactExistingConnect()
+    {
+        uint[] runtimes = [Runtime, Runtime + 1, Runtime + 2, Runtime + 3, Runtime + 4];
+        var connected = Baseline with
+        {
+            Grants = [OwnerConnect, PublicConnect, .. runtimes.Select(oid => new AclGrant(Owner, oid, "CONNECT", false))],
+        };
+        InitializerChecks.AssertRuntimeDatabaseConnect(connected, runtimes);
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertRuntimeDatabaseConnect(Baseline, runtimes));
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertRuntimeDatabaseConnect(connected with
+            {
+                Grants = [.. connected.Grants, new(Owner, Runtime, "TEMPORARY", false)],
+            }, runtimes));
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertRuntimeDatabaseConnect(connected with
+            {
+                Grants = [.. connected.Grants.Where(grant => grant.Grantee != Runtime), new(Owner, Runtime, "CONNECT", true)],
+            }, runtimes));
+        Assert.Throws<InvalidOperationException>(() =>
+            InitializerChecks.AssertRuntimeDatabaseConnect(connected, runtimes[..4]));
+    }
+
+    [Fact]
+    public void ExistingRelationsMustBePlannedOperatorOwnedAndWithinPlannedRuntimeAuthority()
+    {
+        var service = Services()[0] with
+        {
+            Tables = [new TablePlan("requests", ["SELECT", "INSERT"], null, false, null)],
+            OwnerOnlyTables = ["setup"],
+            OwnerOnlySequences = ["setup_seq"],
+        };
+        InitializerChecks.AssertRelationsWithinPlan(service,
+        [
+            new("requests", "r", "operator", ["SELECT"]),
+            new("setup", "r", "operator", []),
+            new("setup_seq", "S", "operator", []),
+        ], "operator");
+        // A planned relation may still be absent because its migration is pending.
+        InitializerChecks.AssertRelationsWithinPlan(service, [], "operator");
+        RelationState[] invalid =
+        [
+            new("requests", "r", "operator", ["SELECT", "DELETE"]),
+            new("requests", "r", "other", ["SELECT"]),
+            new("requests", "r", "operator", null),
+            new("setup", "r", "operator", ["SELECT"]),
+            new("setup_seq", "S", "operator", ["USAGE"]),
+            new("unplanned", "r", "operator", []),
+            new("requests_view", "v", "operator", []),
+        ];
+        foreach (var relation in invalid)
+            Assert.Throws<InvalidOperationException>(() =>
+                InitializerChecks.AssertRelationsWithinPlan(service, [relation], "operator"));
+    }
+
+    [Fact]
+    public void ServiceSchemaAclMustBeOperatorOwnedWithOnlyRuntimeUsage()
+    {
+        var service = Services()[0];
+        AclGrant[] exact =
+        [
+            new(Owner, Owner, "CREATE", false),
+            new(Owner, Owner, "USAGE", false),
+            new(Owner, Runtime, "USAGE", false),
+        ];
+        InitializerChecks.AssertServiceSchemaAcl(service, new SchemaAclState(Owner, exact), Owner, Runtime);
+        SchemaAclState?[] invalid =
+        [
+            null,
+            new(Owner + 1, exact),
+            new(Owner, exact[..2]),
+            new(Owner, [.. exact, new(Owner, 0, "USAGE", false)]),
+            new(Owner, [.. exact, new(Owner, Runtime, "CREATE", false)]),
+            new(Owner, [exact[0], exact[1], exact[2] with { Grantable = true }]),
+        ];
+        foreach (var state in invalid)
+            Assert.Throws<InvalidOperationException>(() =>
+                InitializerChecks.AssertServiceSchemaAcl(service, state, Owner, Runtime));
+    }
+
     private static ServicePlan[] Services() => Enumerable.Range(0, 5).Select(index =>
         new ServicePlan($"service-{index}", $"schema_{index}", $"runtime_{index}",
             $"00000000-0000-0000-0000-{index + 1:000000000000}", [], [])).ToArray();

@@ -118,6 +118,23 @@ public sealed class AzureCostProviderTests
         AssertUnpriced(provider.Price(
             Measurement() with { ProviderUnits = 1m, ProviderUnit = "nano_aiu" }, Model(), binding),
             "provider-units-unsupported");
+        AssertUnpriced(provider.Price(
+            Measurement() with { ProviderUnit = "nano_aiu" }, Model(), binding),
+            "provider-units-unsupported");
+        AssertUnpriced(provider.Price(
+            Measurement() with { ProviderUnits = 1m, ProviderUnit = "tokens" }, Model(), binding),
+            "provider-units-unsupported");
+    }
+
+    [Fact]
+    public void PricesRuntimeByokMeasurementsLabelledAsTokens()
+    {
+        var (provider, binding) = Create();
+
+        var price = provider.Price(Measurement() with { ProviderUnit = "tokens" }, Model(), binding);
+
+        Assert.Equal(CostDisposition.Estimate, price.Disposition);
+        Assert.Equal(provider.Price(Measurement(), Model(), binding).Amount, price.Amount);
     }
 
     [Fact]

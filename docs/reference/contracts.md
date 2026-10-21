@@ -10,6 +10,21 @@ To configure a provider, follow [Configure providers](../guide/configure-provide
 For runtime settings and deployment configuration, see
 [Runtime configuration](./runtime-configuration.md).
 
+## Caller attention
+
+The Orchestrator's `UserNotification` projects persisted pending coordinator
+gates for the existing bell and attention list. `UserNotificationPage` contains
+`items`, the total matching pending `count`, and nullable `nextCursor`.
+Each item carries `notificationId`, `projectId`, `runId`, `sessionId`,
+`requestId`, `kind`, `prompt`, `gateKind`, `stateVersion`, `createdAt`, and
+`updatedAt`. The session-status `CoordinationBlockerKind` mapping is reused.
+
+`GET /api/v1/notifications` checks fresh project read authority on both sides
+of the read. `projectId` only narrows that authority. `includeDismissed=true`
+exposes unresolved shared work even if the caller dismissed its notification.
+Dismissal is a separate caller record, not a decision. See
+[Read notifications across runs](../guide/notifications.md).
+
 ## Azure public routing
 
 The managed Azure Gateway uses one HTTPS listener for the wildcard managed
@@ -90,11 +105,58 @@ credit-limit totals. These methods do not authorize a model session or caller.
 The standalone Azure Cost adapter uses an explicitly configured, versioned card
 for model-scoped standard input/output token rates in the declared currency. It
 does not fetch rates or quote BYOK work. Missing token counts, unsupported cache
-categories, unknown models, and changed bindings remain `Unpriced`. Events must
-verify trusted Azure provider and deployment facts against the accepted runtime
-model pin before using this adapter for receipts. Until that source contract is
-admitted, BYOK receipt accounting remains `Unpriced`; provisioned-throughput
-usage also remains unpriced without trusted usage-share evidence.
+categories, unknown models, and changed bindings remain `Unpriced`.
+
+`RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok` is the trusted Azure
+BYOK producer contract. It accepts only an owner-issued receipt that passes
+`Validate` and has all of these facts:
+
+- The registration uses BYOK, and its model binding pin has provider type `azure`.
+- The SDK source reports provider type `azure`, the `byok.tokens` meter, and no
+  hosted multiplier.
+- The SDK deployment ID, the usage model ID, and the pinned model ID are equal.
+- The SDK configuration hash equals the pinned configuration hash.
+- The usage carries its dispatch message ID.
+
+The contract returns `TrustedAzureByokUsage`, which records the receipt ID,
+runtime instance, registration revision, dispatch ID, deployment ID, pinned
+configuration revision and hash, and receipt payload hash.
+
+`RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance` applies the same
+source checks without the dispatch message ID. Events applies this check to every
+receipt that claims Azure BYOK and rejects a failed claim with
+`runtime_byok_azure_provenance_invalid`. Usage from an untrusted producer never
+enters the ledger. Native SDK usage that has no dispatch message ID passes this
+check and is recorded as `Unpriced`. Only usage that passes
+`RequireTrustedAzureByok` can be priced. Azure pricing is off until `EventsAndSessions:Cost:Azure`
+supplies an explicit rate card; until then admitted Azure BYOK usage is recorded
+as `Unpriced`. Non-Azure BYOK usage is `Unpriced` with `byok-provider-unpriced`.
+Provisioned-throughput usage stays `Unpriced` per event.
+`AzureProvisionedThroughputAllocator.Allocate` returns a report-only allocation
+of a fixed period charge whose shares add up to the charge exactly.
+
+`UsageSpendEvidenceContract` defines the represented-spend read. A
+`UsageSpendEvidenceRequest` names one meter source and unit, an optional
+`UsageSpendPeriod` (inclusive start, exclusive end), and at most 64 unique,
+lowercase dispatch GUIDs. `UsageSpendEvidence` returns `UsageSpendTotal` values
+for the run and the period, one dispatch witness per requested dispatch, and an
+`AccountingCursor` that never decreases between reads. Every witness watermark
+equals the cursor. Events never reports `SourceComplete`; callers compare witness
+receipts with their own completion manifest. `ValidateEvidence` rejects any
+response that does not match its request.
+
+A request can also name an `AgentId`. The evidence then includes an `Agent`
+total for that agent in the run. Dispatch witnesses match dispatches from any run
+in the project, because project budgets hold exposure for other runs.
+
+`SpendBudgetContract` defines spend budgets. A `SpendBudget` has a `BudgetId`, a
+`Revision`, a `Scope` (`project`, `run`, or `agent`), a meter source and unit, an
+optional `SoftLimit`, an optional `HardLimit`, and a positive
+`ReservePerDispatch`. Agent budgets name an `AgentId`. Project budgets name an
+explicit `Period` with an inclusive start and exclusive end. The soft limit
+can't exceed the hard limit, and one configuration layer can't have two budgets
+for the same bucket. `CurrentProjectSpendBudgets` returns the current project
+budgets with the project and platform revisions that produced them.
 
 ## Gateway API and server-sent events
 
@@ -220,9 +282,9 @@ IDs server-side.
 The browser lifecycle, user-level selection APIs, and callbacks are not exposed
 as first-party MCP tools. Run-bound repository operations in the finite OpenAPI
 catalog remain available as ordinary MCP tools and require `tenantSelector`.
-Run-produced-file list/diff/content reads remain unavailable until the durable
-manifest/object-version owner in P2 #1917 is admitted; no raw filesystem Gateway
-proxy is part of this contract.
+Run-produced files are available through the Source Control output-capture
+operations: capture, list, read, diff, and file. They read pinned, immutable
+captures; no raw filesystem Gateway proxy is part of this contract.
 
 ## First-party MCP client
 
@@ -437,7 +499,13 @@ caller cannot submit a resource pin or override the durable binding.
 
 | Method and path | Contract |
 | --- | --- |
+| `POST /api/projects/{projectId}/runs` | Create a new chat run. The bearer must not carry a run binding. Requires one `Idempotency-Key`, current project `acceptRunSelection` authority, and a body with `firstMessage` and `expectedProjectConfigRevision`. Persists the request in `project_run_requests`, mints `runId` and `rootSessionId`, and accepts the selection through the Projects `interactive-selection` route. Returns `201` with `awaiting_binding` and the binding selectors. A replay with the same key and body returns the same run; a changed body returns `409 idempotency_conflict`. |
+| `POST /api/projects/{projectId}/runs/{runId}/start` | Run-bound and bodyless. Locks the saved request, accepts the root session, and delivers the saved first message as a root-to-root addressed message with key `{runId}:first`. The owner accepts this self-addressed message only when its payload matches the saved request. Returns `200` with `started`; a replay does not deliver again. |
+| `POST /api/projects/{projectId}/runs/{runId}/cancel` | Requires a token not bound to a run and fresh Projects `cancelRun` permission from a Contributor, Owner, or tenant admin; Viewer receives `403`. Requires one `Idempotency-Key` and accepts an optional `reason`. For an accepted run, advances the fence, sets `cancelled_at` and `completed_at`, and cancels active sessions. Pending requests are cancelled without root admission. Saves a caller-scoped receipt and `orchestrator.run.cancelled` event atomically. A finished run returns `200` with `alreadyTerminal: true` without mutation or another event. |
 | `GET /api/projects/{projectId}/runs` | List accepted runs in the project, newest first, as a `ProjectRunPage`. The caller needs `api.read`, both Orchestrator and Projects audiences, and current project or tenant read permission from Projects & Config. A run-bound token sees only its own run. The keyset cursor is opaque and bound to the query. A state filter is applied to each run's derived state, so a selective filter can read many older runs before it fills a page. Each `ProjectRunSummary` reports the run ID, root session ID, derived state, timestamps, `completedAt`, and the accepting actor as `startedBy`. |
+| `GET /api/projects/{projectId}/source-control/issues` | List synced repository issues from the project backlog as a `ProjectIssuePage`, with no provider call. The caller needs `api.read` and current project or tenant `readProjects`; run-bound tokens are rejected. `state` is `open` (default), `closed`, or `all`. Each `ProjectIssueSummary` reports the task ID and backlog state, provider, repository, issue number, stored title and state, and task timestamps. It has no issue URL or author because the backlog doesn't store them. |
+| `GET /api/projects/{projectId}/source-control/pull-requests` | List pull requests that project runs created or reused, as a `ProjectPullRequestPage`, with no provider call. Authority matches the run list; a run-bound token sees only its run's records. `state` is `open` (default), `closed`, `merged`, or `all`. Each `ProjectPullRequestSummary` reports the provider, repository, number, recorded title and state, URL, head and base branch and commit, `runId`, `disposition` (`created` or `reused`), `recordedAt`, and `updatedAt`. `coverage.recordedSince` is when migration 032 was applied, and `coverage.includesEarlierPullRequests` is always `false`. Before migration 032 is applied, the route returns `503 pull_request_records_unavailable`. |
+| `/api/chief-of-staff/conversations` and `/api/chief-of-staff/priorities` | Caller-private Chief of Staff records in Orchestrator migration 024. Requires `api.read`, both audiences, and a token that is not bound to a project or run. Each call reads fresh Projects authority, filters rows by tenant, issuer, and subject, and redacts conversations and links in projects the caller can no longer read to `access: unavailable`. A conversation binds a `project_run_requests` row that the caller created; it holds no message content. Priorities use per-item `revision` and list `orderRevision` checks, and create requires one `Idempotency-Key`. Links store owner identity only. Reads resolve run and conversation links to the derived run state and report issue, pull request, and artifact state as `unavailable`. No route writes `accepted_runs`, `project_run_requests`, sessions, or gates. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/root` | Accept the root session for the current accepted run selection and register it with Events & Sessions. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/decisions` | Read the current typed decision state and pending gate without exposing a transferable authorization or provider pin. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/propose_outcome_spec` | Propose a schema-validated outcome specification. |
@@ -448,7 +516,7 @@ caller cannot submit a resource pin or override the durable binding.
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures` | List admitted captures after current read-authority and accepted-selection checks. `limit` defaults to 50 and is bounded to 100. Continue with both `beforeCapturedAt` and `beforeCaptureId` from the preceding page; the pair must be supplied together. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}` | Return the admitted capture summary and canonical manifest. Pending or unadmitted records are not exposed. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/diff` | Return the verified captured patch for this admitted capture. |
-| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/files?path={relativePath}` | Return one manifest-listed file as `application/octet-stream` and its SHA-256 in `X-Source-Control-Output-Sha256`. The path is a safe relative workspace path, not a host path. |
+| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/files?path={relativePath}` | Return one manifest-listed file as `application/octet-stream` and its SHA-256 in `X-Source-Control-Output-Sha256`. The path is a safe relative workspace path, not a host path. The Gateway serves the same five output-capture routes under `/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}` with a required `X-Agentweaver-Tenant` header, and the MCP host exposes them as `agentweaver_` tools. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents` | Read current PR facts from the pinned provider, persist an immutable merge request, then open typed Approval for that exact intent and accepted Merge step. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}` | Read an owner-bound merge intent without exposing credential values or transferable authority. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}/execute` | Execute only through the current source-specific grant and existing action guard, under a repository-scoped lock and exact-head/check preflight. The expected base is a fresh preflight, not an atomic compare-and-swap. |
@@ -1040,8 +1108,32 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 | `GET /api/authorization/context` | Versioned current effective permission context, filtered by the validated audience, `api.read` scope, purpose, optional tenant selector, and project/run bindings. Returns `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}?runId={runId}` | Read project metadata for an exactly matching run-bound token after fresh current `ReadProjects` authorization. Purpose-bound, unbound, or mismatched tokens and duplicate/unknown query parameters are denied; the response is `Cache-Control: no-store`. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, enabled only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. It requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the active project, current actor membership, active Orchestrator assignment, exact project/run token binding, and matching run selection. |
+| `GET /api/projects/{projectId}/runs/{runId}/spend-budgets` | Orchestrator-only read of `CurrentProjectSpendBudgets`. Requires `api.read`, the Orchestrator scope and current role, an exact project/run binding, and an accepted run selection. Resolves project-scope budgets from the current project and platform revisions, so a changed project budget applies to the next dispatch of every run. Returns `Cache-Control: no-store`. |
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
+
+## Platform components report
+
+`PlatformComponentReport` in `Agentweaver.Abstractions` is the shared record for
+`GET /api/v1/platform/components`. Each owner service returns a
+`PlatformComponentOwnerReport` from `GET /internal/platform/components`.
+For behavior and examples, see [Platform components](../guide/platform-components.md).
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /api/platform/components` | Projects & Config requires `api.read`, an unbound non-purpose token, and a current TenantAdmin assignment for the caller's tenant or a current PlatformAdmin assignment. It asks the five owners in parallel with a three-second limit each, then returns all 16 areas in catalog order with `Cache-Control: no-store`. |
+| `GET /internal/platform/components` | Owner-only route, mapped only when `PlatformComponents:ServiceAuthentication` is configured. It accepts only a token for the private audience whose `sub` equals the configured Projects caller subject. Not in the Gateway OpenAPI document. |
+
+The report rules are:
+
+- Every area is present. A missing, failed, slow, or invalid owner answer
+  makes each of its areas `unknown` with reason `ownerUnavailable`.
+- Projects never reports a configured value as active without the owner's answer.
+- Canvas is always `notAvailable` with reason `noBackendOwner`.
+- An area's readiness is the least ready value among its active implementations.
+  An area with nothing selected is `disabled` with reason `notSelected`.
+- The report contains no option values, option revisions, endpoints,
+  credentials, or resource identifiers.
 
 ## Projects & Config host configuration
 
@@ -1251,6 +1343,12 @@ The consumer validates the native probe receipt against the admitted source SHA,
 
 Projects & Config validates skill markdown and text resources before storage.
 `POST /api/skills/preview` returns a content digest without storing the upload.
+`POST /api/skills/package` accepts exactly one of `files` (relative paths and
+base64 content), `archive` (a base64 ZIP), or `draft` (name, description, and
+instructions). It returns one package for each `SKILL.md` root, with the
+candidate, its preview, a per-skill error, and the binary or oversized paths it
+skipped. The upload is limited to 1,024 files and 2 MiB, and it stores nothing.
+Pass each candidate and digest to the import route.
 `POST /api/projects/{projectId}/skills/import` stores a new immutable revision
 and returns its receipt. The request supplies the expected digest, an idempotency
 key, and optional expected revision and source provenance. A repeated key with
