@@ -55,6 +55,7 @@ export default defineConfig({
             { text: 'Configure providers', link: '/guide/configure-providers' },
             { text: 'Configure Knowledge memory', link: '/guide/configure-knowledge' },
             { text: 'Web client', link: '/guide/web-client' },
+            { text: 'Notifications', link: '/guide/notifications' },
             { text: 'Gateway/BFF', link: '/guide/gateway' },
           ],
         },
