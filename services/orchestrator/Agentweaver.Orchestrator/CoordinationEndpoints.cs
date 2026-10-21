@@ -242,7 +242,7 @@ public static partial class CoordinationEndpoints
     /// <summary>
     /// Converts a coordinator gate into the public session-status blocker shape.
     /// </summary>
-    private static SessionStatusBlocker ToStatusBlocker(CoordinatorGateRequest gate)
+    internal static SessionStatusBlocker ToStatusBlocker(CoordinatorGateRequest gate)
     {
         var kind = gate.Kind switch
         {

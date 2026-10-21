@@ -91,6 +91,14 @@ public static class GatewayRouteCatalog
         Add("POST", GatewayOwner.IdentityBroker, "/projects/{projectId}/issue-sync/grants/{grantId}/revoke",
             "/api/projects/{projectId}/issue-sync/grants/{grantId}/revoke", "revokeIssueSyncGrant", "Revoke project issue-sync authority",
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, "/notifications", "/api/notifications",
+            "listUserNotifications", "Read caller attention across runs",
+            ["cursor", "pageSize", "projectId", "includeDismissed"],
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, "/notifications/{notificationId}/dismiss",
+            "/api/notifications/{notificationId}/dismiss",
+            "dismissUserNotification", "Dismiss caller attention without resolving its gate",
+            forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, "/projects", "/api/projects/",
             "createProject", "Create a project", body: true, forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}", "/api/projects/{projectId}",

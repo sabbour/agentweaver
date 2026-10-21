@@ -34,6 +34,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(19)]
     [InlineData(20)]
     [InlineData(21)]
+    [InlineData(25)]
     [InlineData(26)]
     [InlineData(27)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
@@ -108,6 +109,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Theory]
+    [InlineData(2)]
     [InlineData(14)]
     [InlineData(15)]
     [InlineData(19)]
@@ -136,6 +138,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData("backlog_tasks")]
     [InlineData("backlog_dependencies")]
     [InlineData("reviewed_remote_tool_snapshots")]
+    [InlineData("user_notification_dismissals")]
     public async Task VerificationRequiresRegisteredTables(string table)
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -201,6 +204,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (19, "019_session_suspend_resume.sql"),
             (20, "020_maf_buildtest_workspace_seed.sql"),
             (21, "021_row_lock_record_updates.sql"),
+            (25, "025_user_notification_dismissals.sql"),
             (26, "026_backlog_task_content.sql"),
             (27, "027_periodic_issue_sync.sql")
         ];
@@ -300,7 +304,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 26, 27]), reader.GetFieldValue<int[]>(9));
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 25, 26, 27]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));

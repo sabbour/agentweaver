@@ -19,13 +19,17 @@ the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`56a75908221d48a1ea62660fadded26eec136fc1a9a4f7b26ef9904e140f17aa`.
+`e4e9653364b6695189ff8924f0d742617f826506bc391cb2f8928ecbee20d7ec`.
 It is not an approval receipt. The runner uses its explicit registered version
-list, not contiguous numbering; the absent 017 and 022-025 do not require
-placeholders. Version 027 requires 026 only.
+list, not contiguous numbering; the absent 017 and 022-024 do not require
+placeholders. The Core list is 1-16, 18-21, 25, 26, 27. Version 027 requires
+026 only. Merge order is #2197, then #2186, then #2196.
 
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
-open/closed lifecycle and a unique repository issue identity. It takes an
+open/closed lifecycle and a unique repository issue identity. It requires
+migration 021 and has no schema dependency on migration 025, which requires
+only migration 002. The migrator applies missing registered versions in
+ascending order. It takes an
 `ACCESS EXCLUSIVE` lock on `backlog_tasks` and blocks writes until commit.
 It adds no tables or runtime privileges: existing `SELECT, INSERT, UPDATE`
 grants on `backlog_tasks` and `backlog_projects` remain sufficient.
@@ -173,7 +177,11 @@ exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
 The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan retains 95 tables and eight exact row-lock columns.
+The plan lists 96 tables and eight exact row-lock columns. Orchestrator migration
+025 adds the empty `user_notification_dismissals` table. Its runtime role needs
+only `SELECT,INSERT` on that table. The migration does not alter existing tables.
+This source change also changes the plan hash. Applying the migration or grants,
+or running initialization with the new hash, requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved
