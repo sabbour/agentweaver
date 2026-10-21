@@ -39,10 +39,15 @@ public static class GatewayWebCors
                 if (route.ForwardTenantSelector) headers.Add("X-Agentweaver-Tenant");
                 if (RequiresIdempotencyKey(route.OperationId)) headers.Add("Idempotency-Key");
 
-                cors.AddPolicy(PolicyName(route), policy => policy
-                    .WithOrigins(origin)
-                    .WithMethods(route.Method)
-                    .WithHeaders(headers.ToArray()));
+                cors.AddPolicy(PolicyName(route), policy =>
+                {
+                    policy
+                        .WithOrigins(origin)
+                        .WithMethods(route.Method)
+                        .WithHeaders(headers.ToArray());
+                    if (!route.ExposedResponseHeaders.IsDefaultOrEmpty)
+                        policy.WithExposedHeaders(route.ExposedResponseHeaders.ToArray());
+                });
             }
         });
 
@@ -53,6 +58,7 @@ public static class GatewayWebCors
     private static bool RequiresIdempotencyKey(string operationId) => operationId is
         "createProjectRun" or
         "cancelProjectRun" or
+        "createChiefOfStaffPriority" or
         "createKnowledgeRecord" or
         "updateKnowledgeRecord" or
         "restoreKnowledgeRecord" or

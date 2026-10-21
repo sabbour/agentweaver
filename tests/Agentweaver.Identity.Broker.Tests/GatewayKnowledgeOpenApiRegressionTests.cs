@@ -64,6 +64,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     [
         "createProjectRun",
         "cancelProjectRun",
+        "createChiefOfStaffPriority",
         "createKnowledgeRecord",
         "updateKnowledgeRecord",
         "restoreKnowledgeRecord",
@@ -308,6 +309,14 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         AssertNullablePropertyType(importProperties, "skillId", "string");
         AssertNullablePropertyType(importProperties, "expectedRevision", "integer");
 
+        var revoke = FindOperation(paths, "revokeProjectSkillRevision");
+        Assert.Equal("Projects", revoke.GetProperty("x-agentweaver-owner").GetString());
+        Assert.True(revoke.GetProperty("responses").TryGetProperty("204", out _));
+        var package = FindOperation(paths, "packageSkillContent");
+        Assert.Equal(
+            "#/components/schemas/SkillContentPackageResult",
+            package.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
         var inventory = FindOperation(paths, "listProjectSkillInventory");
         var inventoryQuery = inventory.GetProperty("parameters").EnumerateArray()
             .Where(parameter => parameter.GetProperty("in").GetString() == "query")
@@ -439,12 +448,17 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             "SkillContentCandidateRequest",
             "ImportSkillContentRequest",
             "UpdateSkillAssignmentRequest",
+            "PackageSkillContentRequest",
+            "SkillPackageFileRequest",
+            "SkillPackageDraftRequest",
+            "RevokeSkillRevisionRequest",
         })
         {
             Assert.False(schemas.GetProperty(schemaName).GetProperty("additionalProperties").GetBoolean());
         }
 
         Assert.Equal(3L * 1024 * 1024, gateway.GetRequestSizeLimit("/api/v1/skills/preview")?.MaxRequestBodySize);
+        Assert.Equal(3L * 1024 * 1024, gateway.GetRequestSizeLimit("/api/v1/skills/package")?.MaxRequestBodySize);
         Assert.Equal(
             3L * 1024 * 1024,
             gateway.GetRequestSizeLimit("/api/v1/projects/{projectId}/skills/import")?.MaxRequestBodySize);
@@ -458,7 +472,8 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
                 "/api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import")?.MaxRequestBodySize);
         foreach (var operationId in new[]
         {
-            "previewSkillContent", "importProjectSkill", "previewMarketplaceSkill", "importMarketplaceSkill",
+            "previewSkillContent", "packageSkillContent", "importProjectSkill", "previewMarketplaceSkill",
+            "importMarketplaceSkill",
         })
         {
             Assert.Equal(

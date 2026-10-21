@@ -262,6 +262,7 @@ Owner.
 | GET | `/api/catalog/roles` | Bearer | Read built-in roles. | `/api/v1/catalog/roles` |
 | GET | `/api/platform/runtime-defaults/` | `api.read`, `projects.admin`, unbound PlatformAdmin | Read platform runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | PUT | `/api/platform/runtime-defaults/` | Same PlatformAdmin authority | Append runtime defaults. | `/api/v1/platform/runtime-defaults` |
+| GET | `/api/platform/components` | `api.read`, unbound, current TenantAdmin for the caller's tenant or PlatformAdmin | Read active platform components and readiness for every area. See [Platform components](../guide/platform-components.md). | `/api/v1/platform/components` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
 
 ### Casting through the Gateway
@@ -296,11 +297,12 @@ Gateway prefix: `/api/v1/projects/{projectId}/skills`.
 | GET | `/` | Admin; archived projects allowed | Read revision inventory with `cursor` and `pageSize`. | Yes, empty suffix |
 | POST | `/import` | Admin | Import validated content with idempotency and digest checks. | Yes |
 | PUT | `/{skillId}/assignment` | Admin | Save pinned skill assignment at the expected configuration revision. | Yes |
-| POST | `/{skillId}/revisions/{revision:long}/revoke` | Admin | Revoke an imported revision. | No |
+| POST | `/{skillId}/revisions/{revision:long}/revoke` | Admin | Revoke an imported revision. | Yes |
 
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | POST | `/api/skills/preview` | `api.read`; unbound request | Validate local skill files without saving. | `/api/v1/skills/preview` |
+| POST | `/api/skills/package` | `api.read`; unbound request | Group uploaded files, a ZIP archive, or draft fields into skill candidates without saving. | `/api/v1/skills/package` |
 | GET | `/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Selection; exact agent and accepted pins | Read effective run skills. | No |
 
 ### Marketplace sources
@@ -458,6 +460,78 @@ Cross-project overview is out of scope. The Gateway proxies each owner; it
 does not combine metrics and usage into one response. Clients that need
 aligned intervals should pass the same explicit bounds to both routes.
 
+### Chief of Staff
+
+Native prefix: `/api/chief-of-staff`.
+Gateway prefix: `/api/v1/chief-of-staff`.
+
+These routes store a caller's private Chief of Staff conversations and
+Priorities. They never start, cancel, or change runs, sessions, or gates.
+New chats use the [Runs](#runs) routes, and the conversation entry binds the
+returned run. For guidance, see [Chief of Staff](../guide/chief-of-staff.md).
+
+| Method | Suffix | Query | Purpose | Gateway |
+| --- | --- | --- | --- | --- |
+| GET | `/conversations` | `cursor`, `pageSize` | List my conversations, newest first. | `listChiefOfStaffConversations` |
+| POST | `/conversations` | — | Bind a run that I created to a conversation entry. Returns `200` with the same entry on repeat. | `bindChiefOfStaffConversation` |
+| GET | `/conversations/{conversationId}` | — | Read one of my conversations. | `getChiefOfStaffConversation` |
+| GET | `/priorities` | — | List my Priorities in order, with `orderRevision`. | `listChiefOfStaffPriorities` |
+| POST | `/priorities` | — | Create a Priority at the end of the list. Requires `Idempotency-Key`. Returns `201`, or `200` on replay. | `createChiefOfStaffPriority` |
+| PUT | `/priorities/order` | — | Replace the order at `expectedOrderRevision`. | `reorderChiefOfStaffPriorities` |
+| GET | `/priorities/{priorityId}` | — | Read one Priority. | `getChiefOfStaffPriority` |
+| PATCH | `/priorities/{priorityId}` | — | Change outcome, notes, state, or checklist at `expectedRevision`. | `updateChiefOfStaffPriority` |
+| POST | `/priorities/{priorityId}/links` | — | Add a typed link at `expectedRevision`. | `addChiefOfStaffPriorityLink` |
+| DELETE | `/priorities/{priorityId}/links/{linkId}` | `expectedRevision` (required) | Remove a link. | `removeChiefOfStaffPriorityLink` |
+
+Every route requires the `api.read` scope and a token that isn't bound to a
+project or run. A bound token returns `403`. The Orchestrator reads fresh
+Projects authority on each call and returns only the caller's rows; another
+user's conversation or Priority returns `404`.
+
+Access rules:
+
+- Binding a conversation requires read permission on the project and a run
+  that the caller created through `POST /api/v1/projects/{projectId}/runs`.
+  Another user's run returns `404 conversation_run_not_found`.
+- Adding a link requires read permission on the linked project. A
+  `conversation` link must name one of the caller's conversations in the same
+  project.
+- Removing a link doesn't require project access, so users can remove links
+  to projects they no longer read.
+- When the caller loses read permission on a project, conversations and links
+  in that project return `access: unavailable` with only their identifier,
+  kind, and creation time. Priority outcome, notes, and checklist are the
+  caller's own content and stay visible.
+
+Revisions and conflicts:
+
+- Each Priority has a `revision`. Writes with a stale `expectedRevision`
+  return `409 priority_revision_conflict`. Reread the Priority, then retry.
+- The list has an `orderRevision`. A stale reorder returns
+  `409 priority_order_conflict`. A reorder that doesn't name every Priority
+  exactly once returns `400 priority_order_invalid`.
+- A create replay with the same key and body returns the original Priority. A
+  changed body returns `409 idempotency_conflict`.
+- Limits: 100 Priorities (`409 priority_limit_reached`), 50 links per
+  Priority (`409 priority_link_limit_reached`), and 50 checklist items. A
+  duplicate link returns `409 priority_link_exists`.
+
+Link kinds are `run`, `conversation`, `issue`, `pull_request`, and `artifact`.
+Every link names `projectId`. `run` needs `runId`, `conversation` needs
+`conversationId`, `issue` and `pull_request` need `number`, and `artifact`
+needs `runId` and `artifactId`. Reads resolve each link:
+
+| Kind | `state` |
+| --- | --- |
+| `run` | The current run state from the run list, or `access: missing` when the run doesn't exist. |
+| `conversation` | The run state, or the request state (`awaiting_binding`, `cancelled`) before the run starts. |
+| `issue`, `pull_request`, `artifact` | `unavailable`. The owners have no current-state read for these items. |
+
+Priority `state` is `active`, `achieved`, or `dropped`. It's the user's own
+judgment and doesn't depend on run state, so an outcome survives runs ending.
+An empty `notes` value clears the notes, and `checklist` replaces the whole
+list.
+
 ### Coordination
 
 Native prefix: `/api/projects/{projectId}/runs/{runId}/coordination`.
@@ -537,6 +611,9 @@ Gateway prefix:
 These routes require Coordination authority and current Source Control
 selection/pins. Gateway routes require an explicit `X-Agentweaver-Tenant`.
 Merge operations also validate the current merge gate and intent.
+Output-capture reads return only admitted captures. The Gateway forwards the
+`X-Source-Control-Output-Sha256` file header and allows up to 64 MiB for capture
+reads, because a capture can hold a 32 MiB manifest and 16 MiB files.
 
 | Method | Suffix | Purpose | Gateway |
 | --- | --- | --- | --- |
@@ -546,11 +623,11 @@ Merge operations also validate the current merge gate and intent.
 | GET | `/pull-requests/{pullRequestNumber:long}/reviews` | Read reviews. | Yes |
 | POST | `/workspaces` | Prepare pinned repository workspace. | Yes |
 | POST | `/workspaces/{workspaceId}/diff` | Read repository diff. | Yes |
-| POST | `/workspaces/{workspaceId}/output-captures` | Capture verified produced output. | No |
-| GET | `/output-captures` | Read capture page. | No |
-| GET | `/output-captures/{captureId}` | Read capture metadata. | No |
-| GET | `/output-captures/{captureId}/diff` | Read captured diff. | No |
-| GET | `/output-captures/{captureId}/files` | Read exact captured file. | No |
+| POST | `/workspaces/{workspaceId}/output-captures` | Capture verified produced output. | Yes |
+| GET | `/output-captures` | Read capture page. | Yes |
+| GET | `/output-captures/{captureId}` | Read capture metadata. | Yes |
+| GET | `/output-captures/{captureId}/diff` | Read captured diff. | Yes |
+| GET | `/output-captures/{captureId}/files` | Read exact captured file. | Yes |
 | POST | `/merge-intents` | Request approval for merge intent. | Yes |
 | GET | `/merge-intents/{intentId}` | Read merge intent. | Yes |
 | POST | `/merge-intents/{intentId}/execute` | Execute approved intent. | Yes |
@@ -668,9 +745,22 @@ All routes require Journal authority and exact project/run claims.
 | GET | `/internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` | Exact bound `ReadRunSelection` authority and current provider | Read immutable Sessions pin. | No |
 | GET | No native SSE route | Exact run bearer and current Gateway/owner access checks | SSE over committed replay pages. | `/api/v1/projects/{projectId}/runs/{runId}/events/live` |
 
+### Historical turn text
+
+`GET /api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}`
+returns `{ eventId, identity, text }` from the existing Events material owner.
+Use the event and session identities from a committed `turn` event. The native
+route is `GET /internal/sessions/{sessionId}/turns/{eventId:guid}`.
+
+The caller needs an exact run-bound bearer and current project read authority.
+The owner rechecks authority after reading stored bytes. Responses use
+`Cache-Control: no-store`. Missing history returns 404; lost access returns 403.
+The route reads only turn text. It does not accept a material kind or expose
+object keys, runtime configuration, SDK cache, or remote-tool results.
+
 ### Material, messages, and accepted facts
 
-These routes are native-only. Runtime/material routes recheck current Projects,
+The following routes are native-only. Runtime/material routes recheck current Projects,
 Orchestrator, and provider state. Trusted peer checks are additional to bearer
 authentication where configured.
 
@@ -931,6 +1021,17 @@ has separate measured readiness as listed above.
 
 The Web host maps its own health routes and SPA/static paths. See
 [web host reference](./web.md#host-health).
+
+## Platform component owner routes
+
+Events & Sessions, Environment, Knowledge, Orchestrator, and Identity Broker
+each map `GET /internal/platform/components` only when
+`PlatformComponents:ServiceAuthentication` is configured. The route accepts only
+a service token for the private audience whose `sub` claim equals the configured
+Projects caller subject. It returns the owner's areas with `Cache-Control:
+no-store`, and it's not in the Gateway OpenAPI document. Projects calls these
+routes for `GET /api/platform/components`. See
+[Platform components](../guide/platform-components.md).
 
 ## Registration and implementation boundaries
 

@@ -170,6 +170,14 @@ approved explicitly before it is trusted again. Explicit Decision approval also
 appends a revision; unlike proposal promotion, it does not create an accepted-effect
 receipt or deliver a project fact.
 
+Compiled context includes only Active Decisions with Approved trust. A superseded or
+archived Decision leaves current context on its next compilation, and a corrected or
+restored Decision stays out until someone approves it. Each compilation returns the
+record ID, revision number, and revision ID of every item it used. A run that
+accepted a compilation keeps those references. Later corrections, supersession,
+archival, and restores append new revisions, so the revision history endpoint still
+returns the exact content and state each reference identified.
+
 The agent-scoped export and import routes use the selected, already-pinned Memory
 provider. Version 1 exports only Memory and Decision records with their complete
 revision chains for one exact project and agent. The bundle is bounded to 25 records,
