@@ -365,6 +365,77 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             new[] { "runId", "rootSessionId", "title", "goal", "state", "createdAt", "updatedAt", "completedAt", "startedBy" },
             runSummary.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
 
+        foreach (var operationId in new[] { "listProjectIssues", "listProjectPullRequests" })
+        {
+            var sourceList = FindOperation(paths, operationId);
+            var sourceQuery = sourceList.GetProperty("parameters").EnumerateArray()
+                .Where(parameter => parameter.GetProperty("in").GetString() == "query")
+                .ToArray();
+            Assert.Equal(
+                new[] { "state", "cursor", "pageSize" },
+                sourceQuery.Select(parameter => parameter.GetProperty("name").GetString()).ToArray());
+            Assert.All(sourceQuery, parameter => Assert.False(parameter.GetProperty("required").GetBoolean()));
+            var sourcePageSize = sourceQuery
+                .Single(parameter => parameter.GetProperty("name").GetString() == "pageSize")
+                .GetProperty("schema");
+            Assert.Equal(1, sourcePageSize.GetProperty("minimum").GetInt32());
+            Assert.Equal(100, sourcePageSize.GetProperty("maximum").GetInt32());
+            Assert.Equal(25, sourcePageSize.GetProperty("default").GetInt32());
+            foreach (var status in new[] { "200", "400", "403", "502" })
+                Assert.True(sourceList.GetProperty("responses").TryGetProperty(status, out _), status);
+            Assert.Contains("makes no source control provider call",
+                sourceList.GetProperty("description").GetString(), StringComparison.Ordinal);
+        }
+        var issueState = FindOperation(paths, "listProjectIssues").GetProperty("parameters").EnumerateArray()
+            .Single(parameter => parameter.GetProperty("name").GetString() == "state").GetProperty("schema");
+        Assert.Equal(new[] { "open", "closed", "all" },
+            issueState.GetProperty("enum").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal("open", issueState.GetProperty("default").GetString());
+        Assert.Contains("rejects run-bound tokens",
+            FindOperation(paths, "listProjectIssues").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        Assert.Contains("run-bound token sees only its run's pull requests",
+            FindOperation(paths, "listProjectPullRequests").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        var componentSchemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        var issueSummary = componentSchemas.GetProperty("ProjectIssueSummary");
+        Assert.False(issueSummary.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[] { "taskId", "taskState", "providerId", "repository", "number", "title", "state", "createdAt", "updatedAt" },
+            issueSummary.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        var pullRequestSummary = componentSchemas.GetProperty("ProjectPullRequestSummary");
+        Assert.False(pullRequestSummary.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[]
+            {
+                "providerId", "repository", "number", "title", "htmlUrl", "state", "headBranch", "headSha",
+                "baseBranch", "baseSha", "runId", "disposition", "recordedAt", "updatedAt"
+            },
+            pullRequestSummary.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        var issuePage = componentSchemas.GetProperty("ProjectIssuePage");
+        Assert.False(issuePage.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(new[] { "projectId", "items", "nextCursor" },
+            issuePage.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        var pullRequestPage = componentSchemas.GetProperty("ProjectPullRequestPage");
+        Assert.False(pullRequestPage.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(new[] { "projectId", "coverage", "items", "nextCursor" },
+            pullRequestPage.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal(new[] { "recordedSince", "includesEarlierPullRequests" },
+            componentSchemas.GetProperty("ProjectPullRequestCoverage").GetProperty("required").EnumerateArray()
+                .Select(item => item.GetString()).ToArray());
+        var pullRequestState = FindOperation(paths, "listProjectPullRequests").GetProperty("parameters")
+            .EnumerateArray().Single(parameter => parameter.GetProperty("name").GetString() == "state")
+            .GetProperty("schema");
+        Assert.Equal(new[] { "open", "closed", "merged", "all" },
+            pullRequestState.GetProperty("enum").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.True(FindOperation(paths, "listProjectPullRequests").GetProperty("responses")
+            .TryGetProperty("503", out var unavailable));
+        Assert.Contains("pull_request_records_unavailable",
+            unavailable.GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("isn't a complete pull request history",
+            FindOperation(paths, "listProjectPullRequests").GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
         var inventoryPage = schemas.GetProperty("ProjectSkillInventoryPage");
         Assert.False(inventoryPage.GetProperty("additionalProperties").GetBoolean());

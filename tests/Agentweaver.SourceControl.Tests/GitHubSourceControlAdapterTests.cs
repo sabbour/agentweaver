@@ -190,6 +190,37 @@ public sealed partial class GitHubSourceControlAdapterTests
         Assert.Equal(7, result.Number);
         Assert.Equal(HeadSha, result.HeadSha);
         Assert.Equal(BaseSha, result.BaseSha);
+        Assert.Null(result.Title);
+    }
+
+    [Fact]
+    public async Task CreatePullRequestReturnsProviderTitleForCreatedAndReusedPullRequests()
+    {
+        var calls = 0;
+        var handler = new StubHandler((_, _) => Task.FromResult(++calls switch
+        {
+            1 => new HttpResponseMessage(HttpStatusCode.Created)
+            {
+                Content = new StringContent("{\"title\":\"Created title\"," + PullRequestJson(8, HeadSha, BaseSha)[1..])
+            },
+            2 => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+                { Content = new StringContent("{\"message\":\"Validation failed\"}") },
+            3 => JsonResponse("[{\"title\":\"Reused title\"," + OpenPullRequestListItemJson(9, HeadSha, BaseSha)[1..] + "]"),
+            _ => throw new InvalidOperationException("Unexpected GitHub request.")
+        }));
+        var adapter = CreateAdapter(handler);
+        var context = CreateContext(
+            "run-1",
+            SourceControlCapabilities.RepositoryRead,
+            SourceControlCapabilities.PullRequestWrite);
+        var request = new SourceControlPullRequestRequest(
+            "Feature", "Body", "feature", HeadSha, "main", BaseSha, Draft: false);
+
+        var created = await adapter.CreateOrReusePullRequestAsync(context, request, CancellationToken.None);
+        var reused = await adapter.CreateOrReusePullRequestAsync(context, request, CancellationToken.None);
+
+        Assert.Equal((SourceControlPullRequestDisposition.Created, "Created title"), (created.Disposition, created.Title));
+        Assert.Equal((SourceControlPullRequestDisposition.Reused, "Reused title"), (reused.Disposition, reused.Title));
     }
 
     [Fact]

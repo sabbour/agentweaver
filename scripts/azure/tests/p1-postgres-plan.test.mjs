@@ -159,7 +159,11 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       : [...source.matchAll(/^\s*(\d+) => "Agentweaver\.EventsAndSessions\.Migrations\.([^"]+)",$/gm)]
         .map(match => [Number(match[1]), match[2]]);
     assert.deepEqual(mappings.map(([version]) => version), versions);
-    assert.deepEqual(embedded, mappings.map(([, filename]) => filename));
+    // Orchestrator 032 is embedded for its explicit, separately approved apply path only.
+    const optional = owner.startsWith('orchestrator/') ? ['032_source_control_pull_request_records.sql'] : [];
+    for (const filename of optional) assert.ok(embedded.includes(filename));
+    assert.deepEqual(embedded.filter(filename => !optional.includes(filename)),
+      mappings.map(([, filename]) => filename));
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
@@ -170,10 +174,10 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.ok(source.includes('(applied.Contains(24) && !applied.Contains(23))'));
       assert.ok(!source.includes('if (!applied.Contains(21))'));
       const allowed = source.match(/WHERE version NOT IN \(([\d, ]+)\)/);
-      assert.deepEqual(allowed[1].split(',').map(Number), versions);
+      assert.deepEqual(allowed[1].split(',').map(Number), [...versions, 32]);
       assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
-      assert.ok(source.includes('Enumerable.Range(57, 29)'));
+      assert.ok(source.includes('Enumerable.Range(57, 30)'));
     } else {
       assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));
       assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));

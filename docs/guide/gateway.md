@@ -150,6 +150,33 @@ Projects & Config. A run-bound token sees only its own run. The list reads
 persisted run records only. `title` and `goal` are `null` until a run start
 request stores them.
 
+## List project issues and pull requests
+
+Use `GET /api/v1/projects/{projectId}/source-control/issues` and
+`GET /api/v1/projects/{projectId}/source-control/pull-requests` to fill issue
+and pull request pickers. The Gateway forwards each request to the Orchestrator
+owner and returns its status and body with `Cache-Control: no-store`. Both
+lists read stored Agentweaver data. They don't call the source control provider.
+
+- `pageSize` defaults to 25 and accepts 1 through 100.
+- `cursor` continues from the previous page's `nextCursor`. Send the same
+  `state` and `pageSize` values with it.
+- `state` defaults to `open`. Issues also accept `closed` and `all`. Pull
+  requests also accept `closed`, `merged`, and `all`.
+
+The issue list returns issues that periodic issue sync linked to backlog tasks.
+It needs project or tenant read permission and rejects run-bound tokens. Items
+don't include an issue URL or author, because the backlog doesn't store them.
+
+The pull request list returns pull requests that the project's runs created or
+reused. It needs the same permission as the run list. It isn't a complete
+history: recording starts when Orchestrator migration 032 is applied, and the
+response reports that time in `coverage.recordedSince`. Before migration 032 is
+applied, the list returns `503 pull_request_records_unavailable` instead of an
+empty list.
+
+The web picker doesn't use these lists yet.
+
 ## Read project metrics and usage
 
 Send `GET /api/v1/projects/{projectId}/metrics` for run counts and a daily

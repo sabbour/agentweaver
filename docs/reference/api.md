@@ -501,6 +501,59 @@ A run-bound token sees only its own run. `pageSize` defaults to 25 and accepts
 Pass `nextCursor` back with the same filter and page size.
 `title` and `goal` are `null` until a run start request stores them.
 
+### Project issue and pull request lists
+
+These reads return Agentweaver's stored data. They make no source control
+provider call at read time, so they don't need a provider credential.
+
+| Path | Query | Gateway |
+| --- | --- | --- |
+| `GET /api/projects/{projectId}/source-control/issues` | `state`, `cursor`, `pageSize` | Yes, `listProjectIssues` |
+| `GET /api/projects/{projectId}/source-control/pull-requests` | `state`, `cursor`, `pageSize` | Yes, `listProjectPullRequests` |
+
+The Gateway path adds `/v1` after `/api`. Both routes need the `api.read`
+scope, return `Cache-Control: no-store`, and recheck Projects read permission
+after the read. If permission is lost during the read, the route returns
+`403` with no items. `pageSize` defaults to 25 and accepts 1–100. Unknown or
+repeated query parameters return `400 query_invalid`. A bad cursor or page
+size returns `400 cursor_invalid` or `page_size_invalid`. Pass `nextCursor`
+back with the same filter and page size.
+
+**Issue list.** Returns repository issues that
+[periodic issue sync](#periodic-issue-sync) linked to backlog tasks, ordered by
+issue number, newest first. The caller needs current project or tenant
+`readProjects` permission. Run-bound tokens are rejected. `state` is `open`
+(default), `closed`, or `all`; another value returns
+`400 issue_state_filter_invalid`. Archived tasks and tasks without an issue
+link aren't listed, and a project without an issue sync configuration returns
+an empty page. Each item has the task ID and backlog state, provider,
+repository, issue number, stored title, stored state, and task timestamps.
+The backlog doesn't store an issue URL or author, so items don't include them.
+
+**Pull request list.** Returns pull requests that the project's runs created
+or reused, as Source Control recorded them, ordered by `recordedAt`, newest
+first. The caller needs the same permission as the run list. A run-bound token
+sees only its own run's records. `state` is `open` (default), `closed`,
+`merged`, or `all`; another value returns
+`400 pull_request_state_filter_invalid`. Each item has the provider,
+repository, number, title, URL, state, head and base branch and commit, and
+its provenance: `runId`, `disposition` (`created` or `reused`), `recordedAt`,
+and `updatedAt`. Title and state are the values from the last time a run
+recorded the pull request, not live provider values.
+
+The pull request list isn't a complete pull request history. Recording starts
+when Orchestrator migration `032_source_control_pull_request_records.sql` is
+applied. `coverage.recordedSince` reports that time, and
+`coverage.includesEarlierPullRequests` is always `false`. Older pull requests
+aren't recorded. Until migration 032 is applied, the route returns
+`503 pull_request_records_unavailable`, not an empty list. An empty list would
+wrongly tell a client that the project has no pull requests; the 503 says the
+records don't exist yet. Migration 032 is
+code-only: startup, the default migrator, and the P1 initializer don't apply it.
+
+These routes are the data source for issue and pull request pickers. The web
+picker doesn't use them yet.
+
 ### Project metrics and usage
 
 Use these read-only routes for one project's dashboard:
