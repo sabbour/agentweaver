@@ -195,6 +195,7 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             "runtime_grant_operation_receipts", "copilot_connections", "copilot_connection_revisions",
             "repo_app_authorization_transactions",
             "repo_app_connections", "repo_app_installations", "repo_app_repository_selections",
+            "issue_sync_grants", "issue_sync_mint_audit",
         };
         foreach (var table in tables)
         {
@@ -260,6 +261,9 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             UPDATE identity_broker.repo_app_installations SET id = 2;
             INSERT INTO identity_broker.repo_app_repository_selections VALUES (1);
             UPDATE identity_broker.repo_app_repository_selections SET id = 2;
+            INSERT INTO identity_broker.issue_sync_grants VALUES (1);
+            UPDATE identity_broker.issue_sync_grants SET id = 2;
+            INSERT INTO identity_broker.issue_sync_mint_audit VALUES (1);
             """, connection))
             await permitted.ExecuteNonQueryAsync();
         await using (var forbidden = new NpgsqlCommand(
@@ -270,13 +274,14 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
         }
         foreach (var table in tables.Where(table =>
             table.StartsWith("runtime_grant_", StringComparison.Ordinal) ||
-            table.StartsWith("copilot_connection", StringComparison.Ordinal)))
+            table.StartsWith("copilot_connection", StringComparison.Ordinal) ||
+            table.StartsWith("issue_sync_", StringComparison.Ordinal)))
         {
             foreach (var statement in new[]
             {
                 $"DELETE FROM identity_broker.{QuoteIdentifier(table)}",
                 $"TRUNCATE identity_broker.{QuoteIdentifier(table)}",
-            }.Concat(table is "runtime_grant_heads" or "copilot_connections" ? [] :
+            }.Concat(table is "runtime_grant_heads" or "copilot_connections" or "issue_sync_grants" ? [] :
                 new[] { $"UPDATE identity_broker.{QuoteIdentifier(table)} SET id = 2" }))
             {
                 await using var forbidden = new NpgsqlCommand(statement, connection);

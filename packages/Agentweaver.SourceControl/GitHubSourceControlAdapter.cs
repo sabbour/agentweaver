@@ -43,7 +43,7 @@ public sealed class SourceControlOperationException(
 /// Implements the Source Control provider contract against GitHub's REST API.
 /// Every operation checks the pinned provider/resource/capability binding and treats uncertain writes distinctly.
 /// </summary>
-public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
+public sealed partial class GitHubSourceControlAdapter : ISourceControlAdapter, ISourceControlIssueAdapter
 {
     /// <summary>The provider-options schema version supported by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 1;
@@ -111,16 +111,7 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         SecretCredential credential,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(candidate);
-        ArgumentNullException.ThrowIfNull(repository);
-        ArgumentNullException.ThrowIfNull(credential);
-        if (candidate.Seam != ProviderSeam.SourceControl ||
-            !string.Equals(candidate.ProviderId, ProviderId, StringComparison.Ordinal) ||
-            candidate.OptionsSchemaVersion != CurrentOptionsSchemaVersion ||
-            !candidate.AdvertisedCapabilities.IsSupersetOf(AdvertisedCapabilities))
-            throw new SourceControlOperationException(
-                SourceControlFailureCode.InvalidBinding,
-                "The selected provider candidate does not match this GitHub adapter and options schema.");
+        ValidateRepositoryCandidate(candidate, repository, credential);
 
         var info = await ReadRepositoryAsync(repository, credential, cancellationToken).ConfigureAwait(false);
         var capabilities = GetNegotiatedCapabilities(info);
@@ -129,6 +120,12 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 SourceControlFailureCode.InvalidBinding,
                 "The GitHub repository negotiated a capability not advertised by the selected provider.");
 
+        return RepositoryNegotiation(repository, info, capabilities);
+    }
+
+    private SourceControlRepositoryNegotiation RepositoryNegotiation(SourceControlRepositoryIdentity repository,
+        RepositoryInfo info, ImmutableHashSet<string> capabilities)
+    {
         var resource = new ProviderResourceRef(
             ProviderSeam.SourceControl,
             ProviderId,
@@ -140,6 +137,20 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             info.Id,
             info.DefaultBranch,
             info.IsPrivate);
+    }
+
+    private void ValidateRepositoryCandidate(ProviderCandidate candidate, SourceControlRepositoryIdentity repository,
+        SecretCredential credential)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(credential);
+        if (candidate.Seam != ProviderSeam.SourceControl ||
+            !string.Equals(candidate.ProviderId, ProviderId, StringComparison.Ordinal) ||
+            candidate.OptionsSchemaVersion != CurrentOptionsSchemaVersion ||
+            !candidate.AdvertisedCapabilities.IsSupersetOf(AdvertisedCapabilities))
+            throw new SourceControlOperationException(SourceControlFailureCode.InvalidBinding,
+                "The selected provider candidate does not match this GitHub adapter and options schema.");
     }
 
     /// <summary>Rereads repository identity and permission-derived capabilities for a pinned operation.</summary>

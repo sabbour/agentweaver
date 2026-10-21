@@ -7,6 +7,25 @@ describes source receipts, target guards, and the separate #1784 runtime gate.
 
 ## Offline validation
 
+Issue sync adds Orchestrator `027_periodic_issue_sync.sql`, requiring the
+backlog contract's 026, and Identity Broker
+`20261021000100_AddIssueSyncGrants`. They are **unapplied code-only migrations**.
+Orchestrator requires exactly `SELECT, INSERT, UPDATE` on `issue_sync_projects`
+and `issue_sync_receipts`; Identity requires exactly `SELECT, INSERT, UPDATE`
+on `identity_broker.issue_sync_grants`, and `SELECT, INSERT` only on
+`identity_broker.issue_sync_mint_audit`. No new DELETE, default privilege,
+schema CREATE or authority function EXECUTE is granted. These database grants,
+the new Core plan hash, service TLS configuration, and live application-level
+issue-sync grant creation remain separate approval items. Source validation
+does not perform a migration, grant or deployment action.
+The offline plan hash for this source catalog is
+`a08792123f628dc89b0064cb28148acb8f6eb44a0f8d1a37a145f76315212ed7`.
+It is not an approval receipt. The runner uses its explicit registered version
+list, not contiguous numbering; the absent 017 does not require a
+placeholder. The Core list is 1-16, 18-27. Versions 023 and 024 come from
+v1. Version 027 requires 026 only. Merge order is #2197, then #2186, then
+#2196.
+
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
 open/closed lifecycle and a unique repository issue identity. It requires
 migration 021 and has no schema dependency on migration 025, which requires
@@ -179,7 +198,7 @@ Version 26 adds backlog task content columns and a unique repository issue index
 It requires version 21, adds no tables or grants, and blocks writes to
 `backlog_tasks` until commit.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan lists 102 tables and eight exact row-lock columns.
+The plan lists 104 tables and eight exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

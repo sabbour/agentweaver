@@ -94,11 +94,11 @@ test('Only the existing casting authority function receives direct runtime EXECU
     ['projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)']);
 });
 
-// Migrations 023, 024, and 025 must be reviewed together with their exact runtime grants, never applied by these checks.
-test('Core plan includes all 25 registered versions but never 017; source approval is not execution permission', () => {
+// Migrations 023 through 027 must be reviewed together with their exact runtime grants, never applied by these checks.
+test('Core plan includes all 26 registered versions but never 017; source approval is not execution permission', () => {
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'user_notification_dismissals').privileges, ['SELECT', 'INSERT']);
   assert.equal(plan.executionRequirements.length, 6);
@@ -133,7 +133,7 @@ test('Initializer validates planned and installed mutation guards before it comm
   assert.ok(source.includes("has_column_privilege(@role, @table, @column, 'UPDATE')"));
   assert.doesNotMatch(source, /plan\.Services\.Any\(service => service\.Tables\.Any\(table => table\.MutationDenialRequired\)\)/);
   assert.doesNotMatch(source, /One-column row-lock grants still require reviewed mutation-denial source/);
-  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21,\\s*22,\\s*23,\\s*24,\\s*25,\\s*26\\]\\)'));
+  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21,\\s*22,\\s*23,\\s*24,\\s*25,\\s*26,\\s*27\\]\\)'));
   assert.ok(source.includes('21 => \\"row_lock_record_updates\\"'));
   assert.ok(source.includes('22 => \\"run_list_completion\\"'));
   assert.ok(source.includes('23 => \\"project_run_requests\\"'));
@@ -165,7 +165,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
       assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(23) && !applied.Contains(22))'));
@@ -175,7 +175,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.deepEqual(allowed[1].split(',').map(Number), versions);
       assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
-      assert.ok(source.includes('Enumerable.Range(57, 26)'));
+      assert.ok(source.includes('Enumerable.Range(57, 29)'));
     } else {
       assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));
       assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));
@@ -197,7 +197,7 @@ test('Initializer requires the reviewed Events project usage migration and exact
 
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 102);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 104);
   const orchestrator = plan.services.find(service => service.schema === 'orchestrator');
   assert.deepEqual(orchestrator.tables.find(table => table.table === 'project_run_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);

@@ -10,7 +10,7 @@ using Xunit;
 
 namespace Agentweaver.SourceControl.Tests;
 
-public sealed class GitHubSourceControlAdapterTests
+public sealed partial class GitHubSourceControlAdapterTests
 {
     private const string HeadSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string BaseSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

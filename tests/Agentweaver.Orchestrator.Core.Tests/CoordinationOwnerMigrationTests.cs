@@ -39,11 +39,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(24)]
     [InlineData(25)]
     [InlineData(26)]
+    [InlineData(27)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         await ApplyMigrationsThroughAsync(version);
         var historyBefore = await ReadMigrationHistoryAsync(version);
-        if (version < 26)
+        if (version < 27)
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -211,7 +212,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (23, "023_project_run_requests.sql"),
             (24, "024_chief_of_staff.sql"),
             (25, "025_user_notification_dismissals.sql"),
-            (26, "026_backlog_task_content.sql")
+            (26, "026_backlog_task_content.sql"),
+            (27, "027_periodic_issue_sync.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -332,7 +334,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26]), reader.GetFieldValue<int[]>(9));
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));
