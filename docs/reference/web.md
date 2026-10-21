@@ -31,13 +31,17 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
 | `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP connection status, sign-in, refresh, and disconnect in project settings. |
 | `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. |
-| `src/v1/OverviewPage.tsx` | Cross-project home: projects, recent runs in this browser, and items that need input. |
+| `src/v1/OverviewPage.tsx` | Cross-project Chief of Staff home: Priorities, items that need input, New chat, My conversations, projects, and recent runs in this browser. |
+| `src/v1/chiefOfStaff.ts`, `src/v1/ChiefOfStaffPanels.tsx` | Chief of Staff conversations, the pending-chat store that survives the start redirect, New chat, and My conversations. |
+| `src/v1/PrioritiesPanel.tsx` | Priorities list, edit, checklist, order, and picker-only links with conflict rereads. |
+| `src/v1/FlowPage.tsx`, `src/v1/flowGroups.ts` | Project Flow: Needs input from notifications and Open, Working, and Done from the Gateway run list. |
+| `src/v1/notificationsClient.ts` | The only notifications client. Always uses the unbound session. |
 | `src/v1/DashboardPage.tsx` | Project dashboard: readiness from configuration, team and skills summaries, and quick actions. |
 | `src/v1/OrchestrationsPage.tsx` | Project run list with a status summary. |
-| `src/v1/RunList.tsx`, `src/v1/runListData.ts`, `src/v1/recentRuns.ts` | Shared run list and its data source. Today the source is the runs opened in this browser, per tenant, cleared on sign-out. |
+| `src/v1/RunList.tsx`, `src/v1/runListData.ts`, `src/v1/recentRuns.ts` | Shared run list and its two data sources: the runs opened in this browser (per tenant, cleared on sign-out) and the Gateway project run list (`useGatewayRunList`). |
 | `src/v1/DecisionView.tsx`, `src/v1/decisionTitles.ts` | Shared decision view that rereads a gate before it approves or rejects. |
-| `src/v1/AttentionList.tsx`, `src/v1/runAttention.ts` | Items that need input, for Overview and the notification bell. |
-| `src/v1/runState.ts` | State words for runs: Needs input, Open, Working, Done, and Unavailable. |
+| `src/v1/AttentionList.tsx`, `src/v1/runAttention.ts` | Items that need input: pending gate notifications for Overview and Flow, and the open run's gates for the bell. |
+| `src/v1/runState.ts` | State words for runs: Needs input, Open, Working, Done, Failed, Cancelled, Outcome unknown, and Unavailable. |
 | `src/v1/NewChatComposer.tsx` | Message composer with a stable idempotency key per draft. The run Chat tab uses it. |
 | `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
 | `src/v1/AgentsView.tsx` | Agents roster, filters, and the charter drawer. |
@@ -60,7 +64,9 @@ data hooks are not mounted.
 | Browser route | Handler |
 | --- | --- |
 | `/` | Redirect to `/overview`. |
-| `/overview` | `OverviewPage`. |
+| `/overview` | `OverviewPage`: Chief of Staff home with Priorities, attention, New chat, and My conversations. |
+| `/assistant` | `NewChatPage`: New chat and My conversations; `project` preselects a project. |
+| `/projects/:projectId/flow` | `FlowPage`. |
 | `/projects` | `ProjectsPage`. |
 | `/projects/:projectId` | `DashboardPage`. |
 | `/projects/:projectId/settings` | `ProjectConfigurationPage`; `section` selects `general`, `access`, `repository`, `models`, `components`, `limits`, `connections`, `history`, `danger`, or `advanced`. Missing or unknown values open `general`. |
@@ -78,7 +84,7 @@ data hooks are not mounted.
 | `/auth/remote-mcp/oauth/callback` | Remote MCP OAuth popup callback, handled before the main route tree. |
 | `/console` | Redirect to `/assistant`. |
 | `/projects/:projectId/sessions` | Redirect to `/sessions`. |
-| `/sessions`, `/assistant`, `/platform-settings`, `/observability/*`, `/projects/:projectId/team/cast`, and the project `board`, `flow`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
+| `/sessions`, `/platform-settings`, `/observability/*`, `/projects/:projectId/team/cast`, and the project `board`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
 | Other paths | `UnavailablePage` with **Page not found**. |
 
 The production host serves `index.html` for client routes. Missing `/assets`

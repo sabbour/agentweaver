@@ -93,6 +93,71 @@ Flow groups the user's work into **Needs input**, **Open**, **Working**, and
 - Answering a gate rereads the gate by project, run, session, request, and
   state version first. A stale gate fails without changing state.
 
+## Use the web app
+
+The web app shows Chief of Staff on **Overview** (`/overview`) and on each
+project's **Flow** page.
+
+### Start a chat
+
+1. On **Overview**, go to **New chat**. `/assistant` opens the same panel with
+   **My conversations**; `?project=<projectId>` preselects a project.
+1. Under **Project**, choose an active project. You don't type an ID.
+1. Enter the first message and select **Send**.
+
+The web app creates the run with one idempotency key per draft, adds it to
+**My conversations**, and starts it with a token bound to that run. Sending the
+same draft twice, or retrying after a lost response, creates one run. The
+browser saves only the project, run, and root session IDs until start
+finishes, so a reload or a sign-in redirect resumes the same chat. If sign-in
+for the run needs your input, select **Sign in and start**. If start fails,
+select **Retry start**. The chat history stays on the run page.
+
+### My conversations
+
+**My conversations** lists the chats you started, newest first, with the run
+state. Select **Open** to open the run page. A chat that was created but not
+started shows **Not started** and a **Start** button. A conversation in a
+project you can no longer read shows **Unavailable** and no project content.
+
+### Priorities
+
+**Priorities** on **Overview** lists your Priorities in order.
+
+- **Add Priority** creates a Priority from an outcome and optional notes.
+- **Edit** changes the outcome, notes, and state: **Active**, **Achieved**, or
+  **Dropped**.
+- Add, check, and remove checklist items in place.
+- **Move up** and **Move down** change the order.
+- **Add link** links a run or a conversation. Choose a project and pick a run
+  from its run list, or pick one of your conversations. Issue, pull request,
+  and artifact links aren't offered because the web app has no picker for
+  them. Existing links of those kinds show **Unavailable** as their state.
+- Run and conversation links show the run state. A link you can't read shows
+  **Unavailable** and its kind only. A deleted target shows **Not found**.
+
+If another change lands first, the web app rereads Priorities and shows **This
+Priority changed. Review the current values and try again.** Your edit stays in
+the form. An order conflict shows **The order changed. Review the current order
+and try again.** Editing a Priority never calls a run or gate endpoint.
+
+### Flow
+
+Open a project and choose **Flow** (`/projects/:projectId/flow`).
+
+- **Needs input** lists pending gates from your notifications for the project,
+  including dismissed ones. Backlog promotion notifications aren't gates and
+  don't appear. Select an item to open its decision on the run page.
+- **Open** lists idle runs. **Working** lists active and blocked runs.
+- **Done** lists ended runs. **Done**, **Failed**, **Cancelled**, and **Outcome
+  unknown** keep their own labels.
+- Every run shows **Pull request: Unavailable** because no service reports pull
+  request state yet.
+
+Before it approves, rejects, or answers, the decision view rereads the gate.
+If the gate is gone or its state version changed, it shows **This request
+changed since you opened it. Nothing was sent. Review it and try again.**
+
 ## Deployment
 
 Orchestrator migration 024 creates the Chief of Staff tables, and

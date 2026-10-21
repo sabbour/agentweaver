@@ -70,9 +70,11 @@ The client uses these routes:
 | Route | Purpose |
 | --- | --- |
 | `/` | Opens `/overview`. |
-| `/overview` | Read your projects, **Recent runs in this browser**, and the items that need your input. |
+| `/overview` | Chief of Staff home: **Priorities**, **Needs attention**, **New chat**, **My conversations**, your projects, and **Recent runs in this browser**. |
+| `/assistant` | **New chat** and **My conversations**. `?project=<projectId>` preselects a project. |
 | `/projects` | Browse project tiles and create a project. Creating a project does not make you its owner. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, recent runs, team, and quick actions. |
+| `/projects/:projectId/flow` | Read the project's work grouped as **Needs input**, **Open**, **Working**, and **Done**. |
 | `/projects/:projectId/orchestrations` | Read this project's runs from this browser and open a run. |
 | `/projects/:projectId/team` | Read agents and edit an agent's role and charter. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
@@ -87,10 +89,12 @@ The v1 client keeps the 0.x navigation rail, project switcher, floating content
 panel, gallery tiles, dialogs, typography, and theme. Its views use v1 service
 contracts instead of the 0.x API.
 
-The rail has **Overview** and **Projects**. **Overview** is the home page. It
-shows a summary of your projects, **Recent runs in this browser**, and **Needs
-attention**: the questions and approvals that need your input in the run you
-have open. The notification bell in the shell lists the same items.
+The rail has **Overview** and **Projects**. **Overview** is the home page and
+the Chief of Staff home. It shows your **Priorities**, **Needs attention** (the
+pending gates from your notifications), **New chat**, **My conversations**, a
+summary of your projects, and **Recent runs in this browser**. The notification
+bell in the shell lists the questions and approvals for the run you have open.
+For details, see [Chief of Staff](./chief-of-staff.md#use-the-web-app).
 
 Choose **Projects** to open the project gallery. Each tile shows the project
 state, revision, and your access: **Can edit**, **Can view**, or **No access**.
@@ -108,6 +112,7 @@ Within a project, use these destinations:
 | Destination | Route | What you can do |
 | --- | --- | --- |
 | Dashboard | `/projects/:projectId` | Read setup readiness from the saved configuration, team and skills summaries, and recent runs. Use quick actions to finish setup or open Orchestrations and Memories. |
+| Flow | `/projects/:projectId/flow` | Read pending gates under **Needs input**, including dismissed notifications, and the project's runs under **Open**, **Working**, and **Done**. Pull request state shows **Unavailable**. Select **Refresh** to reload. |
 | Orchestrations | `/projects/:projectId/orchestrations` | Read this project's runs from this browser with a status summary. Select **Refresh** to reload. |
 | Agents | `/projects/:projectId/team` | Read the **Total**, **In the team**, and **Not in the team** counts. Filter the agent tiles. Open an agent to read its ID, team position, and skills, or edit its role and charter. |
 | Skills | `/projects/:projectId/skills` | Browse marketplace sources, preview and import Skills, read the inventory, and assign Skills to agents. |
@@ -128,15 +133,15 @@ run off the list only; the run doesn't change. An empty list shows **Runs you
 open appear here.** Signing out clears the list. The list is stored in this
 browser and holds only IDs and the last state read.
 
-A full run list needs a future service API (gap G2). The browser can't start a
-new chat or run yet; that also needs a service API (gap G1). Dashboard metrics
+**Flow** reads the project's full run list from the Gateway. **New chat** on
+**Overview** starts a run in a project you pick. Dashboard metrics
 need a metrics API (gap G3). Agents has no cast, add, or sync controls (gap
 G4).
 
 ### Unavailable destinations
 
-Board, Flow, Workspace, Workflows, Observability, Diagnostics, Heartbeat,
-Cluster, Assistant, Platform settings, and Sessions are not navigation choices.
+Board, Workspace, Workflows, Observability, Diagnostics, Heartbeat,
+Cluster, Platform settings, and Sessions are not navigation choices.
 Their data isn't exposed by this client's v1 APIs. Old links show one **Not
 available in this version** page with a reason and a link back. Unknown
 addresses show **Page not found**. Neither page invents data or calls the old
@@ -423,6 +428,14 @@ Run these commands from the repository root:
    npm --prefix apps/web run coverage
    npm --prefix apps/web run lint
    npm --prefix apps/web run build
+   ```
+
+4. Run the Chief of Staff browser journeys against the build. They serve
+   `apps/web/dist`, fake the Broker and Gateway, and need the Playwright
+   Chromium browser (`npx playwright install chromium`):
+
+   ```powershell
+   npm --prefix apps/web run e2e
    ```
 
 The production host provides unauthenticated `/health/live` and
