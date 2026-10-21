@@ -80,6 +80,9 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `createProject` | Create a project; does not assign an Owner. |
 | `getProject` | Read project metadata. |
 | `updateProject` | Update metadata at an expected revision. |
+| `listProjectRoleAssignments` | Read project role assignments. |
+| `assignProjectRole` | Assign a project role through owner authorization. |
+| `revokeProjectRoleAssignment` | Revoke a project role assignment. |
 | `getProjectConfiguration` | Read current or retained configuration. |
 | `updateProjectConfiguration` | Append a configuration revision. |
 | `getAuthorizationContext` | Read current tenant and effective authority. |
