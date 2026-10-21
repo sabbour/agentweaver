@@ -437,6 +437,89 @@ export interface ProjectConfiguration {
   sourceControl?: SourceControlProjectSettings | null;
 }
 
+/** Owner-reviewed casting draft and its configuration and draft revision fences. */
+export interface ProjectCastingProposal {
+  proposalId: string;
+  projectId: string;
+  baseConfigurationRevision: number;
+  draftRevision: number;
+  state: 'pending' | 'confirmed' | 'rejected';
+  draft: ProjectConfiguration;
+  confirmedConfigurationRevision: number | null;
+  result: ProjectConfiguration | null;
+  transferProvenance: ProjectCastingTransferProvenance | null;
+  createdByActorId: string;
+  createdAt: string;
+  updatedByActorId: string;
+  updatedAt: string;
+}
+
+/** Complete configuration staged for review without applying it. */
+export interface CreateProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  draft: ProjectConfiguration;
+}
+
+/** Built-in scenario selected at the current configuration revision. */
+export interface CreateScenarioProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  templateId: string;
+}
+
+/** Catalog roles selected at the current configuration revision. */
+export interface CreateManualProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  roleIds: string[];
+}
+
+/** Replacement draft fenced to the pending proposal's draft revision. */
+export interface UpdateProjectCastingProposalRequest {
+  expectedDraftRevision: number;
+  draft: ProjectConfiguration;
+}
+
+/** Expected draft revision used for confirmation or rejection. */
+export interface TransitionProjectCastingProposalRequest {
+  expectedDraftRevision: number;
+}
+
+/** Verified source identity and digest retained on an imported proposal. */
+export interface ProjectCastingTransferProvenance {
+  formatVersion: 1;
+  sourceProjectId: string;
+  sourceConfigurationRevision: number;
+  contentDigest: string;
+}
+
+/** Versioned, digest-checked charter and casting payload; excludes other settings. */
+export interface ProjectCastingTransfer extends ProjectCastingTransferProvenance {
+  agentCharters: ProjectConfiguration['agentCharters'];
+  casting: ProjectConfiguration['casting'];
+}
+
+/** Transfer staged for review against the target project's current revision. */
+export interface ImportProjectCastingTransferRequest {
+  expectedConfigurationRevision: number;
+  transfer: ProjectCastingTransfer;
+}
+
+/** Built-in scenario that seeds a proposal from catalog role identifiers. */
+export interface ProjectCastingTemplateDefinition {
+  id: string;
+  title: string;
+  description: string;
+  roleIds: string[];
+}
+
+/** Built-in role text used to generate a project agent charter. */
+export interface ProjectCastingRoleDefinition {
+  id: string;
+  title: string;
+  summary: string;
+  responsibilities: string[];
+  boundaries: string[];
+}
+
 /** Revision and optional agent scope for one assigned skill. */
 export interface ProjectSkillAssignment {
   skillId: string;
@@ -645,6 +728,58 @@ export interface ProjectRunPage {
   projectId: string;
   items: ProjectRunSummary[];
   nextCursor: string | null;
+}
+
+/** Created and terminal-completed run counts on one UTC calendar day. */
+export interface ProjectMetricsDay {
+  date: string;
+  created: number;
+  completed: number;
+}
+
+/** Orchestrator-owned current state, lifetime total, and half-open interval run metrics. */
+export interface ProjectMetrics {
+  projectId: string;
+  from: string;
+  to: string;
+  activeRuns: number;
+  blockedRuns: number;
+  runsInRange: number;
+  runsTotal: number;
+  completedRuns: number;
+  succeededRuns: number;
+  series: ProjectMetricsDay[];
+}
+
+/** Persisted cost subtotal; consumers must not combine units or replace unknown amounts with zero. */
+export interface ProjectUsageCost {
+  priceUnit: string | null;
+  disposition: 'estimate' | 'reconciled' | 'unpriced';
+  amount: number | null;
+}
+
+/** Model or agent ledger aggregate; any missing measurement makes its aggregate null. */
+export interface ProjectUsageItem {
+  id: string;
+  requestCount: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  avgDurationMs: number | null;
+  runs: number;
+  unpricedRequestCount: number | null;
+  cost: ProjectUsageCost[];
+}
+
+/** Events-owned usage grouped independently by persisted model and agent IDs. */
+export interface ProjectUsage {
+  projectId: string;
+  from: string;
+  to: string;
+  usageByModel: ProjectUsageItem[];
+  usageByAgent: ProjectUsageItem[];
 }
 
 /** `unavailable` means the caller can no longer read the project; project-owned fields are then null or absent. */
@@ -1315,4 +1450,100 @@ export interface ProjectRoleAssignment {
 export interface ProjectRoleAssignmentList {
   projectId: string;
   assignments: ProjectRoleAssignment[];
+}
+
+/** Stable platform component area identifiers. */
+export type PlatformComponentArea =
+  | 'sessions'
+  | 'snapshots'
+  | 'sandbox'
+  | 'storage'
+  | 'memory'
+  | 'policy'
+  | 'guardrails'
+  | 'networkPolicy'
+  | 'cost'
+  | 'applicationHosting'
+  | 'canvas'
+  | 'secrets'
+  | 'sourceControl'
+  | 'telemetry'
+  | 'messaging'
+  | 'objectStore';
+
+/** Owner service that reports a platform component area; `none` has no backend owner. */
+export type PlatformComponentOwner =
+  | 'eventsAndSessions'
+  | 'environment'
+  | 'knowledge'
+  | 'orchestrator'
+  | 'identityBroker'
+  | 'none';
+
+/** How many implementations can serve a platform component area. */
+export type PlatformComponentCardinality =
+  | 'exclusive'
+  | 'orderedComposite'
+  | 'platformSingleton'
+  | 'layered'
+  | 'keyedByMeterSource'
+  | 'perApplication'
+  | 'perCanvas';
+
+/** Readiness of an area or implementation as reported by its owner. */
+export type PlatformComponentReadiness =
+  | 'ready'
+  | 'degraded'
+  | 'notReady'
+  | 'disabled'
+  | 'notAvailable'
+  | 'unknown';
+
+/** Reason code for an area or implementation that isn't `ready`. */
+export type PlatformComponentReason =
+  | 'ownerUnavailable'
+  | 'noBackendOwner'
+  | 'notSelected'
+  | 'notImplemented'
+  | 'readinessCheckFailed'
+  | 'readinessTimedOut';
+
+/** One implementation that currently serves a platform component area. */
+export interface PlatformComponentActiveImplementation {
+  implementationId: string;
+  displayName: string;
+  version: string;
+  hosting: string;
+  layer: 'l3l4' | 'l7' | null;
+  meterSource: string | null;
+  order: number | null;
+  readiness: PlatformComponentReadiness;
+  reason: PlatformComponentReason | null;
+  observedAt: string;
+}
+
+/** One registered implementation that an owner could select for an area. */
+export interface PlatformComponentAvailableImplementation {
+  implementationId: string;
+  displayName: string;
+  version: string;
+  enabled: boolean;
+}
+
+/** Active and available implementations for one platform component area. */
+export interface PlatformComponentAreaReport {
+  area: PlatformComponentArea;
+  purpose: string;
+  owner: PlatformComponentOwner;
+  cardinality: PlatformComponentCardinality;
+  readiness: PlatformComponentReadiness;
+  reason: PlatformComponentReason | null;
+  active: PlatformComponentActiveImplementation[];
+  available: PlatformComponentAvailableImplementation[];
+}
+
+/** Response of `GET /api/v1/platform/components`; every area is always present. */
+export interface PlatformComponentReport {
+  observedAt: string;
+  areas: PlatformComponentAreaReport[];
 }

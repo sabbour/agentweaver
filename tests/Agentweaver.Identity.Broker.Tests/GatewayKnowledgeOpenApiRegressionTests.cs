@@ -11,6 +11,55 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class GatewayKnowledgeOpenApiRegressionTests
 {
+    /// <summary>Publishes strict, separate owner contracts and reporting query/error schemas.</summary>
+    [Fact]
+    public async Task ProjectReportingRoutesExposeStrictContractsAndBoundedQueries()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call owners."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        var paths = root.GetProperty("paths");
+        foreach (var (operationId, path, owner, schema) in new[]
+        {
+            ("readProjectMetrics", "metrics", "Orchestrator", "ProjectMetrics"),
+            ("readProjectUsage", "usage", "Events", "ProjectUsage")
+        })
+        {
+            var operation = paths.GetProperty($"/api/v1/projects/{{projectId}}/{path}").GetProperty("get");
+            Assert.Equal(operationId, operation.GetProperty("operationId").GetString());
+            Assert.Equal(owner, operation.GetProperty("x-agentweaver-owner").GetString());
+            Assert.Contains("92 days", operation.GetProperty("responses").GetProperty("400")
+                .GetProperty("description").GetString());
+            Assert.Contains("no-store", operation.GetProperty("description").GetString());
+            Assert.Contains("run-bound", operation.GetProperty("description").GetString());
+            Assert.Equal("#/components/schemas/" + schema, operation.GetProperty("responses").GetProperty("200")
+                .GetProperty("content").GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+            var queries = operation.GetProperty("parameters").EnumerateArray()
+                .Where(parameter => parameter.GetProperty("in").GetString() == "query").ToArray();
+            Assert.Equal(path == "metrics" ? new[] { "from", "to", "bucket" } : ["from", "to"],
+                queries.Select(query => query.GetProperty("name").GetString()));
+            Assert.All(queries.Take(2), query =>
+                Assert.True(query.GetProperty("schema").TryGetProperty("pattern", out _)));
+            if (path == "metrics")
+                Assert.Equal("day", queries[2].GetProperty("schema").GetProperty("enum")[0].GetString());
+        }
+        var schemas = root.GetProperty("components").GetProperty("schemas");
+        foreach (var name in new[] { "ProjectMetrics", "ProjectMetricsDay", "ProjectUsage", "ProjectUsageItem", "ProjectUsageCost" })
+        {
+            var schema = schemas.GetProperty(name);
+            Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
+            Assert.Equal(schema.GetProperty("properties").EnumerateObject().Select(property => property.Name),
+                schema.GetProperty("required").EnumerateArray().Select(property => property.GetString()));
+        }
+        AssertNullablePropertyType(schemas.GetProperty("ProjectUsageItem").GetProperty("properties"), "inputTokens", "number");
+        AssertNullablePropertyType(schemas.GetProperty("ProjectUsageCost").GetProperty("properties"), "amount", "number");
+    }
+
     private static readonly string[] IdempotentWriteOperationIds =
     [
         "createProjectRun",
@@ -260,6 +309,14 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         AssertNullablePropertyType(importProperties, "skillId", "string");
         AssertNullablePropertyType(importProperties, "expectedRevision", "integer");
 
+        var revoke = FindOperation(paths, "revokeProjectSkillRevision");
+        Assert.Equal("Projects", revoke.GetProperty("x-agentweaver-owner").GetString());
+        Assert.True(revoke.GetProperty("responses").TryGetProperty("204", out _));
+        var package = FindOperation(paths, "packageSkillContent");
+        Assert.Equal(
+            "#/components/schemas/SkillContentPackageResult",
+            package.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
         var inventory = FindOperation(paths, "listProjectSkillInventory");
         var inventoryQuery = inventory.GetProperty("parameters").EnumerateArray()
             .Where(parameter => parameter.GetProperty("in").GetString() == "query")
@@ -391,12 +448,17 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             "SkillContentCandidateRequest",
             "ImportSkillContentRequest",
             "UpdateSkillAssignmentRequest",
+            "PackageSkillContentRequest",
+            "SkillPackageFileRequest",
+            "SkillPackageDraftRequest",
+            "RevokeSkillRevisionRequest",
         })
         {
             Assert.False(schemas.GetProperty(schemaName).GetProperty("additionalProperties").GetBoolean());
         }
 
         Assert.Equal(3L * 1024 * 1024, gateway.GetRequestSizeLimit("/api/v1/skills/preview")?.MaxRequestBodySize);
+        Assert.Equal(3L * 1024 * 1024, gateway.GetRequestSizeLimit("/api/v1/skills/package")?.MaxRequestBodySize);
         Assert.Equal(
             3L * 1024 * 1024,
             gateway.GetRequestSizeLimit("/api/v1/projects/{projectId}/skills/import")?.MaxRequestBodySize);
@@ -410,7 +472,8 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
                 "/api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import")?.MaxRequestBodySize);
         foreach (var operationId in new[]
         {
-            "previewSkillContent", "importProjectSkill", "previewMarketplaceSkill", "importMarketplaceSkill",
+            "previewSkillContent", "packageSkillContent", "importProjectSkill", "previewMarketplaceSkill",
+            "importMarketplaceSkill",
         })
         {
             Assert.Equal(

@@ -39,15 +39,16 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         NpgsqlDataSource privilegedDataSource,
         string runtimeRole,
         Uri baseAddress,
-        X509Certificate2? brokerRunBindingServerCertificate)
+        X509Certificate2? brokerRunBindingServerCertificate,
+        bool useKestrel)
     {
         _host = host;
         _dataSource = dataSource;
         _privilegedDataSource = privilegedDataSource;
         _runtimeRole = runtimeRole;
-        _client = brokerRunBindingServerCertificate is null
-            ? host.GetTestClient()
-            : new HttpClient(CreatePinnedTestHandler(brokerRunBindingServerCertificate));
+        _client = brokerRunBindingServerCertificate is not null
+            ? new HttpClient(CreatePinnedTestHandler(brokerRunBindingServerCertificate))
+            : useKestrel ? new HttpClient() : host.GetTestClient();
         _client.BaseAddress = baseAddress;
     }
 
@@ -58,6 +59,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
     public NpgsqlDataSource RuntimeDataSource => _dataSource;
     public NpgsqlDataSource PrivilegedFixtureDataSource => _privilegedDataSource;
 
+    /// <summary>Hosts Projects with restricted runtime grants; optional Kestrel exercises transport request limits.</summary>
     public static async Task<ProjectsConfigResourceServer> StartAsync(
         string connectionString,
         SecurityKey signingKey,
@@ -67,7 +69,9 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         IObjectStore? skillContentObjects = null,
         bool usePublicWriterFixture = false,
         string? brokerRunBindingAudience = null,
-        X509Certificate2? brokerRunBindingServerCertificate = null)
+        X509Certificate2? brokerRunBindingServerCertificate = null,
+        bool grantRoleAssignmentWrites = false,
+        bool useKestrel = false)
     {
         if ((brokerRunBindingAudience is null) != (brokerRunBindingServerCertificate is null))
             throw new ArgumentException(
@@ -91,7 +95,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
 
         var runtimeRole = $"projects_config_runtime_{Guid.NewGuid():N}";
         var runtimePassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        await CreateRuntimeRoleAsync(privilegedDataSource, connectionString, runtimeRole, runtimePassword);
+        await CreateRuntimeRoleAsync(
+            privilegedDataSource, connectionString, runtimeRole, runtimePassword, grantRoleAssignmentWrites);
         var runtimeConnectionString = new NpgsqlConnectionStringBuilder(connectionString)
         {
             Username = runtimeRole,
@@ -124,15 +129,18 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
 
         var host = await new HostBuilder().ConfigureWebHost(web =>
         {
-            if (brokerRunBindingServerCertificate is null)
+            if (brokerRunBindingServerCertificate is null && !useKestrel)
                 web.UseTestServer();
             else
             {
                 web.UseKestrel();
                 web.ConfigureKestrel(server =>
                     server.Listen(IPAddress.Loopback, 0, listen =>
-                        listen.UseHttps(brokerRunBindingServerCertificate, https =>
-                            https.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13)));
+                    {
+                        if (brokerRunBindingServerCertificate is not null)
+                            listen.UseHttps(brokerRunBindingServerCertificate, https =>
+                                https.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13);
+                    }));
             }
             web.ConfigureServices(services =>
             {
@@ -146,12 +154,14 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                             System.Text.Json.JsonNamingPolicy.CamelCase));
                 });
                 services.AddSingleton(serviceDataSource);
-                services.AddDbContext<ProjectsConfigDbContext>((_, options) =>
+                services.AddDbContextFactory<ProjectsConfigDbContext>((_, options) =>
                     options.UseNpgsql(serviceDataSource, npgsql => npgsql.MigrationsHistoryTable(
                         "__ef_migrations_history", ProjectsConfigDbContext.Schema)));
                 services.AddSingleton(catalog);
                 services.AddSingleton(TimeProvider.System);
+                services.AddPlatformComponentCollector(new ConfigurationBuilder().Build());
                 services.AddScoped<ProjectsConfigService>();
+                services.AddScoped<ProjectRoleAssignmentService>();
                 if (skillContentObjects is not null)
                     services.AddScoped(_ => new SkillContentObjectStore(skillContentObjects));
                 services.AddScoped<SkillContentService>(provider => new SkillContentService(
@@ -233,12 +243,12 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             });
         }).StartAsync();
 
-        var baseAddress = brokerRunBindingServerCertificate is null
+        var baseAddress = brokerRunBindingServerCertificate is null && !useKestrel
             ? new Uri("https://projects.test")
             : GetKestrelBaseAddress(host);
         return new ProjectsConfigResourceServer(
             host, dataSource, privilegedDataSource, runtimeRole, baseAddress,
-            brokerRunBindingServerCertificate);
+            brokerRunBindingServerCertificate, useKestrel);
     }
 
     private static Uri GetKestrelBaseAddress(IHost host)
@@ -288,7 +298,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         NpgsqlDataSource privilegedDataSource,
         string ownerConnectionString,
         string runtimeRole,
-        string runtimePassword)
+        string runtimePassword,
+        bool grantRoleAssignmentWrites)
     {
         var database = new NpgsqlConnectionStringBuilder(ownerConnectionString).Database;
         await using var connection = await privilegedDataSource.OpenConnectionAsync();
@@ -307,6 +318,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT, INSERT ON projects_config.project_configuration_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.platform_runtime_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.project_run_selections TO \"{runtimeRole}\"",
+            // Mirrors the deployed runtime grant for owner-reviewed casting proposals.
+            $"GRANT SELECT, INSERT, UPDATE ON projects_config.project_casting_proposals TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.project_skill_content_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.project_skill_content_revocations TO \"{runtimeRole}\"",
             $"GRANT USAGE, SELECT ON SEQUENCE projects_config.platform_runtime_revisions_revision_seq TO \"{runtimeRole}\"",
@@ -315,6 +328,14 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT ON projects_config.authority_audit TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO \"{runtimeRole}\"",
         };
+        if (grantRoleAssignmentWrites)
+            statements =
+            [
+                .. statements,
+                $"GRANT INSERT ON projects_config.project_role_assignments TO \"{runtimeRole}\"",
+                $"GRANT UPDATE (state, revision, revoked_by, revoked_at) ON projects_config.project_role_assignments TO \"{runtimeRole}\"",
+                $"GRANT INSERT ON projects_config.authority_audit TO \"{runtimeRole}\"",
+            ];
         foreach (var statement in statements)
         {
             await using var grant = new NpgsqlCommand(statement, connection);

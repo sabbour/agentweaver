@@ -112,6 +112,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `POST /api/projects/{projectId}/casting/import` | Stage an explicit owner-authorized charter/casting import for review. |
 | `GET /api/platform/runtime-defaults` | Read the platform administrator's current defaults. |
 | `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
+| `GET /api/platform/components` | Report the active implementation and readiness of every platform component area for a current TenantAdmin or PlatformAdmin. Projects collects owner reports in parallel. See [Platform components](../guide/platform-components.md). |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the exact signed project/run binding, active project, current actor membership, active Orchestrator assignment, and matching accepted run-selection snapshot. |
@@ -150,6 +151,33 @@ with revoked or stale authority are denied. Inventory contains no instructions,
 resource bytes, or object keys.
 
 ### Reviewed casting proposals and explicit transfers
+
+The Gateway exposes these owner routes under `/api/v1`, including templates
+and roles. It forwards the bearer and optional tenant selector; Projects remains
+the authorization and persistence owner. Import request bodies have the same
+1 MiB limit at both entry points. Export requires `WriteProjects`, not just read
+authority. See [Gateway casting](../reference/api.md#casting-through-the-gateway).
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant Projects as Projects & Config
+    participant DB as PostgreSQL
+    Client->>Gateway: Create proposal (expectedConfigurationRevision, draft or catalog selection)
+    Gateway->>Projects: Forward bearer, tenant selector, and body
+    Projects->>DB: Check current WriteProjects; stage revision-bound proposal
+    Projects-->>Client: 201 pending proposal through Gateway
+    Client->>Gateway: Confirm reviewed proposal (expectedDraftRevision)
+    Gateway->>Projects: Forward unchanged
+    Projects->>DB: Lock project; recheck authority and both revisions
+    alt Revisions are current
+        Projects->>DB: Append configuration and confirm proposal atomically
+        Projects-->>Client: 200 confirmed proposal through Gateway
+    else Revision is stale
+        Projects-->>Client: 409 through Gateway; configuration unchanged
+    end
+```
 
 Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
 
@@ -255,11 +283,15 @@ does not produce a receipt.
   allow list. It also carries each layered Network Policy provider's layer,
   options revision, and required/advertised capabilities. The Environment consumer rechecks the current authorization context before reading this snapshot and compiles the final intent.
 - Project configuration revisions, platform runtime revisions, and run-selection snapshots are append-only at the database boundary. Project metadata and revision heads remain mutable under optimistic revision checks.
-- Memberships and role assignments live in this service's schema. A privileged
-  source path provisions or revokes them. Public APIs cannot self-grant roles.
+- Memberships and role assignments live in this service's schema. A
+  privileged source path provisions or revokes them. A current TenantAdmin
+  can also assign and revoke project roles through the public
+  role-assignment API; project Owners can list them but can't change them.
   Revocation uses expected revisions and records an immutable audit event. It
-  cannot remove the last explicit project Owner. Runtime database credentials
-  have SELECT-only access to membership, assignment, and audit tables. Casting
+  cannot remove the last Owner of an active project. Runtime database
+  credentials are read-only on memberships. On assignments and audit they
+  have only the approved `INSERT` and column-scoped `UPDATE` grants, and no
+  `DELETE`. Casting
   row locks use the fixed security-definer authority function. Startup checks
   its exact EXECUTE grant.
 - Operators create the first TenantAdmin with the one-shot
@@ -448,13 +480,18 @@ dotnet test tests/Agentweaver.Projects.Config.Tests/Agentweaver.Projects.Config.
 
 The PostgreSQL tests use Testcontainers. They verify tenant-scoped run selection, revision and idempotency behavior,
 model fail-closed semantics, and provider candidate metadata. They also verify
-SELECT-only runtime authority grants, CAS revocation and audit retention, the
+the exact runtime authority grant set, CAS revocation and audit retention, the
 last-Owner invariant, and database append-only triggers.
 
 ## Skill content and assignment
 
 `POST /api/skills/preview` validates a `SKILL.md` document and its text resources
-and returns a digest without storing the content. Project import requires current
+and returns a digest without storing the content. `POST /api/skills/package`
+groups uploaded files, one ZIP archive, or draft form fields into candidates.
+Each `SKILL.md` marks a skill root, and files under a nested root belong only to
+that nested skill. The route checks every path, applies file-count and size
+limits while it expands an archive, and validates each candidate with the same
+preview rules. It stores nothing. Project import requires current
 project write authority, that exact digest, and an idempotency key. Each successful
 import creates an immutable revision with source provenance. Reusing the key for a
 different request or importing against a stale revision returns a conflict.

@@ -58,6 +58,7 @@ export default defineConfig({
             { text: 'Notifications', link: '/guide/notifications' },
             { text: 'Gateway/BFF', link: '/guide/gateway' },
             { text: 'Chief of Staff', link: '/guide/chief-of-staff' },
+            { text: 'Platform components', link: '/guide/platform-components' },
           ],
         },
         {

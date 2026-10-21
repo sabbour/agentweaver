@@ -52,67 +52,62 @@ database credentials while collecting evidence.
 
 ## Diagnose an indeterminate P1 project setup
 
-The P1 API and MCP runners record privileged command failures under
-`observations.fixtureSetup.commandFailures`. Each entry contains
-`productErrorCode`, `kubectlExitCode`, `processErrorClass`, and `stderrClass`.
-The runner keeps only known product error codes and fixed classifications.
-It does not save standard error, standard output from a failed command,
-process error messages, or tokens. An unknown product code stays
-`unrecognized`; a generic product failure stays `product-unclassified`.
+The P1 API and MCP runners set up and clean up their fixture project through
+the public Gateway API with the signed-in setup token:
 
-For `forbidden`, compare the approved issuer, subject, and tenant in
-`ProjectsConfig__PrivilegedSetup__*` with the selected Broker actor. Also
-check current tenant membership, TenantAdmin authority, unbound request
-claims, and the `api.read`, `projects.admin`, and `projects.orchestrator` scopes.
-A `kubectl-forbidden` classification instead indicates Kubernetes
-authorization. For `product-unclassified`, first confirm that the Projects
-Config runtime ConfigMap contains `ConnectionStrings__ProjectsConfigAuthority`
-and the `ProjectsConfig__AuthorityDatabase__WorkloadIdentity__*` keys. The
-command fails before it connects to the database when they're missing. Then
-check migration state, workload identity, database connectivity, and
-concurrency failures. For the required values, see
-[Runtime configuration](../reference/runtime-configuration.md). A `timeout` or
-`exec-transport` result does not establish whether the owner committed the
-operation.
+1. `createProject` creates a project named `p1-<invocation-uuid>`.
+2. `assignProjectRole` assigns the setup actor the Owner role, then the
+   Orchestrator role.
+3. Cleanup revokes the Orchestrator assignment, archives the project with
+   `updateProject`, and then revokes the Owner assignment.
 
-The runner does not retry an indeterminate command automatically. Do not
+The runner records each failed mutating request under
+`observations.fixtureSetup.requestFailures`. Each entry contains `step`,
+`operationId`, `status`, and `problemCode`. A `null` status means the response
+wasn't received, such as a timeout or transport failure. The runner doesn't
+save response bodies, error messages, or tokens. When a failure leaves the
+state unknown, `diagnosis.projectName` contains the fixture project name.
+
+Common results:
+
+| Step | Status and problem code | What to check |
+| --- | --- | --- |
+| `create-project` | `403 forbidden` | The setup actor needs an unbound token with the `api.read` and `projects.admin` scopes and a current TenantAdmin assignment. |
+| `assign-owner`, `assign-orchestrator`, `revoke-*` | `503 role_assignment_unavailable` | The runtime database grants for role assignments aren't applied. See [Runtime authority writes](../reference/runtime-configuration.md#runtime-authority-writes). No authority row changed. Don't grant other privileges as a workaround. |
+| `assign-*` | `404 principal_not_found` | The setup actor has no active membership in the selected tenant. |
+| `revoke-*` | `409 revision_conflict` | Another request changed the assignment. Reconcile it before you do anything else. |
+| `revoke-owner` | `409 last_project_owner` | The project isn't archived yet. Confirm the archive step result first. |
+
+Any failure after the runner sends a mutating request makes setup or cleanup
+indeterminate. The runner doesn't retry the request or run cleanup. Don't
 retry setup, start a replacement invocation, or run cleanup until you have
 reviewed the original invocation state. Use the persisted invocation UUID
 from the evidence, not a new UUID.
 
-1. Generate the read-only query from the repository root:
+1. As a tenant admin, call `listProjects` and find the project whose name
+   matches `diagnosis.projectName`. If no project has that name, the create
+   request didn't commit at that snapshot.
+2. Call `listProjectRoleAssignments` for that project. Compare the active
+   assignments, their IDs, and revisions with `setup` in the evidence.
+3. Call `getAuthorizationContext` with the setup actor's token to confirm its
+   current tenant membership and roles.
+4. Treat a missing project or assignment as absence **at that snapshot**, not
+   proof that an earlier request can't commit later. Keep projects with
+   accepted run selections as retained fixtures. Don't adopt, archive, or
+   revoke a fixture as part of diagnosis. Make any repair as a separate,
+   reviewed change.
 
-   ```powershell
-   node scripts\harness-shared\diagnose-p1-setup.mjs --invocation-id <invocation-uuid> > diagnosis.sql
-   ```
+Each assignment and revocation also writes an `authority_audit` row in the
+same transaction. A database operator can review those rows with an existing
+approved read-only session.
 
-2. Have the database operator run `diagnosis.sql` against the **attested
-   Projects Config database**, using an existing approved read-only database
-   session. The generator does not connect, sign in, or acquire credentials.
-   The query uses a bounded, repeatable-read, read-only transaction and ends
-   with `ROLLBACK`. Save its JSON readback with the original invocation
-   evidence. A query error means the state is still unknown.
-3. Review the immutable setup and cleanup operation rows, current projects,
-   role assignments, and run selections. The query matches the invocation
-   receipt and the exact `p1-<invocation-uuid>` project name, so a project
-   without an operation receipt remains visible. It excludes configuration
-   payloads and credential material.
-4. Treat `not-observed` as absence **at that snapshot**, not proof that an
-   earlier exec cannot commit later. Confirm that the original command has
-   ended before considering a retry. `fixtures-observed` means the returned
-   rows require reconciliation; it does not mean cleanup passed.
-5. Compare issuer, subject, tenant, membership, project, assignment IDs,
-   revisions, and audit IDs with the original evidence. Keep projects with
-   accepted run selections as retained fixtures. A cleaned receipt must
-   agree with the current archived project and revoked grants. Missing or
-   mismatched rows remain indeterminate. Do not adopt, archive, revoke, or
-   delete a fixture as part of diagnosis.
-
-The readback always returns `retryAuthorized: false`. It is diagnostic
-evidence, not a cleanup receipt or permission to replay a write. Pod logs
-from the service process might not contain standard error from a separate
-`kubectl exec` process. Missing log entries do not prove that setup did
-nothing.
+Evidence from runs before this change can still contain
+`commandFailures` from the privileged `kubectl exec` path. For those runs,
+generate the read-only query with
+`node scripts\harness-shared\diagnose-p1-setup.mjs --invocation-id <invocation-uuid>`
+and have a database operator run it against the attested Projects Config
+database. The readback always returns `retryAuthorized: false`; it isn't
+permission to replay a write.
 
 ## Escalate unresolved issues
 

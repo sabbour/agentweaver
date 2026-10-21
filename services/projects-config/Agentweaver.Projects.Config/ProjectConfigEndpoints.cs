@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Projects.Config;
 
@@ -168,6 +169,89 @@ public static class ProjectConfigEndpoints
                     request.Name,
                     request.State,
                     cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapGet("/{projectId}/role-assignments", async (
+            string projectId,
+            HttpContext context,
+            ProjectRoleAssignmentService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_request", "This operation does not accept query parameters.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.ListAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapPost("/{projectId}/role-assignments", async (
+            string projectId,
+            AssignProjectRoleRequest request,
+            HttpContext context,
+            ProjectRoleAssignmentService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_request", "This operation does not accept query parameters.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var assignment = await service.AssignAsync(caller, projectId, request, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Created(
+                    $"/api/projects/{assignment.ProjectId}/role-assignments/{assignment.AssignmentId:D}",
+                    assignment);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapDelete("/{projectId}/role-assignments/{assignmentId:guid}", async (
+            string projectId,
+            Guid assignmentId,
+            HttpContext context,
+            ProjectRoleAssignmentService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Keys.Any(key => key != "expectedRevision") ||
+                    context.Request.Query["expectedRevision"].Count != 1 ||
+                    !long.TryParse(
+                        context.Request.Query["expectedRevision"].ToString(),
+                        System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var expectedRevision))
+                    throw ProjectConfigException.Invalid(
+                        "invalid_expected_revision", "One expectedRevision query parameter is required.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.RevokeAsync(
+                    caller, projectId, assignmentId, expectedRevision, cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
             {
@@ -452,6 +536,7 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        // Match the public Gateway bound before binding a transfer payload.
         projects.MapPost("/{projectId}/casting/import", async (
             string projectId,
             ImportProjectCastingTransferRequest request,
@@ -476,7 +561,7 @@ public static class ProjectConfigEndpoints
             {
                 return ToProblem(exception);
             }
-        });
+        }).WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
 
         // This owner-only helper applies the existing Orchestrator role gate without exposing platform defaults.
         projects.MapPut("/{projectId}/runs/{runId}/interactive-selection", async (
@@ -588,6 +673,28 @@ public static class ProjectConfigEndpoints
                 return ToProblem(exception);
             }
         });
+
+        // Reports active platform components for TenantAdmin or PlatformAdmin callers.
+        app.MapGet("/api/platform/components", async (
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            [Microsoft.AspNetCore.Mvc.FromServices] PlatformComponentCollector collector,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await service.EnsurePlatformComponentReaderAsync(caller, cancellationToken).ConfigureAwait(false);
+                return Results.Ok(await collector.CollectAsync(cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).RequireAuthorization();
 
         if (enableBrokerRunBinding)
         {

@@ -193,6 +193,8 @@ export function buildP1PostgresPlan() {
     // 022 adds completed_at; 023 adds interactive requests and cancellation with the exact grants above.
     // 024 adds private Chief of Staff conversations and Priorities.
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25],
+    // Bind the separately approved Events reporting migration into the reviewed plan hash.
+    eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',
       'A separate approval permits the five SQL login mappings, schema initialization, and exact grants.',
