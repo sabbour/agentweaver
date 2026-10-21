@@ -11,6 +11,7 @@ describe('recent runs in this browser', () => {
 
     expect(readRecentRuns('tenant-a').map((run) => run.runId)).toEqual(['r2', 'r1']);
     expect(readRecentRuns('tenant-a', 'p1').map((run) => run.runId)).toEqual(['r1']);
+    // Tenant B never sees tenant A's runs.
     expect(readRecentRuns('tenant-b').map((run) => run.runId)).toEqual(['other']);
   });
 
@@ -21,6 +22,7 @@ describe('recent runs in this browser', () => {
 
     const runs = readRecentRuns('t');
     expect(runs.map((run) => run.runId)).toEqual(['r1', 'r2']);
+    // Reopening without a state must not erase the state saved earlier.
     expect(runs[0].executionState).toBe('running');
   });
 
@@ -35,6 +37,7 @@ describe('recent runs in this browser', () => {
     localStorage.setItem('unrelated', 'kept');
     clearRecentRuns();
     expect(readRecentRuns('t')).toEqual([]);
+    // Sign-out removes only recent-run keys, not other app data.
     expect(localStorage.getItem('unrelated')).toBe('kept');
   });
 

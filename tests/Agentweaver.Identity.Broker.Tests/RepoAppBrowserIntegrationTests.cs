@@ -204,21 +204,20 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
                 var configurationPath =
                     $"/api/v1/projects/{Uri.EscapeDataString(project.ProjectId)}/configuration";
-                // Open the project from the projects list, then wait for the URL and
-                // the Dashboard heading so the next click happens on the loaded page.
+                // Project tiles open the project Dashboard. Wait for the URL and heading
+                // so the next steps run on the loaded project page.
                 await page.GetByText(projectName, new() { Exact = true }).ClickAsync();
                 await page.WaitForURLAsync(
                     $"**/projects/{Uri.EscapeDataString(project.ProjectId)}");
                 await page.GetByRole(
                     AriaRole.Heading,
                     new() { Name = "Dashboard", Exact = true }).WaitForAsync();
-                // Start listening for the configuration GET before the clicks that
-                // trigger it, so a fast response is not missed.
                 var configurationResponseTask = page.WaitForResponseAsync(response =>
                     response.Request.Method == "GET" &&
                     new Uri(response.Url).AbsolutePath.Equals(
                         configurationPath, StringComparison.Ordinal));
-                // Project settings sits in the rail's Settings menu, as in 0.x.
+                // Project settings are reached through the Settings menu.
+                // Opening them must read the configuration through the Gateway.
                 await page.GetByRole(
                     AriaRole.Button,
                     new() { Name = "Settings", Exact = true }).ClickAsync();
@@ -230,13 +229,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 await page.GetByRole(
                     AriaRole.Heading,
                     new() { Name = "Project settings", Exact = true }).WaitForAsync();
-                // Section links are looked up inside the settings section rail so
-                // they do not match links with the same name elsewhere on the page.
+                // Settings are split into sections. Advanced holds the raw JSON editor;
+                // Connections holds the GitHub Repo App status checked next.
                 var settingsSections = page.GetByRole(
                     AriaRole.Navigation,
                     new() { Name = "Settings sections" });
-                // Advanced holds the raw configuration JSON; seeing its field proves
-                // the configuration loaded. Then switch to Connections for the Repo App.
                 await settingsSections.GetByRole(
                     AriaRole.Link,
                     new() { Name = "Advanced", Exact = true }).ClickAsync();

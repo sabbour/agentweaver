@@ -23,6 +23,7 @@ export interface PendingGateItem extends AttentionItemBase {
   requestId: string;
   kind: CoordinationBlockerKind;
   prompt: string | null;
+  stateVersion?: number;
 }
 
 /** Subtasks a run added to the project backlog. They open the project Board. */
@@ -67,7 +68,8 @@ export function fromUserNotification(notification: UserNotification): AttentionI
   const base = { notificationId, projectId, runId, sessionId, createdAt };
   if (notification.source === 'pendingGate') {
     if (notification.requestId === null || notification.kind === null) return null;
-    return { ...base, source: 'pendingGate', requestId: notification.requestId, kind: notification.kind, prompt: notification.prompt };
+    return { ...base, source: 'pendingGate', requestId: notification.requestId, kind: notification.kind,
+      prompt: notification.prompt, stateVersion: notification.stateVersion ?? undefined };
   }
   if (notification.source === 'backlogPromoted') {
     const { promotionId, taskCount } = notification;
@@ -92,7 +94,22 @@ export function attentionKey(item: AttentionItem): string {
 export function attentionPath(item: AttentionItem): string {
   const project = `/projects/${encodeURIComponent(item.projectId)}`;
   if (item.source === 'backlogPromoted') return `${project}/board`;
-  return `${project}/runs/${encodeURIComponent(item.runId)}?view=approvals`;
+  const query = new URLSearchParams({ view: 'approvals' });
+  // Carry the exact gate version the user opened; another version requires a fresh review.
+  if (item.stateVersion !== undefined) {
+    query.set('requestId', item.requestId);
+    query.set('stateVersion', String(item.stateVersion));
+  }
+  return `${project}/runs/${encodeURIComponent(item.runId)}?${query}`;
+}
+
+/** Accepts only an exact, safely representable gate version from the user-editable URL. */
+export function pinnedDecisionFromSearch(params: URLSearchParams): { requestId: string; stateVersion: number } | null {
+  const requestId = params.get('requestId');
+  const raw = params.get('stateVersion');
+  if (!requestId || raw === null || !/^\d+$/.test(raw)) return null;
+  const stateVersion = Number(raw);
+  return Number.isSafeInteger(stateVersion) ? { requestId, stateVersion } : null;
 }
 
 /** Saved result of the last read. */
@@ -109,7 +126,7 @@ const EMPTY_STATE: ReadState = { items: [], count: 0, error: null, loaded: false
  * Polls the user's notifications every 30 seconds while signed in and while the
  * tab is visible, and dismisses single items.
  */
-export function useRunAttention(): RunAttention {
+export function useRunAttention({ projectId, includeDismissed = false }: { projectId?: string; includeDismissed?: boolean } = {}): RunAttention {
   const { session, apiCall } = useAuth();
   const signedIn = Boolean(session);
   const [state, setState] = useState<ReadState>(EMPTY_STATE);
@@ -153,7 +170,10 @@ export function useRunAttention(): RunAttention {
         // The binding is null so the call uses the unbound token. A token bound
         // to a project or run is rejected by the notifications API.
         const page = await apiCall(
-          (token, tenant) => gatewayClient.listNotifications(token, { pageSize: ATTENTION_PAGE_SIZE }, tenant),
+          (token, tenant) => gatewayClient.listNotifications(token, {
+            pageSize: ATTENTION_PAGE_SIZE, ...(projectId ? { projectId } : {}),
+            ...(includeDismissed ? { includeDismissed: true } : {}),
+          }, tenant),
           null,
         );
         if (active && signedInRef.current) {
@@ -179,7 +199,7 @@ export function useRunAttention(): RunAttention {
       window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [apiCall, signedIn, generation]);
+  }, [apiCall, signedIn, generation, projectId, includeDismissed]);
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
 
@@ -202,7 +222,8 @@ export function useRunAttention(): RunAttention {
     reload();
   }, [apiCall, reload]);
 
-  const items = state.items.filter((item) => !hidden.has(item.notificationId));
+  // A dismissed notification is still a pending gate in Flow until its owner resolves it.
+  const items = state.items.filter((item) => includeDismissed || !hidden.has(item.notificationId));
   return {
     items,
     // Subtract items hidden in this tab that the last read still counted.

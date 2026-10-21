@@ -46,10 +46,12 @@ vi.mock('./pageParts', async () => {
   };
 });
 
+/** Builds a fake load result in the same shape the project data hooks return. */
 function loaded<T>(data: T | null, overrides: Partial<LoadedStub<T>> = {}): LoadedStub<T> {
   return { data, loading: false, error: null, loadedAt: null, reload: vi.fn(), replace: vi.fn(), ...overrides };
 }
 
+/** A fully set-up configuration: model, repository, one cast agent, one enabled skill. */
 function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfiguration {
   return {
     modelSelection: { reference: 'gpt-test' } as ProjectConfiguration['modelSelection'],

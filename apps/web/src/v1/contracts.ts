@@ -1287,6 +1287,8 @@ export interface AddChiefOfStaffPriorityLinkRequest {
   runId?: string | null;
   conversationId?: string | null;
   number?: number | null;
+  providerId?: string | null;
+  repository?: { owner: string; name: string } | null;
   artifactId?: string | null;
 }
 
@@ -1303,6 +1305,8 @@ export interface ChiefOfStaffPriorityLink {
   runId?: string;
   conversationId?: string;
   number?: number;
+  providerId?: string;
+  repository?: { owner: string; name: string };
   artifactId?: string;
   state?: string;
   createdAt?: string;
@@ -1718,6 +1722,13 @@ export interface SessionEventEnvelope {
 }
 
 /** Persisted event page with a cursor for continued replay. */
+/** Run-bound text resolved from a persisted turn event; storage keys never reach the browser. */
+export interface SessionTurnContent {
+  eventId: string;
+  identity: SessionIdentity;
+  text: string;
+}
+
 export interface SessionEventPage {
   events: SessionEventEnvelope[];
   nextCursor?: string | null;

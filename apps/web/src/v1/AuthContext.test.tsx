@@ -120,6 +120,8 @@ async function completeSilentSignIn(
 function Harness() {
   const auth = useAuth();
   const [observedTenant, setObservedTenant] = useState<string | null>(null);
+  // Records the result of ensureSession and which token an unbound call used,
+  // so tests can check that a run-bound session does not replace the unbound one.
   const [ensured, setEnsured] = useState('not-ensured');
   const [unboundToken, setUnboundToken] = useState('none');
   const runConcurrentCalls = async () => {
@@ -300,6 +302,8 @@ describe('Broker refresh coordination', () => {
     vi.restoreAllMocks();
   });
 
+  // A run-bound session must be added next to the unbound one, without a popup,
+  // and unbound calls must keep using the original token.
   it('gets a run session silently and keeps the unbound session usable', async () => {
     render(<AuthProvider><Harness /></AuthProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
@@ -308,6 +312,7 @@ describe('Broker refresh coordination', () => {
     mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('access-run', 'refresh-run'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Ensure run session' }));
+    // The run session must be requested silently (prompt=none) for this exact project and run.
     await waitFor(() => expect(mocks.buildAuthorizeUrl).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.objectContaining({ binding: { projectId: 'project-1', runId: 'run-1' } }),
@@ -319,6 +324,7 @@ describe('Broker refresh coordination', () => {
     await screen.findByText('ensure:ensured');
     await screen.findByText('access-run');
     fireEvent.click(screen.getByRole('button', { name: 'Use unbound session' }));
+    // Unbound calls still use the first token, and only the first sign-in opened a popup.
     await screen.findByText('unbound:access-1');
     expect(window.open).toHaveBeenCalledOnce();
   });

@@ -23,25 +23,30 @@ export function GeneralSection({ project, onUpdated }: { project: ProjectSummary
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [saved, setSaved] = useState(false);
+  // Compare the trimmed value so spaces alone never count as a rename.
   const trimmed = name.trim();
+  /** Sends the rename request and reports the updated project to the parent. */
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    // Skip the request when the name is empty or did not change.
+    // Skip the request when the name is empty or unchanged. The submit button is
+    // also disabled in these cases, but Enter in the field can still submit.
     if (!trimmed || trimmed === project.name) return;
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
-      // Send the revision we loaded. If someone else changed the project since,
-      // the service rejects the update instead of overwriting their change.
-      // The state is sent unchanged because the update replaces name and state together.
+      // The update API replaces name and state together, so send the current
+      // state unchanged. expectedRevision makes the server reject the write if
+      // someone else changed the project since this page loaded.
       const updated = await apiCall((token, tenant) => gatewayClient.updateProject(
         token, project.projectId, { expectedRevision: project.revision, name: trimmed, state: project.state }, tenant,
       ), null);
-      // The parent stores the new project, including its new revision, so the next save uses it.
+      // The parent stores the new project, including its new revision, so the
+      // next save uses the fresh revision.
       onUpdated(updated);
       setSaved(true);
     } catch (reason) {
+      // Keep the typed name so the user can retry after reading the error.
       setError(reason);
     } finally {
       setBusy(false);
@@ -115,13 +120,16 @@ export function RepositoryFields({ configuration, onChange, readOnly }: {
   onChange: (next: ProjectConfiguration) => void;
   readOnly: boolean;
 }) {
-  // Older configurations may have no source control block. Use empty values so the inputs stay controlled.
+  // Older configurations may have no source control block. Use empty values so
+  // the inputs stay controlled.
   const sourceControl = configuration.sourceControl ?? {};
   const repository = sourceControl.repository ?? { owner: '', name: '' };
+  /** Updates one part of the repository and keeps the other part as it is. */
   const setRepository = (part: 'owner' | 'name', value: string) => {
+    // Owner and name never contain spaces, so trim while typing.
     const next = { ...repository, [part]: value.trim() };
-    // When both owner and name are empty, drop the repository instead of saving
-    // an empty one. Other source control fields, such as the sign-in method, stay.
+    // When both parts are empty, remove the repository instead of saving an
+    // empty owner and name, which the server would treat as a real value.
     onChange({
       ...configuration,
       sourceControl: { ...sourceControl, repository: next.owner || next.name ? next : undefined },
@@ -140,7 +148,8 @@ export function RepositoryFields({ configuration, onChange, readOnly }: {
           <Select
             value={sourceControl.authMode ?? ''}
             disabled={readOnly}
-            // "Not set" has an empty value. Save it as undefined so the field is left out.
+            // "Not set" has an empty value. Store it as undefined so the field is
+            // left out of the saved configuration.
             onChange={(_, data) => onChange({
               ...configuration,
               sourceControl: { ...sourceControl, authMode: (data.value || undefined) as SourceControlAuthMode | undefined },
@@ -156,6 +165,7 @@ export function RepositoryFields({ configuration, onChange, readOnly }: {
   );
 }
 
+/** The run limit fields, in display order, with their user-facing labels. */
 const LIMITS: ReadonlyArray<{ key: keyof ProjectConfiguration['runLimits']; label: string }> = [
   { key: 'maxModelTurns', label: 'Model turns' },
   { key: 'maxToolCalls', label: 'Tool calls' },
@@ -171,7 +181,7 @@ export function RunLimitsFields({ configuration, onChange, readOnly }: {
   onChange: (next: ProjectConfiguration) => void;
   readOnly: boolean;
 }) {
-  // Network restrictions are only summarized here. They are edited in the Advanced section.
+  // Network restrictions are edited in Advanced. This section only summarizes them.
   const egress = configuration.egressNarrowing ?? [];
   return (
     <PageSection title="Run limits" description="Each run stops at these limits. Leave a field empty to use the platform limit.">
@@ -185,8 +195,8 @@ export function RunLimitsFields({ configuration, onChange, readOnly }: {
               placeholder="Platform limit"
               readOnly={readOnly}
               onChange={(_, data) => {
-                // Only positive whole numbers are kept. Empty or invalid input saves
-                // null, which means "use the platform limit".
+                // An empty, zero, negative, or non-numeric value becomes null.
+                // Null means "no project limit", so the platform limit applies.
                 const parsed = Number.parseInt(data.value, 10);
                 onChange({
                   ...configuration,
@@ -212,14 +222,16 @@ export function DangerZoneSection({ project, onUpdated }: { project: ProjectSumm
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  // The same button archives an active project or restores an archived one.
+  // The same button archives an active project and restores an archived one.
   const archiving = project.state === 'active';
+  /** Runs after the user confirms in the dialog. Flips the project state. */
   const confirm = async () => {
     setBusy(true);
     setError(null);
     try {
-      // Same update call as rename: keep the name, flip the state, and send the
-      // loaded revision so a concurrent change is rejected instead of overwritten.
+      // Send the current name unchanged because the update API replaces name and
+      // state together. expectedRevision rejects the write if the project changed
+      // since this page loaded.
       const updated = await apiCall((token, tenant) => gatewayClient.updateProject(
         token, project.projectId,
         { expectedRevision: project.revision, name: project.name, state: archiving ? 'archived' : 'active' },
@@ -228,7 +240,7 @@ export function DangerZoneSection({ project, onUpdated }: { project: ProjectSumm
       onUpdated(updated);
       setOpen(false);
     } catch (reason) {
-      // Keep the dialog open on failure so the user sees the error and can retry or cancel.
+      // Leave the dialog open on failure. The error shows in the section behind it.
       setError(reason);
     } finally {
       setBusy(false);

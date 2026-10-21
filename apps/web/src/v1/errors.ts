@@ -14,6 +14,8 @@ export function errorMessage(error: unknown): string {
 
 /** Extracts a stable API error code when an action needs code-specific handling. */
 export function errorCode(error: unknown): string | undefined {
+  // Only our two typed API errors have a code. Other errors return undefined so
+  // callers fall back to the generic message instead of matching on free text.
   return error instanceof GatewayError || error instanceof RepoAppBrokerError
     ? error.code
     : undefined;

@@ -22,6 +22,8 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
 }) {
   const { apiCall } = useAuth();
   const [connectionId, setConnectionId] = useState('');
+  // SHA-256 of the saved connection setup. The server compares it to the
+  // stored setup so consent is only granted for the setup the user expects.
   const [checksum, setChecksum] = useState('');
   const [issuer, setIssuer] = useState('');
   const [scopes, setScopes] = useState('');
@@ -143,33 +145,36 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
       setError('The sign-in window was blocked. Allow popups and try again.');
       return;
     }
-    // Only one sign-in popup at a time: close any earlier one.
+    // Only one sign-in popup at a time. Close any earlier one.
     popup.current?.close();
     popup.current = opened;
     const request = ++generation.current;
     setBusy(true);
     setError(null);
     try {
-      // Send every revision we saw plus the checksum. The service refuses to start
-      // sign-in if the connection, credential, or configuration changed since then.
+      // Send every revision the user saw, plus the checksum. The server refuses
+      // to prepare consent if the connection, credential, or configuration
+      // changed in the meantime.
       const preparation = await apiCall((token, tenant) => gatewayClient.prepareRemoteMcpOAuthConsent(token, connectionId, {
         expectedConnectionRevision: current.connectionRevision,
         expectedCredentialRevision: current.credentialRevision,
         expectedConfigurationRevision: configurationRevision,
         expectedConfigurationSha256: checksum,
       }, tenant), null);
+      // The user changed the ID or the panel unmounted. Those paths already
+      // closed the popup, so just stop.
       if (request !== generation.current) return;
       if (!isRemoteMcpOAuthConsentPreparation(preparation)) throw new Error('The service returned an invalid sign-in request.');
-      // Navigate the popup only to a plain HTTPS address with no embedded user name
-      // or password, and only if the user has not closed the popup meanwhile.
+      // Only follow an HTTPS address without embedded user name or password,
+      // and only if the user has not already closed the popup.
       const destination = new URL(preparation.authorizationUri);
       if (destination.protocol !== 'https:' || destination.username || destination.password || opened.closed)
         throw new Error('The sign-in address is invalid or its window was closed. Try again.');
-      // replace() keeps the blank page out of the popup's history.
+      // replace() keeps about:blank out of the popup's history.
       opened.location.replace(destination.href);
       setSignInStarted(true);
     } catch (reason) {
-      // Never leave a blank or half-started popup open after a failure.
+      // Never leave a blank popup open after a failure.
       opened.close();
       if (request === generation.current) setError(reason instanceof Error ? reason.message : 'Sign-in could not start.');
     } finally {
@@ -233,7 +238,7 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
         <p>{current.credentialUseAvailable ? 'The service reports that this connection can be used.' : 'The service reports that this connection cannot be used.'}</p>
         {!configured && <p className="v1-warning">The saved connection does not match the current project configuration. Update its setup before authorizing or refreshing.</p>}
         <div className="v1-actions">
-          {/* Refresh and disconnect send the revisions shown, so they fail if the connection changed since it was loaded. Disconnect also sends a fresh key so a retried request is applied only once. */}
+          {/* Refresh and disconnect send the revisions shown on screen, so the server rejects them if the connection changed meanwhile. Refresh also needs a matching configuration. Disconnect is always allowed and carries an idempotency key so a retried click is safe. */}
           <Button disabled={busy || !configured} onClick={() => void run(() => apiCall((token, tenant) => gatewayClient.refreshRemoteMcpOAuthConnection(token, connectionId, {
             expectedConnectionRevision: current.connectionRevision, expectedCredentialRevision: current.credentialRevision,
             expectedConfigurationRevision: current.storedConfigurationRevision,
@@ -257,7 +262,8 @@ export function RemoteMcpConnectionPanel({ projectId, configurationRevision }: {
               <Field label="Requested tool permissions" hint="Separate permission names with spaces."><Input value={scopes} disabled={busy} onChange={(_, data) => setScopes(data.value)} /></Field>
               <Button disabled={busy || !connectionValid || !checksumValid || !issuer || configurationRevision === null}
                 onClick={() => {
-                  // Check for null and copy the revision, so the request below uses the value seen at click time.
+                  // Copy the revision into a local so TypeScript keeps it non-null
+                  // inside the async callback.
                   if (configurationRevision === null) return;
                   const revision = configurationRevision;
                   void run(() => apiCall((token, tenant) => gatewayClient.registerRemoteMcpOAuthConnection(token, {

@@ -8,11 +8,7 @@
 import { Badge } from '@fluentui/react-components';
 import type { EffectiveProviderSelection } from './contracts';
 
-/**
- * Plain labels for selection cardinality values. Several spellings map to the
- * same label, so the table reads the same whichever name the service sends.
- * Unknown values show as sent.
- */
+/** Plain labels for selection cardinality values. Unknown values show as sent. */
 const CARDINALITY_LABELS: Record<string, string> = {
   single: 'One',
   exactlyOne: 'One',
@@ -28,7 +24,7 @@ function componentLabel(key: string): string {
   // Split camelCase into words ("sandboxRuntime" -> "sandbox Runtime"), then turn
   // dashes, underscores, and dots into spaces.
   const words = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[-_.]+/g, ' ').trim();
-  // Sentence case: capital first letter, the rest lowercase. Fall back to the raw key if nothing is left.
+  // Sentence case: capital first letter, rest lower. Fall back to the raw key if nothing is left.
   return words ? words[0].toUpperCase() + words.slice(1).toLowerCase() : key;
 }
 
@@ -38,6 +34,8 @@ export function PlatformComponentsTable({ components, caption = 'Allowed impleme
   caption?: string;
 }) {
   if (components.length === 0) return <p className="v1-muted">This run lists no platform components.</p>;
+  // Rows are keyed by component, meter source, and index. The index keeps keys
+  // unique if the same component appears more than once.
   return (
     <div className="v1-table-wrap">
       <table className="v1-table">
@@ -51,7 +49,6 @@ export function PlatformComponentsTable({ components, caption = 'Allowed impleme
         </thead>
         <tbody>
           {components.map((component, index) => (
-            // The same component can appear more than once (for example per meter source), so the index keeps keys unique.
             <tr key={`${component.seam}/${component.meterSource ?? ''}/${index}`}>
               <th scope="row">
                 {componentLabel(component.seam)}

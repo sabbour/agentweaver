@@ -15,6 +15,8 @@ import { errorMessage } from './errors';
 import { Loading, PageHeading } from './pageParts';
 import { RunList } from './RunList';
 import { runListErrorMessage, useCrossProjectRunList } from './runListData';
+import { ConversationList } from './ChiefOfStaffPanels';
+import { useChiefOfStaffConversations } from './chiefOfStaff';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXL },
@@ -28,6 +30,7 @@ export function SessionsPage() {
   const styles = useStyles();
   const navigate = useNavigate();
   const { apiCall } = useAuth();
+  const conversations = useChiefOfStaffConversations();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [projectsError, setProjectsError] = useState<unknown>(null);
@@ -64,11 +67,14 @@ export function SessionsPage() {
         title="Sessions"
         description="Runs across your projects, newest first. Open one to continue."
         actions={<>
-          <Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { void loadProjects(); }}>Refresh</Button>
+          <Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { void loadProjects(); conversations.reload(); }}>Refresh</Button>
           {/* 0.x primary action: start a new chat on the New session page. */}
           <Button appearance="primary" icon={<AddRegular />} onClick={() => navigate('/assistant')}>New session</Button>
         </>}
       />
+      {/* Private chat membership is distinct from the cross-project execution list below. */}
+      <ConversationList conversations={conversations}
+        projectNames={new Map((projects ?? []).map((project) => [project.projectId, project.name]))} />
       {projectsError != null && (
         <ErrorState title="Couldn't load sessions" message={errorMessage(projectsError)} onRetry={() => { void loadProjects(); }} />
       )}

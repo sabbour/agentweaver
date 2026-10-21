@@ -49,10 +49,10 @@ import {
  * provider models, repository readiness, automation controls,
  * sandbox policy, previews, rename, and deletion APIs.
  */
-// Spec settings-subnav — project Settings restructured into a left in-page rail +
-// right content pane. Only sections with a real Agentweaver backend are shipped
-// (Principle VII): General, Sandbox policy, Danger Zone. The rail is
-// data-driven so more sections can be appended as their backends land.
+// Project Settings uses a section rail on the left and the selected section's
+// content on the right. Only sections with a working backend are shown. The
+// rail is built from the SECTIONS list, so new sections can be added as their
+// backends become available.
 /** Route keys for the settings sections available to this project's origin. */
 type SectionId = 'general' | 'repository' | 'unattended' | 'sandbox' | 'danger';
 
@@ -757,11 +757,11 @@ export function ProjectSettingsPage() {
     ? activeSection
     : 'unattended';
   const activeDef = visibleSections.find((s) => s.id === displayedSection) ?? visibleSections[0];
-  // The deployment auth mode comes only from the public auth config. The
-  // project access overview that used to override it is no longer loaded.
+  // The sign-in mode comes only from the deployment's auth config. This page no
+  // longer reads a per-project access overview, so there is no project-level value.
   const resolvedAuthMode = authConfigModeToAuthMode(authConfig?.mode);
   const authModeLabel = resolvedAuthMode ? AUTH_MODE_LABELS[resolvedAuthMode] : 'GitHub';
-  // Without the access overview, the only role we can show is the project owner.
+  // Without the access overview, the project owner is the only role information available.
   const projectRoleSummary = project?.owner ? `Owner (${project.owner})` : 'Unspecified';
 
   return (

@@ -98,6 +98,8 @@ describe('Remote MCP settings connection', () => {
     expect(mocks.read).toHaveBeenCalledWith('token', id, 'tenant');
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect tool service' }));
     await screen.findByText('Disconnected');
+    // Disconnect must send the revisions it loaded, so the server can reject a
+    // stale change, and an idempotency key so a retry is safe.
     expect(mocks.disconnect).toHaveBeenCalledWith('token', id, expect.objectContaining({
       expectedConnectionRevision: 2, expectedCredentialRevision: 1, expectedConfigurationRevision: 4,
       idempotencyKey: expect.any(String),
@@ -125,18 +127,21 @@ describe('Remote MCP settings connection', () => {
   });
 
   it('ignores a connection response after the panel unmounts', async () => {
+    // Hold the read open so the test decides when it finishes.
     let resolve!: (value: typeof status) => void;
     mocks.read.mockReturnValue(new Promise((complete) => { resolve = complete; }));
     const { unmount } = render(<RemoteMcpConnectionPanel projectId="project" configurationRevision={4} />);
     fireEvent.change(screen.getByLabelText('Remote MCP connection ID'), { target: { value: id } });
     fireEvent.click(screen.getByRole('button', { name: 'Load connection' }));
     await waitFor(() => expect(mocks.read).toHaveBeenCalledOnce());
+    // Finish the read only after unmount. The stale response must not be applied.
     unmount();
     await act(async () => { resolve(status); });
     expect(screen.queryByText('Authorized')).toBeNull();
   });
 
   it('reports a blocked popup without preparing consent', async () => {
+    // window.open returns null when the browser blocks the popup.
     vi.spyOn(window, 'open').mockReturnValue(null);
     await prepareAuthorization();
     fireEvent.click(screen.getByRole('button', { name: 'Authorize tool service' }));
@@ -147,8 +152,10 @@ describe('Remote MCP settings connection', () => {
   it('rejects a non-HTTPS sign-in address and closes its popup', async () => {
     const close = vi.fn();
     const replace = vi.fn();
+    // A fake popup that records whether it was navigated or closed.
     const popup = { closed: false, close, location: { replace } };
     vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    // A valid consent preparation, except that the sign-in address uses plain HTTP.
     mocks.prepare.mockResolvedValue({
       correlationId: id, state: 's'.repeat(43), pkceChallenge: 'p'.repeat(43),
       authorizationUri: 'http://tool.example/authorize', expiresAt: '2030-01-01T00:00:00Z',
@@ -171,6 +178,7 @@ describe('Remote MCP settings connection', () => {
     fireEvent.change(screen.getByLabelText('Requested tool permissions'), { target: { value: 'read write' } });
     fireEvent.click(screen.getByRole('button', { name: 'Register connection' }));
     await screen.findByText('Authorized');
+    // The request carries only setup metadata. No secret field exists to send.
     expect(mocks.register).toHaveBeenCalledWith('token', {
       projectId: 'project', connectionId: id, expectedConfigurationRevision: 4,
       expectedConfigurationSha256: 'a'.repeat(64), issuerUri: 'https://tool.example', scopes: ['read', 'write'],

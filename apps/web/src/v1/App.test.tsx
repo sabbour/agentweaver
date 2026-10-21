@@ -178,6 +178,7 @@ vi.mock('./AuthContext', () => {
     apiCall: <T,>(operation: (token: string, tenantSelector: string | null) => Promise<T>) =>
       operation('broker-token', mocks.tenantSelector),
     authorize: async () => {},
+    // Silent sign-in for a run binding. Tests control whether it succeeds.
     ensureSession: (binding: unknown) => mocks.ensureSession(binding),
     signOut: () => {},
     authorizationContext: { tenantId: 'tenant-1' },
@@ -404,13 +405,16 @@ function knowledgeTransferBundle(projectId = 'p1', agentId = 'a1') {
 
 describe('v1 web project scoping', () => {
   beforeEach(() => {
+    // Most tests here cover GitHub connections, which now live in their own Settings section.
     window.history.replaceState({}, '', '/projects/p1/settings?section=connections');
     window.name = '';
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ = undefined;
     mocks.authProvider.mockClear();
     mocks.ensureSession.mockReset();
+    // By default the silent run sign-in fails, so tests see the manual sign-in path unless they say otherwise.
     mocks.ensureSession.mockResolvedValue(false);
     mocks.binding = null;
+    // Recent runs live in browser storage, so clear them to keep tests independent.
     clearRecentRuns();
     mocks.consent = null;
     mocks.tenantSelector = 'tenant-1';
@@ -482,6 +486,8 @@ describe('v1 web project scoping', () => {
     mocks.rejectKnowledgeProposal.mockReset();
     mocks.replayEvents.mockReset();
     mocks.replayEvents.mockResolvedValue({ events: [], hasMore: false, nextCursor: null });
+    // An unbound caller who can read and edit p1. Pages use this to decide
+    // which actions to offer, such as the "Can edit" badge.
     mocks.getAuthorizationContext.mockReset().mockResolvedValue({
       contractVersion: 1,
       issuer: 'https://broker.test',
@@ -512,7 +518,9 @@ describe('v1 web project scoping', () => {
     render(<App />);
     const gallery = await screen.findByRole('list', { name: 'Projects' });
     expect(within(gallery).getByText('Fixture project')).toBeTruthy();
+    // The badge comes from the authorization context, which grants writeProjects on p1.
     expect(await within(gallery).findByText('Can edit')).toBeTruthy();
+    // The create form is not inline on the page; it opens only in a dialog.
     expect(screen.queryByLabelText('Project name')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
     expect(await screen.findByRole('dialog')).toBeTruthy();
@@ -521,6 +529,7 @@ describe('v1 web project scoping', () => {
 
   it('creates a project from a GitHub repository and saves the repository in its configuration', async () => {
     mocks.createProject.mockResolvedValue(projectSummary('p9', 'From GitHub'));
+    // Saving the configuration returns the next revision, like the real owner.
     mocks.updateProjectConfiguration.mockImplementation(async (_token: string, projectId: string, revision: number) =>
       projectConfiguration(projectId, revision + 1));
     window.history.replaceState({}, '', '/projects');
@@ -529,12 +538,15 @@ describe('v1 web project scoping', () => {
     fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
     fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
     const submit = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+    // Text that is not owner/name or a GitHub URL keeps the submit button disabled.
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'not a repo' } });
     expect(submit.disabled).toBe(true);
+    // A full clone URL is accepted and reduced to owner and name.
     fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'https://github.com/octo/agentweaver.git' } });
     fireEvent.click(submit);
 
     await screen.findByText('Project From GitHub was created. It uses octo/agentweaver.');
+    // The repository is saved as a second step, on revision 1 of the new project's configuration.
     expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
       'broker-token', 'p9', 1,
       expect.objectContaining({ sourceControl: expect.objectContaining({ repository: { owner: 'octo', name: 'agentweaver' }, authMode: 'githubApp' }) }),
@@ -544,6 +556,8 @@ describe('v1 web project scoping', () => {
 
   it('keeps a new project when its repository cannot be saved yet', async () => {
     mocks.createProject.mockResolvedValue(projectSummary('p9', 'No access yet'));
+    // The project is created, but its configuration cannot be read yet, as
+    // when the new grant has not reached the configuration owner.
     mocks.getProjectConfiguration.mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
     window.history.replaceState({}, '', '/projects');
     render(<App />);
@@ -554,6 +568,7 @@ describe('v1 web project scoping', () => {
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }));
 
     await screen.findByText(/The repository was not saved\. Add it in Settings > Repository after you have access\./);
+    // The project is kept, and no configuration write is tried without a current revision.
     expect(mocks.updateProjectConfiguration).not.toHaveBeenCalled();
   });
 
@@ -576,7 +591,7 @@ describe('v1 web project scoping', () => {
   });
 
   it.each([
-    ['flow', 'Open runs'],
+    ['flow', 'Open'],
     ['workspace', 'Pull requests'],
     ['workflows', 'Saved workflow references'],
     ['observability/traces', 'Recent runs'],
@@ -671,6 +686,8 @@ describe('v1 web project scoping', () => {
     configureRunSnapshots('p1', 'r1');
     window.history.replaceState({}, '', '/projects/p1/orchestrations/r1?view=chat&source=bookmark');
     render(<App />);
+    // The old orchestrations address still opens the run, on the view it named,
+    // and keeps the other query parameters.
     const chat = await screen.findByRole('tab', { name: 'Chat' });
     expect(chat.getAttribute('aria-selected')).toBe('true');
     expect(window.location.search).toContain('source=bookmark');
@@ -1334,6 +1351,7 @@ describe('v1 web project scoping', () => {
   });
 
   it('does not show a Run chat shortcut in the shell', () => {
+    // Even with a run-bound session, chat is reached from the run page, not a shell button.
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     window.history.replaceState({}, '', '/projects');
     render(<App />);
@@ -1343,21 +1361,27 @@ describe('v1 web project scoping', () => {
 
   it('gets the run sign-in silently when a run opens without one', async () => {
     window.history.replaceState({}, '', '/projects/p1/runs/r1');
+    // A promise that never settles keeps the silent sign-in in progress, so
+    // the test can check what the page shows while it waits.
     mocks.ensureSession.mockImplementation(() => new Promise(() => {}));
     render(<App />);
 
     expect(await screen.findByText('Opening this run…')).toBeTruthy();
     expect(mocks.ensureSession).toHaveBeenCalledWith({ projectId: 'p1', runId: 'r1' });
+    // No sign-in button while the silent attempt may still succeed.
     expect(screen.queryByRole('button', { name: 'Sign in for this project and run' })).toBeNull();
     expect(screen.getByRole('heading', { level: 1, name: 'Orchestration' })).toBeTruthy();
   });
 
   it('shows the run sign-in button only after the silent attempt fails', async () => {
+    // The beforeEach default makes the silent attempt resolve to false (failed).
     window.history.replaceState({}, '', '/projects/p1/runs/r1');
     render(<App />);
 
     expect(await screen.findByRole('button', { name: 'Sign in for this project and run' })).toBeTruthy();
+    // One attempt only: the page must not loop on silent sign-in.
     expect(mocks.ensureSession).toHaveBeenCalledTimes(1);
+    // The message must not use internal terms such as Broker or grant.
     expect(screen.queryByText(/Broker|grant/i)).toBeNull();
   });
 
@@ -1370,13 +1394,16 @@ describe('v1 web project scoping', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Orchestration' })).toBeTruthy();
     await screen.findByRole('complementary', { name: 'Run tree' });
     await screen.findByRole('tab', { name: 'Chat' });
+    // Visit each run tab that exists. Some tabs may be hidden for this fixture, so skip missing ones.
     for (const view of ['Chat', 'Activity', 'Run settings', 'Usage']) {
       const tab = screen.queryByRole('tab', { name: view });
       if (!tab) continue;
       fireEvent.click(tab);
       await waitFor(() => expect(tab.getAttribute('aria-selected')).toBe('true'));
     }
+    // Wait for the last tab's data so any late error would have rendered.
     await waitFor(() => expect(mocks.getRunUsage).toHaveBeenCalled());
+    // The happy path shows no alerts and no "different run" binding warning.
     expect(screen.queryAllByRole('alert')).toHaveLength(0);
     expect(screen.queryByText(/different run/)).toBeNull();
   });
@@ -1385,6 +1412,8 @@ describe('v1 web project scoping', () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
     const tree = sessionTreeSnapshot('p1', 'r1');
+    // Add a worker session s2 under the coordinator s1. The chat must still
+    // address the coordinator, with the worker as the sender.
     mocks.getSessionTree.mockResolvedValue({
       ...tree,
       nodes: [...tree.nodes, {
@@ -1399,12 +1428,14 @@ describe('v1 web project scoping', () => {
     render(<App />);
 
     await screen.findByText('Message the coordinator');
+    // No From/To pickers: the user just types a message.
     expect(screen.queryByLabelText(/^From/)).toBeNull();
     expect(screen.queryByLabelText(/^To/)).toBeNull();
     fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Status?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalled());
+    // Arguments after the token: project, run, sender session, recipient session, text.
     const [, projectId, runId, sender, recipient, text] = mocks.sendMessage.mock.calls[0];
     expect([projectId, runId, sender, recipient, text]).toEqual(['p1', 'r1', 's2', 's1', 'Status?']);
   });
@@ -1742,10 +1773,13 @@ describe('v1 web project scoping', () => {
     const rail = await screen.findByRole('navigation', { name: 'Settings sections' });
     const links = within(rail).getAllByRole('link');
     expect(links.length).toBeGreaterThan(0);
+    // Every section link has an icon, matching the 0.x settings layout.
     for (const link of links) {
       expect(link.querySelector('.v1-settings-rail__icon svg')).not.toBeNull();
     }
+    // The section from the URL is marked as the current page.
     expect(within(rail).getByRole('link', { name: 'Advanced' }).getAttribute('aria-current')).toBe('page');
+    // Danger zone carries a visible Risk badge so it is not opened by accident.
     const danger = within(rail).getByRole('link', { name: /Danger zone/ });
     expect(within(danger).getByText('Risk')).toBeTruthy();
   });
@@ -1764,6 +1798,7 @@ describe('v1 web project scoping', () => {
       configuration,
     }));
 
+    // The JSON editor is in the Advanced section.
     window.history.replaceState({}, '', '/projects/p1/settings?section=advanced');
     render(<App />);
     await waitFor(() => expect(mocks.getProjectConfiguration).toHaveBeenCalledWith('broker-token', 'p1', 'tenant-1'));
@@ -1785,6 +1820,8 @@ describe('v1 web project scoping', () => {
     expect((screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement).value)
       .toContain('"projectMarker": "p2"');
     const shown = screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement;
+    // Save is enabled only after an edit. Re-entering the same JSON without
+    // spaces makes the form dirty without changing the configuration.
     fireEvent.change(shown, { target: { value: JSON.stringify(JSON.parse(shown.value)) } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
@@ -1848,6 +1885,7 @@ describe('v1 web project scoping', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Browse marketplaces' }));
     // happy-dom loses Tabster's modal focus when the busy button disables, so it marks the
     // dialog aria-hidden. Chromium keeps it exposed; `hidden: true` keeps these role queries.
+    // The flow is browse, preview, then import at the exact commit the preview showed.
     fireEvent.click(await screen.findByRole('button', { name: 'Browse skills', hidden: true }));
     await screen.findByText('0123456789abcdef');
     fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill', hidden: true }));
@@ -1947,6 +1985,7 @@ describe('v1 web project scoping', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Assign to selected agents' }));
     await waitFor(() => expect(mocks.updateSkillAssignment).toHaveBeenCalledOnce());
 
+    // While the save is pending, the button is disabled so it cannot be sent twice.
     expect((screen.getByRole('button', { name: 'Saving assignment…' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByLabelText('Typed ProjectConfiguration JSON')).toBeNull();
 
@@ -1988,6 +2027,8 @@ describe('v1 web project scoping', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
     await screen.findByText('model-meter');
 
+    // The second reads fail. Refresh must clear the old values instead of
+    // showing them as if they were still current.
     fireEvent.click(screen.getByRole('button', { name: 'Refresh run' }));
     await screen.findByText('No usage was reported for this run.');
     expect(screen.queryByText('model-meter')).toBeNull();

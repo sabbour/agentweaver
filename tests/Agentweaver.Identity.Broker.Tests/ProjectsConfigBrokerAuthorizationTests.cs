@@ -1580,7 +1580,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 var runSignIn = page.GetByRole(
                     AriaRole.Button,
                     new() { Name = "Sign in for this project and run" });
-                // Seeded memory text. It is visible only after the run-bound Knowledge loads.
                 var originalMemory = page.GetByText("Original browser memory");
                 try
                 {
@@ -1591,7 +1590,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                     if (await WaitForConsentPromptOrTokenAsync(page, reverseProxy))
                         await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
                     // Memories first asks for the run sign-in silently; the button shows only when that fails.
-                    // Wait for whichever appears first: the fallback button or the loaded memory.
+                    // So wait for whichever comes first: the button, or the seeded memory after a silent success.
                     await runSignIn.Or(originalMemory).First.WaitForAsync();
                 }
                 catch (Exception exception)
@@ -1613,7 +1612,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 Assert.Equal(
                     browserOwnerSubject,
                     SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(browserToken).Claims, "sub"));
-                // Click the fallback button only if silent run sign-in did not succeed.
+                // Click only when the silent run sign-in failed and the button is showing.
                 if (await runSignIn.IsVisibleAsync())
                     await runSignIn.ClickAsync();
                 try
@@ -1646,8 +1645,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 await page.GetByLabel("Rationale").FillAsync("Integrated UI proof");
                 await page.GetByLabel("Tags (comma-separated)").FillAsync("browser,integrated");
                 await page.GetByRole(AriaRole.Button, new() { Name = "Create record" }).ClickAsync();
-                // Each action shows a status line naming the service result. The test
-                // then checks the list and the database, so the UI text is not the only proof.
+                // Each Knowledge action shows a short confirmation with the owner's result code.
+                // The test then checks the list and the stored record, not just the message.
                 await page.GetByText(
                     "Record created (Created). The list shows its saved state.")
                     .WaitForAsync();

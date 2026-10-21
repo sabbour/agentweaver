@@ -53,5 +53,6 @@
     <EmbeddedResource Include="Migrations\030_backlog_task_origin.sql" />
     <EmbeddedResource Include="Migrations\031_user_notification_promotion_dismissals.sql" />
     <EmbeddedResource Include="Migrations\032_source_control_pull_request_records.sql" />
+    <EmbeddedResource Include="Migrations\033_priority_link_repository_identity.sql" />
   </ItemGroup>
 </Project>

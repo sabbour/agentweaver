@@ -70,7 +70,9 @@ public sealed record ReorderChiefOfStaffPrioritiesRequest(
 /// <summary>Adds one typed link to a Priority at an expected revision.</summary>
 /// <remarks>
 /// <c>run</c> needs <see cref="RunId"/>. <c>conversation</c> needs <see cref="ConversationId"/>.
-/// <c>issue</c> and <c>pull_request</c> need <see cref="Number"/>. <c>artifact</c> needs <see cref="RunId"/>
+/// <c>issue</c> and <c>pull_request</c> need <see cref="Number"/>, <see cref="ProviderId"/> and
+/// <see cref="Repository"/>. Older number-only links remain readable but have no repository identity.
+/// <c>artifact</c> needs <see cref="RunId"/>
 /// and <see cref="ArtifactId"/>. Every link needs <see cref="ProjectId"/>.
 /// </remarks>
 public sealed record AddChiefOfStaffPriorityLinkRequest(
@@ -80,7 +82,9 @@ public sealed record AddChiefOfStaffPriorityLinkRequest(
     string? RunId,
     string? ConversationId,
     long? Number,
-    string? ArtifactId);
+    string? ArtifactId,
+    string? ProviderId = null,
+    ProjectSourceControlRepository? Repository = null);
 
 /// <summary>A typed link from a Priority to an owner record, resolved against current access.</summary>
 /// <remarks>
@@ -100,7 +104,9 @@ public sealed record ChiefOfStaffPriorityLink(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? Number,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ArtifactId,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? State,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? CreatedAt);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTimeOffset? CreatedAt,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ProviderId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ProjectSourceControlRepository? Repository = null);
 
 /// <summary>One Priority in the caller's list.</summary>
 /// <remarks>Outcome, notes, and checklist are the caller's own content and are always returned.</remarks>

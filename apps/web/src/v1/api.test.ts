@@ -153,6 +153,7 @@ describe('Gateway API client', () => {
     expect(init?.method).toBe('POST');
   });
 
+  // The revision the user saw is sent so the server can reject an edit based on stale data.
   it('renames or archives a project with the displayed project revision', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),
@@ -167,6 +168,8 @@ describe('Gateway API client', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 4, name: 'Launch', state: 'archived' });
   });
 
+  // Revoke must send the assignment revision as `expectedRevision` so a changed
+  // assignment is not revoked by mistake.
   it('lists, assigns and revokes project roles on the role-assignment contract', async () => {
     const assignment = {
       assignmentId: '7f8c1a2e-0000-4000-8000-000000000001', principalId: 'user-2', role: 'viewer',

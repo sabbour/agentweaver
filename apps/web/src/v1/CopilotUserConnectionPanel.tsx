@@ -80,7 +80,8 @@ function copilotCallbackUri(): string {
   if (window.location.protocol !== 'https:') {
     throw new Error('Open project settings over HTTPS before connecting GitHub Copilot.');
   }
-  // The Gateway URL may be relative; resolve it against this page before comparing sites.
+  // The server sets a one-time cookie for the callback. Browsers only send it back
+  // to the same origin, so a Gateway on another origin cannot complete the flow.
   const gatewayUrl = new URL(gatewayBaseUrl, window.location.origin);
   if (gatewayUrl.origin !== window.location.origin) {
     throw new Error('The GitHub Copilot connection must use the same site as this app.');
@@ -361,7 +362,8 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
         if (!popup.closed) popup.close();
         return;
       }
-      // The new connection must belong to this project.
+      // Trust the begin response only if it is for this project. A response for another
+      // project must never open a GitHub authorization window.
       if (!isCopilotConnectionBegin(result.begin) ||
           result.begin.connection.scope !== 'project' ||
           result.begin.connection.scopeId !== attempt.projectId) {

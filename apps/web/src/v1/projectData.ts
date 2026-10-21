@@ -34,43 +34,44 @@ function useScopedLoad<T>(
   accept: (value: T) => boolean = () => true,
 ): Loaded<T> {
   const { session, apiCall } = useAuth();
-  // The scope names the token and the thing being read. Stored data is shown only while the
-  // scope still matches, so a new token or project never shows the previous one's data.
+  // The scope ties a result to one token and one key. When either changes, old data is hidden.
   const scope = JSON.stringify([session?.accessToken ?? null, key]);
   const [state, setState] = useState<{ scope: string; data: T | null; error: unknown; loadedAt: Date | null }>(
     { scope: '', data: null, error: null, loadedAt: null },
   );
-  // Bumped by `reload` to read again.
+  // Bumping the generation re-runs the load effect; reload() uses it.
   const [generation, setGeneration] = useState(0);
-  // Keep the latest callbacks in refs. Callers pass new inline functions each render,
-  // and using them as effect dependencies would re-read on every render.
+  // Callers pass new inline functions on every render. Keeping them in refs lets the
+  // effect use the latest ones without restarting the load each render.
   const readRef = useRef(read);
   const acceptRef = useRef(accept);
   useEffect(() => {
     readRef.current = read;
     acceptRef.current = accept;
   });
+  // `read === null` means "nothing to load yet", for example when the route has no project id.
   const hasReader = read !== null;
 
   useEffect(() => {
-    // A null reader means there is nothing to load yet (for example no project in the route).
     if (!hasReader) return;
-    // Cleared on cleanup so a response for an old scope is dropped.
+    // `active` turns false on cleanup so a late response cannot overwrite newer state.
     let active = true;
-    // Start on the next tick, outside the effect body.
+    // Start the read on the next tick instead of inside the effect body.
     const timer = window.setTimeout(() => {
       const reader = readRef.current;
       if (!reader) return;
-      // Project reads use the unbound session, not a run-bound one.
+      // `null` binding: these reads use the unbound session token.
       void apiCall(reader, null)
         .then((value) => {
           if (!active) return;
-          // Reject data for a different project instead of showing it.
+          // The caller's check confirms the response is for the requested item.
+          // A mismatch is treated as an error so another project's data is never shown.
           if (!acceptRef.current(value)) throw new Error('The service returned data for a different project.');
           setState({ scope, data: value, error: null, loadedAt: new Date() });
         })
         .catch((reason: unknown) => {
-          // On a failed reload, keep the last good data for this scope and show the error with it.
+          // On failure, keep the last good data for the same scope so the page does not go blank.
+          // Data from a different scope is dropped.
           if (active) setState((previous) => ({
             scope,
             data: previous.scope === scope ? previous.data : null,
@@ -86,11 +87,13 @@ function useScopedLoad<T>(
   }, [apiCall, scope, generation, hasReader]);
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
+  // After a successful save, the page can store the returned value directly instead of reading again.
   const replace = useCallback((next: T) => setState({ scope, data: next, error: null, loadedAt: new Date() }), [scope]);
+  // Hide state that belongs to an older scope.
   const current = state.scope === scope;
-  // Loading until this scope has either data or an error.
   return {
     data: current ? state.data : null,
+    // Loading until the current scope has either data or an error.
     loading: hasReader && (!current || (state.data === null && state.error === null)),
     error: current ? state.error : null,
     loadedAt: current ? state.loadedAt : null,
@@ -103,7 +106,9 @@ function useScopedLoad<T>(
 export function useProjectSummary(projectId: string): Loaded<ProjectSummary> {
   return useScopedLoad(
     `project:${projectId}`,
+    // No project id in the route: skip the read.
     projectId ? (token, tenant) => gatewayClient.getProject(token, projectId, tenant) : null,
+    // Reject a response for any other project.
     (value) => value.projectId === projectId,
   );
 }
@@ -172,13 +177,15 @@ export function permissionsForProject(
 ): PermissionSource[] {
   const sources: PermissionSource[] = [];
   for (const grant of context.effectiveAuthority) {
-    // A tenant grant counts only for the caller's own tenant; a project grant only for this project.
+    // A grant counts if it is platform-wide, on the caller's own tenant, or on this exact project.
+    // Grants on other tenants or other projects are ignored.
     const applies = grant.resourceType === 'platform'
       || (grant.resourceType === 'tenant' && grant.resourceId === context.tenantId)
       || (grant.resourceType === 'project' && projectId !== undefined && grant.resourceId === projectId);
     if (!applies) continue;
     for (const permission of grant.permissions) {
-      // Keep one entry per permission and scope, even if several grants repeat it.
+      // Skip duplicates. The same permission can still appear once per scope,
+      // so the UI can show where each permission comes from.
       if (!sources.some((item) => item.permission === permission.permission && item.scope === grant.resourceType))
         sources.push({ permission: permission.permission, scope: grant.resourceType });
     }
@@ -188,6 +195,7 @@ export function permissionsForProject(
 
 /** Short access label for headers and tiles: "Can edit", "Can view", or "No access". */
 export function accessSummary(permissions: PermissionSource[]): 'Can edit' | 'Can view' | 'No access' {
+  // Check the strongest permission first so an editor is not labelled as a viewer.
   if (permissions.some((item) => item.permission === 'writeProjects')) return 'Can edit';
   if (permissions.some((item) => item.permission === 'readProjects')) return 'Can view';
   return 'No access';

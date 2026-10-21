@@ -163,6 +163,7 @@ describe('Skills and marketplace panel', () => {
       />,
     );
 
+    // Reads the number shown next to a stat label in the strip.
     const metricValue = (label: string) =>
       screen.getByText(label).parentElement?.nextElementSibling?.textContent;
     expect(metricValue('Assigned')).toBe('2');
@@ -642,6 +643,8 @@ describe('Skills and marketplace panel', () => {
     ));
     const importRequest = vi.mocked(actions.importSkillContent).mock.calls[0][1];
     expect(importRequest.idempotencyKey).toBeTruthy();
+    // After an import the dialog tells the user where to assign the skill, and closing it
+    // must switch to the Assignments tab.
     expect(screen.getByText(/Close this dialog to assign it on the Assignments tab/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));

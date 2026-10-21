@@ -110,21 +110,21 @@ export function RetainedShell({ children }: { children: ReactNode }) {
     projects: ProjectSummary[];
     error: string | null;
   } | null>(null);
+  // The token identifies the signed-in user. When it changes (sign-in, sign-out,
+  // or switching user), the old list must not be shown.
   const scope = session?.accessToken ?? '';
 
-  // Reload the switcher's project list when the token or the current project
-  // changes. Opening a new project re-reads the list so a just-created project
-  // appears. The `active` flag drops a late result after the effect re-runs or
-  // the shell unmounts, so an old request cannot overwrite newer data.
+  // Reload the project list on sign-in changes and on project navigation, so a
+  // project created or renamed elsewhere shows up in the switcher.
   useEffect(() => {
+    // Ignore the response if the effect re-ran or the shell unmounted first.
     let active = true;
     void apiCall((token, tenant) => gatewayClient.listProjects(token, tenant), null)
       .then((projects) => {
         if (active) setDirectory({ scope, projects, error: null });
       })
       .catch((error: unknown) => {
-        // Keep an empty list and an error message. The switcher shows its
-        // load-error state and the page shows the message above the content.
+        // Keep the rail usable with an empty list and show the error above the page.
         if (active) setDirectory({
           scope, projects: [],
           error: error instanceof Error ? error.message : 'Projects could not load. Try again from Projects.',
