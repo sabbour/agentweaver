@@ -210,15 +210,15 @@ See [Projects & Config](../architecture/projects-config.md) and
 ### Caller notifications
 
 Native owner prefix: `/api/notifications`. Gateway prefix:
-`/api/v1/notifications`. These routes use current Projects read authority,
-not a required run binding. See [Notifications](../guide/notifications.md).
+`/api/v1/notifications`. These routes require an unbound token and current
+Projects read authority. See [Notifications](../guide/notifications.md).
 
 | Method | Suffix | Purpose | Gateway |
 | --- | --- | --- | --- |
 | GET | `?cursor=&pageSize=&projectId=&includeDismissed=` | Read newest-first pending gates, a total count and an opaque cursor. | Yes |
 | POST | `/{notificationId}/dismiss` | Dismiss for the caller without resolving the gate. Bodyless and idempotent. | Yes |
 
-Responses are `no-store`. A token binding narrows the result. The default
+Responses are `no-store`. Project-bound and run-bound tokens are rejected. The default
 excludes caller dismissals; shared Flow reads use `includeDismissed=true`.
 Unknown or repeated query parameters return `400 query_invalid`.
 
