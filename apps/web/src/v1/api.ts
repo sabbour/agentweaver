@@ -125,6 +125,8 @@ export class AgentweaverGatewayClient {
     }
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
+    // Default to JSON, but keep an Accept header the caller set. The captured-file read asks for
+    // application/octet-stream to receive raw bytes.
     if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     if (tenantSelector !== undefined && tenantSelector !== null)
       headers.set('X-Agentweaver-Tenant', tenantSelector);
@@ -152,6 +154,8 @@ export class AgentweaverGatewayClient {
       throw new GatewayError(response.status, body, problemMessage(body, response.status));
     }
     if (response.status === 204) return undefined as T;
+    // Callers that need the body bytes or response headers get the Response itself. Errors were
+    // already turned into GatewayError above, so only successful responses reach this point.
     if (rawResponse) return response as T;
     return await response.json() as T;
   }
@@ -779,7 +783,7 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Lists admitted produced-output captures for a run session, newest first. */
+  /** Lists the saved output captures for a run session, newest first, 50 per page. */
   listSourceControlOutputCaptures(
     token: string,
     projectId: string,
@@ -789,6 +793,8 @@ export class AgentweaverGatewayClient {
     before?: { capturedAt: string; captureId: string },
   ): Promise<SourceControlOutputCapturePage> {
     const query = new URLSearchParams({ limit: '50' });
+    // The cursor has two parts because two captures can share a timestamp. The owner needs both
+    // values to find the exact position, so set them together or not at all.
     if (before) {
       query.set('beforeCapturedAt', before.capturedAt);
       query.set('beforeCaptureId', before.captureId);
@@ -802,7 +808,7 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads one admitted capture and its file list. */
+  /** Reads one saved capture and its file list (the manifest). */
   readSourceControlOutputCapture(
     token: string,
     projectId: string,
@@ -820,7 +826,7 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads the diff stored with one admitted capture. */
+  /** Reads the diff saved with one capture. */
   readSourceControlOutputCaptureDiff(
     token: string,
     projectId: string,
@@ -851,6 +857,8 @@ export class AgentweaverGatewayClient {
     captureId: string,
     path: string,
   ): Promise<SourceControlOutputFileContent> {
+    // Send the path as a query value, not as URL segments, so slashes and special characters in
+    // the path are encoded once and cannot change which route is called.
     const response = await this.request<Response>(
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'files')}?${new URLSearchParams({ path })}`,
@@ -859,6 +867,8 @@ export class AgentweaverGatewayClient {
       tenantSelector,
       true,
     );
+    // Read the body as bytes, not text, so the content is exactly what was captured. The digest
+    // header is null when the browser can't read it (for example, if CORS doesn't expose it).
     return {
       bytes: new Uint8Array(await response.arrayBuffer()),
       sha256: response.headers.get('X-Source-Control-Output-Sha256'),

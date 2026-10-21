@@ -391,6 +391,8 @@ describe('v1 web project scoping', () => {
     mocks.consent = null;
     mocks.tenantSelector = 'tenant-1';
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
+    // The run Changes tab always loads produced files. Return no captures so run-page tests
+    // don't depend on that panel.
     mocks.listSourceControlOutputCaptures.mockReset().mockResolvedValue({ captures: [] });
     mocks.listProjects.mockReset().mockResolvedValue([]);
     mocks.createProject.mockReset();

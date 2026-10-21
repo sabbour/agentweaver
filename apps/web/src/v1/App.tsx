@@ -2753,6 +2753,8 @@ function RunPage() {
               ) : (
                 <EmptyState title="No repository changes" description="This run does not use a GitHub App repository connection, so it has no branch or pull request to show." />
               )}
+              {/* Read captures for the run's root session. The panel shows for every run, with or
+                  without a GitHub App repository connection. */}
               <ProducedFilesPanel projectId={projectId} runId={runId} sessionId={currentRunStatus.rootSessionId} />
             </div>
           )}

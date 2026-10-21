@@ -447,7 +447,7 @@ The Gateway does not expose journal object-content reads, so the UI displays
 opaque references rather than inventing transcript text.
 
 The run's **Changes** tab includes a **Produced files** panel. It lists the
-pinned output captures that Source Control admitted for the run, newest first,
+pinned output captures that Source Control saved for the run, newest first,
 labeled by save time and branch. Select a file to view its exact captured
 bytes, or select **Changes** to view the capture diff. Text files that are not
 valid UTF-8 show as binary. The panel reads only through the Gateway
