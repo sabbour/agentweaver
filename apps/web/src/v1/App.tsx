@@ -103,6 +103,9 @@ import { DashboardPage } from './DashboardPage';
 import { OverviewPage } from './OverviewPage';
 import { OrchestrationsPage } from './OrchestrationsPage';
 import { SessionsPage } from './SessionsPage';
+import { NewSessionPage } from './NewSessionPage';
+import { readPendingRun } from './pendingRun';
+import { StopRunButton } from './StopRunButton';
 import { AgentsView } from './AgentsView';
 import { accessSummary, permissionsForProject, useAuthorizationContext, useProjectConfiguration, useProjectSummary } from './projectData';
 import { runListErrorMessage, useProjectRunList } from './runListData';
@@ -2729,7 +2732,16 @@ function RunPage() {
         title="Orchestration"
         description={Number.isNaN(startedAt) ? `Run ${runId}` : `Run ${runId} · Started ${new Date(startedAt).toLocaleString()}`}
         page="Orchestrations"
-        actions={<Button appearance="secondary" aria-label="Refresh run" icon={<ArrowClockwiseRegular />} disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh</Button>}
+        actions={<>
+          {/* Stop shows only while the run is open; a stop reloads the run state. */}
+          <StopRunButton
+            projectId={projectId}
+            runId={runId}
+            state={currentRunStatus?.executionState}
+            onStopped={() => void refreshRef.current()}
+          />
+          <Button appearance="secondary" aria-label="Refresh run" icon={<ArrowClockwiseRegular />} disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh</Button>
+        </>}
       />
       {currentSnapshotMessage && <MessageBar intent="info"><MessageBarBody>{currentSnapshotMessage}</MessageBarBody></MessageBar>}
       {Object.entries(pageErrors).map(([key, message]) => (
@@ -3028,7 +3040,9 @@ function ReactFlowView({
 /** Displays the in-window Broker sign-in exchange and redirects after a session is established. */
 function CallbackPage() {
   const { session, error, busy } = useAuth();
-  if (session) return <Navigate to="/projects" replace />;
+  // A full-page sign-in for a new chat returns here. Go back to New session,
+  // which starts the saved chat; otherwise open Projects.
+  if (session) return <Navigate to={readPendingRun() ? '/assistant' : '/projects'} replace />;
   return (
     <div className="v1-auth-page">
       <section className="v1-auth-card">
@@ -3191,7 +3205,7 @@ function AuthenticatedRoutes() {
       <Route path="/" element={<Navigate to="/overview" replace />} />
       <Route path="/overview" element={<Shell><OverviewPage /></Shell>} />
       <Route path="/sessions" element={<Shell><SessionsPage /></Shell>} />
-      <Route path="/assistant" element={<Shell><UnavailablePage title="New session" description="Starting a new chat needs a service update. Open a project, then choose a run in Orchestrations to read and send messages." /></Shell>} />
+      <Route path="/assistant" element={<Shell><NewSessionPage /></Shell>} />
       <Route path="/console" element={<Navigate to="/assistant" replace />} />
       <Route path="/settings" element={<Shell><AccountSettingsPage /></Shell>} />
       <Route path="/platform-settings" element={<Shell><UnavailablePage title="Platform settings" description="Platform administration is not available in this web client." /></Shell>} />

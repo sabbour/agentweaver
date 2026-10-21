@@ -4,8 +4,9 @@
  * so the page reads the project list and then each project's newest runs.
  */
 import { Button, MessageBar, MessageBarBody, makeStyles, tokens } from '@fluentui/react-components';
-import { ArrowSyncRegular } from '@fluentui/react-icons';
+import { AddRegular, ArrowSyncRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { EmptyState, ErrorState } from '../components/ui/States';
 import { useAuth } from './AuthContext';
 import { gatewayClient } from './api';
@@ -25,6 +26,7 @@ const SESSIONS_PAGE_SIZE = 10;
 /** Renders the signed-in user's runs across projects. */
 export function SessionsPage() {
   const styles = useStyles();
+  const navigate = useNavigate();
   const { apiCall } = useAuth();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [projectsLoading, setProjectsLoading] = useState(true);
@@ -61,7 +63,11 @@ export function SessionsPage() {
       <PageHeading
         title="Sessions"
         description="Runs across your projects, newest first. Open one to continue."
-        actions={<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { void loadProjects(); }}>Refresh</Button>}
+        actions={<>
+          <Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { void loadProjects(); }}>Refresh</Button>
+          {/* 0.x primary action: start a new chat on the New session page. */}
+          <Button appearance="primary" icon={<AddRegular />} onClick={() => navigate('/assistant')}>New session</Button>
+        </>}
       />
       {projectsError != null && (
         <ErrorState title="Couldn't load sessions" message={errorMessage(projectsError)} onRetry={() => { void loadProjects(); }} />

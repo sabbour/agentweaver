@@ -109,12 +109,12 @@ export function RetainedShell({ children }: { children: ReactNode }) {
   const current = directory?.scope === scope ? directory : null;
   return (
     <div className="aw-app-shell">
-      {/* The rail shows only the pages that v1 implements. The New session
-          button stays hidden because the service cannot create runs yet. */}
+      {/* The rail shows only the pages that v1 implements, plus the 0.x
+          Sessions group with its New session button. */}
       <LeftNavView
-        visibleGlobalKeys={['overview', 'projects']}
+        visibleGlobalKeys={['overview', 'projects', 'sessions']}
         visibleProjectKeys={['dashboard', 'orchestrations', 'agents', 'skills', 'memories']}
-        showNewSession={false}
+        showNewSession
         projectId={projectId}
         pathname={location.pathname}
         // v1 routes that the shared nav config does not know: knowledge pages
