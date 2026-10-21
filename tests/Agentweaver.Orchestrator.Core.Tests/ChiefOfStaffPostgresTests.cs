@@ -185,9 +185,10 @@ public sealed class ChiefOfStaffPostgresTests(CoordinationPostgresFixture fixtur
         Assert.All(priority.Links, link => Assert.Equal("github", link.ProviderId));
         var reloaded = await new ChiefOfStaffStore(fixture.DataSource, _schema)
             .GetPriorityAsync(_actor, Tenant, priority.PriorityId, default);
-        Assert.Equal(priority.Links, reloaded!.Links);
+        // Compare link values, not the backing-array identity of independently materialized receipts.
+        Assert.Equal(priority.Links.ToArray(), reloaded!.Links.ToArray());
         var listed = await _store.ListPrioritiesAsync(_actor, Tenant, default);
-        Assert.Equal(priority.Links, Assert.Single(listed.Items).Links);
+        Assert.Equal(priority.Links.ToArray(), Assert.Single(listed.Items).Links.ToArray());
         await AssertCodeAsync("priority_link_exists", () => _store.AddLinkAsync(_actor, Tenant, priority.PriorityId,
             new(priority.Revision, kind, Project, null, null, 42, null, "github", new("other", "repo")), default));
 
