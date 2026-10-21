@@ -6,10 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   CONNECTIVITY_MARKER, DB_MAINTENANCE_TARGET, LOCK_NAME, describeEgressDrift, MIGRATION_IDENTITY, REVIEWED_PLAN_SHA256, STATE_NAME,
-  connectivityProbeJob, imageReference, loadSchemaSupport, parseDbMaintenanceArgs, planServiceOrder, prepareJob, runDbMaintenance,
-  verifyGrantsMarker,
+  connectivityProbeJob, imageReference, parseDbMaintenanceArgs, planServiceOrder, prepareJob, readImageSchemaRange, runDbMaintenance,
+  schemaRangeFromSource, verifyGrantsMarker,
 } from '../lib/db-maintenance.mjs';
 import { p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
+import { redact } from '../lib/exec.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
 
 const digest = character => `sha256:${character.repeat(64)}`;
@@ -45,7 +46,8 @@ const driftedSpec = () => {
 };
 
 function world({ lease, drift = false, state, jobOutcome = () => 'Complete', logs = goodLogs, identityExists = true,
-  federated = true, accountType = 'user', relayError, appImages = {}, rolloutFails = false, probeLog } = {}) {
+  federated = true, accountType = 'user', relayError, appImages = {}, rolloutFails = false, probeLog,
+  schemaRanges = { [digest('a')]: { minSchema: 31, maxSchema: 32 }, [digest('b')]: { minSchema: 9, maxSchema: 9 } } } = {}) {
   const calls = [];
   const cluster = new Map();
   if (lease) cluster.set(`lease/${LOCK_NAME}`, lease);
@@ -148,6 +150,8 @@ function world({ lease, drift = false, state, jobOutcome = () => 'Complete', log
     deps: {
       exec, repoRoot: process.cwd(), sleep: async () => {}, now: () => new Date('2026-10-22T10:00:00.123Z'),
       newRunId: () => 'abcdef123456', log: () => {},
+      // Image schema ranges come from this table instead of the registry, so tests stay offline.
+      imageSchemaRange: async image => schemaRanges[image?.slice(image.indexOf('@') + 1)] ?? { unknown: 'not in the test registry' },
       writeReceipt: (path, receipt) => receipts.push({ path, receipt: structuredClone(receipt) }),
       relay: async options => {
         relayCalls.push(options);
@@ -573,53 +577,109 @@ test('the connectivity probe runs under the migration egress label with no token
   assert.match(pod.containers[0].image, /@sha256:[0-9a-f]{64}$/);
   assert.match(pod.containers[0].command[2], new RegExp(CONNECTIVITY_MARKER));
 });
-const support = (orchestrator = {}, events = {}) => loadSchemaSupport(JSON.stringify({
-  images: { 'Agentweaver.Orchestrator': orchestrator, 'Agentweaver.EventsAndSessions': events } }));
+const eventsImage = character => imageReference('Agentweaver.EventsAndSessions', digest(character));
 const apps = (running, expected = 'b') => [
   { deployment: 'orchestrator', component: 'Agentweaver.Orchestrator', status: 'match',
     expected: imageReference('Agentweaver.Orchestrator', digest('a')), running: imageReference('Agentweaver.Orchestrator', digest('a')) },
   { deployment: 'events-and-sessions', component: 'Agentweaver.EventsAndSessions', status: 'mismatch',
-    expected: imageReference('Agentweaver.EventsAndSessions', digest(expected)),
-    running: imageReference('Agentweaver.EventsAndSessions', digest(running)) },
+    expected: eventsImage(expected), running: eventsImage(running) },
 ];
 const schemas = { orchestrator: 33, 'events-and-sessions': 9 };
+const range = (minSchema, maxSchema) => ({ minSchema, maxSchema });
 
 test('the service order follows the schema ranges of the running and target images', () => {
-  const order = (catalog, current) => planServiceOrder({ appImages: apps('e'), support: support({}, catalog),
+  // Ranges are keyed by image reference, as the runner reads them from each image.
+  const order = (running, target, current) => planServiceOrder({ appImages: apps('e'),
+    ranges: { [eventsImage('e')]: running, [eventsImage('b')]: target },
     targetSchema: schemas, currentSchema: { orchestrator: 31, 'events-and-sessions': current } });
   // The running image accepts the target schema: migrate first; deploying is optional.
-  let result = order({ [digest('e')]: { minSchema: 8, maxSchema: 9 } }, 8);
+  let result = order(range(8, 9), range(9, 9), 8);
   assert.equal(result.order, 'migrate-first');
   assert.equal(result.services[1].action, 'migrate-first');
   // The target image accepts the current schema: deploy first, so the service stays ready.
-  result = order({ [digest('b')]: { minSchema: 8, maxSchema: 9 } }, 8);
+  result = order(undefined, range(8, 9), 8);
   assert.equal(result.order, 'deploy-first');
   assert.equal(result.services[1].action, 'deploy-first');
   // Neither image accepts the other's schema: a planned readiness gap, not an error.
-  result = order({ [digest('e')]: { minSchema: 8, maxSchema: 8 }, [digest('b')]: { minSchema: 9, maxSchema: 9 } }, 8);
+  result = order(range(8, 8), range(9, 9), 8);
   assert.equal(result.order, 'planned-readiness-gap');
   assert.equal(result.services[1].action, 'gap');
-  // Unknown images and an unrecorded current schema never assume compatibility.
-  assert.equal(order({}, undefined).order, 'planned-readiness-gap');
-  assert.equal(order({}, 8).services[1].targetSupports.minSchema, 9);
+  // An unknown running image and an unrecorded current schema never assume compatibility.
+  assert.equal(order(undefined, range(8, 9), undefined).order, 'planned-readiness-gap');
   // A matching service needs no action.
   assert.equal(result.services[0].action, 'none');
-  // A catalog entry that rejects the reviewed plan's own target schema stops the run.
-  assert.throws(() => order({ [digest('b')]: { minSchema: 7, maxSchema: 8 } }, 8), /does not accept schema 9 from the reviewed plan/);
+  // A target image that rejects the reviewed plan's own target schema is the wrong digest.
+  assert.throws(() => order(undefined, range(7, 8), 8), /accepts schema 7-8, not 9 from the reviewed plan/);
+  assert.throws(() => order(undefined, undefined, 8), /accepts schema unknown, not 9/);
 });
 
-test('the schema support catalog rejects malformed entries and the shipped catalog loads', () => {
-  for (const range of [{ minSchema: 9, maxSchema: 8 }, { minSchema: 0, maxSchema: 1 }, { minSchema: '8', maxSchema: 9 }, null])
-    assert.throws(() => support({ [digest('a')]: range }), /is malformed/);
-  assert.throws(() => support({ 'sha256:abc': { minSchema: 1, maxSchema: 2 } }), /is malformed/);
-  const shipped = loadSchemaSupport(readFileSync('scripts/azure/lib/db-schema-support.json', 'utf8'));
-  assert.deepEqual(Object.keys(shipped), ['Agentweaver.Orchestrator', 'Agentweaver.EventsAndSessions']);
+test('the schema range comes from the readiness check in the migrator source', () => {
+  // The current owners: Orchestrator requires 31 and also accepts the optional 032; Events is 9.
+  // Git output passes through redaction, which must not change the parsed text.
+  const read = (path, component) => schemaRangeFromSource(redact(readFileSync(path, 'utf8')), component);
+  assert.deepEqual(read('services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs',
+    'Agentweaver.Orchestrator'), range(Math.max(...plan.coreVersions), 32));
+  assert.deepEqual(read('services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs',
+    'Agentweaver.EventsAndSessions'), range(Math.max(...plan.eventsVersions), Math.max(...plan.eventsVersions)));
+  // An older image with no optional version accepts exactly its own highest version.
+  const older = ['WHERE version = 1),', 'WHERE version = 21) = 1,', 'WHERE version NOT IN (1, 2, 21)),']
+    .map(line => `SELECT count(*) FROM s.coordination_schema_migrations ${line}`).join('\n');
+  assert.deepEqual(schemaRangeFromSource(older, 'Agentweaver.Orchestrator'), range(21, 21));
+  // Other tables, a missing or repeated allow-list, and unknown components give no range.
+  assert.equal(schemaRangeFromSource(older, 'Agentweaver.EventsAndSessions'), undefined);
+  assert.equal(schemaRangeFromSource(older.split('\n').slice(0, 2).join('\n'), 'Agentweaver.Orchestrator'), undefined);
+  assert.equal(schemaRangeFromSource(`${older}\n${older}`, 'Agentweaver.Orchestrator'), undefined);
+  assert.equal(schemaRangeFromSource(older, 'Agentweaver.Other'), undefined);
+});
+
+test('an image schema range is read from its source label and the source at that commit', async () => {
+  const sha = '1'.repeat(40);
+  const source = readFileSync('services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs', 'utf8');
+  const gitCalls = [];
+  // A fake git: the commit is missing until fetched, then show returns the migrator source.
+  const fakeGit = ({ fetched = false, showFails = false } = {}) => (command, args) => {
+    gitCalls.push(args);
+    if (args[0] === 'cat-file') return fetched ? ok() : fail('missing');
+    if (args[0] === 'fetch') { fetched = true; return ok(); }
+    if (args[0] === 'show') return showFails ? fail('bad object') : ok(source);
+    throw new Error(`Unexpected git ${args.join(' ')}`);
+  };
+  const read = (overrides = {}) => readImageSchemaRange({ image: eventsImage('b'), component: 'Agentweaver.EventsAndSessions',
+    readImage: async () => ({ sourceSha: sha }), exec: fakeGit(), repoRoot: '.', ...overrides });
+  assert.deepEqual(await read(), { minSchema: 9, maxSchema: 9, sourceSha: sha });
+  // A missing commit is fetched by name once, then read.
+  assert.deepEqual(gitCalls.map(args => args[0]), ['cat-file', 'fetch', 'show']);
+  assert.deepEqual(gitCalls[2], ['show', `${sha}:services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs`]);
+  // Every failure is reported as unknown with a reason; the caller decides what that means.
+  assert.match((await read({ readImage: async () => { throw new Error('denied'); } })).unknown, /could not read the image labels: denied/);
+  assert.match((await read({ readImage: async () => ({ sourceSha: 'main' }) })).unknown, /no source commit label/);
+  assert.match((await read({ exec: fakeGit({ showFails: true }) })).unknown, /could not read .*EventsAndSessionsMigrator\.cs at 1{40}/);
+  assert.match((await read({ image: 'ghcr.io/sabbour/agentweaver-events-and-sessions:latest' })).unknown, /not a published/);
+  assert.match((await read({ image: `docker.io/other/events@${digest('b')}` })).unknown, /not a published/);
+});
+
+test('a target image whose schema range cannot be read stops the run before any change', async () => {
+  const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 32) } });
+  try {
+    await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--deploy-apps']),
+      receiptDir: fake.receiptDir }, fake.deps), /Could not read the schema range of events-and-sessions image .*not in the test registry/);
+    assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
+  } finally { fake.done(); }
+});
+
+test('a target digest built for another schema stops the run before any change', async () => {
+  const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 32), [digest('b')]: range(8, 8) } });
+  try {
+    await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--deploy-apps']),
+      receiptDir: fake.receiptDir }, fake.deps), /accepts schema 8-8, not 9 from the reviewed plan/);
+    assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
+  } finally { fake.done(); }
 });
 
 test('deploy-first moves a service to an image that accepts the current schema before any migration Job', async () => {
   const fake = appWorld({ state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
-    data: { handoverPrincipalObjectId: PRINCIPAL_ID, 'events-and-sessions.schema': '8' } } });
-  fake.deps.schemaSupport = support({}, { [digest('b')]: { minSchema: 8, maxSchema: 9 } });
+      data: { handoverPrincipalObjectId: PRINCIPAL_ID, 'events-and-sessions.schema': '8' } },
+    schemaRanges: { [digest('a')]: range(31, 32), [digest('b')]: range(8, 9) } });
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
       receiptDir: fake.receiptDir }, fake.deps);
@@ -634,8 +694,7 @@ test('deploy-first moves a service to an image that accepts the current schema b
 });
 
 test('migrate-first keeps a running image that accepts the target schema when no deploy is asked for', async () => {
-  const fake = appWorld();
-  fake.deps.schemaSupport = support({}, { [digest('e')]: { minSchema: 8, maxSchema: 9 } });
+  const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 32), [digest('b')]: range(9, 9), [digest('e')]: range(8, 9) } });
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
       receiptDir: fake.receiptDir }, fake.deps);

@@ -1,7 +1,0 @@
-{
-  "description": "Reviewed schema ranges that each published owner image accepts at startup and on /health/ready. Keys are image digests; minSchema and maxSchema are the highest applied migration versions of that service's schema. The database maintenance runner uses this to choose deploy-first, migrate-first, or a planned readiness gap. An image that is not listed is treated as accepting only its own target schema.",
-  "images": {
-    "Agentweaver.Orchestrator": {},
-    "Agentweaver.EventsAndSessions": {}
-  }
-}

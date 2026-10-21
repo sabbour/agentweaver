@@ -164,18 +164,29 @@ The options are:
 
 ### Schema ranges
 
-The accepted ranges live in `scripts/azure/lib/db-schema-support.json`. Each
-entry maps a published image digest to its lowest and highest schema version.
-A schema version is the highest applied migration of that service. When you
-publish an owner image, add its digest and range in the same change as the
-migration it supports.
+The runner reads each image's accepted range from the image itself. There is
+no list to update when you publish an image. A schema version is the highest
+applied migration of that service.
 
-An image that is not listed is treated with care. A new image accepts only the
-target schema. A running image accepts nothing the runner can rely on. So a
-run with unlisted images takes the planned-gap path. The runner records each
-schema version in its state after a run, and uses it to decide whether a new
-image accepts the current schema. The run fails if the catalog says the new
-image rejects the target schema of the reviewed plan.
+For each image that would change, the runner:
+
+1. Reads the image's `org.opencontainers.image.revision` label from the
+   registry. Every published service image has this label. It holds the commit
+   the image was built from.
+2. Reads the service's migrator source at that commit with git. It fetches the
+   commit from `origin` if the clone does not have it.
+3. Reads the range from the readiness check in that source. The highest
+   version the check requires is the lowest accepted version. The highest
+   version it allows is the highest accepted version. For example, the current
+   Orchestrator image accepts 31 to 32, because migration 032 is optional.
+
+If the runner cannot read the range of a new image, the run stops before any
+change. If the new image does not accept the target schema of the reviewed
+plan, the digest was built from other source, and the run also stops. If it
+cannot read the range of a running image, for example a tag or an image from
+another registry, it assumes nothing about that image, so the run takes the
+planned-gap path. The runner records each schema version in its state after a
+run, and uses it to decide whether a new image accepts the current schema.
 
 ### Planned readiness gap
 

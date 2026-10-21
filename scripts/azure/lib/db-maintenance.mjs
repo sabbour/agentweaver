@@ -13,6 +13,7 @@ import { p1PostgresPlanHash } from './p1-postgres-plan.mjs';
 import { bootstrapIdentityPostgres } from './identity-postgres-bootstrap.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
 import { componentImageRepository } from '../../release/pack.mjs';
+import { verifyServiceRegistryImage } from '../../release/registry.mjs';
 
 /** The only environment this runner can touch. Every value is checked against the live account. */
 export const DB_MAINTENANCE_TARGET = Object.freeze({
@@ -38,8 +39,19 @@ const P1_DIRECTORY = join('deploy', 'k8s', 'migrations', 'p1-postgres');
 const BROKER_DIRECTORY = join('deploy', 'k8s', 'migrations', 'identity-broker');
 const IDENTITY_TEMPLATE = join('infra', 'bicep', 'p1-postgres-migration-identity.bicep');
 const PLAN_FILE = join('scripts', 'azure', 'lib', 'p1-postgres-plan.json');
-// Reviewed list of published service digests and the schema versions each one accepts.
-const SCHEMA_SUPPORT_FILE = join('scripts', 'azure', 'lib', 'db-schema-support.json');
+// Each owner's readiness check and the migration table it reads. The runner reads this file at
+// the commit an image was built from to learn which schema versions that image accepts. Git
+// paths always use forward slashes.
+const OWNER_SOURCES = Object.freeze({
+  'Agentweaver.Orchestrator': {
+    file: 'services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs',
+    table: 'coordination_schema_migrations',
+  },
+  'Agentweaver.EventsAndSessions': {
+    file: 'services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs',
+    table: 'sessions_schema_migrations',
+  },
+});
 // Projects whose locked restore must succeed before anything runs: the shared persistence code
 // in the Jobs and the handover, the Broker verifier, and the relay used by the handover.
 const LOCKED_PROJECTS = [
@@ -231,25 +243,61 @@ function checkAppImages(kubectl, options) {
 }
 
 /**
- * Parses the reviewed schema-support catalog. Each entry maps a published digest to the lowest
- * and highest schema version that image's readiness check accepts. A schema version is the
- * highest applied migration of that service. Malformed entries fail the run, because a wrong
- * range could pick an order that leaves services unready.
+ * Reads the schema range a service accepts from its migrator source. A schema version is the
+ * highest applied migration of that service. The readiness check rejects any version outside its
+ * `NOT IN (...)` list, so the highest listed version is the most the image accepts. It also
+ * requires each version it checks with `WHERE version = N)`, except versions it also accepts as
+ * absent (`= 0`), such as the optional Orchestrator 032. The highest required version is the
+ * least the image accepts. Returns undefined when the source does not have that shape, so an
+ * unexpected file never produces a guessed range.
  */
-export function loadSchemaSupport(text) {
-  const parsed = JSON.parse(text);
-  const support = {};
-  for (const job of P1_JOBS) {
-    const entries = parsed.images?.[job.component] ?? {};
-    support[job.component] = {};
-    for (const [digest, range] of Object.entries(entries)) {
-      if (!DIGEST.test(digest) || !Number.isInteger(range?.minSchema) || !Number.isInteger(range?.maxSchema) ||
-          range.minSchema < 1 || range.minSchema > range.maxSchema)
-        throw new Error(`Schema support entry ${job.component} ${digest} is malformed.`);
-      support[job.component][digest] = { minSchema: range.minSchema, maxSchema: range.maxSchema };
-    }
+export function schemaRangeFromSource(source, component) {
+  const owner = OWNER_SOURCES[component];
+  if (!owner || typeof source !== 'string') return undefined;
+  // Exactly one allow-list is expected; zero or several means the shape changed.
+  const allowLists = [...source.matchAll(new RegExp(`${owner.table} WHERE version NOT IN \\(([\\d, ]+)\\)`, 'g'))];
+  if (allowLists.length !== 1) return undefined;
+  const allowed = allowLists[0][1].split(',').map(Number);
+  const checked = new Set([...source.matchAll(new RegExp(`${owner.table} WHERE version = (\\d+)\\)`, 'g'))]
+    .map(match => Number(match[1])));
+  const optional = new Set([...source.matchAll(new RegExp(`${owner.table} WHERE version = (\\d+)\\) = 0`, 'g'))]
+    .map(match => Number(match[1])));
+  const required = [...checked].filter(version => !optional.has(version));
+  if (!required.length) return undefined;
+  const range = { minSchema: Math.max(...required), maxSchema: Math.max(...allowed) };
+  // The least accepted version must itself be allowed, or the two rules contradict each other.
+  return allowed.includes(range.minSchema) && range.minSchema <= range.maxSchema ? range : undefined;
+}
+
+/**
+ * Finds the schema range of a published owner image from the image itself. Every published
+ * service image carries its source commit in the `org.opencontainers.image.revision` label. The
+ * runner reads that label from the registry, reads the owner's migrator source at that commit
+ * with git, and parses the range (see schemaRangeFromSource). Nothing is maintained by hand.
+ * Returns `{ minSchema, maxSchema, sourceSha }`, or `{ unknown: reason }` when any step fails;
+ * the caller decides whether unknown is acceptable.
+ */
+export async function readImageSchemaRange({ image, component, readImage, exec, repoRoot }) {
+  const owner = OWNER_SOURCES[component];
+  // Only digest references to the target registry have a label the runner can trust.
+  if (!owner || typeof image !== 'string' || !image.startsWith(`${DB_MAINTENANCE_TARGET.registry}/`) ||
+      !DIGEST.test(image.slice(image.indexOf('@') + 1)))
+    return { unknown: `${image} is not a published ${DB_MAINTENANCE_TARGET.registry} digest reference` };
+  let sourceSha;
+  try {
+    ({ sourceSha } = await readImage(image));
+  } catch (error) {
+    return { unknown: `could not read the image labels: ${redact(error.message)}` };
   }
-  return support;
+  if (!/^[0-9a-f]{40}$/.test(sourceSha ?? '')) return { unknown: 'the image has no source commit label' };
+  // The commit is on v1, which the preflight fetched. Fetch it by name only when it is missing,
+  // for example in a shallow clone.
+  const hasCommit = () => exec('git', ['cat-file', '-e', `${sourceSha}^{commit}`], { cwd: repoRoot }).status === 0;
+  if (!hasCommit()) exec('git', ['fetch', '--quiet', '--no-tags', 'origin', sourceSha], { cwd: repoRoot });
+  const shown = exec('git', ['show', `${sourceSha}:${owner.file}`], { cwd: repoRoot });
+  if (shown.status !== 0) return { unknown: `could not read ${owner.file} at ${sourceSha}`, sourceSha };
+  const range = schemaRangeFromSource(shown.stdout, component);
+  return range ? { ...range, sourceSha } : { unknown: `could not parse the readiness check at ${sourceSha}`, sourceSha };
 }
 
 /**
@@ -260,30 +308,30 @@ export function loadSchemaSupport(text) {
  *   keeps the service ready on both sides.
  * - gap: neither image accepts the other's schema. The service is unready from the migration
  *   until its target image is ready. This is a planned readiness gap, not an error.
- * An image missing from the catalog accepts only its own schema: for a target image that is the
- * target schema, and for a running image nothing is assumed. The current schema comes from the
- * state ConfigMap; when it was never recorded, deploy-first is not chosen.
+ * An image whose range is unknown accepts nothing as far as this function knows. The runner
+ * never passes an unknown range for a target image (see runDbMaintenance), so in practice only
+ * a running image can be unknown. The current schema comes from the state ConfigMap; when it was
+ * never recorded, deploy-first is not chosen.
  */
-export function planServiceOrder({ appImages, support, targetSchema, currentSchema }) {
+export function planServiceOrder({ appImages, ranges, targetSchema, currentSchema }) {
   const within = (range, version) => range !== undefined && version !== undefined &&
     version >= range.minSchema && version <= range.maxSchema;
   const services = appImages.map(app => {
     const target = targetSchema[app.deployment];
     const current = currentSchema[app.deployment];
-    const catalog = support[app.component] ?? {};
-    const targetDigest = app.expected.slice(app.expected.indexOf('@') + 1);
-    const targetSupports = catalog[targetDigest] ?? { minSchema: target, maxSchema: target };
-    // A catalog entry that rejects the plan's own schema means the catalog and plan disagree.
-    if (!within(targetSupports, target))
-      throw new Error(`The catalog says ${app.deployment} ${targetDigest} does not accept schema ${target} from the reviewed plan.`);
-    const runningDigest = app.running?.includes('@') ? app.running.slice(app.running.indexOf('@') + 1) : undefined;
-    const runningSupports = runningDigest ? catalog[runningDigest] : undefined;
+    const targetSupports = ranges[app.expected];
+    // A target image that rejects the plan's own schema was built from other source: wrong digest.
+    if (app.status === 'mismatch' && !within(targetSupports, target))
+      throw new Error(`${app.deployment} image ${app.expected} accepts schema ` +
+        `${targetSupports ? `${targetSupports.minSchema}-${targetSupports.maxSchema}` : 'unknown'}, ` +
+        `not ${target} from the reviewed plan. Pass the digest built from the reviewed source.`);
+    const runningSupports = app.running ? ranges[app.running] : undefined;
     const action = app.status !== 'mismatch' ? 'none'
       : within(runningSupports, target) ? 'migrate-first'
         : within(targetSupports, current) ? 'deploy-first'
           : 'gap';
     return { deployment: app.deployment, action, currentSchema: current ?? null, targetSchema: target,
-      runningSupports: runningSupports ?? null, targetSupports };
+      runningSupports: runningSupports ?? null, targetSupports: targetSupports ?? null };
   });
   const order = services.some(service => service.action === 'gap') ? 'planned-readiness-gap'
     : services.some(service => service.action === 'deploy-first') ? 'deploy-first' : 'migrate-first';
@@ -410,6 +458,10 @@ export async function runDbMaintenance(options, overrides = {}) {
   const deps = { ...defaultDependencies(), ...overrides };
   const repoRoot = deps.repoRoot ?? process.cwd();
   const { exec, log } = deps;
+  // Reads an image's accepted schema range from its source label and the source at that commit.
+  // Tests replace it, or only the registry read, to stay offline.
+  deps.imageSchemaRange ??= (image, component) => readImageSchemaRange({ image, component,
+    readImage: deps.readImage ?? (reference => verifyServiceRegistryImage(reference)), exec, repoRoot });
   const target = DB_MAINTENANCE_TARGET;
   const runId = deps.newRunId();
   const receipt = {
@@ -580,14 +632,28 @@ export async function runDbMaintenance(options, overrides = {}) {
         throw new Error(`Deployment ${absent.map(app => app.deployment).join(', ')} does not exist. ` +
           'Install the services with the release deploy path first.');
     } else if (!options.prepareOnly) {
-      const support = deps.schemaSupport ?? loadSchemaSupport(readFileSync(join(repoRoot, SCHEMA_SUPPORT_FILE), 'utf8'));
+      // Read the accepted schema range of every image involved in a change, from the image's own
+      // source label. Services already on the target image need no range. A target image must
+      // have a known range: an unreadable label or source stops the run, because guessing could
+      // pick an order that leaves a service unready. A running image may be unknown (for example
+      // a tag or a foreign registry); then nothing is assumed about it.
+      const ranges = {};
+      for (const app of receipt.appImages.filter(entry => entry.status === 'mismatch')) {
+        const targetRange = await deps.imageSchemaRange(app.expected, app.component);
+        if (targetRange.unknown)
+          throw new Error(`Could not read the schema range of ${app.deployment} image ${app.expected}: ${targetRange.unknown}.`);
+        ranges[app.expected] = { minSchema: targetRange.minSchema, maxSchema: targetRange.maxSchema };
+        const runningRange = await deps.imageSchemaRange(app.running, app.component);
+        if (runningRange.unknown) log(`Schema range of running ${app.deployment} image is unknown: ${runningRange.unknown}.`);
+        else ranges[app.running] = { minSchema: runningRange.minSchema, maxSchema: runningRange.maxSchema };
+      }
       const targetSchema = Object.fromEntries(P1_JOBS.map(job => [job.key, Math.max(...plan[job.planVersions])]));
       // Unrecorded or malformed versions count as unknown, which only removes the deploy-first choice.
       const currentSchema = Object.fromEntries(P1_JOBS.map(job => {
         const value = Number(stateData[`${job.key}.schema`]);
         return [job.key, Number.isInteger(value) && value > 0 ? value : undefined];
       }));
-      ordering = planServiceOrder({ appImages: receipt.appImages, support, targetSchema, currentSchema });
+      ordering = planServiceOrder({ appImages: receipt.appImages, ranges, targetSchema, currentSchema });
       receipt.serviceOrder = ordering;
       // Deploy-first and a planned gap both depend on deploying the target images in this run.
       // Without --deploy-apps the run would leave a service unready, so it stops here.
