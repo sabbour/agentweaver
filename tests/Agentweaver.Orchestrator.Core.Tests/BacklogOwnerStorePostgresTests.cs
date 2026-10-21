@@ -51,6 +51,76 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProjectContentSurvivesRestartAndConcurrentIssueImportsHaveOneWinner()
+    {
+        var content = new BacklogTaskContent("Issue title", "Issue body",
+            RepositoryIssue: new("github", new("Owner", "Repo"), 1915));
+        var contenders = await Task.WhenAll(
+            _backlog.AddTaskAsync(TaskRef("import-a"), content, 0, CancellationToken.None),
+            _backlog.AddTaskAsync(TaskRef("import-b"), content, 0, CancellationToken.None));
+        Assert.Single(contenders, result => result.IsSuccess);
+        Assert.Single(contenders, result => !result.IsSuccess);
+        var restarted = new BacklogOwnerStore(_fixture.DataSource, _schema);
+        var graph = (await restarted.ReadGraphAsync("backlog-project", CancellationToken.None)).Value!;
+        var task = Assert.Single(graph.Tasks);
+        Assert.Equal("Issue title", task.Title);
+        Assert.Equal("Issue body", task.Description);
+        Assert.Equal("owner/repo", task.RepositoryIssue!.Repository.FullName);
+        var duplicate = await restarted.AddTaskAsync(TaskRef("duplicate"), content,
+            graph.Revision, CancellationToken.None);
+        Assert.Contains(duplicate.Issues, issue => issue.Code == BacklogIssueCode.DuplicateRepositoryIssue);
+        var closed = await restarted.SetTaskContentAsync(task.Reference,
+            content with { Lifecycle = BacklogTaskLifecycle.Closed },
+            graph.Revision, task.Revision, CancellationToken.None);
+        Assert.True(closed.IsSuccess);
+        var stale = await restarted.SetTaskContentAsync(task.Reference, content,
+            graph.Revision, task.Revision, CancellationToken.None);
+        Assert.Contains(stale.Issues, issue => issue.Code == BacklogIssueCode.StaleGraphRevision);
+        var noOp = await restarted.SetTaskContentAsync(task.Reference,
+            content with { Lifecycle = BacklogTaskLifecycle.Closed },
+            closed.Value!.Revision, task.Revision + 1, CancellationToken.None);
+        Assert.True(noOp.IsSuccess);
+        Assert.Equal(closed.Value.Revision, noOp.Value!.Revision);
+        Assert.Equal(0, await ReadCountAsync("accepted_runs", "project_id = 'backlog-project'"));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task RevocationDuringProjectCaptureRollsBackTaskAndGraph(int failOnCheck)
+    {
+        var checks = 0;
+        await Assert.ThrowsAsync<CoordinationException>(() => _backlog.AddTaskAsync(
+            TaskRef("revoked-capture"), new BacklogTaskContent("Title"), 0, CancellationToken.None,
+            _ => ++checks == failOnCheck
+                ? Task.FromException(new CoordinationException("backlog_project_permission_denied", 403))
+                : Task.CompletedTask));
+        var graph = (await _backlog.ReadGraphAsync("backlog-project", CancellationToken.None)).Value!;
+        Assert.Equal(0, graph.Revision);
+        Assert.Empty(graph.Tasks);
+    }
+
+    [Fact]
+    public async Task ContentPersistenceFailureRollsBackRevisionAndSurfacesDatabaseError()
+    {
+        var captured = await _backlog.AddTaskAsync(TaskRef("content-failure"),
+            new BacklogTaskContent("Original"), 0, CancellationToken.None);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            $"ALTER TABLE \"{_schema}\".backlog_tasks ADD CONSTRAINT test_title_write CHECK (title <> 'Rejected')",
+            connection))
+            await command.ExecuteNonQueryAsync();
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => _backlog.SetTaskContentAsync(
+            TaskRef("content-failure"), new BacklogTaskContent("Rejected"), captured.Value!.Revision, 0,
+            CancellationToken.None));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
+        var graph = (await _backlog.ReadGraphAsync("backlog-project", CancellationToken.None)).Value!;
+        Assert.Equal(captured.Value!.Revision, graph.Revision);
+        Assert.Equal("Original", Assert.Single(graph.Tasks).Title);
+        Assert.Equal(0, Assert.Single(graph.Tasks).Revision);
+    }
+
+    [Fact]
     public async Task RestrictedRuntimeRoleEditsTheGraphWithoutSchemaOrHistoryWritePrivileges()
     {
         var role = _schema + "_runtime";
@@ -105,6 +175,11 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
             Assert.Contains(graph.Value.Tasks, item => item.Reference == task);
             Assert.Contains(graph.Value.Tasks, item => item.Reference == prerequisite);
             Assert.Empty(graph.Value.Dependencies);
+            var updated = await store.SetTaskContentAsync(task,
+                new BacklogTaskContent("Runtime title", RepositoryIssue: new("github", new("owner", "repo"), 42)),
+                graph.Value.Revision, 0, CancellationToken.None);
+            Assert.True(updated.IsSuccess);
+            Assert.Equal("Runtime title", updated.Value!.Tasks.Single(item => item.Reference == task).Title);
 
             await using var runtimeConnection = await runtime.OpenConnectionAsync();
             foreach (var sql in new[]
