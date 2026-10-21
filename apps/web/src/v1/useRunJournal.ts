@@ -11,8 +11,10 @@ export function mergeOrderedEvents(
   incoming: SessionEventEnvelope[],
 ): SessionEventEnvelope[] {
   const byId = new Map<string, SessionEventEnvelope>();
+  // Events seen in both lists keep one copy. The incoming copy wins because it is newer.
   for (const event of current) byId.set(event.eventId, event);
   for (const event of incoming) byId.set(event.eventId, event);
+  // Sort by owner position. The event id breaks ties so the order is always stable.
   return [...byId.values()].sort((left, right) =>
     left.position - right.position || left.eventId.localeCompare(right.eventId));
 }
@@ -48,17 +50,27 @@ export function useRunJournal(
   runId: string,
   tenantSelector?: string,
 ): Omit<JournalState, 'scopeId'> {
+  // The scope id names one exact journal: token, project, run, and tenant.
+  // State saved under a different scope id is never shown.
   const scopeId = JSON.stringify([token ?? null, projectId, runId, tenantSelector ?? null]);
   const [state, setState] = useState<JournalState>({ ...initialState, scopeId: '' });
 
   useEffect(() => {
+    // Two stop signals: `active` for React cleanup and an AbortController that
+    // also cancels the open network stream.
     let active = true;
     const abortController = new AbortController();
     const { signal } = abortController;
     const isActive = () => active && !signal.aborted;
+    /**
+     * Applies a state change only while this effect is still running. If stored
+     * state is from an older scope, the change starts from a clean state instead,
+     * so events from another run are never mixed in.
+     */
     const updateState = (update: (current: JournalState) => JournalState) => {
       if (!isActive()) return;
       setState((current) => {
+        // Check again: the effect may have stopped between scheduling and running the updater.
         if (!isActive()) return current;
         const scoped = current.scopeId === scopeId
           ? current
@@ -66,6 +78,7 @@ export function useRunJournal(
         return { ...update(scoped), scopeId };
       });
     };
+    // Signed out: nothing to read. Still return cleanup so the contract stays the same.
     if (!token) {
       return () => {
         active = false;
@@ -73,8 +86,11 @@ export function useRunJournal(
       };
     }
 
+    /** Adds new events after checking that every one belongs to this project and run. */
     const addEvents = (incoming: SessionEventEnvelope[]) => {
       if (!incoming.length) return;
+      // One wrong event stops the whole journal. Showing another run's events
+      // would leak data, so this is treated as fatal, not skipped.
       if (incoming.some((event) =>
         event.identity?.projectId !== projectId || event.identity?.runId !== runId)) {
         throw new JournalScopeError('The server returned a journal event outside the exact project and run scope.');
@@ -85,16 +101,20 @@ export function useRunJournal(
       }));
     };
 
+    /**
+     * Main loop. First it replays stored history page by page, then it follows the
+     * live stream from the last cursor. When the stream drops, it reconnects from
+     * that cursor, so no events are missed or replayed twice.
+     */
     const connect = async () => {
-      // The cursor is the last event we have; replay and reconnects resume from it.
+      // `cursor` is the last position read. Replay and live reads both continue from it.
       let cursor: string | null = null;
       let replayed = false;
       let reconnectDelay = 500;
-      // Counts failed connections in a row. Any received event resets it.
       let transientFailures = 0;
       try {
         while (!signal.aborted) {
-          // Step 1, once: page through stored history up to now, before going live.
+          // History is replayed once. Later reconnects only resume the live stream.
           if (!replayed) {
             let pageCount = 0;
             while (!signal.aborted) {
@@ -103,12 +123,13 @@ export function useRunJournal(
               );
               if (!isActive()) return;
               addEvents(page.events);
-              // A page that says "more" but does not move the cursor would loop forever.
+              // Guard against a server bug that would loop forever on the same page.
               if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor))
                 throw new Error('The server returned hasMore without advancing its journal cursor.');
               if (page.nextCursor) cursor = page.nextCursor;
               updateState((current) => ({ ...current, cursor }));
               if (!page.hasMore) break;
+              // Hard cap on history pages so a runaway server cannot keep the page busy forever.
               if (++pageCount > 1000)
                 throw new Error('The server exceeded the bounded initial history limit.');
             }
@@ -124,8 +145,10 @@ export function useRunJournal(
             )) {
               if (!isActive()) return;
               addEvents([frame.event]);
+              // Save the cursor after each event so a reconnect resumes right after it.
               cursor = frame.cursor;
               updateState((current) => ({ ...current, cursor }));
+              // A working stream resets the backoff and the failure count.
               reconnectDelay = 500;
               transientFailures = 0;
             }
@@ -135,17 +158,21 @@ export function useRunJournal(
             transientFailures = 0;
             updateState((current) => ({ ...current, connected: false }));
             await new Promise((resolve) => window.setTimeout(resolve, reconnectDelay));
+            // Double the wait each time, up to 10 seconds.
             reconnectDelay = Math.min(reconnectDelay * 2, 10_000);
           } catch (error) {
+            // Aborted by cleanup: stop quietly, this is not a failure.
             if (signal.aborted) return;
             updateState((current) => ({ ...current, connected: false }));
-            // Client errors (except timeout and rate limit) will not fix themselves: stop.
+            // Most 4xx errors (for example, no access or not found) will not fix
+            // themselves, so stop and show the error. 408 (timeout) and 429 (rate
+            // limit) are temporary, so they fall through and retry.
             if (error instanceof GatewayError && error.status >= 400 &&
                 error.status < 500 && error.status !== 408 && error.status !== 429) {
               updateState((current) => ({ ...current, error }));
               return;
             }
-            // An event from another project or run is a safety stop, never retried.
+            // A scope violation is never retried.
             if (error instanceof JournalScopeError) {
               updateState((current) => ({ ...current, error }));
               return;
@@ -161,6 +188,8 @@ export function useRunJournal(
           }
         }
       } catch (error) {
+        // Errors thrown during replay land here. Replay has no retry, so the
+        // journal stops loading and shows the error.
         if (!isActive()) return;
         updateState((current) => ({
           ...current,
@@ -178,6 +207,8 @@ export function useRunJournal(
     };
   }, [projectId, runId, scopeId, tenantSelector, token]);
 
+  // On the first render after the scope changes, the effect has not reset state yet.
+  // Show a clean loading state instead of the previous run's events.
   const visibleState = state.scopeId === scopeId
     ? state
     : { ...initialState, scopeId, loading: Boolean(token) };

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayError } from './api';
 import type { useAuth } from './AuthContext';
 import type { CoordinatorDecisionStateView, SessionStatusBlocker, SessionStatusSnapshot } from './contracts';
-import { DecisionList, DecisionView } from './DecisionView';
+import { DecisionList, DecisionView, STALE_DECISION_NOTICE } from './DecisionView';
 
 const mocks = vi.hoisted(() => ({
   getDecisions: vi.fn(),
@@ -27,6 +27,7 @@ const decisionKey = { projectId: 'p1', runId: 'r1', sessionId: 's1', requestId: 
 const approval: SessionStatusBlocker = { kind: 'awaitingApproval', requestId: 'req-1', choices: [], allowsFreeform: false, prompt: 'Deploy?' };
 const question: SessionStatusBlocker = { kind: 'awaitingInput', requestId: 'req-1', choices: ['Yes', 'No'], allowsFreeform: true, prompt: 'Continue?' };
 
+/** Builds the decision state of session s1. A null requestId means no gate is pending. */
 function decisions(requestId: string | null, stateVersion = 4): CoordinatorDecisionStateView {
   return {
     stateVersion,
@@ -42,6 +43,7 @@ function decisions(requestId: string | null, stateVersion = 4): CoordinatorDecis
 }
 
 const accepted = { decisionId: 'd1', stateVersion: 8, accepted: true, executionFence: 1, issues: [] };
+// Fake apiCall: runs the operation with a fixed token and tenant and records the binding it got.
 const apiCallMock = vi.fn((operation: (token: string, tenant: string) => Promise<unknown>) => operation('token', 'tenant-1'));
 const apiCall = apiCallMock as unknown as ReturnType<typeof useAuth>['apiCall'];
 
@@ -61,6 +63,7 @@ function renderView(props: Partial<Parameters<typeof DecisionView>[0]> = {}) {
   return { refresh };
 }
 
+/** Clicks and waits for the async submit to settle. */
 async function click(element: HTMLElement) {
   await act(async () => { fireEvent.click(element); });
 }
@@ -81,11 +84,13 @@ describe('DecisionView', () => {
   });
 
   it('rereads decisions before approving and sends the latest state version', async () => {
+    // The screen shows version 4, but the server is at 7. No version was pinned, so 7 is sent.
     mocks.getDecisions.mockResolvedValue(decisions('req-1', 7));
     mocks.resolveGate.mockResolvedValue(accepted);
     const { refresh } = renderView();
     await click(screen.getByTestId('approval-gate-approve-btn'));
     expect(mocks.getDecisions).toHaveBeenCalledWith('token', 'p1', 'r1', 's1', 'tenant-1');
+    // The reread must happen before the resolve call.
     expect(mocks.getDecisions.mock.invocationCallOrder[0]).toBeLessThan(mocks.resolveGate.mock.invocationCallOrder[0]);
     expect(mocks.resolveGate).toHaveBeenCalledWith('token', 'p1', 'r1', 's1', 'req-1', 7, true, expect.any(String), 'tenant-1');
     expect(apiCallMock).toHaveBeenCalledWith(expect.any(Function), { projectId: 'p1', runId: 'r1' });
@@ -112,11 +117,49 @@ describe('DecisionView', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
+  it('sends nothing when the reread state version differs from the opened one', async () => {
+    // The user opened version 4 (for example from a notification); the server is now at 6.
+    mocks.getDecisions.mockResolvedValue(decisions('req-1', 6));
+    mocks.resolveGate.mockResolvedValue(accepted);
+    const { refresh } = renderView({ decisionKey: { ...decisionKey, stateVersion: 4 } });
+    await click(screen.getByTestId('approval-gate-approve-btn'));
+    expect(mocks.getDecisions).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveGate).not.toHaveBeenCalled();
+    expect(mocks.answerGate).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toBe(STALE_DECISION_NOTICE);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    // After the notice, a second click is accepted and sends the reread version.
+    await click(screen.getByTestId('approval-gate-approve-btn'));
+    expect(mocks.resolveGate).toHaveBeenCalledWith('token', 'p1', 'r1', 's1', 'req-1', 6, true, expect.any(String), 'tenant-1');
+  });
+
+  it('uses a new notification pin when the same request is already open', async () => {
+    mocks.getDecisions.mockResolvedValue(decisions('req-1', 6));
+    const props = { decisionKey, blocker: approval, decisions: decisions('req-1', 6),
+      apiCall, refresh: vi.fn().mockResolvedValue(undefined), snapshotBusy: false };
+    const view = render(<DecisionView {...props} />);
+    view.rerender(<DecisionView {...props} decisionKey={{ ...decisionKey, stateVersion: 4 }} />);
+    await click(screen.getByTestId('approval-gate-approve-btn'));
+    expect(mocks.resolveGate).not.toHaveBeenCalled();
+    expect(mocks.answerGate).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toBe(STALE_DECISION_NOTICE);
+  });
+
+  it('sends when the reread state version matches the opened one', async () => {
+    mocks.getDecisions.mockResolvedValue(decisions('req-1', 4));
+    mocks.resolveGate.mockResolvedValue(accepted);
+    renderView({ decisionKey: { ...decisionKey, stateVersion: 4 } });
+    await click(screen.getByTestId('approval-gate-approve-btn'));
+    expect(mocks.resolveGate).toHaveBeenCalledWith('token', 'p1', 'r1', 's1', 'req-1', 4, true, expect.any(String), 'tenant-1');
+  });
+
   it('disables actions and warns when the snapshot no longer has this request pending', async () => {
     renderView({ decisions: decisions('req-other') });
     expect(screen.getByText('This request is no longer the pending one. Refresh the run to see its current state.')).toBeTruthy();
     const approve = screen.getByTestId('approval-gate-approve-btn') as HTMLButtonElement;
     expect(approve.disabled).toBe(true);
+    // Even a forced click must not reach the server.
     await click(approve);
     expect(mocks.getDecisions).not.toHaveBeenCalled();
   });
@@ -131,6 +174,7 @@ describe('DecisionView', () => {
     mocks.answerGate.mockResolvedValue(accepted);
     renderView({ blocker: question });
     const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement;
+    // Send stays off until a choice or text is given.
     expect(send.disabled).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
     await click(send);
@@ -170,6 +214,7 @@ describe('DecisionView', () => {
   });
 
   it('shows other failures without refreshing', async () => {
+    // A non-409 failure (here the reread itself) shows the error but does not refresh.
     mocks.getDecisions.mockRejectedValue(new Error('Network down'));
     const { refresh } = renderView();
     await click(screen.getByTestId('approval-gate-approve-btn'));
@@ -180,6 +225,7 @@ describe('DecisionView', () => {
 });
 
 describe('DecisionList', () => {
+  // Minimal session status with only the fields DecisionList reads.
   function status(sessionId: string, blockers: SessionStatusBlocker[]): SessionStatusSnapshot {
     return { identity: { projectId: 'p1', runId: 'r1', sessionId }, blockers } as SessionStatusSnapshot;
   }

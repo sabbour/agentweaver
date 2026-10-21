@@ -701,8 +701,17 @@ Revisions and conflicts:
 
 Link kinds are `run`, `conversation`, `issue`, `pull_request`, and `artifact`.
 Every link names `projectId`. `run` needs `runId`, `conversation` needs
-`conversationId`, `issue` and `pull_request` need `number`, and `artifact`
-needs `runId` and `artifactId`. Reads resolve each link:
+`conversationId`, `issue` and `pull_request` need `number`, `providerId`, and
+`repository: { owner, name }`, and `artifact`
+needs `runId` and `artifactId`. Identity is returned unchanged in list, read and
+write receipts, and removed with other protected target fields after read loss.
+New repository links without complete identity return `400 priority_link_invalid`.
+Before Core migration 033, a compatible owner returns
+`503 database_update_pending` for those saves and leaves the revision unchanged.
+Existing number-only rows remain readable; clients must refuse ambiguous targets
+rather than infer a repository from the number.
+
+Reads resolve each link:
 
 | Kind | `state` |
 | --- | --- |

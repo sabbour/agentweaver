@@ -10,7 +10,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run src/v1 --maxWorkers=2 --config vitest.config.ts",
-    "coverage": "vitest run src/v1 --coverage --maxWorkers=2 --config vitest.config.ts"
+    "coverage": "vitest run src/v1 --coverage --maxWorkers=2 --config vitest.config.ts",
+    "e2e": "node --test e2e/*.test.mjs"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.74.6",

@@ -80,25 +80,18 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-// How long an interactive (popup) sign-in may take before we give up.
 const AUTH_TIMEOUT_MS = 10 * 60 * 1000;
-// A silent sign-in needs no user action, so it should finish quickly or not at all.
 const SILENT_AUTH_TIMEOUT_MS = 15 * 1000;
-// Session-storage flag that says "this tab signed in before". It holds no token. After a
-// reload or a full-page redirect it tells the provider to try one silent sign-in.
 const SIGNED_IN_BEFORE_STORAGE_KEY = 'agentweaver.auth.signed-in-before';
 
-/** True when this tab signed in earlier, so a silent restore after reload is worth trying. */
 function hasSignedInBefore(): boolean {
   try {
     return sessionStorage.getItem(SIGNED_IN_BEFORE_STORAGE_KEY) === '1';
   } catch {
-    // Storage can be blocked. Treat that as "never signed in" so no silent attempt starts.
     return false;
   }
 }
 
-/** Sets the "signed in before" flag after a successful sign-in. */
 function rememberSignIn(): void {
   try {
     sessionStorage.setItem(SIGNED_IN_BEFORE_STORAGE_KEY, '1');
@@ -107,7 +100,6 @@ function rememberSignIn(): void {
   }
 }
 
-/** Clears the flag on sign-out or when a silent restore fails, so we do not retry forever. */
 function forgetSignIn(): void {
   try {
     sessionStorage.removeItem(SIGNED_IN_BEFORE_STORAGE_KEY);
@@ -116,20 +108,11 @@ function forgetSignIn(): void {
   }
 }
 
-/**
- * True when this page load is the Broker redirect back to us. In that case the callback
- * handler finishes sign-in, so the silent restore must not also start.
- */
 function hasIdentityCallback(): boolean {
   return window.location.pathname === '/auth/callback' ||
     typeof window.__AGENTWEAVER_IDENTITY_CALLBACK__ === 'string';
 }
 
-/**
- * Reads the project/run binding from the current URL (a run or orchestration page).
- * A silent restore on such a page asks for a token bound to that run, because the
- * run page cannot use an unbound token. Other pages get an unbound token.
- */
 function bindingFromCurrentRoute(): RunBinding | null {
   const match = /^\/projects\/([^/]+)\/(?:runs|orchestrations)\/([^/]+)(?:\/|$)/
     .exec(window.location.pathname);
@@ -140,7 +123,6 @@ function bindingFromCurrentRoute(): RunBinding | null {
       runId: decodeURIComponent(match[2]),
     };
   } catch {
-    // A malformed percent-escape cannot name a real run; fall back to an unbound token.
     return null;
   }
 }
@@ -150,12 +132,7 @@ function bindingKey(binding: RunBinding | null): string {
   return binding ? JSON.stringify([binding.projectId, binding.runId]) : '';
 }
 
-/**
- * How a sign-in result is stored:
- * - `replace`: drop every held session and keep only the new one (a fresh sign-in).
- * - `activate`: add the new session next to the held ones and make it the active one.
- * - `store`: add the new session but keep the current active session.
- */
+/** How a sign-in result is stored: replace all sessions, or add one and optionally activate it. */
 type SessionMode = 'replace' | 'activate' | 'store';
 
 /** True when two optional authorization requests target the same project and run. */
@@ -209,13 +186,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authorizationContextLoading, setAuthorizationContextLoading] = useState(false);
   const [authorizationContextError, setAuthorizationContextError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  // Start in "restoring" when the tab signed in before and this load is not the Broker
-  // callback. Pages wait on this flag instead of showing the sign-in screen too early.
   const [restoringSession, setRestoringSession] = useState(
     () => hasSignedInBefore() && !hasIdentityCallback(),
   );
   const [consent, setConsent] = useState<BrokerConsentPrompt | null>(null);
-  // A redirect callback with unreadable parameters is reported right away.
   const [error, setError] = useState<string | null>(() => {
     const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
     return typeof callbackSearch === 'string' &&
@@ -223,34 +197,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? 'The sign-in response is invalid. Start sign-in again.'
       : null;
   });
-  // The active session, readable synchronously from callbacks without waiting for a render.
   const sessionRef = useRef<AuthSession | null>(null);
-  // Every held session, keyed by binding. The unbound session uses the empty key.
+  // Every session the page holds, keyed by bindingKey(). The unbound session and each
+  // run-bound session live side by side, so opening a run does not sign out the user.
   const sessionsRef = useRef(new Map<string, AuthSession>());
-  // One in-flight silent sign-in per binding, so parallel callers share the same attempt.
+  // Silent sign-ins in flight, keyed by binding. Callers asking for the same binding
+  // share one attempt instead of opening several hidden frames.
   const ensureRef = useRef(new Map<string, Promise<boolean>>());
-  // Bumped whenever the active session changes. Late results from an older session are ignored.
   const sessionGenerationRef = useRef(0);
-  // Bumped on each tenant-context request. Only the newest request may update state.
   const authorizationContextRequestRef = useRef(0);
-  // The confirmed tenant, plus the exact token, binding and generation it was confirmed for.
   const authorizationContextRef = useRef<{
     value: ConfirmedAuthorizationContext;
     accessToken: string;
     binding: RunBinding | null;
     sessionGeneration: number;
   } | null>(null);
-  // One in-flight token refresh per binding, tagged with the session it refreshes.
+  // One token refresh in flight per binding, so parallel calls do not spend the same
+  // refresh token twice.
   const refreshPromisesRef = useRef(new Map<string, {
     session: AuthSession;
     promise: Promise<AuthSession | null>;
   }>());
-  // The PKCE transaction in progress. A newer sign-in replaces it, which cancels the older loop.
   const transactionRef = useRef<AuthorizationTransaction | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
-  // Hidden iframe used by silent sign-in, so sign-out can remove it.
   const authorizationFrameRef = useRef<HTMLIFrameElement | null>(null);
-  // The reload restore runs at most once per page load.
   const silentAttemptedRef = useRef(false);
 
   const configurationError = useMemo(() => {
@@ -263,9 +233,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** Makes `next` the active session without changing the held sessions. */
   const setActiveSession = useCallback((next: AuthSession | null) => {
     const current = sessionRef.current;
-    // A different token or binding means the confirmed tenant no longer applies.
-    // Bump the generations so in-flight tenant requests are ignored, and clear the tenant.
-    // Activating the same session again keeps the tenant.
+    // A different token or binding means a new identity for the page. Bump the generation
+    // and drop the cached tenant context so no answer from the old session is reused.
     if (current?.accessToken !== next?.accessToken || !sameBinding(current?.binding ?? null, next?.binding ?? null)) {
       sessionGenerationRef.current += 1;
       authorizationContextRequestRef.current += 1;
@@ -280,7 +249,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   /** Replaces every held session with `next` (or none) and activates it. */
   const setSession = useCallback((next: AuthSession | null) => {
-    // Forget pending silent attempts too; they belong to the sessions being dropped.
+    // Forget every held session and every pending silent sign-in. Used for sign-out
+    // and for a fresh unbound sign-in.
     sessionsRef.current.clear();
     ensureRef.current.clear();
     if (next) sessionsRef.current.set(bindingKey(next.binding), next);
@@ -306,20 +276,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setActiveSession(next);
   }, [setActiveSession, setSession]);
 
-  /** Swaps the authorization code for tokens and stores the new session. */
+  /** Exchanges the authorization code for tokens and stores the new session using `mode`. */
   const finishCode = useCallback(async (code: string, transaction: AuthorizationTransaction, mode: SessionMode) => {
     const token = await exchangeAuthorizationCode(
       defaultAuthorizationConfig(),
       transaction,
       code,
     );
-    // The transaction is single use. Clear it before storing so a replayed callback fails.
+    // The PKCE transaction is single use. Clear it before storing the session so a
+    // replayed callback cannot exchange the same code again.
     clearAuthorizationTransaction();
     transactionRef.current = null;
     setConsent(null);
     setError(null);
     rememberSignIn();
-    // The token is bound to the binding the transaction was started for, not the current URL.
     storeSession(sessionFromToken(token, transaction.binding), mode);
   }, [storeSession]);
 
@@ -332,7 +302,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     transaction: AuthorizationTransaction,
     mode: SessionMode = 'replace',
   ): Promise<boolean> => {
-    // The parser also checks that `state` matches this transaction.
     const result = parseAuthorizationResult(responseUrl, transaction.state);
     if (!result) return false;
     if ('error' in result) {
@@ -342,17 +311,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true;
   }, [finishCode]);
 
-  // Full-page redirect sign-in: the Broker sent the browser back with a code or an error.
-  // The boot script saved the callback query in a global; finish the sign-in from it here.
   useEffect(() => {
     const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
     if (typeof callbackSearch !== 'string') return;
-    // Consume the global once so a re-render or remount cannot replay the code.
     window.__AGENTWEAVER_IDENTITY_CALLBACK__ = undefined;
     const callback = parseAuthorizationCallbackParameters(callbackSearch);
-    // Invalid parameters were already reported by the initial `error` state.
     if (!callback) return;
-    // After a full-page redirect the in-memory transaction is gone, so read the stored one.
     let transaction: AuthorizationTransaction | null = transactionRef.current;
     try {
       transaction ??= readAuthorizationTransaction();
@@ -363,7 +327,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setError('The sign-in response has no matching in-progress PKCE transaction. Start sign-in again.');
       return;
     }
-    // Rebuild a callback URL so the same parser and state check as the popup path apply.
     const responseUrl = new URL('/auth/callback', window.location.origin);
     responseUrl.searchParams.set('state', callback.state);
     if ('code' in callback) responseUrl.searchParams.set('code', callback.code);
@@ -373,13 +336,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         responseUrl.searchParams.set('error_description', callback.error_description);
     }
     setBusy(true);
-    // Default `replace` mode: a redirect sign-in starts a fresh set of sessions.
     void consumeAuthorizationResponse(responseUrl.toString(), transaction)
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Sign-in failed.'))
       .finally(() => setBusy(false));
   }, [consumeAuthorizationResponse, setBusy]);
 
-  // Stop any pending Broker poll when the provider unmounts.
   useEffect(() => () => pollAbortRef.current?.abort(), []);
 
   /**
@@ -394,8 +355,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     silent: boolean,
     rebind: SessionMode | null = null,
   ): Promise<boolean> => {
-    // Missing client settings: sign-in cannot work. A background rebind fails quietly;
-    // otherwise show the error and stop the reload restore so the page does not wait.
+    // Without a valid client configuration no sign-in can work. A background run-bound
+    // attempt fails quietly; a user-started attempt shows the configuration error.
     if (configurationError) {
       if (rebind) return false;
       setError(configurationError);
@@ -406,19 +367,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return false;
     }
     const config = defaultAuthorizationConfig();
-    // Pick how the result is stored. A caller-supplied rebind mode wins. Otherwise a
-    // run-bound sign-in while already signed in adds a session next to the unbound one,
-    // and any other sign-in replaces all sessions.
+    // A run-bound sign-in while already signed in keeps the other sessions. A sign-in with
+    // no binding, or with no session yet, replaces everything.
     const mode: SessionMode = rebind ?? (requestedBinding && sessionRef.current ? 'activate' : 'replace');
-    // A rebind runs in the background, so it must not touch page-level error/consent/busy UI.
+    // Background run-bound attempts do not touch the page's error, consent, or busy state,
+    // so they never interrupt what the user is looking at.
     if (!rebind) {
       setError(null);
       setConsent(null);
       setBusy(true);
     }
-    // Drop old tokens before a replacing sign-in so no call uses them during the flow.
     if (mode === 'replace') setSession(null);
-    // Only one Broker poll may run at a time.
+    // Abort any older consent poll so only this attempt is waiting on the Broker.
     pollAbortRef.current?.abort();
 
     let popup: Window | null = null;
@@ -429,26 +389,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let popupCallbackReceived = false;
     let popupMessageHandler: ((event: MessageEvent<unknown>) => void) | null = null;
     try {
-      // Open the popup before any `await`. Browsers only allow popups inside the click
-      // handler. A caller may pass its own popup (or null to force a full-page redirect).
+      // Silent sign-in uses a hidden frame, never a popup. A caller may pass its own popup
+      // (opened during a click so the browser allows it).
       popup = silent
         ? null
         : popupOverride === undefined
           ? window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720')
           : popupOverride;
-      // Setting transactionRef cancels any older sign-in loop (it checks this ref each turn).
-      // The transaction is also saved to session storage so a full-page redirect can finish it.
       const transaction = transactionFor(requestedBinding);
       transactionRef.current = transaction;
       storeAuthorizationTransaction(transaction);
       const challenge = await pkceChallenge(transaction.verifier);
-      // `prompt=none` tells the Broker to answer at once: a code if the user still has a
-      // Broker session, or an error if it would need to show a page.
       const authorizeUrl = silent
         ? buildAuthorizeUrl(config, transaction, challenge, 'none')
         : buildAuthorizeUrl(config, transaction, challenge);
-      // Three ways to reach the Broker: a hidden iframe (silent), a popup, or, when the
-      // popup was blocked, a full-page redirect that is finished by the callback effect.
       if (silent) {
         iframe = document.createElement('iframe');
         iframe.title = 'Silent sign-in';
@@ -465,14 +419,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         callbackWindow = popup;
       }
       else {
+        // No popup (blocked or none given). Fall back to a full-page redirect; the result
+        // arrives through the callback page on reload.
         window.location.assign(authorizeUrl);
         return false;
       }
-      // The callback page in the popup or iframe posts the result back with postMessage.
       const callbackOrigin = new URL(transaction.redirectUri).origin;
+      // Accept a callback message only from the window we opened, from the callback origin,
+      // for the current transaction, and only once. Anything else is ignored.
       popupMessageHandler = (event) => {
-        // Accept only one message, from our own window, from our callback origin, and only
-        // while this transaction is still the current one. Anything else is ignored.
         if (event.source !== callbackWindow ||
             event.origin !== callbackOrigin ||
             transactionRef.current !== transaction ||
@@ -482,8 +437,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const message = parseAuthorizationCallbackMessage(event.data);
         if (!message) return;
         popupCallbackReceived = true;
-        // Validate the result here (including `state`), but finish it in the wait loop below
-        // so token exchange errors go through the same error handling.
         try {
           const responseUrl = new URL(transaction.redirectUri);
           responseUrl.searchParams.set('state', message.state);
@@ -493,6 +446,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (message.error_description)
               responseUrl.searchParams.set('error_description', message.error_description);
           }
+          // Validate `state` here so a forged message fails before the loop uses it.
           parseAuthorizationResult(responseUrl.toString(), transaction.state);
           popupCallbackUrl = responseUrl.toString();
         } catch (reason) {
@@ -500,14 +454,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ? reason
             : new Error('The sign-in response is invalid.');
         }
-        // Wake the wait loop now instead of after the current poll finishes.
+        // Stop the current consent poll so the loop below picks up the result at once.
         pollAbortRef.current?.abort();
       };
       window.addEventListener('message', popupMessageHandler);
-      // Wait loop: check for a posted result, a closed popup, or (popup only) a consent page.
       const startedAt = Date.now();
+      // Wait for the callback. Silent sign-in has a short limit because the Broker answers
+      // at once or not at all; interactive sign-in gives the user time to finish.
       while (Date.now() - startedAt < (silent ? SILENT_AUTH_TIMEOUT_MS : AUTH_TIMEOUT_MS)) {
-        // A newer sign-in or sign-out replaced this transaction.
+        // A newer sign-in replaced this one.
         if (transactionRef.current !== transaction)
           throw new Error('Sign-in was cancelled.');
         if (popupCallbackError) throw popupCallbackError;
@@ -519,13 +474,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         if (!silent && popup?.closed)
           throw new Error('The sign-in window closed before sign-in finished.');
-        // Silent sign-in only waits for the iframe message; it never polls the Broker.
         if (silent) {
           await new Promise((resolve) => window.setTimeout(resolve, 50));
           continue;
         }
-        // Popup sign-in: poll the authorize URL with the Broker cookie. A redirect means the
-        // user is still signing in. A JSON body can be a consent prompt or a Broker error.
+        // Interactive only: ask the Broker whether it needs a consent decision first.
+        // Each poll is cut off after 2.5 seconds so a slow answer does not block the loop.
         const abortController = new AbortController();
         pollAbortRef.current = abortController;
         const timeout = window.setTimeout(() => abortController.abort(), 2500);
@@ -537,6 +491,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             signal: abortController.signal,
             headers: { Accept: 'application/json' },
           });
+          // A redirect means the Broker is sending the browser on to the callback, so there is
+          // nothing to read here. Any other answer is an error or a consent prompt.
           if (response.type !== 'opaqueredirect') {
             if (!response.ok) {
               const problem = await response.json().catch(() => null) as {
@@ -551,13 +507,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               );
             }
             const result: unknown = await response.json().catch(() => null);
+            // Show consent only if it is for this client and asks for no extra scopes.
             if (isConsentPrompt(result)) {
-              // Refuse a consent prompt for another client or for scopes we never asked for.
               if (result.client_id !== config.clientId ||
                   result.requested_scopes.some((scope) => !config.scopes.includes(scope))) {
                 throw new Error('The Broker consent response does not match this registered client and its configured scopes.');
               }
-              // Hand off to the in-app consent dialog; `decideConsent` continues from here.
               popup?.close();
               setConsent(result);
               return false;
@@ -567,7 +522,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               throw new Error(body.error_description ?? `Sign-in failed: ${body.error}.`);
           }
         } catch (reason) {
-          // Aborts and network blips are normal while polling; keep waiting. Real errors stop.
+          // Aborts and network blips are expected while polling; try again. Real errors stop sign-in.
           if (reason instanceof Error && !/aborted|load failed|failed to fetch/i.test(reason.message))
             throw reason;
         } finally {
@@ -579,11 +534,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('Sign-in timed out. You can try again.');
     } catch (reason) {
       popup?.close();
+      // How a failure is reported depends on who started the attempt.
       if (rebind) {
         // The held sessions stay usable; the page offers a manual sign-in instead.
       } else if (silent) {
-        // The reload restore failed (for example the Broker session ended). Clear the
-        // flag so we do not retry on every load, and show the normal sign-in screen
+        // Silent restore failed: forget the 'was signed in' marker and show the sign-in page
         // without an error.
         forgetSignIn();
         setError(null);
@@ -598,7 +553,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (authorizationFrameRef.current === iframe)
         authorizationFrameRef.current = null;
       iframe?.remove();
-      // Only the reload restore owns the `restoringSession` flag; rebinds leave it alone.
+      // Background attempts never owned the restoring or busy flags, so leave them alone.
       if (silent && !rebind) setRestoringSession(false);
       if (!rebind) setBusy(false);
     }
@@ -612,41 +567,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await runAuthorization(requestedBinding, popupOverride, false);
   }, [runAuthorization]);
 
+  /** Returns a session for `binding`, reusing a held one or trying one silent sign-in. */
   const ensureSession = useCallback((binding: RunBinding | null, activate = true): Promise<boolean> => {
     const key = bindingKey(binding);
-    // Already holding a token for this exact binding: reuse it, no Broker call.
     const held = sessionsRef.current.get(key);
+    // Already held: no network call. Switch to it if the caller wants it active.
     if (held) {
       if (activate && sessionRef.current !== held) setActiveSession(held);
       return Promise.resolve(true);
     }
-    // A silent attempt for this binding is already running: share it instead of starting another.
+    // Share an attempt that is already running for this binding.
     const pending = ensureRef.current.get(key);
     if (pending) return pending;
-    // Ask the Broker silently for a token bound to this binding. On failure the current
-    // session is kept and the caller shows a manual sign-in.
+    // Silent attempt that keeps the other held sessions whatever the result.
     const attempt = runAuthorization(binding, null, true, activate ? 'activate' : 'store');
     ensureRef.current.set(key, attempt);
-    // Clear the entry when done, unless sign-out or a newer attempt already replaced it.
     void attempt.finally(() => {
+      // Remove only our own entry. setSession may have cleared it and a newer attempt may own the key.
       if (ensureRef.current.get(key) === attempt) ensureRef.current.delete(key);
     });
     return attempt;
   }, [runAuthorization, setActiveSession]);
 
-  // Reload restore: tokens live only in memory, so a reload loses them. If this tab signed
-  // in before, try one silent sign-in for the page's binding (run-bound on a run page,
-  // unbound elsewhere). This is not a rebind, so the result replaces all sessions.
   useEffect(() => {
     if (session || !restoringSession || silentAttemptedRef.current) return;
     silentAttemptedRef.current = true;
+    // Restore once on page load, bound to the run in the URL if there is one.
     void runAuthorization(bindingFromCurrentRoute(), null, true);
   }, [restoringSession, runAuthorization, session]);
 
-  /** Sends the user's consent decision to the Broker and finishes or cancels sign-in. */
   const decideConsent = useCallback(async (approve: boolean) => {
     if (!consent) return;
-    // The consent belongs to the sign-in transaction that triggered it.
     const transaction = transactionRef.current ?? readAuthorizationTransaction();
     if (!transaction) {
       setConsent(null);
@@ -657,14 +608,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     let popup: Window | null = null;
     try {
-      // Open the popup now, while still inside the click, in case sign-in must continue.
       popup = approve
         ? window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720')
         : null;
       const response = await submitBrokerConsent(defaultAuthorizationConfig(), consent, approve);
-      // Same rule as runAuthorization: a run-bound sign-in while signed in adds a session.
+      // Same rule as runAuthorization: a run-bound consent keeps the sessions already held.
       const mode: SessionMode = transaction.binding && sessionRef.current ? 'activate' : 'replace';
-      // The Broker may answer the consent with a code right away.
       if (await consumeAuthorizationResponse(response.url, transaction, mode)) {
         popup?.close();
         return;
@@ -674,7 +623,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (!popup)
         throw new Error('Allow the sign-in popup to continue.');
-      // Otherwise restart the interactive sign-in in the popup for the same binding.
       await authorize(transaction.binding, popup);
     } catch (reason) {
       popup?.close();
@@ -688,14 +636,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   /** Drops one held session after a failed refresh; the unbound session falls back to sign-in. */
   const dropSession = useCallback((current: AuthSession, message: string) => {
-    // Losing the unbound session means the user is signed out: drop everything.
+    // Losing the unbound session means the user is signed out. Clear all and show the error.
     if (!current.binding) {
       setSession(null);
       setError(message);
       return;
     }
-    // Losing a run-bound session only drops that run's token. If it was active, fall back
-    // to the unbound session. Show the error only when no session is left.
+    // Losing a run-bound session only removes that run. Fall back to the unbound session
+    // if the dropped one was active, and show an error only if nothing is left.
     sessionsRef.current.delete(bindingKey(current.binding));
     if (sessionRef.current === current) setActiveSession(sessionsRef.current.get('') ?? null);
     if (!sessionRef.current) setError(message);
@@ -741,13 +689,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const activeRefresh = { session: current, promise };
     refreshPromisesRef.current.set(key, activeRefresh);
     void promise.finally(() => {
+      // Remove only our own entry; a newer refresh may already own the key.
       if (refreshPromisesRef.current.get(key) === activeRefresh)
         refreshPromisesRef.current.delete(key);
     });
     return promise;
   }, [dropSession, setActiveSession]);
 
-  // Refresh the active session about 30 seconds before it expires.
   useEffect(() => {
     if (!session) return;
     const delay = Math.max(0, session.expiresAt - Date.now() - 30_000);
@@ -755,16 +703,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, [refresh, session]);
 
-  /**
-   * Runs one Gateway call with the token held for `requestedBinding`. Run-bound calls use
-   * only the token bound to that exact run, never the unbound token or another run's token.
-   */
   const apiCall = useCallback(async <T,>(
     operation: (accessToken: string, tenantSelector: string | null) => Promise<T>,
     requestedBinding: RunBinding | null = null,
   ): Promise<T> => {
+    // Use the session held for this exact binding, never a different one. A run-bound call
+    // must not fall back to the unbound token, and the reverse.
     let current = sessionsRef.current.get(bindingKey(requestedBinding)) ?? null;
-    // No token for this binding: fail like the Gateway would, so callers handle it the same way.
     if (!current) {
       throw new GatewayError(
         401,
@@ -774,14 +719,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           : 'Sign in to continue.',
       );
     }
-    // Refresh first if the token is about to expire, to avoid a predictable 401.
     if (current.expiresAt <= Date.now() + 5_000) {
       current = await refresh(current);
       if (!current) throw new GatewayError(401, { code: 'unauthorized' }, 'Your Broker session expired.');
     }
     const invoke = (active: AuthSession) => {
-      // Send the confirmed tenant only if it was confirmed for this exact token, session
-      // generation and binding. Otherwise send no tenant and let the Gateway pick the default.
       const confirmed = authorizationContextRef.current;
       const tenantSelector =
         confirmed &&
@@ -793,7 +735,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           : null;
       return operation(active.accessToken, tenantSelector);
     };
-    // On a 401, refresh once and retry once. A second failure goes to the caller.
     try {
       return await invoke(current);
     } catch (reason) {
@@ -829,7 +770,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const result = await apiCall(
         (accessToken) => {
           const active = sessionRef.current;
-          // The active session changed between the request start and this call: stop.
           if (!active ||
               active.accessToken !== accessToken ||
               !sameBinding(active.binding, startingSession.binding))
@@ -845,7 +785,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
       const identity = requestIdentity.current;
       const active = sessionRef.current;
-      // Ignore the answer if a newer request started or the session changed while waiting.
       if (requestGeneration !== authorizationContextRequestRef.current ||
           !identity ||
           !active ||
@@ -853,7 +792,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           sessionGenerationRef.current !== identity.sessionGeneration ||
           !sameBinding(active.binding, identity.binding))
         return null;
-      // The owner must confirm the same binding the token carries (run-bound or unbound).
       if (!contextMatchesBinding(result, identity.binding))
         throw new GatewayError(
           502,
@@ -894,7 +832,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(bootstrap);
   }, [resolveAuthorizationContext, session]);
 
-  /** Clears every token, any sign-in in progress, the restore flag, and the recent-runs list. */
   const signOut = useCallback(() => {
     pollAbortRef.current?.abort();
     authorizationFrameRef.current?.remove();
@@ -905,7 +842,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setConsent(null);
     setError(null);
     forgetSignIn();
-    // Recent runs belong to the signed-in user; do not show them to the next one.
     clearRecentRuns();
     setRestoringSession(false);
   }, [setSession]);

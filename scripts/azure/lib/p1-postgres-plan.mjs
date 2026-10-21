@@ -210,7 +210,8 @@ export function buildP1PostgresPlan() {
     // 028 adds the append-only guardrails_evaluations table. 029 adds the spend budget tables.
     // 030 adds append-only plan promotion and task origin rows with SELECT,INSERT grants.
     // 031 adds caller dismissals of promotion notices with SELECT,INSERT grants.
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+    // 033 extends existing Priority link columns and indexes; no new grants or optional 032 apply.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33],
     // Bind the separately approved Events reporting migration into the reviewed plan hash.
     eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),
     executionRequirements: [

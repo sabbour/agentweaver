@@ -4,6 +4,8 @@ import { GatewayError } from './api';
 import type { ProjectRoleAssignment } from './contracts';
 import { ProjectMembersPanel } from './ProjectMembers';
 
+// Shared fakes. apiCall runs the operation right away with a fixed token and
+// tenant, so tests can assert the exact gateway arguments.
 const mocks = vi.hoisted(() => ({
   apiCall: (operation: (token: string, tenant: string) => Promise<unknown>) => operation('token', 'tenant-1'),
   listProjectRoleAssignments: vi.fn(),
@@ -15,6 +17,8 @@ vi.mock('./AuthContext', () => ({
   useAuth: () => ({ apiCall: mocks.apiCall }),
 }));
 
+// Keep the real GatewayError so the panel's status and code checks work.
+// Replace only the client calls.
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');
   return {
@@ -34,15 +38,18 @@ const viewer: ProjectRoleAssignment = {
   assignmentId: 'as-2', principalId: 'bob', role: 'viewer', revision: 11, createdBy: 'admin', createdAt: '2026-01-03T00:00:00Z',
 };
 
+/** Builds a member list response for project p1. */
 function listOf(...assignments: ProjectRoleAssignment[]) {
   return { projectId: 'p1', assignments };
 }
 
+/** Renders the panel and waits until its first list request has started. */
 async function renderPanel(canManage: boolean) {
   render(<ProjectMembersPanel projectId="p1" canManage={canManage} />);
   await waitFor(() => expect(mocks.listProjectRoleAssignments).toHaveBeenCalled());
 }
 
+/** Fills the add form and submits it. Leaves the role at its default when none is given. */
 async function addMember(principalId: string, role?: string) {
   fireEvent.change(await screen.findByRole('textbox', { name: /Member ID/ }), { target: { value: principalId } });
   if (role) fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: role } });
@@ -60,6 +67,7 @@ describe('ProjectMembersPanel', () => {
     mocks.listProjectRoleAssignments.mockResolvedValue(listOf(owner, viewer));
     await renderPanel(false);
     const table = await screen.findByRole('table', { name: 'Project members' });
+    // Skip the header row so only member rows are counted.
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(2);
     expect(within(rows[0]).getByRole('rowheader').textContent).toBe('alice');
@@ -93,9 +101,11 @@ describe('ProjectMembersPanel', () => {
   });
 
   it('adds a member with the chosen role and reloads the list', async () => {
+    // The second list response simulates the server after the add succeeds.
     mocks.listProjectRoleAssignments.mockResolvedValueOnce(listOf(owner)).mockResolvedValueOnce(listOf(owner, viewer));
     mocks.assignProjectRole.mockResolvedValue(viewer);
     await renderPanel(true);
+    // Surrounding spaces must be trimmed before the ID is sent.
     await addMember('  bob  ', 'viewer');
     expect(mocks.assignProjectRole).toHaveBeenCalledWith('token', 'p1', { principalId: 'bob', role: 'viewer' }, 'tenant-1');
     await waitFor(() => expect(mocks.listProjectRoleAssignments).toHaveBeenCalledTimes(2));
@@ -116,11 +126,14 @@ describe('ProjectMembersPanel', () => {
     mocks.revokeProjectRoleAssignment.mockResolvedValue(undefined);
     await renderPanel(true);
     const table = await screen.findByRole('table', { name: 'Project members' });
+    // Row 0 is the header, so row 2 is bob. Clicking Remove must only open the
+    // confirmation dialog, not revoke yet.
     fireEvent.click(within(within(table).getAllByRole('row')[2]).getByRole('button', { name: 'Remove' }));
     expect(mocks.revokeProjectRoleAssignment).not.toHaveBeenCalled();
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('Remove Viewer role from bob?');
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' })); });
+    // The revoke must carry bob's revision (11) as the concurrency check.
     expect(mocks.revokeProjectRoleAssignment).toHaveBeenCalledWith('token', 'p1', 'as-2', 11, 'tenant-1');
     await waitFor(() => expect(mocks.listProjectRoleAssignments).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText('bob')).toBeNull());

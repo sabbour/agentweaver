@@ -33,7 +33,16 @@ import type {
   CopilotConnectionBegin,
   CopilotConnectionMutation,
   CopilotConnectionReceipt,
+  AddChiefOfStaffPriorityLinkRequest,
+  BindChiefOfStaffConversationRequest,
+  ChiefOfStaffConversation,
+  ChiefOfStaffConversationPage,
+  ChiefOfStaffPriority,
+  ChiefOfStaffPriorityList,
   CoordinatorDecisionOperationResponse,
+  CreateChiefOfStaffPriorityRequest,
+  ReorderChiefOfStaffPrioritiesRequest,
+  UpdateChiefOfStaffPriorityRequest,
   CoordinatorDecisionStateView,
   CoordinationTreeCommandResult,
   EffectiveRunSelection,
@@ -86,6 +95,7 @@ import type {
   SessionEventEnvelope,
   SessionEventPage,
   SessionStatusSnapshot,
+  SessionTurnContent,
   SessionTreeSnapshot,
   SourceControlOutputCaptureDiff,
   SourceControlOutputCaptureDetail,
@@ -107,7 +117,10 @@ export class GatewayError extends Error {
     this.name = 'GatewayError';
     this.status = status;
     this.problem = problem;
-    this.code = typeof problem.code === 'string' ? problem.code : undefined;
+    // Problem details use `code`; Chief of Staff and run routes return `{ error: code }`.
+    this.code = typeof problem.code === 'string'
+      ? problem.code
+      : typeof problem.error === 'string' ? problem.error : undefined;
   }
 }
 
@@ -125,8 +138,64 @@ function problemMessage(problem: Record<string, unknown>, status: number): strin
 }
 
 /** Encodes each path segment independently so identifiers cannot alter route structure. */
-function encodeSegments(...segments: string[]): string {
+export function encodeSegments(...segments: string[]): string {
   return segments.map((part) => encodeURIComponent(part)).join('/');
+}
+
+/**
+ * Sends one JSON request to `url` with a Broker token and preserves structured
+ * error details in {@link GatewayError}. Requests omit ambient credentials, skip
+ * the cache, and send the tenant selector only when one is given.
+ */
+export async function sendGatewayRequest<T>(
+  fetcher: typeof fetch,
+  token: string,
+  url: string,
+  init: RequestInit = {},
+  tenantSelector?: string | null,
+  readBody?: (response: Response) => Promise<T>,
+): Promise<T> {
+  if (!token) {
+    // Fail before the network call. A request with no token would only return 401 anyway.
+    throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
+  }
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  headers.set('Accept', 'application/json');
+  if (tenantSelector !== undefined && tenantSelector !== null)
+    headers.set('X-Agentweaver-Tenant', tenantSelector);
+  if (init.body !== undefined) headers.set('Content-Type', 'application/json');
+
+  // Call fetch on globalThis: browsers throw "Illegal invocation" for window.fetch on
+  // another receiver. Cookies are omitted because auth is the bearer token only, and
+  // no-store keeps private responses out of the browser's HTTP cache.
+  const response = await fetcher.call(globalThis, url, {
+    ...init,
+    headers,
+    credentials: init.credentials ?? 'omit',
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    let body: Record<string, unknown> = {};
+    // Read the error body as text first. JSON objects become the problem details;
+    // plain text or other JSON is kept as `detail` so the message is not lost.
+    const raw = await response.text();
+    if (raw) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+          body = parsed as Record<string, unknown>;
+        else body = { detail: raw };
+      } catch {
+        body = { detail: raw };
+      }
+    }
+    throw new GatewayError(response.status, body, problemMessage(body, response.status));
+  }
+  // 204 has no body to parse. `readBody` lets a caller read non-JSON bodies such as file bytes.
+  if (response.status === 204) return undefined as T;
+  if (readBody) return readBody(response);
+  return await response.json() as T;
 }
 
 /**
@@ -254,18 +323,14 @@ export class AgentweaverGatewayClient {
     const result = await this.request<ProjectRoleAssignmentList>(
       token, `/projects/${encodeSegments(projectId)}/role-assignments`, {}, this.baseUrl, tenantSelector,
     );
-    // Check the owner answered for the project we asked about before showing anyone's roles.
+    // Never show roles for a project other than the one asked for. A mismatch means the
+    // server answer is broken, so report it as a 502 contract error.
     if (result?.projectId !== projectId || !Array.isArray(result.assignments))
       throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned role assignments for a different project.');
     return result;
   }
 
-  /**
-   * Assigns a role to a tenant member. TenantAdmin only. The body is exactly
-   * `{ principalId, role }`. The service answers `201` with the new assignment,
-   * `409 role_assignment_exists` for a duplicate, and `404 principal_not_found`
-   * when the person has no active membership in the tenant.
-   */
+  /** Assigns a role to a member. TenantAdmin only; 409 `role_assignment_exists` for duplicates. */
   assignProjectRole(
     token: string,
     projectId: string,
@@ -281,12 +346,7 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /**
-   * Revokes one assignment at its current revision. TenantAdmin only. Returns
-   * the assignment with `state: 'revoked'`. A stale revision returns
-   * `409 revision_conflict`; the last owner of an active project returns
-   * `409 last_project_owner`.
-   */
+  /** Revokes one assignment at its current revision. TenantAdmin only. */
   revokeProjectRoleAssignment(
     token: string,
     projectId: string,
@@ -333,6 +393,7 @@ export class AgentweaverGatewayClient {
     // Without `revision` the owner returns the current configuration; with it, that saved version.
     return this.request(
       token,
+      // Without `revision` the server returns the latest configuration; with it, that exact saved version.
       `/projects/${encodeSegments(projectId)}/configuration${revision === undefined ? '' : `?revision=${revision}`}`,
       {},
       this.baseUrl,
@@ -1150,6 +1211,23 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /** Reads the text of one committed turn event with the run-bound token. */
+  readSessionTurnContent(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    eventId: string,
+    tenantSelector?: string | null,
+  ): Promise<SessionTurnContent> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'sessions', sessionId, 'turns', eventId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
   /** Reads pending decisions and gate state for one coordination session. */
   getDecisions(
     token: string,
@@ -1292,6 +1370,149 @@ export class AgentweaverGatewayClient {
           payload: { text },
         }),
       },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Lists the caller's private Chief of Staff conversations, newest first. */
+  listChiefOfStaffConversations(
+    token: string,
+    options: { cursor?: string | null; pageSize?: number } = {},
+    tenantSelector?: string | null,
+  ): Promise<ChiefOfStaffConversationPage> {
+    const query = new URLSearchParams();
+    if (options.cursor) query.set('cursor', options.cursor);
+    if (options.pageSize) query.set('pageSize', String(options.pageSize));
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request(token, `/chief-of-staff/conversations${suffix}`, {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Binds a run the caller created to a conversation entry. Repeating returns the same entry. */
+  bindChiefOfStaffConversation(
+    token: string,
+    body: BindChiefOfStaffConversationRequest,
+    tenantSelector?: string | null,
+  ): Promise<ChiefOfStaffConversation> {
+    return this.request(
+      token,
+      '/chief-of-staff/conversations',
+      { method: 'POST', body: JSON.stringify(body) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads one of the caller's conversations. */
+  getChiefOfStaffConversation(
+    token: string,
+    conversationId: string,
+    tenantSelector?: string | null,
+  ): Promise<ChiefOfStaffConversation> {
+    return this.request(
+      token,
+      `/chief-of-staff/conversations/${encodeSegments(conversationId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Lists the caller's Priorities in order with the order revision. */
+  listChiefOfStaffPriorities(token: string, tenantSelector?: string | null): Promise<ChiefOfStaffPriorityList> {
+    return this.request(token, '/chief-of-staff/priorities', {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Creates a Priority. One key per draft; a replay with the same key returns the original. */
+  createChiefOfStaffPriority(
+    token: string,
+    body: CreateChiefOfStaffPriorityRequest,
+    idempotencyKey: string,
+    tenantSelector?: string | null,
+  ): Promise<ChiefOfStaffPriority> {
+    return this.request(
+      token,
+      '/chief-of-staff/priorities',
+      { method: 'POST', body: JSON.stringify(body), headers: { 'Idempotency-Key': idempotencyKey } },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads one Priority. */
+  getChiefOfStaffPriority(
+    token: string,
+    priorityId: string,
+    tenantSelector?: string | null,
+  ): Promise<ChiefOfStaffPriority> {
+    return this.request(
+      token,
+      `/chief-of-staff/priorities/${encodeSegments(priorityId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Changes a Priority at `expectedRevision`; a stale revision returns 409. */
+  updateChiefOfStaffPriority(
+    token: string,
+    priorityId: string,
+    body: UpdateChiefOfStaffPriorityRequest,
+    tenantSelector?: string | null,
+  ): Promise<ChiefOfStaffPriority> {
+    return this.request(
+      token,
+      `/chief-of-staff/priorities/${encodeSegments(priorityId)}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Replaces the whole Priority order at `expectedOrderRevision`; a stale revision returns 409. */
+  reorderChiefOfStaffPriorities(
+    token: string,
+    body: ReorderChiefOfStaffPrioritiesRequest,
+    tenantSelector?: string | null,
+  ): Promise<ChiefOfStaffPriorityList> {
+    return this.request(
+      token,
+      '/chief-of-staff/priorities/order',
+      { method: 'PUT', body: JSON.stringify(body) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Adds a typed link to a Priority at `expectedRevision`. */
+  addChiefOfStaffPriorityLink(
+    token: string,
+    priorityId: string,
+    body: AddChiefOfStaffPriorityLinkRequest,
+    tenantSelector?: string | null,
+  ): Promise<ChiefOfStaffPriority> {
+    return this.request(
+      token,
+      `/chief-of-staff/priorities/${encodeSegments(priorityId, 'links')}`,
+      { method: 'POST', body: JSON.stringify(body) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Removes a link from a Priority at `expectedRevision`. Works without project access. */
+  removeChiefOfStaffPriorityLink(
+    token: string,
+    priorityId: string,
+    linkId: string,
+    expectedRevision: number,
+    tenantSelector?: string | null,
+  ): Promise<ChiefOfStaffPriority> {
+    return this.request(
+      token,
+      `/chief-of-staff/priorities/${encodeSegments(priorityId, 'links', linkId)}?expectedRevision=${expectedRevision}`,
+      { method: 'DELETE' },
       this.baseUrl,
       tenantSelector,
     );

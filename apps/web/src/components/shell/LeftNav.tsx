@@ -78,15 +78,15 @@ function formatVersionBadge(version: string): string {
 
 /**
  * Renders the primary navigation using the configured app routes and current project context.
- * `useAppVersion` supplies the version display; route hooks determine active navigation and local
- * state supports responsive navigation behavior.
+ * This wrapper fills the rail's slots with the 0.x data sources: the app version, the
+ * project switcher with its own project list, the notification bell, and the GitHub identity.
  */
 export function LeftNav({
   ...props
 }: LeftNavProps) {
-  // The 0.x app wires the shared rail to its legacy hooks and APIs here. The
-  // v1 shell renders LeftNavView directly with its own slots instead.
   const version = useAppVersion();
+  // All drawing happens in LeftNavView. This wrapper only supplies the parts
+  // that call 0.x APIs, so the v1 shell can reuse the same rail with its own parts.
   return (
     <LeftNavView
       {...props}
@@ -100,20 +100,23 @@ export function LeftNav({
   );
 }
 
-/** Service-owned slots keep the retained navigation independent of legacy APIs. */
+/**
+ * Props for the rail view. The caller supplies every part that needs data
+ * (version, project switcher, bell, identity), so the rail itself makes no API calls.
+ */
 export interface LeftNavViewProps extends LeftNavProps {
   version: string;
   projectSwitcher: ReactNode;
   notifications?: ReactNode;
-  /** Renders the footer identity. Receives the collapsed state and the status/version footer content. */
+  /** Renders the footer identity. Receives the collapsed state and the status and version badges for its menu. */
   identity: (collapsed: boolean, footerMeta: ReactNode) => ReactNode;
-  /** Replaces the default New session navigation when set. */
+  /** Replaces the default "go to /assistant" behavior of the new chat button. */
   onNewSession?: () => void;
-  /** Extra content shown after the Sessions group. */
+  /** Extra content placed under the Sessions entry. */
   sessionAction?: ReactNode;
-  /** Global item keys to show. Omit to show all. */
+  /** When set, only these global entries are shown. When omitted, all are shown. */
   visibleGlobalKeys?: readonly string[];
-  /** Project item keys to show. Omit to show all. */
+  /** When set, only these project entries are shown. When omitted, all are shown. */
   visibleProjectKeys?: readonly string[];
   showNewSession?: boolean;
 }
@@ -146,10 +149,9 @@ export function LeftNavView({
       return false;
     }
   });
-  // Apply the optional allow-lists. With no list, every item shows, as in 0.x.
-  // Sessions is pulled out of the global items because it renders in its own
-  // group with the New session button. Project sections left with no items
-  // are dropped so no empty heading or divider shows.
+  // Split the configured entries into the parts of the rail. When the caller
+  // passes visible keys, drop every entry not in the list, then drop sections
+  // left with no entries so no empty heading or divider is drawn.
   const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
     globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
     globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
@@ -174,7 +176,8 @@ export function LeftNavView({
   };
 
   const startNewSession = () => {
-    // A caller handler replaces the default route to the 0.x assistant.
+    // A caller-supplied handler wins. Otherwise open a new assistant chat,
+    // scoped to the current project when there is one.
     if (onNewSession) {
       onNewSession();
       return;

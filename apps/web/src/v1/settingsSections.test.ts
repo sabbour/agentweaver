@@ -10,6 +10,7 @@ describe('settings sections', () => {
     expect(settingsSection(null)).toBe('general');
     expect(settingsSection('')).toBe('general');
     expect(settingsSection('nope')).toBe('general');
+    // Keys are case-sensitive, so a label is not accepted as a key.
     expect(settingsSection('Models')).toBe('general');
   });
 
@@ -21,6 +22,7 @@ describe('settings sections', () => {
   });
 
   it('marks only the shared-draft sections as configuration sections', () => {
+    // These sections share one Save button. The others save on their own or are read-only.
     expect([...CONFIGURATION_SECTIONS].sort()).toEqual(['advanced', 'components', 'limits', 'models', 'repository']);
     for (const key of ['general', 'access', 'connections', 'history', 'danger'] as const)
       expect(CONFIGURATION_SECTIONS.has(key)).toBe(false);

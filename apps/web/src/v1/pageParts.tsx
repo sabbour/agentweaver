@@ -72,7 +72,7 @@ export function Panel({ title, children, actions, description }: {
 export function ProjectBreadcrumb({ projectId, page }: { projectId: string; page?: string }) {
   const styles = useStyles();
   const project = useProjectSummary(projectId);
-  // Show the raw project ID until the summary loads or if it fails to load.
+  // Show the ID until the project name loads, or if it cannot load.
   const name = project.data?.name ?? projectId;
   return (
     <nav className={styles.breadcrumb} aria-label="Breadcrumb">
@@ -97,13 +97,11 @@ export function ProjectBreadcrumb({ projectId, page }: { projectId: string; page
  */
 export function ProjectAccessBadge({ projectId }: { projectId: string }) {
   const context = useAuthorizationContext();
-  // Render nothing until the authorization context loads, and on error. A
-  // missing badge is safer than a wrong one.
+  // Render nothing until permissions load, so the badge never shows a wrong guess.
   if (!context.data) return null;
-  // Collect the permissions that apply to this project: platform, tenant, and
-  // project grants.
   const permissions = permissionsForProject(context.data, projectId);
   const summary = accessSummary(permissions);
+  // Tooltip text: each permission with its scope (project, tenant, or platform).
   const detail = permissions.length === 0
     ? 'You have no permissions in this project.'
     : permissions.map((item) => `${PERMISSION_LABELS[item.permission]} (${item.scope})`).join(', ');
@@ -127,8 +125,8 @@ export function PageHeading({ title, description, actions, page, breadcrumb = tr
   breadcrumb?: boolean;
 }) {
   const { projectId } = useParams();
-  // Project pages get the breadcrumb and access badge. Cross-project pages
-  // such as Overview have no project ID, or pass `breadcrumb={false}`.
+  // Breadcrumb and access badge only make sense on project routes. A page can
+  // pass breadcrumb={false} to hide the breadcrumb.
   return <PageHeader
     title={title}
     description={description}

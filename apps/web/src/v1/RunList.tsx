@@ -56,7 +56,7 @@ const useStyles = makeStyles({
 /** Formats an ISO time for list rows. */
 function formatTime(value: string): string {
   const parsed = new Date(value);
-  // Show the raw text if the value is not a valid date, rather than "Invalid Date".
+  // If the value is not a valid date, show the raw text rather than "Invalid Date".
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 

@@ -20,5 +20,6 @@ export const CONFIGURATION_SECTIONS: ReadonlySet<SettingsSection> = new Set(['re
 
 /** Returns a known section, or General for a missing or unknown value. */
 export function settingsSection(value: string | null): SettingsSection {
+  // Matching is exact and case-sensitive. A bad link opens General instead of a blank page.
   return SETTINGS_SECTIONS.find((section) => section.key === value)?.key ?? 'general';
 }

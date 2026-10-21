@@ -11,6 +11,31 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class GatewayKnowledgeOpenApiRegressionTests
 {
+    [Fact]
+    public async Task PriorityLinkRequestsAndReceiptsExposeRepositoryIdentity()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call owners."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        // Both sides use the canonical repository contract, so callers can retain the exact selected target.
+        foreach (var name in new[] { "AddChiefOfStaffPriorityLinkRequest", "ChiefOfStaffPriorityLink" })
+        {
+            var schema = schemas.GetProperty(name);
+            Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
+            var properties = schema.GetProperty("properties");
+            Assert.True(properties.TryGetProperty("providerId", out _));
+            var repository = properties.GetProperty("repository");
+            if (repository.TryGetProperty("anyOf", out var alternatives))
+                repository = alternatives[0];
+            Assert.Equal("#/components/schemas/ProjectSourceControlRepository", repository.GetProperty("$ref").GetString());
+        }
+    }
+
     /// <summary>Publishes strict, separate owner contracts and reporting query/error schemas.</summary>
     [Fact]
     public async Task ProjectReportingRoutesExposeStrictContractsAndBoundedQueries()

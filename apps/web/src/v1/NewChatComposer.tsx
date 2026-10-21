@@ -1,10 +1,10 @@
 /**
- * Message composer shared by the run chat today and by "start a new chat" once
- * the service can create runs. It owns the draft text and one
+ * Message composer shared by the run chat and by the Chief of Staff new chat.
+ * It owns the draft text and one
  * idempotency key per draft: a retry of the same text reuses the key, so a
  * timed-out send cannot post twice. The key changes after a successful send or
  * when the text changes. Callers supply any pickers (sessions now, a project
- * picker later) through `children`.
+ * picker for a new chat) through `children`.
  */
 import { Button, Field, Textarea } from '@fluentui/react-components';
 import { SendRegular } from '@fluentui/react-icons';
@@ -21,39 +21,53 @@ export interface NewChatComposerProps {
   label?: string;
   placeholder?: string;
   submitLabel?: string;
+  /**
+   * Identifies what the draft is sent to, such as the picked project. A different
+   * scope gets a new idempotency key; the text stays.
+   */
+  draftScope?: string;
   children?: ReactNode;
 }
 
 /** Text box and send button with retry-safe idempotency. */
 export function NewChatComposer({
-  onSubmit, blocked = false, label = 'Message', placeholder = 'Write a message', submitLabel = 'Send', children,
+  onSubmit, blocked = false, label = 'Message', placeholder = 'Write a message', submitLabel = 'Send', draftScope = '', children,
 }: NewChatComposerProps) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  // Idempotency key for the current draft. A ref, not state, because changing
-  // it must not re-render. Null means "make a new key on the next send".
+  // Idempotency key for the current draft. null means "make a new one on the next send".
   const key = useRef<string | null>(null);
+  // The draft scope the current key was made for.
+  const keyScope = useRef(draftScope);
+  // State updates are async; this ref blocks a second submit fired before the re-render.
+  const sending = useRef(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = text.trim();
-    // Ignore empty text, a send already in flight, and caller-blocked states.
-    if (!value || busy || blocked) return;
-    // Reuse the key from a failed attempt, so a retry of the same draft is
-    // treated by the service as the same message.
+    if (!value || sending.current || blocked) return;
+    // The target changed (for example another project was picked). The old key
+    // belongs to a different request, so drop it and make a new one.
+    if (keyScope.current !== draftScope) {
+      key.current = null;
+      keyScope.current = draftScope;
+    }
+    // Reuse the key on a retry of the same draft; make one on the first send.
     key.current ??= crypto.randomUUID();
+    sending.current = true;
     setBusy(true);
     setError(null);
     try {
       await onSubmit(value, key.current);
-      // Sent: clear the key so the next message gets its own key.
+      // Sent: clear the draft and its key.
       key.current = null;
       setText('');
     } catch (reason) {
-      // Failed: keep the draft and the key so the user can retry safely.
+      // Keep the text and the key, so pressing Send again retries the same request.
       setError(reason);
     } finally {
+      sending.current = false;
       setBusy(false);
     }
   };
@@ -68,11 +82,9 @@ export function NewChatComposer({
           placeholder={placeholder}
           rows={3}
           resize="vertical"
-          // Edited text is a new message, so drop the old key.
           onChange={(_, data) => { setText(data.value); key.current = null; }}
-          // Ctrl+Enter or Cmd+Enter sends. requestSubmit runs the form's
-          // submit handler, so the same checks apply as for the button.
           onKeyDown={(event) => {
+            // Ctrl+Enter (Cmd+Enter on Mac) sends. requestSubmit runs the normal form submit path.
             if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();

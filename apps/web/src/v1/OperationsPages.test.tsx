@@ -70,6 +70,12 @@ vi.mock('./RunAttentionContext', () => ({
     dismissError: null,
   }),
 }));
+vi.mock('./runAttention', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./runAttention')>(),
+  useRunAttention: () => ({
+    items: [], count: 0, loading: false, error: null, reload: vi.fn(), dismiss: vi.fn(), dismissError: null,
+  }),
+}));
 
 vi.mock('./pageParts', async (importOriginal) => ({
   ...await importOriginal<typeof import('./pageParts')>(),
@@ -229,12 +235,12 @@ describe('FlowPage', () => {
     expect(stages.textContent).toContain('Active1');
     expect(stages.textContent).toContain('Done1');
     expect(screen.getByRole('link', { name: 'Open Board' }).getAttribute('href')).toBe('/projects/p1/board');
-    expect(mocks.listProjectRuns).toHaveBeenCalledWith('token', 'p1', { states: ['open'], cursor: null, pageSize: 25 }, 'tenant-1');
+    expect(mocks.listProjectRuns).toHaveBeenCalledWith('token', 'p1', { states: undefined, cursor: null, pageSize: 25 }, 'tenant-1');
   });
 
   it('refreshes notifications, runs, and the board', async () => {
     renderPage('flow', <FlowPage />);
-    await screen.findByText('No runs are open.');
+    await screen.findByText('No open runs.');
     await waitFor(() => expect(mocks.readProjectBacklog).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(mocks.attentionReload).toHaveBeenCalled();
@@ -244,8 +250,8 @@ describe('FlowPage', () => {
 
   it('shows empty states', async () => {
     renderPage('flow', <FlowPage />);
-    expect(await screen.findByText('No runs are open.')).toBeTruthy();
-    expect(screen.getByText('Nothing needs your attention.')).toBeTruthy();
+    expect(await screen.findByText('No open runs.')).toBeTruthy();
+    expect(screen.getAllByText('Nothing needs your attention.').length).toBeGreaterThan(0);
     const stages = await screen.findByLabelText('Tasks by stage');
     expect(stages.textContent).toContain('Backlog0');
     expect(stages.textContent).toContain('Done0');
@@ -272,7 +278,7 @@ describe('FlowPage', () => {
 
   it('names the missing live agent graph in plain copy', async () => {
     renderPage('flow', <FlowPage />);
-    await screen.findByText('No runs are open.');
+    await screen.findByText('No open runs.');
     expectPlainNote('The live agent graph for the whole project is not available.');
   });
 });

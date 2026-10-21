@@ -3,8 +3,8 @@
  * project metrics and usage, Recent runs, and Needs attention. Counts come from
  * the project list, the newest runs of each project, and your notifications. The
  * service reports metrics and usage per project only, so the metrics section
- * shows one chosen project and says so. This page is the planned home for
- * Chief of Staff priorities.
+ * shows one chosen project and says so. Personal Priorities, new chat and private
+ * conversations sit alongside these project-owned views without controlling them.
  */
 import { Button, Select, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
@@ -21,6 +21,9 @@ import { ProjectMetricsSections } from './ProjectMetricsSections';
 import { useSharedRunAttention } from './RunAttentionContext';
 import { RunList } from './RunList';
 import { runListErrorMessage, useCrossProjectRunList } from './runListData';
+import { ConversationList, NewChatPanel } from './ChiefOfStaffPanels';
+import { useChiefOfStaffConversations, useChiefOfStaffPriorities } from './chiefOfStaff';
+import { PrioritiesPanel } from './PrioritiesPanel';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXL },
@@ -114,6 +117,8 @@ export function OverviewPage() {
   const { apiCall } = useAuth();
   // Shared with the rail bell, so a dismiss in either place shows in both.
   const attention = useSharedRunAttention();
+  const conversations = useChiefOfStaffConversations();
+  const priorities = useChiefOfStaffPriorities();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   // Each project list load also reads the newest runs of every project.
   const runs = useCrossProjectRunList(projects, 5);
@@ -134,16 +139,15 @@ export function OverviewPage() {
       setLoadedAt(new Date());
       setError(null);
     } catch (reason) {
+      // Keep the last project list on failure so the page stays usable; only show the error.
       setError(reason);
     } finally {
       setLoading(false);
     }
   }, [apiCall]);
 
-  // Start the first load in a zero-delay timer instead of calling it directly
-  // in the effect. This keeps state updates out of the effect body. The cleanup
-  // cancels the timer if the page unmounts before it fires.
   useEffect(() => {
+    // Start the first load on the next tick instead of inside the effect body.
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
@@ -163,7 +167,7 @@ export function OverviewPage() {
   const projectNames = new Map((projects ?? []).map((project) => [project.projectId, project.name]));
   // Refresh re-reads the project list, which also re-reads the runs, the
   // notifications, and the shown project's metrics.
-  const refresh = () => { void load(); attention.reload(); metrics.reload(); };
+  const refresh = () => { void load(); attention.reload(); metrics.reload(); conversations.reload(); void priorities.reload(); };
 
   return (
     <div className={styles.root}>
@@ -183,6 +187,10 @@ export function OverviewPage() {
       {loading && !projects && <Loading label="Loading overview" />}
       {projects && (
         <>
+          {/* Personal planning stays separate from execution and project metrics. */}
+          <PrioritiesPanel priorities={priorities} projects={projects} conversations={conversations} />
+          <NewChatPanel projects={projects} onChanged={conversations.reload} />
+          <ConversationList conversations={conversations} projectNames={projectNames} />
           <section className={styles.card} aria-labelledby="overview-operations">
             <div className={styles.cardHead}>
               <span className={styles.cardHeadIcon}><Pulse24Regular /></span>

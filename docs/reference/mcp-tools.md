@@ -187,7 +187,7 @@ See [AgentSuite import](./agentsuite-import.md).
 | `reorderChiefOfStaffPriorities` | Reorder my Priorities at an expected order revision. |
 | `getChiefOfStaffPriority` | Read one Priority. |
 | `updateChiefOfStaffPriority` | Change a Priority at an expected revision. Never changes run state. |
-| `addChiefOfStaffPriorityLink` | Link a Priority to a run, conversation, issue, pull request, or artifact. |
+| `addChiefOfStaffPriorityLink` | Link a Priority to a run, conversation, issue, pull request, or artifact. Issue and pull request bodies include `providerId`, `repository: { owner, name }`, and `number`; before the database update they return `database_update_pending`. |
 | `removeChiefOfStaffPriorityLink` | Remove a Priority link at an expected revision. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |

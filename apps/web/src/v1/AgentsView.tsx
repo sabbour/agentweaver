@@ -44,26 +44,31 @@ function AgentDetail({ projectId, agent, configuration, readOnly, onClose, onSav
   onSave: (next: ProjectConfiguration) => Promise<boolean>;
 }) {
   const styles = useStyles();
+  // Form fields start from the agent's saved values. The parent remounts this
+  // component (by key) when another agent is opened, so values never carry over.
   const [tab, setTab] = useState<'overview' | 'charter'>('overview');
   const [role, setRole] = useState(agent.role);
   const [charter, setCharter] = useState(agent.charter);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  // The casting entry, if any, says whether and where this agent sits in the team.
+  // An agent is "in the team" only when it has a casting entry.
   const casting = configuration.casting.find((item) => item.agentId === agent.agentId);
-  // An enabled skill applies to this agent when it lists no agents (applies to all) or lists this agent.
+  // A skill applies if it is enabled and either lists no agents (all agents) or lists this one.
   const skills = configuration.skills.filter((skill) => skill.enabled && (!skill.agentIds?.length || skill.agentIds.includes(agent.agentId)));
+  // Save is enabled only after a real change.
   const dirty = role !== agent.role || charter !== agent.charter;
+  /** Saves a full configuration where only this agent's role and charter differ. */
   const save = async () => {
     setSaving(true);
     setSaved(false);
-    // Send the whole configuration with only this agent's role and charter replaced.
-    // The parent saves it as a new revision and resolves true on success.
+    // The configuration is saved as a whole revision, so copy it and replace just
+    // this one charter entry. The role is trimmed; the charter text is kept as typed.
     const ok = await onSave({
       ...configuration,
       agentCharters: configuration.agentCharters.map((item) => item.agentId === agent.agentId ? { ...item, role: role.trim(), charter } : item),
     });
     setSaving(false);
+    // Show "Charter saved." only when onSave reports success.
     setSaved(ok);
   };
   return (
@@ -230,7 +235,6 @@ export function AgentsView({ projectId, configuration, configurationRevision, re
       )}
       <OverlayDrawer open={selected !== null} onOpenChange={(_, data) => { if (!data.open) setSelectedId(null); }} position="end" size="medium">
         {selected && (
-          // Keying by agent ID resets the drawer's draft fields when a different agent is opened.
           <AgentDetail
             key={selected.agentId}
             projectId={projectId}

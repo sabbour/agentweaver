@@ -70,8 +70,8 @@ The client uses these routes:
 | Route | Purpose |
 | --- | --- |
 | `/` | Opens `/overview`. |
-| `/overview` | Read your projects, recent runs across your projects, metrics and usage for one project, and your notifications. |
-| `/sessions` | List runs across your projects, newest first, and start a new session. `/projects/:projectId/sessions` opens the same page. |
+| `/overview` | Manage personal Priorities and private conversations alongside projects, recent runs, project metrics and notifications. |
+| `/sessions` | Reopen private conversations, list runs across projects, and start a new session. `/projects/:projectId/sessions` opens the same page. |
 | `/assistant` | Start a new session: choose a project and send the first message. `/console` opens the same page. |
 | `/projects` | Browse project tiles and create a project. Creating a project does not make you its owner. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, metrics, usage, recent runs, team, and quick actions. |
@@ -82,7 +82,7 @@ The client uses these routes:
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
 | `/projects/:projectId/skills` | Manage Skill sources, imported revisions, and agent assignments. |
 | `/projects/:projectId/memories` | Search and manage Knowledge records and transfer bundles for a run and an agent. `/knowledge` opens the same page. |
-| `/projects/:projectId/flow` | Read the project's attention items, task counts for each Board column, and open runs. |
+| `/projects/:projectId/flow` | Read project notifications, pending gates, Board counts, and runs grouped as Open, Working and Done. |
 | `/projects/:projectId/workflows` | Read the saved default workflow and the workflow for each blueprint. |
 | `/projects/:projectId/workspace` | Read the configured repository, pull requests that runs opened, and synced issues. |
 | `/projects/:projectId/observability` | Read project metrics, usage, and recent runs. |
@@ -109,6 +109,10 @@ group has a **New session** button. **Overview** is the home page. It shows:
   project picker.
 - **Recent runs** across your projects.
 - **Needs attention**: your notifications across all projects.
+- Personal **Priorities**, **New chat**, and **My conversations**. Priorities
+  link authorized runs, conversations, saved captures, synced issues and recorded
+  pull requests without changing execution. See [Chief of Staff](./chief-of-staff.md)
+  for selection, conflict handling, access loss and conversation recovery.
 
 The notification bell in the shell lists the same notifications. Its badge
 shows the number of pending notifications that the service reports. The
@@ -277,8 +281,9 @@ Heartbeat, and Cluster in its navigation. Each page shows the parts that
 project reads can drive, and one **Not available in this version** note that
 names what is still missing:
 
-- **Flow:** **Needs attention** for the project, **Task stages** with the
-  task count in each Board column, and **Open runs**.
+- **Flow:** project notifications, **Needs input** including dismissed gates,
+  **Task stages** with Board counts, and **Open**, **Working**, and **Done** run groups.
+  Failed, cancelled and unknown outcomes retain separate state labels.
 - **Workflows:** the default workflow and the workflow for each blueprint,
   from the project configuration.
 - **Workspace:** the configured repository, pull requests that runs opened or

@@ -23,6 +23,7 @@ function LocationProbe() {
   return <p data-testid="location">{`${location.pathname}${location.search}`}</p>;
 }
 
+/** Renders the element inside a router, next to the location probe. */
 function renderWithRouter(element: React.ReactElement) {
   return render(
     <MemoryRouter initialEntries={['/start']}>

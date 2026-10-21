@@ -70,6 +70,10 @@ export function NewSessionPage() {
     setResumeError(null);
     const binding = { projectId: run.projectId, runId: run.runId };
     try {
+      // Save the caller's private conversation before switching to the run token.
+      // Repeating after a redirect or failed start returns the same entry.
+      await apiCall((token, tenant) => gatewayClient.bindChiefOfStaffConversation(
+        token, { projectId: run.projectId, runId: run.runId }, tenant), null);
       const outcome = await resumePendingRun({
         ensureRunSession: () => ensureSession(binding),
         // Start needs the session bound to this run.

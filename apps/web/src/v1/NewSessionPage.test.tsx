@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getProjectConfiguration: vi.fn(),
   createProjectRun: vi.fn(),
   startProjectRun: vi.fn(),
+  bindChiefOfStaffConversation: vi.fn().mockResolvedValue({}),
   ensureSession: vi.fn(),
   authorize: vi.fn(),
   apiCall: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock('./api', async () => {
       getProjectConfiguration: mocks.getProjectConfiguration,
       createProjectRun: mocks.createProjectRun,
       startProjectRun: mocks.startProjectRun,
+      bindChiefOfStaffConversation: mocks.bindChiefOfStaffConversation,
     },
   };
 });
