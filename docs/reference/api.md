@@ -345,6 +345,84 @@ A run-bound token sees only its own run. `pageSize` defaults to 25 and accepts
 Pass `nextCursor` back with the same filter and page size.
 `title` and `goal` are `null` until a run start request stores them.
 
+### Project metrics and usage
+
+Use these read-only routes for one project's dashboard:
+
+| Gateway path (GET) | Owner path | Operation ID |
+| --- | --- | --- |
+| `/api/v1/projects/{projectId}/metrics?from=&to=&bucket=day` | Orchestrator `/api/projects/{projectId}/metrics` | `readProjectMetrics` |
+| `/api/v1/projects/{projectId}/usage?from=&to=` | Events & Sessions `/api/projects/{projectId}/usage` | `readProjectUsage` |
+
+Both owners require `api.read`, their own audience and the Projects audience,
+and a fresh Projects authorization context. The caller needs project
+`readProjects` or `readRunSelection`, or tenant `readProjects`. Unbound and
+project-bound callers can read the project. A run-bound caller sees only its
+own run. Both responses use `Cache-Control: no-store`.
+
+`from` is inclusive and `to` is exclusive. Supply ISO dates (`2026-10-01`)
+or timestamps with an explicit offset (`2026-10-01T00:00:00Z`). Dates start
+at UTC midnight. When `to` is omitted, it defaults to the current UTC time.
+When `from` is omitted, it defaults to 30 days before `to`. An interval can
+span at most 92 days. Equal bounds are valid and return no interval activity.
+Only metrics accepts `bucket`; its only value is `day`. Unknown or repeated
+query parameters, invalid dates, reversed bounds, and unsupported buckets
+return a `400` problem response with `title` and `code` set to `query_invalid`.
+The response does not include exception text. A default start date earlier
+than the supported date range is also invalid.
+
+Metrics returns `projectId`, normalized `from` and `to`, the counts below,
+and `series`. Current state and lifetime counts are not limited by the date
+range. They still respect tenant, project, and run-bound scope.
+
+| Field | v1 definition | 0.x dashboard mapping |
+| --- | --- | --- |
+| `activeRuns` | Runs whose derived state is `active`, including presenting root turns. | Active runs tile; does not include the separate active-agent count. |
+| `blockedRuns` | Runs whose derived state is `blocked`. | Additional v1 state detail, not a summary tile in 0.x. |
+| `runsInRange` | Runs with `created_at` in `[from,to)`. | Runs this week when callers select that week; Created total for the selected range. |
+| `runsTotal` | All accepted runs in the authorized scope. | Total run count. |
+| `completedRuns` | Terminal runs (`completed`, `failed`, `cancelled`, `indeterminate`) with `completed_at` in `[from,to)`. | Completed total and Done series; not the 0.x completed-task count. |
+| `succeededRuns` | Runs in `completedRuns` whose derived state is `completed`. | Numerator for v1 run success; not the 0.x agent-dependency success measure. |
+| `series[].date` | UTC calendar date, ascending, for each day intersecting the interval. | Runs over time and daily activity. |
+| `series[].created` | Runs created within the interval on that UTC day. | Created series. |
+| `series[].completed` | Terminal runs completed within the interval on that UTC day. | Done series. |
+
+Days with no activity have zero counts. An equal-bound interval has an empty
+series. A run created before the interval can contribute to its completion
+count. Terminal rows without `completed_at` do not contribute to completion
+metrics.
+
+These definitions map to the 0.x dashboard controls. v1 uses persisted
+owner data, not Application Insights, and cannot reproduce historic 0.x
+telemetry. v1 run success is `succeededRuns / completedRuns`; display it as
+unknown when the denominator is zero. 0.x used per-agent dependency success,
+so the two percentages are not equivalent.
+
+Usage returns `projectId`, normalized `from` and `to`, `usageByModel`, and
+`usageByAgent`. Each array item has `id` (persisted `model_id` or `agent_id`),
+`requestCount`, `inputTokens`, `outputTokens`, `cachedTokens`,
+`cacheWriteTokens`, `reasoningTokens`, `avgDurationMs`, `runs`, `cost`, and
+`unpricedRequestCount`. Empty intervals or projects have empty usage arrays.
+`runs` counts distinct `run_id` values represented in that group and interval.
+These groups replace the model metrics and usage portion of the agent
+leaderboard, not agent-role or agent-success telemetry.
+
+Token and request counts are sums of recorded measurements. `avgDurationMs`
+is the arithmetic mean of ledger-event durations, not a request-weighted mean.
+If any included row lacks a measurement, that aggregate is `null`, not zero.
+TTFT is not returned because the ledger does not record it.
+
+`cost[]` keeps a separate subtotal for each `(priceUnit, disposition)` pair.
+Disposition is `estimate`, `reconciled`, or `unpriced`. Never sum across
+units. An unpriced amount remains `null`, including a missing unit.
+`unpricedRequestCount` sums request counts on unpriced rows; it is `null`
+when any such row has an unknown request count, and zero when no rows are
+unpriced. Reads do not price, reprice, reserve, or change budgets.
+
+Cross-project overview is out of scope. The Gateway proxies each owner; it
+does not combine metrics and usage into one response. Clients that need
+aligned intervals should pass the same explicit bounds to both routes.
+
 ### Coordination
 
 Native prefix: `/api/projects/{projectId}/runs/{runId}/coordination`.

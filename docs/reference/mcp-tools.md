@@ -134,6 +134,7 @@ See [AgentSuite import](./agentsuite-import.md).
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
 | `listProjectRuns` | List accepted project runs, newest first. |
+| `readProjectMetrics` | Read bounded project run counts and daily UTC activity from Orchestrator. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |
@@ -169,6 +170,16 @@ See [AgentSuite import](./agentsuite-import.md).
 | `acknowledgeMessage` | Acknowledge a message. |
 | `readPolicyEvaluation` | Read a policy receipt. |
 | `validatePolicyEvaluationAdmission` | Revalidate receipt admission. |
+
+`readProjectMetrics` accepts optional `from`, `to`, and `bucket=day`.
+`readProjectUsage` accepts optional `from` and `to`, and reads Events &
+Sessions ledger totals grouped by model and agent. Both tools use fresh
+project read authority and a half-open UTC interval of at most 92 days,
+defaulting to the last 30 days. A run-bound caller sees only its own run.
+Cost units and dispositions remain separate, unknown values remain `null`,
+and usage reads do not price or change budgets. Cross-project overview is out
+of scope. See [Project metrics and usage](./api.md#project-metrics-and-usage)
+for metric definitions and differences from the 0.x dashboard.
 
 ### Source Control
 
@@ -207,6 +218,7 @@ See [AgentSuite import](./agentsuite-import.md).
 | --- | --- |
 | `replayRunEvents` | Read a finite committed journal page. |
 | `readRunUsage` | Read run usage totals. |
+| `readProjectUsage` | Read persisted project usage grouped by model and agent. |
 
 ## Results and errors
 
