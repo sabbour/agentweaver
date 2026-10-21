@@ -101,6 +101,9 @@ import { PlatformComponentsTable } from './PlatformComponentsTable';
 import { isRunFinished, runState } from './runState';
 import { DashboardPage } from './DashboardPage';
 import { OverviewPage } from './OverviewPage';
+import { FlowPage } from './FlowPage';
+import { NewChatPage } from './ChiefOfStaffPanels';
+import { pinnedDecisionFromSearch } from './runAttention';
 import { OrchestrationsPage } from './OrchestrationsPage';
 import { AgentsView } from './AgentsView';
 import { accessSummary, permissionsForProject, useAuthorizationContext, useProjectConfiguration, useProjectSummary } from './projectData';
@@ -2353,6 +2356,7 @@ function RunPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('view');
   const tab: RunTab = isRunTab(requestedTab) ? requestedTab : 'chat';
+  const pinnedDecision = useMemo(() => pinnedDecisionFromSearch(searchParams), [searchParams]);
   const authorized = isSameBinding(session?.binding, binding);
   const silentBind = useSilentRunSession(binding, authorized, ensureSession);
   const now = useTickingNow(authorized);
@@ -2720,7 +2724,7 @@ function RunPage() {
           )}
           {tab === 'chat' && <ChatView key={`${projectId}/${runId}/${session?.accessToken ?? ''}`} projectId={projectId} runId={runId} nodes={nodes} targetSessionId={chatTarget} journalEvents={journal.events} apiCall={apiCall} snapshotBusy={snapshotBusy} />}
           {tab === 'approvals' && (
-            <DecisionList projectId={projectId} runId={runId} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
+            <DecisionList projectId={projectId} runId={runId} pinned={pinnedDecision} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
           )}
           {tab === 'activity' && (
             <div className="v1-stack">
@@ -3085,7 +3089,7 @@ function AuthenticatedRoutes() {
       <Route path="/" element={<Navigate to="/overview" replace />} />
       <Route path="/overview" element={<Shell><OverviewPage /></Shell>} />
       <Route path="/sessions" element={<Shell><UnavailablePage title="Sessions" description="Starting and listing chat sessions needs a service update. Open a project, then choose a run in Orchestrations." /></Shell>} />
-      <Route path="/assistant" element={<Shell><UnavailablePage title="New session" description="Starting a new chat needs a service update. Open a project, then choose a run in Orchestrations to read and send messages." /></Shell>} />
+      <Route path="/assistant" element={<Shell><NewChatPage /></Shell>} />
       <Route path="/console" element={<Navigate to="/assistant" replace />} />
       <Route path="/settings" element={<Shell><AccountSettingsPage /></Shell>} />
       <Route path="/platform-settings" element={<Shell><UnavailablePage title="Platform settings" description="Platform administration is not available in this web client." /></Shell>} />
@@ -3100,6 +3104,7 @@ function AuthenticatedRoutes() {
       <Route path="/projects/:projectId/knowledge" element={<Shell><KnowledgePage /></Shell>} />
       <Route path="/projects/:projectId/memories" element={<Shell><KnowledgePage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations" element={<Shell><OrchestrationsPage /></Shell>} />
+      <Route path="/projects/:projectId/flow" element={<Shell><FlowPage /></Shell>} />
       <Route path="/projects/:projectId/sessions" element={<Navigate to="/sessions" replace />} />
       <Route path="/projects/:projectId/runs/:runId" element={<Shell><RunPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunRedirect />} />
@@ -3122,7 +3127,6 @@ function CoordinatorRunRedirect() {
 /** Legacy destinations stay addressable without falling back to monolith APIs. */
 const unavailableProjectPages = [
   { segment: 'board', title: 'Board', description: 'The project board is not available in this version. Open Orchestrations to review runs and approvals.' },
-  { segment: 'flow', title: 'Flow', description: 'Project-wide agent activity is not available in this version. Open Orchestrations, then a run, to view its session topology.' },
   { segment: 'workspace', title: 'Workspace', description: 'Project file browsing is not available in this version. A run shows its changes in the Changes tab.' },
   { segment: 'workflows', title: 'Workflows', description: 'The workflow editor is not available in this version. Workflow references remain in Project settings.' },
   { segment: 'observability/*', title: 'Observability', description: 'Project trace and agent summaries are not available in this version. Open a run for Activity and Usage.' },

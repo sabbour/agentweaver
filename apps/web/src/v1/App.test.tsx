@@ -522,7 +522,8 @@ describe('v1 web project scoping', () => {
     const nav = screen.getByRole('navigation', { name: 'Primary navigation' });
     expect(within(nav).getByRole('link', { name: 'Orchestrations' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Skills' })).toBeTruthy();
-    for (const name of ['Board', 'Flow', 'Workspace', 'Workflows', 'Observability', 'Diagnostics', 'Heartbeat', 'Cluster']) {
+    expect(within(nav).getByRole('link', { name: 'Flow' })).toBeTruthy();
+    for (const name of ['Board', 'Workspace', 'Workflows', 'Observability', 'Diagnostics', 'Heartbeat', 'Cluster']) {
       expect(within(nav).queryByRole('link', { name })).toBeNull();
     }
     fireEvent.click(screen.getByRole('button', { name: 'Collapse navigation' }));
@@ -531,7 +532,7 @@ describe('v1 web project scoping', () => {
     expect(nav.getAttribute('data-collapsed')).toBe('false');
   });
 
-  it.each(['board', 'flow', 'workspace', 'workflows', 'observability/traces', 'diagnostics', 'heartbeat', 'cluster'])(
+  it.each(['board', 'workspace', 'workflows', 'observability/traces', 'diagnostics', 'heartbeat', 'cluster'])(
     'explains unsupported old %s links without pretending the route is Projects',
     async (path) => {
       window.history.replaceState({}, '', `/projects/p1/${path}`);

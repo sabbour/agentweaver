@@ -101,7 +101,7 @@ export function RetainedShell({ children }: { children: ReactNode }) {
     <div className="aw-app-shell">
       <LeftNavView
         visibleGlobalKeys={['overview', 'projects']}
-        visibleProjectKeys={['dashboard', 'orchestrations', 'agents', 'skills', 'memories']}
+        visibleProjectKeys={['dashboard', 'flow', 'orchestrations', 'agents', 'skills', 'memories']}
         showNewSession={false}
         projectId={projectId}
         pathname={location.pathname}

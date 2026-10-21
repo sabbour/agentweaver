@@ -1,9 +1,9 @@
 /**
- * Cross-project Overview in the 0.x layout: Operations card, Recent projects,
- * Recent runs in this browser, and Needs attention. Counts come from the project
- * list, browser run history, and the open run. The 0.x usage charts and
- * activity feed need the metrics contract (gap G3) and are not shown. This page
- * is the planned home for Chief of Staff priorities.
+ * Cross-project Overview and Chief of Staff home: New chat, My conversations,
+ * Priorities, and Needs attention (the caller's notifications), then the 0.x
+ * Operations card, Recent projects, and Recent runs in this browser. The 0.x
+ * usage charts and activity feed need the metrics contract (gap G3) and are not
+ * shown.
  */
 import { Button, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
@@ -15,7 +15,10 @@ import { gatewayClient } from './api';
 import type { ProjectSummary } from './contracts';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
-import { useRunAttention } from './runAttention';
+import { useNotificationAttention } from './runAttention';
+import { ConversationList, NewChatPanel } from './ChiefOfStaffPanels';
+import { useChiefOfStaffConversations, useChiefOfStaffPriorities } from './chiefOfStaff';
+import { PrioritiesPanel } from './PrioritiesPanel';
 import { RunList } from './RunList';
 import { useBrowserRunList } from './runListData';
 
@@ -94,6 +97,7 @@ const useStyles = makeStyles({
   },
   projectName: { fontWeight: tokens.fontWeightSemibold, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   stat: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  column: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 0 },
   mainGrid: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1.35fr) minmax(320px, .85fr)',
@@ -109,7 +113,9 @@ const RECENT_PROJECT_LIMIT = 6;
 export function OverviewPage() {
   const styles = useStyles();
   const { apiCall } = useAuth();
-  const attention = useRunAttention();
+  const attention = useNotificationAttention();
+  const conversations = useChiefOfStaffConversations();
+  const priorities = useChiefOfStaffPriorities();
   const runs = useBrowserRunList();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
@@ -140,13 +146,13 @@ export function OverviewPage() {
   );
   const active = (projects ?? []).filter((project) => project.state === 'active');
   const recent = [...active].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT_PROJECT_LIMIT);
-  const refresh = () => { void load(); attention.reload(); };
+  const refresh = () => { void load(); attention.reload(); conversations.reload(); void priorities.reload(); };
 
   return (
     <div className={styles.root}>
       <PageHeading
         title="Overview"
-        description="Your projects, the runs you opened, and what needs your input."
+        description="Your Priorities, chats, and what needs your input."
         breadcrumb={false}
         actions={(
           <div className={styles.headerActions}>
@@ -159,6 +165,17 @@ export function OverviewPage() {
       {loading && !projects && <Loading label="Loading overview" />}
       {projects && (
         <>
+          <div className={styles.mainGrid}>
+            <PrioritiesPanel priorities={priorities} projects={projects} conversations={conversations} />
+            <div className={styles.column}>
+              <section className={styles.card} aria-labelledby="overview-attention">
+                <Text as="h2" id="overview-attention" className={styles.sectionTitle}>Needs attention</Text>
+                <AttentionList attention={attention} />
+              </section>
+              <NewChatPanel projects={projects} onChanged={conversations.reload} />
+              <ConversationList conversations={conversations} projectNames={projectNames} />
+            </div>
+          </div>
           <section className={styles.card} aria-labelledby="overview-operations">
             <div className={styles.cardHead}>
               <span className={styles.cardHeadIcon}><Pulse24Regular /></span>
@@ -204,20 +221,14 @@ export function OverviewPage() {
               </div>
             )}
           </section>
-          <div className={styles.mainGrid}>
-            <RunList
-              title="Recent runs in this browser"
-              description="Runs you opened in any project. A full run list needs a service update."
-              data={runs}
-              emptyText="Runs you open appear here."
-              projectNames={projectNames}
-              limit={8}
-            />
-            <section className={styles.card} aria-labelledby="overview-attention">
-              <Text as="h2" id="overview-attention" className={styles.sectionTitle}>Needs attention</Text>
-              <AttentionList attention={attention} />
-            </section>
-          </div>
+          <RunList
+            title="Recent runs in this browser"
+            description="Runs you opened in any project. A full run list needs a service update."
+            data={runs}
+            emptyText="Runs you open appear here."
+            projectNames={projectNames}
+            limit={8}
+          />
         </>
       )}
     </div>

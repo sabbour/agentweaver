@@ -1,10 +1,10 @@
 /**
- * Message composer shared by the run chat today and by "start a new chat" once
- * the service can create runs (gap G1). It owns the draft text and one
+ * Message composer shared by the run chat and by the Chief of Staff new chat.
+ * It owns the draft text and one
  * idempotency key per draft: a retry of the same text reuses the key, so a
  * timed-out send cannot post twice. The key changes after a successful send or
  * when the text changes. Callers supply any pickers (sessions now, a project
- * picker later) through `children`.
+ * picker for a new chat) through `children`.
  */
 import { Button, Field, Textarea } from '@fluentui/react-components';
 import { SendRegular } from '@fluentui/react-icons';
@@ -21,23 +21,36 @@ export interface NewChatComposerProps {
   label?: string;
   placeholder?: string;
   submitLabel?: string;
+  /**
+   * Identifies what the draft is sent to, such as the picked project. A different
+   * scope gets a new idempotency key; the text stays.
+   */
+  draftScope?: string;
   children?: ReactNode;
 }
 
 /** Text box and send button with retry-safe idempotency. */
 export function NewChatComposer({
-  onSubmit, blocked = false, label = 'Message', placeholder = 'Write a message', submitLabel = 'Send', children,
+  onSubmit, blocked = false, label = 'Message', placeholder = 'Write a message', submitLabel = 'Send', draftScope = '', children,
 }: NewChatComposerProps) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const key = useRef<string | null>(null);
+  const keyScope = useRef(draftScope);
+  // State updates are async; this ref blocks a second submit fired before the re-render.
+  const sending = useRef(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = text.trim();
-    if (!value || busy || blocked) return;
+    if (!value || sending.current || blocked) return;
+    if (keyScope.current !== draftScope) {
+      key.current = null;
+      keyScope.current = draftScope;
+    }
     key.current ??= crypto.randomUUID();
+    sending.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -47,6 +60,7 @@ export function NewChatComposer({
     } catch (reason) {
       setError(reason);
     } finally {
+      sending.current = false;
       setBusy(false);
     }
   };
