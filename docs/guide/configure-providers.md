@@ -225,7 +225,7 @@ for the meter source before you set a hard limit, for example the Azure rate
 card in [Understand source candidates](#understand-source-candidates).
 
 For the enforcement design and error codes, see
-[Scoped spend budgets and dispatch exposure](../architecture/design/provider-seams.md#scoped-spend-budgets-and-dispatch-exposure).
+[Scoped spend budgets and dispatch exposure](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/provider-seams.md#scoped-spend-budgets-and-dispatch-exposure).
 
 ## Expected result
 

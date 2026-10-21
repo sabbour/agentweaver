@@ -862,7 +862,7 @@ accepted run selection pins run and agent budgets. Orchestrator reads project bu
 each dispatch, so a tightened project budget applies to the next dispatch of every run.
 
 Events is the only usage ledger. Orchestrator stores no spend amounts. Migration
-`024_spend_budget_exposure.sql` adds two tables to the Orchestrator schema:
+`029_spend_budget_exposure.sql` adds two tables to the Orchestrator schema:
 
 - `spend_budget_reservations` holds one reservation of `ReservePerDispatch` per admitted dispatch and
   bucket. A reservation is `outstanding` until Events accounts for the dispatch, and then it becomes

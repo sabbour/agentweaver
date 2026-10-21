@@ -56,7 +56,7 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 24)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 29)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -76,9 +76,9 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(19) && !applied.Contains(15)) ||
             (applied.Contains(20) && !applied.Contains(19)) ||
             (applied.Contains(21) && !applied.Contains(20)) ||
-            (applied.Contains(24) && !applied.Contains(21)))
+            (applied.Contains(29) && !applied.Contains(21)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
-        foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 24])
+        foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 29])
             .Where(version => !applied.Contains(version)))
         {
             var migrationName = version switch
@@ -103,7 +103,7 @@ public static class CoordinationOwnerMigrator
                 19 => "session_suspend_resume",
                 20 => "maf_buildtest_workspace_seed",
                 21 => "row_lock_record_updates",
-                24 => "spend_budget_exposure",
+                29 => "spend_budget_exposure",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -155,7 +155,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 24)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 29)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -229,7 +229,7 @@ public static class CoordinationOwnerMigrator
                       AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
                       AND tgenabled = 'O' AND NOT tgisinternal
                       AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 24) = 1,
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 29) = 1,
                 to_regclass(@spendBudgetReservations) IS NOT NULL,
                 to_regclass(@spendBudgetCursors) IS NOT NULL
             """, connection);
