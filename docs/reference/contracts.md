@@ -98,6 +98,27 @@ usage also remains unpriced without trusted usage-share evidence.
 
 ## Gateway API and server-sent events
 
+Project reporting uses two separate owner contracts. `ProjectMetrics` returns
+current active and blocked counts, lifetime accepted runs, bounded created and
+terminal-completed counts, succeeded runs, and zero-filled UTC daily points.
+`ProjectUsage` returns ledger measurements grouped by model ID and agent ID.
+The Gateway never aggregates across owners. Cross-project overview is out of
+scope. See [Project metrics and usage](./api.md#project-metrics-and-usage) for
+the field definitions and 0.x dashboard mapping.
+
+Both contracts echo normalized `from` and `to` bounds. The half-open interval
+defaults to the last 30 days and cannot exceed 92 days. Only metrics accepts
+`bucket=day`. Both owners validate fresh project read authority, return
+`Cache-Control: no-store`, and narrow run-bound tokens to their own run.
+OpenAPI defines strict response objects and query schemas. Invalid or repeated
+query values return a `400` problem response with `title` and `code` set to
+`query_invalid`, without exception text.
+
+Usage measurements remain nullable when source data is missing. Cost subtotals
+are grouped by unit and disposition; consumers must not add different units
+or treat unpriced usage as zero. The read path does not invoke pricing or
+budgeting.
+
 The `Agentweaver.Gateway` source exposes a finite, versioned client API at
 `/api/v1`. The service is a source candidate; these mappings do not confirm a
 deployment. `GET /openapi/v1.json` returns the route catalog and identifies each

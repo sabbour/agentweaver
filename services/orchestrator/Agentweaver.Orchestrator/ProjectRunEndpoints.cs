@@ -145,8 +145,35 @@ public static class ProjectRunEndpoints
     public static IEndpointRouteBuilder MapProjectRunEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/projects/{projectId}/runs", ListRunsAsync).RequireAuthorization();
+        // Metrics use the same fresh authority and run-bound narrowing as the run list.
+        app.MapGet("/api/projects/{projectId}/metrics", ReadMetricsAsync).RequireAuthorization();
         return app;
     }
+
+    /// <summary>Returns stable query failures and reads bounded, uncached UTC project metrics.</summary>
+    internal static Task<IResult> ReadMetricsAsync(
+        string projectId, HttpContext context, ProjectsRunSelectionClient projects,
+        ProjectRunReadStore store, TimeProvider timeProvider, CancellationToken cancellationToken) =>
+        CoordinationEndpoints.ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            ProjectMetricsRange range;
+            try
+            {
+                var query = ReadSingleValuedQuery(context.Request.Query, new(["from", "to", "bucket"], StringComparer.Ordinal));
+                range = ProjectMetricsRange.Parse(query.GetValueOrDefault("from"), query.GetValueOrDefault("to"),
+                    query.GetValueOrDefault("bucket"), timeProvider.GetUtcNow());
+            }
+            catch (Exception exception) when (exception is ArgumentException ||
+                exception is CoordinationException { Code: "query_invalid" })
+            {
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "query_invalid",
+                    extensions: new Dictionary<string, object?> { ["code"] = "query_invalid" });
+            }
+            var authority = await projects.ReadProjectReadAuthorityAsync(context, projectId, cancellationToken);
+            return Results.Ok(await store.ReadMetricsAsync(
+                authority.TenantId, projectId, authority.BoundRunId, range, cancellationToken));
+        }, cancellationToken);
 
     /// <summary>
     /// Lists the project's runs newest first after a fresh Projects read-authority check.
