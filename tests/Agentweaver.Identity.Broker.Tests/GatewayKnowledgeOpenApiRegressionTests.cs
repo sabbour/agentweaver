@@ -60,8 +60,10 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         AssertNullablePropertyType(schemas.GetProperty("ProjectUsageCost").GetProperty("properties"), "amount", "number");
     }
 
-    private static readonly string[] KnowledgeWriteOperationIds =
+    private static readonly string[] IdempotentWriteOperationIds =
     [
+        "createProjectRun",
+        "cancelProjectRun",
         "createKnowledgeRecord",
         "updateKnowledgeRecord",
         "restoreKnowledgeRecord",
@@ -72,7 +74,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     ];
 
     [Fact]
-    public async Task ServedOpenApiRequiresIdempotencyKeyOnlyForKnowledgeWrites()
+    public async Task ServedOpenApiRequiresIdempotencyKeyOnlyForIdempotentWrites()
     {
         using var rsa = RSA.Create(2048);
         await using var gateway = await GatewayResourceServer.StartAsync(
@@ -86,7 +88,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var paths = document.RootElement.GetProperty("paths");
 
-        foreach (var operationId in KnowledgeWriteOperationIds)
+        foreach (var operationId in IdempotentWriteOperationIds)
         {
             var operation = FindOperation(paths, operationId);
             var header = Assert.Single(
@@ -112,7 +114,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         }
 
         Assert.Equal(
-            KnowledgeWriteOperationIds.OrderBy(id => id, StringComparer.Ordinal),
+            IdempotentWriteOperationIds.OrderBy(id => id, StringComparer.Ordinal),
             operationsWithIdempotencyKey);
     }
 
