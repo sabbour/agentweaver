@@ -64,7 +64,8 @@ describe('SessionsPage', () => {
     const links = within(list).getAllByRole('link', { name: /^Open run/ });
     expect(links.map((link) => link.getAttribute('href'))).toEqual(['/projects/p1/runs/a1', '/projects/p2/runs/b1']);
     expect(within(list).getByText('Alpha task')).toBeTruthy();
-    expect(within(list).getByText('b1')).toBeTruthy();
+    // An untitled run with no goal shows "Run" and its short ID.
+    expect(within(list).getByText('Run b1')).toBeTruthy();
     expect(within(list).getByText(/^Beta \u00b7 Started/)).toBeTruthy();
     expect(mocks.listProjectRuns).toHaveBeenCalledWith('token', 'p1', { cursor: null, pageSize: 10 }, 'tenant');
   });

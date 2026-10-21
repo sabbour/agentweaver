@@ -49,12 +49,13 @@ beforeEach(() => {
 });
 
 describe('run display helpers', () => {
-  it('uses title, then goal, then root session ID, then run ID', () => {
+  it('uses title, then goal, then "Run" with the short run ID', () => {
     expect(runDisplayLabel(summary('r1', { title: 'Title', goal: 'Goal', rootSessionId: 's1' }))).toBe('Title');
     expect(runDisplayLabel(summary('r1', { title: '  ', goal: 'Goal', rootSessionId: 's1' }))).toBe('Goal');
-    expect(runDisplayLabel(summary('r1', { rootSessionId: 's1' }))).toBe('s1');
-    expect(runDisplayLabel(summary('r1'))).toBe('r1');
-    expect(runDisplayLabel({ runId: 'r2' } as ProjectRunSummary)).toBe('r2');
+    // The root session ID is skipped: it is the same agent name for many runs.
+    expect(runDisplayLabel(summary('0123456789abcdef', { rootSessionId: 'coordinator' }))).toBe('Run 01234567');
+    expect(runDisplayLabel(summary('r1'))).toBe('Run r1');
+    expect(runDisplayLabel({ runId: 'r2' } as ProjectRunSummary)).toBe('Run r2');
   });
 
   it('maps a run summary to a row', () => {

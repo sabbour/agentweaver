@@ -57,15 +57,17 @@ export interface ProjectRunListOptions {
 }
 
 /**
- * Returns the text shown for a run. The order is title, goal, root session ID,
- * then run ID. Blank values are skipped so a row never shows empty text.
+ * Returns the text shown for a run. The order is title, then goal, then
+ * "Run" with the first 8 characters of the run ID. Blank values are skipped so
+ * a row never shows empty text. The root session ID is not used, because it is
+ * the same agent name, such as "coordinator", for many runs.
  */
-export function runDisplayLabel(run: Pick<ProjectRunSummary, 'runId' | 'title' | 'goal' | 'rootSessionId'>): string {
-  for (const value of [run.title, run.goal, run.rootSessionId]) {
+export function runDisplayLabel(run: Pick<ProjectRunSummary, 'runId' | 'title' | 'goal'>): string {
+  for (const value of [run.title, run.goal]) {
     const text = value?.trim();
     if (text) return text;
   }
-  return run.runId;
+  return `Run ${run.runId.slice(0, 8)}`;
 }
 
 /** Converts one service run summary to a list row. */

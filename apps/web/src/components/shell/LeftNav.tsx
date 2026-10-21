@@ -15,7 +15,7 @@ import {
   PanelLeftExpand24Regular,
   Settings24Regular,
 } from '@fluentui/react-icons';
-import { GLOBAL_NAV_ITEMS, NAV_SECTIONS, navItemPath } from './navConfig';
+import { GLOBAL_NAV_ITEMS, NAV_SECTIONS, NEW_SESSION_NAV_KEY, SETTINGS_NAV_KEY, navItemPath } from './navConfig';
 import { useAppVersion } from '../../hooks/useAppVersion';
 import { NotificationBell } from './NotificationBell';
 import { ProjectSwitcher } from './ProjectSwitcher';
@@ -184,6 +184,11 @@ export function LeftNavView({
   };
 
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  // The New session and Settings buttons show as selected on their own pages,
+  // like the nav links, so those pages do not fall back to Overview.
+  const newSessionSelected = activeKey === NEW_SESSION_NAV_KEY;
+  const settingsSelected = activeKey === SETTINGS_NAV_KEY;
+  const newSessionClassName = `aw-nav-action-button${newSessionSelected ? ' aw-nav-action-button--selected' : ''}`;
 
   const goTo = (path: string) => {
     setSettingsMenuOpen(false);
@@ -293,6 +298,8 @@ export function LeftNavView({
                   appearance="subtle"
                   icon={<Settings24Regular />}
                   aria-label="Settings"
+                  aria-current={settingsSelected ? 'page' : undefined}
+                  className={settingsSelected ? 'aw-nav-action-button--selected' : undefined}
                   data-testid="settings-menu-button"
                 />
               </Tooltip>
@@ -386,8 +393,9 @@ export function LeftNavView({
                     appearance="subtle"
                     icon={<AddRegular />}
                     aria-label="New session"
+                    aria-current={newSessionSelected ? 'page' : undefined}
                     onClick={startNewSession}
-                    className="aw-nav-action-button"
+                    className={newSessionClassName}
                   />
                 </Tooltip>}
               </div>
@@ -409,8 +417,9 @@ export function LeftNavView({
                       appearance="subtle"
                       icon={<AddRegular />}
                       aria-label="New session"
+                      aria-current={newSessionSelected ? 'page' : undefined}
                       onClick={startNewSession}
-                      className="aw-nav-action-button"
+                      className={newSessionClassName}
                     />
                   </Tooltip>}
                 </div>

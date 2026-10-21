@@ -15,8 +15,8 @@ vi.mock('./AuthContext', () => ({
   useAuth: () => ({ apiCall: mocks.apiCall }),
 }));
 
-vi.mock('./runAttention', () => ({
-  useRunAttention: () => ({ items: [], reload: vi.fn() }),
+vi.mock('./RunAttentionContext', () => ({
+  useSharedRunAttention: () => ({ items: [], reload: vi.fn() }),
 }));
 
 vi.mock('./AttentionList', () => ({ AttentionList: () => <p>No attention items</p> }));

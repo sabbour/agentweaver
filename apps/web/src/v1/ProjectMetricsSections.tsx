@@ -15,6 +15,7 @@ import {
   TableRow,
   Text,
   makeStyles,
+  mergeClasses,
   tokens,
 } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
@@ -94,12 +95,17 @@ const useStyles = makeStyles({
   empty: { color: tokens.colorNeutralForeground3 },
   usageBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 0 },
   tableWrap: { overflowX: 'auto', minWidth: 0 },
-  table: { minWidth: '980px' },
-  headerCell: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground2 },
-  nameCell: { fontWeight: tokens.fontWeightSemibold, overflowWrap: 'anywhere' },
-  idCaption: { display: 'block', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere' },
-  number: { fontVariantNumeric: 'tabular-nums' },
-  costList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, margin: 0, padding: 0, listStyle: 'none' },
+  // Auto layout sizes each column to its content instead of equal fixed
+  // columns, so names and costs fit. A wide table scrolls sideways in tableWrap.
+  table: { minWidth: '100%', width: 'max-content', tableLayout: 'auto' },
+  headerCell: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground2, whiteSpace: 'nowrap' },
+  // Names never break inside a word; the name column gets room to fit them.
+  nameColumn: { minWidth: '200px' },
+  nameCell: { fontWeight: tokens.fontWeightSemibold, wordBreak: 'normal', overflowWrap: 'normal', whiteSpace: 'nowrap' },
+  idCaption: { display: 'block', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, wordBreak: 'normal', overflowWrap: 'normal', whiteSpace: 'nowrap' },
+  number: { fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
+  // One cost subtotal per line, and each line never wraps.
+  costList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, margin: 0, padding: 0, listStyle: 'none', whiteSpace: 'nowrap' },
 });
 
 /** 0.x range selector: last 7, 30, or 90 days. */
@@ -197,7 +203,7 @@ export function UsageTable({ title, kind, items, nameFor }: {
           <Table aria-label={title} size="small" className={styles.table}>
             <TableHeader>
               <TableRow>
-                <TableHeaderCell className={styles.headerCell}>{kind}</TableHeaderCell>
+                <TableHeaderCell className={mergeClasses(styles.headerCell, styles.nameColumn)}>{kind}</TableHeaderCell>
                 <TableHeaderCell className={styles.headerCell}>Runs</TableHeaderCell>
                 <TableHeaderCell className={styles.headerCell}>Requests</TableHeaderCell>
                 <TableHeaderCell className={styles.headerCell}>Input tokens</TableHeaderCell>
@@ -215,7 +221,7 @@ export function UsageTable({ title, kind, items, nameFor }: {
                 const name = nameFor?.(row.id);
                 return (
                   <TableRow key={row.id}>
-                    <TableCell>
+                    <TableCell className={styles.nameColumn}>
                       <Text className={styles.nameCell}>{name ?? row.id}</Text>
                       {name && name !== row.id && <Text className={styles.idCaption}>{row.id}</Text>}
                     </TableCell>

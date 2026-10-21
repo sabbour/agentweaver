@@ -18,7 +18,7 @@ import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
 import { metricTiles, useProjectMetrics, type MetricsRangeKey } from './projectMetrics';
 import { ProjectMetricsSections } from './ProjectMetricsSections';
-import { useRunAttention } from './runAttention';
+import { useSharedRunAttention } from './RunAttentionContext';
 import { RunList } from './RunList';
 import { runListErrorMessage, useCrossProjectRunList } from './runListData';
 
@@ -112,7 +112,8 @@ const RECENT_PROJECT_LIMIT = 6;
 export function OverviewPage() {
   const styles = useStyles();
   const { apiCall } = useAuth();
-  const attention = useRunAttention();
+  // Shared with the rail bell, so a dismiss in either place shows in both.
+  const attention = useSharedRunAttention();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   // Each project list load also reads the newest runs of every project.
   const runs = useCrossProjectRunList(projects, 5);

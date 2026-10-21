@@ -155,7 +155,9 @@ You don't type a run ID. The client reads runs from the project run list:
   read access, a warning names those projects.
 - **Overview** and the project **Dashboard** show the newest runs.
 
-Each row has **Open**, which opens the run page.
+Each row has **Open**, which opens the run page. A row shows the run title. If
+the run has no title, the row shows its goal. If it has neither, the row shows
+**Run** and the first 8 characters of the run ID.
 
 ### Start a session
 

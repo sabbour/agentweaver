@@ -83,7 +83,9 @@ describe('formatting', () => {
   it('shows each cost subtotal as reported without pricing it', () => {
     expect(formatCost({ priceUnit: 'USD', disposition: 'estimate', amount: 1.25 })).toBe('1.25 USD · Estimate');
     expect(formatCost({ priceUnit: 'AIC', disposition: 'reconciled', amount: 3 })).toBe('3 AIC · Reconciled');
-    expect(formatCost({ priceUnit: null, disposition: 'unpriced', amount: null })).toBe('— — · Unpriced');
+    expect(formatCost({ priceUnit: null, disposition: 'unpriced', amount: null })).toBe('Unpriced');
+    // A missing amount shows a single dash, not one dash per field.
+    expect(formatCost({ priceUnit: 'USD', disposition: 'estimate', amount: null })).toBe('— · Estimate');
   });
 
   it('sorts usage by request count with unmeasured rows last', () => {

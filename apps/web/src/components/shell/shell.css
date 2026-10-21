@@ -285,6 +285,13 @@
   flex-shrink: 0;
 }
 
+/* Selected state for rail buttons (New session, Settings) on their own pages.
+   The doubled class outranks the Fluent subtle button background. */
+.aw-nav-action-button--selected.aw-nav-action-button--selected {
+  background-color: var(--colorNeutralBackground3);
+  color: var(--colorNeutralForeground1);
+}
+
 .aw-left-nav--collapsed .aw-nav-action-button {
   align-self: center;
 }

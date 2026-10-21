@@ -76,12 +76,18 @@ const DISPOSITION_LABELS: Record<ProjectUsageCost['disposition'], string> = {
 /**
  * Formats one cost subtotal as reported, for example "1.25 USD · Estimate".
  * Subtotals are never added together or converted: each unit and disposition
- * stays on its own line. A null amount or unit shows a dash.
+ * stays on its own line. A missing amount shows one dash, for example
+ * "— · Estimate". An unpriced cost with no amount shows only "Unpriced".
  */
 export function formatCost(cost: ProjectUsageCost): string {
-  const amount = cost.amount == null ? NOT_MEASURED : cost.amount.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  const label = DISPOSITION_LABELS[cost.disposition] ?? cost.disposition;
+  if (cost.amount == null) {
+    // With no amount, the unit adds nothing, and "Unpriced" already says why.
+    return cost.disposition === 'unpriced' ? label : `${NOT_MEASURED} · ${label}`;
+  }
+  const amount = cost.amount.toLocaleString(undefined, { maximumFractionDigits: 6 });
   const unit = cost.priceUnit ?? NOT_MEASURED;
-  return `${amount} ${unit} · ${DISPOSITION_LABELS[cost.disposition] ?? cost.disposition}`;
+  return `${amount} ${unit} · ${label}`;
 }
 
 /**
