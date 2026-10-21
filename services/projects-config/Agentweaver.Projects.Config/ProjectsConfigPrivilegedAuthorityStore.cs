@@ -1235,34 +1235,18 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
     }
 
     /// <summary>Checks for another active Owner grant backed by an active membership before revocation.</summary>
-    private async Task<bool> HasOtherActiveProjectOwnerAsync(
+    private static Task<bool> HasOtherActiveProjectOwnerAsync(
         ProjectsConfigDbContext db,
         ProjectRoleAssignmentRecord assignment,
         CancellationToken cancellationToken) =>
-        await (
-                from other in db.RoleAssignments.AsNoTracking()
-                join membership in db.TenantMemberships.AsNoTracking()
-                    on other.MembershipId equals membership.MembershipId
-                where other.ResourceType == ProjectAuthorityResourceType.Project &&
-                    other.ResourceId == assignment.ResourceId &&
-                    other.Role == ProjectAuthorityRole.Owner &&
-                    other.State == ProjectAuthorityRecordState.Active &&
-                    other.AssignmentId != assignment.AssignmentId &&
-                    membership.State == ProjectAuthorityRecordState.Active
-                select other.AssignmentId)
-            .AnyAsync(cancellationToken)
-            .ConfigureAwait(false);
+        ProjectAuthorityRules.HasOtherActiveProjectOwnerAsync(db, assignment, cancellationToken);
 
     /// <summary>Serializes concurrent owner mutations for one project within the database transaction.</summary>
-    private async Task LockProjectOwnersAsync(
+    private static Task LockProjectOwnersAsync(
         ProjectsConfigDbContext db,
         string projectId,
-        CancellationToken cancellationToken)
-    {
-        await db.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT pg_advisory_xact_lock(hashtextextended({"project-owner:" + projectId}, 0))",
-            cancellationToken).ConfigureAwait(false);
-    }
+        CancellationToken cancellationToken) =>
+        ProjectAuthorityRules.LockProjectOwnersAsync(db, projectId, cancellationToken);
 
     /// <summary>Serializes first-admin bootstrap and later TenantAdmin assignments for one tenant.</summary>
     private static Task LockTenantAdminGrantsAsync(
@@ -1295,40 +1279,14 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         ProjectTenantMembershipRecord membership,
         ProjectRoleAssignmentRecord assignment,
         string eventType,
-        string actor) => new()
-    {
-        EventId = Guid.NewGuid(),
-        EventType = eventType,
-        MembershipId = membership.MembershipId,
-        AssignmentId = assignment.AssignmentId,
-        Issuer = membership.Issuer,
-        Subject = membership.Subject,
-        TenantId = membership.TenantId,
-        ResourceType = assignment.ResourceType,
-        ResourceId = assignment.ResourceId,
-        Role = assignment.Role,
-        Revision = assignment.Revision,
-        Actor = actor,
-        CreatedAt = timeProvider.GetUtcNow(),
-    };
+        string actor) =>
+        ProjectAuthorityRules.CreateRoleAudit(membership, assignment, eventType, actor, timeProvider.GetUtcNow());
 
-    /// <summary>Recognizes PostgreSQL serialization failures through nested provider exceptions.</summary>
-    private static bool IsSerializationFailure(Exception exception)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-            if (current is PostgresException { SqlState: "40001" })
-                return true;
-        return false;
-    }
+    private static bool IsSerializationFailure(Exception exception) =>
+        ProjectAuthorityRules.IsSerializationFailure(exception);
 
-    /// <summary>Recognizes PostgreSQL unique-constraint failures through nested provider exceptions.</summary>
-    private static bool IsUniqueViolation(Exception exception)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-            if (current is PostgresException { SqlState: "23505" })
-                return true;
-        return false;
-    }
+    private static bool IsUniqueViolation(Exception exception) =>
+        ProjectAuthorityRules.IsUniqueViolation(exception);
 
     /// <summary>Validates opaque authority identifiers before using them in database operations.</summary>
     private static void ValidateIdentifier(string value, string parameterName)

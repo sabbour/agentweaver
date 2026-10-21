@@ -83,10 +83,15 @@ prompt-capacity verification; no images are published by this workflow.
 Web, AgentHost, deployment and .NET build/lock inputs also select Node tooling
 because its executable Linux contracts consume those inputs.
 
-Each .NET project runs on its own runner. The Broker suite has four stable
-SHA-256 method shards, derived from the built assembly's VSTest discovery.
-All theory cases for a method stay together, including methods in large
-partial classes. Every Broker shard saves the complete partition and checks
+Each .NET project runs on its own runner. The Broker suite has four
+deterministic method shards, derived from the built assembly's VSTest
+discovery. All theory cases for a method stay together, including methods in
+large partial classes. Shards are balanced by measured duration: CI places the
+slowest method first on the least-loaded shard (longest-processing-time-first).
+Method weights come from `scripts/ci/broker-test-weights.json`, which records
+the source run. A method without a recorded weight uses `defaultSeconds`, so
+new tests are still assigned exactly once. Weights change placement only;
+they never filter tests. Every Broker shard saves the complete partition and checks
 its TRX method set against its assigned partition. Empty discovery, empty
 shards, missing receipts and failed tests fail CI. Existing explicitly
 opt-in native cases retain their skip behavior; isolated image-native checks
@@ -131,6 +136,18 @@ Broker shard (Docker, Chromium and built Web assets are required). Set
 `COLLECT_COVERAGE=true` to instrument that invocation. Each shard's summary
 and artifact include test/discovery elapsed time; Actions job durations also
 include setup, restore and build.
+
+When one Broker shard becomes consistently slower than the others, refresh
+the weights from the TRX receipts of a recent successful run without coverage:
+
+```powershell
+gh run download <run-id> --pattern 'v1-dotnet-identity-broker-*' --dir artifacts\broker-trx
+node scripts\ci\v1-test-plan.mjs weights "v1 foundation CI run <run-id>" (Get-ChildItem artifacts\broker-trx -Recurse -Filter *.trx).FullName
+```
+
+The command sums theory-case durations per method, keeps methods that take at
+least one second, and sets `defaultSeconds` to the mean of the rest. Commit the
+updated file with the run URL in the pull request.
 
 The historical comparison baseline was approximately 29 minutes median for
 v1 PR CI versus 15 minutes for dev, with Broker alone taking 13m46s.

@@ -385,6 +385,89 @@ export interface ProjectConfiguration {
   sourceControl?: SourceControlProjectSettings | null;
 }
 
+/** Owner-reviewed casting draft and its configuration and draft revision fences. */
+export interface ProjectCastingProposal {
+  proposalId: string;
+  projectId: string;
+  baseConfigurationRevision: number;
+  draftRevision: number;
+  state: 'pending' | 'confirmed' | 'rejected';
+  draft: ProjectConfiguration;
+  confirmedConfigurationRevision: number | null;
+  result: ProjectConfiguration | null;
+  transferProvenance: ProjectCastingTransferProvenance | null;
+  createdByActorId: string;
+  createdAt: string;
+  updatedByActorId: string;
+  updatedAt: string;
+}
+
+/** Complete configuration staged for review without applying it. */
+export interface CreateProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  draft: ProjectConfiguration;
+}
+
+/** Built-in scenario selected at the current configuration revision. */
+export interface CreateScenarioProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  templateId: string;
+}
+
+/** Catalog roles selected at the current configuration revision. */
+export interface CreateManualProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  roleIds: string[];
+}
+
+/** Replacement draft fenced to the pending proposal's draft revision. */
+export interface UpdateProjectCastingProposalRequest {
+  expectedDraftRevision: number;
+  draft: ProjectConfiguration;
+}
+
+/** Expected draft revision used for confirmation or rejection. */
+export interface TransitionProjectCastingProposalRequest {
+  expectedDraftRevision: number;
+}
+
+/** Verified source identity and digest retained on an imported proposal. */
+export interface ProjectCastingTransferProvenance {
+  formatVersion: 1;
+  sourceProjectId: string;
+  sourceConfigurationRevision: number;
+  contentDigest: string;
+}
+
+/** Versioned, digest-checked charter and casting payload; excludes other settings. */
+export interface ProjectCastingTransfer extends ProjectCastingTransferProvenance {
+  agentCharters: ProjectConfiguration['agentCharters'];
+  casting: ProjectConfiguration['casting'];
+}
+
+/** Transfer staged for review against the target project's current revision. */
+export interface ImportProjectCastingTransferRequest {
+  expectedConfigurationRevision: number;
+  transfer: ProjectCastingTransfer;
+}
+
+/** Built-in scenario that seeds a proposal from catalog role identifiers. */
+export interface ProjectCastingTemplateDefinition {
+  id: string;
+  title: string;
+  description: string;
+  roleIds: string[];
+}
+
+/** Built-in role text used to generate a project agent charter. */
+export interface ProjectCastingRoleDefinition {
+  id: string;
+  title: string;
+  summary: string;
+  responsibilities: string[];
+  boundaries: string[];
+}
+
 /** Revision and optional agent scope for one assigned skill. */
 export interface ProjectSkillAssignment {
   skillId: string;
@@ -553,6 +636,45 @@ export interface SkillContentInventoryPage {
   assignments: SkillContentAssignmentSummary[];
   revisions: SkillContentRevisionSummary[];
   pageSize: number;
+  nextCursor: string | null;
+}
+
+/** Derived run state reported by the project run list. */
+export type ProjectRunState =
+  | 'idle'
+  | 'active'
+  | 'blocked'
+  | 'completed'
+  | 'failed'
+  | 'indeterminate'
+  | 'cancelled';
+
+/** Run-list state filter: one or more states, or the `open` and `terminal` aliases. */
+export type ProjectRunStateFilter = ProjectRunState | 'open' | 'terminal';
+
+/** Actor whose accepted run selection created the run. */
+export interface ProjectRunStartedBy {
+  issuer: string;
+  subject: string;
+}
+
+/** One run in a project run list. Title and goal stay null until a start request stores them. */
+export interface ProjectRunSummary {
+  runId: string;
+  rootSessionId: string | null;
+  title: string | null;
+  goal: string | null;
+  state: ProjectRunState;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  startedBy: ProjectRunStartedBy;
+}
+
+/** One newest-first page of project runs. Pass `nextCursor` back with the same filter and page size. */
+export interface ProjectRunPage {
+  projectId: string;
+  items: ProjectRunSummary[];
   nextCursor: string | null;
 }
 
