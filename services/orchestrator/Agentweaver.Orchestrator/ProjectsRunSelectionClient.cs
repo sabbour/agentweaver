@@ -517,7 +517,9 @@ internal sealed class ProjectsRunSelectionClient(
             authorization.MembershipRevision < 1 ||
             authorization.BoundProjectId is not null ||
             authorization.BoundRunId is not null ||
-            authorization.EffectiveAuthority.IsDefault)
+            authorization.EffectiveAuthority.IsDefault ||
+            authorization.EffectiveAuthority.Any(item => item is null || item.Permissions.IsDefault ||
+                item.Permissions.Any(permission => permission is null)))
             throw new CoordinationException("projects_authorization_contract_invalid", StatusCodes.Status502BadGateway);
         return authorization;
     }

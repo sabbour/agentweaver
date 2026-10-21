@@ -18,6 +18,8 @@ internal static partial class GatewayOpenApi
         new Dictionary<string, OperationContract>(StringComparer.Ordinal)
         {
             ["listProjects"] = C(null, "ProjectSummaryList", "200"),
+            ["listUserNotifications"] = C(null, "UserNotificationPage", "200"),
+            ["dismissUserNotification"] = C(null, null, "204"),
             ["createProject"] = C("CreateProjectRequest", "ProjectSummary", "201"),
             ["getProject"] = C(null, "ProjectSummary", "200"),
             ["updateProject"] = C("UpdateProjectRequest", "ProjectSummary", "200"),
@@ -439,7 +441,7 @@ internal static partial class GatewayOpenApi
     {
         if (operationId == "listProjectSkillInventory" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
-        if (operationId is "listProjectRuns" or "listChiefOfStaffConversations" && name == "pageSize")
+        if (operationId is "listProjectRuns" or "listChiefOfStaffConversations" or "listUserNotifications" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
         if (operationId == "listProjectRuns" && name == "state")
             return new
@@ -449,6 +451,8 @@ internal static partial class GatewayOpenApi
                 pattern = "^(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal)" +
                     "(,(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal))*$",
             };
+        if (operationId == "listUserNotifications" && name == "includeDismissed")
+            return new { type = "boolean", @default = false };
 
         if ((operationId == "removeMarketplaceSource" && name == "expectedRevision") ||
             (operationId == "removeChiefOfStaffPriorityLink" && name == "expectedRevision") ||
@@ -1063,6 +1067,18 @@ internal static partial class GatewayOpenApi
             ("sha256", Str()), ("utf8ByteLength", Int())),
         ["RuntimeExecutionCheckpointParent"] = StrictObj(["hasParentMetadata", "parentCheckpointId"],
             ("hasParentMetadata", Bool()), ("parentCheckpointId", NullableStr())),
+        ["UserNotification"] = StrictObj(
+            ["notificationId", "projectId", "runId", "sessionId", "requestId", "kind", "prompt", "createdAt",
+                "gateKind", "stateVersion", "updatedAt"],
+            ("notificationId", Str()), ("projectId", Str()), ("runId", Str()), ("sessionId", Str()),
+            ("requestId", Str()),
+            ("kind", Enum("awaitingInput", "awaitingPlanApproval", "awaitingApproval", "awaitingOutcomeConfirmation")),
+            ("prompt", NullableStr()), ("createdAt", Date()),
+            ("gateKind", Enum("outcomeConfirmation", "generatedWorkflowConfirmation", "workPlanConfirmation",
+                "scopeChangeConfirmation", "question", "approval")),
+            ("stateVersion", Int()), ("updatedAt", Date())),
+        ["UserNotificationPage"] = StrictObj(["items", "count", "nextCursor"],
+            ("items", Arr(Ref("UserNotification"))), ("count", Int()), ("nextCursor", NullableStr())),
         ["SessionIdentity"] = Obj(["projectId", "runId", "sessionId"],
             ("projectId", Str()), ("runId", Str()), ("sessionId", Str())),
         ["SessionTreeSnapshot"] = Obj(["rootSessionId", "nodes"],

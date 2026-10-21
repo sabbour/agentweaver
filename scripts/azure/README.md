@@ -143,8 +143,8 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 24.
-These are 23 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16 and 18 through 25.
+These are 24 registered versions; version 17 remains excluded.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,
@@ -160,7 +160,11 @@ empty tables. It doesn't alter or scan existing tables. Its runtime grants are
 `chief_of_staff_priority_lists` and `chief_of_staff_priorities`, and
 `SELECT,INSERT,DELETE` on `chief_of_staff_priority_links`.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan retains 101 tables and eight exact row-lock columns.
+The plan lists 102 tables and eight exact row-lock columns. Orchestrator migration
+025 adds the empty `user_notification_dismissals` table. Its runtime role needs
+only `SELECT,INSERT` on that table. The migration does not alter existing tables.
+This source change also changes the plan hash. Applying the migration or grants,
+or running initialization with the new hash, requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved
