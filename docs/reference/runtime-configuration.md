@@ -406,6 +406,30 @@ and its selection limits. The Knowledge Deployment imports the same immutable
 `projects-config-provider-catalog` ConfigMap under that prefix; it is not part
 of `knowledge-runtime-config`.
 
+## Platform component report settings
+
+`GET /api/platform/components` works without these settings, but Projects then
+reports every area that has a backend owner as `unknown` with reason
+`ownerUnavailable`. The current runtime maps don't include these settings.
+Adding them is a separate live configuration change. For the request flow, see
+[Platform components](../guide/platform-components.md).
+
+Projects & Config reads these optional settings:
+
+| Setting | Contract |
+| --- | --- |
+| `PlatformComponents__ServiceToken__TokenFile` | Absolute path of a projected service-account token whose audience is the private platform components audience. Projects reads the file on each owner call. |
+| `PlatformComponents__Owners__<owner>__BaseAddress` | HTTPS origin, with no path, of an owner service. `<owner>` is `eventsAndSessions`, `environment`, `knowledge`, `orchestrator`, or `identityBroker`. Projects trusts only the service backend CA mounted at `/var/run/service-backend-ca/ca.crt`. |
+
+Each owner service reads these optional settings. Set all three or none. When
+none is set, the owner doesn't map `GET /internal/platform/components`.
+
+| Setting | Contract |
+| --- | --- |
+| `PlatformComponents__ServiceAuthentication__Authority` | HTTPS issuer of the Projects service token. The owner reads its signing keys from OpenID Connect discovery. |
+| `PlatformComponents__ServiceAuthentication__Audience` | Private absolute HTTPS audience. It must differ from the owner's public token audience. |
+| `PlatformComponents__ServiceAuthentication__CallerSubject` | Exact `sub` claim of the Projects workload, for example `system:serviceaccount:<namespace>:<service-account>`. |
+
 ## Orchestrator settings
 
 The `orchestrator-runtime-config.json` map contains:
