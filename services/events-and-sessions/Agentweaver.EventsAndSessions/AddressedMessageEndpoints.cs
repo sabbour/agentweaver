@@ -10,7 +10,9 @@ public static class AddressedMessageEndpoints
     public static IEndpointRouteBuilder MapAddressedMessageEndpoints(this IEndpointRouteBuilder app)
     {
         var endpoints = app.MapGroup("/internal/addressed-messages").RequireAuthorization();
-        endpoints.MapPost("/admit", AdmitAsync);
+        // Escaped 32-KiB interactive input can exceed the ordinary 64-KiB transport bound.
+        endpoints.MapPost("/admit", AdmitAsync)
+            .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(256 * 1024));
         endpoints.MapPost(
             "/projects/{projectId}/runs/{runId}/sessions/{sessionId}/claim", ClaimAsync);
         endpoints.MapPost(

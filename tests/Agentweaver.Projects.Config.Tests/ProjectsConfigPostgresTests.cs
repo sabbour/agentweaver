@@ -956,6 +956,24 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                     ProviderRequirements = [requirement with { MeterSource = "unknown.meter" }],
                 } }, CancellationToken.None));
         Assert.Equal("provider_resolution_failed", unknown.Code);
+
+        // Interactive selection derives its context from server configuration and keeps the Orchestrator role gate.
+        var interactiveRun = "interactive-" + suffix;
+        var interactive = new InteractiveRunSelectionRequest(project.ConfigurationRevision);
+        var accepted = await service.AcceptInteractiveRunSelectionAsync(
+            caller, project.ProjectId, interactiveRun, interactive, CancellationToken.None);
+        Assert.Equal(interactiveRun, accepted.RunId);
+        Assert.Equal("interactive-v1", accepted.ContextRevision);
+        Assert.Equal(accepted.ContextRevision, (await service.AcceptInteractiveRunSelectionAsync(
+            caller, project.ProjectId, interactiveRun, interactive, CancellationToken.None)).ContextRevision);
+        var ownerInteractive = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.AcceptInteractiveRunSelectionAsync(owner, project.ProjectId, "owner-" + suffix, interactive,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, ownerInteractive.StatusCode);
+        var staleInteractive = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.AcceptInteractiveRunSelectionAsync(caller, project.ProjectId, "stale-" + suffix,
+                new InteractiveRunSelectionRequest(project.ConfigurationRevision + 1), CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, staleInteractive.StatusCode);
     }
 
     [Fact]

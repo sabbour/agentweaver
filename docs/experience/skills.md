@@ -52,6 +52,22 @@ revision and content digest. A preview alone does not save an imported skill.
 The local upload and marketplace import are separate paths. Preview validates
 the candidate without importing it.
 
+To prepare candidates from local content, send one of these inputs to
+`POST /api/v1/skills/package`:
+
+- **Files or a folder**: each file's relative path and base64 content. Every
+  `SKILL.md` marks one skill. Files under a nested `SKILL.md` belong only to
+  that nested skill.
+- **A ZIP archive**: the archive as base64. The owner applies the same path,
+  file-count, and size rules while it reads the archive.
+- **A new skill**: a name, an optional description, and instructions. The owner
+  writes the `SKILL.md` frontmatter for you.
+
+The response lists each skill with its candidate, preview, and digest, or a
+validation error. It also lists binary or oversized files that the owner
+skipped. An upload can contain up to 1,024 files and 2 MiB. To save a skill,
+send its candidate and digest to the import route.
+
 **Expected result:** The owner returns the validated skill name, resource
 count, content digest, and byte count. After import, the owner returns the
 saved skill revision.
@@ -69,6 +85,12 @@ running agent loaded the skill.
 
 **Expected result:** The page displays the configuration revision returned by
 the owner with the skill assignment.
+
+## Remove a skill from use
+
+Imported revisions are immutable. To stop using a skill, remove it from the
+agents' assignment, and then revoke the revision with a reason. A revoked
+revision stays in the inventory for audit, and the runtime does not load it.
 
 ## Inspect the inventory
 
@@ -109,9 +131,11 @@ source.
 | Preview selected content | `POST /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview` |
 | Import selected content | `POST /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` |
 | Preview local content | `POST /api/v1/skills/preview` |
+| Package uploads or a new skill | `POST /api/v1/skills/package` |
 | Import local content | `POST /api/v1/projects/{projectId}/skills/import` |
 | Read inventory | `GET /api/v1/projects/{projectId}/skills` |
 | Assign a skill | `PUT /api/v1/projects/{projectId}/skills/{skillId}/assignment` |
+| Revoke a revision | `POST /api/v1/projects/{projectId}/skills/{skillId}/revisions/{revision}/revoke` |
 
 See [Skill marketplace sources](../architecture/skill-marketplace.md) for
 source, content, and size constraints, and the

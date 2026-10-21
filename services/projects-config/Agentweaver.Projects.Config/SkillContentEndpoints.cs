@@ -83,7 +83,7 @@ public static class SkillContentEndpoints
 {
     private const long MaxContentRequestBytes = 3 * 1024 * 1024;
 
-    /// <summary>Registers skill preview, inventory, import, assignment, revocation, and accepted-run read routes.</summary>
+    /// <summary>Registers skill preview, packaging, inventory, import, assignment, revocation, and accepted-run read routes.</summary>
     /// <param name="app">The application route builder.</param>
     /// <returns>The same route builder for endpoint composition.</returns>
     public static IEndpointRouteBuilder MapSkillContentEndpoints(this IEndpointRouteBuilder app)
@@ -121,6 +121,35 @@ public static class SkillContentEndpoints
         })
         .WithMetadata(new RequestSizeLimitAttribute(MaxContentRequestBytes))
         .WithName("PreviewSkillContent");
+
+        preview.MapPost("/package", async (
+            PackageSkillContentRequest request,
+            HttpContext context,
+            ProjectAuthorizationOwner authorizationOwner,
+            ISkillContentService service,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                RejectQuery(context);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+                caller.RequireUnboundRequest();
+                return Results.Ok(SkillContentPackager.Package(request, service.Preview));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (SkillContentValidationException exception)
+            {
+                return ToProblem(exception);
+            }
+        })
+        .WithMetadata(new RequestSizeLimitAttribute(MaxContentRequestBytes))
+        .WithName("PackageSkillContent");
 
         var projects = app.MapGroup("/api/projects/{projectId}/skills").RequireAuthorization();
         projects.MapGet("/", async (

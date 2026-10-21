@@ -1,81 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createP1Fixture, executePrivilegedProjectSetup, summarizeP1FixtureCleanup, summarizePrivilegedSetupCommand,
+  createP1Fixture, p1FixtureProjectName, summarizeP1FixtureCleanup,
 } from '../p1-fixture-setup.mjs';
 import { runP1SurfaceJourney } from '../p1-surface-runner.mjs';
 
 const SOURCE_SHA = 'a'.repeat(40);
 const SOURCE_TREE = 'b'.repeat(40);
+const OWNER_ASSIGNMENT_ID = '00000000-0000-4000-8000-000000000013';
+const ORCHESTRATOR_ASSIGNMENT_ID = '00000000-0000-4000-8000-000000000012';
 const INVOCATION_ID = '00000000-0000-4000-8000-000000000001';
 const PROJECT_ID = 'fixture-project';
 const TENANT_ID = 'fixture-tenant';
 const ACTOR_ID = 'fixture-owner';
 const ISSUER = 'https://identity.controlled.test/';
 const AUDIENCE = 'agentweaver-controlled';
-
-function sourceEvidence() {
-  const image = 'ghcr.io/sabbour/agentweaver/projects-config@sha256:' + 'c'.repeat(64);
-  const imageID = 'containerd://sha256:' + 'd'.repeat(64);
-  const deployment = {
-    kind: 'Deployment',
-    metadata: {
-      name: 'projects-config',
-      uid: 'deployment-uid',
-      generation: 3,
-    },
-    spec: {
-      replicas: 1,
-      template: { spec: { containers: [{ name: 'projects-config', image }] } },
-    },
-    status: { observedGeneration: 3, readyReplicas: 1, availableReplicas: 1, updatedReplicas: 1 },
-  };
-  const replicaSet = {
-    kind: 'ReplicaSet',
-    metadata: {
-      name: 'projects-config-abc',
-      uid: 'replicaset-uid',
-      ownerReferences: [{ kind: 'Deployment', uid: deployment.metadata.uid, controller: true }],
-    },
-    spec: { replicas: 1 },
-  };
-  const pod = {
-    kind: 'Pod',
-    metadata: {
-      name: 'projects-config-pod',
-      uid: 'pod-uid',
-      ownerReferences: [{ kind: 'ReplicaSet', uid: replicaSet.metadata.uid, controller: true }],
-    },
-    spec: {
-      containers: [{ name: 'projects-config', image }],
-    },
-    status: {
-      phase: 'Running',
-      conditions: [{ type: 'Ready', status: 'True' }],
-      containerStatuses: [{ ready: true, imageID }],
-    },
-  };
-  return {
-    services: {
-      status: 'passed',
-      sourceSha: SOURCE_SHA,
-      sourceTree: SOURCE_TREE,
-      services: [{
-        componentId: 'Agentweaver.Projects.Config',
-        deployment: { name: deployment.metadata.name, uid: deployment.metadata.uid, generation: 3, desiredReplicas: 1 },
-        replicaSet: { name: replicaSet.metadata.name, uid: replicaSet.metadata.uid },
-        pods: [{
-          name: pod.metadata.name,
-          uid: pod.metadata.uid,
-          image,
-          imageID,
-          registry: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-        }],
-      }],
-    },
-    objects: [deployment, replicaSet, pod],
-  };
-}
 
 function apiFor({
   bound = false,
@@ -85,7 +24,10 @@ function apiFor({
   actorId = ACTOR_ID,
   tenantId = TENANT_ID,
   platformRuntimeRevision = 7,
+  failures = {},
 } = {}) {
+  let project;
+  const assignments = new Map();
   let selection;
   let root;
   let child;
@@ -95,6 +37,10 @@ function apiFor({
   const baseUrl = 'https://environment.controlled.test/';
   const paths = {
     getAuthorizationContext: '/api/v1/authorization/context',
+    createProject: '/api/v1/projects',
+    updateProject: '/api/v1/projects/{projectId}',
+    assignProjectRole: '/api/v1/projects/{projectId}/role-assignments',
+    revokeProjectRoleAssignment: '/api/v1/projects/{projectId}/role-assignments/{assignmentId}',
     getProjectConfiguration: '/api/v1/projects/{projectId}/configuration',
     getPlatformRuntimeDefaults: '/api/v1/platform/runtime-defaults',
     acceptRunSelection: '/api/v1/projects/{projectId}/runs/{runId}/selection',
@@ -120,12 +66,69 @@ function apiFor({
     calls,
     resolveGate() { gateResolved = true; },
     async discover() {},
-    async invoke(operationId, { pathParameters = {}, body } = {}) {
-      calls.push({ operationId, pathParameters, body });
+    async invoke(operationId, { pathParameters = {}, query, body } = {}) {
+      calls.push({ operationId, pathParameters, query, body });
       const result = (status, transientResponseBody) => ({
         operationId, status, transientResponseBody,
       });
+      const failure = failures[`${operationId}:${body?.role ?? ''}`] ?? failures[operationId];
+      if (typeof failure === 'function') return failure(result);
+      if (failure) return result(failure.status, failure.body);
+      const assignmentView = assignment => ({
+        assignmentId: assignment.assignmentId,
+        projectId: assignment.projectId,
+        principalId: assignment.principalId,
+        role: assignment.role,
+        state: assignment.state,
+        revision: assignment.revision,
+        grantedBy: actorId,
+        grantedAt: '2026-10-13T00:00:00.000Z',
+        revokedBy: assignment.state === 'revoked' ? actorId : null,
+        revokedAt: assignment.state === 'revoked' ? '2026-10-13T00:01:00.000Z' : null,
+      });
+      const projectView = () => ({
+        projectId: project.projectId,
+        name: project.name,
+        state: project.state,
+        revision: project.revision,
+        configurationRevision: 4,
+        createdAt: '2026-10-13T00:00:00.000Z',
+        updatedAt: '2026-10-13T00:00:00.000Z',
+      });
       switch (operationId) {
+        case 'createProject':
+          project = { projectId, name: body.name, state: 'active', revision: 1 };
+          return result(201, projectView());
+        case 'updateProject':
+          if (pathParameters.projectId !== project?.projectId || body.expectedRevision !== project.revision) {
+            return result(409, { code: 'revision_conflict' });
+          }
+          project = { ...project, name: body.name, state: body.state, revision: project.revision + 1 };
+          return result(200, projectView());
+        case 'assignProjectRole': {
+          const assignment = {
+            assignmentId: body.role === 'owner' ? OWNER_ASSIGNMENT_ID : ORCHESTRATOR_ASSIGNMENT_ID,
+            projectId: pathParameters.projectId,
+            principalId: body.principalId,
+            role: body.role,
+            state: 'active',
+            revision: 1,
+          };
+          assignments.set(assignment.assignmentId, assignment);
+          return result(201, assignmentView(assignment));
+        }
+        case 'revokeProjectRoleAssignment': {
+          const assignment = assignments.get(pathParameters.assignmentId);
+          if (!assignment || assignment.state !== 'active' || query?.expectedRevision !== assignment.revision) {
+            return result(409, { code: 'revision_conflict' });
+          }
+          if (assignment.role === 'owner' && project.state !== 'archived') {
+            return result(409, { code: 'last_project_owner' });
+          }
+          assignment.state = 'revoked';
+          assignment.revision += 1;
+          return result(200, assignmentView(assignment));
+        }
         case 'getAuthorizationContext':
           return result(200, {
             contractVersion: 1,
@@ -359,13 +362,6 @@ async function createJourneyFixture(journey) {
   const fixture = await createP1Fixture(input, {
     api: apiFor({ journey }),
     invocationId: INVOCATION_ID,
-    setupToken: 'controlled-secret-token',
-    sourceEvidence: sourceEvidence(),
-    sourceReceipt: input.pins.sourceReceipt,
-    setupContext: input.pins.context,
-    namespace: input.pins.namespace,
-    runPrivilegedSetup: async request =>
-      setupResult(request.request.invocationId, request.request.operationKind),
     acquireRunIdentity: async binding => ({
       token: 'run-token',
       deniedToken: 'denied-token',
@@ -477,228 +473,22 @@ function uiFor(events, journey, resolveGate = () => {}) {
   };
 }
 
-function setupResult(invocationId, operationKind, cleanupState = 'retainedPending') {
-  const setup = {
-    invocationId,
-    issuer: ISSUER,
-    subject: ACTOR_ID,
-    tenantId: TENANT_ID,
-    membershipId: '00000000-0000-4000-8000-000000000011',
-    membershipRevision: 1,
-    projectId: PROJECT_ID,
-    createdByActorId: ACTOR_ID,
-    projectRevision: 1,
-    projectConfigurationRevision: 4,
-    assignmentId: '00000000-0000-4000-8000-000000000012',
-    assignmentRevision: 1,
-    ownerAssignmentId: '00000000-0000-4000-8000-000000000013',
-    ownerAssignmentRevision: 1,
-    authorityAuditEventId: '00000000-0000-4000-8000-000000000014',
-    ownerAuthorityAuditEventId: '00000000-0000-4000-8000-000000000015',
-  };
-  const cleaned = cleanupState === 'cleaned';
-  if (operationKind === 'setup') {
-    return {
-      operationKind,
-      replayed: false,
-      setup,
-      setupReadback: {
-        projectExists: true,
-        projectState: 'active',
-        projectRevision: 1,
-        projectConfigurationRevision: 4,
-        initialConfigurationExists: true,
-        assignmentExists: true,
-        assignmentState: 'active',
-        assignmentRevision: 1,
-        authorityAuditExists: true,
-        ownerAssignmentId: setup.ownerAssignmentId,
-        ownerAssignmentExists: true,
-        ownerAssignmentState: 'active',
-        ownerAssignmentRevision: 1,
-        ownerAuthorityAuditExists: true,
-      },
-      cleanup: null,
-    };
-  }
-  return {
-    operationKind,
-    replayed: false,
-    setup: null,
-    setupReadback: null,
-    cleanup: {
-      invocationId,
-      tenantId: TENANT_ID,
-      projectId: PROJECT_ID,
-      assignmentId: setup.assignmentId,
-      state: cleanupState,
-      projectRevision: cleaned ? 2 : 1,
-      projectConfigurationRevision: 4,
-      assignmentRevision: cleaned ? 2 : 1,
-      authorityAuditEventId: cleaned ? '00000000-0000-4000-8000-000000000016' : null,
-      ownerAssignmentId: setup.ownerAssignmentId,
-      ownerAssignmentRevision: cleaned ? 2 : 1,
-      ownerRevocationAuditEventId: cleaned ? '00000000-0000-4000-8000-000000000017' : null,
-    },
-  };
-}
-
-test('privileged Projects Config input is sent only after the exact source-attested Pod is re-read', async () => {
-  const evidence = sourceEvidence();
-  const calls = [];
-  const token = 'controlled-secret-token';
-  const result = await executePrivilegedProjectSetup({
-    context: 'p1-control',
-    namespace: 'agentweaver',
-    sourceEvidence: evidence,
-    sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-    accessToken: token,
-    request: {
-      invocationId: INVOCATION_ID,
-      operationKind: 'setup',
-      tenantId: TENANT_ID,
-      expectedProjectRevision: null,
-      expectedAssignmentRevision: null,
-    },
-    spawnSyncImpl(_executable, args, options) {
-      calls.push({ args, options });
-      if (args.includes('get') && args.includes('deployments,replicasets,pods')) {
-        return { status: 0, stdout: JSON.stringify({ items: evidence.objects }), stderr: '' };
-      }
-      if (args.includes('get') && args.includes('pod')) {
-        return { status: 0, stdout: JSON.stringify(evidence.objects[2]), stderr: '' };
-      }
-      return { status: 0, stdout: JSON.stringify({ operationKind: 'setup' }), stderr: '' };
-    },
-  });
-  assert.equal(result.operationKind, 'setup');
-  assert.equal(calls.length, 3);
-  assert.ok(calls[1].args.includes('get'));
-  assert.ok(calls[1].args.includes('projects-config-pod'));
-  assert.deepEqual(calls[2].args.slice(-3), ['dotnet', 'Agentweaver.Projects.Config.dll', '--privileged-project-setup']);
-  assert.ok(calls[2].args.includes('-i'));
-  assert.ok(calls[2].args.includes('--container=projects-config'));
-  assert.ok(!calls[2].args.includes(token));
-  assert.match(calls[2].options.input, new RegExp(token));
-  assert.equal(calls[2].options.stdio[0], 'pipe');
-});
-
-test('a changed Projects Config Pod blocks before privileged stdin is sent', async () => {
-  const evidence = sourceEvidence();
-  let calls = 0;
-  await assert.rejects(executePrivilegedProjectSetup({
-    context: 'p1-control',
-    namespace: 'agentweaver',
-    sourceEvidence: evidence,
-    sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-    accessToken: 'controlled-secret-token',
-    request: { invocationId: INVOCATION_ID, operationKind: 'setup', tenantId: TENANT_ID },
-    spawnSyncImpl(_executable, args) {
-      calls += 1;
-      if (calls === 1) return { status: 0, stdout: JSON.stringify({ items: evidence.objects }), stderr: '' };
-      return {
-        status: 0,
-        stdout: JSON.stringify({ ...evidence.objects[2], metadata: { ...evidence.objects[2].metadata, uid: 'changed-pod' } }),
-        stderr: '',
-      };
-    },
-  }), /freshly observed Projects Config Pod/);
-  assert.equal(calls, 2);
-});
-
-test('privileged command diagnostics retain only stable codes and fixed process classifications', () => {
-  const cases = [
-    [{ status: 1, stderr: 'Privileged project setup failed (forbidden).\ncommand terminated with exit code 1\n' },
-      { productErrorCode: 'forbidden', kubectlExitCode: 1, processErrorClass: null, stderrClass: 'product-code' }],
-    [{ status: 1, stderr: 'Privileged project setup failed (cleanup_revision_conflict).\r\n' },
-      { productErrorCode: 'cleanup_revision_conflict', kubectlExitCode: 1, processErrorClass: null, stderrClass: 'product-code' }],
-    [{ status: 1, stderr: 'Privileged project setup failed; no credential or exception detail was written.\n' },
-      { productErrorCode: null, kubectlExitCode: 1, processErrorClass: null, stderrClass: 'product-unclassified' }],
-    [{ status: 1, stderr: 'Error from server (Forbidden): sensitive actor details' },
-      { productErrorCode: null, kubectlExitCode: 1, processErrorClass: null, stderrClass: 'kubectl-forbidden' }],
-    [{ status: null, error: { code: 'ETIMEDOUT', message: 'sensitive process details' }, stderr: 'context deadline exceeded' },
-      { productErrorCode: null, kubectlExitCode: null, processErrorClass: 'timeout', stderrClass: 'timeout' }],
-    [{ status: null, error: { code: 'ENOENT' } },
-      { productErrorCode: null, kubectlExitCode: null, processErrorClass: 'executable-not-found', stderrClass: 'empty' }],
-    [{ status: 1, stderr: 'unable to upgrade connection: sensitive endpoint' },
-      { productErrorCode: null, kubectlExitCode: 1, processErrorClass: null, stderrClass: 'exec-transport' }],
-  ];
-  for (const [result, expected] of cases) {
-    assert.deepEqual(summarizePrivilegedSetupCommand(result), expected);
-  }
-  for (const stderr of [
-    'Privileged project setup failed (secret_token).\n',
-    'Privileged project setup failed (forbidden-secret).\n',
-    'Bearer controlled-secret-token',
-    'prefix Privileged project setup failed (forbidden).\n',
-    'Privileged project setup failed (forbidden).\nPrivileged project setup failed (setup_invocation_conflict).\n',
-  ]) {
-    assert.deepEqual(summarizePrivilegedSetupCommand({ status: 1, stderr }), {
-      productErrorCode: null, kubectlExitCode: 1, processErrorClass: null, stderrClass: 'unrecognized',
-    });
-  }
-});
-
-for (const invalidReceipt of [false, true]) {
-  test(`privileged ${invalidReceipt ? 'invalid JSON receipt' : 'nonzero exit'} preserves safe invocation evidence`, async () => {
-    const evidence = sourceEvidence();
-    let calls = 0;
-    let failure;
-    try {
-      await createP1Fixture(plan('journal'), {
-        api: apiFor(),
-        invocationId: INVOCATION_ID,
-        setupToken: 'controlled-secret-token',
-        sourceEvidence: evidence,
-        sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-        setupContext: 'p1-control',
-        namespace: 'agentweaver',
-        acquireRunIdentity: async () => { throw new Error('Must not acquire run identity.'); },
-        spawnSyncImpl(_executable, args) {
-          calls += 1;
-          if (args.includes('deployments,replicasets,pods')) {
-            return { status: 0, stdout: JSON.stringify({ items: evidence.objects }) };
-          }
-          if (args.includes('get')) return { status: 0, stdout: JSON.stringify(evidence.objects[2]) };
-          return {
-            status: invalidReceipt ? 0 : 1,
-            stdout: 'controlled-secret-token',
-            stderr: invalidReceipt ? '' : 'Privileged project setup failed (forbidden).\nBearer controlled-secret-token',
-          };
-        },
-      });
-    } catch (error) {
-      failure = error;
-    }
-    assert.equal(calls, 3, 'Never retry an indeterminate command automatically');
-    assert.equal(failure.indeterminate, true);
-    const summary = summarizeP1FixtureCleanup(failure.p1SetupState, await failure.p1SetupCleanup());
-    assert.equal(summary.cleanup.state, 'indeterminate');
-    assert.equal(summary.commandFailures.length, 1);
-    assert.equal(summary.commandFailures[0].kubectlExitCode, invalidReceipt ? 0 : 1);
-    assert.equal(summary.commandFailures[0].productErrorCode, invalidReceipt ? null : 'forbidden');
-    assert.equal(summary.diagnosis.state, 'required');
-    assert.ok(summary.diagnosis.command.endsWith(`--invocation-id ${INVOCATION_ID}`));
-    assert.doesNotMatch(JSON.stringify(summary), /controlled-secret-token|Bearer|stdout|stderr":/);
-  });
-}
-
-test('same-invocation fixture creation uses owner readbacks and retains accepted selections on cleanup', async () => {
+test('fixture setup and cleanup use only the public Projects API with the setup token', async () => {
   const events = [];
   const setupApi = apiFor();
+  const setupInvoke = setupApi.invoke.bind(setupApi);
+  setupApi.invoke = async (operationId, options) => {
+    if (['createProject', 'assignProjectRole', 'revokeProjectRoleAssignment', 'updateProject']
+      .includes(operationId)) {
+      events.push(`${operationId}${options.body?.role ? `:${options.body.role}` : ''}`
+        + `${options.body?.state ? `:${options.body.state}` : ''}`);
+    }
+    return setupInvoke(operationId, options);
+  };
   const deniedApi = apiFor();
   const fixture = await createP1Fixture(plan('gate-answer'), {
     api: setupApi,
     invocationId: INVOCATION_ID,
-    setupToken: 'controlled-secret-token',
-    sourceEvidence: sourceEvidence(),
-    sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-    setupContext: 'p1-control',
-    namespace: 'agentweaver',
-    runPrivilegedSetup: async request => {
-      events.push(`setup:${request.request.operationKind}`);
-      return setupResult(request.request.invocationId, request.request.operationKind);
-    },
     acquireRunIdentity: async binding => {
       events.push('identity');
       assert.equal(binding.projectId, PROJECT_ID);
@@ -733,9 +523,31 @@ test('same-invocation fixture creation uses owner readbacks and retains accepted
     && receipt.creationReceipt.resourceId === receipt.resourceId
     && receipt.observedReceipt.resourceId === receipt.resourceId), true);
   assert.ok(events.indexOf('identity') > -1);
+  const create = setupApi.calls.find(call => call.operationId === 'createProject');
+  assert.deepEqual(create.body, { name: p1FixtureProjectName(INVOCATION_ID) });
+  assert.deepEqual(setupApi.calls.filter(call => call.operationId === 'assignProjectRole')
+    .map(call => call.body), [
+    { principalId: ACTOR_ID, role: 'owner' },
+    { principalId: ACTOR_ID, role: 'orchestrator' },
+  ]);
   const cleanup = await fixture.cleanup();
-  assert.equal(cleanup.state, 'retainedPending');
-  assert.deepEqual(events, ['setup:setup', 'identity', 'setup:cleanup']);
+  assert.equal(cleanup.state, 'cleaned');
+  assert.equal(cleanup.projectState, 'archived');
+  assert.equal(cleanup.projectRevision, 2);
+  assert.equal(cleanup.assignmentId, ORCHESTRATOR_ASSIGNMENT_ID);
+  assert.equal(cleanup.assignmentRevision, 2);
+  assert.equal(cleanup.ownerAssignmentId, OWNER_ASSIGNMENT_ID);
+  assert.equal(cleanup.ownerAssignmentRevision, 2);
+  assert.deepEqual(events, [
+    'createProject', 'assignProjectRole:owner', 'assignProjectRole:orchestrator', 'identity',
+    'revokeProjectRoleAssignment', 'updateProject:archived', 'revokeProjectRoleAssignment',
+  ]);
+  assert.deepEqual(setupApi.calls.filter(call => call.operationId === 'revokeProjectRoleAssignment')
+    .map(call => [call.pathParameters.assignmentId, call.query]), [
+    [ORCHESTRATOR_ASSIGNMENT_ID, { expectedRevision: 1 }],
+    [OWNER_ASSIGNMENT_ID, { expectedRevision: 1 }],
+  ]);
+  await assert.rejects(fixture.cleanup(), /never retried/);
 });
 
 test('one-account fixture setup never reads a denied token or creates a denied API', async () => {
@@ -745,11 +557,6 @@ test('one-account fixture setup never reads a denied token or creates a denied A
   const fixture = await createP1Fixture(fixturePlan, {
     api: apiFor(),
     invocationId: INVOCATION_ID,
-    setupToken: 'controlled-secret-token',
-    sourceEvidence: sourceEvidence(),
-    sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-    runPrivilegedSetup: async request =>
-      setupResult(request.request.invocationId, request.request.operationKind),
     acquireRunIdentity: async binding => {
       const identity = {
         token: 'run-token',
@@ -788,19 +595,6 @@ test('TenantAdmin setup with Owner and Orchestrator grants accepts selection wit
   const fixture = await createP1Fixture(fixturePlan, {
     api,
     invocationId: INVOCATION_ID,
-    setupToken: 'controlled-secret-token',
-    sourceEvidence: sourceEvidence(),
-    sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-    runPrivilegedSetup: async request => {
-      assert.equal(request.request.tenantId, TENANT_ID);
-      const result = setupResult(request.request.invocationId, request.request.operationKind);
-      if (request.request.operationKind === 'setup') {
-        assert.equal(result.setup.tenantId, TENANT_ID);
-        assert.equal(result.setupReadback.assignmentExists, true);
-        assert.equal(result.setupReadback.ownerAssignmentExists, true);
-      }
-      return result;
-    },
     acquireRunIdentity: async binding => ({
       token: 'run-token',
       deniedToken: 'denied-token',
@@ -839,12 +633,6 @@ test('stale expected platform revision is denied before run identity or root/ses
     await createP1Fixture(plan('message'), {
       api,
       invocationId: INVOCATION_ID,
-      setupToken: 'controlled-secret-token',
-      sourceEvidence: sourceEvidence(),
-      sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-      runPrivilegedSetup: async request =>
-        setupResult(request.request.invocationId, request.request.operationKind,
-          request.request.operationKind === 'cleanup' ? 'cleaned' : 'retainedPending'),
       acquireRunIdentity: async () => {
         identityAcquired = true;
         throw new Error('Identity must not be requested after stale selection denial.');
@@ -887,13 +675,6 @@ test('same-invocation gate retry verifies and reuses the owner gate after losing
   const createFixture = () => createP1Fixture(plan('gate-answer'), {
     api: setupApi,
     invocationId: INVOCATION_ID,
-    setupToken: 'controlled-secret-token',
-    sourceEvidence: sourceEvidence(),
-    sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-    setupContext: 'p1-control',
-    namespace: 'agentweaver',
-    runPrivilegedSetup: async request =>
-      setupResult(request.request.invocationId, request.request.operationKind),
     createId: purpose => ({
       run: '00000000-0000-4000-8000-000000000021',
       'root-session': '00000000-0000-4000-8000-000000000022',
@@ -946,11 +727,6 @@ test('message setup registers and reads back a same-run child without invoking d
   const fixture = await createP1Fixture(plan('message'), {
     api: setupApi,
     invocationId: INVOCATION_ID,
-    setupToken: 'controlled-secret-token',
-    sourceEvidence: sourceEvidence(),
-    sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
-    runPrivilegedSetup: async request =>
-      setupResult(request.request.invocationId, request.request.operationKind),
     acquireRunIdentity: async binding => ({
       token: 'run-token',
       deniedToken: 'denied-token',
@@ -1011,33 +787,57 @@ test('same-invocation fixtures reach the selected API, MCP, and UI gate and mess
   }
 });
 
-test('setup failures without a verified receipt report indeterminate only after a privileged attempt', async () => {
-  const indeterminate = Object.assign(new Error('controlled missing receipt'), { indeterminate: true });
-  let attempts = 0;
-  let setupError;
-  try {
-    await createP1Fixture(plan('journal'), {
-      api: apiFor(),
-      invocationId: INVOCATION_ID,
-      setupToken: 'controlled-secret-token',
-      sourceEvidence: sourceEvidence(),
-      sourceReceipt: plan('journal').pins.sourceReceipt,
-      setupContext: 'p1-control',
-      namespace: 'agentweaver',
-      runPrivilegedSetup: async () => {
-        attempts += 1;
-        throw indeterminate;
-      },
-      acquireRunIdentity: async () => { throw new Error('Identity must not be requested before setup.'); },
+const SETUP_STEPS = [
+  ['createProject', 'create-project', 'createProject'],
+  ['assignProjectRole:owner', 'assign-owner', 'assignProjectRole'],
+  ['assignProjectRole:orchestrator', 'assign-orchestrator', 'assignProjectRole'],
+];
+for (const [failureKey, step, operationId] of SETUP_STEPS) {
+  for (const mode of ['http', 'transport', 'receipt']) {
+    test(`a ${mode} failure at ${step} is indeterminate, never retried, and never cleaned up`, async () => {
+      const failures = {
+        [failureKey]: mode === 'http'
+          ? { status: 403, body: { code: 'forbidden', detail: 'controlled-secret-token' } }
+          : mode === 'transport'
+            ? () => { throw new Error('controlled transport failure'); }
+            : result => result(201, { projectId: 'other-project', detail: 'controlled-secret-token' }),
+      };
+      const api = apiFor({ failures });
+      let setupError;
+      try {
+        await createP1Fixture(plan('journal'), {
+          api,
+          invocationId: INVOCATION_ID,
+          acquireRunIdentity: async () => { throw new Error('Identity must not be requested before setup.'); },
+        });
+      } catch (error) {
+        setupError = error;
+      }
+      assert.ok(setupError);
+      assert.equal(setupError.p1SetupState.setupAttempted, true);
+      assert.equal(setupError.p1SetupState.setupIndeterminate, true);
+      const callsBeforeCleanup = api.calls.length;
+      assert.equal(api.calls.filter(call => call.operationId === operationId
+        && (failureKey.includes(':') ? `${operationId}:${call.body.role}` === failureKey : true)).length, 1,
+      'Never retry a mutating setup request.');
+      const cleanup = await setupError.p1SetupCleanup();
+      assert.equal(cleanup.state, 'indeterminate');
+      assert.equal(api.calls.length, callsBeforeCleanup, 'Never clean up after an indeterminate setup.');
+      const summary = summarizeP1FixtureCleanup(setupError.p1SetupState, cleanup);
+      assert.equal(summary.diagnosis.state, 'required');
+      assert.equal(summary.diagnosis.projectName, p1FixtureProjectName(INVOCATION_ID));
+      assert.deepEqual(summary.requestFailures, [{
+        step,
+        operationId: mode === 'http' ? operationId : null,
+        status: mode === 'http' ? 403 : null,
+        problemCode: mode === 'http' ? 'forbidden' : null,
+      }]);
+      assert.doesNotMatch(JSON.stringify(summary), /controlled-secret-token/);
     });
-  } catch (error) {
-    setupError = error;
   }
-  assert.ok(setupError);
-  assert.equal(attempts, 1);
-  assert.equal(setupError.p1SetupState.setupAttempted, true);
-  assert.equal((await setupError.p1SetupCleanup()).state, 'indeterminate');
+}
 
+test('setup failures before the first mutating request report not-created', async () => {
   const beforeAttempt = apiFor();
   beforeAttempt.discover = async () => { throw new Error('controlled discovery failure'); };
   let discoveryError;
@@ -1045,14 +845,6 @@ test('setup failures without a verified receipt report indeterminate only after 
     await createP1Fixture(plan('journal'), {
       api: beforeAttempt,
       invocationId: INVOCATION_ID,
-      setupToken: 'controlled-secret-token',
-      sourceEvidence: sourceEvidence(),
-      sourceReceipt: plan('journal').pins.sourceReceipt,
-      setupContext: 'p1-control',
-      namespace: 'agentweaver',
-      runPrivilegedSetup: async () => {
-        throw new Error('Privileged setup must not be called.');
-      },
       acquireRunIdentity: async () => { throw new Error('Identity must not be requested before setup.'); },
     });
   } catch (error) {
@@ -1060,87 +852,71 @@ test('setup failures without a verified receipt report indeterminate only after 
   }
   assert.ok(discoveryError);
   assert.equal(discoveryError.p1SetupState.setupAttempted, false);
+  assert.equal(beforeAttempt.calls.length, 0);
   assert.equal((await discoveryError.p1SetupCleanup()).state, 'not-created');
 });
 
-test('an indeterminate cleanup is not retried and retains diagnosis plus sanitized command evidence', async () => {
-  const operations = [];
-  const fixture = await createP1Fixture(plan('journal'), {
-    api: apiFor(),
-    invocationId: INVOCATION_ID,
-    setupToken: 'controlled-secret-token',
-    sourceEvidence: sourceEvidence(),
-    sourceReceipt: plan('journal').pins.sourceReceipt,
-    setupContext: 'p1-control',
-    namespace: 'agentweaver',
-    createId: purpose => purpose === 'run'
-      ? 'selected-run' : '00000000-0000-4000-8000-000000000022',
-    acquireRunIdentity: async binding => ({
-      token: 'run-token',
-      deniedToken: 'denied-token',
-      projectId: binding.projectId,
-      runId: binding.runId,
-      api: apiFor({ bound: true }),
-      deniedApi: apiFor({ actorId: 'denied-actor' }),
-    }),
-    runPrivilegedSetup: async ({ request }) => {
-      operations.push(request.operationKind);
-      if (request.operationKind === 'setup') return setupResult(request.invocationId, 'setup');
-      throw Object.assign(new Error('controlled cleanup failure'), {
-        indeterminate: true,
-        commandEvidence: {
-          productErrorCode: 'controlled-secret-token',
-          kubectlExitCode: 1,
-          processErrorClass: 'controlled-secret-token',
-          stderrClass: 'controlled-secret-token',
-          stderr: 'controlled-secret-token',
-        },
-      });
-    },
+for (const [failureKey, step] of [
+  ['revokeProjectRoleAssignment', 'revoke-orchestrator'],
+  ['updateProject', 'archive-project'],
+]) {
+  test(`a cleanup failure at ${step} is indeterminate and is not retried`, async () => {
+    const api = apiFor();
+    const fixture = await createP1Fixture(plan('journal'), {
+      api,
+      invocationId: INVOCATION_ID,
+      createId: purpose => purpose === 'run'
+        ? 'selected-run' : '00000000-0000-4000-8000-000000000022',
+      acquireRunIdentity: async binding => ({
+        token: 'run-token',
+        deniedToken: 'denied-token',
+        projectId: binding.projectId,
+        runId: binding.runId,
+        api: apiFor({ bound: true }),
+        deniedApi: apiFor({ actorId: 'denied-actor' }),
+      }),
+    });
+    const invoke = api.invoke.bind(api);
+    api.invoke = async (operationId, options) => operationId === failureKey
+      ? { operationId, status: 503, transientResponseBody: { code: 'role_assignment_unavailable', detail: 'controlled-secret-token' } }
+      : invoke(operationId, options);
+    await assert.rejects(fixture.cleanup(), /unexpected HTTP result/);
+    const cleanupCalls = api.calls.filter(call =>
+      ['revokeProjectRoleAssignment', 'updateProject'].includes(call.operationId));
+    assert.equal(cleanupCalls.length, step === 'revoke-orchestrator' ? 0 : 1);
+    await assert.rejects(fixture.cleanup(), /never retried/);
+    const summary = summarizeP1FixtureCleanup(fixture.state);
+    assert.equal(summary.cleanup.state, 'indeterminate');
+    assert.equal(summary.diagnosis.state, 'required');
+    assert.deepEqual(summary.requestFailures, [{
+      step, operationId: failureKey, status: 503, problemCode: 'role_assignment_unavailable',
+    }]);
+    assert.doesNotMatch(JSON.stringify(summary), /controlled-secret-token/);
   });
-  await assert.rejects(fixture.cleanup(), /controlled cleanup failure/);
-  assert.deepEqual(operations, ['setup', 'cleanup']);
-  const summary = summarizeP1FixtureCleanup(fixture.state);
-  assert.equal(summary.cleanup.state, 'indeterminate');
-  assert.equal(summary.diagnosis.state, 'required');
-  assert.deepEqual(summary.commandFailures, [{
-    operationKind: 'cleanup', productErrorCode: null, kubectlExitCode: 1,
-    processErrorClass: null, stderrClass: 'unrecognized',
-  }]);
-  assert.doesNotMatch(JSON.stringify(summary), /controlled-secret-token/);
-});
+}
 
-test('setup cleanup verifies archive and revocation when selection was not accepted', async () => {
+test('setup cleanup archives and revokes when a later setup step fails', async () => {
   const api = apiFor();
   const invoke = api.invoke.bind(api);
   api.invoke = async (operationId, options) => operationId === 'getProjectConfiguration'
     ? { operationId, status: 503, transientResponseBody: { code: 'unavailable' } }
     : invoke(operationId, options);
-  const operations = [];
   let setupFailure;
   try {
     await createP1Fixture(plan('journal'), {
       api,
       invocationId: INVOCATION_ID,
-      setupToken: 'controlled-secret-token',
-      sourceEvidence: sourceEvidence(),
-      sourceReceipt: plan('journal').pins.sourceReceipt,
-      setupContext: 'p1-control',
-      namespace: 'agentweaver',
-      runPrivilegedSetup: async request => {
-        operations.push(request.request.operationKind);
-        return setupResult(request.request.invocationId, request.request.operationKind, 'cleaned');
-      },
       acquireRunIdentity: async () => { throw new Error('Identity must not be requested before selection.'); },
     });
   } catch (error) {
     setupFailure = error;
   }
   assert.ok(setupFailure);
-  assert.ok(setupFailure.p1SetupState.setup);
+  assert.equal(setupFailure.p1SetupState.setup.complete, true);
+  assert.equal(setupFailure.p1SetupState.setupIndeterminate, false);
   const cleanup = await setupFailure.p1SetupCleanup();
   assert.equal(cleanup.state, 'cleaned');
-  assert.deepEqual(operations, ['setup', 'cleanup']);
+  assert.equal(cleanup.projectState, 'archived');
 });
 
 test('a failed durable UI action marker prevents the UI write', async () => {

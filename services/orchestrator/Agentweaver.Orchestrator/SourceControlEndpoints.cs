@@ -19,7 +19,8 @@ namespace Agentweaver.Orchestrator;
 internal static partial class SourceControlEndpoints
 {
     private static readonly TimeSpan MergeSettlementTimeout = TimeSpan.FromSeconds(30);
-    private static readonly JsonSerializerOptions ProviderSelectionJsonOptions = new(JsonSerializerDefaults.Web)
+    // Internal so the Guardrails gate parses the accepted provider selection with the same strict rules.
+    internal static readonly JsonSerializerOptions ProviderSelectionJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
@@ -385,6 +386,10 @@ internal static partial class SourceControlEndpoints
                     return result;
                 },
                 cancellationToken).ConfigureAwait(false);
+            // Record the stored pull request list entry. A retry after a failed write reuses the
+            // pull request and upserts the same row. Before migration 032 the write is skipped.
+            await sourceControlOwner.RecordPullRequestAsync(run.Pin, pullRequest, cancellationToken)
+                .ConfigureAwait(false);
             return Results.Ok(pullRequest);
         }, cancellationToken);
 

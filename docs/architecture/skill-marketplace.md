@@ -222,11 +222,12 @@ Errors use Problem Details with a stable `code`:
 
 The checked-in v1 Gateway catalog maps suggested-marketplace definitions, source list/create/update/tombstone,
 pinned browse, selected-content preview/import, inline Skills preview/import,
-project assignment, and metadata-only inventory reads to these Projects owner
+local upload packaging, project assignment, revision revocation, and
+metadata-only inventory reads to these Projects owner
 paths. Its OpenAPI contract includes the owner DTOs, exact required source
 revision query values, optional inventory cursor/page-size parameters with their
-bounds, and 3 MiB request-body limits for both inline and selected-source
-preview/import. The first-party MCP catalog is built from that same OpenAPI
+bounds, and 3 MiB request-body limits for inline packaging and for both inline
+and selected-source preview/import. The first-party MCP catalog is built from that same OpenAPI
 document. The Gateway remains a forwarder; these contracts do not prove a joined
 or deployed owner implementation.
 
@@ -234,7 +235,8 @@ The retained Web project settings page uses the source management and pinned
 browse routes, then offers explicit selected-source preview and import. The
 source request contains no file bytes; the owner receipt must match the preview
 digest before the imported skill can be assigned to agents in the current
-project cast. Local file preview/import remains a separate path. The API has no
+project cast. Local files, ZIP archives, and new skills use the separate
+package, preview, and import path. The API has no
 actor-safe runtime-loaded status producer; the page reports that gap instead of
 inferring runtime use from an assignment or accepted run configuration. The
 source and Gateway routes are present in v1; deployment and live availability

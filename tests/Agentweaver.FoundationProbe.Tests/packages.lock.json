@@ -1030,9 +1030,9 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.3.0, )",
           "Agentweaver.Providers": "[1.0.2, )",
-          "Agentweaver.Providers.Sandbox.AgentSandbox": "[1.1.3, )",
+          "Agentweaver.Providers.Sandbox.AgentSandbox": "[1.1.4, )",
           "Agentweaver.Providers.Storage.AzureFiles": "[1.0.4, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
@@ -1044,12 +1044,13 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.3.0, )",
           "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
           "Agentweaver.Persistence.Postgres": "[1.0.2, )",
           "Agentweaver.Providers": "[1.0.2, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
           "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
         }
@@ -1078,7 +1079,7 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.3.0, )",
           "Agentweaver.Persistence.Postgres": "[1.0.2, )",
           "Agentweaver.Providers": "[1.0.2, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
@@ -1100,13 +1101,14 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.3.0, )",
           "Agentweaver.Orchestrator.Core": "[1.1.1, )",
           "Agentweaver.Persistence.Postgres": "[1.0.2, )",
           "Agentweaver.Providers": "[1.0.2, )",
           "Agentweaver.SourceControl": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.Agents.AI.Workflows": "[1.19.0, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
           "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
         }
@@ -1129,6 +1131,7 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.Abstractions": "[1.1.1, )",
+          "Agentweaver.Identity": "[1.3.0, )",
           "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
           "Agentweaver.Providers": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
