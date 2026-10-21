@@ -1278,7 +1278,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.NotNull(pin);
         Assert.Equal(EventsHost::Agentweaver.EventsAndSessions.NativePostgresSessionsProvider.ProviderId, pin.ProviderId);
         Assert.True(pin.ResourceGeneration > 0);
-        Assert.Contains(EventsHost::Agentweaver.EventsAndSessions.SessionsCapabilities.ObjectReferences,
+        Assert.Contains(SessionsCapabilities.ObjectReferences,
             pin.NegotiatedCapabilities);
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => session.CommitTurnContentAsync(
             material, Guid.NewGuid(), "user", "No execution after authority loss.", cancellationToken));

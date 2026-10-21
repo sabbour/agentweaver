@@ -2,10 +2,10 @@ using Xunit;
 using System.Text;
 using System.Text.Json;
 using Agentsessions.V1;
-using Agentweaver.EventsAndSessions.AgentSessions;
+using Agentweaver.Providers.Sessions.AgentSessions;
 using Google.Protobuf;
 
-namespace Agentweaver.EventsAndSessions.Tests;
+namespace Agentweaver.Providers.Sessions.AgentSessions.Tests;
 
 public sealed class AgentSessionsRecordVerifierTests
 {

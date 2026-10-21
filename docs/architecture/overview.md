@@ -92,6 +92,7 @@ their external boundaries.
 | --- | --- | --- |
 | `Agentweaver.Abstractions` | Provider, journal, addressed-message, accepted-effect, secret, object-store, environment/network-policy, authorization-context, run-selection, and Memory contracts. | — |
 | `Agentweaver.Providers` | In-memory provider catalog and resolver. | `Agentweaver.Abstractions` |
+| `Agentweaver.Providers.Sessions.AgentSessions` | Optional, read-only AgentSessions Sessions provider and record verifier. No service references it. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Google.Protobuf` |
 | `Agentweaver.Orchestrator.Core` | Workflow validation and the platform-singleton AGT YAML Policy adapter. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Microsoft.AgentGovernance` |
 | `Agentweaver.Identity` | Trusted actor, exact secret grants, separate runtime nonce contracts, and fixed owner HTTP transport. | `Agentweaver.Abstractions` |
 | `Agentweaver.AgentRuntime` | Authenticated bootstrap, guarded native turns/tools, actual turn content, accounting acknowledgment, and compatible SDK-cache or journal recovery. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `GitHub.Copilot.SDK` |

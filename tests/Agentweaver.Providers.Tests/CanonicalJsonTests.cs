@@ -2,7 +2,7 @@ using Xunit;
 using System.Text;
 using Agentweaver.Abstractions;
 
-namespace Agentweaver.EventsAndSessions.Tests;
+namespace Agentweaver.Providers.Tests;
 
 public sealed class CanonicalJsonTests
 {

@@ -45,6 +45,10 @@ checked-in application catalog:
 
 - `cosmos.memory` and `redis.memory` are optional Memory implementation
   candidates. The default catalog does not register either one.
+- `agentsessions.records` is an optional, read-only Sessions provider in the
+  `Agentweaver.Providers.Sessions.AgentSessions` package. It replays verified
+  AgentSessions record exports. The default catalog does not register it, and
+  the Events & Sessions host doesn't reference it.
 - `azure.byok-usage-cost` has an options contract, but the default catalog
   selects Copilot cost. Azure BYOK usage is not priced until the runtime has
   trusted provider, deployment, and usage-share evidence.

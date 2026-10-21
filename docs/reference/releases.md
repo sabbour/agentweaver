@@ -42,9 +42,10 @@ digests or release evidence, so it is not an accepted platform release.
 | `Agentweaver.FoundationProbe` | Acceptance-only service | `0.0.3` |
 | `Agentweaver.Providers.Storage.AzureFiles` | Library | `1.0.4` |
 | `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `1.1.3` |
+| `Agentweaver.Providers.Sessions.AgentSessions` | Library | `0.1.0` |
 
 The manifest pins project-reference compatibility but does not yet pin service
-images. Its compatibility table contains 53 direct dependency relationships.
+images. Its compatibility table contains 58 direct dependency relationships.
 The Foundation Probe is not a product service; `--platform-only` excludes it
 from product preparation and publication.
 

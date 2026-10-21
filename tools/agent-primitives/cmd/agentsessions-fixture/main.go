@@ -2,7 +2,7 @@
 // .NET verifier tests read. It runs only the pinned reference controller, a local deterministic model,
 // and a temporary sqlite file. It makes no network or model-provider call.
 //
-//	go run ./cmd/agentsessions-fixture -out ../../tests/Agentweaver.EventsAndSessions.Tests/Fixtures/AgentSessions
+//	go run ./cmd/agentsessions-fixture -out ../../tests/Agentweaver.Providers.Sessions.AgentSessions.Tests/Fixtures/AgentSessions
 package main
 
 import (

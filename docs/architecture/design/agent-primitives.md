@@ -18,6 +18,83 @@ The Go reference tools in `tools/agent-primitives` pin these commits in `go.mod`
 verifier pins the AgentSessions commit in `AgentSessionsPin` and rejects exports from any other
 commit or contract version with `unsupported_source`.
 
+## AgentSessions as an optional Sessions provider
+
+AgentSessions is one optional implementation of the Sessions provider contract. The native
+PostgreSQL journal stays the default Sessions provider. Agentweaver builds, tests, and runs with
+the AgentSessions package absent, and no service, contract, or `Agentweaver.Abstractions` type
+references an AgentSessions type.
+
+The `Agentweaver.Providers.Sessions.AgentSessions` package holds all AgentSessions code:
+
+| Type | Purpose |
+| --- | --- |
+| `AgentSessionsSessionsProvider` | Provider descriptor, registration, negotiation, and run pinning. Provider ID `agentsessions.records`, Sessions adapter contract `1.0.0`, options schema `1`, in-process hosting. |
+| `AgentSessionsRecordJournal` | Read-only `ISessionsJournal` over verified record exports for one pinned run binding. |
+| `AgentSessionsRecordVerifier` | Independent hash, chain, and fork verification. |
+| `AgentSessionsPin` | The pinned upstream commit and contract version. |
+
+### Registration and selection
+
+Register the provider in the host's provider catalog next to the native provider. Keep
+`postgres.native-sessions` as the Sessions default, and allow AgentSessions as a project
+override. The standard `ProviderResolver` then selects a provider for each run:
+
+- A run with no project override resolves the native PostgreSQL journal.
+- A run with a permitted `agentsessions.records` override resolves AgentSessions. The resolver
+  matches the adapter version exactly, so AgentSessions reports Sessions adapter contract
+  `1.0.0`, the same version the host requests for the native provider.
+- `ResolveNegotiateAndPin` validates the options, negotiates the required capabilities, and pins
+  the run. `ToSessionBinding` converts the pin to a `SessionProviderBinding`.
+
+AgentSessions offers the `Replay`, `Subscribe`, `ObjectReferences`, and `ToolCalls`
+capabilities. It doesn't offer `Append` or `Fork`. Negotiation fails when a run requires
+either one.
+
+### Journal behavior
+
+`AgentSessionsRecordJournal.Create` verifies every export before it serves an event. It also
+runs `VerifyFork` for each child whose parent export is in the same set. A failed export throws
+`AgentSessionsVerificationException` with the session uid and the verifier's failure code.
+
+The journal maps each verified record to a `SessionEventEnvelope`:
+
+| Record kind | Sessions payload |
+| --- | --- |
+| Message | `TurnSessionPayload`. The role defaults to `user`. |
+| Tool call | `ToolCallSessionPayload` with state `requested`. |
+| Tool result | `ToolCallSessionPayload` with state `completed` or `failed`. The tool name comes from the matching call, or `unknown`. |
+| Any other kind | `ArtifactReferenceSessionPayload`. |
+
+- Every payload references the record by object key `agentsessions/{uid}/{seq}` with purpose
+  `agentsessions.record`.
+- Positions run across the whole run in export order. Cursors have the form
+  `agentsessions:{position}`, and a page holds 1 to 1,000 events.
+- Event IDs are the first 16 bytes of SHA-256 over the session uid and the record content hash. A
+  fork child repeats its parent's records, so the uid keeps the IDs unique.
+- Reads check the caller's `sub`, `project_id`, and `run_id` claims against the binding and
+  throw `SessionAccessDeniedException` on a mismatch.
+- `CreateSessionAsync` and `AppendAsync` throw `NotSupportedException`. `ForkFromExplicitEventAsync` throws
+  `SessionForkUnsupportedException`. `SubscribeAsync` and `SubscribeRunAsync` return the stored events and end.
+
+### Contract gaps
+
+The shared Sessions contract stays provider-neutral. These gaps limit the AgentSessions provider
+today:
+
+1. The `SessionEventEnvelope` constructor is internal to Events & Sessions. An external
+   provider builds envelopes from the public JSON wire form.
+1. `ISessionsProviderBinder` and the Events & Sessions host bind one `ISessionsJournal`, the
+   native PostgreSQL journal, and the native journal rejects other provider IDs. Serving
+   AgentSessions for a run needs a provider-neutral journal router in the host.
+1. The run-scope claim rules are internal to Events & Sessions, so the provider repeats the check.
+1. Sessions payloads hold content by `SessionObjectReference`, and AgentSessions events are
+   inline. The typed mapping covers messages and tool calls. Other kinds, such as model calls,
+   usage, approvals, and lifecycle events, become artifact references.
+1. The contract has no equivalent of the AgentSessions expected-head and fence append rules, so the
+   provider is read-only and doesn't fork.
+1. The resolver requires an exact adapter-version match for each request.
+
 ## AgentSessions record export
 
 The Go exporter in `tools/agent-primitives/sessionsexport` reads stored rows from the upstream
@@ -52,7 +129,8 @@ export carries the upstream producer's exact output.
 
 ### Independent verification
 
-`AgentSessionsRecordVerifier` in `Agentweaver.EventsAndSessions` verifies an export without Go
+`AgentSessionsRecordVerifier` in the optional `Agentweaver.Providers.Sessions.AgentSessions` package
+verifies an export without Go
 and without the upstream code. It uses only the vendored `agentsessions/v1/common.proto`, the
 Google.Protobuf runtime, and the shared RFC 8785 implementation in
 `Agentweaver.Abstractions.CanonicalJson`. For each record it:
@@ -89,13 +167,13 @@ metadata from the exporter, not an external anchor.
 
 ### Regenerate the reference fixture
 
-The committed fixture in `tests/Agentweaver.EventsAndSessions.Tests/Fixtures/AgentSessions` holds
+The committed fixture in `tests/Agentweaver.Providers.Sessions.AgentSessions.Tests/Fixtures/AgentSessions` holds
 a parent session and a child session forked at seq 5. The upstream controller and echo agent
 produce it with no model calls. To regenerate it, run:
 
 ```bash
 cd tools/agent-primitives
-go run ./cmd/agentsessions-fixture -out ../../tests/Agentweaver.EventsAndSessions.Tests/Fixtures/AgentSessions
+go run ./cmd/agentsessions-fixture -out ../../tests/Agentweaver.Providers.Sessions.AgentSessions.Tests/Fixtures/AgentSessions
 ```
 
 Each run writes new timestamps and execution IDs, so commit both files together. CI runs `gofmt`, `go vet`, and `go test` for the module in the `go`

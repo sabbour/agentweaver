@@ -275,7 +275,7 @@ other services.
 
 | Seam | Purpose | Owning service | Azure/default adapter in 1.0 | Later adapters | Cardinality |
 | --- | --- | --- | --- | --- | --- |
-| Sessions | Journal, playback, and optional capture | Events & Sessions | Native Postgres journal | agentsessions capture sidecar | Exclusive authority, with optional capture mirror |
+| Sessions | Journal, playback, and optional capture | Events & Sessions | Native Postgres journal | Optional AgentSessions provider (read-only replay of verified record exports) | Exclusive authority per run |
 | Snapshots | Capture and explicitly restore environments | Environment manager | `None` at cutover; gated AKS Blob-backed pod snapshots | OpenSandbox-native; managed-runtime snapshots after Azure support | Exclusive, paired |
 | Sandbox | Provision, observe, fence, and release AgentHost environments | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; Container Apps Sandboxes (P3 evaluation) | Exclusive |
 | Storage | Durable agent workspace volumes and bindings | Environment manager | Azure Files CSI | Elastic SAN deferred outside P2; future agent filesystem providers | Exclusive |
@@ -320,9 +320,12 @@ Deployed skill loading and acceptance of the complete skill-import workflow rema
 **Owner:** Events & Sessions. **Cardinality:** exclusive authority, with an optional capture-only
 mirror that observes journal entries but has no authority. The native Postgres adapter appends the
 authoritative run journal and supplies ordered playback. Clients, audit, usage attribution, and context
-rebuilding consume this journal. An optional agentsessions sidecar may mirror entries, verify a hash chain,
-and play them back. It does not mediate model calls or claim deterministic re-execution; it ships only if it
-adds value over the native journal ([R1](../decisions/0001-platform-architecture.md#risk-register)).
+rebuilding consume this journal. AgentSessions is one optional Sessions provider implementation in the
+`Agentweaver.Providers.Sessions.AgentSessions` package. It registers in the provider catalog like any other
+Sessions provider, verifies record hash chains, and serves read-only replay for runs that select it. It does
+not mediate model calls or claim deterministic re-execution, and the platform builds and runs without it
+([R1](../decisions/0001-platform-architecture.md#risk-register)). See
+[Agent primitives proof of concept](agent-primitives.md#agentsessions-as-an-optional-sessions-provider).
 
 The initial native host candidate resolves and negotiates the PostgreSQL Sessions provider
 through the shared provider catalog, then persists the exact pin for the project/run when
@@ -1176,7 +1179,7 @@ volumes and Postgres-backed state, not by retaining dual local/cloud code paths.
 | P0 Foundation | DI contracts, catalog/resolvers/pinning, conformance kit, Postgres schemas and outbox, Blob Object Store, Key Vault/workload identity, OpenTelemetry/Azure Monitor. |
 | P1 Core and defaults | Native Sessions/Memory, agent-sandbox, Azure Files, Cilium intent, AGT, GitHub, Copilot cost ledger; AgentHost startup phases, retention, reclaim, and run fencing. |
 | P2 Parity and cutover | Manifest-based suspend/resume, Guardrails, permission metadata, own Tool & MCP gateway and MCP catalog, Cosmos and Redis Memory providers, Azure BYOK pricing/budgets, built-in AKS Application Hosting, [Canvas and A2UI #1878](https://github.com/sabbour/agentweaver/issues/1878) with [GitHub declaration/action research #1901](https://github.com/sabbour/agentweaver/issues/1901) and separate [adapter #1904](https://github.com/sabbour/agentweaver/issues/1904), context ordering and cache telemetry; exact-SHA AKS persona harnesses and parity-map acceptance. Research is not implementation or interoperability. No Elastic SAN or additional hosting adapters. |
-| P3 After cutover | Gated AKS snapshot/restore; OpenSandbox, Agent Substrate, and Container Apps Sandboxes evaluation; agentsessions; agent filesystem providers; agentgateway. Elastic SAN has no committed delivery phase. |
+| P3 After cutover | Gated AKS snapshot/restore; OpenSandbox, Agent Substrate, and Container Apps Sandboxes evaluation; AgentSessions write and capture support; agent filesystem providers; agentgateway. Elastic SAN has no committed delivery phase. |
 
 No P2 requirement depends on an optional P3 provider. The active 0.x line supplies behavioral parity
 evidence until cutover.
@@ -1189,7 +1192,7 @@ evidence until cutover.
 - [R4](../decisions/0001-platform-architecture.md#risk-register): the consistency manifest accounts for volume data outside snapshots.
 - [R5](../decisions/0001-platform-architecture.md#risk-register): BYOK resolution stops at platform and project scope.
 - [R6](../decisions/0001-platform-architecture.md#risk-register): AGT's .NET YAML kernel is the baseline until other rule languages reach parity.
-- [R7](../decisions/0001-platform-architecture.md#risk-register): Cosmos and Redis Memory providers target P2; optional preview libraries are not prerequisites, and agentsessions remains P3.
+- [R7](../decisions/0001-platform-architecture.md#risk-register): Cosmos and Redis Memory providers target P2; optional preview libraries are not prerequisites, and AgentSessions is an optional Sessions provider.
 - [R8](../decisions/0001-platform-architecture.md#risk-register): the managed-runtime adapter needs an AKS VM-isolation proof and Azure snapshot durability.
 - [R9](../decisions/0001-platform-architecture.md#risk-register): messaging uses at-least-once delivery, idempotency, and sequence numbers.
 - [R14](../decisions/0001-platform-architecture.md#risk-register): neutral volume contracts absorb upstream API changes.

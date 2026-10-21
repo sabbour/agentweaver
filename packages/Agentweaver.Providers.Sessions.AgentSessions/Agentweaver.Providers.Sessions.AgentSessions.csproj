@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Version>0.1.0</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.36.2" />
+    <PackageReference Include="Grpc.Tools" Version="2.84.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <ProjectReference Include="..\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
+    <ProjectReference Include="..\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Pinned agent-primitives/sessions 465e82175da7815db39ec14852deb3949ff82670 (MIT); see README.md. -->
+    <Protobuf Include="Protos\agentsessions\v1\common.proto" ProtoRoot="Protos" GrpcServices="None" />
+  </ItemGroup>
+</Project>

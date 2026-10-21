@@ -8,7 +8,7 @@ using Agentweaver.Abstractions;
 using Agentsessions.V1;
 using Google.Protobuf;
 
-namespace Agentweaver.EventsAndSessions.AgentSessions;
+namespace Agentweaver.Providers.Sessions.AgentSessions;
 
 /// <summary>Pinned AgentSessions source and contract identity for the P2 proof of concept.</summary>
 public static class AgentSessionsPin

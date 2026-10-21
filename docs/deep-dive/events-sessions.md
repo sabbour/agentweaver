@@ -142,16 +142,20 @@ change does not need a fabricated run or session identity.
 - Startup verifies the expected schema. Migration uses a separate `--migrate`
   path; serving traffic does not silently initialize the schema.
 
-## Verify AgentSessions record exports
+## Use the optional AgentSessions provider
 
-The P2 proof of concept exports sessions recorded with the public
-[AgentSessions](https://github.com/agent-primitives/sessions) contract.
+The native PostgreSQL journal is the default Sessions provider. AgentSessions is
+one optional Sessions provider implementation in the separate
+`Agentweaver.Providers.Sessions.AgentSessions` package. Events & Sessions does
+not reference it and runs without it. A run that selects it replays verified
+[AgentSessions](https://github.com/agent-primitives/sessions) record exports
+through the read-only `ISessionsJournal` contract.
 AgentSessionsRecordVerifier checks an export without Go or upstream code: it
 decodes each stored protobuf event, recomputes the RFC 8785 record hash, and
 checks sequence, links, and fork lineage. The chain is unkeyed, so compare the
 verified head with a separately held head to detect truncation. See
 [Agent primitives proof of concept](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-primitives.md)
-for the export format and failure codes.
+for the export format, failure codes, payload mapping, and current contract gaps.
 
 ## Related content
 
