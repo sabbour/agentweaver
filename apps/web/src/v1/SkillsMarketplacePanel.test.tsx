@@ -112,14 +112,55 @@ function renderPanel(actions: SkillsMarketplaceActions | null) {
   );
 }
 
+/** Opens the 0.x "Browse marketplaces" dialog that hosts sources, browse, preview, and import. */
+function openMarketplaces() {
+  fireEvent.click(screen.getByRole('button', { name: 'Browse marketplaces' }));
+}
+
+/** Opens the 0.x "Import skill" dialog that hosts local skill validation and import. */
+function openImport() {
+  fireEvent.click(screen.getByRole('button', { name: 'Import skill' }));
+}
+
 describe('Skills and marketplace panel', () => {
   it('does not assume owner state or enable actions when Gateway actions are absent', () => {
     renderPanel(null);
 
     expect(screen.getByText(/No source, import, assignment, or runtime state is assumed/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Browse marketplaces' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Import skill' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.click(screen.getByRole('tab', { name: 'Assignments' }));
     expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Add source' }).hasAttribute('disabled')).toBe(true);
-    expect(screen.getByRole('button', { name: 'Import skill to project' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('shows the 0.x stat strip, toolbar, and Catalog/Assignments tabs from loaded data', async () => {
+    render(
+      <SkillsMarketplacePanel
+        projectId="project-1"
+        configurationRevision={4}
+        assignments={[
+          { skillId: 'skill-a', enabled: true, order: 0 },
+          { skillId: 'skill-b', enabled: false, order: 1 },
+        ]}
+        agents={[{ agentId: 'agent-1', displayName: 'Agent One' }]}
+        actions={createActions({ listSources: vi.fn().mockResolvedValue([source]) })}
+      />,
+    );
+
+    const metricValue = (label: string) =>
+      screen.getByText(label).parentElement?.nextElementSibling?.textContent;
+    expect(metricValue('Assigned')).toBe('2');
+    expect(metricValue('Enabled')).toBe('1');
+    expect(metricValue('Agents')).toBe('1');
+    await waitFor(() => expect(metricValue('Marketplace sources')).toBe('1'));
+    expect(screen.getByRole('tab', { name: 'Catalog' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Load skill inventory' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Marketplace sources' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Assignments' }));
+    expect(screen.getByText('skill-a')).toBeTruthy();
+    openMarketplaces();
+    expect(await screen.findByRole('dialog', { name: 'Browse marketplaces' })).toBeTruthy();
   });
 
   it('shows paginated owner skill inventory without claiming runtime load state', async () => {
@@ -219,6 +260,7 @@ describe('Skills and marketplace panel', () => {
       importMarketplaceSkill: vi.fn().mockResolvedValue(importedSkill),
     });
     renderPanel(actions);
+    openMarketplaces();
 
     await screen.findByText('example/skills · main · revision 7 · active');
     const browseButton = screen.getByRole('button', { name: 'Browse skills' }) as HTMLButtonElement;
@@ -270,6 +312,7 @@ describe('Skills and marketplace panel', () => {
         .mockResolvedValueOnce(importedSkill),
     });
     renderPanel(actions);
+    openMarketplaces();
 
     await screen.findByText('example/skills · main · revision 7 · active');
     fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
@@ -323,6 +366,7 @@ describe('Skills and marketplace panel', () => {
       previewMarketplaceSkill: vi.fn().mockReturnValue(pendingPreview),
     });
     renderPanel(actions);
+    openMarketplaces();
 
     await screen.findByText('example/skills · main · revision 7 · active');
     fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
@@ -351,6 +395,7 @@ describe('Skills and marketplace panel', () => {
       importMarketplaceSkill: vi.fn().mockRejectedValueOnce(new Error('temporary import failure')),
     });
     const rendered = renderPanel(actions);
+    openMarketplaces();
 
     await screen.findByText('example/skills · main · revision 7 · active');
     fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
@@ -409,6 +454,7 @@ describe('Skills and marketplace panel', () => {
       previewMarketplaceSkill: vi.fn().mockReturnValue(pendingPreview),
     });
     const rendered = renderPanel(actions);
+    openMarketplaces();
 
     await screen.findByText('example/skills · main · revision 7 · active');
     fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
@@ -457,6 +503,7 @@ describe('Skills and marketplace panel', () => {
       }),
     });
     renderPanel(actions);
+    openMarketplaces();
 
     await screen.findByText('example/skills · main · revision 7 · active');
     fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
@@ -479,6 +526,7 @@ describe('Skills and marketplace panel', () => {
       previewSkillContent: vi.fn().mockReturnValue(pendingPreview),
     });
     renderPanel(actions);
+    openImport();
 
     const fileInput = screen.getByLabelText('Skill folder or files') as HTMLInputElement;
     fireEvent.change(fileInput, {
@@ -542,6 +590,7 @@ describe('Skills and marketplace panel', () => {
       updateSkillAssignment: vi.fn().mockResolvedValue(assignment),
     });
     renderPanel(actions);
+    openImport();
 
     const skillFile = new File(['# Sample skill'], 'SKILL.md', { type: 'text/markdown' });
     const resourceFile = new File(['Read me'], 'README.md', { type: 'text/markdown' });
@@ -570,7 +619,10 @@ describe('Skills and marketplace panel', () => {
     ));
     const importRequest = vi.mocked(actions.importSkillContent).mock.calls[0][1];
     expect(importRequest.idempotencyKey).toBeTruthy();
+    expect(screen.getByText(/Close this dialog to assign it on the Assignments tab/)).toBeTruthy();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Assignments' }).getAttribute('aria-selected')).toBe('true'));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Agent One' }));
     fireEvent.click(screen.getByRole('button', { name: 'Assign to selected agents' }));
     await screen.findByText(/saved this assignment in configuration revision 5/);
@@ -591,6 +643,7 @@ describe('Skills and marketplace panel', () => {
       listSources: vi.fn().mockRejectedValue(new Error('source owner denied this request')),
     });
     renderPanel(actions);
+    openMarketplaces();
 
     expect((await screen.findByRole('alert')).textContent).toContain('source owner denied this request');
   });

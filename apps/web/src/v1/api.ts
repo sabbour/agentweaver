@@ -26,6 +26,9 @@ import type {
   OwnerRunStatus,
   ProjectAuthorizationContextResponse,
   ProjectConfiguration,
+  ProjectRole,
+  ProjectRoleAssignment,
+  ProjectRoleAssignmentList,
   SkillAssignmentRequest,
   SkillContentCandidateRequest,
   SkillContentInventoryPage,
@@ -75,7 +78,7 @@ function problemMessage(problem: Record<string, unknown>, status: number): strin
   const detail = typeof problem.detail === 'string' ? problem.detail : undefined;
   const title = typeof problem.title === 'string' ? problem.title : undefined;
   const code = typeof problem.code === 'string' ? problem.code : undefined;
-  return detail ?? title ?? code ?? `Gateway request failed with HTTP ${status}.`;
+  return detail ?? title ?? code ?? `The request failed with HTTP ${status}.`;
 }
 
 /** Encodes each path segment independently so identifiers cannot alter route structure. */
@@ -113,7 +116,7 @@ export class AgentweaverGatewayClient {
     tenantSelector?: string | null,
   ): Promise<T> {
     if (!token) {
-      throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in through the Identity Broker to continue.');
+      throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
     }
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
@@ -195,15 +198,82 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /** Lists active role assignments. TenantAdmin or the project Owner only; returns 403 otherwise. */
+  async listProjectRoleAssignments(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectRoleAssignmentList> {
+    const result = await this.request<ProjectRoleAssignmentList>(
+      token, `/projects/${encodeSegments(projectId)}/role-assignments`, {}, this.baseUrl, tenantSelector,
+    );
+    if (result?.projectId !== projectId || !Array.isArray(result.assignments))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned role assignments for a different project.');
+    return result;
+  }
+
+  /** Assigns a role to a member. TenantAdmin only; 409 `role_assignment_exists` for duplicates. */
+  assignProjectRole(
+    token: string,
+    projectId: string,
+    request: { principalId: string; role: ProjectRole },
+    tenantSelector?: string | null,
+  ): Promise<ProjectRoleAssignment> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId)}/role-assignments`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Revokes one assignment at its current revision. TenantAdmin only. */
+  revokeProjectRoleAssignment(
+    token: string,
+    projectId: string,
+    assignmentId: string,
+    expectedRevision: number,
+    tenantSelector?: string | null,
+  ): Promise<unknown> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId)}/role-assignments/${encodeSegments(assignmentId)}?expectedRevision=${expectedRevision}`,
+      { method: 'DELETE' },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Renames or archives a project. The owner rejects the write when
+   * `expectedRevision` is stale, so callers must send the revision they displayed.
+   */
+  updateProject(
+    token: string,
+    projectId: string,
+    request: { expectedRevision: number; name: string; state: ProjectSummary['state'] },
+    tenantSelector?: string | null,
+  ): Promise<ProjectSummary> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId)}`,
+      { method: 'PATCH', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
   /** Reads the current project configuration together with its revision. */
   getProjectConfiguration(
     token: string,
     projectId: string,
     tenantSelector?: string | null,
+    revision?: number,
   ): Promise<VersionedProjectConfiguration> {
     return this.request(
       token,
-      `/projects/${encodeSegments(projectId)}/configuration`,
+      `/projects/${encodeSegments(projectId)}/configuration${revision === undefined ? '' : `?revision=${revision}`}`,
       {},
       this.baseUrl,
       tenantSelector,
@@ -952,7 +1022,9 @@ export class AgentweaverGatewayClient {
     });
     if (tenantSelector !== undefined && tenantSelector !== null)
       headers.set('X-Agentweaver-Tenant', tenantSelector);
-    const response = await this.fetcher(
+    // Browsers reject window.fetch called with any receiver other than the global object.
+    const response = await this.fetcher.call(
+      globalThis,
       `${this.baseUrl}/projects/${encodeSegments(projectId, 'runs', runId, 'events', 'live')}${query}`,
       {
         headers,
@@ -972,7 +1044,7 @@ export class AgentweaverGatewayClient {
       }
       throw new GatewayError(response.status, body, problemMessage(body, response.status));
     }
-    if (!response.body) throw new Error('The Gateway SSE response has no readable body.');
+    if (!response.body) throw new Error('The live update stream has no readable body.');
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

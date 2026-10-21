@@ -1,9 +1,14 @@
 # Skills and marketplace
 
-Use **Skills and marketplace** in project settings to import validated skill
-content and assign an exact revision to agents in the project's current cast.
+Use the project's **Skills** page to import validated skill content and assign
+a skill revision to agents in the project's current cast. Open it from the
+project navigation, or go to `/projects/:projectId/skills`.
 An active marketplace source means that the source is configured; it does not
 confirm GitHub availability.
+
+The page has a stat strip (**Assigned**, **Enabled**, **Marketplace sources**,
+and **Agents**), a toolbar with **Import skill** and **Browse marketplaces**,
+and two tabs: **Catalog** and **Assignments**.
 
 The Projects & Config implementation is an unpublished .NET service
 candidate. Its routes and current browser controls describe source behavior,
@@ -11,14 +16,14 @@ not proof of deployment.
 
 ## Prerequisites
 
-- Sign in and open the project's settings page.
+- Sign in and open the project's **Skills** page.
 - Have current project Owner or tenant administrator authority for the
   marketplace and inventory operations.
 - For marketplace imports, provide a public GitHub repository.
 
 ## Add and browse a public source
 
-1. Under **Add a public source**, enter a public GitHub repository in
+1. Select **Browse marketplaces**. Under **Add a public source**, enter a public GitHub repository in
    `owner/repository` form. You can also provide a source name, requested ref
    (defaults to `main`), and repository subpath.
 2. Select **Add source**.
@@ -43,7 +48,7 @@ revision and content digest. A preview alone does not save an imported skill.
 
 ## Upload a local skill
 
-1. Under **Upload a local skill**, choose a folder or files that contain
+1. Select **Import skill**, and then choose a folder or files that contain
    exactly one `SKILL.md` file and its text resources.
 2. Select **Validate skill files**.
 3. Inspect the Skills owner's validation result.
@@ -54,14 +59,16 @@ the candidate without importing it.
 
 **Expected result:** The owner returns the validated skill name, resource
 count, content digest, and byte count. After import, the owner returns the
-saved skill revision.
+saved skill revision. Close the dialog to assign the skill. The page opens
+the **Assignments** tab after an import.
 
 ## Assign an imported skill
 
 1. Save or reload any unsaved configuration changes.
-2. Select agents from the project's current cast.
-3. Submit the assignment for the imported skill revision and digest.
-4. Read the saved configuration revision.
+2. Open the **Assignments** tab.
+3. Select agents from the project's current cast.
+4. Submit the assignment for the imported skill revision and digest.
+5. Read the saved configuration revision.
 
 The assignment includes the current project configuration revision and saves
 the assignment in a new configuration revision. It does not report that a
@@ -72,7 +79,7 @@ the owner with the skill assignment.
 
 ## Inspect the inventory
 
-**Imported skill inventory** shows owner-provided revision metadata and current
+On the **Catalog** tab, **Imported skill inventory** shows owner-provided revision metadata and current
 project assignments. Select the inventory refresh and paging controls to read
 more results. The owner defaults to 25 records per page and accepts page sizes
 from 1 to 50. The cursor does not provide a snapshot across pages.

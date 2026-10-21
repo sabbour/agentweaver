@@ -166,7 +166,7 @@ describe('IdentityBrokerRepoAppClient', () => {
       name: 'RepoAppBrokerError',
       status: 409,
       code: 'not_connected',
-      message: 'Identity Broker Repo App request failed with HTTP 409 (not_connected).',
+      message: 'The GitHub app request failed with HTTP 409 (not_connected).',
     } satisfies Partial<RepoAppBrokerError>);
   });
 

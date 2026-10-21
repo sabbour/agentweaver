@@ -25,7 +25,7 @@ import { createNewAssistantSessionState } from '../../routes/assistantNavigation
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 // Persistent left navigation. Native FluentUI rebuild — no copilot-fluent-system
 // kit imports. Copilot-style single rail: chrome (brand + collapse), a header
 // slot (project switcher), a scrollable nav area, and a bottom persona footer.
@@ -82,17 +82,53 @@ function formatVersionBadge(version: string): string {
  * state supports responsive navigation behavior.
  */
 export function LeftNav({
+  ...props
+}: LeftNavProps) {
+  const version = useAppVersion();
+  return (
+    <LeftNavView
+      {...props}
+      version={version}
+      projectSwitcher={<ProjectSwitcher {...props} />}
+      notifications={<NotificationBell />}
+      identity={(collapsed, footerMeta) => (
+        <GitHubIdentityBadge projectId={props.projectId} collapsed={collapsed} footerMeta={footerMeta} />
+      )}
+    />
+  );
+}
+
+/** Service-owned slots keep the retained navigation independent of legacy APIs. */
+export interface LeftNavViewProps extends LeftNavProps {
+  version: string;
+  projectSwitcher: ReactNode;
+  notifications?: ReactNode;
+  identity: (collapsed: boolean, footerMeta: ReactNode) => ReactNode;
+  onNewSession?: () => void;
+  sessionAction?: ReactNode;
+  visibleGlobalKeys?: readonly string[];
+  visibleProjectKeys?: readonly string[];
+  showNewSession?: boolean;
+}
+
+/** Renders the 0.x rail unchanged; callers supply identity and project data. */
+export function LeftNavView({
   projectId,
   activeKey,
-  pathname,
-  isFallbackProject,
-  onFallbackProjectMissing,
   isPlatformAdmin = false,
   tourTargets,
   onTakeProductTour,
-}: LeftNavProps) {
+  version,
+  projectSwitcher,
+  notifications,
+  identity,
+  onNewSession,
+  sessionAction,
+  visibleGlobalKeys,
+  visibleProjectKeys,
+  showNewSession = true,
+}: LeftNavViewProps) {
   const styles = useStyles();
-  const version = useAppVersion();
   const versionLabel = formatVersionBadge(version);
   const footerVersionText = versionLabel ? `v${versionLabel}` : 'Alpha';
   const navigate = useNavigate();
@@ -104,11 +140,15 @@ export function LeftNav({
     }
   });
   const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
-    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions'),
-    globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions'),
-    primarySections: NAV_SECTIONS.filter((section) => !section.anchorBottom),
-    bottomSections: NAV_SECTIONS.filter((section) => section.anchorBottom),
-  }), []);
+    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
+    globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
+    primarySections: NAV_SECTIONS.filter((section) => !section.anchorBottom)
+      .map((section) => ({ ...section, items: section.items.filter((item) => !visibleProjectKeys || visibleProjectKeys.includes(item.key)) }))
+      .filter((section) => section.items.length > 0),
+    bottomSections: NAV_SECTIONS.filter((section) => section.anchorBottom)
+      .map((section) => ({ ...section, items: section.items.filter((item) => !visibleProjectKeys || visibleProjectKeys.includes(item.key)) }))
+      .filter((section) => section.items.length > 0),
+  }), [visibleGlobalKeys, visibleProjectKeys]);
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
@@ -123,6 +163,10 @@ export function LeftNav({
   };
 
   const startNewSession = () => {
+    if (onNewSession) {
+      onNewSession();
+      return;
+    }
     const search = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
     navigate(`/assistant${search}`, { state: createNewAssistantSessionState() });
   };
@@ -287,7 +331,7 @@ export function LeftNav({
               )}
             </PopoverSurface>
           </Popover>
-          <NotificationBell />
+          {notifications}
           <Button
             appearance="subtle"
             icon={collapsed ? <PanelLeftExpand24Regular /> : <PanelLeftContract24Regular />}
@@ -303,12 +347,7 @@ export function LeftNav({
           points now live in the global Sessions hub / /assistant route. */}
       {!collapsed && (
         <div className="aw-rail-header">
-          <ProjectSwitcher
-            projectId={projectId}
-            pathname={pathname}
-            isFallbackProject={isFallbackProject}
-            onFallbackProjectMissing={onFallbackProjectMissing}
-          />
+          {projectSwitcher}
         </div>
       )}
 
@@ -330,7 +369,7 @@ export function LeftNav({
             {collapsed ? (
               <div role="group" aria-label="Sessions" className="aw-nav-section" style={{ gap: '2px' }}>
                 {renderGlobalItem(globalSessionsItem)}
-                <Tooltip content="New session" relationship="label" positioning="after">
+                {showNewSession && <Tooltip content="New session" relationship="label" positioning="after">
                   <Button
                     appearance="subtle"
                     icon={<AddRegular />}
@@ -338,7 +377,7 @@ export function LeftNav({
                     onClick={startNewSession}
                     className="aw-nav-action-button"
                   />
-                </Tooltip>
+                </Tooltip>}
               </div>
             ) : (
               <div role="group" aria-label="Sessions" className="aw-nav-section">
@@ -353,7 +392,7 @@ export function LeftNav({
                     <span className="aw-nav-item__icon" aria-hidden="true">{globalSessionsItem.icon}</span>
                     <span className="aw-nav-item__label">{globalSessionsItem.label}</span>
                   </Link>
-                  <Tooltip content="New session" relationship="label" positioning="after">
+                  {showNewSession && <Tooltip content="New session" relationship="label" positioning="after">
                     <Button
                       appearance="subtle"
                       icon={<AddRegular />}
@@ -361,12 +400,14 @@ export function LeftNav({
                       onClick={startNewSession}
                       className="aw-nav-action-button"
                     />
-                  </Tooltip>
+                  </Tooltip>}
                 </div>
               </div>
             )}
           </>
         )}
+
+        {sessionAction}
 
         {/* Project-scoped primary sections, each preceded by a thin divider */}
         {projectId && primarySections.map((section) => (
@@ -387,10 +428,7 @@ export function LeftNav({
 
       {/* Footer: signed-in identity. Status and version appear in its menu footer. */}
       <div className="aw-rail-footer">
-        <GitHubIdentityBadge
-          projectId={projectId}
-          collapsed={collapsed}
-          footerMeta={(
+        {identity(collapsed, (
             <>
               <StatusDot />
               <Badge
@@ -402,8 +440,7 @@ export function LeftNav({
                 <span className="aw-identity-menu-footer__version-text">{footerVersionText}</span>
               </Badge>
             </>
-          )}
-        />
+        ))}
       </div>
     </nav>
   );

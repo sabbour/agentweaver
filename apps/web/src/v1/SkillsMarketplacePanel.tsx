@@ -1,4 +1,9 @@
-import { Button, Field, Input, MessageBar, MessageBarBody, Spinner } from '@fluentui/react-components';
+import {
+  Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
+  Field, Input, MessageBar, MessageBarBody, Spinner, Tab, TabList,
+} from '@fluentui/react-components';
+import { ArrowUpload24Regular, PuzzlePiece20Regular } from '@fluentui/react-icons';
+import { MetricRow } from '../components/ui/Metric';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { GatewayError } from './api';
@@ -154,7 +159,7 @@ function validateSource(
       !Number.isSafeInteger(source.revision) || source.revision < 1 ||
       source.state !== expectedState ||
       (previousRevision !== undefined && source.revision <= previousRevision)) {
-    throw new Error('Projects & Config returned an invalid marketplace source response.');
+    throw new Error('The server returned an invalid marketplace source response.');
   }
 }
 
@@ -166,7 +171,7 @@ async function listMarketplaceSources(
   const result = await actions.listSources(projectId);
   if (!Array.isArray(result) || result.some((source) =>
     !source || typeof source.sourceId !== 'string' || !Number.isSafeInteger(source.revision))) {
-    throw new Error('Projects & Config returned an invalid marketplace source list.');
+    throw new Error('The server returned an invalid marketplace source list.');
   }
   return result;
 }
@@ -240,7 +245,7 @@ function validateSkillInventoryPage(result: SkillContentInventoryPage): void {
         !nullableString(revision.revokedByActorId) ||
         !nullableString(revision.revokedAt) ||
         (revision.revokedAt !== null && !Number.isFinite(Date.parse(revision.revokedAt))))) {
-    throw new Error('Projects & Config returned an invalid skill inventory.');
+    throw new Error('The server returned an invalid skill inventory.');
   }
 }
 
@@ -325,6 +330,9 @@ export function SkillsMarketplacePanel({
   const folderInputRef = useCallback((input: HTMLInputElement | null) => {
     input?.setAttribute('webkitdirectory', '');
   }, []);
+  const [tab, setTab] = useState<'catalog' | 'assignments'>('catalog');
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [sources, setSources] = useState<MarketplaceSource[] | null>(null);
   const [sourcesProjectId, setSourcesProjectId] = useState<string | null>(null);
   const [sourceError, setSourceError] = useState<string | null>(null);
@@ -647,7 +655,7 @@ export function SkillsMarketplacePanel({
           result.page !== page ||
           !Number.isSafeInteger(result.total) ||
           !Array.isArray(result.candidates)) {
-        throw new Error('Projects & Config returned browse results for a different source revision or page.');
+        throw new Error('The server returned browse results for a different source revision or page.');
       }
       setBrowsePage(result);
       setBrowseResultQuery(query);
@@ -737,6 +745,7 @@ export function SkillsMarketplacePanel({
       validateSkillImportReceipt(result, selectedPreview);
       setImportReceipt(result);
       setImportReceiptKind('marketplace');
+      setTab('assignments');
       setMarketplaceImportComplete(true);
       setMarketplaceNotice(`The Skills owner imported ${result.name} at revision ${result.revision}.`);
     } catch (reason) {
@@ -802,6 +811,7 @@ export function SkillsMarketplacePanel({
       validateSkillImportReceipt(result, preview);
       setImportReceipt(result);
       setImportReceiptKind('local');
+      setTab('assignments');
       setSkillNotice(`The Skills owner imported ${result.name} at revision ${result.revision}.`);
     } catch (reason) {
       if (activeProjectId.current === scope && skillRequest.current === requestId)
@@ -847,7 +857,7 @@ export function SkillsMarketplacePanel({
       if (result.projectId !== scope ||
           !Number.isSafeInteger(result.revision) ||
           result.revision <= currentConfigurationRevision) {
-        throw new Error('Projects & Config returned an assignment for a different project or configuration revision.');
+        throw new Error('The server returned an assignment for a different project or configuration revision.');
       }
       const savedAssignment = result.configuration.skills.find((item) =>
         item.skillId === importReceipt.skillId);
@@ -859,7 +869,7 @@ export function SkillsMarketplacePanel({
           !savedAssignment.agentIds ||
           savedAssignment.agentIds.length !== selectedAgentIds.length ||
           selectedAgentIds.some((agentId) => !savedAssignment.agentIds?.includes(agentId))) {
-        throw new Error('Projects & Config returned a revision without the requested skill assignment.');
+        throw new Error('The server returned a revision without the requested skill assignment.');
       }
       setAssignmentSnapshot({
         projectId: scope,
@@ -880,14 +890,17 @@ export function SkillsMarketplacePanel({
     }
   };
 
+  const enabledAssignmentCount = currentAssignments.filter((assignment) => assignment.enabled).length;
+  const skillMessages = (
+    <>
+      {skillError && <MessageBar intent="error" role="alert"><MessageBarBody>{skillError}</MessageBarBody></MessageBar>}
+      {skillNotice && <MessageBar intent="success"><MessageBarBody>{skillNotice}</MessageBarBody></MessageBar>}
+    </>
+  );
+
+  // 0.x Skills layout: stat strip, toolbar dialogs, and Catalog/Assignments tabs.
   return (
-    <section className="v1-panel v1-stack" aria-labelledby="skills-marketplace-heading">
-      <div className="v1-panel-heading">
-        <h2 id="skills-marketplace-heading">Skills and marketplace</h2>
-      </div>
-      <p className="v1-muted">
-        The signed-in actor and current project are checked by the owner on every request. A source marked active is configured; it does not confirm that GitHub is available.
-      </p>
+    <div className="v1-stack">
       {!actions && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -896,478 +909,527 @@ export function SkillsMarketplacePanel({
         </MessageBar>
       )}
 
-      <section className="v1-stack" aria-labelledby="marketplace-sources-heading">
-        <h3 id="marketplace-sources-heading">Marketplace sources</h3>
-        {sourceError && <MessageBar intent="error" role="alert"><MessageBarBody>{sourceError}</MessageBarBody></MessageBar>}
-        {sourceNotice && <MessageBar intent="success"><MessageBarBody>{sourceNotice}</MessageBarBody></MessageBar>}
-        {marketplaceError && <MessageBar intent="error" role="alert"><MessageBarBody>{marketplaceError}</MessageBarBody></MessageBar>}
-        {marketplaceNotice && <MessageBar intent="success"><MessageBarBody>{marketplaceNotice}</MessageBarBody></MessageBar>}
-        <p className="v1-muted">
-          Sources must be public GitHub repositories. Browse results pin a source revision and resolved commit. Preview and import read the selected content at that exact commit; the browser does not send source files.
-        </p>
-        {sourceLoadState === 'loading' && <Spinner label="Loading marketplace sources…" />}
-        {sourceLoadState === 'unavailable' && (
-          <p className="v1-warning">Marketplace source operations are unavailable through the current Gateway contract.</p>
-        )}
-        {sourceLoadState === 'loaded' && currentSources === null && !sourceError && (
-          <p className="v1-warning">The source list is not available for this project.</p>
-        )}
-        {currentSources && currentSources.length === 0 && !sourceError && (
-          <p className="v1-muted">No active marketplace sources were returned for this project.</p>
-        )}
-        {currentSources && currentSources.length > 0 && (
-          <div className="v1-record-list">
-            {currentSources.map((source) => {
-              const draft = sourceDrafts[source.sourceId] ?? sourceDraft(source);
-              const busy = sourceBusy !== null;
-              return (
-                <article className="v1-record" key={source.sourceId}>
-                  <form className="v1-form" onSubmit={(event) => void updateSource(event, source)}>
-                    <div className="v1-inline-form">
-                      <Field label="Source name">
-                        <Input value={draft.name} onChange={(_, data) => updateSourceDraft(source.sourceId, 'name', data.value)} />
-                      </Field>
-                      <Field label="Public GitHub repository" hint="Use owner/repository.">
-                        <Input value={draft.repository} onChange={(_, data) => updateSourceDraft(source.sourceId, 'repository', data.value)} />
-                      </Field>
-                      <Field label="Requested ref">
-                        <Input value={draft.requestedRef} onChange={(_, data) => updateSourceDraft(source.sourceId, 'requestedRef', data.value)} />
-                      </Field>
-                      <Field label="Repository subpath" hint="Leave blank to browse from the repository root.">
-                        <Input value={draft.subpath} onChange={(_, data) => updateSourceDraft(source.sourceId, 'subpath', data.value)} />
-                      </Field>
-                    </div>
-                    <p className="v1-muted">
-                      {source.repository} · {source.requestedRef} · revision {source.revision} · {source.state}
-                    </p>
-                    <div className="v1-actions">
-                      <Button appearance="secondary" type="submit" disabled={!actions || busy ||
-                        marketplaceBusy === 'import' || source.state !== 'active' || !draft.repository.trim()}>
-                        {sourceBusy === `update:${source.sourceId}` ? 'Saving…' : 'Save source'}
-                      </Button>
-                      <Button
-                        appearance="secondary"
-                        type="button"
-                        disabled={!actions || busy || marketplaceBusy === 'import' || source.state !== 'active'}
-                        onClick={() => void removeSource(source)}
-                      >
-                        {sourceBusy === `remove:${source.sourceId}` ? 'Removing…' : 'Remove source'}
-                      </Button>
-                    </div>
-                  </form>
-                </article>
-              );
-            })}
-          </div>
-        )}
-        <form className="v1-form" onSubmit={(event) => void addSource(event)}>
-          <h4>Add a public source</h4>
-          <div className="v1-inline-form">
-            <Field label="Source name">
-              <Input value={newSource.name} onChange={(_, data) => setNewSource((current) => ({ ...current, name: data.value }))} />
-            </Field>
-            <Field label="Public GitHub repository" hint="Use owner/repository.">
-              <Input value={newSource.repository} onChange={(_, data) => setNewSource((current) => ({ ...current, repository: data.value }))} />
-            </Field>
-            <Field label="Requested ref">
-              <Input value={newSource.requestedRef} onChange={(_, data) => setNewSource((current) => ({ ...current, requestedRef: data.value }))} />
-            </Field>
-            <Field label="Repository subpath" hint="Leave blank to browse from the repository root.">
-              <Input value={newSource.subpath} onChange={(_, data) => setNewSource((current) => ({ ...current, subpath: data.value }))} />
-            </Field>
-          </div>
+      <MetricRow items={[
+        { label: 'Assigned', value: currentAssignments.length },
+        { label: 'Enabled', value: enabledAssignmentCount },
+        { label: 'Marketplace sources', value: currentSources ? currentSources.length : '—' },
+        { label: 'Agents', value: agents.length },
+      ]} />
+      <div className="v1-actions">
+        <Button icon={<ArrowUpload24Regular />} disabled={!actions} onClick={() => setImportOpen(true)}>Import skill</Button>
+        <Button icon={<PuzzlePiece20Regular />} disabled={!actions} onClick={() => setMarketplaceOpen(true)}>Browse marketplaces</Button>
+      </div>
+      {!importOpen && skillMessages}
+      <TabList
+        selectedValue={tab}
+        onTabSelect={(_, data) => setTab(data.value === 'assignments' ? 'assignments' : 'catalog')}
+        aria-label="Skills view"
+      >
+        <Tab value="catalog">Catalog</Tab>
+        <Tab value="assignments">Assignments</Tab>
+      </TabList>
+      {tab === 'catalog' && (
+        <section className="v1-stack" aria-labelledby="skill-inventory-heading">
+          <h3 id="skill-inventory-heading">Imported skill inventory</h3>
+          <p className="v1-muted">
+            This owner-provided metadata shows stored revisions and project assignments. It does not show whether a runtime loaded a skill. Reading the inventory requires current project Owner or tenant administrator authority.
+          </p>
+          {currentSkillInventory?.error && (
+            <MessageBar intent="error" role="alert">
+              <MessageBarBody>{currentSkillInventory.error}</MessageBarBody>
+            </MessageBar>
+          )}
           <div className="v1-actions">
-            <Button appearance="primary" type="submit" disabled={!actions || sourceBusy !== null ||
-              marketplaceBusy === 'import' || !newSource.repository.trim()}>
-              {sourceBusy === 'create' ? 'Adding…' : 'Add source'}
-            </Button>
-            <Button appearance="secondary" type="button" disabled={!actions || sourceBusy !== null ||
-              marketplaceBusy === 'import'} onClick={() => {
-              setSourceError(null);
-              void refreshSources();
-            }}>
-              Refresh sources
-            </Button>
-          </div>
-        </form>
-        <form className="v1-form" onSubmit={(event) => {
-          event.preventDefault();
-          void browse(1);
-        }}>
-          <h4>Browse a source</h4>
-          <Field label="Marketplace source">
-            <select
-              className="v1-select"
-              aria-label="Marketplace source"
-              value={currentSelectedSourceId}
-              onChange={(event) => {
-                setSelectedSourceId(event.currentTarget.value);
-                clearMarketplaceBrowse();
-              }}
-              disabled={!currentSources?.length || marketplaceBusy === 'import'}
+            <Button
+              appearance="secondary"
+              type="button"
+              disabled={!actions || currentSkillInventory?.loading}
+              onClick={() => void loadSkillInventory(null, [null])}
             >
-              <option value="">Select a source</option>
-              {currentSources?.map((source) => (
-                <option key={source.sourceId} value={source.sourceId}>
-                  {source.name} · {source.repository}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <div className="v1-inline-form">
-            <Field label="Search skills" hint="Matches skill name or repository location.">
-              <Input
-                value={browseQuery}
-                maxLength={128}
-                disabled={marketplaceBusy === 'import'}
-                onChange={(_, data) => {
-                  setBrowseQuery(data.value);
-                  clearMarketplaceBrowse();
-                }}
-              />
-            </Field>
-            <div className="v1-actions">
-              <Button appearance="primary" type="submit" disabled={!actions || !selectedSource ||
-                browsing || marketplaceBusy === 'import'}>
-                {browsing ? 'Browsing…' : 'Browse skills'}
+              {currentSkillInventory?.loading ? 'Loading inventory…' :
+                skillInventoryPage ? 'Refresh skill inventory' : 'Load skill inventory'}
+            </Button>
+            {skillInventoryPage?.nextCursor && (
+              <Button
+                appearance="secondary"
+                type="button"
+                disabled={currentSkillInventory?.loading}
+                onClick={() => void loadSkillInventory(
+                  skillInventoryPage.nextCursor,
+                  [...(currentSkillInventory?.cursors ?? [null]), skillInventoryPage.nextCursor],
+                )}
+              >
+                Next inventory page
               </Button>
-            </div>
+            )}
+            {(currentSkillInventory?.cursors.length ?? 0) > 1 && (
+              <Button
+                appearance="secondary"
+                type="button"
+                disabled={currentSkillInventory?.loading}
+                onClick={() => {
+                  const cursors = currentSkillInventory?.cursors.slice(0, -1) ?? [null];
+                  void loadSkillInventory(cursors.at(-1) ?? null, cursors);
+                }}
+              >
+                Previous inventory page
+              </Button>
+            )}
           </div>
-        </form>
-        {browsing && <Spinner label="Browsing the selected source revision…" />}
-        {currentBrowsePage && (
-          <div className="v1-stack" aria-label="Marketplace browse results">
-            <p className="v1-muted">
-              Ref {currentBrowsePage.requestedRef} · source revision {currentBrowsePage.sourceRevision} · commit <code>{currentBrowsePage.resolvedCommitSha}</code> · {currentBrowsePage.total} result(s)
-            </p>
-            {currentBrowsePage.candidates.length === 0 ? (
-              <p className="v1-muted">No skills matched this search on the selected source revision.</p>
-            ) : (
-              <div className="v1-record-list">
-                {currentBrowsePage.candidates.map((item) => (
-                  <article className="v1-record" key={`${item.location}/${item.name}`}>
-                    <h4>{item.name}</h4>
-                    <p className="v1-muted">{item.location || 'Repository root'}</p>
-                    {item.description && <p>{item.description}</p>}
-                    <Button
-                      appearance="secondary"
-                      aria-label={`Preview ${item.name}`}
-                      disabled={!actions || marketplaceBusy !== null || skillBusy !== null}
-                      onClick={() => void previewMarketplaceSkill(item)}
-                    >
-                      {marketplaceBusy === 'preview' &&
-                        currentMarketplaceSelection?.selectedPath === item.location
-                        ? 'Previewing…'
-                        : 'Preview source skill'}
-                    </Button>
+          {currentSkillInventory?.loading && (
+            <Spinner label="Loading project skill inventory…" />
+          )}
+          {skillInventoryPage && (
+            <div className="v1-stack" aria-label="Project skill inventory">
+              <p className="v1-muted">
+                Page {currentSkillInventory?.cursors.length ?? 1}
+              </p>
+              <div className="v1-stack">
+                <h4>Current project assignments</h4>
+                {skillInventoryPage.assignments.length === 0 ? (
+                  <p className="v1-muted">No saved skill assignments were returned.</p>
+                ) : skillInventoryPage.assignments.map((assignment) => (
+                  <article className="v1-record" key={assignment.skillId}>
+                    <h5>{assignment.skillId}</h5>
+                    <p className="v1-muted">
+                      {assignment.enabled ? 'Enabled' : 'Disabled'} · order {assignment.order} · revision {assignment.revision ?? 'not set'}
+                    </p>
+                    <p className="v1-muted">
+                      Agents: {assignment.agentIds?.length ? assignment.agentIds.join(', ') : 'none recorded'}
+                    </p>
+                    {assignment.contentDigest && <p className="v1-muted">Digest: <code>{assignment.contentDigest}</code></p>}
                   </article>
                 ))}
               </div>
-            )}
-            <div className="v1-actions">
-              <Button
-                appearance="secondary"
-                disabled={!actions || browsing || marketplaceBusy === 'import' ||
-                  currentBrowsePage.page <= 1}
-                onClick={() => void browse(currentBrowsePage.page - 1)}
-              >
-                Previous page
-              </Button>
-              <span className="v1-muted">Page {currentBrowsePage.page} · {currentBrowsePage.pageSize} per page</span>
-              <Button
-                appearance="secondary"
-                disabled={!actions || browsing || marketplaceBusy === 'import' ||
-                  !currentBrowsePage.hasMore}
-                onClick={() => void browse(currentBrowsePage.page + 1)}
-              >
-                Next page
-              </Button>
+              <div className="v1-stack">
+                <h4>Stored revisions</h4>
+                {skillInventoryPage.revisions.length === 0 ? (
+                  <p className="v1-muted">No stored skill revisions were returned for this page.</p>
+                ) : skillInventoryPage.revisions.map((revision) => {
+                  const assignment = skillInventoryPage.assignments.find((item) =>
+                    item.skillId === revision.skillId);
+                  const assignedExactRevision = assignment?.enabled === true &&
+                    assignment.revision === revision.revision &&
+                    assignment.contentDigest === revision.contentDigest;
+                  const assignmentSummary = !assignment
+                    ? 'No project assignment'
+                    : assignedExactRevision
+                      ? `Enabled for agents: ${assignment.agentIds?.join(', ') || 'none recorded'}`
+                      : `Project assignment references revision ${assignment.revision ?? 'not set'}`;
+                  return (
+                    <article className="v1-record" key={`${revision.skillId}/${revision.revision}`}>
+                      <h5>{revision.name}</h5>
+                      <p className="v1-muted">
+                        <code>{revision.skillId}</code> · revision {revision.revision} · {revision.isRevoked ? 'revoked' : 'not revoked'}
+                      </p>
+                      {revision.description && <p>{revision.description}</p>}
+                      <p className="v1-muted">{assignmentSummary}</p>
+                      <p className="v1-muted">
+                        Digest <code>{revision.contentDigest}</code> · {revision.resourceCount} resource(s) · {revision.totalBytes} byte(s)
+                      </p>
+                      <p className="v1-muted">
+                        {revision.sourceId
+                          ? `Marketplace source ${revision.sourceId} · source revision ${revision.sourceRevision ?? 'unknown'} · commit ${revision.resolvedCommitSha ?? 'unknown'} · ${revision.selectedPath ?? 'repository root'}`
+                          : 'Local upload'}
+                      </p>
+                      <p className="v1-muted">
+                        Created <time dateTime={revision.createdAt}>{revision.createdAt}</time>
+                      </p>
+                    </article>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        )}
-        {marketplaceBusy === 'preview' && (
-          <Spinner label="Previewing the selected skill at its pinned commit…" />
-        )}
-        {currentMarketplaceSelection && currentMarketplacePreview && (
-          <div className="v1-stack" aria-label="Marketplace skill preview">
-            <h4>Preview {currentMarketplaceSelection.candidateName}</h4>
-            <p className="v1-muted">
-              {currentMarketplaceSelection.selectedPath || 'Repository root'} · source revision {currentMarketplaceSelection.sourceRevision} · commit <code>{currentMarketplaceSelection.resolvedCommitSha}</code>
-            </p>
-            <div className="v1-detail-list">
-              <div><dt>Validated skill</dt><dd>{currentMarketplacePreview.name}</dd></div>
-              <div><dt>Resources</dt><dd>{currentMarketplacePreview.resourceCount}</dd></div>
-              <div><dt>Content digest</dt><dd><code>{currentMarketplacePreview.contentDigest}</code></dd></div>
-              <div><dt>Total bytes</dt><dd>{currentMarketplacePreview.totalBytes}</dd></div>
-            </div>
-            <Button
-              appearance="primary"
-              type="button"
-              disabled={!actions || skillBusy !== null || marketplaceBusy !== null ||
-                marketplaceImportComplete}
-              onClick={() => void importMarketplaceSkill()}
-            >
-              {marketplaceBusy === 'import' ? 'Importing…' :
-                marketplaceImportComplete ? 'Source skill imported' : 'Import selected source skill'}
-            </Button>
-          </div>
-        )}
-        {marketplaceBusy === 'import' && (
-          <Spinner label="Importing the selected source skill…" />
-        )}
-        {importReceiptKind === 'marketplace' && importReceipt && (
-          <p>
-            Imported <strong>{importReceipt.name}</strong> · revision {importReceipt.revision} · digest <code>{importReceipt.contentDigest}</code>
+          )}
+        </section>
+      )}
+      {tab === 'assignments' && (
+        <section className="v1-stack" aria-labelledby="skill-assignment-heading">
+          <h3 id="skill-assignment-heading">Project assignments</h3>
+          <p className="v1-muted">
+            An assignment changes the next project configuration revision. Accepted runs keep their own immutable configuration.
           </p>
-        )}
-      </section>
-
-      <section className="v1-stack" aria-labelledby="skill-inventory-heading">
-        <h3 id="skill-inventory-heading">Imported skill inventory</h3>
-        <p className="v1-muted">
-          This owner-provided metadata shows stored revisions and project assignments. It does not show whether a runtime loaded a skill. Reading the inventory requires current project Owner or tenant administrator authority.
-        </p>
-        {currentSkillInventory?.error && (
-          <MessageBar intent="error" role="alert">
-            <MessageBarBody>{currentSkillInventory.error}</MessageBarBody>
-          </MessageBar>
-        )}
-        <div className="v1-actions">
-          <Button
-            appearance="secondary"
-            type="button"
-            disabled={!actions || currentSkillInventory?.loading}
-            onClick={() => void loadSkillInventory(null, [null])}
-          >
-            {currentSkillInventory?.loading ? 'Loading inventory…' :
-              skillInventoryPage ? 'Refresh skill inventory' : 'Load skill inventory'}
-          </Button>
-          {skillInventoryPage?.nextCursor && (
-            <Button
-              appearance="secondary"
-              type="button"
-              disabled={currentSkillInventory?.loading}
-              onClick={() => void loadSkillInventory(
-                skillInventoryPage.nextCursor,
-                [...(currentSkillInventory?.cursors ?? [null]), skillInventoryPage.nextCursor],
-              )}
-            >
-              Next inventory page
-            </Button>
+          {assignmentDisabledReason && <p className="v1-warning">{assignmentDisabledReason}</p>}
+          {currentConfigurationRevision === null && (
+            <p className="v1-warning">Project configuration is not available, so assignment is disabled.</p>
           )}
-          {(currentSkillInventory?.cursors.length ?? 0) > 1 && (
-            <Button
-              appearance="secondary"
-              type="button"
-              disabled={currentSkillInventory?.loading}
-              onClick={() => {
-                const cursors = currentSkillInventory?.cursors.slice(0, -1) ?? [null];
-                void loadSkillInventory(cursors.at(-1) ?? null, cursors);
-              }}
-            >
-              Previous inventory page
-            </Button>
-          )}
-        </div>
-        {currentSkillInventory?.loading && (
-          <Spinner label="Loading project skill inventory…" />
-        )}
-        {skillInventoryPage && (
-          <div className="v1-stack" aria-label="Project skill inventory">
-            <p className="v1-muted">
-              Configuration revision {skillInventoryPage.configurationRevision} · page {currentSkillInventory?.cursors.length ?? 1} · {skillInventoryPage.pageSize} revisions per page
-            </p>
-            <div className="v1-stack">
-              <h4>Current project assignments</h4>
-              {skillInventoryPage.assignments.length === 0 ? (
-                <p className="v1-muted">No saved skill assignments were returned.</p>
-              ) : skillInventoryPage.assignments.map((assignment) => (
+          {currentAssignments.length === 0 ? (
+            <p className="v1-muted">No skill assignments were returned by the current project configuration.</p>
+          ) : (
+            <div className="v1-record-list">
+              {currentAssignments.map((assignment) => (
                 <article className="v1-record" key={assignment.skillId}>
-                  <h5>{assignment.skillId}</h5>
+                  <strong>{assignment.skillId}</strong>
                   <p className="v1-muted">
-                    {assignment.enabled ? 'Enabled' : 'Disabled'} · order {assignment.order} · revision {assignment.revision ?? 'not set'}
+                    {assignment.enabled ? 'Enabled' : 'Disabled'} · order {assignment.order}
+                    {assignment.revision ? ` · revision ${assignment.revision}` : ' · no imported content revision'}
+                    {assignment.agentIds?.length ? ` · ${assignment.agentIds.length} agent(s)` : ''}
                   </p>
-                  <p className="v1-muted">
-                    Agents: {assignment.agentIds?.length ? assignment.agentIds.join(', ') : 'none recorded'}
-                  </p>
-                  {assignment.contentDigest && <p className="v1-muted">Digest: <code>{assignment.contentDigest}</code></p>}
+                  {!assignment.revision || !assignment.contentDigest || !assignment.agentIds?.length ? (
+                    <p className="v1-warning">This entry has no complete content pin and is not returned as accepted runtime content.</p>
+                  ) : null}
                 </article>
               ))}
             </div>
-            <div className="v1-stack">
-              <h4>Stored revisions</h4>
-              {skillInventoryPage.revisions.length === 0 ? (
-                <p className="v1-muted">No stored skill revisions were returned for this page.</p>
-              ) : skillInventoryPage.revisions.map((revision) => {
-                const assignment = skillInventoryPage.assignments.find((item) =>
-                  item.skillId === revision.skillId);
-                const assignedExactRevision = assignment?.enabled === true &&
-                  assignment.revision === revision.revision &&
-                  assignment.contentDigest === revision.contentDigest;
-                const assignmentSummary = !assignment
-                  ? 'No project assignment'
-                  : assignedExactRevision
-                    ? `Enabled for agents: ${assignment.agentIds?.join(', ') || 'none recorded'}`
-                    : `Project assignment references revision ${assignment.revision ?? 'not set'}`;
-                return (
-                  <article className="v1-record" key={`${revision.skillId}/${revision.revision}`}>
-                    <h5>{revision.name}</h5>
-                    <p className="v1-muted">
-                      <code>{revision.skillId}</code> · revision {revision.revision} · {revision.isRevoked ? 'revoked' : 'not revoked'}
-                    </p>
-                    {revision.description && <p>{revision.description}</p>}
-                    <p className="v1-muted">{assignmentSummary}</p>
-                    <p className="v1-muted">
-                      Digest <code>{revision.contentDigest}</code> · {revision.resourceCount} resource(s) · {revision.totalBytes} byte(s)
-                    </p>
-                    <p className="v1-muted">
-                      {revision.sourceId
-                        ? `Marketplace source ${revision.sourceId} · source revision ${revision.sourceRevision ?? 'unknown'} · commit ${revision.resolvedCommitSha ?? 'unknown'} · ${revision.selectedPath ?? 'repository root'}`
-                        : 'Local upload'}
-                    </p>
-                    <p className="v1-muted">
-                      Created <time dateTime={revision.createdAt}>{revision.createdAt}</time>
-                    </p>
-                  </article>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </section>
+          )}
+          {importReceipt && (
+            <form className="v1-form" onSubmit={(event) => void assignImportedSkill(event)}>
+              <h4>Assign {importReceipt.name}</h4>
+              {agents.length === 0 ? (
+                <p className="v1-warning">No active project agents were returned. This skill cannot be assigned.</p>
+              ) : (
+                <fieldset className="v1-form">
+                  <legend>Active project agents</legend>
+                  {agents.map((agent) => (
+                    <label className="v1-checkbox" key={agent.agentId}>
+                      <input
+                        type="checkbox"
+                        checked={selectedAgentIds.includes(agent.agentId)}
+                        onChange={() => toggleAgent(agent.agentId)}
+                      />
+                      <span>{agent.displayName}</span>
+                    </label>
+                  ))}
+                </fieldset>
+              )}
+              <div className="v1-actions">
+                <Button
+                  appearance="primary"
+                  type="submit"
+                  disabled={!actions || currentConfigurationRevision === null ||
+                    selectedAgentIds.length === 0 || agents.length === 0 || skillBusy !== null ||
+                    marketplaceBusy !== null ||
+                    assignmentDisabledReason !== undefined && assignmentDisabledReason !== null}
+                >
+                  {skillBusy === 'assignment' ? 'Saving assignment…' : 'Assign to selected agents'}
+                </Button>
+              </div>
+            </form>
+          )}
+          <MessageBar intent="info">
+            <MessageBarBody>
+              Runtime load status is not available from this API. A saved assignment or accepted configuration does not prove that the AgentHost loaded a skill.
+            </MessageBarBody>
+          </MessageBar>
+        </section>
+      )}
 
-      <section className="v1-stack" aria-labelledby="local-skill-heading">
-        <h3 id="local-skill-heading">Upload a local skill</h3>
-        <p className="v1-muted">
-          Select a folder that contains one SKILL.md and its text resources, or select those files together. The Skills owner checks file content and paths before import.
-        </p>
-        {skillError && <MessageBar intent="error" role="alert"><MessageBarBody>{skillError}</MessageBarBody></MessageBar>}
-        {skillNotice && <MessageBar intent="success"><MessageBarBody>{skillNotice}</MessageBarBody></MessageBar>}
-        <Field label="Skill folder or files" hint="Include exactly one file named SKILL.md.">
-          <input
-            ref={folderInputRef}
-            className="v1-select"
-            type="file"
-            multiple
-            aria-label="Skill folder or files"
-            disabled={!actions || skillBusy !== null || marketplaceBusy !== null}
-            onChange={(event) => {
-              if (skillBusy !== null || marketplaceBusy !== null) return;
-              setSelectedFiles(Array.from(event.currentTarget.files ?? []));
-              setCandidate(null);
-              setPreview(null);
-              setImportReceipt(null);
-              setImportReceiptKind(null);
-              setPendingImportKey(null);
-              setSkillError(null);
-              setSkillNotice(null);
-            }}
-          />
-        </Field>
-        <p className="v1-muted">{selectedFiles.length} file(s) selected.</p>
-        <div className="v1-actions">
-          <Button
-            appearance="primary"
-            type="button"
-            disabled={!actions || selectedFiles.length === 0 || skillBusy !== null ||
-              marketplaceBusy !== null}
-            onClick={() => void previewLocalSkill()}
-          >
-            {skillBusy === 'preview' ? 'Checking files…' : 'Validate skill files'}
-          </Button>
-          <Button
-            appearance="secondary"
-            type="button"
-            disabled={!actions || !preview || !candidate || skillBusy !== null ||
-              marketplaceBusy !== null || importReceipt !== null}
-            onClick={() => void importLocalSkill()}
-          >
-            {skillBusy === 'import' ? 'Importing…' : importReceipt ? 'Imported' : 'Import skill to project'}
-          </Button>
-        </div>
-        {preview && (
-          <div className="v1-detail-list" aria-label="Skill preview">
-            <div><dt>Validated skill</dt><dd>{preview.name}</dd></div>
-            <div><dt>Resources</dt><dd>{preview.resourceCount}</dd></div>
-            <div><dt>Content digest</dt><dd><code>{preview.contentDigest}</code></dd></div>
-            <div><dt>Total bytes</dt><dd>{preview.totalBytes}</dd></div>
-          </div>
-        )}
-        {importReceipt && importReceiptKind === 'local' && (
-          <p>
-            Imported <strong>{importReceipt.name}</strong> · revision {importReceipt.revision} · digest <code>{importReceipt.contentDigest}</code>
-          </p>
-        )}
-      </section>
-
-      <section className="v1-stack" aria-labelledby="skill-assignment-heading">
-        <h3 id="skill-assignment-heading">Project assignments</h3>
-        <p className="v1-muted">
-          An assignment changes the next project configuration revision. Accepted runs keep their own immutable configuration.
-        </p>
-        {assignmentDisabledReason && <p className="v1-warning">{assignmentDisabledReason}</p>}
-        {currentConfigurationRevision === null && (
-          <p className="v1-warning">Project configuration is not available, so assignment is disabled.</p>
-        )}
-        {currentAssignments.length === 0 ? (
-          <p className="v1-muted">No skill assignments were returned by the current project configuration.</p>
-        ) : (
-          <div className="v1-record-list">
-            {currentAssignments.map((assignment) => (
-              <article className="v1-record" key={assignment.skillId}>
-                <strong>{assignment.skillId}</strong>
+      <Dialog open={marketplaceOpen} onOpenChange={(_, data) => setMarketplaceOpen(data.open)}>
+        <DialogSurface className="v1-dialog-surface--wide">
+          <DialogBody>
+            <DialogTitle>Browse marketplaces</DialogTitle>
+            <DialogContent>
+              <section className="v1-stack" aria-labelledby="marketplace-sources-heading">
+                <h3 id="marketplace-sources-heading">Marketplace sources</h3>
                 <p className="v1-muted">
-                  {assignment.enabled ? 'Enabled' : 'Disabled'} · order {assignment.order}
-                  {assignment.revision ? ` · revision ${assignment.revision}` : ' · no imported content revision'}
-                  {assignment.agentIds?.length ? ` · ${assignment.agentIds.length} agent(s)` : ''}
+                  The service checks your project access for each action. An active source is saved; it does not confirm that GitHub is available.
                 </p>
-                {!assignment.revision || !assignment.contentDigest || !assignment.agentIds?.length ? (
-                  <p className="v1-warning">This entry has no complete content pin and is not returned as accepted runtime content.</p>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        )}
-        {importReceipt && (
-          <form className="v1-form" onSubmit={(event) => void assignImportedSkill(event)}>
-            <h4>Assign {importReceipt.name}</h4>
-            {agents.length === 0 ? (
-              <p className="v1-warning">No active project agents were returned. This skill cannot be assigned.</p>
-            ) : (
-              <fieldset className="v1-form">
-                <legend>Active project agents</legend>
-                {agents.map((agent) => (
-                  <label className="v1-checkbox" key={agent.agentId}>
+                {sourceError && <MessageBar intent="error" role="alert"><MessageBarBody>{sourceError}</MessageBarBody></MessageBar>}
+                {sourceNotice && <MessageBar intent="success"><MessageBarBody>{sourceNotice}</MessageBarBody></MessageBar>}
+                {marketplaceError && <MessageBar intent="error" role="alert"><MessageBarBody>{marketplaceError}</MessageBarBody></MessageBar>}
+                {marketplaceNotice && <MessageBar intent="success"><MessageBarBody>{marketplaceNotice}</MessageBarBody></MessageBar>}
+                <p className="v1-muted">
+                  Use public GitHub repositories. Preview and import use the exact saved source version shown in the results.
+                </p>
+                {sourceLoadState === 'loading' && <Spinner label="Loading marketplace sources…" />}
+                {sourceLoadState === 'unavailable' && (
+                  <p className="v1-warning">Marketplace source operations are unavailable through the current Gateway contract.</p>
+                )}
+                {sourceLoadState === 'loaded' && currentSources === null && !sourceError && (
+                  <p className="v1-warning">The source list is not available for this project.</p>
+                )}
+                {currentSources && currentSources.length === 0 && !sourceError && (
+                  <p className="v1-muted">No active marketplace sources were returned for this project.</p>
+                )}
+                {currentSources && currentSources.length > 0 && (
+                  <div className="v1-record-list">
+                    {currentSources.map((source) => {
+                      const draft = sourceDrafts[source.sourceId] ?? sourceDraft(source);
+                      const busy = sourceBusy !== null;
+                      return (
+                        <article className="v1-record" key={source.sourceId}>
+                          <form className="v1-form" onSubmit={(event) => void updateSource(event, source)}>
+                            <div className="v1-inline-form">
+                              <Field label="Source name">
+                                <Input value={draft.name} onChange={(_, data) => updateSourceDraft(source.sourceId, 'name', data.value)} />
+                              </Field>
+                              <Field label="Public GitHub repository" hint="Use owner/repository.">
+                                <Input value={draft.repository} onChange={(_, data) => updateSourceDraft(source.sourceId, 'repository', data.value)} />
+                              </Field>
+                              <Field label="Requested ref">
+                                <Input value={draft.requestedRef} onChange={(_, data) => updateSourceDraft(source.sourceId, 'requestedRef', data.value)} />
+                              </Field>
+                              <Field label="Repository subpath" hint="Leave blank to browse from the repository root.">
+                                <Input value={draft.subpath} onChange={(_, data) => updateSourceDraft(source.sourceId, 'subpath', data.value)} />
+                              </Field>
+                            </div>
+                            <p className="v1-muted">
+                              {source.repository} · {source.requestedRef} · revision {source.revision} · {source.state}
+                            </p>
+                            <div className="v1-actions">
+                              <Button appearance="secondary" type="submit" disabled={!actions || busy ||
+                                marketplaceBusy === 'import' || source.state !== 'active' || !draft.repository.trim()}>
+                                {sourceBusy === `update:${source.sourceId}` ? 'Saving…' : 'Save source'}
+                              </Button>
+                              <Button
+                                appearance="secondary"
+                                type="button"
+                                disabled={!actions || busy || marketplaceBusy === 'import' || source.state !== 'active'}
+                                onClick={() => void removeSource(source)}
+                              >
+                                {sourceBusy === `remove:${source.sourceId}` ? 'Removing…' : 'Remove source'}
+                              </Button>
+                            </div>
+                          </form>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+                <form className="v1-form" onSubmit={(event) => void addSource(event)}>
+                  <h4>Add a public source</h4>
+                  <div className="v1-inline-form">
+                    <Field label="Source name">
+                      <Input value={newSource.name} onChange={(_, data) => setNewSource((current) => ({ ...current, name: data.value }))} />
+                    </Field>
+                    <Field label="Public GitHub repository" hint="Use owner/repository.">
+                      <Input value={newSource.repository} onChange={(_, data) => setNewSource((current) => ({ ...current, repository: data.value }))} />
+                    </Field>
+                    <Field label="Requested ref">
+                      <Input value={newSource.requestedRef} onChange={(_, data) => setNewSource((current) => ({ ...current, requestedRef: data.value }))} />
+                    </Field>
+                    <Field label="Repository subpath" hint="Leave blank to browse from the repository root.">
+                      <Input value={newSource.subpath} onChange={(_, data) => setNewSource((current) => ({ ...current, subpath: data.value }))} />
+                    </Field>
+                  </div>
+                  <div className="v1-actions">
+                    <Button appearance="primary" type="submit" disabled={!actions || sourceBusy !== null ||
+                      marketplaceBusy === 'import' || !newSource.repository.trim()}>
+                      {sourceBusy === 'create' ? 'Adding…' : 'Add source'}
+                    </Button>
+                    <Button appearance="secondary" type="button" disabled={!actions || sourceBusy !== null ||
+                      marketplaceBusy === 'import'} onClick={() => {
+                      setSourceError(null);
+                      void refreshSources();
+                    }}>
+                      Refresh sources
+                    </Button>
+                  </div>
+                </form>
+                <form className="v1-form" onSubmit={(event) => {
+                  event.preventDefault();
+                  void browse(1);
+                }}>
+                  <h4>Browse a source</h4>
+                  <Field label="Marketplace source">
+                    <select
+                      className="v1-select"
+                      aria-label="Marketplace source"
+                      value={currentSelectedSourceId}
+                      onChange={(event) => {
+                        setSelectedSourceId(event.currentTarget.value);
+                        clearMarketplaceBrowse();
+                      }}
+                      disabled={!currentSources?.length || marketplaceBusy === 'import'}
+                    >
+                      <option value="">Select a source</option>
+                      {currentSources?.map((source) => (
+                        <option key={source.sourceId} value={source.sourceId}>
+                          {source.name} · {source.repository}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <div className="v1-inline-form">
+                    <Field label="Search skills" hint="Matches skill name or repository location.">
+                      <Input
+                        value={browseQuery}
+                        maxLength={128}
+                        disabled={marketplaceBusy === 'import'}
+                        onChange={(_, data) => {
+                          setBrowseQuery(data.value);
+                          clearMarketplaceBrowse();
+                        }}
+                      />
+                    </Field>
+                    <div className="v1-actions">
+                      <Button appearance="primary" type="submit" disabled={!actions || !selectedSource ||
+                        browsing || marketplaceBusy === 'import'}>
+                        {browsing ? 'Browsing…' : 'Browse skills'}
+                      </Button>
+                    </div>
+                  </div>
+                </form>
+                {browsing && <Spinner label="Browsing the selected source revision…" />}
+                {currentBrowsePage && (
+                  <div className="v1-stack" aria-label="Marketplace browse results">
+                    <p className="v1-muted">
+                      Ref {currentBrowsePage.requestedRef} · source revision {currentBrowsePage.sourceRevision} · commit <code>{currentBrowsePage.resolvedCommitSha}</code> · {currentBrowsePage.total} result(s)
+                    </p>
+                    {currentBrowsePage.candidates.length === 0 ? (
+                      <p className="v1-muted">No skills matched this search on the selected source revision.</p>
+                    ) : (
+                      <div className="v1-record-list">
+                        {currentBrowsePage.candidates.map((item) => (
+                          <article className="v1-record" key={`${item.location}/${item.name}`}>
+                            <h4>{item.name}</h4>
+                            <p className="v1-muted">{item.location || 'Repository root'}</p>
+                            {item.description && <p>{item.description}</p>}
+                            <Button
+                              appearance="secondary"
+                              aria-label={`Preview ${item.name}`}
+                              disabled={!actions || marketplaceBusy !== null || skillBusy !== null}
+                              onClick={() => void previewMarketplaceSkill(item)}
+                            >
+                              {marketplaceBusy === 'preview' &&
+                                currentMarketplaceSelection?.selectedPath === item.location
+                                ? 'Previewing…'
+                                : 'Preview source skill'}
+                            </Button>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                    <div className="v1-actions">
+                      <Button
+                        appearance="secondary"
+                        disabled={!actions || browsing || marketplaceBusy === 'import' ||
+                          currentBrowsePage.page <= 1}
+                        onClick={() => void browse(currentBrowsePage.page - 1)}
+                      >
+                        Previous page
+                      </Button>
+                      <span className="v1-muted">Page {currentBrowsePage.page} · {currentBrowsePage.pageSize} per page</span>
+                      <Button
+                        appearance="secondary"
+                        disabled={!actions || browsing || marketplaceBusy === 'import' ||
+                          !currentBrowsePage.hasMore}
+                        onClick={() => void browse(currentBrowsePage.page + 1)}
+                      >
+                        Next page
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {marketplaceBusy === 'preview' && (
+                  <Spinner label="Previewing the selected skill at its pinned commit…" />
+                )}
+                {currentMarketplaceSelection && currentMarketplacePreview && (
+                  <div className="v1-stack" aria-label="Marketplace skill preview">
+                    <h4>Preview {currentMarketplaceSelection.candidateName}</h4>
+                    <p className="v1-muted">
+                      {currentMarketplaceSelection.selectedPath || 'Repository root'} · source revision {currentMarketplaceSelection.sourceRevision} · commit <code>{currentMarketplaceSelection.resolvedCommitSha}</code>
+                    </p>
+                    <div className="v1-detail-list">
+                      <div><dt>Validated skill</dt><dd>{currentMarketplacePreview.name}</dd></div>
+                      <div><dt>Resources</dt><dd>{currentMarketplacePreview.resourceCount}</dd></div>
+                      <div><dt>Content digest</dt><dd><code>{currentMarketplacePreview.contentDigest}</code></dd></div>
+                      <div><dt>Total bytes</dt><dd>{currentMarketplacePreview.totalBytes}</dd></div>
+                    </div>
+                    <Button
+                      appearance="primary"
+                      type="button"
+                      disabled={!actions || skillBusy !== null || marketplaceBusy !== null ||
+                        marketplaceImportComplete}
+                      onClick={() => void importMarketplaceSkill()}
+                    >
+                      {marketplaceBusy === 'import' ? 'Importing…' :
+                        marketplaceImportComplete ? 'Source skill imported' : 'Import selected source skill'}
+                    </Button>
+                  </div>
+                )}
+                {marketplaceBusy === 'import' && (
+                  <Spinner label="Importing the selected source skill…" />
+                )}
+                {importReceiptKind === 'marketplace' && importReceipt && (
+                  <p>
+                    Imported <strong>{importReceipt.name}</strong> · revision {importReceipt.revision} · digest <code>{importReceipt.contentDigest}</code>. Close this dialog to assign it on the Assignments tab.
+                  </p>
+                )}
+              </section>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setMarketplaceOpen(false)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      <Dialog open={importOpen} onOpenChange={(_, data) => setImportOpen(data.open)}>
+        <DialogSurface className="v1-dialog-surface--wide">
+          <DialogBody>
+            <DialogTitle>Import skill</DialogTitle>
+            <DialogContent>
+              <div className="v1-stack">
+                {skillMessages}
+                <section className="v1-stack" aria-label="Upload a local skill">
+                  <p className="v1-muted">
+                    Select a folder that contains one SKILL.md and its text resources, or select those files together. The Skills owner checks file content and paths before import.
+                  </p>
+                  <Field label="Skill folder or files" hint="Include exactly one file named SKILL.md.">
                     <input
-                      type="checkbox"
-                      checked={selectedAgentIds.includes(agent.agentId)}
-                      onChange={() => toggleAgent(agent.agentId)}
+                      ref={folderInputRef}
+                      className="v1-select"
+                      type="file"
+                      multiple
+                      aria-label="Skill folder or files"
+                      disabled={!actions || skillBusy !== null || marketplaceBusy !== null}
+                      onChange={(event) => {
+                        if (skillBusy !== null || marketplaceBusy !== null) return;
+                        setSelectedFiles(Array.from(event.currentTarget.files ?? []));
+                        setCandidate(null);
+                        setPreview(null);
+                        setImportReceipt(null);
+                        setImportReceiptKind(null);
+                        setPendingImportKey(null);
+                        setSkillError(null);
+                        setSkillNotice(null);
+                      }}
                     />
-                    <span>{agent.displayName}</span>
-                  </label>
-                ))}
-              </fieldset>
-            )}
-            <div className="v1-actions">
-              <Button
-                appearance="primary"
-                type="submit"
-                disabled={!actions || currentConfigurationRevision === null ||
-                  selectedAgentIds.length === 0 || agents.length === 0 || skillBusy !== null ||
-                  marketplaceBusy !== null ||
-                  assignmentDisabledReason !== undefined && assignmentDisabledReason !== null}
-              >
-                {skillBusy === 'assignment' ? 'Saving assignment…' : 'Assign to selected agents'}
-              </Button>
-            </div>
-          </form>
-        )}
-        <MessageBar intent="info">
-          <MessageBarBody>
-            Runtime load status is not available from this API. A saved assignment or accepted configuration does not prove that the AgentHost loaded a skill.
-          </MessageBarBody>
-        </MessageBar>
-      </section>
-    </section>
+                  </Field>
+                  <p className="v1-muted">{selectedFiles.length} file(s) selected.</p>
+                  <div className="v1-actions">
+                    <Button
+                      appearance="primary"
+                      type="button"
+                      disabled={!actions || selectedFiles.length === 0 || skillBusy !== null ||
+                        marketplaceBusy !== null}
+                      onClick={() => void previewLocalSkill()}
+                    >
+                      {skillBusy === 'preview' ? 'Checking files…' : 'Validate skill files'}
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      type="button"
+                      disabled={!actions || !preview || !candidate || skillBusy !== null ||
+                        marketplaceBusy !== null || importReceipt !== null}
+                      onClick={() => void importLocalSkill()}
+                    >
+                      {skillBusy === 'import' ? 'Importing…' : importReceipt ? 'Imported' : 'Import skill to project'}
+                    </Button>
+                  </div>
+                  {preview && (
+                    <div className="v1-detail-list" aria-label="Skill preview">
+                      <div><dt>Validated skill</dt><dd>{preview.name}</dd></div>
+                      <div><dt>Resources</dt><dd>{preview.resourceCount}</dd></div>
+                      <div><dt>Content digest</dt><dd><code>{preview.contentDigest}</code></dd></div>
+                      <div><dt>Total bytes</dt><dd>{preview.totalBytes}</dd></div>
+                    </div>
+                  )}
+                  {importReceipt && importReceiptKind === 'local' && (
+                    <p>
+                      Imported <strong>{importReceipt.name}</strong> · revision {importReceipt.revision} · digest <code>{importReceipt.contentDigest}</code>. Close this dialog to assign it on the Assignments tab.
+                    </p>
+                  )}
+                </section>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setImportOpen(false)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </div>
   );
 }

@@ -1,4 +1,5 @@
 import { Button, MessageBar, MessageBarBody } from '@fluentui/react-components';
+import { PageSection } from '../components/ui/PageSection';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAuth } from './AuthContext';
 import { gatewayClient, GatewayError } from './api';
@@ -62,7 +63,7 @@ function receiptForProject(
       value.connectionId !== connectionId ||
       value.scope !== 'project' ||
       value.scopeId !== projectId) {
-    throw new Error('The Gateway returned a connection outside this project or the expected connection.');
+    throw new Error('The server returned a connection outside this project or the expected connection.');
   }
   return value;
 }
@@ -74,7 +75,7 @@ function copilotCallbackUri(): string {
   }
   const gatewayUrl = new URL(gatewayBaseUrl, window.location.origin);
   if (gatewayUrl.origin !== window.location.origin) {
-    throw new Error('GitHub Copilot connection requires the Gateway on this same origin for its nonce cookie.');
+    throw new Error('The GitHub Copilot connection must use the same site as this app.');
   }
   return new URL(COPILOT_CALLBACK_PATH, window.location.origin).toString();
 }
@@ -345,7 +346,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
       if (!isCopilotConnectionBegin(result.begin) ||
           result.begin.connection.scope !== 'project' ||
           result.begin.connection.scopeId !== attempt.projectId) {
-        throw new Error('The Gateway returned a connection outside this project.');
+        throw new Error('The server returned a connection outside this project.');
       }
       const state = expectedCopilotCallbackState(result.begin.authorizationUri, callbackUri);
       if (popup.closed) {
@@ -415,10 +416,9 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
   };
 
   return (
-    <section className="v1-panel" aria-labelledby="copilot-user-connection-title">
-      <div className="v1-panel-heading">
-        <h2 id="copilot-user-connection-title">GitHub Copilot connection</h2>
-        {receipt && (
+    <PageSection
+      title={<span id="copilot-user-connection-title">GitHub Copilot connection</span>}
+      actions={receipt && (
           <Button
             appearance="secondary"
             disabled={refreshing || starting || flowActive}
@@ -426,11 +426,11 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
           >
             {refreshing ? 'Refreshing…' : 'Refresh status'}
           </Button>
-        )}
-      </div>
+      )}
+    >
       <p className="v1-muted">
-        Connect GitHub Copilot in a pop-up while keeping this signed-in settings session open.
-        The owner response, not the callback page, determines connection status.
+        Connect GitHub Copilot in a popup. Keep this settings page open.
+        The service checks the connection after sign-in returns.
       </p>
       {receipt && (
         <p>
@@ -454,7 +454,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
           {starting || flowActive ? 'Connecting…' : 'Connect GitHub Copilot'}
         </Button>
       </div>
-    </section>
+    </PageSection>
   );
 }
 

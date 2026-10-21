@@ -118,6 +118,8 @@ export interface ExecutorState {
 export interface WorkflowNodeData extends Record<string, unknown> {
   def: ExecutorDef;
   state: ExecutorState;
+  /** Owner-reported status when a service does not use legacy workflow step states. */
+  statusLabelOverride?: string;
   /** node_type drives card width and shape. */
   nodeType?: GraphNodeType;
   isPlanned?: boolean;
@@ -983,6 +985,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
     editorBadge,
     editorActions,
     definitionNode,
+    statusLabelOverride,
   } = data as WorkflowNodeData;
   const { key, label, Icon } = def;
   const { status, startedAt, completedAt, intent, message } = state;
@@ -1043,7 +1046,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : (message ?? rawSubText));
   const roleText   = agentRoleTitle ?? def.roleDescription;
   const coordinatorClickable = key === 'coordinator' && !isPlanned && Boolean(openSession);
-  const statusText = isPlanned ? 'Planned' : isHumanWaiting ? 'Awaiting' : statusLabel(effectiveStatus);
+  const statusText = statusLabelOverride ?? (isPlanned ? 'Planned' : isHumanWaiting ? 'Awaiting' : statusLabel(effectiveStatus));
   const handleTestId = (suffix: string) => handleTestIdPrefix ? `${handleTestIdPrefix}-${suffix}` : undefined;
 
   // Compact face: always the role ICON (never an avatar). The agent name lives in the hover popover.
@@ -1083,10 +1086,10 @@ export function WorkflowNode({ data, selected }: NodeProps) {
           View session
         </Button>
       )}
-      {key === 'agent' && !isPlanned && (
+      {key === 'agent' && !isPlanned && openModal && (
         <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>View execution</Button>
       )}
-      {key === 'rai' && !isPlanned && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
+      {key === 'rai' && !isPlanned && openModal && (status === 'started' || status === 'completed' || status === 'failed' || status === 'revise') && (
         <Button appearance="outline" size="small" onClick={() => openModal?.(`${executionId as string}-rai`)}>View execution</Button>
       )}
       {key === 'build_test' && !isPlanned && previewUrl && (
@@ -1124,7 +1127,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
       <div
         className={pillClass}
         role="article"
-        aria-label={`${label}: ${statusLabel(effectiveStatus)}`}
+        aria-label={`${label}: ${statusText}`}
         aria-current={selected ? 'true' : undefined}
         data-node-type={nodeType ?? 'default'}
         data-testid={interactionTestId ?? (coordinatorClickable ? 'coordinator-card' : undefined)}

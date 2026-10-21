@@ -170,6 +170,21 @@ export interface ModelSelectionSettings {
   reference: string;
   credentialReference?: { id: string; version: string } | null;
   connectionId?: string;
+  sourceMode?: 'hostedCopilot' | 'byok' | null;
+  reasoningEffort?: ReasoningEffort | null;
+}
+
+/** Reasoning levels accepted by the Projects configuration validator. */
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+/** Task categories serialized by the owner with stable camel-case names. */
+export type ModelTaskKind = 'planning' | 'review' | 'design' | 'security'
+  | 'creativeWriting' | 'complex' | 'codeWriting' | 'straightforward';
+
+/** A project task override inherits any omitted model or reasoning value. */
+export interface ModelTaskOverride {
+  taskKind: ModelTaskKind;
+  selection: { reference?: string | null; reasoningEffort?: ReasoningEffort | null };
 }
 
 /** Owner scope of a user-managed Copilot connection. */
@@ -402,6 +417,7 @@ export function isCopilotConnectionBegin(value: unknown): value is CopilotConnec
 /** Mutable owner configuration, including model, skills, source control, and run limits. */
 export interface ProjectConfiguration {
   modelSelection?: ModelSelectionSettings | null;
+  modelTaskOverrides?: ModelTaskOverride[];
   providerOverrides: Array<{ seam: string; providerId: string }>;
   orderedProviderOverrides: Array<{ seam: string; providerIds: string[] }>;
   agentCharters: Array<{ agentId: string; name: string; role: string; charter: string }>;
@@ -1229,4 +1245,25 @@ export interface BrokerTokenResponse {
   expires_in: number;
   refresh_token?: string;
   scope?: string;
+}
+
+/** Project role a tenant administrator can assign. */
+export type ProjectRole = 'owner' | 'contributor' | 'viewer' | 'orchestrator';
+
+/** One active project role assignment (`listProjectRoleAssignments`). */
+export interface ProjectRoleAssignment {
+  assignmentId: string;
+  /** Member subject under the caller's issuer. */
+  principalId: string;
+  role: ProjectRole;
+  /** Concurrency token for revoke (`expectedRevision`). */
+  revision: number;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** Response of `GET /projects/{projectId}/role-assignments`. */
+export interface ProjectRoleAssignmentList {
+  projectId: string;
+  assignments: ProjectRoleAssignment[];
 }

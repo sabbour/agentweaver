@@ -6,16 +6,16 @@ is a node in the run's owner-reported tree.
 
 ## Prerequisites
 
-- Know the exact project ID, and the run ID for an existing run.
+- Open the run once in this browser, for example from a link or a
+  notification. After that, it appears in **Recent runs in this browser**.
+- Sign in with a Broker token bound to that project and run.
 - To create a chat, have the project Orchestrator role (`acceptRunSelection`).
   Owner or Contributor alone receives `403`. A tenant admin grants the role through
   `/api/v1/projects/{projectId}/role-assignments`.
-- Sign in with a Broker token that requests `api.read` and
-  `projects.orchestrator`. Start and run pages need a token bound to
-  that exact project and run.
 
-Open `/projects/:projectId/runs/:runId`, then select
-**Sign in for this project and run** if the page requests it.
+Open the run from **Overview**, the project **Dashboard**, or
+**Orchestrations**. The app signs in to the run silently. You don't type a run
+ID. If the silent sign-in fails, select **Sign in for this project and run**.
 
 ## Start a new chat
 
@@ -63,55 +63,81 @@ state or sending another event. Idempotency receipts are scoped to each caller.
 
 ## Inspect an existing run
 
-The **Authoritative run snapshot** shows the Orchestrator's current owner
-state. The page refreshes owner snapshots every five seconds after each
-polling pass. Select **Refresh owner snapshots** for an immediate read.
+The **Orchestration** page uses the 0.x two-pane layout. A status strip shows
+the run state, the session count, the elapsed time, and the live update state
+(**Live** or **Reconnecting**). **Run details** expands the owner state. The
+**Run tree** pane lists the sessions; select one to open it in the session
+panel. The page reads owner snapshots again five seconds after each polling
+pass. Select **Refresh** for an immediate read.
 
 | Tab | What you can read or do |
 | --- | --- |
+| **Chat** | Read the run's **Activity** and message the coordinator, or the session you select in the run tree. This tab opens by default. |
 | **Topology** | Inspect the root and child sessions in an interactive graph. Select a node to read activity, lifecycle, blockers, and detach state. |
-| **Chat** | Read journal summaries and send an addressed message between two existing active sessions. |
-| **Outcomes & approvals** | Answer questions and approve or reject exact pending outcome, plan, or approval gates. |
+| **Approvals** | Answer questions and approve or reject pending outcome, plan, or step approvals. The tab label shows the number of pending decisions. |
 | **Activity** | Read committed events, execution state, lifecycle, and blockers. |
-| **Selection** | Read the accepted configuration and provider selection. Manage the [run repository pin](./connections.md#pin-a-repository-to-an-existing-run) when the run uses GitHub App mode. |
+| **Changes** | Manage GitHub App repository access for the run. If the project doesn't use a GitHub App, the tab shows **No repository changes**. |
 | **Usage** | Read owner usage and accounting totals. Missing or unpriced usage is not a zero-cost measurement. |
+| **Run settings** | Read the model, the revisions the run started with, and the platform components it can use. |
 
-The `view` query selects `topology`, `chat`, `approvals`, `activity`,
-`selection`, or `usage`. An invalid value normalizes to `topology`.
+The `view` query selects `chat`, `topology`, `approvals`, `activity`,
+`changes`, `usage`, or `selection` (**Run settings**). An invalid value
+selects `topology`.
 
-The Selection tab shows the immutable accepted selection and advertised
-provider candidates. It does not report a runtime model ID or a provisioned
-provider pin. A candidate is metadata, not proof of a provisioned resource or
-provider binding. Some service candidates in the repository are source-only or
+**Run settings** shows the settings the run started with. Changing project
+settings doesn't change them. It lists the model reference, the project
+configuration revision, and the platform defaults revision. The table
+**Allowed implementations for this run** lists each platform component, its
+choice (one, an ordered list, or several), and its implementations in order.
+The table shows allowed implementations, not the implementation that is
+running. Some service candidates in the repository are source-only or
 unpublished; see the [provider and model reference](../architecture/providers-models.md).
+
+In **Changes**, use **GitHub App repository access** to
+[pin a repository to the run](./connections.md#pin-a-repository-to-an-existing-run).
 
 ## Send a message
 
-**Prerequisites:** The session tree contains at least two active sessions.
+**Prerequisites:** The run tree contains at least two active sessions.
 
-1. Open **Chat**.
-2. Choose different **From session** and **To session** values.
+1. Open **Chat**. **Message the coordinator** is selected by default.
+2. To message another session, select it in the **Run tree**.
 3. Enter a message.
-4. Select **Send immediately**.
+4. Select **Send**, or press Ctrl+Enter.
 
-**Expected result:** The owner returns a message ID and status. The app shows
-the message text as a browser-local echo after it receives the receipt. The
-receipt does not prove delivery or completion, and the page does not restore a
-transcript. The journal contains typed events and opaque object references; the
-page has no object-content reader.
+The service accepts messages only between sessions of the run. The app sends
+the message from another active session: the coordinator, or the first active
+session when you message the coordinator. Direct messages from you to the
+coordinator need a service API that doesn't exist yet.
+
+**Expected result:** The page shows **Message accepted.** and lists the
+message under the composer. The list is local to the page; reloading clears
+it. The receipt does not prove delivery or completion. If a send fails and you
+retry the same text, the app reuses the same request, so the message isn't
+sent twice. The journal contains typed events and opaque object references;
+the page has no message-content reader.
+
+You can't start a new chat or run from the browser yet. That needs a service
+API that doesn't exist yet (gap G1).
 
 ## Answer a gate
 
-1. Open **Outcomes & approvals**.
-2. Read the blocker prompt and exact request ID.
-3. Select an advertised answer, or enter freeform text when the blocker allows it.
-4. Submit the answer, approval, or rejection.
+1. Open **Approvals**.
+2. Read the prompt, session, and request ID.
+3. Select an offered answer, or enter text in **Your answer** when the request
+   allows it.
+4. Select **Send answer**, or approve or reject the request.
 5. Read the refreshed owner snapshot.
 
 The blocker and decision snapshot must report the same pending request ID. The
-action includes that ID and the expected decision-state version. The app
-disables an action when the snapshots do not match. A `409` response causes
-the app to reload owner state without assuming that the decision was applied.
+action includes that ID and the expected decision-state version. When the
+snapshots don't match, the app disables the action and shows **This request is
+no longer the pending one.** A `409` response causes the app to reload owner
+state without assuming that the decision was applied.
+
+You can also open a pending request from the notification bell or from
+**Needs attention** on **Overview**. Both list requests from the run you have
+open.
 
 **Expected result:** The owner reports whether it accepted the request. A
 refreshed snapshot, not the receipt, shows the resulting gate state.
@@ -131,17 +157,19 @@ owner reports it. These controls do not stop a pod or infer AgentHost health.
 ## Read activity and usage
 
 The app replays available journal pages before following the live event stream.
-It deduplicates events by event ID and orders them by owner position. The stream
-reconnects from its cursor after retryable failures. Scope mismatches and
-nonretryable client errors stop the stream.
+It deduplicates events by event ID and orders them by owner position. When the
+stream closes or a retryable failure occurs, it reconnects from its cursor with
+backoff, and the status strip shows **Reconnecting**. The page shows an error
+only after three failures in a row. Scope mismatches and nonretryable client
+errors stop the stream and show an error at once.
 
 The **Usage** tab preserves missing measurements as **not reported**. A
 partially priced usage summary does not mean that unpriced usage cost zero.
 
 ## Understand errors
 
-- Snapshot errors appear on the affected surface, such as run, selection, usage,
-  or session. A failed topology read does not fabricate a tree.
+- Snapshot errors appear on the affected area, such as run, run settings,
+  usage, or session. A failed topology read does not fabricate a tree.
 - An empty tree or pending-request list reflects the owner response.
 - Activity displays loading, live, or reconnecting journal state.
 - The app rejects responses for a different project, run, or session.

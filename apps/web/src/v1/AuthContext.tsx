@@ -33,6 +33,7 @@ import type {
   ProjectAuthorizationContextResponse,
 } from './contracts';
 import { gatewayClient, GatewayError } from './api';
+import { clearRecentRuns } from './recentRuns';
 
 /** In-memory bearer session bound to the project/run that initiated authorization. */
 interface AuthSession {
@@ -60,6 +61,12 @@ interface AuthContextValue {
   error: string | null;
   configurationError: string | null;
   authorize: (binding?: RunBinding | null) => Promise<void>;
+  /**
+   * Makes a session for `binding` available without a prompt. It reuses a held session or
+   * asks the Broker once with `prompt=none`. Returns false when the Broker needs the user;
+   * the current session is kept in that case. `activate` makes it the page's active session.
+   */
+  ensureSession: (binding: RunBinding | null, activate?: boolean) => Promise<boolean>;
   resolveAuthorizationContext: (tenantSelector?: string) => Promise<ConfirmedAuthorizationContext | null>;
   decideConsent: (approve: boolean) => Promise<void>;
   signOut: () => void;
@@ -117,6 +124,14 @@ function bindingFromCurrentRoute(): RunBinding | null {
   }
 }
 
+/** Map key for the session held for one binding; the unbound session uses the empty key. */
+function bindingKey(binding: RunBinding | null): string {
+  return binding ? JSON.stringify([binding.projectId, binding.runId]) : '';
+}
+
+/** How a sign-in result is stored: replace all sessions, or add one and optionally activate it. */
+type SessionMode = 'replace' | 'activate' | 'store';
+
 /** True when two optional authorization requests target the same project and run. */
 function sameBinding(left: RunBinding | null, right: RunBinding | null): boolean {
   return left?.projectId === right?.projectId && left?.runId === right?.runId;
@@ -153,10 +168,12 @@ function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null
 }
 
 /**
- * Owns the v1 Broker session, PKCE sign-in, one-time silent restoration, consent,
+ * Owns the v1 Broker sessions, PKCE sign-in, one-time silent restoration, consent,
  * refresh, and tenant context.
- * Access tokens stay in memory; each Gateway call is fenced to the session's
- * exact project/run binding and may retry once after a 401 using token refresh.
+ * Access tokens stay in memory. The provider holds at most one session per binding
+ * (the unbound session plus run-bound sessions); `session` is the active one. Each
+ * Gateway call uses the session held for its exact project/run binding and may retry
+ * once after a 401 using token refresh.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSessionState] = useState<AuthSession | null>(null);
@@ -173,10 +190,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
     return typeof callbackSearch === 'string' &&
       !parseAuthorizationCallbackParameters(callbackSearch)
-      ? 'The Identity Broker sign-in response is invalid. Start sign-in again.'
+      ? 'The sign-in response is invalid. Start sign-in again.'
       : null;
   });
   const sessionRef = useRef<AuthSession | null>(null);
+  const sessionsRef = useRef(new Map<string, AuthSession>());
+  const ensureRef = useRef(new Map<string, Promise<boolean>>());
   const sessionGenerationRef = useRef(0);
   const authorizationContextRequestRef = useRef(0);
   const authorizationContextRef = useRef<{
@@ -185,10 +204,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     binding: RunBinding | null;
     sessionGeneration: number;
   } | null>(null);
-  const refreshPromiseRef = useRef<{
+  const refreshPromisesRef = useRef(new Map<string, {
     session: AuthSession;
     promise: Promise<AuthSession | null>;
-  } | null>(null);
+  }>());
   const transactionRef = useRef<AuthorizationTransaction | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
   const authorizationFrameRef = useRef<HTMLIFrameElement | null>(null);
@@ -201,7 +220,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : null;
   }, []);
 
-  const setSession = useCallback((next: AuthSession | null) => {
+  /** Makes `next` the active session without changing the held sessions. */
+  const setActiveSession = useCallback((next: AuthSession | null) => {
     const current = sessionRef.current;
     if (current?.accessToken !== next?.accessToken || !sameBinding(current?.binding ?? null, next?.binding ?? null)) {
       sessionGenerationRef.current += 1;
@@ -215,7 +235,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSessionState(next);
   }, []);
 
-  const finishCode = useCallback(async (code: string, transaction: AuthorizationTransaction) => {
+  /** Replaces every held session with `next` (or none) and activates it. */
+  const setSession = useCallback((next: AuthSession | null) => {
+    sessionsRef.current.clear();
+    ensureRef.current.clear();
+    if (next) sessionsRef.current.set(bindingKey(next.binding), next);
+    setActiveSession(next);
+  }, [setActiveSession]);
+
+  /** Stores a new session for its binding; `mode` decides whether others are kept and it becomes active. */
+  const storeSession = useCallback((next: AuthSession, mode: SessionMode) => {
+    if (mode === 'replace') {
+      setSession(next);
+      return;
+    }
+    sessionsRef.current.set(bindingKey(next.binding), next);
+    if (mode === 'activate' || sessionRef.current?.binding && sameBinding(sessionRef.current.binding, next.binding))
+      setActiveSession(next);
+  }, [setActiveSession, setSession]);
+
+  const finishCode = useCallback(async (code: string, transaction: AuthorizationTransaction, mode: SessionMode) => {
     const token = await exchangeAuthorizationCode(
       defaultAuthorizationConfig(),
       transaction,
@@ -226,19 +265,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setConsent(null);
     setError(null);
     rememberSignIn();
-    setSession(sessionFromToken(token, transaction.binding));
-  }, [setSession]);
+    storeSession(sessionFromToken(token, transaction.binding), mode);
+  }, [storeSession]);
 
   const consumeAuthorizationResponse = useCallback(async (
     responseUrl: string,
     transaction: AuthorizationTransaction,
+    mode: SessionMode = 'replace',
   ): Promise<boolean> => {
     const result = parseAuthorizationResult(responseUrl, transaction.state);
     if (!result) return false;
     if ('error' in result) {
-      throw new Error(result.description ?? `Identity Broker authorization failed: ${result.error}.`);
+      throw new Error(result.description ?? `Sign-in failed: ${result.error}.`);
     }
-    await finishCode(result.code, transaction);
+    await finishCode(result.code, transaction, mode);
     return true;
   }, [finishCode]);
 
@@ -274,24 +314,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => () => pollAbortRef.current?.abort(), []);
 
-  const authorize = useCallback(async (
-    requestedBinding: RunBinding | null = null,
-    popupOverride?: Window | null,
-    silent = false,
-  ) => {
+  /**
+   * Runs one Broker authorization. `silent` uses a hidden frame with `prompt=none`.
+   * `rebind` adds a run-bound session next to the held ones; it keeps the current
+   * session and the sign-in marker when the Broker needs the user. Returns true when
+   * a session was stored.
+   */
+  const runAuthorization = useCallback(async (
+    requestedBinding: RunBinding | null,
+    popupOverride: Window | null | undefined,
+    silent: boolean,
+    rebind: SessionMode | null = null,
+  ): Promise<boolean> => {
     if (configurationError) {
+      if (rebind) return false;
       setError(configurationError);
       if (silent) {
         forgetSignIn();
         setRestoringSession(false);
       }
-      return;
+      return false;
     }
     const config = defaultAuthorizationConfig();
-    setError(null);
-    setConsent(null);
-    setSession(null);
-    setBusy(true);
+    const mode: SessionMode = rebind ?? (requestedBinding && sessionRef.current ? 'activate' : 'replace');
+    if (!rebind) {
+      setError(null);
+      setConsent(null);
+      setBusy(true);
+    }
+    if (mode === 'replace') setSession(null);
     pollAbortRef.current?.abort();
 
     let popup: Window | null = null;
@@ -331,7 +382,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       else {
         window.location.assign(authorizeUrl);
-        return;
+        return false;
       }
       const callbackOrigin = new URL(transaction.redirectUri).origin;
       popupMessageHandler = (event) => {
@@ -358,7 +409,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch (reason) {
           popupCallbackError = reason instanceof Error
             ? reason
-            : new Error('The Identity Broker returned an invalid sign-in response.');
+            : new Error('The sign-in response is invalid.');
         }
         pollAbortRef.current?.abort();
       };
@@ -366,16 +417,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const startedAt = Date.now();
       while (Date.now() - startedAt < (silent ? SILENT_AUTH_TIMEOUT_MS : AUTH_TIMEOUT_MS)) {
         if (transactionRef.current !== transaction)
-          throw new Error('Identity Broker sign-in was cancelled.');
+          throw new Error('Sign-in was cancelled.');
         if (popupCallbackError) throw popupCallbackError;
         if (popupCallbackUrl) {
-          if (!await consumeAuthorizationResponse(popupCallbackUrl, transaction))
-            throw new Error('The Identity Broker returned an invalid sign-in response.');
+          if (!await consumeAuthorizationResponse(popupCallbackUrl, transaction, mode))
+            throw new Error('The sign-in response is invalid.');
           popup?.close();
-          return;
+          return true;
         }
         if (!silent && popup?.closed)
-          throw new Error('Identity Broker sign-in was closed before it completed.');
+          throw new Error('The sign-in window closed before sign-in finished.');
         if (silent) {
           await new Promise((resolve) => window.setTimeout(resolve, 50));
           continue;
@@ -400,8 +451,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               throw new Error(
                 problem?.error_description ??
                   (problem?.error
-                    ? `Identity Broker authorization failed: ${problem.error}.`
-                    : `Identity Broker authorization failed with HTTP ${response.status}.`),
+                    ? `Sign-in failed: ${problem.error}.`
+                    : `Sign-in failed with HTTP ${response.status}.`),
               );
             }
             const result: unknown = await response.json().catch(() => null);
@@ -412,11 +463,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               }
               popup?.close();
               setConsent(result);
-              return;
+              return false;
             }
             const body = result as { error?: string; error_description?: string } | null;
             if (body?.error)
-              throw new Error(body.error_description ?? `Identity Broker authorization failed: ${body.error}.`);
+              throw new Error(body.error_description ?? `Sign-in failed: ${body.error}.`);
           }
         } catch (reason) {
           if (reason instanceof Error && !/aborted|load failed|failed to fetch/i.test(reason.message))
@@ -427,32 +478,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         await new Promise((resolve) => window.setTimeout(resolve, 500));
       }
-      throw new Error('Identity Broker sign-in timed out. You can try again.');
+      throw new Error('Sign-in timed out. You can try again.');
     } catch (reason) {
       popup?.close();
-      if (silent) {
+      if (rebind) {
+        // The held sessions stay usable; the page offers a manual sign-in instead.
+      } else if (silent) {
         forgetSignIn();
         setError(null);
       } else {
-        setError(reason instanceof Error ? reason.message : 'Identity Broker sign-in failed.');
+        setError(reason instanceof Error ? reason.message : 'Sign-in failed.');
       }
       clearAuthorizationTransaction();
       transactionRef.current = null;
+      return false;
     } finally {
       if (popupMessageHandler) window.removeEventListener('message', popupMessageHandler);
       if (authorizationFrameRef.current === iframe)
         authorizationFrameRef.current = null;
       iframe?.remove();
-      if (silent) setRestoringSession(false);
-      setBusy(false);
+      if (silent && !rebind) setRestoringSession(false);
+      if (!rebind) setBusy(false);
     }
   }, [configurationError, consumeAuthorizationResponse, setSession]);
+
+  /** Interactive sign-in for the unbound session or a project/run binding. */
+  const authorize = useCallback(async (
+    requestedBinding: RunBinding | null = null,
+    popupOverride?: Window | null,
+  ) => {
+    await runAuthorization(requestedBinding, popupOverride, false);
+  }, [runAuthorization]);
+
+  const ensureSession = useCallback((binding: RunBinding | null, activate = true): Promise<boolean> => {
+    const key = bindingKey(binding);
+    const held = sessionsRef.current.get(key);
+    if (held) {
+      if (activate && sessionRef.current !== held) setActiveSession(held);
+      return Promise.resolve(true);
+    }
+    const pending = ensureRef.current.get(key);
+    if (pending) return pending;
+    const attempt = runAuthorization(binding, null, true, activate ? 'activate' : 'store');
+    ensureRef.current.set(key, attempt);
+    void attempt.finally(() => {
+      if (ensureRef.current.get(key) === attempt) ensureRef.current.delete(key);
+    });
+    return attempt;
+  }, [runAuthorization, setActiveSession]);
 
   useEffect(() => {
     if (session || !restoringSession || silentAttemptedRef.current) return;
     silentAttemptedRef.current = true;
-    void authorize(bindingFromCurrentRoute(), null, true);
-  }, [authorize, restoringSession, session]);
+    void runAuthorization(bindingFromCurrentRoute(), null, true);
+  }, [restoringSession, runAuthorization, session]);
 
   const decideConsent = useCallback(async (approve: boolean) => {
     if (!consent) return;
@@ -470,7 +549,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         ? window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720')
         : null;
       const response = await submitBrokerConsent(defaultAuthorizationConfig(), consent, approve);
-      if (await consumeAuthorizationResponse(response.url, transaction)) {
+      const mode: SessionMode = transaction.binding && sessionRef.current ? 'activate' : 'replace';
+      if (await consumeAuthorizationResponse(response.url, transaction, mode)) {
         popup?.close();
         return;
       }
@@ -478,7 +558,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error('Consent was declined. No Agentweaver session was created.');
       }
       if (!popup)
-        throw new Error('Allow the Identity Broker sign-in popup to continue.');
+        throw new Error('Allow the sign-in popup to continue.');
       await authorize(transaction.binding, popup);
     } catch (reason) {
       popup?.close();
@@ -490,17 +570,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [authorize, consent, consumeAuthorizationResponse]);
 
-  const refresh = useCallback((current: AuthSession): Promise<AuthSession | null> => {
-    const latest = sessionRef.current;
-    if (latest !== current) {
-      return Promise.resolve(latest && sameBinding(latest.binding, current.binding) ? latest : null);
+  /** Drops one held session after a failed refresh; the unbound session falls back to sign-in. */
+  const dropSession = useCallback((current: AuthSession, message: string) => {
+    if (!current.binding) {
+      setSession(null);
+      setError(message);
+      return;
     }
-    if (refreshPromiseRef.current?.session === current)
-      return refreshPromiseRef.current.promise;
+    sessionsRef.current.delete(bindingKey(current.binding));
+    if (sessionRef.current === current) setActiveSession(sessionsRef.current.get('') ?? null);
+    if (!sessionRef.current) setError(message);
+  }, [setActiveSession, setSession]);
+
+  const refresh = useCallback((current: AuthSession): Promise<AuthSession | null> => {
+    const key = bindingKey(current.binding);
+    const latest = sessionsRef.current.get(key) ?? null;
+    if (latest !== current) return Promise.resolve(latest);
+    const inFlight = refreshPromisesRef.current.get(key);
+    if (inFlight?.session === current) return inFlight.promise;
     const refreshToken = current.refreshToken;
     if (!refreshToken) {
-      setSession(null);
-      setError('Your Broker session expired. Sign in again to continue.');
+      dropSession(current, 'Your sign-in expired. Sign in again to continue.');
       return Promise.resolve(null);
     }
     const promise = (async (): Promise<AuthSession | null> => {
@@ -508,30 +598,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const refreshed = await refreshBrokerToken(defaultAuthorizationConfig(), refreshToken);
         const next = sessionFromToken(refreshed, current.binding);
         if (!next.refreshToken) next.refreshToken = refreshToken;
-        if (sessionRef.current !== current) {
-          const replacement = sessionRef.current;
-          return replacement && sameBinding(replacement.binding, current.binding) ? replacement : null;
-        }
-        setSession(next);
+        if (sessionsRef.current.get(key) !== current) return sessionsRef.current.get(key) ?? null;
+        sessionsRef.current.set(key, next);
+        if (sessionRef.current === current) setActiveSession(next);
         return next;
       } catch (reason) {
-        if (sessionRef.current !== current) {
-          const replacement = sessionRef.current;
-          return replacement && sameBinding(replacement.binding, current.binding) ? replacement : null;
-        }
-        setSession(null);
-        setError(reason instanceof Error ? reason.message : 'Your Broker session expired. Sign in again.');
+        if (sessionsRef.current.get(key) !== current) return sessionsRef.current.get(key) ?? null;
+        dropSession(current, reason instanceof Error ? reason.message : 'Your sign-in expired. Sign in again.');
         return null;
       }
     })();
     const activeRefresh = { session: current, promise };
-    refreshPromiseRef.current = activeRefresh;
+    refreshPromisesRef.current.set(key, activeRefresh);
     void promise.finally(() => {
-      if (refreshPromiseRef.current === activeRefresh)
-        refreshPromiseRef.current = null;
+      if (refreshPromisesRef.current.get(key) === activeRefresh)
+        refreshPromisesRef.current.delete(key);
     });
     return promise;
-  }, [setSession]);
+  }, [dropSession, setActiveSession]);
 
   useEffect(() => {
     if (!session) return;
@@ -544,14 +628,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     operation: (accessToken: string, tenantSelector: string | null) => Promise<T>,
     requestedBinding: RunBinding | null = null,
   ): Promise<T> => {
-    let current = sessionRef.current;
-    if (!current || !sameBinding(current.binding, requestedBinding)) {
+    let current = sessionsRef.current.get(bindingKey(requestedBinding)) ?? null;
+    if (!current) {
       throw new GatewayError(
         401,
         { code: 'unauthorized' },
         requestedBinding
           ? 'Sign in for this exact project and run before continuing.'
-          : 'Sign in through the Identity Broker to continue.',
+          : 'Sign in to continue.',
       );
     }
     if (current.expiresAt <= Date.now() + 5_000) {
@@ -677,6 +761,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setConsent(null);
     setError(null);
     forgetSignIn();
+    clearRecentRuns();
     setRestoringSession(false);
   }, [setSession]);
 
@@ -688,6 +773,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     error,
     configurationError,
     authorize,
+    ensureSession,
     decideConsent,
     signOut,
     apiCall,
@@ -705,6 +791,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     configurationError,
     consent,
     decideConsent,
+    ensureSession,
     error,
     resolveAuthorizationContext,
     session,

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   binding: null as { projectId: string; runId: string } | null,
   consent: null as BrokerConsentPrompt | null,
   authProvider: vi.fn(),
+  ensureSession: vi.fn(),
   tenantSelector: 'tenant-1',
   completeRemoteMcpOAuthCallback: vi.fn(),
   listProjects: vi.fn(),
@@ -38,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   getSessionTree: vi.fn(),
   getSessionStatus: vi.fn(),
   getDecisions: vi.fn(),
+  sendMessage: vi.fn(),
   searchKnowledge: vi.fn(),
   createKnowledgeRecord: vi.fn(),
   updateKnowledgeRecord: vi.fn(),
@@ -50,6 +52,9 @@ const mocks = vi.hoisted(() => ({
   rejectKnowledgeProposal: vi.fn(),
   replayEvents: vi.fn(),
   streamEvents: vi.fn(),
+  getAuthorizationContext: vi.fn(),
+  listProjectRoleAssignments: vi.fn(),
+  createProject: vi.fn(),
 }));
 
 vi.mock('./api', () => ({
@@ -77,6 +82,7 @@ vi.mock('./api', () => ({
     getSessionTree: mocks.getSessionTree,
     getSessionStatus: mocks.getSessionStatus,
     getDecisions: mocks.getDecisions,
+    sendMessage: mocks.sendMessage,
     searchKnowledge: mocks.searchKnowledge,
     createKnowledgeRecord: mocks.createKnowledgeRecord,
     updateKnowledgeRecord: mocks.updateKnowledgeRecord,
@@ -89,6 +95,9 @@ vi.mock('./api', () => ({
     rejectKnowledgeProposal: mocks.rejectKnowledgeProposal,
     replayEvents: mocks.replayEvents,
     streamEvents: mocks.streamEvents,
+    getAuthorizationContext: mocks.getAuthorizationContext,
+    listProjectRoleAssignments: mocks.listProjectRoleAssignments,
+    createProject: mocks.createProject,
   },
   GatewayError: class GatewayError extends Error {
     status: number;
@@ -143,7 +152,9 @@ vi.mock('./AuthContext', () => {
     apiCall: <T,>(operation: (token: string, tenantSelector: string | null) => Promise<T>) =>
       operation('broker-token', mocks.tenantSelector),
     authorize: async () => {},
+    ensureSession: (binding: unknown) => mocks.ensureSession(binding),
     signOut: () => {},
+    authorizationContext: { tenantId: 'tenant-1' },
     busy: false,
     restoringSession: false,
     consent: null,
@@ -171,6 +182,7 @@ vi.mock('./config', async (importOriginal) => {
 
 import App from './App';
 import { GatewayError } from './api';
+import { clearRecentRuns, rememberRun } from './recentRuns';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -366,17 +378,21 @@ function knowledgeTransferBundle(projectId = 'p1', agentId = 'a1') {
 
 describe('v1 web project scoping', () => {
   beforeEach(() => {
-    window.history.replaceState({}, '', '/projects/p1/settings');
+    window.history.replaceState({}, '', '/projects/p1/settings?section=connections');
     window.name = '';
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ = undefined;
     mocks.authProvider.mockClear();
+    mocks.ensureSession.mockReset();
+    mocks.ensureSession.mockResolvedValue(false);
     mocks.binding = null;
+    clearRecentRuns();
     mocks.consent = null;
     mocks.tenantSelector = 'tenant-1';
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
     mocks.listProjects.mockReset().mockResolvedValue([]);
-    mocks.getProject.mockReset();
-    mocks.getProjectConfiguration.mockReset();
+    mocks.createProject.mockReset();
+    mocks.getProject.mockReset().mockImplementation(async (_token: string, projectId: string) => projectSummary(projectId, 'Fixture project'));
+    mocks.getProjectConfiguration.mockReset().mockImplementation(async (_token: string, projectId: string) => projectConfiguration(projectId, 1));
     mocks.updateProjectConfiguration.mockReset();
     mocks.listMarketplaceSources.mockReset().mockResolvedValue([]);
     mocks.createMarketplaceSource.mockReset();
@@ -413,6 +429,7 @@ describe('v1 web project scoping', () => {
     mocks.getSessionTree.mockReset();
     mocks.getSessionStatus.mockReset();
     mocks.getDecisions.mockReset();
+    mocks.sendMessage.mockReset();
     mocks.searchKnowledge.mockReset();
     mocks.createKnowledgeRecord.mockReset();
     mocks.updateKnowledgeRecord.mockReset();
@@ -425,10 +442,121 @@ describe('v1 web project scoping', () => {
     mocks.rejectKnowledgeProposal.mockReset();
     mocks.replayEvents.mockReset();
     mocks.replayEvents.mockResolvedValue({ events: [], hasMore: false, nextCursor: null });
+    mocks.getAuthorizationContext.mockReset().mockResolvedValue({
+      contractVersion: 1,
+      issuer: 'https://broker.test',
+      actorId: 'user-1',
+      tenantId: 'tenant-1',
+      membershipRevision: 1,
+      boundProjectId: null,
+      boundRunId: null,
+      effectiveAuthority: [{
+        resourceType: 'project',
+        resourceId: 'p1',
+        permissions: [{ permission: 'readProjects', roleRevision: 1 }, { permission: 'writeProjects', roleRevision: 1 }],
+      }],
+    });
+    mocks.listProjectRoleAssignments.mockReset().mockResolvedValue({ projectId: 'p1', assignments: [] });
     mocks.streamEvents.mockReset();
     mocks.streamEvents.mockImplementation(() => {
       throw new Error('The event stream is not used by this test.');
     });
+  });
+
+  it('retains gallery tiles and opens project creation in a dialog', async () => {
+    mocks.listProjects.mockResolvedValue([projectSummary('p1', 'Fixture project')]);
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    const gallery = await screen.findByRole('list', { name: 'Projects' });
+    expect(within(gallery).getByText('Fixture project')).toBeTruthy();
+    expect(await within(gallery).findByText('Can edit')).toBeTruthy();
+    expect(screen.queryByLabelText('Project name')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(screen.getByLabelText('Project name')).toBeTruthy();
+  });
+
+  it('creates a project from a GitHub repository and saves the repository in its configuration', async () => {
+    mocks.createProject.mockResolvedValue(projectSummary('p9', 'From GitHub'));
+    mocks.updateProjectConfiguration.mockImplementation(async (_token: string, projectId: string, revision: number) =>
+      projectConfiguration(projectId, revision + 1));
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'From GitHub' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+    const submit = within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }) as HTMLButtonElement;
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'not a repo' } });
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'https://github.com/octo/agentweaver.git' } });
+    fireEvent.click(submit);
+
+    await screen.findByText('Project From GitHub was created. It uses octo/agentweaver.');
+    expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
+      'broker-token', 'p9', 1,
+      expect.objectContaining({ sourceControl: expect.objectContaining({ repository: { owner: 'octo', name: 'agentweaver' }, authMode: 'githubApp' }) }),
+      'tenant-1',
+    );
+  });
+
+  it('keeps a new project when its repository cannot be saved yet', async () => {
+    mocks.createProject.mockResolvedValue(projectSummary('p9', 'No access yet'));
+    mocks.getProjectConfiguration.mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }));
+    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'No access yet' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub repository' }));
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/agentweaver' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Create project' }));
+
+    await screen.findByText(/The repository was not saved\. Add it in Settings > Repository after you have access\./);
+    expect(mocks.updateProjectConfiguration).not.toHaveBeenCalled();
+  });
+
+  it('uses the retained collapse control and hides unsupported navigation', async () => {
+    mocks.getProject.mockResolvedValue(projectSummary('p1', 'Fixture project'));
+    window.history.replaceState({}, '', '/projects/p1');
+    render(<App />);
+    await screen.findByText('Fixture project');
+    const nav = screen.getByRole('navigation', { name: 'Primary navigation' });
+    expect(within(nav).getByRole('link', { name: 'Orchestrations' })).toBeTruthy();
+    expect(within(nav).getByRole('link', { name: 'Skills' })).toBeTruthy();
+    for (const name of ['Board', 'Flow', 'Workspace', 'Workflows', 'Observability', 'Diagnostics', 'Heartbeat', 'Cluster']) {
+      expect(within(nav).queryByRole('link', { name })).toBeNull();
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse navigation' }));
+    expect(nav.getAttribute('data-collapsed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand navigation' }));
+    expect(nav.getAttribute('data-collapsed')).toBe('false');
+  });
+
+  it.each(['board', 'flow', 'workspace', 'workflows', 'observability/traces', 'diagnostics', 'heartbeat', 'cluster'])(
+    'explains unsupported old %s links without pretending the route is Projects',
+    async (path) => {
+      window.history.replaceState({}, '', `/projects/p1/${path}`);
+      render(<App />);
+      expect(await screen.findByText('Not available in this version')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Open Dashboard' }).getAttribute('href')).toBe('/projects/p1');
+      expect(window.location.pathname).toBe(`/projects/p1/${path}`);
+    },
+  );
+
+  it('distinguishes unknown addresses from unavailable legacy features', async () => {
+    window.history.replaceState({}, '', '/unknown-page');
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();
+    expect(screen.queryByText('Not available in this version')).toBeNull();
+  });
+
+  it('keeps orchestration bookmarks and their selected run view', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    window.history.replaceState({}, '', '/projects/p1/orchestrations/r1?view=chat&source=bookmark');
+    render(<App />);
+    const chat = await screen.findByRole('tab', { name: 'Chat' });
+    expect(chat.getAttribute('aria-selected')).toBe('true');
+    expect(window.location.search).toContain('source=bookmark');
   });
 
   it('explains known permissions and links each one to Agentweaver documentation', () => {
@@ -974,7 +1102,7 @@ describe('v1 web project scoping', () => {
       expect(signal?.aborted).toBe(true);
       expect(popup.closed).toBe(true);
       expect(screen.getByText(
-        'GitHub authorization timed out before the Identity Broker could start it. Start the connection again.',
+        'GitHub authorization timed out before it started. Start the connection again.',
       )).toBeTruthy();
       expect((screen.getByRole(
         'button',
@@ -1049,10 +1177,10 @@ describe('v1 web project scoping', () => {
       expect(closePopup).toHaveBeenCalledOnce();
       expect(popup.closed).toBe(true);
 
-      navigate('/projects/p1/settings');
+      navigate('/projects/p1/settings?section=connections');
       await waitFor(() => expect(statusRequests).toBe(2));
       navigate('/projects');
-      navigate('/projects/p1/settings');
+      navigate('/projects/p1/settings?section=connections');
       await screen.findByText('No GitHub Repo App connection is available for this identity.');
       expect(statusRequests).toBe(3);
 
@@ -1088,29 +1216,94 @@ describe('v1 web project scoping', () => {
     }
   });
 
-  it('keeps Run chat disabled until a session has an exact run binding', () => {
-    window.history.replaceState({}, '', '/projects?preset=1');
-    render(<App />);
-
-    const runChat = screen.getByRole('button', { name: 'Run chat opens from a run' }) as HTMLButtonElement;
-    expect(runChat.disabled).toBe(true);
-    fireEvent.click(runChat);
-    expect(window.location.pathname).toBe('/projects');
-    expect(window.location.search).toBe('?preset=1');
-  });
-
-  it('opens the exact bound run directly on Chat from the shell', async () => {
+  it('does not show a Run chat shortcut in the shell', () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
-    configureRunSnapshots('p1', 'r1');
     window.history.replaceState({}, '', '/projects');
     render(<App />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run chat' }));
+    expect(screen.queryByRole('button', { name: /Run chat/ })).toBeNull();
+  });
+
+  it('gets the run sign-in silently when a run opens without one', async () => {
+    window.history.replaceState({}, '', '/projects/p1/runs/r1');
+    mocks.ensureSession.mockImplementation(() => new Promise(() => {}));
+    render(<App />);
+
+    expect(await screen.findByText('Opening this run…')).toBeTruthy();
+    expect(mocks.ensureSession).toHaveBeenCalledWith({ projectId: 'p1', runId: 'r1' });
+    expect(screen.queryByRole('button', { name: 'Sign in for this project and run' })).toBeNull();
+    expect(screen.getByRole('heading', { level: 1, name: 'Orchestration' })).toBeTruthy();
+  });
+
+  it('shows the run sign-in button only after the silent attempt fails', async () => {
+    window.history.replaceState({}, '', '/projects/p1/runs/r1');
+    render(<App />);
+
+    expect(await screen.findByRole('button', { name: 'Sign in for this project and run' })).toBeTruthy();
+    expect(mocks.ensureSession).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Broker|grant/i)).toBeNull();
+  });
+
+  it('shows the run tree and run panel with no alerts on the main path', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat');
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Orchestration' })).toBeTruthy();
+    await screen.findByRole('complementary', { name: 'Run tree' });
+    await screen.findByRole('tab', { name: 'Chat' });
+    for (const view of ['Chat', 'Activity', 'Run settings', 'Usage']) {
+      const tab = screen.queryByRole('tab', { name: view });
+      if (!tab) continue;
+      fireEvent.click(tab);
+      await waitFor(() => expect(tab.getAttribute('aria-selected')).toBe('true'));
+    }
+    await waitFor(() => expect(mocks.getRunUsage).toHaveBeenCalled());
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
+    expect(screen.queryByText(/different run/)).toBeNull();
+  });
+
+  it('sends chat to the coordinator by default without a sender form', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const tree = sessionTreeSnapshot('p1', 'r1');
+    mocks.getSessionTree.mockResolvedValue({
+      ...tree,
+      nodes: [...tree.nodes, {
+        ...tree.nodes[0],
+        identity: { projectId: 'p1', runId: 'r1', sessionId: 's2' },
+        kind: 'worker' as const,
+        parentSessionId: 's1',
+      }],
+    });
+    mocks.sendMessage.mockResolvedValue({ ownerMessageId: 'm1', status: 'accepted' });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat');
+    render(<App />);
+
+    await screen.findByText('Message the coordinator');
+    expect(screen.queryByLabelText(/^From/)).toBeNull();
+    expect(screen.queryByLabelText(/^To/)).toBeNull();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Status?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalled());
+    const [, projectId, runId, sender, recipient, text] = mocks.sendMessage.mock.calls[0];
+    expect([projectId, runId, sender, recipient, text]).toEqual(['p1', 'r1', 's2', 's1', 'Status?']);
+  });
+
+  it('lists runs opened in this browser in Orchestrations and opens one on Chat', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    rememberRun('tenant-1', { projectId: 'p1', runId: 'r1', executionState: 'running' });
+    window.history.replaceState({}, '', '/projects/p1/orchestrations');
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open run r1' }));
 
     const chatTab = await screen.findByRole('tab', { name: 'Chat' });
     await waitFor(() => expect(chatTab.getAttribute('aria-selected')).toBe('true'));
     expect(window.location.pathname).toBe('/projects/p1/runs/r1');
-    expect(new URLSearchParams(window.location.search).get('view')).toBe('chat');
   });
 
   it('opens the Chat tab from the view query and preserves other query parameters', async () => {
@@ -1199,7 +1392,7 @@ describe('v1 web project scoping', () => {
     } as unknown as Window;
     const openPopup = vi.spyOn(window, 'open').mockReturnValue(popup);
     mocks.beginRepoAppInstallationSetup.mockResolvedValue(undefined);
-    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=selection');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
     render(<App />);
 
     await screen.findByRole('heading', { name: 'GitHub App repository access' });
@@ -1290,7 +1483,7 @@ describe('v1 web project scoping', () => {
       isPrivate: true,
       pinnedAt: '2026-10-08T00:00:00Z',
     });
-    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=selection');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
     render(<App />);
 
     await screen.findByRole('button', { name: 'Install GitHub App for this run' });
@@ -1320,7 +1513,7 @@ describe('v1 web project scoping', () => {
     };
     mocks.getRunSelection.mockResolvedValue(selection);
     mocks.getRepoAppStatus.mockRejectedValue(new Error('Identity Broker owner unavailable'));
-    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=selection');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=changes');
     render(<App />);
 
     expect(await screen.findByText(
@@ -1333,19 +1526,19 @@ describe('v1 web project scoping', () => {
     )).toBeNull();
   });
 
-  it('defaults invalid run view queries to Topology while preserving other query parameters', async () => {
+  it('defaults invalid run view queries to Chat while preserving other query parameters', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
     window.history.replaceState({}, '', '/projects/p1/runs/r1?view=unsupported&source=notification');
     render(<App />);
 
-    await screen.findByRole('tab', { name: 'Topology' });
+    await screen.findByRole('tab', { name: 'Chat' });
     await waitFor(() => {
       const params = new URLSearchParams(window.location.search);
-      expect(params.get('view')).toBe('topology');
+      expect(params.get('view')).toBe('chat');
       expect(params.get('source')).toBe('notification');
     });
-    expect(screen.getByRole('tab', { name: 'Topology' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('hides the previous project and ignores a stale project response after navigation', async () => {
@@ -1362,14 +1555,14 @@ describe('v1 web project scoping', () => {
       window.history.pushState({}, '', '/projects/p1');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
-    await screen.findByRole('heading', { name: 'Project One' });
+    await screen.findByText('Project One');
 
     act(() => {
       window.history.pushState({}, '', '/projects/p2');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
     await waitFor(() => expect(mocks.getProject).toHaveBeenCalledWith('broker-token', 'p2', 'tenant-1'));
-    expect(screen.queryByRole('heading', { name: 'Project One' })).toBeNull();
+    expect(screen.queryByText('Project One')).toBeNull();
 
     act(() => {
       window.history.pushState({}, '', '/projects/p3');
@@ -1380,13 +1573,29 @@ describe('v1 web project scoping', () => {
       oldProjectLoad.resolve(projectSummary('p2', 'Project Two'));
       await oldProjectLoad.promise;
     });
-    expect(screen.queryByRole('heading', { name: 'Project Two' })).toBeNull();
+    expect(screen.queryByText('Project Two')).toBeNull();
 
     await act(async () => {
       currentProjectLoad.resolve(projectSummary('p3', 'Project Three'));
       await currentProjectLoad.promise;
     });
-    await screen.findByRole('heading', { name: 'Project Three' });
+    await screen.findByText('Project Three');
+  });
+
+  it('shows the 0.x settings rail with section icons and a Risk badge on Danger zone', async () => {
+    mocks.getProjectConfiguration.mockResolvedValue(projectConfiguration('p1', 2));
+    window.history.replaceState({}, '', '/projects/p1/settings?section=advanced');
+    render(<App />);
+
+    const rail = await screen.findByRole('navigation', { name: 'Settings sections' });
+    const links = within(rail).getAllByRole('link');
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link.querySelector('.v1-settings-rail__icon svg')).not.toBeNull();
+    }
+    expect(within(rail).getByRole('link', { name: 'Advanced' }).getAttribute('aria-current')).toBe('page');
+    const danger = within(rail).getByRole('link', { name: /Danger zone/ });
+    expect(within(danger).getByText('Risk')).toBeTruthy();
   });
 
   it('does not show or save an old project configuration after navigation', async () => {
@@ -1403,16 +1612,17 @@ describe('v1 web project scoping', () => {
       configuration,
     }));
 
+    window.history.replaceState({}, '', '/projects/p1/settings?section=advanced');
     render(<App />);
     await waitFor(() => expect(mocks.getProjectConfiguration).toHaveBeenCalledWith('broker-token', 'p1', 'tenant-1'));
 
     act(() => {
-      window.history.pushState({}, '', '/projects/p2/settings');
+      window.history.pushState({}, '', '/projects/p2/settings?section=advanced');
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
 
-    await screen.findByRole('heading', { name: 'Revision 2' });
-    const editor = screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement;
+    await screen.findByText('Revision 2');
+    const editor = screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement;
     expect(editor.value).toContain('"projectMarker": "p2"');
 
     await act(async () => {
@@ -1420,9 +1630,11 @@ describe('v1 web project scoping', () => {
       await oldProjectLoad.promise;
     });
 
-    expect((screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement).value)
+    expect((screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement).value)
       .toContain('"projectMarker": "p2"');
-    fireEvent.click(screen.getByRole('button', { name: 'Append configuration revision' }));
+    const shown = screen.getByLabelText('Configuration JSON') as HTMLTextAreaElement;
+    fireEvent.change(shown, { target: { value: JSON.stringify(JSON.parse(shown.value)) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
     expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
       'broker-token',
@@ -1434,6 +1646,7 @@ describe('v1 web project scoping', () => {
   });
 
   it('loads marketplace sources through the selected project with the current tenant', async () => {
+    window.history.replaceState({}, '', '/projects/p1/skills');
     mocks.getProjectConfiguration.mockResolvedValue(projectConfiguration('p1', 4));
     mocks.listMarketplaceSources.mockResolvedValue([{
       sourceId: 'source-1',
@@ -1474,18 +1687,20 @@ describe('v1 web project scoping', () => {
 
     render(<App />);
 
-    await screen.findByRole('heading', { name: 'Revision 4' });
-    await screen.findByRole('heading', { name: 'Skills and marketplace' });
+    await screen.findByRole('tab', { name: 'Catalog' });
     await waitFor(() => expect(mocks.listMarketplaceSources).toHaveBeenCalledWith(
       'broker-token',
       'p1',
       'tenant-1',
     ));
-    fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Browse marketplaces' }));
+    // happy-dom loses Tabster's modal focus when the busy button disables, so it marks the
+    // dialog aria-hidden. Chromium keeps it exposed; `hidden: true` keeps these role queries.
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse skills', hidden: true }));
     await screen.findByText('0123456789abcdef');
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill', hidden: true }));
     await screen.findByLabelText('Marketplace skill preview');
-    fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill', hidden: true }));
     await screen.findByText(/The Skills owner imported Sample skill at revision 2/);
 
     expect(mocks.previewMarketplaceSkillContent).toHaveBeenCalledWith(
@@ -1515,7 +1730,8 @@ describe('v1 web project scoping', () => {
     expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
   });
 
-  it('prevents configuration edits while a skill assignment is pending', async () => {
+  it('keeps Skills separate from configuration editing while assignment is pending', async () => {
+    window.history.replaceState({}, '', '/projects/p1/skills');
     const base = projectConfiguration('p1', 4);
     const configured = {
       ...base,
@@ -1561,24 +1777,24 @@ describe('v1 web project scoping', () => {
     mocks.updateSkillAssignment.mockReturnValue(pendingAssignment.promise);
     render(<App />);
 
-    await screen.findByRole('heading', { name: 'Revision 4' });
-    await screen.findByRole('heading', { name: 'Skills and marketplace' });
-    const editor = screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement;
-    const originalEditor = editor.value;
-    fireEvent.change(screen.getByLabelText('Skill folder or files'), {
+    await screen.findByRole('tab', { name: 'Catalog' });
+    expect(screen.queryByLabelText('Typed ProjectConfiguration JSON')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Import skill' }));
+    fireEvent.change(await screen.findByLabelText('Skill folder or files'), {
       target: { files: [new File(['# Sample skill'], 'SKILL.md', { type: 'text/markdown' })] },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files' }));
+    // See the marketplace test: happy-dom can mark the open dialog aria-hidden.
+    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files', hidden: true }));
     await screen.findByText('sha256:sample');
-    fireEvent.click(screen.getByRole('button', { name: 'Import skill to project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import skill to project', hidden: true }));
     await screen.findByText(/The Skills owner imported Sample skill at revision 1/);
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Agent One' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close', hidden: true }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Agent One' }));
     fireEvent.click(screen.getByRole('button', { name: 'Assign to selected agents' }));
     await waitFor(() => expect(mocks.updateSkillAssignment).toHaveBeenCalledOnce());
 
-    expect(editor.readOnly).toBe(true);
-    fireEvent.change(editor, { target: { value: '{"projectMarker":"unsaved edit"}' } });
-    expect(editor.value).toBe(originalEditor);
+    expect((screen.getByRole('button', { name: 'Saving assignment…' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByLabelText('Typed ProjectConfiguration JSON')).toBeNull();
 
     await act(async () => {
       pendingAssignment.resolve(saved);
@@ -1586,9 +1802,7 @@ describe('v1 web project scoping', () => {
     });
 
     await screen.findByText(/saved this assignment in configuration revision 5/);
-    expect(editor.value).toBe(JSON.stringify(saved.configuration, null, 2));
-    expect(editor.value).not.toContain('unsaved edit');
-    expect(editor.readOnly).toBe(false);
+    expect(mocks.updateSkillAssignment).toHaveBeenCalledOnce();
   });
 
   it('clears an accepted selection and usage after a later snapshot read fails', async () => {
@@ -1614,18 +1828,18 @@ describe('v1 web project scoping', () => {
 
     window.history.replaceState({}, '', '/projects/p1/runs/r1');
     render(<App />);
-    await screen.findByRole('tab', { name: 'Selection' });
-    fireEvent.click(screen.getByRole('tab', { name: 'Selection' }));
+    await screen.findByRole('tab', { name: 'Run settings' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Run settings' }));
     await screen.findByText('selected-model');
     fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
     await screen.findByText('model-meter');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh owner snapshots' }));
-    await screen.findByText('No usage totals were returned by Events & Sessions.');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh run' }));
+    await screen.findByText('No usage was reported for this run.');
     expect(screen.queryByText('model-meter')).toBeNull();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Selection' }));
-    await screen.findByText('No accepted run-selection snapshot was returned by Projects & Config.');
+    fireEvent.click(screen.getByRole('tab', { name: 'Run settings' }));
+    await screen.findByText('The service returned no settings for this run.');
     expect(screen.queryByText('selected-model')).toBeNull();
   });
 
@@ -1970,7 +2184,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.click(screen.getByRole('button', { name: 'Export scoped Knowledge' }));
     await screen.findByLabelText('Exported Knowledge bundle');
 
@@ -2003,7 +2217,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.click(screen.getByRole('button', { name: 'Export scoped Knowledge' }));
     await screen.findByText('Knowledge transfer bundle is outside the exact project, run, and agent scope.');
     expect(screen.queryByLabelText('Exported Knowledge bundle')).toBeNull();
@@ -2019,7 +2233,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.change(screen.getByLabelText('Versioned Knowledge bundle JSON'), {
       target: { value: JSON.stringify(knowledgeTransferBundle()) },
     });
@@ -2048,7 +2262,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.change(screen.getByLabelText('Versioned Knowledge bundle JSON'), {
       target: { value: JSON.stringify(knowledgeTransferBundle('p2', 'a1')) },
     });
@@ -2069,7 +2283,7 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.change(screen.getByLabelText('Versioned Knowledge bundle JSON'), {
       target: { value: JSON.stringify(knowledgeTransferBundle()) },
     });
@@ -2081,13 +2295,13 @@ describe('v1 web project scoping', () => {
     expect(screen.queryByRole('heading', { name: 'foreign-record' })).toBeNull();
   });
 
-  it('rejects import input larger than the Gateway 1 MiB limit before submission', async () => {
+  it('rejects import input larger than the 1 MiB limit before submission', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     mocks.searchKnowledge.mockResolvedValue(knowledgePage([]));
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
     render(<App />);
 
-    await screen.findByText('No matching Knowledge records.');
+    await screen.findByText('No matching records.');
     fireEvent.change(screen.getByLabelText('Versioned Knowledge bundle JSON'), {
       target: { value: `${JSON.stringify(knowledgeTransferBundle())}${' '.repeat(1024 * 1024 + 1)}` },
     });

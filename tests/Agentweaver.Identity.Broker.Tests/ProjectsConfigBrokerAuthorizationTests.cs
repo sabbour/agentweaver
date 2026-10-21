@@ -1580,14 +1580,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 var runSignIn = page.GetByRole(
                     AriaRole.Button,
                     new() { Name = "Sign in for this project and run" });
+                var originalMemory = page.GetByText("Original browser memory");
                 try
                 {
                     await page.GetByRole(
                         AriaRole.Button,
-                        new() { Name = "Continue with Identity Broker" }).ClickAsync();
+                        new() { Name = "Sign in", Exact = true }).ClickAsync();
                     if (await WaitForConsentPromptOrTokenAsync(page, reverseProxy))
                         await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
-                    await runSignIn.WaitForAsync();
+                    // Memories first asks for the run sign-in silently; the button shows only when that fails.
+                    await runSignIn.Or(originalMemory).First.WaitForAsync();
                 }
                 catch (Exception exception)
                 {
@@ -1608,10 +1610,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 Assert.Equal(
                     browserOwnerSubject,
                     SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(browserToken).Claims, "sub"));
-                await runSignIn.ClickAsync();
+                if (await runSignIn.IsVisibleAsync())
+                    await runSignIn.ClickAsync();
                 try
                 {
-                    await page.GetByText("Original browser memory").WaitForAsync();
+                    await originalMemory.WaitForAsync();
                 }
                 catch (Exception exception)
                 {
@@ -1640,7 +1643,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 await page.GetByLabel("Tags (comma-separated)").FillAsync("browser,integrated");
                 await page.GetByRole(AriaRole.Button, new() { Name = "Create record" }).ClickAsync();
                 await page.GetByText(
-                    "Knowledge owner returned Created; persisted trust and revision state are shown after refresh.")
+                    "Record created (Created). The list shows its saved state.")
                     .WaitForAsync();
                 await page.Locator("article.v1-record")
                     .Filter(new() { HasText = "Created through the browser" })
@@ -1661,7 +1664,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 await page.GetByLabel("Correction reason").FillAsync("Correcting the retained fact");
                 await page.GetByRole(AriaRole.Button, new() { Name = "Save correction" }).ClickAsync();
                 await page.GetByText(
-                    "Knowledge owner returned Updated; the corrected record is shown after refresh.")
+                    "Correction saved (Updated). The list shows the corrected record.")
                     .WaitForAsync();
                 await page.Locator("article.v1-record")
                     .Filter(new() { HasText = "Corrected browser memory" })
@@ -1685,7 +1688,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 try
                 {
                     await page.GetByText(
-                            "Knowledge owner returned Updated; the restored revision is shown after refresh.")
+                            "Revision restored (Updated). The list shows the restored record.")
                         .WaitForAsync(new() { Timeout = 10_000 });
                 }
                 catch (Exception exception)
@@ -1708,7 +1711,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                     AriaRole.Button,
                     new() { Name = "Archive record" }).ClickAsync();
                 await page.GetByText(
-                    "Knowledge owner returned Updated; the resulting record state is not inferred locally.")
+                    "Record archived (Updated). The list shows its current state.")
                     .WaitForAsync();
                 var archivedMemory = Assert.IsType<KnowledgeRecord>(
                     await database.Provider.ReadAsync(project.ProjectId, seededMemory.Record.RecordId));
@@ -1720,7 +1723,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                     AriaRole.Button,
                     new() { Name = "Approve Decision" }).ClickAsync();
                 await page.GetByText(
-                    "Knowledge owner returned Updated; the Decision trust state is shown after refresh.")
+                    "Decision approved (Updated). The list shows its trust state.")
                     .WaitForAsync();
                 var approvedDecision = Assert.IsType<KnowledgeRecord>(
                     await database.Provider.ReadAsync(project.ProjectId, firstDecision.RecordId));
@@ -1734,7 +1737,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                     AriaRole.Button,
                     new() { Name = "Supersede with selected Decision" }).ClickAsync();
                 await page.GetByText(
-                    "Knowledge owner returned Updated; the superseding Decision link is shown after refresh.")
+                    "Decision replaced (Updated). The list shows the new link.")
                     .WaitForAsync();
                 var supersededDecision = Assert.IsType<KnowledgeRecord>(
                     await database.Provider.ReadAsync(project.ProjectId, firstDecision.RecordId));
@@ -1763,7 +1766,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                     AriaRole.Button,
                     new() { Name = "Import scoped Knowledge" }).ClickAsync();
                 await page.GetByText(
-                    $"Knowledge owner returned {importBundle.Records.Length} imported record(s)")
+                    $"Imported {importBundle.Records.Length} record(s)")
                     .WaitForAsync();
                 var importedRecords = (await database.Provider.SearchAsync(
                     new KnowledgeRecordQuery(project.ProjectId, agentId, IncludeInactive: true)))

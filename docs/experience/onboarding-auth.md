@@ -1,7 +1,7 @@
 # Sign in and access
 
 Use this page to sign in to the Agentweaver v1 browser app and request access
-to an exact project and run. The app signs you in through the Identity Broker;
+to a run. The app signs you in through the Identity Broker;
 you do not enter a browser API key.
 
 ## Prerequisites
@@ -13,7 +13,7 @@ you do not enter a browser API key.
 
 ## Sign in
 
-1. Select **Continue with Identity Broker**.
+1. On the sign-in card, select **Sign in**.
 2. Complete sign-in in the Broker popup. If the browser cannot open the popup,
    the app continues with a full-page authorization redirect.
 3. If the Broker displays **Review access**, check the client ID and requested
@@ -29,36 +29,45 @@ memory. The app stores only the short-lived PKCE transaction in session
 storage so it can complete a full-page redirect. The authorization attempt
 has a ten-minute client deadline.
 
-**Expected result:** The app opens `/projects` after it establishes a Broker
-session. If the Broker requests consent, the app continues only after you make
-an explicit choice.
+**Expected result:** The app opens the page you requested. `/` opens
+**Overview**. After a full-page redirect, the app opens **Projects**. If the
+Broker requests consent, the app continues only after you make an explicit
+choice.
 
 ## Open an existing run
 
-**Prerequisites:** You know the exact project ID and existing run ID.
+You don't type a run ID. Open a run from a link or a notification, or select
+**Open** next to a run in **Recent runs in this browser** on **Overview**, the
+project **Dashboard**, or **Orchestrations**.
 
-1. Open the [project](./projects.md).
-2. Enter the existing run ID in **Exact run ID** and select **Open run**.
-3. On the run page, select **Sign in for this project and run**.
-4. Complete the Broker flow.
+1. Open the run. The page shows **Opening this run…** while the app signs in
+   to the run silently.
+2. If the silent sign-in fails, select **Sign in for this project and run**
+   and complete the sign-in.
 
-The Broker validates current authority for that exact project and run. The app
-does not reuse a token bound to another run. The Knowledge page uses the same
-exact-run sign-in control.
+The Broker validates current authority for that project and run. Each run has
+its own sign-in; the app keeps your project sign-in and does not reuse a token
+bound to another run. When you leave the run page, the app switches back to
+your project sign-in. The **Memories** page uses the same run sign-in when you
+choose a run that your current sign-in doesn't cover.
 
-**Expected result:** The run page loads only when the session's binding matches
-the project and run in the route. The page then reads owner snapshots,
-committed journal events, and usage.
+**Expected result:** The run page loads only when your sign-in matches the
+project and run in the address. The page then reads owner snapshots,
+committed journal events, and usage. The run is added to **Recent runs in this
+browser**.
 
-## Clear the browser session
+## Sign out
 
-Select **Clear browser session** in the shell. The app clears its in-memory
-session and current authorization context. It does not disconnect GitHub
-connections or sign you out of the external identity provider.
+Select **Account** in the navigation rail, then select **Sign out**. You can
+also select **Sign out** in **Account settings** (`/settings`). The app clears
+its in-memory session, its current authorization context, and the **Recent
+runs in this browser** list. It does not disconnect GitHub connections or sign
+you out of the external identity provider.
 
-After you reload, sign in again. The Broker can reuse its local session, but
-the app rechecks current grants and roles. The browser returns to the sign-in
-screen until you establish a new app session.
+After you sign out, the app shows the sign-in card. If you reload the page
+without signing out, the app can restore your sign-in silently when the Broker
+still has a valid session and consent. The app rechecks current grants and
+roles. If the Broker needs your input, the app shows the sign-in card.
 
 ## Understand sign-in states and errors
 
@@ -69,7 +78,7 @@ screen until you establish a new app session.
 | Declined consent, invalid state, or unmatched callback | Start sign-in again. The app rejects callbacks without the matching transaction. |
 | `401` on an API call | The app attempts one token refresh when a refresh token exists. If it fails, sign in again. |
 | `403` or ambiguous tenant context | Use an identity with current owner-granted access. The app does not guess a tenant. |
-| Run-bound sign-in prompt | Authorize the exact project and run shown by the page. |
+| **Sign in for this project and run** button | The silent run sign-in failed. Select the button to sign in to the project and run shown by the page. |
 
 ## Requests
 
