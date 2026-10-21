@@ -177,6 +177,8 @@ test('flow: groups by state, keeps dismissed gates, hides promotions, and pins t
     assert.ok(reads.some((request) => request.url.searchParams.get('projectId') === 'p1'));
     assert.ok(reads.some((request) => request.url.searchParams.get('projectId') === null));
     await shot('pr-flow-gateway-adapter', page.locator('main'));
+    for (const name of ['Needs input', 'Open', 'Working', 'Done'])
+      await shot(`pr-flow-${name.toLowerCase().replaceAll(' ', '-')}`, region(name));
 
     // The decision view rereads this pinned version before acting; DecisionView.test.tsx covers the no-POST path.
     // Opening the gate must carry its request id and state version in the URL,

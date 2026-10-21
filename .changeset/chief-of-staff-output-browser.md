@@ -24,3 +24,5 @@ Priorities and the retained file viewer.
 Check every stored page before saving number-only repository links, and refuse
 ambiguous targets rather than opening the wrong repository. Reset gate-version
 review when another notification opens the same request.
+Keep gate counts separate from task notices and compare retained file components
+at the same desktop and mobile widths in screenshot evidence.

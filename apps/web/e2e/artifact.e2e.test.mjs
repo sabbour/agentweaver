@@ -99,6 +99,7 @@ test('artifact: choose run/session/capture/file, link whole capture, reopen afte
     await details.getByRole('heading', { name: 'Release notes' }).waitFor();
     // Screenshot the parent so the file tree and the viewer are both in the shot.
     const fileSurface = details.getByRole('region', { name: 'Captured files' }).locator('..');
+    const desktopBounds = await fileSurface.boundingBox();
     await shot('pr-files-preview', fileSurface);
     await details.getByRole('tab', { name: 'Source' }).click();
     assert.equal(await details.getByRole('tab', { name: 'Source' }).getAttribute('aria-selected'), 'true');
@@ -146,6 +147,7 @@ test('artifact: choose run/session/capture/file, link whole capture, reopen afte
       fixtureBacked: true, liveAcceptance: false,
       prHead: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
       mobileAppViewportWidth: 390, mobileFileSurfaceWidth: Math.round(bounds.width),
+      desktopFileSurfaceWidth: Math.round(desktopBounds.width),
       reference: 'origin/dev fb24c71c4d912354998ccaf775af12be4a049798',
       reused: ['FilesTabPanel', 'FileViewer'], newGatewayAdapters: ['saved capture list', 'capture detail', 'Priority artifact picker'],
       outputReads, writes: linkWrite.map((request) => ({ method: request.method, path: request.url.pathname, body: request.body })),
@@ -162,7 +164,9 @@ test('retained 0.x file tree/viewer screenshot reference', { skip: !evidence }, 
   const app = await openApp({ origin: server.origin });
   try {
     const port = vite.httpServer.address().port;
-    await app.page.setViewportSize({ width: 1440, height: 1100 });
+    const journey = JSON.parse(await readFile(join(evidence, 'artifact-journey.json'), 'utf8'));
+    // Both desktop and mobile comparisons use the exact component width inside the PR.
+    await app.page.setViewportSize({ width: journey.desktopFileSurfaceWidth, height: 1100 });
     await app.page.goto(`http://127.0.0.1:${port}/e2e/retained-reference.html`);
     const surface = app.page.getByRole('region', { name: '0.x retained file browser' });
     await surface.getByText('release notes.md', { exact: true }).click();
@@ -171,7 +175,6 @@ test('retained 0.x file tree/viewer screenshot reference', { skip: !evidence }, 
     await surface.getByRole('tab', { name: 'Source' }).click();
     await surface.screenshot({ path: join(evidence, '0x-files-source.png') });
     // The first test wrote this file. It holds the measured mobile width.
-    const journey = JSON.parse(await readFile(join(evidence, 'artifact-journey.json'), 'utf8'));
     // Match the component width inside the PR shell, not the outer app viewport.
     await app.page.setViewportSize({ width: journey.mobileFileSurfaceWidth, height: 844 });
     await surface.screenshot({ path: join(evidence, '0x-files-mobile.png') });

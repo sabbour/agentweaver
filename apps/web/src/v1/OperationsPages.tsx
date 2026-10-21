@@ -162,7 +162,9 @@ export function FlowPage() {
   const attention = useSharedRunAttention();
   // Dismissal hides inbox noise, not unresolved work. This read includes dismissed gates.
   const gates = useRunAttention({ projectId, includeDismissed: true });
-  const needsInput = { ...gates, items: gates.items.filter((item) => item.projectId === projectId && item.source === 'pendingGate') };
+  const gateItems = gates.items.filter((item) => item.projectId === projectId && item.source === 'pendingGate');
+  // The inbox total also includes task notices; it is not a count of pending gates.
+  const needsInput = { ...gates, items: gateItems, count: gateItems.length };
   const runs = useProjectRunList(projectId, { pageSize: 25 });
   // The shared notification list covers every project. Keep only this project's
   // items and count, so the empty state and the "more" hint are about this project.

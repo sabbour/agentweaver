@@ -19,7 +19,7 @@ export default function Reference() {
   return <FluentProvider theme={agentweaverLightTheme}>
     <style>{`
       body { margin: 0; }
-      .reference { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); min-height: 340px; max-width: 600px; border: 1px solid #e0e0e0; }
+      .reference { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); min-height: 340px; box-sizing: border-box; border: 1px solid #e0e0e0; }
       .files { padding: 8px; overflow: auto; }
       .viewer { display: flex; min-width: 0; min-height: 300px; max-height: 600px; overflow: auto; }
       @media(max-width: 640px) { .reference { grid-template-columns: minmax(0, 1fr); } }
