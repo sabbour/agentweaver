@@ -1,4 +1,8 @@
 ---
+"Agentweaver.AgentRuntime": minor
+"Agentweaver.Identity": minor
+"Agentweaver.Orchestrator.Core": minor
+"Agentweaver.Orchestrator": minor
 ---
 
 Run ordered Guardrails checks on model-turn user input during runtime action admission, with Azure AI Content Safety Prompt Shields as the supported default check.

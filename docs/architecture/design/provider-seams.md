@@ -735,6 +735,13 @@ gateway work in [#1925](https://github.com/sabbour/agentweaver/issues/1925) and
 [#1929](https://github.com/sabbour/agentweaver/issues/1929). For configuration, see
 [Guardrails settings](../../reference/runtime-configuration.md#guardrails-settings).
 
+AgentSuite policy documents and per-agent policy bindings are the interoperable policy format. The
+AgentSuite import ([#2114](https://github.com/sabbour/agentweaver/issues/2114)) is the only loader. It
+retains each policy and binds it to the effective agent ID and policy digest. Importing or persisting a
+policy doesn't prove that the runner enforces it. The AgentSuite v2 policy carries only a network egress
+allow-list, which Guardrails doesn't enforce. A bound agent keeps the `policy_not_enforced` blocker until
+an owner that advertises `network/egress-allow/v1` accepts the binding.
+
 ## Network Policy
 
 ### Egress intent and contract
