@@ -1,6 +1,5 @@
 # Story: Compose Key Vault redemption with AKS workload identity
 
-**Issue:** [#1766](https://github.com/sabbour/agentweaver/issues/1766).
 **Status:** v1 P0 library slice, not deployed integration.
 
 As a trusted Identity/control-plane host, I can explicitly supply the tenant ID,

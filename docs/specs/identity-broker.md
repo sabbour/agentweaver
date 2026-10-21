@@ -1,6 +1,5 @@
 # Story: Identity broker foundation
 
-**Issue:** [#1779](https://github.com/sabbour/agentweaver/issues/1779).
 **Status:** P0 implementation candidate. No publication, deployment, or Azure acceptance.
 
 `Agentweaver.Identity.Broker` is a .NET 10/OpenIddict service.
@@ -76,7 +75,7 @@ The browser must retain the local and antiforgery cookies.
 The client sends `csrf_token` through `X-CSRF-TOKEN` when it submits consent.
 Consent is API-only in P0. The consent UI remains P1 work.
 
-## Run-bound SecretRef redemption (#1783)
+## Run-bound SecretRef redemption
 
 The redemption endpoint requires a bearer token validated by the existing
 OpenIddict validation middleware for this broker's issuer, signature, lifetime,
@@ -115,7 +114,7 @@ The backend receives the exact requested SecretRef version.
 
 ## Host and deployment contract
 
-### Runtime credential source candidate (#1850)
+### Runtime credential source candidate
 
 The source contains a separate runtime grant store. It does not use the
 Key Vault secret-redemption grant or change human OAuth clients or claims.
@@ -337,7 +336,7 @@ A separate native resource server enforces a configured audience for issued and 
 It rejects invalid issuer, audience, signature, purpose, and expiry.
 Trace-level log tests cover successful requests, denial, and invalid/replayed grants without raw token or secret values.
 Test artifacts remain under ignored repository artifacts and never use shared credentials.
-The #1783 tests also exercise real redemption middleware and HTTP against
+The redemption tests also exercise real redemption middleware and HTTP against
 disposable PostgreSQL, including revision races, idempotency, ownership,
 restart, cancellation, and error redaction. A Testcontainers end-to-end test
 also completes the broker's external-login, consent, authorization-code, and
@@ -350,5 +349,5 @@ The draft release manifest registers `Agentweaver.Identity.Broker` at project ve
 The draft omits `imageDigest` until actual publication supplies it.
 A local Docker image proves only the local build, not registry publication or cloud execution.
 
-Azure publication and deployed proof remain dependent on
-[#1790](https://github.com/sabbour/agentweaver/issues/1790).
+Azure publication and deployed proof require a separately approved image
+publication and deployment.

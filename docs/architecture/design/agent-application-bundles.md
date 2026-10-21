@@ -21,7 +21,7 @@ Unsupported required content blocks activation rather than creating a new extens
 
 The [post-core plan](../decisions/0001-platform-architecture.md#installed-agent-applications---planned-post-core-extension) contains the delivery phases.
 The existing nineteen-item P1 scope, acceptance criteria, counts, and completion gates remain unchanged.
-This extension does not add scope to [#1848](https://github.com/sabbour/agentweaver/issues/1848) or [#1851](https://github.com/sabbour/agentweaver/issues/1851).
+This extension does not add scope to P1 or to the cutover plan.
 It is not an additional P1 completion or cutover prerequisite.
 
 ## Product model and host boundary
@@ -77,12 +77,12 @@ None uses an installation ID as a run ID or claims provider capabilities from pa
 ## Existing foundation and compatible reuse
 
 The preserved specification originated at `892ffde6f93243c33636b28c3c637289a50194db`.
-Provider placement and Canvas evidence follow the admitted
-[#1909](https://github.com/sabbour/agentweaver/pull/1909) and
-[#1918](https://github.com/sabbour/agentweaver/pull/1918) decisions.
+Provider placement and Canvas evidence follow the accepted provider-placement
+decision in [Provider seams](provider-seams.md) and the Canvas evidence in
+[Applications and surfaces](applications-and-surfaces.md#github-canvas-evidence-and-versions).
 This reconciliation uses source commit
 `e6d8d392cb3634da6243b06b1397a25973ac3615`, including the optional Cosmos Memory
-adapter in [#1931](https://github.com/sabbour/agentweaver/pull/1931).
+adapter.
 Knowledge still owns Memory operations, accepted-effect receipts, and selected-backend
 delivery intent. Events owns the authoritative journal; Object Store owns referenced bytes.
 These source boundaries do not establish a deployed bundle or Canvas runtime.
@@ -102,7 +102,8 @@ All installation records, routes, component loaders, and lifecycle behavior in t
 ### Reviewed owner delegation for background work
 
 [ADR 0002](../decisions/0002-project-issue-sync-delegation.md) documents the
-separately reviewed existing-owner delegation path implemented for #2176.
+separately reviewed existing-owner delegation path used by periodic project issue
+synchronization.
 Identity owns a revocable, project/repository-scoped `issue-sync` grant; Projects
 revalidates the creator's current exact Owner role and selected repository.
 Dedicated mTLS service peers obtain only short-lived repository-specific
@@ -110,7 +111,7 @@ credentials, with durable mint auditing and no saved user bearer.
 Only the creator or a current tenant administrator can revoke the grant.
 
 This is not bundle self-authorization, an installation grant, or a replacement
-for run-bound authority. Future #1914 schedules may reuse the management/proof/
+for run-bound authority. Future scheduled work may reuse the management/proof/
 issuance/audit pattern with a separately reviewed purpose and minimum scope,
 not replay issue-write authority as permission to start a run. The bundle
 installer and scheduler remain unimplemented by this source change.
@@ -741,9 +742,8 @@ The phase labels do not change the existing P0-P3 ledger or cutover gate.
 The release backlog is `v1.0.0` P2, after applicable P1 foundations.
 The [Canvas C1-C5 plan](applications-and-surfaces.md#canvas-provider-delivery-and-milestone-placement)
 defines the abstraction, concrete adapters, bundle integration, and exact-SHA acceptance.
-User-directed tracking issue [#1878](https://github.com/sabbour/agentweaver/issues/1878)
-records the bundle and Canvas plan in milestone `v1.0.0`.
-Separate implementation children and an execution schedule remain pending.
+The bundle and Canvas plan belong to milestone `v1.0.0`.
+Separate implementation work and an execution schedule are not yet defined.
 The issue does not add another P1 or cutover prerequisite.
 
 | Slice | Existing owners and prerequisites | Acceptance |

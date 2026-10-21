@@ -24,18 +24,14 @@
 Paths refer to the 0.x code on the `dev` branch. The preview gateway routes a live application to
 its AgentHost sandbox (`k8s/base/gateway-preview.yaml`). Preview availability therefore follows the
 sandbox lease rather than an independently owned application deployment. Holding finished sandboxes
-for previews can exhaust isolation capacity; bounded retention and abandoned-sandbox reclaim are
-addressed by [#1688](https://github.com/sabbour/agentweaver/issues/1688).
+for previews can exhaust isolation capacity. Bounded retention and abandoned-sandbox reclaim
+address that capacity problem.
 
-The active 0.x roadmap also describes workflow publication with web and declarative A2UI profiles
-([#662](https://github.com/sabbour/agentweaver/issues/662)), a canvas and renderer
-([#665](https://github.com/sabbour/agentweaver/issues/665)), and audience, route, and
-workflow-action authorization ([#668](https://github.com/sabbour/agentweaver/issues/668)).
-Image-backed hosting ([#666](https://github.com/sabbour/agentweaver/issues/666)), owner-managed
-hosting ([#667](https://github.com/sabbour/agentweaver/issues/667)) remain historical parity inputs,
+The active 0.x roadmap also describes workflow publication with web and declarative A2UI profiles,
+a canvas and renderer, and audience, route, and workflow-action authorization.
+Image-backed hosting and owner-managed hosting remain historical parity inputs,
 but their additional hosting adapters are deferred from the current plan.
-Isolated image publication ([#761](https://github.com/sabbour/agentweaver/issues/761))
-and project-owned preview deployments ([#1494](https://github.com/sabbour/agentweaver/issues/1494))
+Isolated image publication and project-owned preview deployments
 remain in scope. These are roadmap requirements, not claims that every capability already ships in 0.x.
 
 ## Installed agent applications
@@ -95,14 +91,13 @@ contract, the platform captures the verified artifact and its evidence as an imm
 deploys it at `preview`, and releases the sandbox. The durable preview then serves from application
 capacity, not from a retained AgentHost. Declarative output preserves its verified Canvas
 package and renderer binding instead of starting an application server.
-This is the primary design response to the capacity failure
-behind [#1688](https://github.com/sabbour/agentweaver/issues/1688), alongside the Sandbox seam's
-retention and reclaim rules.
+This is the primary design response to sandbox capacity exhaustion from retained previews,
+alongside the Sandbox seam's retention and reclaim rules.
 
 If the output cannot satisfy that contract, a retained sandbox is not a substitute for a durable
 preview. The environment is released according to run policy, and the run record explains why no
 preview was created. The project-owned preview remains available after the producing run ends,
-subject to bounded retention ([#1494](https://github.com/sabbour/agentweaver/issues/1494)). The
+subject to bounded retention. The
 journal and artifact references survive independently of the environment.
 
 The Sandbox provider owns the live endpoint and environment lifetime; Application Hosting takes over
@@ -121,12 +116,12 @@ revision on the owner's behalf; see [Orchestration](orchestration.md).
 
 A published route never inherits a preview capability URL or the producing run's credentials.
 Viewers authenticate and are authorized for the application, route, and workflow actions at the
-Gateway/Identity edge under [#668](https://github.com/sabbour/agentweaver/issues/668). Promotion
+Gateway/Identity edge. Promotion
 keeps the pinned revision and its hosting or Canvas binding. Rollback serves a previously approved immutable
 revision at the stable authenticated route; it is not an edit to the current artifact.
 
-The declarative A2UI profile invokes one typed form action bound to its approved workflow
-([#662](https://github.com/sabbour/agentweaver/issues/662)). Its content cannot approve work, choose
+The declarative A2UI profile invokes one typed form action bound to its approved workflow.
+Its content cannot approve work, choose
 another workflow, or confer a viewer's privileges. Application actions still pass through the same
 core authorization and audit gates as other workflow actions.
 
@@ -195,21 +190,21 @@ Image-backed, owner-managed external, and Container Apps hosting adapters are re
 for now. A web image remains an artifact format, not a separate hosting provider.
 Container Apps Sandboxes belongs to the later [Sandbox evaluation](provider-seams.md#managed-runtime-contract-check).
 The web and declarative profiles still share the application identity and publish
-model of [#662](https://github.com/sabbour/agentweaver/issues/662), but use different
+model, but use different
 Hosting and Canvas contracts.
 
 ### Image publication and trust
 
 BuildKit may build an image from isolated run output. The control plane publishes only the approved
 build output to the configured registry and stores its digest receipt; the run never receives a
-registry credential ([#761](https://github.com/sabbour/agentweaver/issues/761)). Azure Container
+registry credential. Azure Container
 Registry is the default configuration, not a new seam. The recorded digest, not a mutable image tag,
 identifies what the hosting provider serves.
 
 Applications do not receive run credentials, agent credentials, or the AgentHost's purpose-bound
 tokens. Gateway and Identity authenticate viewers and enforce the configured audience and route
-rules before traffic reaches the built-in hosting runtime or Canvas content
-([#668](https://github.com/sabbour/agentweaver/issues/668)). Neither provider owns the
+rules before traffic reaches the built-in hosting runtime or Canvas content.
+Neither provider owns the
 authorization boundary.
 
 Application ingress and egress compile through the [Network
@@ -237,7 +232,7 @@ The current source catalog does not yet implement this contract.
 | Canvas adapter | Responsibility | Phase |
 | --- | --- | --- |
 | A2UI | Render declarative packages using a pinned specification and component catalog. Forward typed actions to the existing core gates. | P2 |
-| GitHub Canvas-compatible | Map the researched experimental declaration, action, and lifecycle subset. A portable content format and browser bridge are not established. Implementation remains separate [#1904](https://github.com/sabbour/agentweaver/issues/1904). | P2 |
+| GitHub Canvas-compatible | Map the researched experimental declaration, action, and lifecycle subset. A portable content format and browser bridge are not established. The adapter implementation is separate work. | P2 |
 
 GitHub Canvas is not a public standard. Compatibility work belongs inside its adapter,
 not in Agentweaver's core action protocol or a replacement UI.
@@ -248,7 +243,7 @@ and outbound boundaries; it is not an additional Application Hosting adapter.
 
 ### GitHub Canvas evidence and versions
 
-Research [#1901](https://github.com/sabbour/agentweaver/issues/1901) inspected accessible
+The GitHub Canvas research inspected accessible
 first-party source and permitted local declarations on 2026-10-08. It establishes
 declaration, callback, and lifecycle shapes, not executed Agentweaver interoperability.
 The historical reverse-engineering artifact is unavailable; no recovered private
@@ -262,10 +257,10 @@ specification is claimed.
 | Read-only app discovery | Runtime `1.0.93-1`; browser capabilities returned open/action JSON schemas and `extensionId: connection:1` | This differs from the public CLI pin. No open, action, rendering, reconnect, or integration was exercised. |
 | Released Agentweaver 0.x | `v0.34.2`, commit [`013ba5e12915b6a729763e04221c297438b1cd11`](https://github.com/sabbour/agentweaver/tree/013ba5e12915b6a729763e04221c297438b1cd11) | Existing panel and preview state, not a shipped GitHub Canvas renderer. |
 
-The inspected SDK [factory](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/canvas.ts#L45-L197),
-[RPC declarations](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/generated/rpc.ts#L8085-L8450),
-[provider types](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/types.ts#L2209-L2235),
-and [lifecycle events](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/generated/session-events.ts#L13189-L13560)
+The inspected SDK [factory](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/canvas.ts),
+[RPC declarations](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/generated/rpc.ts),
+[provider types](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/types.ts),
+and [lifecycle events](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/generated/session-events.ts)
 support the matrix below. The [Node examples/tests](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/test/e2e/canvas.e2e.test.ts)
 use a fixed counter result and an example URL. The
 [Python resume scenario](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/python/e2e/test_scenario_canvas_e2e.py)
@@ -291,19 +286,19 @@ The proposed mapping is not current adapter support.
 | Close and cleanup | `onClose` is best-effort; the outer close RPC can resolve despite a handler failure. | Closing removes the view, not its run or artifact. Only the resource owner and its receipt establish cleanup or action settlement. |
 | Deployment | Read-only browser capability discovery succeeded. | No Agentweaver AKS/web/MCP/SDK interoperability was executed. Native Office/terminal, desktop integration, and arbitrary extensions are outside the evidence. |
 
-The released 0.x [run page](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/pages/CoordinatorRunPage.tsx#L5141-L5325)
+The released 0.x [run page](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/pages/CoordinatorRunPage.tsx)
 has slide panels and a separate preview dialog; closing the dialog does not stop the
 preview. Its [preview state](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/state/runPreviewState.ts)
 requires current assembly and server-backed readiness evidence. Inspected
-[reload tests](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/__tests__/CoordinatorRunPage.test.tsx#L1591-L1664)
-and [preview-state tests](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/__tests__/CoordinatorRunPage.coordUx.test.tsx#L229-L332)
+[reload tests](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/__tests__/CoordinatorRunPage.test.tsx)
+and [preview-state tests](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/__tests__/CoordinatorRunPage.coordUx.test.tsx)
 support reuse of those presentation and truthful-state patterns. Do not reuse
 sandbox port-forward identity as Canvas artifact identity. The inspected released
 tree contains no GitHub Canvas or A2UI implementation; roadmap entries are not shipped parity.
 
 ### Bounded adapter subset
 
-The initial [#1904](https://github.com/sabbour/agentweaver/issues/1904) target is
+The initial GitHub Canvas adapter target is
 **GitHub Canvas declaration/action compatibility**, not full native renderer interoperability.
 It includes trusted declaration/discovery mapping, create/focus/describe/invoke/close
 semantics, one controlled renderer using verified owned assets, and one declared
@@ -324,11 +319,8 @@ Renderer metadata cannot authorize publication, hosting, workflow execution, or 
 If arbitrary existing GitHub Canvas content is required, its absent portable content,
 asset, and browser-bridge contract remains a blocker; this narrower subset does not satisfy it.
 
-Implementation requires the admitted research and [#1878](https://github.com/sabbour/agentweaver/issues/1878)
-C1 contract/owner-state slice, retained-web/core action contracts from
-[#1859](https://github.com/sabbour/agentweaver/issues/1859) and
-[#1857](https://github.com/sabbour/agentweaver/issues/1857), and applicable
-[#1858](https://github.com/sabbour/agentweaver/issues/1858) MCP operations.
+Implementation requires the admitted research, the Canvas C1 contract and owner-state slice,
+the retained-web and Gateway core action contracts, and the applicable first-party MCP operations.
 It does not wait for the whole bundle epic, all P1, A2UI, Memory adapters, or P3.
 The [planned acceptance cases](../../guide/testing.md#planned-github-canvas-adapter-acceptance)
 remain unexecuted. Integrated exact-SHA AKS acceptance requires separate target,
@@ -363,7 +355,7 @@ same core enforcement gates.
 
 | Kind | Presentation | Action boundary |
 | --- | --- | --- |
-| Application | Sandboxed iframe for `live`, `preview`, or `published`, showing stage and exact revision ([#665](https://github.com/sabbour/agentweaver/issues/665)). | Authenticated app-router route and application permissions. |
+| Application | Sandboxed iframe for `live`, `preview`, or `published`, showing stage and exact revision. | Authenticated app-router route and application permissions. |
 | Canvas | A2UI packages or verified owned assets under the researched GitHub declaration/action profile. No portable GitHub renderer format is established. | Typed action bound to the specified workflow or gate; content alone cannot authorize it. |
 | MCP App | Sandboxed iframe for an MCP server's `ui://` resource. | UI-initiated tool calls pass core tool authorization, audit, and outbound controls. |
 | Built-in | Diff/review, Markdown document editor, read-only logs/terminal, and workflow graph. | Each built-in declares its allowed actions; a read-only view remains read-only. |
@@ -413,8 +405,7 @@ do not invent an upstream format or component-catalog version from discovery met
 
 ### Canvas provider contract and adapters
 
-**Status:** Proposed C1-C5 work under
-[#1878](https://github.com/sabbour/agentweaver/issues/1878), not an implemented API.
+**Status:** Proposed C1-C5 work, not an implemented API.
 The source enum names fifteen seams and has no `Canvas` member.
 The plan separately names Canvas as its sixteenth seam.
 The repository's [workflow Canvas extension](../../../.github/extensions/agentweaver-workflow-canvas/README.md)
@@ -537,7 +528,7 @@ These names identify planned work, not shipped packages:
 | Target | Implementation boundary | Explicit limit |
 | --- | --- | --- |
 | `A2uiCanvasProvider` (`Agentweaver.Providers.Canvas.A2ui`) | In-process .NET adapter and retained web components. C2 first supplies native artifact/progress views and one typed form/action, then a pinned A2UI renderer/catalog through the same Core boundary. | Native built-ins are trusted host views, not a third provider. No arbitrary browser script, separate agent server, copied Copilot UI, or native Office automation. |
-| `GitHubCanvasCompatibilityProvider` (`Agentweaver.Providers.Canvas.GitHub`) | The separately tracked [#1904](https://github.com/sabbour/agentweaver/issues/1904) maps the admitted declaration/action/lifecycle subset to C1 state and verified owned renderer assets. | No portable GitHub content/catalog claim, arbitrary package handlers, generic browser bridge compatibility, or implicit cleanup. The existing [research limits](#bounded-adapter-subset) remain authoritative. |
+| `GitHubCanvasCompatibilityProvider` (`Agentweaver.Providers.Canvas.GitHub`) | A separate adapter maps the admitted declaration/action/lifecycle subset to C1 state and verified owned renderer assets. | No portable GitHub content/catalog claim, arbitrary package handlers, generic browser bridge compatibility, or implicit cleanup. The existing [research limits](#bounded-adapter-subset) remain authoritative. |
 | MCP Apps protocol integration | Existing Tool & MCP gateway, selected Canvas/Core path, and retained web host bridge resolve an approved `ui://` resource and exact enforceable revision. C3 validates messages and dispatches tool calls through current enforcement. | No new provider seam, package-created connection, ambient browser bearer, direct outbound fetch, or fallback from unsupported remote content to native execution. |
 
 Application views embed authorized Application Hosting or Sandbox endpoints.
@@ -599,7 +590,7 @@ agent environment.
 
 | Option | Why not |
 | --- | --- |
-| Retain every sandbox to preserve a preview | Couples viewer lifetime to expensive isolation capacity and leaves abandoned leases; durable capture plus reclaim addresses [#1688](https://github.com/sabbour/agentweaver/issues/1688). |
+| Retain every sandbox to preserve a preview | Couples viewer lifetime to expensive isolation capacity and leaves abandoned leases; durable capture plus reclaim avoids that capacity loss. |
 | Maintain separate preview and published product models | Duplicates project ownership, routes, auth, evidence, and revision tracking; stages are sufficient. |
 | Make each hosting provider authenticate viewers | Moves audience and route authorization to inconsistent provider-specific edges; Gateway/Identity owns that decision. |
 | Make the reverse-engineered GitHub Canvas protocol the core surface contract | Keep compatibility inside the Canvas adapter. Core retains Agentweaver's typed actions, authorization, and existing UI. |
@@ -617,28 +608,23 @@ Canvas C1-C5 belongs to P2 after its applicable foundations.
   surface contracts alongside the platform's identity, secrets, and provider catalog. Establish the
   outbox and artifact records used for durable handoff.
 - **P1 — core:** Build the Gateway/BFF, Identity, Environment manager, Orchestrator, web, and MCP
-  foundations; sandbox retention/reclaim and startup-phase observability cover
-  [#1688](https://github.com/sabbour/agentweaver/issues/1688) and
-  [#1257](https://github.com/sabbour/agentweaver/issues/1257). At the end of P1, persona harnesses
+  foundations; sandbox retention and reclaim free abandoned capacity, and startup-phase
+  observability exposes slow AgentHost starts. At the end of P1, persona harnesses
   start against exact-SHA AKS deployments.
 - **P2 — parity and cutover:** Deliver `live`/`preview`/`published`, built-in AKS
   Application Hosting, Canvas with A2UI and GitHub Canvas compatibility research and
-  reverse engineering, verified publish gate, image publication
-  ([#761](https://github.com/sabbour/agentweaver/issues/761)), project-owned previews
-  ([#1494](https://github.com/sabbour/agentweaver/issues/1494)), and the application/A2UI/MCP
-  App/built-in surface panel. Additional hosting adapters
-  [#666](https://github.com/sabbour/agentweaver/issues/666) and
-  [#667](https://github.com/sabbour/agentweaver/issues/667) remain explicitly deferred.
+  reverse engineering, verified publish gate, image publication, project-owned previews, and the application/A2UI/MCP
+  App/built-in surface panel. The image-backed and owner-managed hosting adapters
+  remain explicitly deferred.
 - **P3 — after cutover:** Expose first-party Agentweaver surfaces as MCP Apps resources
   for external hosts. Container Apps Sandboxes is separate Sandbox work, not a hosting adapter.
 
 ### Canvas provider delivery and milestone placement
 
-[#1878](https://github.com/sabbour/agentweaver/issues/1878) tracks bundle B1-B5 and
-Canvas C1-C5 in milestone `v1.0.0` (18), as P2 work.
-[#1841](https://github.com/sabbour/agentweaver/issues/1841) retains its original P1 scope.
-[#665](https://github.com/sabbour/agentweaver/issues/665) is historical product backlog;
-[#1751](https://github.com/sabbour/agentweaver/issues/1751) is Squad development tooling.
+Bundle slices B1-B5 and Canvas slices C1-C5 are P2 work planned for the `v1.0.0` release.
+P1 keeps its original scope.
+The 0.x canvas and renderer backlog item is historical product backlog, and the
+Squad workflow canvas is development tooling.
 Neither proves a v1 product Canvas implementation.
 
 These are original acceptance slices, not accepted source or deployed evidence:
@@ -652,8 +638,8 @@ These are original acceptance slices, not accepted source or deployed evidence:
 | C5: Integrated P2 acceptance | Acceptance coordinator with C1-C4 source and separately approved deployment authority. | Exact-SHA AKS API/UI/MCP journeys for native/A2UI and MCP Apps profiles, browser restart, action response loss, revocation, renderer failure, bundle upgrade, and owned cleanup |
 
 C1-C3 elaborate P2 surfaces; C4 adds bundle integration.
-The specification does not complete C1 or close #1878.
-The GitHub adapter remains separate #1904 with its bounded dependencies,
+The specification does not complete C1 or the Canvas work.
+The GitHub Canvas adapter remains separate work with its bounded dependencies,
 not a prerequisite on the whole bundle epic, all P1, or other Memory providers.
 Live acceptance requires separate target/access/cost/cleanup approval.
 

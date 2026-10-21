@@ -184,8 +184,8 @@ deployment configuration guidance.
 ### GitHub Repo App and Copilot connection BFF
 
 These explicit Gateway-to-Identity Broker routes are outside the OpenAPI catalog
-and describe source mappings, not deployment availability. Repo App source
-operations were released in #1934; Copilot operations require #1906. Missing
+and describe source mappings, not deployment availability. Both the Repo App and
+the Copilot connection operations have source mappings. Missing
 owner routes/configuration remain explicit failures.
 User-level authorization, status, refresh/revoke, and repository discovery require
 the current Broker bearer and no tenant selector. The status response exposes only
@@ -1013,8 +1013,7 @@ compaction threshold, not aggregate token usage, a per-request admission guarant
 or a raw-request token count. The session-material
 owner binds this source fact and rejects a changed value. Absent optional pins
 preserve historical payloads; they do not authorize a configured-capacity resume.
-Native and hosted deployment evidence is still required to close issue
-[#1855](https://github.com/sabbour/agentweaver/issues/1855).
+Native and hosted deployment evidence is still required.
 
 `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context`
 requires the authenticated current run owner and returns `Cache-Control: no-store`.

@@ -84,8 +84,5 @@ division: browser seen and sound state do not become gate state.
 0.x also derives recent delegated-work promotion notices from persisted plans
 and the tasks they actually created. Those notices need the v1 task-promotion
 owner contract; they must not be synthesized from unrelated task creation.
-The pending-gate endpoint does not claim to implement that source. Follow
-[#2187](https://github.com/sabbour/agentweaver/issues/2187) for the remaining
-promotion-source integration and
-[#2176](https://github.com/sabbour/agentweaver/issues/2176) for repository issue
-synchronization. ADR 0001 does not drop these capabilities.
+The pending-gate endpoint does not implement that source. Promotion notices
+remain planned work. ADR 0001 does not drop this capability.

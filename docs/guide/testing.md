@@ -362,10 +362,8 @@ deployed owner services.
 ## Planned GitHub Canvas adapter acceptance
 
 GitHub Canvas adapter cases are unexecuted requirements, not a passing suite
-or current adapter support. The research recorded in
-[issue #1901](https://github.com/sabbour/agentweaver/issues/1901) did not run
-interoperability, rendering, or restart tests. Implementation work is tracked
-in [issue #1904](https://github.com/sabbour/agentweaver/issues/1904). Do not
+or current adapter support. The Canvas research did not run interoperability, rendering, or restart tests.
+The adapter is not implemented yet. Do not
 report the planned cases as product behavior or passing test evidence.
 
 ## Test retained API, UI, and MCP adapters

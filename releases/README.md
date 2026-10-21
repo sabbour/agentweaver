@@ -142,9 +142,8 @@ Account-free SDK transport tests cover failures, cancellation and redaction.
 This adds no authorization gate or deployable service; the draft composition's
 initial package baseline is `0.0.0`.
 
-#1766 adds explicit AKS workload-identity composition in the existing Key Vault
-adapter: trusted hosts provide tenant ID, client ID, and projected token-file path
-to Azure Identity, with no developer-identity fallback. Fake-transport tests cover
+The Key Vault adapter adds explicit AKS workload-identity composition: trusted hosts
+provide tenant ID, client ID, and projected token-file path to Azure Identity, with no developer-identity fallback. Fake-transport tests cover
 OAuth exchange and exact-version vault requests. Authentication, authorization and
 rotation in a deployed AKS service remain unverified; no new component or version
 is added to the draft manifest.
@@ -183,7 +182,7 @@ It names the reviewed plan source, checksum, applied versions and archived note 
 The manifest remains a draft. This is not a published platform release or permission to publish.
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
-The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
+The manifest registers the Identity broker, `Agentweaver.Identity.Broker`, as an unpublished service.
 Its current manifest/project source version is `1.1.3`.
 The record is release intent, not a registry artifact or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
@@ -247,7 +246,7 @@ the Azure Blob transport adapter.
 
 ## Earlier foundation changes
 
-- #1776 adds the `Agentweaver.Identity` 0.0.0 authorization library. It authorizes
+- The `Agentweaver.Identity` 0.0.0 authorization library authorizes
   exact run grants and compares immutable
   pre/post grant identity, revision, expiry and bindings. Abstractions adds a
   metadata-only, thread-safe `SecretCredential.LimitLifetime` on the original
@@ -256,18 +255,18 @@ the Azure Blob transport adapter.
   compatibility record pins Identity's Abstractions dependency to 0.0.0.
   No broker/store/service/Azure
   deployment or new-tree approval from historical review receipts is implied.
-- #1768 adds consumer-scoped transactional inbox receipts to
+- Consumer-scoped transactional inbox receipts are part of
   `Agentweaver.Persistence.Postgres` 0.0.0. Migration 2 upgrades existing
   service-owned version-1 schemas without changing their outbox records. This
   remains a draft library, not a consumer service or exactly-once delivery.
-- #1750 supplies the platform-singleton Object Store contract for opaque platform
-  artifacts. #1744 adds the Azure Blob adapter, with streamed reads, create-only
+- The platform-singleton Object Store contract covers opaque platform
+  artifacts. The Azure Blob adapter provides streamed reads, create-only
   writes, and missing-object delete semantics. This draft library composition
   is not a platform release or version bump. Changeset records track intent;
   source-bound version preparation is described here. The original P0 packages
-  were published from an earlier source; #1825 tracks their historical 0.0.0 baseline.
+  were published from an earlier source with a historical 0.0.0 baseline.
   This draft does not claim platform deployment.
-- #1767 adds ordered, layered provider composition: permitted Guardrails and
+- Provider composition is ordered and layered: permitted Guardrails and
   Telemetry providers resolve and pin as ordered sets, pinning resource
   generations and order. Network Policy resolves its required L3/L4 and
   optional L7 layers as platform-selected, platform-owned providers, and
@@ -879,8 +878,8 @@ Do not add another subject or role.
 Download the source-matched receipt's `publication.json` to
 `artifacts/release/publish/publication.json`. Continuation receipts and
 `--completion` proofs are rejected; no image is rebuilt or republished. The
-source-bound bootstrap command remains a pre-acceptance operation and does not
-complete the deployment evidence in issue #2097.
+source-bound bootstrap command remains a pre-acceptance operation. It does not
+complete the deployment evidence for this release.
 
 ```powershell
 npm run release:deploy-bootstrap -- v1.0.4 `
@@ -946,8 +945,8 @@ privileged-setup allowlist is unchanged by this bootstrap-pin update.
 Download `publication.json` from the exact receipt artifact to
 `artifacts/release/publish/publication.json`. Continuation receipts and
 `--completion` proofs are rejected; no image is rebuilt or republished. This
-pre-acceptance bootstrap does not close release issue #2104, and issue #2101
-remains open for live sign-in verification.
+pre-acceptance bootstrap does not complete release acceptance, and live sign-in
+verification is still required.
 
 ```powershell
 npm run release:deploy-bootstrap -- v1.0.5 `

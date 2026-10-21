@@ -130,7 +130,7 @@ Container Apps Sandboxes is a later Sandbox evaluation, not an application host.
 
 ## GitHub Canvas research boundary
 
-Research [#1901](https://github.com/sabbour/agentweaver/issues/1901) inspected the
+The GitHub Canvas research inspected the
 experimental public SDK at commit
 [`2023ed29af3cae890b26f9e2a269a04d8ac7ba60`](https://github.com/github/copilot-sdk/tree/2023ed29af3cae890b26f9e2a269a04d8ac7ba60)
 and permitted local declarations. The source snapshot reports SDK `0.0.0-dev`,
@@ -148,9 +148,9 @@ artifact ownership. An instance or URL is not an artifact or grant. Reconnect mu
 preserve its binding and obtain a fresh location; successful close does not prove cleanup.
 The [detailed evidence, unknowns, and subset](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/applications-and-surfaces.md#github-canvas-evidence-and-versions)
 and [planned acceptance cases](../guide/testing.md#planned-github-canvas-adapter-acceptance)
-inform separate adapter [#1904](https://github.com/sabbour/agentweaver/issues/1904).
-Canvas remains unimplemented in the current source enum/resolver; research does not close
-that adapter issue or establish deployment/publication acceptance.
+inform a separate GitHub Canvas adapter.
+Canvas remains unimplemented in the current source enum and resolver. The research does not
+implement that adapter or establish deployment or publication acceptance.
 
 ## Existing model and provider integrations
 
@@ -225,10 +225,8 @@ Core binds token measurements to these facts, the producer registration, and the
 Events reads the immutable Core receipt by reference. It does not accept caller-supplied provider authority.
 Unknown pricing remains `Unpriced`.
 
-The AgentHost mode repair belongs to
-[#1856](https://github.com/sabbour/agentweaver/issues/1856).
-The source Copilot connection and refresh lifecycle belongs to [#1906](https://github.com/sabbour/agentweaver/issues/1906);
-repository App credentials are separate [#1907](https://github.com/sabbour/agentweaver/issues/1907).
+Identity owns the Copilot connection and refresh lifecycle.
+Repository GitHub App credentials are a separate Identity connection.
 Platform/project model selection remains the documented scope. GitHub-user account linking
 can authenticate a deliberately selected Copilot binding; it does not add personal BYOK
 settings or personal model-provider preference or fallback.

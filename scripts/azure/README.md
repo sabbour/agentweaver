@@ -2,8 +2,9 @@
 
 These dependency-free tools define and inspect infrastructure.
 They do not deploy a service or prove workload identity.
-The [#1777 specification](../../docs/specs/1777-azure-p0-infrastructure.md)
-describes source receipts, target guards, and the separate #1784 runtime gate.
+The [Azure P0 infrastructure specification](../../docs/specs/azure-p0-infrastructure.md)
+describes source receipts, target guards, and the separate
+[foundation probe](../../docs/specs/foundation-probe.md) runtime gate.
 
 ## Offline validation
 
@@ -21,10 +22,10 @@ does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
 `a08792123f628dc89b0064cb28148acb8f6eb44a0f8d1a37a145f76315212ed7`.
 It is not an approval receipt. The runner uses its explicit registered version
-list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-27. Versions 023 and 024 come from
-v1. Version 027 requires 026 only. Merge order is #2197, then #2186, then
-#2196.
+list, not contiguous numbering. Version 017 is not registered, so it needs no
+placeholder. The Core list is 1-16, 18-27. Apply the versions in list order:
+025 adds user notification dismissals, 026 adds backlog task content, and 027
+adds periodic issue sync. Version 027 requires 026 only.
 
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
 open/closed lifecycle and a unique repository issue identity. It requires
@@ -327,7 +328,7 @@ cost by 50%, plus per-node service charges. Quota headroom does not prove region
 
 AKS opts into Advanced Container Networking Services (ACNS) with security
 enabled and observability disabled, the security-only configuration needed for
-the #1784 FQDN-filtering work. Runtime Kubernetes must be version 1.29 or later.
+FQDN-based egress filtering in the foundation probe Job. Runtime Kubernetes must be version 1.29 or later.
 The template leaves `kubernetesVersion` empty so AKS selects its currently
 supported default rather than pinning an older version.
 
@@ -839,7 +840,7 @@ no retries, and a 360-to-420-second deadline. The observed pod must belong to
 that Job by UID, run in the exact namespace with the expected ServiceAccount,
 have the Azure workload-identity projection, and terminate with exit code 0.
 
-The immutable target ConfigMap must contain the strict #1784 `ProbeTarget` for
+The immutable target ConfigMap must contain the foundation probe's strict `ProbeTarget` for
 the exact reviewed SHA, Git tree, infrastructure hash, deployment, identities,
 resources, database target, and read-only Key Vault secret name/version.
 The native probe receipt must preserve the exact federation issuer, subject,
@@ -893,7 +894,7 @@ Key Vault Secrets User remains read-only.
 The probe requires a separately approved fixture with an exact secret name and version.
 Probe secret creation, deletion, and purge are not permitted by this contract.
 Purge protection remains enabled.
-The executable #1784 probe must adopt this read-only fixture before cloud acceptance.
+The executable foundation probe must adopt this read-only fixture before cloud acceptance.
 
 The exported Blob diagnostic is operator-only and requires separate write approval.
 It creates a local fixture under `artifacts\azure`, uses a generated owned blob,

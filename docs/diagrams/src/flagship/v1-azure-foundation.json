@@ -105,7 +105,7 @@
     },
     {
       "id": "native-receipt",
-      "label": "Native #1784 receipt",
+      "label": "Probe receipt",
       "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof",
       "icon": "document",
       "fluentIcon": "document",
@@ -152,7 +152,7 @@
       { "id": "monitor", "type": "card", "position": { "x": 860, "y": 1000 }, "data": { "label": "Azure Monitor", "subLabel": "Fresh AppDependencies/AppRequests query after Job completion" } },
       { "id": "probe-identity", "type": "card", "position": { "x": 80, "y": 540 }, "data": { "label": "Foundation Probe identity", "subLabel": "Dedicated user-assigned managed identity" } },
       { "id": "job", "type": "card", "position": { "x": 500, "y": 770 }, "data": { "label": "Foundation Probe Job", "subLabel": "One completed Job; pod UID/owner, namespace, SA, projected ID, success" } },
-      { "id": "native-receipt", "type": "card", "position": { "x": 80, "y": 770 }, "data": { "label": "Native #1784 receipt", "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof" } },
+      { "id": "native-receipt", "type": "card", "position": { "x": 80, "y": 770 }, "data": { "label": "Probe receipt", "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof" } },
       { "id": "image-receipt", "type": "card", "position": { "x": 80, "y": 1000 }, "data": { "label": "CI image receipt", "subLabel": "Source SHA/tree-bound registry manifest digest" } },
       { "id": "acceptance-consumer", "type": "card", "position": { "x": 500, "y": 1000 }, "data": { "label": "External evidence gate", "subLabel": "Complete evidence => deployedAcceptance; otherwise blocked" } },
       { "id": "egress", "type": "card", "position": { "x": 860, "y": 1230 }, "data": { "label": "Probe egress policy", "subLabel": "Overlay-scoped NetworkPolicy" } }

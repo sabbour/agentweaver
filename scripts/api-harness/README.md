@@ -253,7 +253,7 @@ unavailable in this one-account operator flow, so the denied-actor
 authorization check remains blocked while the remaining API steps run.
 The Host-caller probe-provider gap is also still blocked; this launcher does
 not provide Host-caller probe adapters, and missing native probes continue to
-block full P1 acceptance. The UI surface remains blocked on #1859.
+block full P1 acceptance. The UI surface remains blocked until the 0.x UI is restored onto v1.
 
 Advanced invocations may continue to use the lower-level runner with an
 already-authorized identity provider. It requires the setup token in the

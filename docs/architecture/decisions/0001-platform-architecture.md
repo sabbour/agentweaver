@@ -242,8 +242,7 @@ or 0.x implementation names to new contracts. The parity map tracks each
 0.x capability and open roadmap item, its 1.0 owner, disposition (rebuild,
 redesign, drop, or defer), and evidence.
 
-The verified behavior guarantees in
-[#1405](https://github.com/sabbour/agentweaver/issues/1405) become the
+The verified 0.x behavior guarantees become the
 acceptance list **when published**; that document does not exist yet.
 The appendix seeds the map, not a claim that parity is complete.
 
@@ -297,64 +296,56 @@ flowchart LR
 
 ## Roadmap alignment
 
-Shipped 0.x issues create parity obligations. Items still open at the cut
+Shipped 0.x capabilities create parity obligations. Items still open at the cut
 line enter the 1.0 backlog under the listed owner.
 
-| 0.x milestone | Issues | 1.0 owner and treatment |
+| 0.x milestone | Capabilities | 1.0 owner and treatment |
 | --- | --- | --- |
-| v0.35 | Remote MCP [#1229](https://github.com/sabbour/agentweaver/issues/1229) ([#1230](https://github.com/sabbour/agentweaver/issues/1230), [#1231](https://github.com/sabbour/agentweaver/issues/1231), [#1232](https://github.com/sabbour/agentweaver/issues/1232), [#1233](https://github.com/sabbour/agentweaver/issues/1233), [#1234](https://github.com/sabbour/agentweaver/issues/1234), [#1235](https://github.com/sabbour/agentweaver/issues/1235)); MCP surface [#1407](https://github.com/sabbour/agentweaver/issues/1407), [#1427](https://github.com/sabbour/agentweaver/issues/1427), [#1428](https://github.com/sabbour/agentweaver/issues/1428) | MCP catalog and Tool & MCP gateway ([Provider seams](../design/provider-seams.md)). |
-| v0.35 | Tracked addressed messages [#1406](https://github.com/sabbour/agentweaver/issues/1406); run state and recovery effects [#1402](https://github.com/sabbour/agentweaver/issues/1402) | Message primitive and status snapshot ([Sessions and coordination](../design/sessions-and-coordination.md)). |
-| v0.35 | Preview retention and abandoned-sandbox reclaim [#1688](https://github.com/sabbour/agentweaver/issues/1688) | Sandbox lifecycle and `live`-to-`preview` capture ([Provider seams](../design/provider-seams.md), [Applications](../design/applications-and-surfaces.md)). |
-| v0.35 | Workflow applications [#662](https://github.com/sabbour/agentweaver/issues/662), canvas/A2UI renderer [#665](https://github.com/sabbour/agentweaver/issues/665), authorization [#668](https://github.com/sabbour/agentweaver/issues/668) | Built-in AKS Application Hosting and the separate Canvas seam for A2UI; core owns authorization. |
-| v0.35 | Verified behavior guarantees [#1405](https://github.com/sabbour/agentweaver/issues/1405) | Parity-map acceptance list once published. |
-| v0.36 | Image-backed [#666](https://github.com/sabbour/agentweaver/issues/666) and owner-managed [#667](https://github.com/sabbour/agentweaver/issues/667) app providers; image publication [#761](https://github.com/sabbour/agentweaver/issues/761) | Additional hosting providers are deferred from the current plan; control-plane image publication remains. |
-| v0.37 | Suspend/resume [#1410](https://github.com/sabbour/agentweaver/issues/1410); AgentHost startup [#1257](https://github.com/sabbour/agentweaver/issues/1257) | Snapshots and consistency manifest; measured image pull size, download optimization, and startup-time budgets, with no hard image-size ceiling. |
-| v0.38 | Delivery simplification [#1429](https://github.com/sabbour/agentweaver/issues/1429), [#1430](https://github.com/sabbour/agentweaver/issues/1430) | Fresh 1.0 release tooling ([Services and release](../design/services-and-release.md)). |
-| v0.39 | Project-owned durable previews [#1494](https://github.com/sabbour/agentweaver/issues/1494) | Application `preview` stage. |
+| v0.35 | Remote MCP connections, tools, and OAuth; MCP surface tools and catalog | MCP catalog and Tool & MCP gateway ([Provider seams](../design/provider-seams.md)). |
+| v0.35 | Tracked addressed messages; run state and recovery effects | Message primitive and status snapshot ([Sessions and coordination](../design/sessions-and-coordination.md)). |
+| v0.35 | Preview retention and abandoned-sandbox reclaim | Sandbox lifecycle and `live`-to-`preview` capture ([Provider seams](../design/provider-seams.md), [Applications](../design/applications-and-surfaces.md)). |
+| v0.35 | Workflow applications, canvas/A2UI renderer, application authorization | Built-in AKS Application Hosting and the separate Canvas seam for A2UI; core owns authorization. |
+| v0.35 | Verified behavior guarantees | Parity-map acceptance list once published. |
+| v0.36 | Image-backed and owner-managed app providers; image publication | Additional hosting providers are deferred from the current plan; control-plane image publication remains. |
+| v0.37 | Suspend/resume; AgentHost startup time | Snapshots and consistency manifest; measured image pull size, download optimization, and startup-time budgets, with no hard image-size ceiling. |
+| v0.38 | Delivery simplification | Fresh 1.0 release tooling ([Services and release](../design/services-and-release.md)). |
+| v0.39 | Project-owned durable previews | Application `preview` stage. |
 
 ## Phases
 
-**Historical foundation snapshot (2026-10-02):** Merged foundations below are libraries and validation
-tooling, not a running or released platform. The workload-identity composition
-from [#1771](https://github.com/sabbour/agentweaver/pull/1771) (issue
-[#1766](https://github.com/sabbour/agentweaver/issues/1766)) is merged, but
-deployed AKS workload identity and Identity authorization remain unverified.
-The candidate for [#1778](https://github.com/sabbour/agentweaver/issues/1778) adds
-dependency-free `release:plan`/`release:apply`/`release:pack` tooling
-(see [release composition](../../../releases/README.md#release-planning-and-package-preparation)):
-it applies source-bound component intent and prepares locked packages and service images.
-A separate manual workflow can publish verified artifacts and record receipts.
-No artifact publication, released platform composition, registry push, or deployment
-occurred in this candidate.
-Azure foundation tooling for issue [#1777](https://github.com/sabbour/agentweaver/issues/1777)
-(Bicep modules, a guardrail-enforced plan/deploy/verify-acceptance CLI, and the
-Kustomize service-account layout) is staged on a branch, not reviewed, merged,
-or deployed. The phase descriptions below remain the scope authority.
+**P0 foundation components.** P0 delivered libraries, validation tooling, and Azure
+infrastructure:
 
-**Candidate, not merged:** [#1776](https://github.com/sabbour/agentweaver/issues/1776)
-adds trusted Identity run-grant authorization as a library. It compares exact
-bindings and immutable grant ID/revision/expiry before and after acquisition,
-narrows credential metadata without value access and invalidates on all
-post-acquisition errors/cancellation. This does not complete the remaining
-Identity broker, durable authority, service or Azure acceptance work.
+- AKS workload-identity composition. See the
+  [AKS workload identity specification](../../specs/aks-workload-identity.md).
+- Dependency-free `release:plan`, `release:apply`, and `release:pack` release tooling
+  (see [release composition](../../../releases/README.md#release-planning-and-package-preparation)).
+  It applies source-bound component intent and prepares locked packages and service images.
+  A separate manual workflow publishes verified artifacts and records receipts.
+  The release commands themselves never publish, push to a registry, or deploy.
+- Azure foundation tooling: Bicep modules, a guardrail-enforced plan, deploy, and
+  verify-acceptance CLI, and the Kustomize service-account layout. See the
+  [Azure P0 infrastructure specification](../../specs/azure-p0-infrastructure.md).
+- Trusted Identity run-grant authorization as a library. It compares exact
+  bindings and the immutable grant ID, revision, and expiry before and after acquisition.
+  It narrows credential metadata without reading secret values. It invalidates the grant
+  on any error or cancellation after acquisition. See the
+  [secret redemption authorization specification](../../specs/secret-redemption-authorization.md).
+- The native .NET/OpenIddict Identity service with owned PostgreSQL stores,
+  authenticated OAuth flows, and locked image builds. See the
+  [Identity broker specification](../../specs/identity-broker.md).
 
-The [#1779 broker candidate](../../specs/1779-identity-broker.md) adds the native
-.NET/OpenIddict Identity service, owned PostgreSQL stores, and authenticated OAuth flows.
-It includes locked image builds, but no publication or deployed Azure evidence.
-Run-grant redemption composition (#1783) and Azure proof (#1790) remain separate dependencies.
+The phase descriptions below remain the scope authority.
 
-**Current acceptance (2026-10-08):** P0 shipment and live acceptance are complete
-under [#1801](https://github.com/sabbour/agentweaver/issues/1801). Its recorded
-publication, AKS installation, authentication, Key Vault, Blob, PostgreSQL, telemetry,
-and owned-cleanup results supersede the historical snapshot above.
+**Current acceptance (2026-10-08):** P0 shipment and live acceptance are complete.
+The recorded publication, AKS installation, authentication, Key Vault, Blob, PostgreSQL,
+telemetry, and owned-cleanup results are the P0 evidence.
 This does not prove the unfinished P1 runtime, GitHub lifecycles, or integrated journeys.
-Their current source acceptance remains under
-[#1841](https://github.com/sabbour/agentweaver/issues/1841).
 
 | Phase | Status and evidence | Remaining before phase completion |
 | --- | --- | --- |
-| P0 — Foundation | **Accepted.** Source and initial artifacts are shipped under [#1801](https://github.com/sabbour/agentweaver/issues/1801). The AKS installation [#1812](https://github.com/sabbour/agentweaver/issues/1812) and exact-source live acceptance [#1814](https://github.com/sabbour/agentweaver/issues/1814) are complete, including owned cleanup. | None for the accepted P0 scope. Obsolete package deletion [#1825](https://github.com/sabbour/agentweaver/issues/1825) is explicitly deferred and does not block acceptance. New P1 credential-writer deployment rights are not included in P0's read-only secret access. |
-| P1 — Core and defaults | **Incomplete.** Accepted source and remaining delivery are tracked under [#1841](https://github.com/sabbour/agentweaver/issues/1841). The project issue workflow [#1743](https://github.com/sabbour/agentweaver/pull/1743) and workflow canvas [#1755](https://github.com/sabbour/agentweaver/pull/1755)/[#1757](https://github.com/sabbour/agentweaver/pull/1757)/[#1762](https://github.com/sabbour/agentweaver/pull/1762) are delivery tooling, not product acceptance. | Remaining core source and separately authorized exact-SHA AKS harness journeys described below. |
+| P0 — Foundation | **Accepted.** Source and initial artifacts are shipped. The AKS installation and exact-source live acceptance are complete, including owned cleanup. | None for the accepted P0 scope. Deleting obsolete packages is deferred and does not block acceptance. P0 grants read-only secret access. It does not include the credential-writer deployment rights that P1 needs. |
+| P1 — Core and defaults | **Incomplete.** Part of the core source is accepted. The project issue workflow and the workflow canvas are delivery tooling, not product acceptance. | Remaining core source and separately authorized exact-SHA AKS harness journeys described below. |
 | P2 — Parity and cutover | **Not delivered.** | Parity, application/surface capabilities, acceptance and cutover described below. |
 | P3 — After cutover | **Deferred and optional.** | Evaluate gated adapters only after cutover; none blocks it. |
 
@@ -368,31 +359,25 @@ Their current source acceptance remains under
   server, and budgeted AgentHost startup. Supply native Sessions/Memory,
   agent-sandbox with retention/reclaim, Azure Files, Cilium egress intent,
   AGT, GitHub, and Copilot cost. Start exact-SHA AKS harness runs at the end of P1.
-  Canonical work remains [MAF execution and joins #1855](https://github.com/sabbour/agentweaver/issues/1855),
-  [AgentHost #1856](https://github.com/sabbour/agentweaver/issues/1856),
-  [first-party MCP #1858](https://github.com/sabbour/agentweaver/issues/1858),
-  [retained web UI #1859](https://github.com/sabbour/agentweaver/issues/1859), and
-  [integrated acceptance #1860](https://github.com/sabbour/agentweaver/issues/1860).
-  These links do not imply that all source or live acceptance is complete.
+  The remaining P1 work is bounded MAF workflow execution and joins, AgentHost,
+  first-party MCP, the retained web UI, and integrated acceptance.
+  Accepted source in these areas does not mean that live acceptance is complete.
 - **P2 — Parity and cutover.** Add suspend/resume with a consistency manifest,
   Guardrails and tool permission metadata, remote MCP catalog and gateway,
-  [Cosmos #1902](https://github.com/sabbour/agentweaver/issues/1902) and
-  [Redis #1898](https://github.com/sabbour/agentweaver/issues/1898) Memory providers,
+  Cosmos and Redis Memory providers,
   Azure BYOK cost and budgets, prompt ordering
   and cache telemetry, Squad import/export, and `live`/`preview`/`published`
-  applications through [built-in AKS hosting #1900](https://github.com/sabbour/agentweaver/issues/1900).
-  Add the separate [Canvas seam and A2UI renderer #1878](https://github.com/sabbour/agentweaver/issues/1878),
-  [GitHub Canvas research #1901](https://github.com/sabbour/agentweaver/issues/1901),
+  applications through built-in AKS hosting.
+  Add the separate Canvas seam and A2UI renderer, GitHub Canvas research,
   image publication, publish gate, and application/MCP App/built-in surfaces.
   The [research findings](../design/applications-and-surfaces.md#github-canvas-evidence-and-versions)
   establish experimental declarations, actions, and lifecycle shapes, not a portable
-  renderer contract or executed interoperability. The
-  [supported adapter #1904](https://github.com/sabbour/agentweaver/issues/1904)
+  renderer contract or executed interoperability. The supported GitHub Canvas adapter
   depends on admitted findings and the Canvas C1 contract; it remains unimplemented.
   Elastic SAN and additional Application Hosting providers are outside this scope.
   Close parity against these explicit dispositions, pass API/UI/MCP harnesses, and cut over.
 - **P3 — After cutover.** Consider gated AKS pod snapshot/restore, OpenSandbox,
-  Agent Substrate, [Container Apps Sandboxes #1899](https://github.com/sabbour/agentweaver/issues/1899),
+  Agent Substrate, [Container Apps Sandboxes](../design/container-apps-sandboxes-evaluation.md),
   agentsessions, filesystem providers for agents,
   agentgateway, and Agentweaver surfaces exposed
   as MCP Apps. None of these optional adapters blocks cutover.
@@ -406,9 +391,8 @@ It does not describe an implemented installer or deployed capability.
 
 This P2 extension follows its applicable core prerequisites.
 It leaves P1's nineteen-item scope, counts, acceptance criteria, and completion gates unchanged.
-It does not widen #1848 or #1851 or add a P1 prerequisite.
-[#1878](https://github.com/sabbour/agentweaver/issues/1878) tracks B1-B5 and C1-C5
-in milestone `v1.0.0` (18).
+It does not widen any accepted P1 item or add a P1 prerequisite.
+The B1-B5 bundle slices and C1-C5 Canvas slices are planned for the `v1.0.0` release.
 The [Canvas contract](../design/applications-and-surfaces.md#canvas-provider-contract-and-adapters)
 uses the separately planned sixteenth seam; current source still implements fifteen.
 A2UI and bounded GitHub compatibility are planned adapters.
@@ -428,8 +412,8 @@ The [integration matrix](../design/agent-application-bundles.md#required-integra
 preserves lifecycle, failure, authorization, affinity, and ownership-safe cleanup requirements.
 The [C1-C5 plan](../design/applications-and-surfaces.md#canvas-provider-delivery-and-milestone-placement)
 retains Core state, native/A2UI views, MCP Apps, bundle integration, and live acceptance.
-Documentation admission is not C1/source acceptance; #1878 remains open until its actual criteria are met.
-GitHub adapter #1904 remains separately scoped after its applicable C1/web/Core/MCP prerequisites.
+Documentation admission is not C1 or source acceptance. The Canvas work stays open until its C1-C5 criteria are met.
+The GitHub Canvas adapter stays separately scoped. It starts only after its C1, web, Core, and MCP prerequisites exist.
 No additional hosting adapter, Elastic SAN, generic installer service, or permission framework is added.
 
 ## Risk register
@@ -447,7 +431,7 @@ the design contains the failure mode.
 | R5 | User-level BYOK expands the credential boundary. | Decided | Keep platform and project settings only in 1.0. |
 | R6 | AGT 5.0 policy language support lacks .NET parity. | Decided | Use the AGT .NET kernel with YAML rules as in 0.x; consider Rego/Cedar later without changing contracts. |
 | R7 | Optional upstream memory and session libraries are previews. | Decided | Native implementations remain defaults. Cosmos and Redis Memory providers ship in P2 behind conformance gates; agentsessions stays optional in P3. No preview library is mandatory. |
-| R8 | Agent Substrate has beta APIs, uncertain AKS viability, and no Blob snapshot store. | Gated | P3 conformance and an AKS proof of VM-level isolation ([#553](https://github.com/sabbour/agentweaver/issues/553)); leave snapshots off until Azure Blob support. |
+| R8 | Agent Substrate has beta APIs, uncertain AKS viability, and no Blob snapshot store. | Gated | P3 conformance and an AKS proof of VM-level isolation; leave snapshots off until Azure Blob support. |
 | R9 | Messages cross service boundaries and may duplicate. | Decided | At-least-once outbox, idempotency keys, consumer deduplication, per-thread sequence numbers. |
 | R10 | Operator chat may need to spawn runs. | Decided | Permit spawn under run-start authorization; record the run as the chat's child. |
 | R11 | Per-run workflow generation is needed for parity. | Decided | Retain it with grammar/step-catalog validation and human confirmation before first use. |
@@ -463,7 +447,7 @@ the design contains the failure mode.
 | R21 | Cutover could discard 0.x history or require a force push. | Decided | Tag final 0.x on `dev`, keep `release/0.x` for patches, merge old `dev` into `v1` with `--allow-unrelated-histories -s ours`, and fast-forward `dev` to `v1`. |
 | R22 | An active 0.x line keeps moving the parity target. | Decided | Set a cut line once the map is complete; later changes enter the 1.0 backlog rather than blocking cutover. |
 | R23 | Persona harness coverage could arrive too late. | Decided | Run API/UI/MCP harnesses on exact-SHA AKS deployments from the end of P1; require all green at cutover. |
-| R24 | Sandbox options, viewer auth, and application hosting can be confused. | Decided | Keep only built-in AKS Application Hosting for now. Evaluate Container Apps Sandboxes under the Sandbox seam in P3. Gateway/Identity retains viewer authorization. Defer [#666](https://github.com/sabbour/agentweaver/issues/666)/[#667](https://github.com/sabbour/agentweaver/issues/667) hosting adapters. |
+| R24 | Sandbox options, viewer auth, and application hosting can be confused. | Decided | Keep only built-in AKS Application Hosting for now. Evaluate Container Apps Sandboxes under the Sandbox seam in P3. Gateway/Identity retains viewer authorization. Defer the image-backed and owner-managed hosting adapters. |
 | R25 | A2UI versions and experimental GitHub Canvas declarations/actions can change; a portable GitHub renderer contract is not established. | Mitigated | Isolate compatibility behind the P2 Canvas seam. Pin A2UI specification/catalog and each adapter/profile/content revision; GitHub discovery is not a rendering catalog. Preserve core action authority and require executed acceptance before claiming interoperability. |
 
 ## Consequences
@@ -485,29 +469,27 @@ the design contains the failure mode.
 The capability rows below define the rebuild, redesign, drop, and defer dispositions.
 They do not establish behavioral parity.
 The linked area owns each disposition.
-Released source, tests, and the guarantees tracked in
-[#1405](https://github.com/sabbour/agentweaver/issues/1405) supply the behavioral acceptance conditions.
+Released source, tests, and the verified 0.x behavior guarantees
+supply the behavioral acceptance conditions.
 
 ### Source admission and remaining journeys
 
-The 2026-10-08 source snapshot has **16 of 19 original P1 children accepted**.
-The canonical issue [#1841](https://github.com/sabbour/agentweaver/issues/1841)
-contains the original criteria, native evidence, and observed admission records.
+The 2026-10-08 source snapshot has **16 of 19 original P1 items accepted**.
 The last confirmed admitted `v1` revision is
 `15a711ab4bb7410907dacbb982e9d11ef1de9f98`.
 Source admission does not establish deployment, publication, or whole-journey parity.
 
-| Capability group | Source admission records | Remaining acceptance |
+| Capability group | Source admission | Remaining acceptance |
 | --- | --- | --- |
-| Journal, addressed messages, decisions, and session tree | [#1842](https://github.com/sabbour/agentweaver/issues/1842), [#1845](https://github.com/sabbour/agentweaver/issues/1845), [#1848](https://github.com/sabbour/agentweaver/issues/1848), [#1849](https://github.com/sabbour/agentweaver/issues/1849) are accepted. | Actual workflow/runtime and retained-UI composition; exact-SHA API/UI/MCP journeys. |
-| Workflow catalogs and effective project/run configuration | [#1843](https://github.com/sabbour/agentweaver/issues/1843), [#1844](https://github.com/sabbour/agentweaver/issues/1844) are accepted. | Bounded execution, joins, reviewed casting, skills delivery, and accountable initiation. |
-| Policy, Storage, Sandbox, and Network | [#1846](https://github.com/sabbour/agentweaver/issues/1846), [#1851](https://github.com/sabbour/agentweaver/issues/1851), [#1852](https://github.com/sabbour/agentweaver/issues/1852), [#1853](https://github.com/sabbour/agentweaver/issues/1853) are accepted. | Integrated permissions, recovery, transport, and preview behavior on the approved live target. |
-| Knowledge and Copilot usage accounting | [#1847](https://github.com/sabbour/agentweaver/issues/1847), [#1850](https://github.com/sabbour/agentweaver/issues/1850) are accepted. | Decision journeys, actual context consumption, Azure BYOK accounting, and scoped budgets. |
-| GitHub Source Control and native AgentHost | [#1854](https://github.com/sabbour/agentweaver/issues/1854), [#1856](https://github.com/sabbour/agentweaver/issues/1856) are accepted. | Reachable GitHub connection settings, Gateway/MCP integration, retained UI, and produced-output capture. |
-| Gateway and first-party MCP | [#1857](https://github.com/sabbour/agentweaver/issues/1857), [#1858](https://github.com/sabbour/agentweaver/issues/1858) are accepted. | Retained Web, later producer routes, and genuine integrated API/UI/MCP journeys. |
-| Bounded workflow execution and joins | [#1855](https://github.com/sabbour/agentweaver/issues/1855) remains unfinished. | Production executors, durable frontiers/joins, limits, recovery, and correctly correlated native accounting. |
-| Retained Web | [#1859](https://github.com/sabbour/agentweaver/issues/1859) remains unfinished. | Production browser authentication, settings, permissions, reconnect/recovery, and real service integration. |
-| Integrated P1 | [#1860](https://github.com/sabbour/agentweaver/issues/1860) remains unfinished. | All eighteen source children and an explicitly approved exact-SHA AKS target, access, cost, and cleanup scope. |
+| Journal, addressed messages, decisions, and session tree | Accepted (four items). | Actual workflow/runtime and retained-UI composition; exact-SHA API/UI/MCP journeys. |
+| Workflow catalogs and effective project/run configuration | Accepted (two items). | Bounded execution, joins, reviewed casting, skills delivery, and accountable initiation. |
+| Policy, Storage, Sandbox, and Network | Accepted (four items). | Integrated permissions, recovery, transport, and preview behavior on the approved live target. |
+| Knowledge and Copilot usage accounting | Accepted (two items). | Decision journeys, actual context consumption, Azure BYOK accounting, and scoped budgets. |
+| GitHub Source Control and native AgentHost | Accepted (two items). | Reachable GitHub connection settings, Gateway/MCP integration, retained UI, and produced-output capture. |
+| Gateway and first-party MCP | Accepted (two items). | Retained Web, later producer routes, and genuine integrated API/UI/MCP journeys. |
+| Bounded workflow execution and joins | Unfinished. | Production executors, durable frontiers/joins, limits, recovery, and correctly correlated native accounting. |
+| Retained Web | Unfinished. | Production browser authentication, settings, permissions, reconnect/recovery, and real service integration. |
+| Integrated P1 | Unfinished. | All eighteen source items and an explicitly approved exact-SHA AKS target, access, cost, and cleanup scope. |
 
 Required-affinity Copilot budget enforcement still needs supported per-send usage proof.
 If that proof is known to be unavailable, dispatch must fail before acquiring a cost turn or invoking the model.
@@ -515,17 +497,15 @@ An already-started turn with uncertain usage ownership must remain held.
 Legacy no-cap and Azure BYOK behavior remain distinct.
 Failing safely does not complete the required positive-affinity functionality.
 
-GitHub lifecycle work stays within the existing service boundaries:
-[#1906](https://github.com/sabbour/agentweaver/issues/1906),
-[#1907](https://github.com/sabbour/agentweaver/issues/1907), and
-[#1908](https://github.com/sabbour/agentweaver/issues/1908).
-The App source is admitted through [#1934](https://github.com/sabbour/agentweaver/pull/1934).
-Its retained-Web criterion remains open.
-These supporting issues do not add numbered P1 children or reopen accepted source.
+GitHub lifecycle work stays within the existing service boundaries.
+Identity owns the Copilot connection lifecycle and the GitHub Repo App connection.
+Web and MCP expose the GitHub connection and repository routes.
+The Repo App source is admitted. Its retained-Web criterion remains open.
+This work does not add numbered P1 items or reopen accepted source.
 
 ### Released 0.x behavior and explicit gaps
 
-The bounded parity inventory in [#1841](https://github.com/sabbour/agentweaver/issues/1841)
+The bounded parity inventory
 inspected released `v0.34.2`, commit `013ba5e12915b6a729763e04221c297438b1cd11`.
 It also compared baseline `d984e8bba4e6932eef4de69e93bc5be94868b16b`.
 The tests were inspected, not rerun.
@@ -533,41 +513,41 @@ Neither reference is a declared final 0.x cut line.
 
 | Required journey | Released source/test evidence | v1 owner and remaining native evidence |
 | --- | --- | --- |
-| Revise, supersede, and archive decisions | `DecisionsEndpoints.cs`; `KnowledgeRevisionEndpointsTests.cs` | Knowledge owns [#1911](https://github.com/sabbour/agentweaver/issues/1911). Source is admitted through [#1935](https://github.com/sabbour/agentweaver/pull/1935); retained-Web journeys remain open. Preserve stale-CAS rejection, immutable history, replacement-cycle rejection, and context filtering. |
-| Import and assign skills consumed by the actual runtime | `SkillEndpoints.cs`; `SkillPromptInjectionTests.cs` | Projects & Config and Runtime own [#1912](https://github.com/sabbour/agentweaver/issues/1912). Prove exact active instructions/resources, unassigned-content denial, and explicit unavailable delivery. |
-| Review and confirm casting/configuration changes | `CastingEndpoints.cs`; `ScenarioCastingTests.cs` | Projects & Config owns [#1913](https://github.com/sabbour/agentweaver/issues/1913). Prove stale-roster conflict, rejection without writes, and atomic authorized confirmation. |
-| Initiate workflows from events and recurring schedules | `WorkflowTriggerEndpoints.cs`; `WorkflowEventTriggerServiceTests.cs`; `WorkflowScheduleEvaluatorTests.cs` | Orchestrator owns [#1914](https://github.com/sabbour/agentweaver/issues/1914). Prove authorized accepted workflow binding, occurrence deduplication, concurrent one-winner claims, and restart recovery. |
-| Execute ready backlog work with dependencies | `BacklogEndpoints.cs`; `BacklogClaimReserveTests.cs` | Orchestrator owns [#1915](https://github.com/sabbour/agentweaver/issues/1915). Prove prerequisite blocking, atomic one-winner execution claims, immutable settings/workflow pins, and idempotent retry. |
-| Browse marketplace sources and import pinned skills | `SkillEndpoints.cs`; `SkillMarketplaceBrowseTests.cs` | Projects & Config owns [#1916](https://github.com/sabbour/agentweaver/issues/1916). Prove filtering/pagination, exact imported content/revision, source removal, and explicit upstream failures. |
-| Browse immutable produced-run artifacts | The workspace-browse and immutable-output dispositions below identify the behavior; Storage alone is not capture authority. | Source Control/Core and Events own [#1917](https://github.com/sabbour/agentweaver/issues/1917); Web consumes the admitted producer. Prove sealed dirty/untracked bytes, durable retry identity, current historical authority, and failed/indeterminate withholding. |
+| Revise, supersede, and archive decisions | `DecisionsEndpoints.cs`; `KnowledgeRevisionEndpointsTests.cs` | Knowledge owns this journey. Source is admitted; retained-Web journeys remain open. Preserve stale-CAS rejection, immutable history, replacement-cycle rejection, and context filtering. |
+| Import and assign skills consumed by the actual runtime | `SkillEndpoints.cs`; `SkillPromptInjectionTests.cs` | Projects & Config and Runtime own this journey. Prove exact active instructions/resources, unassigned-content denial, and explicit unavailable delivery. |
+| Review and confirm casting/configuration changes | `CastingEndpoints.cs`; `ScenarioCastingTests.cs` | Projects & Config owns this journey. Prove stale-roster conflict, rejection without writes, and atomic authorized confirmation. |
+| Initiate workflows from events and recurring schedules | `WorkflowTriggerEndpoints.cs`; `WorkflowEventTriggerServiceTests.cs`; `WorkflowScheduleEvaluatorTests.cs` | Orchestrator owns this journey. Prove authorized accepted workflow binding, occurrence deduplication, concurrent one-winner claims, and restart recovery. |
+| Execute ready backlog work with dependencies | `BacklogEndpoints.cs`; `BacklogClaimReserveTests.cs` | Orchestrator owns this journey. Prove prerequisite blocking, atomic one-winner execution claims, immutable settings/workflow pins, and idempotent retry. |
+| Browse marketplace sources and import pinned skills | `SkillEndpoints.cs`; `SkillMarketplaceBrowseTests.cs` | Projects & Config owns this journey. Prove filtering/pagination, exact imported content/revision, source removal, and explicit upstream failures. |
+| Browse immutable produced-run artifacts | The workspace-browse and immutable-output dispositions below identify the behavior; Storage alone is not capture authority. | Source Control/Core and Events own this journey; Web consumes the admitted producer. Prove sealed dirty/untracked bytes, durable retry identity, current historical authority, and failed/indeterminate withholding. |
 
 Automatic writable-file decisions-inbox, Scribe, and Squad reconciliation remain intentionally removed.
 Do not recreate them as parity defects.
 Explicit user import/export and accepted Knowledge history remain required.
 First-party OpenAPI tools do not establish remote MCP client behavior.
-The remote MCP issues below track agreed v1 requirements, not unverified shipped 0.x parity.
+The remote MCP rows below are agreed v1 requirements, not unverified shipped 0.x parity.
 
 ### Agreed P2 providers, control, and release
 
-The following issues own the remaining agreed scope.
-An issue, design, passing isolated suite, or research result does not establish implementation or interoperability.
+The following owners hold the remaining agreed scope.
+A design, a passing isolated suite, or a research result does not establish implementation or interoperability.
 
-| Scope | Accountable owner and issue | Delivery boundary |
+| Scope | Accountable owner | Delivery boundary |
 | --- | --- | --- |
-| Installed bundles and Canvas | Projects & Config/Canvas: [#1878](https://github.com/sabbour/agentweaver/issues/1878), [#1904](https://github.com/sabbour/agentweaver/issues/1904) | GitHub Canvas research [#1901](https://github.com/sabbour/agentweaver/issues/1901) is accepted; the supported adapter and actual journeys remain separate. |
-| Application Hosting and image publication | Environment/Orchestrator/Identity: [#1900](https://github.com/sabbour/agentweaver/issues/1900), [#1919](https://github.com/sabbour/agentweaver/issues/1919) | Built-in AKS web hosting only; exact produced revision, approved isolated build, purpose-bound registry credentials, digest linkage, and effect reconciliation. |
-| Selectable Memory providers | Memory: [#1902](https://github.com/sabbour/agentweaver/issues/1902), [#1898](https://github.com/sabbour/agentweaver/issues/1898) | Cosmos source is accepted through [#1931](https://github.com/sabbour/agentweaver/pull/1931). Redis remains unfinished; neither establishes live provider acceptance. |
-| Suspend/resume and provider lifecycle | Orchestrator/Environment: [#1930](https://github.com/sabbour/agentweaver/issues/1930), [#1922](https://github.com/sabbour/agentweaver/issues/1922) | Consistency manifests and interruption/relocation reconciliation; no required VM snapshot provider. |
-| Remote MCP metadata and credentials | Environment/Identity: [#1923](https://github.com/sabbour/agentweaver/issues/1923), [#1927](https://github.com/sabbour/agentweaver/issues/1927) | Immutable connection/catalog revisions and current scoped OAuth/credential validity. |
-| Remote calls and trusted transport | Orchestrator/Environment/Network: [#1925](https://github.com/sabbour/agentweaver/issues/1925), [#1929](https://github.com/sabbour/agentweaver/issues/1929) | Reviewed agent/node snapshots, exact-call approval, journal-before-send, and required trusted L7 transport. |
-| Guardrails | Orchestrator: [#1928](https://github.com/sabbour/agentweaver/issues/1928) | Ordered gates and supported default Prompt Shields; preserve actual tool-approval denial/concurrency behavior. |
-| Azure BYOK and scoped budgets | Runtime/Events/Orchestrator: [#1921](https://github.com/sabbour/agentweaver/issues/1921), [#1924](https://github.com/sabbour/agentweaver/issues/1924), [#1926](https://github.com/sabbour/agentweaver/issues/1926) | Genuine SDK provenance, immutable dispatch-correlated accounting, explicit scoped limits, and conservative durable exposure. |
-| Product publication and cutover | Delivery/release coordinator: [#1920](https://github.com/sabbour/agentweaver/issues/1920) | Closed parity, complete changesets, exact-SHA composition, live representative/feature journeys, repair-and-retest, actual publication, and authorized history-preserving cutover. |
+| Installed bundles and Canvas | Projects & Config and Canvas | GitHub Canvas research is accepted. The supported GitHub Canvas adapter and the actual journeys remain separate work. |
+| Application Hosting and image publication | Environment, Orchestrator, and Identity | Built-in AKS web hosting only; exact produced revision, approved isolated build, purpose-bound registry credentials, digest linkage, and effect reconciliation. |
+| Selectable Memory providers | Memory | Cosmos source is accepted. Redis remains unfinished. Neither establishes live provider acceptance. |
+| Suspend/resume and provider lifecycle | Orchestrator and Environment | Consistency manifests and interruption/relocation reconciliation; no required VM snapshot provider. |
+| Remote MCP metadata and credentials | Environment and Identity | Immutable connection/catalog revisions and current scoped OAuth/credential validity. |
+| Remote calls and trusted transport | Orchestrator, Environment, and Network | Reviewed agent/node snapshots, exact-call approval, journal-before-send, and required trusted L7 transport. |
+| Guardrails | Orchestrator | Ordered gates and supported default Prompt Shields; preserve actual tool-approval denial/concurrency behavior. |
+| Azure BYOK and scoped budgets | Runtime, Events, and Orchestrator | Genuine SDK provenance, immutable dispatch-correlated accounting, explicit scoped limits, and conservative durable exposure. |
+| Product publication and cutover | Delivery and release coordinator | Closed parity, complete changesets, exact-SHA composition, live representative/feature journeys, repair-and-retest, actual publication, and authorized history-preserving cutover. |
 
 Elastic SAN and additional Application Hosting adapters are outside P2.
-Container Apps Sandboxes belongs to the later optional evaluation tracked in
-[#1899](https://github.com/sabbour/agentweaver/issues/1899).
-That evaluation is admitted through [#1936](https://github.com/sabbour/agentweaver/pull/1936);
+Container Apps Sandboxes belongs to the later optional
+[evaluation](../design/container-apps-sandboxes-evaluation.md).
+That evaluation is admitted as research;
 it is not a production adapter.
 Optional P3 adapters do not become P2 cutover prerequisites.
 Separately agreed P3 delivery/publication obligations are not silently dropped.
@@ -575,7 +555,7 @@ Separately agreed P3 delivery/publication obligations are not silently dropped.
 Release acceptance must verify the assembled preview and corrected revision, where applicable.
 Abnormal outcomes become repair issues in the release patch milestone and require corrected-SHA deployment and retesting.
 Only an explicitly approved target permits live access, credentials, paid execution, deployment, or cleanup.
-The final 0.x cut line and before/after ancestry receipts remain requirements of #1920, not guessed references.
+The final 0.x cut line and the before and after ancestry receipts are release requirements. They must come from the actual cutover, not from guessed references.
 
 ### Capability dispositions
 
@@ -602,12 +582,12 @@ Each remaining row needs source admission and behavioral evidence before parity 
 | immutable-output | Pin reviewed output by revision | `specs/workflows-automation/pin-reviewed-output-by-revision.md` | [Orchestration](../design/orchestration.md) | Rebuild |
 | single-agent-run / multi-agent-coordination | Run tasks and coordinate goals | `specs/orchestration-runs/`; `apps/Agentweaver.Api/Runs/` | [Orchestration](../design/orchestration.md) | Rebuild |
 | run-steering | Steer, pause, recover, and resume runs | `specs/orchestration-runs/steer-and-recover-orchestrations.md` | [Sessions and coordination](../design/sessions-and-coordination.md) | Redesign: messages |
-| agent-messaging | Send addressed messages; tracked acknowledgment [#1406](https://github.com/sabbour/agentweaver/issues/1406) | `specs/orchestration-runs/send-addressed-agent-messages.md`; `apps/Agentweaver.Api/Memory/AddressedMessageService.cs` | [Sessions and coordination](../design/sessions-and-coordination.md) | Rebuild |
+| agent-messaging | Send addressed messages with tracked acknowledgment | `specs/orchestration-runs/send-addressed-agent-messages.md`; `apps/Agentweaver.Api/Memory/AddressedMessageService.cs` | [Sessions and coordination](../design/sessions-and-coordination.md) | Rebuild |
 | review / run-decision / child-output-integration | Review and integrate child output | `specs/review-merge/` | [Orchestration](../design/orchestration.md) | Rebuild |
 | tool-governance | Approve tools and answer questions | `specs/agent-execution-sandbox/govern-agent-tools-and-questions.md` | [Provider seams](../design/provider-seams.md) (Policy) + [Sessions and coordination](../design/sessions-and-coordination.md) | Rebuild |
 | sandbox-isolation / effective-permissions | Isolate execution and enforce permissions | `specs/agent-execution-sandbox/` | [Provider seams](../design/provider-seams.md) (Sandbox, Policy) | Rebuild |
 | sandbox-preview | Show live previews | `specs/agent-execution-sandbox/preview-sandbox-apps.md` | [Applications and surfaces](../design/applications-and-surfaces.md) (`live`) | Redesign |
-| preview-deployments | Durable project-owned previews [#1494](https://github.com/sabbour/agentweaver/issues/1494) | `specs/agent-execution-sandbox/project-owned-preview-deployments.md` | [Applications and surfaces](../design/applications-and-surfaces.md) (`preview`) | Redesign |
+| preview-deployments | Durable project-owned previews | `specs/agent-execution-sandbox/project-owned-preview-deployments.md` | [Applications and surfaces](../design/applications-and-surfaces.md) (`preview`) | Redesign |
 | image-builds | Build Open Container Initiative (OCI) images with rootless BuildKit | `specs/agent-execution-sandbox/build-images-with-rootless-buildkit.md` | [Services and release](../design/services-and-release.md) | Rebuild |
 | agent-skills | Assign, import, sync, and browse skills | `specs/agent-configuration/`; `apps/Agentweaver.Api/Skills/` | [Provider seams](../design/provider-seams.md) (configuration, not a seam) | Rebuild |
 | decision-inbox | Curate a file-backed decision inbox | `specs/memory-decisions/curate-decision-inbox.md` | [Sessions and coordination](../design/sessions-and-coordination.md) | Drop: knowledge records and messages replace it |
