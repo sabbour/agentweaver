@@ -138,6 +138,16 @@ See [AgentSuite import](./agentsuite-import.md).
 | `acceptRunRoot` | Accept root owner state. |
 | `listProjectRuns` | List accepted project runs, newest first. |
 | `readProjectMetrics` | Read bounded project run counts and daily UTC activity from Orchestrator. |
+| `listChiefOfStaffConversations` | List my private Chief of Staff conversations. |
+| `bindChiefOfStaffConversation` | Bind a run I created to a Chief of Staff conversation. |
+| `getChiefOfStaffConversation` | Read one of my Chief of Staff conversations. |
+| `listChiefOfStaffPriorities` | List my ordered Priorities with resolved links. |
+| `createChiefOfStaffPriority` | Create a Priority. Requires `Idempotency-Key`. |
+| `reorderChiefOfStaffPriorities` | Reorder my Priorities at an expected order revision. |
+| `getChiefOfStaffPriority` | Read one Priority. |
+| `updateChiefOfStaffPriority` | Change a Priority at an expected revision. Never changes run state. |
+| `addChiefOfStaffPriorityLink` | Link a Priority to a run, conversation, issue, pull request, or artifact. |
+| `removeChiefOfStaffPriorityLink` | Remove a Priority link at an expected revision. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |
@@ -225,6 +235,7 @@ for metric definitions and differences from the 0.x dashboard.
 | Operation ID | Purpose |
 | --- | --- |
 | `replayRunEvents` | Read a finite committed journal page. |
+| `readSessionTurnContent` | Read recorded turn text with current run-bound project authority. Excludes cache, configuration, and tool-result material. |
 | `readRunUsage` | Read run usage totals. |
 | `readProjectUsage` | Read persisted project usage grouped by model and agent. |
 

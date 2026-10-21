@@ -16,3 +16,14 @@ WHERE to_regclass(format('%I.project_run_requests', :'service_schema')) IS NOT N
 SELECT format('GRANT SELECT, INSERT ON TABLE %I.project_run_cancellations TO %I',
   :'service_schema', :'runtime_role')
 WHERE to_regclass(format('%I.project_run_cancellations', :'service_schema')) IS NOT NULL \gexec
+-- Apply only in the Orchestrator database after migration 024, with separate approval.
+-- Conversations are append-only, Priorities are revised in place, and only Priority links are deleted.
+SELECT format('GRANT SELECT, INSERT ON TABLE %I.chief_of_staff_conversations TO %I',
+  :'service_schema', :'runtime_role')
+WHERE to_regclass(format('%I.chief_of_staff_conversations', :'service_schema')) IS NOT NULL \gexec
+SELECT format('GRANT SELECT, INSERT, UPDATE ON TABLE %I.chief_of_staff_priority_lists, %I.chief_of_staff_priorities TO %I',
+  :'service_schema', :'service_schema', :'runtime_role')
+WHERE to_regclass(format('%I.chief_of_staff_priorities', :'service_schema')) IS NOT NULL \gexec
+SELECT format('GRANT SELECT, INSERT, DELETE ON TABLE %I.chief_of_staff_priority_links TO %I',
+  :'service_schema', :'runtime_role')
+WHERE to_regclass(format('%I.chief_of_staff_priority_links', :'service_schema')) IS NOT NULL \gexec

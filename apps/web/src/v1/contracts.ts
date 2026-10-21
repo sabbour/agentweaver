@@ -898,6 +898,117 @@ export interface ProjectUsage {
   usageByAgent: ProjectUsageItem[];
 }
 
+/** `unavailable` means the caller can no longer read the project; project-owned fields are then null or absent. */
+export type ChiefOfStaffAccess = 'available' | 'unavailable';
+
+/** Binds a run that the caller created through `createProjectRun` to the caller's private conversation list. */
+export interface BindChiefOfStaffConversationRequest {
+  projectId: string;
+  runId: string;
+}
+
+/** One private Chief of Staff conversation. It stores no message content; messages stay with the run. */
+export interface ChiefOfStaffConversation {
+  conversationId: string;
+  access: ChiefOfStaffAccess;
+  projectId: string | null;
+  runId: string | null;
+  rootSessionId: string | null;
+  title: string | null;
+  requestState: 'awaiting_binding' | 'started' | 'cancelled' | null;
+  runState: ProjectRunState | null;
+  createdAt: string;
+}
+
+/** One newest-first page of the caller's conversations. */
+export interface ChiefOfStaffConversationPage {
+  items: ChiefOfStaffConversation[];
+  nextCursor: string | null;
+}
+
+/** One manual checklist item. Omit `itemId` for a new item; the owner assigns it. */
+export interface ChiefOfStaffChecklistItem {
+  itemId?: string | null;
+  text: string;
+  done: boolean;
+}
+
+/** The user's own judgment of a Priority. It never depends on run state. */
+export type ChiefOfStaffPriorityState = 'active' | 'achieved' | 'dropped';
+
+/** Creates a Priority at the end of the list. Send it with one `Idempotency-Key`. */
+export interface CreateChiefOfStaffPriorityRequest {
+  outcome: string;
+  notes?: string | null;
+  checklist?: ChiefOfStaffChecklistItem[] | null;
+}
+
+/** Changes a Priority at `expectedRevision`. Omitted fields keep their values; `checklist` replaces the list. */
+export interface UpdateChiefOfStaffPriorityRequest {
+  expectedRevision: number;
+  outcome?: string | null;
+  notes?: string | null;
+  state?: ChiefOfStaffPriorityState | null;
+  checklist?: ChiefOfStaffChecklistItem[] | null;
+}
+
+/** Replaces the full order at `expectedOrderRevision`. Name every Priority exactly once. */
+export interface ReorderChiefOfStaffPrioritiesRequest {
+  expectedOrderRevision: number;
+  priorityIds: string[];
+}
+
+export type ChiefOfStaffPriorityLinkKind = 'run' | 'conversation' | 'issue' | 'pull_request' | 'artifact';
+
+/** Adds a typed link at `expectedRevision`. Required fields depend on `kind`. */
+export interface AddChiefOfStaffPriorityLinkRequest {
+  expectedRevision: number;
+  kind: ChiefOfStaffPriorityLinkKind;
+  projectId: string;
+  runId?: string | null;
+  conversationId?: string | null;
+  number?: number | null;
+  artifactId?: string | null;
+}
+
+/**
+ * A link resolved against current access. `missing` means the project is readable but the target doesn't exist.
+ * `state` is the run state for run and conversation links, and `unavailable` for issue, pull request, and artifact
+ * links. An unavailable link carries only `linkId`, `kind`, and `access`.
+ */
+export interface ChiefOfStaffPriorityLink {
+  linkId: string;
+  kind: ChiefOfStaffPriorityLinkKind;
+  access: ChiefOfStaffAccess | 'missing';
+  projectId?: string;
+  runId?: string;
+  conversationId?: string;
+  number?: number;
+  artifactId?: string;
+  state?: string;
+  createdAt?: string;
+}
+
+/** One Priority. Outcome, notes, and checklist are the caller's own content and stay visible after access loss. */
+export interface ChiefOfStaffPriority {
+  priorityId: string;
+  outcome: string;
+  notes: string | null;
+  state: ChiefOfStaffPriorityState;
+  checklist: Array<{ itemId: string; text: string; done: boolean }>;
+  position: number;
+  revision: number;
+  links: ChiefOfStaffPriorityLink[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The caller's ordered Priorities and the revision that guards their order. */
+export interface ChiefOfStaffPriorityList {
+  orderRevision: number;
+  items: ChiefOfStaffPriority[];
+}
+
 /** Revision-fenced skill assignment update sent to the Projects owner. */
 export interface SkillAssignmentRequest {
   expectedProjectConfigurationRevision: number;
