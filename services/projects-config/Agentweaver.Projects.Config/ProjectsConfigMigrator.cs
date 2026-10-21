@@ -42,7 +42,9 @@ public static class ProjectsConfigMigrator
     }
 
     /// <summary>
-    /// Verifies that runtime identity can read authority rows but cannot mutate them or access setup-operation receipts.
+    /// Verifies the runtime authority boundary: SELECT on authority tables, no membership writes, no deletes,
+    /// no access to setup-operation receipts, and either no role-assignment writes or exactly the
+    /// role-assignment API grants (INSERT on assignments and audit, and UPDATE only on the four revoke columns).
     /// </summary>
     /// <exception cref="InvalidOperationException">The database principal does not match the required grants.</exception>
     public static async Task VerifyRuntimeAuthorityReadOnlyAsync(
@@ -53,6 +55,16 @@ public static class ProjectsConfigMigrator
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
             """
+            WITH role_assignment_api AS (
+                SELECT ARRAY[
+                    has_table_privilege(current_user, 'projects_config.project_role_assignments', 'INSERT'),
+                    has_table_privilege(current_user, 'projects_config.authority_audit', 'INSERT'),
+                    has_column_privilege(current_user, 'projects_config.project_role_assignments', 'state', 'UPDATE'),
+                    has_column_privilege(current_user, 'projects_config.project_role_assignments', 'revision', 'UPDATE'),
+                    has_column_privilege(current_user, 'projects_config.project_role_assignments', 'revoked_by', 'UPDATE'),
+                    has_column_privilege(current_user, 'projects_config.project_role_assignments', 'revoked_at', 'UPDATE')
+                ] AS grants
+            )
             SELECT has_schema_privilege(current_user, 'projects_config', 'USAGE')
                AND NOT has_schema_privilege(current_user, 'projects_config', 'CREATE')
                AND has_table_privilege(current_user, 'projects_config.tenant_memberships', 'SELECT')
@@ -61,15 +73,22 @@ public static class ProjectsConfigMigrator
                AND NOT has_table_privilege(current_user, 'projects_config.tenant_memberships', 'DELETE')
                AND NOT has_table_privilege(current_user, 'projects_config.tenant_memberships', 'TRUNCATE')
                AND has_table_privilege(current_user, 'projects_config.project_role_assignments', 'SELECT')
-               AND NOT has_table_privilege(current_user, 'projects_config.project_role_assignments', 'INSERT')
                AND NOT has_table_privilege(current_user, 'projects_config.project_role_assignments', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'projects_config.project_role_assignments', 'DELETE')
                AND NOT has_table_privilege(current_user, 'projects_config.project_role_assignments', 'TRUNCATE')
+               AND NOT has_column_privilege(current_user, 'projects_config.project_role_assignments', 'assignment_id', 'UPDATE')
+               AND NOT has_column_privilege(current_user, 'projects_config.project_role_assignments', 'membership_id', 'UPDATE')
+               AND NOT has_column_privilege(current_user, 'projects_config.project_role_assignments', 'resource_type', 'UPDATE')
+               AND NOT has_column_privilege(current_user, 'projects_config.project_role_assignments', 'resource_id', 'UPDATE')
+               AND NOT has_column_privilege(current_user, 'projects_config.project_role_assignments', 'role', 'UPDATE')
+               AND NOT has_column_privilege(current_user, 'projects_config.project_role_assignments', 'granted_by', 'UPDATE')
+               AND NOT has_column_privilege(current_user, 'projects_config.project_role_assignments', 'granted_at', 'UPDATE')
                AND has_table_privilege(current_user, 'projects_config.authority_audit', 'SELECT')
-               AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'INSERT')
                AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'UPDATE')
+               AND NOT has_any_column_privilege(current_user, 'projects_config.authority_audit', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'DELETE')
                AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'TRUNCATE')
+               AND (SELECT true = ALL(grants) OR false = ALL(grants) FROM role_assignment_api)
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'SELECT')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'INSERT')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'UPDATE')
@@ -83,7 +102,7 @@ public static class ProjectsConfigMigrator
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Projects & Config runtime database principal must have SELECT-only access to authority tables, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), and no schema CREATE privilege.");
+                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
     }
 
     /// <summary>
