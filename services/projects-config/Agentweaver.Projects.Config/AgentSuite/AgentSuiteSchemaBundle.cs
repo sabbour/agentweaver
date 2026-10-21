@@ -31,6 +31,7 @@ internal static class AgentSuiteSchemaBundle
         ["tool-provider.schema.json"] = "sha256:0935f9285be64236af6156d11b78b818a697c0a8bea8eeea58199e8aeef3ecb8",
     }.ToFrozenDictionary(StringComparer.Ordinal);
 
+    // Lazy with ExecutionAndPublication runs Verify exactly once even under concurrent first use; a failure is cached and rethrown.
     private static readonly Lazy<bool> Verified = new(() => { Verify(); return true; }, LazyThreadSafetyMode.ExecutionAndPublication);
 
     /// <summary>Verifies the bundle once per process; later calls are free.</summary>
@@ -40,16 +41,19 @@ internal static class AgentSuiteSchemaBundle
     public static void Verify()
     {
         var assembly = typeof(AgentSuiteSchemaBundle).Assembly;
+        // Collect embedded schema file names by stripping the resource prefix.
         var embedded = assembly.GetManifestResourceNames()
             .Where(name => name.StartsWith(ResourcePrefix, StringComparison.Ordinal))
             .Select(name => name[ResourcePrefix.Length..])
             .ToHashSet(StringComparer.Ordinal);
+        // An extra schema is refused too: the bundle must be exactly the pinned upstream set, nothing added.
         foreach (var extra in embedded.Where(name => !PinnedDigests.ContainsKey(name)))
             throw new InvalidOperationException($"AgentSuite schema bundle contains unpinned file '{extra}'.");
         foreach (var (name, _) in PinnedDigests)
         {
             if (!embedded.Contains(name))
                 throw new InvalidOperationException($"AgentSuite schema bundle is missing '{name}'.");
+            // Hash the raw resource bytes; any edit (even whitespace) breaks parity with upstream and fails here.
             if (!MatchesPin(name, Read(name)))
                 throw new InvalidOperationException($"AgentSuite schema '{name}' does not match its pinned digest.");
         }
@@ -57,16 +61,19 @@ internal static class AgentSuiteSchemaBundle
 
     /// <summary>Returns true when the bytes match the pinned digest for the named schema.</summary>
     public static bool MatchesPin(string name, ReadOnlySpan<byte> data) =>
+        // Unknown names never match; digests use the same lowercase "sha256:<hex>" form as the pin table.
         PinnedDigests.TryGetValue(name, out var pinned) &&
         string.Equals(pinned, "sha256:" + Convert.ToHexStringLower(SHA256.HashData(data)), StringComparison.Ordinal);
 
     /// <summary>Returns the exact embedded bytes of one pinned schema.</summary>
     public static byte[] Read(string name)
     {
+        // Only pinned names may be read, so callers cannot load arbitrary embedded resources through this method.
         if (!PinnedDigests.ContainsKey(name))
             throw new ArgumentException($"Unknown AgentSuite schema '{name}'.", nameof(name));
         using var stream = typeof(AgentSuiteSchemaBundle).Assembly.GetManifestResourceStream(ResourcePrefix + name)
             ?? throw new InvalidOperationException($"AgentSuite schema bundle is missing '{name}'.");
+        // Copy the stream unchanged; no decoding or normalization, so the bytes stay identical to upstream.
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
         return buffer.ToArray();

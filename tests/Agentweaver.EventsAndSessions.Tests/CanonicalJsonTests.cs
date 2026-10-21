@@ -7,6 +7,9 @@ namespace Agentweaver.EventsAndSessions.Tests;
 public sealed class CanonicalJsonTests
 {
     [Theory]
+    // Numbers are rewritten in the ECMAScript (JavaScript) shortest round-trip form required by JCS:
+    // negative zero becomes 0, exponents from 1e21 use "e+", trailing zeros are dropped,
+    // and digits beyond double precision are rounded away.
     [InlineData("0", "0")]
     [InlineData("-0", "0")]
     [InlineData("1e21", "1e+21")]
@@ -26,17 +29,24 @@ public sealed class CanonicalJsonTests
     [Fact]
     public void ObjectMembersSortByUtf16CodeUnitsAndStringsUseMinimalEscaping()
     {
-        // RFC 8785 section 3.2.3 sorting sample.
+        // RFC 8785 section 3.2.3 sorting sample: keys sort by UTF-16 code units, so the emoji
+        // (a surrogate pair starting at 0xD83D) sorts before U+FB33.
         var input = "{\"\\u20ac\":\"Euro\",\"\\r\":\"cr\",\"\\ufb33\":\"h\",\"1\":\"one\",\"\\ud83d\\ude00\":\"smile\",\"\\u0080\":\"c\",\"\\u00f6\":\"o\"}";
         var expected = "{\"\\r\":\"cr\",\"1\":\"one\",\"\u0080\":\"c\",\"\u00f6\":\"o\",\"\u20ac\":\"Euro\",\"\ud83d\ude00\":\"smile\",\"\ufb33\":\"h\"}";
         Assert.Equal(expected, Encoding.UTF8.GetString(CanonicalJson.Canonicalize(Encoding.UTF8.GetBytes(input))));
+        // Only control characters, quote and backslash stay escaped; "\/" becomes a plain "/",
+        // and the short escapes \b \f \n \r \t are used where they exist.
         Assert.Equal("[\"\\u001f/\\\"\\\\\\b\\f\\n\\r\\t\"]",
             Encoding.UTF8.GetString(CanonicalJson.Canonicalize("[\"\\u001f\\/\\\"\\\\\\b\\f\\n\\r\\t\"]"u8)));
+        // Whitespace is removed, nested objects are sorted too, and 1.0 becomes 1.
         Assert.Equal("{\"a\":[true,false,null,{}],\"b\":{\"c\":1}}",
             Encoding.UTF8.GetString(CanonicalJson.Canonicalize(" { \"b\" : { \"c\" : 1.0 } , \"a\" : [ true , false , null , { } ] } "u8)));
     }
 
     [Theory]
+    // Each kind of bad input fails with its own error code instead of being silently repaired:
+    // duplicate keys at any depth, unpaired surrogates, numbers outside double range,
+    // trailing commas, more than one top-level value, and empty input.
     [InlineData("{\"a\":1,\"a\":2}", "duplicate_key")]
     [InlineData("{\"a\":{\"b\":1,\"b\":1}}", "duplicate_key")]
     [InlineData("\"\\ud800\"", "lone_surrogate")]
@@ -51,14 +61,18 @@ public sealed class CanonicalJsonTests
     [Fact]
     public void InvalidUtf8AndLimitsFailExplicitly()
     {
+        // 0xC3 starts a two-byte UTF-8 sequence, but 0x28 is not a valid continuation byte.
         Assert.Equal("invalid_utf8", Assert.Throws<CanonicalJsonException>(() => CanonicalJson.Canonicalize([0x22, 0xC3, 0x28, 0x22])).Code);
+        // "[1]" is 3 bytes, over a 2-byte limit.
         Assert.Equal("too_large", Assert.Throws<CanonicalJsonException>(() => CanonicalJson.Canonicalize("[1]"u8, new CanonicalJsonLimits(MaxBytes: 2))).Code);
+        // Three nested arrays exceed a maximum depth of 2.
         Assert.Equal("invalid_json", Assert.Throws<CanonicalJsonException>(() => CanonicalJson.Canonicalize("[[[1]]]"u8, new CanonicalJsonLimits(MaxDepth: 2))).Code);
     }
 
     [Fact]
     public void IsCanonicalComparesExactBytes()
     {
+        // Only exact canonical bytes pass: unsorted keys, "1.0" and a trailing newline all fail.
         Assert.True(CanonicalJson.IsCanonical("{\"a\":1,\"b\":[2]}"u8));
         Assert.False(CanonicalJson.IsCanonical("{\"b\":[2],\"a\":1}"u8));
         Assert.False(CanonicalJson.IsCanonical("{\"a\":1.0}"u8));

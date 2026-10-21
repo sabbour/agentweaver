@@ -10,13 +10,16 @@ public sealed record ImportProjectAgentSuiteRequest
     public const string OciLayoutTarFormat = "oci-layout-tar";
     public const string ContentTarGzipFormat = "content-tar-gzip";
 
+    /// <summary>
+    /// The project configuration revision the caller reviewed. Import fails with 409 if the project has moved on.
+    /// </summary>
     public required long ExpectedConfigurationRevision { get; init; }
     /// <summary><c>oci-layout-tar</c> or <c>content-tar-gzip</c>.</summary>
     public required string Format { get; init; }
     /// <summary>Base64 archive bytes. The decoded archive is limited to 16 MiB.</summary>
     public required string Archive { get; init; }
     /// <summary>
-    /// Binds remote MCP tool providers to Environment-owned Remote MCP connections (#1923). Each
+    /// Binds remote MCP tool providers to Environment-owned Remote MCP connections. Each
     /// <see cref="ProjectAgentSuiteToolConnection.ToolProvider"/> is a catalog <c>id@version</c>. The package never
     /// carries endpoints or secret values; the Environment owner resolves them from the connection.
     /// </summary>
@@ -45,6 +48,7 @@ public sealed record ProjectAgentSuiteBlueprint
     public const string DefaultId = "default";
     public const string RestrictedSandbox = "restricted";
 
+    // Every default below is valid on its own, so an omitted blueprint passes validation unchanged.
     public string? SourceBlueprintId { get; init; }
     /// <summary>Defaults to the suite name.</summary>
     public string? DisplayName { get; init; }
@@ -199,6 +203,8 @@ public sealed class AgentSuiteImportRejectedException(
     string message,
     ImmutableArray<string> errors) : Exception(message)
 {
+    // Machine-readable error code, returned as "code" in the problem response.
     public string Code { get; } = code;
+    // One line per validation failure, returned as "errors" in the problem response.
     public ImmutableArray<string> Errors { get; } = errors;
 }

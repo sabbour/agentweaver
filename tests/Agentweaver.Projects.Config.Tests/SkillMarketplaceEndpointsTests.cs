@@ -144,6 +144,15 @@ public sealed class SkillMarketplaceEndpointValidationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Definitions_reject_query_parameters()
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get, "/api/projects/" + ProjectId + "/skill-marketplaces/definitions?name=x");
+
+        await AssertProblemAsync(response, HttpStatusCode.BadRequest, "invalid_marketplace_request");
+    }
+
+    [Fact]
     public async Task Repeated_tenant_selectors_are_forbidden_before_membership_lookup()
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, SourcesPath);
@@ -381,6 +390,74 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
         await SkillMarketplaceEndpointHost.AssertProblemAsync(readOnlyCreate, HttpStatusCode.Forbidden, "forbidden");
     }
 
+    [Fact]
+    public async Task Definitions_mark_the_added_source_and_removal_stops_browse_preview_and_import()
+    {
+        var owner = await SeedOwnerAsync();
+        var definitionsPath = $"/api/projects/{owner.ProjectId}/skill-marketplaces/definitions";
+        var sourcesPath = SourcesPath(owner.ProjectId);
+
+        using var before = await SendAsync(owner, HttpMethod.Get, definitionsPath);
+        Assert.Equal(HttpStatusCode.OK, before.StatusCode);
+        AssertNoStore(before);
+        var definitions = (await ReadJsonAsync(before)).EnumerateArray().ToArray();
+        Assert.Equal(new[] { "Azure Skills", "GitHub Awesome Copilot" },
+            definitions.Select(item => item.GetProperty("name").GetString()!).ToArray());
+        Assert.All(definitions, item => Assert.Equal(JsonValueKind.Null, item.GetProperty("sourceId").ValueKind));
+        var awesome = definitions[1];
+
+        // Add the suggested marketplace with the values the definition returned, as the UI does.
+        using var created = await SendAsync(owner, HttpMethod.Post, sourcesPath, new
+        {
+            name = awesome.GetProperty("name").GetString(),
+            repository = awesome.GetProperty("repository").GetString(),
+            requestedRef = awesome.GetProperty("requestedRef").GetString(),
+            subpath = awesome.GetProperty("subpath").GetString(),
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var sourceId = (await ReadJsonAsync(created)).GetProperty("sourceId").GetGuid();
+
+        using var after = await SendAsync(owner, HttpMethod.Get, definitionsPath);
+        var marked = (await ReadJsonAsync(after)).EnumerateArray().ToArray();
+        Assert.Equal(JsonValueKind.Null, marked[0].GetProperty("sourceId").ValueKind);
+        Assert.Equal(sourceId, marked[1].GetProperty("sourceId").GetGuid());
+
+        var sourcePath = $"{sourcesPath}/{sourceId:D}";
+        using var removed = await SendAsync(owner, HttpMethod.Delete, sourcePath + "?expectedRevision=1");
+        Assert.Equal(HttpStatusCode.OK, removed.StatusCode);
+
+        // After removal, each content route must return 404 before it calls GitHub. The empty request
+        // log below proves that no upstream call was made.
+        using var browse = await SendAsync(owner, HttpMethod.Get, sourcePath + "/browse?expectedSourceRevision=1");
+        await SkillMarketplaceEndpointHost.AssertProblemAsync(
+            browse, HttpStatusCode.NotFound, "marketplace_source_not_found");
+        using var preview = await SendAsync(owner, HttpMethod.Post, sourcePath + "/preview", new
+        {
+            expectedSourceRevision = 1,
+            resolvedCommitSha = CommitSha,
+            selectedPath = "skills/pinned",
+        });
+        await SkillMarketplaceEndpointHost.AssertProblemAsync(
+            preview, HttpStatusCode.NotFound, "marketplace_source_not_found");
+        using var import = await SendAsync(
+            owner,
+            HttpMethod.Post,
+            sourcePath + "/import",
+            SkillMarketplaceEndpointHost.ImportBody(1, "skills/pinned", "removed-" + owner.ProjectId, new string('0', 64)));
+        await SkillMarketplaceEndpointHost.AssertProblemAsync(
+            import, HttpStatusCode.NotFound, "marketplace_source_not_found");
+
+        using var cleared = await SendAsync(owner, HttpMethod.Get, definitionsPath);
+        Assert.All((await ReadJsonAsync(cleared)).EnumerateArray(),
+            item => Assert.Equal(JsonValueKind.Null, item.GetProperty("sourceId").ValueKind));
+        Assert.Empty(_gitHubRequests);
+
+        // A caller with no project authority can't read the suggested list for that project.
+        var outsider = owner with { Subject = "outsider-" + Guid.NewGuid().ToString("N") };
+        using var denied = await SendAsync(outsider, HttpMethod.Get, definitionsPath);
+        await SkillMarketplaceEndpointHost.AssertProblemAsync(denied, HttpStatusCode.Forbidden, "forbidden");
+    }
+
     private static string SourcesPath(string projectId) => $"/api/projects/{projectId}/skill-marketplaces/sources";
 
     private async Task<TestCaller> SeedOwnerAsync()
@@ -530,6 +607,7 @@ internal static class SkillMarketplaceEndpointHost
                     services.AddScoped<IProjectMarketplaceSourceStore>(
                         provider => provider.GetRequiredService<MarketplaceSourceStore>());
                     services.AddScoped<ProjectMarketplaceSourceService>();
+                    services.AddSingleton(new SkillMarketplaceCatalog(SkillMarketplaceCatalog.DefaultDefinitions));
                     services.AddScoped<ProjectMarketplaceSkillContentService>();
                     services.AddScoped(provider => new SkillMarketplaceBrowseService(
                         new HttpClient(new StubGitHubHandler(respondFromGitHub)),

@@ -18,6 +18,11 @@ internal static partial class GatewayOpenApi
         new Dictionary<string, OperationContract>(StringComparer.Ordinal)
         {
             ["listProjects"] = C(null, "ProjectSummaryList", "200"),
+            ["readIssueSync"] = C(null, "IssueSyncProject", "200"),
+            ["configureIssueSync"] = C("ConfigureIssueSyncRequest", "IssueSyncProject", "200"),
+            ["createIssueSyncGrant"] = C("CreateIssueSyncGrant", "IssueSyncGrantReceipt", "200"),
+            ["readIssueSyncGrant"] = C(null, "IssueSyncGrantReceipt", "200"),
+            ["revokeIssueSyncGrant"] = C(null, "IssueSyncGrantRevocation", "200"),
             ["listUserNotifications"] = C(null, "UserNotificationPage", "200"),
             ["dismissUserNotification"] = C(null, null, "204"),
             ["createProject"] = C("CreateProjectRequest", "ProjectSummary", "201"),
@@ -41,6 +46,7 @@ internal static partial class GatewayOpenApi
             ["importProjectCasting"] = C("ImportProjectCastingTransferRequest", "ProjectCastingProposal", "201"),
             ["listProjectCastingTemplates"] = C(null, "ProjectCastingTemplateList", "200"),
             ["listProjectCastingRoles"] = C(null, "ProjectCastingRoleList", "200"),
+            ["listMarketplaceDefinitions"] = C(null, "SkillMarketplaceDefinitionList", "200"),
             ["listMarketplaceSources"] = C(null, "MarketplaceSourceList", "200"),
             ["createMarketplaceSource"] = C("CreateMarketplaceSourceRequest", "MarketplaceSource", "201"),
             ["updateMarketplaceSource"] = C("UpdateMarketplaceSourceRequest", "MarketplaceSource", "200"),
@@ -54,6 +60,7 @@ internal static partial class GatewayOpenApi
             ["importProjectSkill"] = C("ImportSkillContentRequest", "SkillContentImportReceipt", "200"),
             ["updateProjectSkillAssignment"] = C("UpdateSkillAssignmentRequest", "VersionedProjectConfiguration", "200"),
             ["listProjectSkillInventory"] = C(null, "ProjectSkillInventoryPage", "200"),
+            // 201 when a new casting proposal is staged; 200 when there is nothing to propose.
             ["importProjectAgentSuite"] = C("ImportProjectAgentSuiteRequest", "ProjectAgentSuiteImportResult", "200", "201"),
             ["getProjectAgentSuiteImport"] = C(null, "ProjectAgentSuiteImport", "200"),
             ["getProjectAgentSuiteAgentPolicy"] = C(null, "ProjectAgentSuiteAgentPolicy", "200"),
@@ -88,6 +95,8 @@ internal static partial class GatewayOpenApi
             ["readSourceControlOutputCaptureDiff"] = C(null, "SourceControlOutputCaptureDiff", "200"),
             ["readSourceControlOutputCaptureFile"] = C(null, "SourceControlOutputFileContent", "200"),
             ["listProjectRuns"] = C(null, "ProjectRunPage", "200"),
+            ["listProjectIssues"] = C(null, "ProjectIssuePage", "200"),
+            ["listProjectPullRequests"] = C(null, "ProjectPullRequestPage", "200"),
             // Reporting contracts stay separate across the two data owners.
             ["readProjectMetrics"] = C(null, "ProjectMetrics", "200"),
             ["readProjectUsage"] = C(null, "ProjectUsage", "200"),
@@ -146,6 +155,10 @@ internal static partial class GatewayOpenApi
             ["replayRunEvents"] = C(null, "SessionEventPage", "200"),
             ["streamRunEvents"] = C(null, "SessionEventPage", "200"),
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
+            ["listRemoteMcpConnections"] = C(null, "RemoteMcpConnectionDirectoryPage", "200"),
+            ["readProjectBacklog"] = C(null, "BacklogGraph", "200"),
+            ["captureBacklogTask"] = C("CaptureBacklogTaskRequest", "BacklogGraph", "200"),
+            ["editBacklogTaskContent"] = C("EditBacklogTaskContentRequest", "BacklogGraph", "200"),
         };
 
     /// <summary>Checks operation/schema coverage and returns the versioned API document.</summary>
@@ -307,7 +320,14 @@ internal static partial class GatewayOpenApi
                             }
                             : null);
         }
-        if (route.IsRunEventStream)
+        if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent")
+        {
+            responses["400"] = JsonResponse(Ref("BacklogIssues"), "Invalid backlog content or revision.");
+            responses["409"] = JsonResponse(Ref("BacklogIssues"), "Stale revision, duplicate issue, or noneditable task.");
+            if (route.OperationId == "editBacklogTaskContent")
+                responses["404"] = JsonResponse(Ref("BacklogIssues"), "The task does not exist.");
+        }
+        else if (route.IsRunEventStream)
         {
             responses["400"] = ProblemResponse("The event cursor is invalid or ambiguous.");
         }
@@ -369,6 +389,23 @@ internal static partial class GatewayOpenApi
             responses["400"] = ProblemResponse(
                 "The owner rejected an unknown or repeated query key, unknown state, invalid cursor, " +
                 "or page size outside 1 through 100.");
+        }
+        // Both stored lists share the owner's query, authority, and Projects failure responses.
+        else if (route.OperationId is "listProjectIssues" or "listProjectPullRequests")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected an unknown or repeated query key, unknown state, invalid cursor, " +
+                "or page size outside 1 through 100.");
+            responses["403"] = ProblemResponse(
+                "The token lacks api.read or names another project, or the caller lacks current Projects " +
+                "read authority. The response contains no items.");
+            responses["502"] = ProblemResponse("The Projects owner returned an invalid or failed authority response.");
+            // Only the pull request list depends on optional migration 032. Document its 503 so
+            // clients don't treat "not available" as an empty list.
+            if (route.OperationId == "listProjectPullRequests")
+                responses["503"] = ProblemResponse(
+                    "pull_request_records_unavailable: Orchestrator migration 032 isn't applied, so no pull " +
+                    "request records exist yet. This isn't an empty list.");
         }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
@@ -460,6 +497,34 @@ else if (route.OperationId is
                 "the project, or tenant readProjects authority. A run-bound token sees only its own run. Runs are " +
                 "ordered by createdAt descending, then runId descending. The opaque cursor is valid only with " +
                 "the same project, state filter, and page size, and multiple pages are not a snapshot.";
+        }
+        else if (route.OperationId == "listProjectIssues")
+        {
+            description +=
+                " This read returns issues that periodic issue sync stored in the project backlog. It makes no " +
+                "source control provider call. It requires api.read and fresh Projects readProjects authority " +
+                "on the project or tenant, the same authority as the project backlog read, and rejects " +
+                "run-bound tokens. Archived tasks are not returned. The state filter is open, closed, or all, " +
+                "and the default is open. Issues are ordered by number descending, then taskId descending. " +
+                "The stored issue has no URL or author. The opaque cursor is valid only with the same project, " +
+                "state filter, and page size, and multiple pages are not a snapshot.";
+        }
+        else if (route.OperationId == "listProjectPullRequests")
+        {
+            description +=
+                " This read returns pull requests that project runs created or reused through Source Control, " +
+                "as recorded at that time. It makes no source control provider call. It isn't a complete " +
+                "pull request history: recording starts when Orchestrator migration 032 is applied, and " +
+                "coverage.recordedSince states that time. Older pull requests, and pull requests that no run " +
+                "created or reused, aren't listed. Before migration 032 is applied, the read returns 503 " +
+                "pull_request_records_unavailable instead of an empty list. It requires api.read and fresh " +
+                "Projects readProjects or readRunSelection authority on the project, or tenant readProjects " +
+                "authority. A run-bound token sees only its run's pull requests. The state filter is open, " +
+                "closed, merged, or all, and the default is open. State is the recorded state, not the live " +
+                "provider state. Each item keeps its runId, disposition (created or reused), and recordedAt. " +
+                "Items are ordered by recordedAt descending, then runId, pinId, and number descending. The " +
+                "opaque cursor is valid only with the same project, state filter, and page size, and multiple " +
+                "pages are not a snapshot.";
         }
         else if (route.OperationId.Contains("Casting", StringComparison.Ordinal))
         {
@@ -663,6 +728,25 @@ else if (route.OperationId is
             return new { type = "boolean", @default = false };
         if (operationId is "listProjectRuns" or "listChiefOfStaffConversations" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
+        // Publish the owner's real limits and defaults so generated clients validate the same way.
+        if (operationId is "listProjectIssues" or "listProjectPullRequests" && name == "pageSize")
+            return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
+        if (operationId == "listProjectIssues" && name == "state")
+            return new
+            {
+                type = "string",
+                description = "The stored issue state to list.",
+                @enum = new[] { "open", "closed", "all" },
+                @default = "open",
+            };
+        if (operationId == "listProjectPullRequests" && name == "state")
+            return new
+            {
+                type = "string",
+                description = "The recorded pull request state to list.",
+                @enum = new[] { "open", "closed", "merged", "all" },
+                @default = "open",
+            };
         if (operationId == "listProjectRuns" && name == "state")
             return new
             {
@@ -733,6 +817,48 @@ else if (route.OperationId is
     {
         ["Problem"] = Obj(["title", "status", "code"],
             ("type", Str()), ("title", Str()), ("status", Int()), ("detail", Str()), ("code", Str())),
+
+        ["BacklogTaskReference"] = Obj(["projectId", "taskId"], ("projectId", Str()), ("taskId", Str())),
+        ["BacklogIssues"] = Obj(["issues"], ("issues", Arr(Ref("BacklogIssue")))),
+        ["BacklogIssue"] = Obj(["code", "path", "message"], ("code", Str()), ("path", Str()), ("message", Str())),
+        ["SourceControlRepositoryIdentity"] = Obj(["owner", "name"], ("owner", Str()), ("name", Str())),
+        ["IssueSyncSettings"] = Obj(["enabled", "grantId", "intervalSeconds", "maxItems", "maxCycleSeconds"],
+            ("enabled", Bool()), ("grantId", Uuid()), ("intervalSeconds", Int()),
+            ("maxItems", Int()), ("maxCycleSeconds", Int())),
+        ["IssueSyncProjectProof"] = Obj(["projectId", "tenantId", "creatorId", "connectionId", "repository"],
+            ("projectId", Str()), ("tenantId", Str()), ("creatorId", Uuid()), ("connectionId", Str()),
+            ("repository", Ref("SourceControlRepositoryIdentity"))),
+        ["IssueSyncGrantReceipt"] = Obj(["grantId", "project", "active"],
+            ("grantId", Uuid()), ("project", Ref("IssueSyncProjectProof")), ("active", Bool())),
+        ["IssueSyncProject"] = Obj(["projectId", "tenantId", "revision", "settings", "grantProof",
+                "nextCycleAt", "status", "importPage", "taskCursor"],
+            ("projectId", Str()), ("tenantId", Str()), ("revision", Int()),
+            ("settings", Ref("IssueSyncSettings")), ("grantProof", Ref("IssueSyncGrantReceipt")),
+            ("nextCycleAt", Date()), ("lastCycleAt", NullableDate()), ("status", Str()),
+            ("errorCode", NullableStr()), ("importPage", Int()), ("taskCursor", Str())),
+        ["ConfigureIssueSyncRequest"] = Obj(["expectedRevision", "settings"],
+            ("expectedRevision", Int()), ("settings", Ref("IssueSyncSettings"))),
+        ["CreateIssueSyncGrant"] = Obj(["selectionCode"], ("selectionCode", Str())),
+        ["IssueSyncGrantRevocation"] = Obj(["revoked"], ("revoked", Bool())),
+        ["BacklogRepositoryIssueLink"] = Obj(["providerId", "repository", "issueNumber"],
+            ("providerId", Str()), ("repository", Ref("SourceControlRepositoryIdentity")), ("issueNumber", Int())),
+        ["BacklogTaskContent"] = Obj(["title"], ("title", Str()), ("description", NullableStr()),
+            ("lifecycle", Enum("open", "closed")), ("repositoryIssue", Nullable(Ref("BacklogRepositoryIssueLink")))),
+        ["BacklogTaskSnapshot"] = Obj(
+            ["reference", "revision", "state", "isArchived", "isAutomationInvocationPending", "title", "lifecycle"],
+            ("reference", Ref("BacklogTaskReference")), ("revision", Int()),
+            ("state", Enum("backlog", "ready", "claimed")), ("isArchived", Bool()),
+            ("isAutomationInvocationPending", Bool()), ("title", Str()), ("description", NullableStr()),
+            ("lifecycle", Enum("open", "closed")), ("repositoryIssue", Nullable(Ref("BacklogRepositoryIssueLink")))),
+        ["BacklogDependencyEdge"] = Obj(["task", "prerequisite"],
+            ("task", Ref("BacklogTaskReference")), ("prerequisite", Ref("BacklogTaskReference"))),
+        ["BacklogGraph"] = Obj(["projectId", "revision", "tasks", "dependencies"],
+            ("projectId", Str()), ("revision", Int()), ("tasks", Arr(Ref("BacklogTaskSnapshot"))),
+            ("dependencies", Arr(Ref("BacklogDependencyEdge")))),
+        ["CaptureBacklogTaskRequest"] = Obj(["taskId", "content", "expectedGraphRevision"],
+            ("taskId", Str()), ("content", Ref("BacklogTaskContent")), ("expectedGraphRevision", Int())),
+        ["EditBacklogTaskContentRequest"] = Obj(["content", "expectedGraphRevision", "expectedTaskRevision"],
+            ("content", Ref("BacklogTaskContent")), ("expectedGraphRevision", Int()), ("expectedTaskRevision", Int())),
 
         ["ProjectSummary"] = Obj(["projectId", "name", "state", "revision", "configurationRevision", "createdAt", "updatedAt"],
             ("projectId", Str()), ("name", Str()), ("state", Enum("active", "archived")),
@@ -818,6 +944,11 @@ else if (route.OperationId is
             ("sourceId", Uuid()), ("name", Str()), ("repository", Str()), ("requestedRef", Str()),
             ("subpath", NullableStr()), ("revision", Int()), ("state", Enum("active", "removed"))),
         ["MarketplaceSourceList"] = Arr(Ref("MarketplaceSource")),
+        ["SkillMarketplaceDefinition"] = Obj(
+            ["name", "repository", "requestedRef", "subpath", "layoutNote", "sourceId"],
+            ("name", Str()), ("repository", Str()), ("requestedRef", Str()), ("subpath", NullableStr()),
+            ("layoutNote", NullableStr()), ("sourceId", NullableUuid())),
+        ["SkillMarketplaceDefinitionList"] = Arr(Ref("SkillMarketplaceDefinition")),
         ["CreateMarketplaceSourceRequest"] = StrictObj(["repository"],
             ("name", NullableStr()), ("repository", Str()), ("requestedRef", NullableStr()),
             ("subpath", NullableStr())),
@@ -1028,7 +1159,8 @@ else if (route.OperationId is
             ["number", "htmlUrl", "state", "headBranch", "headSha", "baseBranch", "baseSha", "merged", "disposition"],
             ("number", Int()), ("htmlUrl", new { type = "string", format = "uri" }), ("state", Str()),
             ("headBranch", Str()), ("headSha", Str()), ("baseBranch", Str()), ("baseSha", Str()),
-            ("merged", Bool()), ("disposition", Enum("created", "reused", "observed"))),
+            ("merged", Bool()), ("disposition", Enum("created", "reused", "observed")),
+            ("title", Str())),
         ["SourceControlReview"] = Obj(["id", "reviewer", "state"],
             ("id", Int()), ("reviewer", Str()),
             ("state", Enum("approved", "changesRequested", "commented", "pending", "dismissed", "unknown")),
@@ -1222,6 +1354,27 @@ else if (route.OperationId is
             ("startedBy", Ref("ProjectRunStartedBy"))),
         ["ProjectRunPage"] = StrictObj(["projectId", "items", "nextCursor"],
             ("projectId", Str()), ("items", Arr(Ref("ProjectRunSummary"))), ("nextCursor", NullableStr())),
+        ["ProjectSourceControlRepository"] = StrictObj(["owner", "name"], ("owner", Str()), ("name", Str())),
+        ["ProjectIssueSummary"] = StrictObj(
+            ["taskId", "taskState", "providerId", "repository", "number", "title", "state", "createdAt", "updatedAt"],
+            ("taskId", Str()), ("taskState", Enum("backlog", "ready", "claimed")), ("providerId", Str()),
+            ("repository", Ref("ProjectSourceControlRepository")), ("number", Int()), ("title", Str()),
+            ("state", Enum("open", "closed")), ("createdAt", Date()), ("updatedAt", Date())),
+        ["ProjectIssuePage"] = StrictObj(["projectId", "items", "nextCursor"],
+            ("projectId", Str()), ("items", Arr(Ref("ProjectIssueSummary"))), ("nextCursor", NullableStr())),
+        ["ProjectPullRequestSummary"] = StrictObj(
+            ["providerId", "repository", "number", "title", "htmlUrl", "state", "headBranch", "headSha",
+             "baseBranch", "baseSha", "runId", "disposition", "recordedAt", "updatedAt"],
+            ("providerId", Str()), ("repository", Ref("ProjectSourceControlRepository")), ("number", Int()),
+            ("title", NullableStr()), ("htmlUrl", Str()), ("state", Enum("open", "closed", "merged")),
+            ("headBranch", Str()), ("headSha", Str()), ("baseBranch", Str()), ("baseSha", Str()),
+            ("runId", Str()), ("disposition", Enum("created", "reused")),
+            ("recordedAt", Date()), ("updatedAt", Date())),
+        ["ProjectPullRequestCoverage"] = StrictObj(["recordedSince", "includesEarlierPullRequests"],
+            ("recordedSince", Date()), ("includesEarlierPullRequests", Bool())),
+        ["ProjectPullRequestPage"] = StrictObj(["projectId", "coverage", "items", "nextCursor"],
+            ("projectId", Str()), ("coverage", Ref("ProjectPullRequestCoverage")),
+            ("items", Arr(Ref("ProjectPullRequestSummary"))), ("nextCursor", NullableStr())),
         // Strict reporting schemas preserve nullable measurements and independent cost units.
         ["ProjectMetricsDay"] = StrictObj(["date", "created", "completed"],
             ("date", new { type = "string", format = "date" }), ("created", Int()), ("completed", Int())),
@@ -1503,16 +1656,20 @@ else if (route.OperationId is
             ("sha256", Str()), ("utf8ByteLength", Int())),
         ["RuntimeExecutionCheckpointParent"] = StrictObj(["hasParentMetadata", "parentCheckpointId"],
             ("hasParentMetadata", Bool()), ("parentCheckpointId", NullableStr())),
+        // Both sources use one strict item shape. Fields for the other source are present but null.
         ["UserNotification"] = StrictObj(
-            ["notificationId", "projectId", "runId", "sessionId", "requestId", "kind", "prompt", "createdAt",
-                "gateKind", "stateVersion", "updatedAt"],
-            ("notificationId", Str()), ("projectId", Str()), ("runId", Str()), ("sessionId", Str()),
-            ("requestId", Str()),
-            ("kind", Enum("awaitingInput", "awaitingPlanApproval", "awaitingApproval", "awaitingOutcomeConfirmation")),
+            ["notificationId", "source", "projectId", "runId", "sessionId", "requestId", "kind", "prompt",
+                "createdAt", "gateKind", "stateVersion", "updatedAt", "promotionId", "taskCount"],
+            ("notificationId", Str()), ("source", Enum("pendingGate", "backlogPromoted")),
+            ("projectId", Str()), ("runId", Str()), ("sessionId", Str()),
+            ("requestId", NullableStr()),
+            ("kind", Nullable(Enum("awaitingInput", "awaitingPlanApproval", "awaitingApproval",
+                "awaitingOutcomeConfirmation"))),
             ("prompt", NullableStr()), ("createdAt", Date()),
-            ("gateKind", Enum("outcomeConfirmation", "generatedWorkflowConfirmation", "workPlanConfirmation",
-                "scopeChangeConfirmation", "question", "approval")),
-            ("stateVersion", Int()), ("updatedAt", Date())),
+            ("gateKind", Nullable(Enum("outcomeConfirmation", "generatedWorkflowConfirmation", "workPlanConfirmation",
+                "scopeChangeConfirmation", "question", "approval"))),
+            ("stateVersion", NullableInt()), ("updatedAt", Date()),
+            ("promotionId", NullableUuid()), ("taskCount", NullableInt())),
         ["UserNotificationPage"] = StrictObj(["items", "count", "nextCursor"],
             ("items", Arr(Ref("UserNotification"))), ("count", Int()), ("nextCursor", NullableStr())),
         ["SessionIdentity"] = Obj(["projectId", "runId", "sessionId"],
@@ -1722,6 +1879,19 @@ else if (route.OperationId is
             ("cacheWriteTokens", NullableInt())),
         ["UsageAmountTotal"] = Obj(["meterSource", "unit", "amount", "pricedEvents", "unpricedEvents"],
             ("meterSource", Str()), ("unit", Str()), ("amount", Number()), ("pricedEvents", Int()), ("unpricedEvents", Int())),
+        ["RemoteMcpConnectionDirectoryPage"] = Obj(["connections", "nextConnectionId"],
+            ("connections", Arr(Ref("RemoteMcpConnectionDirectoryEntry"))), ("nextConnectionId", Nullable(Uuid()))),
+        ["RemoteMcpConnectionDirectoryEntry"] = Obj(
+            ["connectionId", "displayName", "endpointUri", "resourceUri", "authenticationMode", "transportProfile",
+                "state", "rowRevision", "configurationRevision", "configurationSha256", "identityBound",
+                "registryServerName", "registryExactVersion", "discoveryRevision", "catalogSha256", "toolCount"],
+            ("connectionId", Uuid()), ("displayName", Str()), ("endpointUri", Str()), ("resourceUri", NullableStr()),
+            ("authenticationMode", Enum("none", "delegatedOAuth")),
+            ("transportProfile", Enum("streamableHttp20250618")),
+            ("state", Enum("draft", "enabled", "disabled", "removed")),
+            ("rowRevision", Int()), ("configurationRevision", Int()), ("configurationSha256", Str()),
+            ("identityBound", Bool()), ("registryServerName", NullableStr()), ("registryExactVersion", NullableStr()),
+            ("discoveryRevision", NullableInt()), ("catalogSha256", NullableStr()), ("toolCount", Int())),
     };
 
     private static object Obj(

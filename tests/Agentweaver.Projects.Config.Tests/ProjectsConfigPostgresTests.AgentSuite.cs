@@ -14,6 +14,7 @@ public sealed partial class ProjectsConfigPostgresTests
     [Fact]
     public async Task AgentSuiteImportStagesReviewOnlyAgentsAndIsIdempotent()
     {
+        // Arrange: a tenant admin owns a project that already has one configured agent.
         await using var db = CreateDbContext();
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
         var service = CreateCastingProposalService(db);
@@ -30,20 +31,28 @@ public sealed partial class ProjectsConfigPostgresTests
         var first = await service.ImportAgentSuiteAsync(
             owner, project.ProjectId, AgentSuiteRequest(seeded.Revision, "valid"), store, CancellationToken.None);
 
+        // The import is identified by the OCI manifest digest.
         var proposal = Assert.IsType<ProjectCastingProposal>(first.Proposal);
         Assert.Equal(AgentSuiteValidManifest, first.Import.SourceIdentity);
         Assert.Equal(AgentSuiteValidManifest, first.Import.ManifestDigest);
+        // The effective ID ends with the first 12 hex characters of the manifest digest.
         var agent = Assert.Single(first.Import.Agents);
         Assert.Equal($"agentsuite:{first.Import.SuiteName}:{agent.NativeId}:499d25ae869a", agent.EffectiveAgentId);
+        // Imported agents are review-only: they cannot run until a runtime exists.
         Assert.False(agent.Runnable);
         Assert.Contains(agent.Blockers, item => item.Code == "runtime_unavailable");
+        // The proposal adds the native agent with its instructions as the charter,
+        // keeps the existing agent, and casts the new agent after it.
         var charter = Assert.Single(proposal.Draft.AgentCharters, item => item.AgentId == agent.EffectiveAgentId);
         Assert.Equal("Repeat the user's request in one short sentence.\n", charter.Charter);
         Assert.Contains(proposal.Draft.AgentCharters, item => item.AgentId == "existing-agent");
         Assert.Contains(proposal.Draft.Casting, item => item.AgentId == agent.EffectiveAgentId && item.Order == 1);
+        // Staging a proposal does not change the live configuration revision.
         Assert.Equal(seeded.Revision,
             (await service.GetProjectConfigurationAsync(owner, project.ProjectId, null, CancellationToken.None)).Revision);
 
+        // Every blob that exists as a fixture file is stored byte-for-byte in the object store.
+        // Blobs without a fixture file (such as extracted content files) are skipped here.
         foreach (var blob in first.Import.Blobs)
         {
             var path = Path.Combine(AgentSuiteFixtureRoot, "valid", "blobs", "sha256", blob.Digest[7..]);
@@ -55,9 +64,12 @@ public sealed partial class ProjectsConfigPostgresTests
             await read.Content.CopyToAsync(copy);
             Assert.Equal(await File.ReadAllBytesAsync(path), copy.ToArray());
         }
+        // Reading the import back returns exactly the record the import call returned.
         AssertSameAgentSuiteRecord(first.Import, await service.GetAgentSuiteImportAsync(
             owner, project.ProjectId, AgentSuiteValidManifest, store, CancellationToken.None));
 
+        // Idempotency: importing the same suite again, or the same manifest under another tag,
+        // returns the existing proposal instead of creating a new one.
         var replay = await service.ImportAgentSuiteAsync(
             owner, project.ProjectId, AgentSuiteRequest(seeded.Revision, "valid"), store, CancellationToken.None);
         Assert.Equal(proposal.ProposalId, replay.Proposal?.ProposalId);
@@ -66,6 +78,7 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(proposal.ProposalId, retagged.Proposal?.ProposalId);
         Assert.Single(await service.ListCastingProposalsAsync(owner, project.ProjectId, 50, CancellationToken.None));
 
+        // Confirming the proposal applies the imported agent to a new configuration revision.
         var confirmed = await service.ConfirmCastingProposalAsync(
             owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
         var confirmedRevision = confirmed.ConfirmedConfigurationRevision
@@ -74,11 +87,14 @@ public sealed partial class ProjectsConfigPostgresTests
         var current = await service.GetProjectConfigurationAsync(owner, project.ProjectId, confirmedRevision, CancellationToken.None);
         Assert.Contains(current.Configuration.AgentCharters, item => item.AgentId == agent.EffectiveAgentId);
 
+        // Importing again after confirmation finds the agent already applied:
+        // no new proposal, and the stored import record is unchanged.
         var unchanged = await service.ImportAgentSuiteAsync(
             owner, project.ProjectId, AgentSuiteRequest(confirmedRevision, "valid"), store, CancellationToken.None);
         Assert.Null(unchanged.Proposal);
         AssertSameAgentSuiteRecord(first.Import, unchanged.Import);
 
+        // Revision fence: an expected revision that does not match the current one is a 409 conflict.
         var stale = await Assert.ThrowsAsync<ProjectConfigException>(() => service.ImportAgentSuiteAsync(
             owner, project.ProjectId, AgentSuiteRequest(confirmedRevision + 5, "valid"), store, CancellationToken.None));
         Assert.Equal("stale_project_configuration", stale.Code);
@@ -88,6 +104,7 @@ public sealed partial class ProjectsConfigPostgresTests
     [Fact]
     public async Task AgentSuiteImportRejectsInvalidSuitesAndNeverOverwritesAgents()
     {
+        // Arrange: an admin owner and a reader who has only the api.read scope.
         await using var db = CreateDbContext();
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
         var service = CreateCastingProposalService(db);
@@ -102,17 +119,21 @@ public sealed partial class ProjectsConfigPostgresTests
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
         var project = await service.CreateProjectAsync(owner, "Suite conflict", CancellationToken.None);
 
+        // A suite that fails validation is rejected with the validator's error messages.
         var rejected = await Assert.ThrowsAsync<AgentSuiteImportRejectedException>(() => service.ImportAgentSuiteAsync(
             owner, project.ProjectId, AgentSuiteRequest(project.ConfigurationRevision, "config-not-empty"), store,
             CancellationToken.None));
         Assert.Equal("agentsuite_invalid", rejected.Code);
         Assert.Contains("AgentSuite config blob must be the exact bytes {}", rejected.Errors);
 
+        // Without the projects.admin scope the caller cannot import.
         var unauthorized = await Assert.ThrowsAsync<ProjectConfigException>(() => service.ImportAgentSuiteAsync(
             reader, project.ProjectId, AgentSuiteRequest(project.ConfigurationRevision, "valid"), store,
             CancellationToken.None));
         Assert.Equal(StatusCodes.Status403Forbidden, unauthorized.StatusCode);
 
+        // Stage a proposal, reject it, then import again: the import returns the same rejected
+        // proposal instead of staging a fresh one.
         var staged = await service.ImportAgentSuiteAsync(
             owner, project.ProjectId, AgentSuiteRequest(project.ConfigurationRevision, "valid"), store,
             CancellationToken.None);
@@ -125,12 +146,16 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(rejectedProposal.ProposalId, replay.Proposal?.ProposalId);
         Assert.Equal(ProjectCastingProposalState.Rejected, replay.Proposal?.State);
 
+        // Simulate a user edit: the configuration now holds an agent with the imported effective ID
+        // but a different charter.
         var edited = await SeedHistoricalConfigurationAsync(
             db, project, owner.ActorId, CastingConfiguration(effectiveId, "Edited charter"));
+        // No overwrite: the import refuses with an identity conflict ...
         var conflict = await Assert.ThrowsAsync<ProjectConfigException>(() => service.ImportAgentSuiteAsync(
             owner, project.ProjectId, AgentSuiteRequest(edited.Revision, "valid"), store, CancellationToken.None));
         Assert.Equal("agentsuite_identity_conflict", conflict.Code);
         Assert.Equal(StatusCodes.Status409Conflict, conflict.StatusCode);
+        // ... and the user's edited charter is still in place.
         Assert.Equal("Edited charter", Assert.Single(
             (await service.GetProjectConfigurationAsync(owner, project.ProjectId, null, CancellationToken.None))
                 .Configuration.AgentCharters).Charter);
@@ -154,9 +179,12 @@ public sealed partial class ProjectsConfigPostgresTests
         var revision = project.ConfigurationRevision;
         const string connectionId = "6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f";
 
+        // Helper: expects the import to fail request validation.
         async Task<ProjectConfigException> InvalidAsync(ImportProjectAgentSuiteRequest request) =>
             await Assert.ThrowsAsync<ProjectConfigException>(() => service.ImportAgentSuiteAsync(
                 owner, project.ProjectId, request, store, CancellationToken.None));
+        // Bad tool connections, in order: empty GUID, uppercase GUID, unknown provider version,
+        // and the same provider bound twice. Each one is a 400 bad request.
         foreach (var connections in new ProjectAgentSuiteToolConnection[][]
                  {
                      [new("search@1.0.0", Guid.Empty.ToString("D"))],
@@ -169,13 +197,14 @@ public sealed partial class ProjectsConfigPostgresTests
             Assert.Equal("invalid_agentsuite_tool_connection", invalid.Code);
             Assert.Equal(StatusCodes.Status400BadRequest, invalid.StatusCode);
         }
+        // A blueprint skill binding for "planner", a role the suite does not define, is invalid.
         var badBlueprint = await InvalidAsync(AgentSuiteRequest(revision, "team") with
         {
             Blueprint = new ProjectAgentSuiteBlueprint { SkillBindings = [new("planner", ["docs"])] },
         });
         Assert.Equal("invalid_agentsuite_blueprint", badBlueprint.Code);
-        // The projection must also pass the 0.x blueprint rules; only the default workflow is registered today,
-        // so naming another workflow is rejected.
+
+        // Blueprint workflow validation must finish before the archive or proposal is stored.
         var unavailableWorkflow = await InvalidAsync(AgentSuiteRequest(revision, "team") with
         {
             Blueprint = new ProjectAgentSuiteBlueprint { Workflows = ["default", "feature-development"] },
@@ -183,6 +212,8 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal("invalid_blueprint", unavailableWorkflow.Code);
         Assert.Contains("Unknown workflow 'feature-development'.", unavailableWorkflow.Message, StringComparison.Ordinal);
 
+        // Profile refusals: model secret references, and the upstream "coordinator-workers" suite
+        // whose coordinator agent uses a reserved orchestration role.
         var secrets = await Assert.ThrowsAsync<AgentSuiteImportRejectedException>(() => service.ImportAgentSuiteAsync(
             owner, project.ProjectId, AgentSuiteRequest(revision, "team-model-secret-refs"), store, CancellationToken.None));
         Assert.Contains(secrets.Errors, item => item.StartsWith("agentsuite_secret_reference:", StringComparison.Ordinal));
@@ -196,6 +227,7 @@ public sealed partial class ProjectsConfigPostgresTests
             }, store, CancellationToken.None));
         Assert.Equal(["agentsuite_reserved_role: Agent 'coordinator' uses a reserved orchestration role."], reserved.Errors.ToArray());
 
+        // Act: a valid team import with one tool connection and a blueprint.
         var blueprint = new ProjectAgentSuiteBlueprint
         {
             SourceBlueprintId = "web-team",
@@ -210,6 +242,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var imported = await service.ImportAgentSuiteAsync(owner, project.ProjectId, request, store, CancellationToken.None);
 
         var record = imported.Import;
+        // All three agents are imported and none is runnable.
         Assert.Equal("agentweaver-team", record.SuiteName);
         Assert.Equal(["lead", "reviewer", "writer"], record.Agents.Select(item => item.NativeId).Order());
         Assert.All(record.Agents, item => Assert.False(item.Runnable));
@@ -217,6 +250,9 @@ public sealed partial class ProjectsConfigPostgresTests
         var writer = record.Agents.Single(item => item.NativeId == "writer");
         var reviewer = record.Agents.Single(item => item.NativeId == "reviewer");
         Assert.Equal(["reviewer", "writer"], lead.Invokes.Select(item => item.Agent).Order());
+        // Blockers explain why each agent cannot run:
+        // lead uses a capability-based model and a v2 policy that is recorded but not enforced;
+        // writer uses an older policy version; reviewer has no policy, so no policy blocker.
         Assert.Contains(lead.Blockers, item => item.Code == "capability_model_unsupported");
         Assert.Contains(lead.Blockers, item => item.Code == "policy_not_enforced");
         Assert.DoesNotContain(lead.Blockers, item => item.Code == "policy_version_unsupported");
@@ -224,6 +260,8 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Null(reviewer.PolicyDigest);
         Assert.DoesNotContain(reviewer.Blockers, item => item.Code == "policy_not_enforced");
 
+        // The remote MCP provider is recorded but marked unsupported. Its tools use the
+        // delegated connection, and the caller's connection ID is stored as given.
         var provider = Assert.Single(record.ToolProviders);
         Assert.Equal("unsupported", provider.Support);
         var remote = Assert.IsType<ProjectAgentSuiteRemoteMcp>(provider.Remote);
@@ -231,24 +269,27 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal("Authorization", Assert.Single(remote.Headers).Name);
         Assert.All(provider.Tools, tool => Assert.Equal("search-delegated-connection", tool.DelegatedAuthorization?.BindingRef));
         Assert.Equal(new ProjectAgentSuiteToolConnection("search@1.0.0", connectionId), Assert.Single(record.ToolConnections));
+        // The blueprint takes its display name from the suite and keeps the caller's other fields.
         Assert.Equal("agentweaver-team", record.Blueprint.DisplayName);
         Assert.Equal("web-team", record.Blueprint.SourceBlueprintId);
         Assert.Equal(ProjectAgentSuiteBlueprint.RestrictedSandbox, record.Blueprint.SandboxProfile);
         Assert.Equal("writer", Assert.Single(record.Blueprint.SkillBindings).Role);
 
         var proposal = Assert.IsType<ProjectCastingProposal>(imported.Proposal);
+        // One charter per agent, using the agent's display name.
         Assert.Equal(3, proposal.Draft.AgentCharters.Length);
         Assert.Equal("Team lead",
             proposal.Draft.AgentCharters.Single(item => item.AgentId == lead.EffectiveAgentId).Name);
-        // The blueprint goes through the inline apply path: workflow references, default workflow, sandbox, skills.
+        // The blueprint uses the inline apply path for workflows, sandbox and unresolved skill bindings.
         Assert.Equal([new BlueprintWorkflowReference("web-team", "default")], proposal.Draft.BlueprintWorkflowReferences.ToArray());
         Assert.Equal("default", proposal.Draft.DefaultWorkflowId);
         Assert.True(proposal.Draft.EgressNarrowing is { IsEmpty: true });
-        // The "writer" role's "docs" skill isn't installed in this project, so the binding is reported, not applied.
         Assert.Equal(
             [new BlueprintUnresolvedSkillBinding("writer", "docs", BlueprintUnresolvedSkillBinding.SkillNotInstalled)],
             imported.UnresolvedSkillBindings.ToArray());
 
+        // Policies are read back from the stored blobs by effective agent ID.
+        // lead has a v2 policy with an egress allow rule and a required capability.
         var leadPolicy = await service.GetAgentSuiteAgentPolicyAsync(
             owner, project.ProjectId, lead.EffectiveAgentId, store, CancellationToken.None);
         Assert.Equal(record.SourceIdentity, leadPolicy.SourceIdentity);
@@ -257,12 +298,15 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal("agentsuite.policy/v2", v2.Version);
         Assert.Equal(new ProjectAgentSuiteEgressRule("10.0.0.2", "TCP", 443), Assert.Single(v2.EgressAllow!.Value));
         Assert.Equal(["network/egress-allow/v1"], v2.RequiredCapabilities.ToArray());
+        // writer has a v1 policy, which has no egress rules.
         var v1 = Assert.IsType<ProjectAgentSuitePolicy>((await service.GetAgentSuiteAgentPolicyAsync(
             owner, project.ProjectId, writer.EffectiveAgentId, store, CancellationToken.None)).Policy);
         Assert.Equal("application/vnd.agentsuite.policy.v1+json", v1.MediaType);
         Assert.Null(v1.EgressAllow);
+        // reviewer has no policy.
         Assert.Null((await service.GetAgentSuiteAgentPolicyAsync(
             owner, project.ProjectId, reviewer.EffectiveAgentId, store, CancellationToken.None)).Policy);
+        // A well-formed effective ID that was never imported is 404; a native ID alone is not accepted.
         var unknown = await Assert.ThrowsAsync<ProjectConfigException>(() => service.GetAgentSuiteAgentPolicyAsync(
             owner, project.ProjectId, "agentsuite:agentweaver-team:planner:000000000000", store, CancellationToken.None));
         Assert.Equal(StatusCodes.Status404NotFound, unknown.StatusCode);
@@ -270,10 +314,12 @@ public sealed partial class ProjectsConfigPostgresTests
             owner, project.ProjectId, "lead", store, CancellationToken.None));
         Assert.Equal("invalid_agentsuite_agent_id", native.Code);
 
+        // Replaying the identical request returns the same proposal.
         var replay = await service.ImportAgentSuiteAsync(owner, project.ProjectId, request, store, CancellationToken.None);
         Assert.Equal(proposal.ProposalId, replay.Proposal?.ProposalId);
-        // A replayed import returns the same unresolved bindings as the first import.
         Assert.Equal(imported.UnresolvedSkillBindings.ToArray(), replay.UnresolvedSkillBindings.ToArray());
+        // Importing the same suite without the tool connection and blueprint conflicts with
+        // the stored record (409), and the stored record stays unchanged.
         var rebound = await InvalidAsync(AgentSuiteRequest(revision, "team"));
         Assert.Equal("agentsuite_import_conflict", rebound.Code);
         Assert.Equal(StatusCodes.Status409Conflict, rebound.StatusCode);
@@ -380,6 +426,7 @@ public sealed partial class ProjectsConfigPostgresTests
                          .Order(StringComparer.Ordinal))
             {
                 var bytes = File.ReadAllBytes(Path.Combine(directory, path));
+                // Fixed mode 0644 and epoch time keep the archive bytes the same on every machine.
                 writer.WriteEntry(new UstarTarEntry(TarEntryType.RegularFile, path)
                 {
                     DataStream = new MemoryStream(bytes, writable: false),

@@ -24,13 +24,16 @@ public sealed partial class ProjectsConfigService
         IObjectStore objectStore,
         CancellationToken cancellationToken)
     {
+        // Check the caller's casting write role first, before any decoding or validation work.
         RequireCastingWrite(caller, projectId);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(objectStore);
+        // The caller must say which configuration revision it reviewed. Revisions start at 1.
         if (request.ExpectedConfigurationRevision <= 0)
             throw ProjectConfigException.Invalid(
                 "invalid_configuration_revision",
                 "The expected project configuration revision must be positive.");
+        // Map the wire format name to the validator's archive format. Unknown names are rejected.
         var format = request.Format switch
         {
             ImportProjectAgentSuiteRequest.OciLayoutTarFormat => AgentSuiteArchiveFormat.OciLayoutTar,
@@ -42,13 +45,16 @@ public sealed partial class ProjectsConfigService
         };
         var archive = DecodeAgentSuiteArchive(request.Archive);
 
+        // Offline validation: only the archive bytes are read. Nothing is fetched from the network.
         var result = AgentSuiteValidator.Validate(format, archive);
+        // Return every native and Agentweaver profile error together so the author can fix them in one pass.
         if (!result.Accepted || result.Graph is null)
             throw new AgentSuiteImportRejectedException(
                 "agentsuite_invalid",
                 "The AgentSuite archive is not valid.",
                 [.. result.NativeErrors, .. result.ProfileErrors.Select(item => $"{item.Code}: {item.Message}")]);
         // Native agent IDs become cast roles. The platform owns reserved roles, such as the coordinator.
+        // Sort the list so the error output is the same on every run.
         var reserved = result.Graph.Agents.Select(agent => agent.Id)
             .Where(ProjectConfigurationValidator.IsReservedOrchestrationRole)
             .Order(StringComparer.Ordinal)
@@ -60,6 +66,8 @@ public sealed partial class ProjectsConfigService
                 [.. reserved.Select(id =>
                     $"agentsuite_reserved_role: Agent '{id}' uses a reserved orchestration role.")]);
 
+        // Build everything that does not need the database first: the record, charters and proposal ID.
+        // These are deterministic, so a repeated request produces the same values.
         var record = AgentSuiteImportPlanner.CreateRecord(
             projectId,
             result,
@@ -87,11 +95,14 @@ public sealed partial class ProjectsConfigService
 
         return await ExecuteCastingProposalTransactionAsync(async (context, token) =>
         {
+            // Lock the project row and re-check write authority inside the transaction, so a role change
+            // or a concurrent proposal cannot slip in between the check and the write.
             var project = await LockCastingProjectAndAuthorityAsync(
                 context, caller, projectId, write: true, token).ConfigureAwait(false);
             RequireActiveCastingProject(project);
 
             // A lost response or restart replays the same request; return the proposal it already created.
+            // This check runs before the revision check, because the first request may have moved the revision.
             var existing = await context.CastingProposals.AsNoTracking()
                 .SingleOrDefaultAsync(
                     item => item.ProposalId == proposalId && item.ProjectId == project.ProjectId,
@@ -99,14 +110,15 @@ public sealed partial class ProjectsConfigService
                 .ConfigureAwait(false);
             if (existing is not null)
             {
+                // The record was written before the proposal, so it must exist. If it is gone, storage is damaged.
                 var replayed = await store.ReadRecordAsync(projectId, record.SourceIdentity, JsonOptions, token)
                     .ConfigureAwait(false) ?? throw new ProjectConfigException(
                         "agentsuite_integrity_error",
                         "The import record for this proposal is missing.",
                         StatusCodes.Status500InternalServerError);
                 var replayedProposal = ToCastingProposal(existing);
-                // Unresolved bindings are not stored, so recompute them from the stored draft. That draft already
-                // has the blueprint applied, so re-applying it yields the same codes.
+                // The stored draft already includes the blueprint. Reapply it only to recover the same
+                // unresolved-binding report without changing the stored proposal.
                 return new ProjectAgentSuiteImportResult(replayed, replayedProposal)
                 {
                     UnresolvedSkillBindings = applyBlueprint
@@ -116,8 +128,10 @@ public sealed partial class ProjectsConfigService
                 };
             }
 
+            // Revision fence: the caller reviewed an older configuration, so reject with 409 instead of merging.
             if (project.ConfigurationRevision != request.ExpectedConfigurationRevision)
                 throw CastingConfigurationConflict();
+            // Load the configuration at the current revision; the new agents are merged into it.
             var currentRevision = await context.ProjectConfigurationRevisions.AsNoTracking()
                 .SingleOrDefaultAsync(
                     item => item.ProjectId == project.ProjectId && item.Revision == project.ConfigurationRevision,
@@ -125,38 +139,43 @@ public sealed partial class ProjectsConfigService
                 .ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
             var current = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+            // Merge first: it throws on an identity conflict before anything is written to storage.
             var draft = MergeAgentSuiteImport(current, charters);
             var unresolved = ImmutableArray<BlueprintUnresolvedSkillBinding>.Empty;
             if (applyBlueprint)
             {
-                // Same apply path as inline blueprints: workflows, default workflow, skills, and sandbox.
-                // A null draft means the agents already exist, so apply the blueprint to the current configuration.
+                // A repeated agent import can still change workflows, skills or sandbox settings.
+                // Use the same apply path as inline blueprints, even when there are no new agents.
                 var application = ProjectBlueprintCatalog.ApplyBlueprint(draft ?? current, record.Blueprint, agentIds);
                 unresolved = application.UnresolvedSkillBindings;
-                // Skip the proposal only when neither the merge nor the blueprint changed anything.
                 draft = draft is null && SameConfiguration(current, application.Draft) ? null : application.Draft;
             }
 
+            // Store order: blobs, then the agent index, then the record. Every write is create-if-absent, so a
+            // retry after a partial failure finishes the job without overwriting anything.
             await store.WriteBlobsAsync(result.Blobs, token).ConfigureAwait(false);
             await store.WriteAgentIndexAsync(record, token).ConfigureAwait(false);
             var stored = await store.WriteRecordAsync(record, JsonOptions, token).ConfigureAwait(false);
-            // Nothing to review: the import is recorded, but no proposal is created. Still report unresolved bindings.
+            // Nothing changed, but bindings that could not apply must still be visible in the response.
             if (draft is null)
                 return new ProjectAgentSuiteImportResult(stored, null) { UnresolvedSkillBindings = unresolved };
 
             ProjectConfiguration normalized;
             try
             {
+                // Run the normal configuration rules on the merged draft, as for any other casting change.
                 normalized = ProjectConfigurationValidator.ValidateTransition(current, draft);
             }
             catch (ProjectConfigException exception)
             {
+                // Report rule failures as 422 so the caller knows the suite, not the request, is the problem.
                 throw new ProjectConfigException(
                     "incompatible_agentsuite_import",
                     $"The suite agents are incompatible with this project: {exception.Message}",
                     StatusCodes.Status422UnprocessableEntity);
             }
             await EnsureCastingProjectNarrowingAsync(context, normalized, token).ConfigureAwait(false);
+            // Stage a pending proposal with the stable ID. It is only applied after review; nothing is activated.
             var proposal = await AddCastingProposalAsync(
                 context, caller, project, normalized, null, token, proposalId).ConfigureAwait(false);
             return new ProjectAgentSuiteImportResult(stored, proposal) { UnresolvedSkillBindings = unresolved };
@@ -173,12 +192,15 @@ public sealed partial class ProjectsConfigService
     {
         RequireCastingRead(caller, projectId);
         ArgumentNullException.ThrowIfNull(objectStore);
+        // Reject malformed identities early; they are also used to build the storage key.
         RequireSourceIdentity(sourceIdentity);
 
         return ExecuteCastingProposalTransactionAsync(async (context, token) =>
         {
+            // Re-check read authority against the current project state before reading storage.
             await LockCastingProjectAndAuthorityAsync(context, caller, projectId, write: false, token)
                 .ConfigureAwait(false);
+            // A record that was never written for this project returns 404, not an empty result.
             return await new AgentSuiteObjectStore(objectStore)
                 .ReadRecordAsync(projectId, sourceIdentity, JsonOptions, token).ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
@@ -198,6 +220,7 @@ public sealed partial class ProjectsConfigService
     {
         RequireCastingRead(caller, projectId);
         ArgumentNullException.ThrowIfNull(objectStore);
+        // Cheap shape check: 256 is the identifier length limit, and every imported ID has the "agentsuite:" prefix.
         if (string.IsNullOrEmpty(effectiveAgentId) || effectiveAgentId.Length > 256 ||
             !effectiveAgentId.StartsWith(AgentSuiteImportPlanner.EffectiveIdPrefix + ":", StringComparison.Ordinal))
             throw ProjectConfigException.Invalid(
@@ -209,12 +232,14 @@ public sealed partial class ProjectsConfigService
             await LockCastingProjectAndAuthorityAsync(context, caller, projectId, write: false, token)
                 .ConfigureAwait(false);
             var store = new AgentSuiteObjectStore(objectStore);
+            // Two lookups: the agent index gives the source identity, which then locates the import record.
             var identity = await store.ReadAgentIndexAsync(projectId, effectiveAgentId, token).ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
             var record = await store.ReadRecordAsync(projectId, identity, JsonOptions, token).ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
             var agent = record.Agents.SingleOrDefault(item => item.EffectiveAgentId == effectiveAgentId)
                 ?? throw ProjectConfigException.NotFound();
+            // Match on both digest and owning agent, because two agents may share the same policy bytes.
             var policy = agent.PolicyDigest is null
                 ? null
                 : record.Policies.Single(item => item.Digest == agent.PolicyDigest && item.OwningAgent == agent.NativeId);
@@ -222,6 +247,7 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    // Accepts only "sha256:" plus 64 lowercase hex characters (7 + 64 = 71 characters in total).
     private static void RequireSourceIdentity(string sourceIdentity)
     {
         if (sourceIdentity is not { Length: 71 } ||
@@ -242,13 +268,16 @@ public sealed partial class ProjectsConfigService
     {
         if (connections.IsDefaultOrEmpty)
             return [];
+        // Only providers that declare a remote MCP endpoint can be bound to a connection.
         var remote = graph.ToolProviders
             .Where(item => item.HasRemoteMcp)
             .Select(item => AgentSuiteImportPlanner.ToolProviderKey(item.Id, item.Version))
             .ToHashSet(StringComparer.Ordinal);
+        // Tracks providers already bound, to reject a second binding for the same provider.
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var connection in connections)
         {
+            // JSON can carry null entries or null fields, so check them before the lookup.
             if (connection is null || connection.ToolProvider is null || !remote.Contains(connection.ToolProvider))
                 throw ProjectConfigException.Invalid(
                     "invalid_agentsuite_tool_connection",
@@ -257,6 +286,8 @@ public sealed partial class ProjectsConfigService
                 throw ProjectConfigException.Invalid(
                     "invalid_agentsuite_tool_connection",
                     $"Tool provider '{connection.ToolProvider}' has more than one connection.");
+            // Require the exact lowercase "D" GUID text (round-trip check) so the same ID always has one spelling
+            // and the record bytes stay stable. The empty GUID is not a real connection.
             if (connection.ConnectionId is not { Length: 36 } id ||
                 !Guid.TryParseExact(id, "D", out var parsed) || parsed == Guid.Empty ||
                 !string.Equals(parsed.ToString("D"), id, StringComparison.Ordinal))
@@ -264,27 +295,33 @@ public sealed partial class ProjectsConfigService
                     "invalid_agentsuite_tool_connection",
                     "The connection ID must be a nonempty lowercase GUID.");
         }
+        // Sort by provider so the record (and so the proposal ID) does not depend on request order.
         return [.. connections.OrderBy(item => item.ToolProvider, StringComparer.Ordinal)];
     }
 
     /// <summary>Applies blueprint defaults and checks every value. Roles must be native agent IDs in the suite.</summary>
     private static ProjectAgentSuiteBlueprint NormalizeBlueprint(ProjectAgentSuiteBlueprint? blueprint, AgentSuiteGraph graph)
     {
+        // A missing blueprint means "use all defaults".
         blueprint ??= new ProjectAgentSuiteBlueprint();
         static ProjectConfigException Invalid(string message) =>
             ProjectConfigException.Invalid("invalid_agentsuite_blueprint", message);
+        // Identifiers: 1-256 ASCII letters, digits, '.', '_', '-' or ':'.
         static bool IsIdentifier(string? value) =>
             !string.IsNullOrEmpty(value) && value.Length <= 256 &&
             value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
+        // Free text: not blank and within the given length.
         static bool IsText(string? value, int maximum) =>
             !string.IsNullOrWhiteSpace(value) && value.Length <= maximum;
 
+        // Optional fields are checked only when present.
         if (blueprint.SourceBlueprintId is not null && !IsIdentifier(blueprint.SourceBlueprintId))
             throw Invalid("The source blueprint ID must be an identifier.");
         if (blueprint.DisplayName is not null && !IsText(blueprint.DisplayName, 160))
             throw Invalid("The display name must be nonempty and at most 160 characters.");
         if (blueprint.Description is not null && !IsText(blueprint.Description, 2000))
             throw Invalid("The description must be nonempty and at most 2000 characters.");
+        // Workflows: at least one, all identifiers, no duplicates (distinct count equals total count).
         if (blueprint.Workflows.IsDefaultOrEmpty || !blueprint.Workflows.All(IsIdentifier) ||
             blueprint.Workflows.Distinct(StringComparer.Ordinal).Count() != blueprint.Workflows.Length)
             throw Invalid("Workflows must be a nonempty list of unique identifiers.");
@@ -294,18 +331,21 @@ public sealed partial class ProjectsConfigService
             throw Invalid("The review policy must be an identifier.");
         if (blueprint.SandboxProfile is not (ProjectAgentSuiteBlueprint.DefaultId or ProjectAgentSuiteBlueprint.RestrictedSandbox))
             throw Invalid("The sandbox profile must be 'default' or 'restricted'.");
+        // A default (uninitialized) array means the JSON had "skillBindings": null; an empty list is fine.
         if (blueprint.SkillBindings.IsDefault)
             throw Invalid("Skill bindings must be a list.");
         var agents = graph.Agents.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
         var roles = new HashSet<string>(StringComparer.Ordinal);
         foreach (var binding in blueprint.SkillBindings)
         {
+            // Each binding must name a real suite agent, and each agent may appear in only one binding.
             if (binding is null || binding.Role is null || !agents.Contains(binding.Role) || !roles.Add(binding.Role))
                 throw Invalid("Each skill binding must name a different agent in the suite.");
             if (binding.Skills.IsDefaultOrEmpty || !binding.Skills.All(IsIdentifier) ||
                 binding.Skills.Distinct(StringComparer.Ordinal).Count() != binding.Skills.Length)
                 throw Invalid($"Skills for '{binding.Role}' must be a nonempty list of unique identifiers.");
         }
+        // Sort bindings by role so the stored record does not depend on request order.
         return blueprint with
         {
             SkillBindings = [.. blueprint.SkillBindings.OrderBy(item => item.Role, StringComparer.Ordinal)],
@@ -325,11 +365,13 @@ public sealed partial class ProjectsConfigService
         var added = new List<ProjectAgentCharter>();
         foreach (var (charter, _) in charters)
         {
+            // New effective ID: stage it.
             if (!existing.TryGetValue(charter.AgentId, out var present))
             {
                 added.Add(charter);
                 continue;
             }
+            // Same ID and same content: already imported, skip it. Same ID but different content: refuse (409).
             if (present != charter)
                 throw ProjectConfigException.Conflict(
                     "agentsuite_identity_conflict",
@@ -338,6 +380,7 @@ public sealed partial class ProjectsConfigService
         if (added.Count == 0)
             return null;
 
+        // Append new cast entries after the highest existing order, keeping the charter order from the suite.
         var order = current.Casting.IsDefaultOrEmpty ? 0 : current.Casting.Max(item => item.Order) + 1;
         return current with
         {
@@ -347,15 +390,17 @@ public sealed partial class ProjectsConfigService
         };
     }
 
-    /// <summary>Compares two configurations by their serialized form, because immutable arrays compare by reference.</summary>
+    /// <summary>Compares configuration values, including the contents of immutable arrays.</summary>
     private static bool SameConfiguration(ProjectConfiguration left, ProjectConfiguration right) =>
-        // Record equality would report equal arrays as different, so compare the JSON text instead.
+        // Record equality compares immutable arrays by reference rather than by their contents.
         JsonSerializer.Serialize(left, JsonOptions) == JsonSerializer.Serialize(right, JsonOptions);
 
+    // Decodes the base64 archive. The size check runs on the text first, so oversized input is never decoded.
     private static byte[] DecodeAgentSuiteArchive(string archive)
     {
         if (string.IsNullOrEmpty(archive))
             throw ProjectConfigException.Invalid("invalid_agentsuite_archive", "The archive is empty.");
+        // Base64 uses 4 characters per 3 bytes, so this is the longest text that can decode within the limit.
         if (archive.Length > (AgentSuiteValidator.MaxArchiveBytes + 2) / 3 * 4)
             throw ProjectConfigException.Invalid(
                 "agentsuite_archive_too_large",
@@ -376,10 +421,13 @@ public sealed partial class ProjectsConfigService
     /// </summary>
     private static Guid AgentSuiteProposalId(string projectId, ProjectAgentSuiteImport record, long expectedRevision)
     {
+        // Hash the canonical record JSON so any change in record content gives a different proposal ID.
         var recordDigest = AgentSuiteObjectStore.Digest(
             CanonicalJson.Canonicalize(JsonSerializer.SerializeToUtf8Bytes(record, JsonOptions)));
+        // Include the project and expected revision: the same suite imported at a new revision is a new proposal.
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(
             $"agentweaver-agentsuite-import\n{projectId}\n{record.SourceIdentity}\n{recordDigest}\n{expectedRevision}"));
+        // A GUID holds 16 bytes, so use the first 16 bytes of the hash.
         return new Guid(hash.AsSpan(0, 16));
     }
 }

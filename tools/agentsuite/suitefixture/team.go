@@ -20,6 +20,8 @@ type TeamAgent struct {
 // TeamAgents returns the team fixture agents: a lead with a capability-based model, invokes, and a v2
 // policy; a writer with an exact model and a v1 policy; and a reviewer with an exact model and no policy.
 func TeamAgents() []TeamAgent {
+	// "exact" pins a specific model ID. The lead instead describes required capabilities and lets the
+	// runtime pick any matching model.
 	exact := map[string]any{"model": ExecutionModel, "protocol": ExecutionProtocol}
 	return []TeamAgent{
 		{
@@ -27,10 +29,13 @@ func TeamAgents() []TeamAgent {
 			Model: map[string]any{"protocol": "openai-compatible", "capabilities": map[string]any{
 				"api": "openai-chat-completions-v1", "contextTokens": 128000, "outputTokens": 4096, "streaming": true, "toolCalling": true,
 			}},
+			// The lead may hand work to the writer and the reviewer. maxConcurrent and maxDepth of 1 allow one
+			// call at a time and one level of delegation.
 			Invokes: []any{
 				map[string]any{"agent": "writer", "maxConcurrent": 1, "maxDepth": 1},
 				map[string]any{"agent": "reviewer", "maxConcurrent": 1, "maxDepth": 1},
 			},
+			// A v2 policy that allows egress to one address and port. Import records it but does not enforce it.
 			Policy: map[string]any{
 				"version":              "agentsuite.policy/v2",
 				"network":              map[string]any{"egressAllow": []any{map[string]any{"address": "10.0.0.2", "protocol": "TCP", "port": 443}}},
@@ -66,6 +71,8 @@ func BuildTeam(agents []TeamAgent) Content {
 	var files Content
 	platform := map[string]any{"os": "linux", "architecture": "amd64"}
 	var agentRefs, compositionRefs []any
+	// For each agent, build its files from the leaves upward: instructions and policy first, then the agent
+	// manifest that pins their digests, then a composition that pins the agent.
 	for _, a := range agents {
 		instructions := []byte(a.Instructions)
 		manifest := map[string]any{
@@ -73,16 +80,19 @@ func BuildTeam(agents []TeamAgent) Content {
 			"id": a.ID, "description": a.Description, "model": a.Model,
 			"instructions": map[string]any{"path": "instructions/" + a.ID + ".md", "descriptor": descriptor(agentsuite.MediaTypeInstructions, instructions)},
 		}
+		// Optional fields are added only when set, so an agent without them has no empty key in its JSON.
 		if a.Invokes != nil {
 			manifest["invokes"] = a.Invokes
 		}
 		if a.Policy != nil {
 			policy := canonical(a.Policy)
 			path := "policies/" + a.ID + ".json"
+			// The descriptor media type says whether this is a v1 or v2 policy document.
 			manifest["policy"] = map[string]any{"path": path, "descriptor": descriptor(a.PolicyType, policy)}
 			files = append(files, File{Path: path, Data: policy})
 		}
 		agent := canonical(manifest)
+		// Each composition binds no tool providers, because the remote provider declared below cannot be bound.
 		composition := canonical(map[string]any{
 			"schemaVersion": agentsuite.SpecVersion, "mediaType": agentsuite.MediaTypeComposition,
 			"agent": a.ID, "platform": platform, "buildProfile": "default", "toolProviders": []any{},
@@ -99,15 +109,21 @@ func BuildTeam(agents []TeamAgent) Content {
 		)
 	}
 
+	// schemaRef stores a JSON Schema file and returns a reference to it. It appends to files as a side effect.
 	schemaRef := func(name string, data []byte) map[string]any {
 		path := "schemas/" + name + ".json"
 		files = append(files, File{Path: path, Data: data})
 		return map[string]any{"path": path, "descriptor": descriptor("application/schema+json", data)}
 	}
+	// delegated declares that a tool acts for the user with the given scope. The credential is supplied by
+	// the runtime through a named binding; the package never holds the credential itself.
 	delegated := func(scope string) map[string]any {
 		return map[string]any{"service": "search", "scope": scope,
 			"credential": map[string]any{"resolution": "runtime-brokered", "bindingRef": "search-delegated-connection"}}
 	}
+	// One remote MCP provider with two tools: a read-only search and a mutating action that needs approval.
+	// The endpoint, header secret, and network destination are names ("...Ref"), not real values; the
+	// environment resolves them later.
 	provider := canonical(map[string]any{
 		"schemaVersion": agentsuite.SpecVersion, "mediaType": agentsuite.MediaTypeToolProvider,
 		"id": "search", "version": "1.0.0", "retained": true, "protocol": "mcp", "revision": "2025-06-18",
@@ -136,6 +152,7 @@ func BuildTeam(agents []TeamAgent) Content {
 			"id": "search", "version": "1.0.0", "path": providerPath, "descriptor": descriptor(agentsuite.MediaTypeToolProvider, provider),
 		}},
 	})
+	// Reuse the build profile from the single-agent suite so both fixtures share the same placeholder images.
 	base := Build()
 	profile := base.Get("build-profiles/default.json")
 	suite, err := json.MarshalIndent(map[string]any{
@@ -160,7 +177,9 @@ func BuildTeam(agents []TeamAgent) Content {
 // carry secret slots.
 func TeamVariants() []Variant {
 	agents := TeamAgents()
+	// Call TeamAgents again for an independent copy, so changing withSecrets does not change agents.
 	withSecrets := TeamAgents()
+	// Index 1 is the writer. endpointEnv and secretRefs are allowed by the spec but name host secrets.
 	withSecrets[1].Model = map[string]any{
 		"model": ExecutionModel, "protocol": ExecutionProtocol, "endpointEnv": "WRITER_ENDPOINT", "secretRefs": []any{"writer-key"},
 	}

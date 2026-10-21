@@ -17,6 +17,8 @@ internal readonly struct J(JsonNode? node)
 
     public J this[string key] => new(node is { Kind: JsonKind.Object } ? node.Get(key) : null);
 
+    // The accessors below return Go zero values (empty string, 0, false, empty list) when the value is
+    // missing or of another kind, the same as reading an unset field of a decoded Go struct.
     public string S => node is { Kind: JsonKind.String } ? node.Text! : string.Empty;
 
     public long I => node is { Kind: JsonKind.Number } && long.TryParse(node.Text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value) ? value : 0;
@@ -38,6 +40,7 @@ internal readonly struct J(JsonNode? node)
     {
         get
         {
+            // Format is "os/architecture", plus "/variant" only when a variant is set (for example "linux/arm64/v8").
             var variant = this["variant"].S;
             var value = this["os"].S + "/" + this["architecture"].S;
             return variant.Length == 0 ? value : value + "/" + variant;
@@ -71,6 +74,7 @@ internal static class AgentSuiteTypes
     public const string OciIndexMediaType = "application/vnd.oci.image.index.v1+json";
     public const string ExecutionSharedSandbox = "shared-sandbox";
 
+    // Short names for the Go primitive types, so the struct definitions below read like the Go source.
     private static readonly GoPrim Str = new(GoPrimKind.String);
     private static readonly GoPrim Bool = new(GoPrimKind.Bool);
     private static readonly GoPrim Int = new(GoPrimKind.Int);
@@ -82,9 +86,12 @@ internal static class AgentSuiteTypes
     private static GoSlice SliceOf(GoType type) => new(type);
     private static GoPointer Ptr(GoType type) => new(type);
 
+    // Each field is declared with its JSON name and Go type, in the same order as the upstream struct.
     public static readonly GoStruct Descriptor = new GoStruct("Descriptor")
         .With("mediaType", Str).With("digest", Str).With("size", Int64).With("annotations", new GoMap(Str));
 
+    // A copy of Descriptor without its custom hook, used to finish decoding after the hook's own checks
+    // (like a Go type alias that avoids calling UnmarshalJSON again).
     private static readonly GoStruct DescriptorAlias = Descriptor.Wire("descriptorAlias");
 
     public static readonly GoStruct Platform = new GoStruct("Platform")
@@ -239,15 +246,19 @@ internal static class AgentSuiteTypes
 
     static AgentSuiteTypes()
     {
+        // Hooks act like Go UnmarshalJSON methods: they run extra checks when the decoder reaches that type.
+        // They are set here because some hooks refer to struct definitions declared above.
         Descriptor.Hook = DescriptorHook;
         ModelRequirement.Hook = node => WireHook(node, ModelRequirement, ModelRequirementChecks);
         InferenceRequirements.Hook = node => RequiredContract(node, InferenceRequirements, "api", "contextTokens", "outputTokens", "streaming", "toolCalling");
         ExecutionInput.Hook = node => RequiredContract(node, ExecutionInput, "name", "environment", "secret");
+        // The execution contract needs its required fields, and an optional "configuration" that is not empty.
         ExecutionContract.Hook = node => RequiredContract(node, ExecutionContract, "kind", "protocol", "port", "healthPath", "inputs")
             ?? (node.Has("configuration") && new J(node)["configuration"].S.Length == 0
                 ? GoDecodeError.Of("execution configuration must not be empty when present")
                 : null);
         ToolProvider.Hook = node => WireHook(node, ToolProvider, ToolProviderChecks);
+        // "execution" may be omitted, but an explicit null is rejected.
         BuildProfile.Hook = node => WireHook(node, BuildProfile, fields =>
             fields.Get("execution") is { IsNull: true } ? "build profile execution must not be null" : null);
         RuntimeProfile.Hook = node => WireHook(node, RuntimeProfile, RuntimeProfileChecks);
@@ -259,15 +270,19 @@ internal static class AgentSuiteTypes
     /// <summary>Upstream <c>Unmarshal(data, out)</c> (jsoncodec) on a nested value that already passed token checks.</summary>
     public static GoDecodeError? NestedUnmarshal(JsonNode node, GoType type)
     {
+        // First check the JSON kind of every field, then run the full Go decode for the remaining errors.
         if (AgentSuiteJson.ValidateJsonType(node, type) is { } fieldError)
             return GoDecodeError.Of(fieldError);
         return GoDecoder.DecodeError(node, type);
     }
 
+    // Upstream hooks also decode into map[string]json.RawMessage, which fails unless the value is an object.
     private static GoDecodeError? FieldMapError(JsonNode node) => node.Kind == JsonKind.Object
         ? null
         : new GoDecodeError { Value = node.GoValueName, TypeName = "map[string]json.RawMessage" };
 
+    // Shared hook shape: decode into the hook-free copy, then decode as a field map, then run type-specific checks.
+    // The order matters because Go returns the first error it hits, and error text must match upstream.
     private static GoDecodeError? WireHook(JsonNode node, GoStruct type, Func<JsonNode, string?> checks)
     {
         if (NestedUnmarshal(node, type.Wire("wire")) is { } error)
@@ -280,10 +295,12 @@ internal static class AgentSuiteTypes
     /// <summary>Upstream <c>decodeRequiredContract</c>.</summary>
     private static GoDecodeError? RequiredContract(JsonNode node, GoStruct type, params string[] required)
     {
+        // Same first two steps as WireHook.
         if (NestedUnmarshal(node, type.Wire("wire")) is { } error)
             return error;
         if (FieldMapError(node) is { } mapError)
             return mapError;
+        // Then every listed field must be present and not null. Go zero values cannot tell "missing" from "0".
         foreach (var name in required)
         {
             if (node.Get(name) is not { IsNull: false })
@@ -297,6 +314,7 @@ internal static class AgentSuiteTypes
     {
         if (FieldMapError(node) is { } mapError)
             return mapError;
+        // Reject unknown fields, then missing required fields, then null required fields, in upstream order.
         foreach (var (name, _) in node.Members!)
         {
             if (name is not ("mediaType" or "digest" or "size" or "annotations"))
@@ -313,11 +331,14 @@ internal static class AgentSuiteTypes
             if (node.Get(name)!.IsNull)
                 return GoDecodeError.Of($"descriptor field {Go.Quote(name)} must not be null");
         }
+        // "annotations" is optional, but if it is present it must not be null.
         if (node.Get("annotations") is { IsNull: true })
             return GoDecodeError.Of($"descriptor field {Go.Quote("annotations")} must not be null");
+        // All custom checks passed; finish with a normal decode into the hook-free copy.
         return GoDecoder.DecodeError(node, DescriptorAlias);
     }
 
+    // A model is either an exact model name or a capability request, never both and never neither.
     private static string? ModelRequirementChecks(JsonNode fields)
     {
         var hasModel = fields.Has("model");
@@ -326,6 +347,7 @@ internal static class AgentSuiteTypes
             return "model requires exactly one of model or capabilities";
         if (hasCapabilities && fields.Get("capabilities")!.IsNull)
             return "model capabilities must not be null";
+        // Capability requests are resolved by the deployment, so the package may not name an endpoint or secrets.
         if (hasCapabilities)
         {
             foreach (var name in new[] { "endpointEnv", "secretRefs" })
@@ -340,8 +362,10 @@ internal static class AgentSuiteTypes
     /// <summary>Upstream <c>requireExtensionCritical</c>.</summary>
     private static string? RequireExtensionCritical(JsonNode? raw)
     {
+        // A missing or non-array value is left for the normal type check to report.
         if (raw is null || raw.Kind != JsonKind.Array)
             return null;
+        // Every extension must say explicitly whether it is critical, so a reader knows if it may ignore it.
         for (var index = 0; index < raw.Items!.Count; index++)
         {
             var extension = raw.Items[index];
@@ -353,6 +377,8 @@ internal static class AgentSuiteTypes
         return null;
     }
 
+    // Upstream tool provider checks: extensions need "critical", "variants" cannot be an empty list,
+    // and a tool's "outputSchema" may be omitted but not set to null.
     private static string? ToolProviderChecks(JsonNode fields)
     {
         if (RequireExtensionCritical(fields.Get("extensions")) is { } extensionError)
@@ -372,16 +398,19 @@ internal static class AgentSuiteTypes
 
     private static string? RuntimeProfileChecks(JsonNode fields)
     {
+        // Step 1: every field is required and must not be null.
         foreach (var key in new[] { "schemaVersion", "mediaType", "id", "runtime", "harness", "renderer", "configurationABI", "imageRequired" })
         {
             if (fields.Get(key) is not { IsNull: false })
                 return $"runtime profile requires non-null {key}";
         }
+        // Step 2: each implementation object needs id, version and digest.
         foreach (var key in new[] { "runtime", "harness", "renderer" })
         {
             if (!ImplementationShape(fields.Get(key)!))
                 return $"runtime profile {key} requires id, version and digest";
         }
+        // Step 3: check the values (spec version, media type, identifiers, digests). One generic message, as upstream.
         var profile = new J(fields);
         if (profile["schemaVersion"].S != SpecVersion || profile["mediaType"].S != MediaTypeRuntimeProfile ||
             !Go.IdentifierPattern.IsMatch(profile["id"].S) || !Go.EvidenceToken(profile["id"].S) ||
@@ -399,6 +428,7 @@ internal static class AgentSuiteTypes
             return false;
         if (!node.Has("id") || !node.Has("version") || !node.Has("digest"))
             return false;
+        // No member may be null, including any extra members.
         return node.Members!.All(member => !member.Value.IsNull);
     }
 
@@ -410,6 +440,7 @@ internal static class AgentSuiteTypes
     {
         if (RequireExtensionCritical(fields.Get("extensions")) is { } extensionError)
             return extensionError;
+        // "runtimeProfiles" is optional. When present it must be a nonempty list of complete references.
         if (fields.Get("runtimeProfiles") is { } raw)
         {
             var refs = new J(raw);
@@ -417,6 +448,7 @@ internal static class AgentSuiteTypes
                 return "runtimeProfiles must be a nonempty array";
             foreach (var reference in refs.A)
             {
+                // The path must be a safe relative path inside the content layer.
                 if (AgentSuiteContent.ValidateContentPath(reference["path"].S, out _) is { } pathError)
                     return $"runtime profile reference path: {pathError}";
                 var descriptor = reference["descriptor"];
@@ -433,6 +465,7 @@ internal static class AgentSuiteTypes
     {
         if (fields.Get("runtimeProfile") is { } raw)
         {
+            // An explicit null decodes to the empty string in Go, which the identifier pattern then checks.
             if (raw.IsNull)
                 return Go.IdentifierPattern.IsMatch(string.Empty) ? null : "runtimeProfile must be a nonempty identifier";
             if (raw.Kind != JsonKind.String || !Go.IdentifierPattern.IsMatch(raw.Text!))

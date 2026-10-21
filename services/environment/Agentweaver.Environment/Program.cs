@@ -94,6 +94,10 @@ builder.Services.AddScoped<
     EnvironmentRuntimeBootstrapProfileReplacementStore>();
 builder.Services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
 builder.Services.AddScoped<RemoteMcpConnectionStore>();
+// The trusted transport registers the production discovery source; without it discovery fails with 503.
+Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions
+    .TryAddSingleton<IRemoteMcpDiscoverySource, UnavailableRemoteMcpDiscoverySource>(builder.Services);
+builder.Services.AddScoped<RemoteMcpDiscoveryService>();
 builder.AddRemoteMcpTrustedServiceTls();
 var remoteMcpCurrentCallVerificationEnabled =
     builder.AddRemoteMcpCurrentCallVerification(authorityUri.AbsoluteUri);

@@ -52,6 +52,19 @@ public sealed class UserNotificationContractTests
         Assert.NotEqual(first, UserNotificationStore.NotificationId("project-a", "run-a", "request-b"));
     }
 
+    [Fact]
+    public void PromotionIdentityIsStablePerPromotionAndNeverMatchesAGateId()
+    {
+        // A fixed promotion is repeatable, while a new promotion or source must get a different hash.
+        var promotion = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
+        var first = UserNotificationStore.PromotionNotificationId("project-a", "run-a", promotion);
+        Assert.Equal(first, UserNotificationStore.PromotionNotificationId("project-a", "run-a", promotion));
+        Assert.NotEqual(first, UserNotificationStore.PromotionNotificationId("project-a", "run-a", Guid.NewGuid()));
+        Assert.NotEqual(first, UserNotificationStore.PromotionNotificationId("project-b", "run-a", promotion));
+        Assert.NotEqual(first, UserNotificationStore.NotificationId("project-a", "run-a", promotion.ToString()));
+        Assert.Equal(TimeSpan.FromHours(24), UserNotificationStore.BacklogPromotedWindow);
+    }
+
     [Theory]
     [InlineData("not-json")]
     [InlineData("null")]

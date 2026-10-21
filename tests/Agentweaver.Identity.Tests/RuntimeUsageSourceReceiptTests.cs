@@ -1371,6 +1371,116 @@ public sealed class RuntimeUsageSourceReceiptTests
                 RuntimeUsageSourceReceiptContract.ValidateUsage(registration, invalid));
     }
 
+    private static RuntimeUsageSourceReceipt AzureByokReceipt(string providerType = "azure")
+    {
+        // Start from a valid hosted receipt and convert it to BYOK so every unrelated field stays valid.
+        var hosted = Receipt();
+        // The owner's registration pins BYOK with the requested provider type. The pin's model ID becomes
+        // the deployment ID that the SDK source must report.
+        var registration = hosted.Registration with
+        {
+            Binding = hosted.Registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = new(1, hosted.Usage.SdkSource!.ModelSelectionReference,
+                    hosted.Usage.SdkSource.ModelId, ModelSourceMode.Byok, "byok-bindings-v1", new string('a', 64))
+                {
+                    ProviderType = providerType
+                }
+            }
+        };
+        // The SDK source agrees with the pin: BYOK tokens meter, no hosted multiplier, the same deployment,
+        // and the same configuration hash.
+        var source = hosted.Usage.SdkSource! with
+        {
+            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null,
+            ByokProvider = new(providerType, hosted.Usage.SdkSource.ModelId, new string('a', 64)),
+            ModelBindingPin = registration.Binding.ModelBindingPin,
+            ResolvedModelBindingPin = registration.Binding.ModelBindingPin
+        };
+        // A fresh SDK event ID gives each receipt its own usage event ID.
+        var eventId = Guid.NewGuid().ToString("D");
+        var observation = new SdkUsageObservation(
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, eventId),
+            eventId, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
+            17, 11, null, null, null, null, 12.5m);
+        // Keep the hosted receipt's dispatch message ID so the default receipt is dispatch-correlated.
+        var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation) with
+        {
+            A2AMessageId = hosted.Usage.A2AMessageId
+        };
+        return new(1, Guid.NewGuid(), registration, usage,
+            RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
+    }
+
+    // Recomputes the payload hash after a test edits a field. The receipt then passes the hash check, so
+    // the Azure-specific rule is what rejects it, not the hash.
+    private static RuntimeUsageSourceReceipt Reseal(RuntimeUsageSourceReceipt receipt) =>
+        receipt with { CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, receipt.Usage) };
+
+    [Fact]
+    public void TrustedAzureByokProvenanceReturnsDispatchAndPinnedConfiguration()
+    {
+        var receipt = AzureByokReceipt();
+        Assert.True(RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt));
+
+        var trusted = RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt);
+
+        // Each returned fact comes from the receipt or the owner's pin, not from new input.
+        Assert.Equal(receipt.ReceiptId, trusted.SourceReceiptId);
+        Assert.Equal(receipt.Registration.RuntimeInstanceId, trusted.RuntimeInstanceId);
+        Assert.Equal(receipt.Registration.Revision, trusted.RegistrationRevision);
+        Assert.Equal(receipt.Usage.A2AMessageId, trusted.DispatchId);
+        Assert.Equal(receipt.Usage.ModelBinding.ModelId, trusted.DeploymentId);
+        Assert.Equal("byok-bindings-v1", trusted.ConfigurationRevision);
+        Assert.Equal(new string('a', 64), trusted.ConfigurationHash);
+        Assert.Equal(receipt.CanonicalPayloadHash, trusted.SourcePayloadHash);
+    }
+
+    [Fact]
+    public void TrustedAzureByokProvenanceRejectsOtherProvidersHostedUsageAndTampering()
+    {
+        var receipt = AzureByokReceipt();
+        // Another BYOK provider doesn't claim Azure and isn't trusted as Azure.
+        var openAi = AzureByokReceipt("openai");
+        Assert.False(RuntimeUsageSourceReceiptContract.ClaimsAzureByok(openAi));
+        Assert.Equal("runtime_byok_azure_provenance_invalid", Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(openAi)).Code);
+        // Hosted Copilot usage isn't BYOK.
+        Assert.Equal("runtime_byok_azure_provenance_invalid", Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(Receipt())).Code);
+        // A payload hash that doesn't match the content fails validation.
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt with { CanonicalPayloadHash = new string('c', 64) }));
+        // The empty GUID isn't a dispatch ID.
+        Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(
+            Reseal(receipt with { Usage = receipt.Usage with { A2AMessageId = Guid.Empty } })));
+        // Usage without a dispatch ID passes the source check, which lets Events record it as Unpriced,
+        // but it fails the dispatch-level check that pricing requires.
+        var uncorrelated = Reseal(receipt with { Usage = receipt.Usage with { A2AMessageId = null } });
+        RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(uncorrelated);
+        Assert.Equal("runtime_byok_azure_provenance_invalid", Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(uncorrelated)).Code);
+        Assert.Equal("runtime_byok_azure_provenance_invalid", Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(openAi)).Code);
+        var source = receipt.Usage.SdkSource!;
+        // Each edit changes one SDK source fact so it no longer matches the pin: a foreign deployment, a
+        // different configuration, or a non-Azure provider. The receipt is resealed, so the edit itself is
+        // what fails, with or without a dispatch ID.
+        foreach (var tampered in new[]
+        {
+            source with { ByokProvider = source.ByokProvider! with { DeploymentId = "foreign" } },
+            source with { ByokProvider = source.ByokProvider! with { ConfigurationHash = new string('b', 64) } },
+            source with { ByokProvider = source.ByokProvider! with { Type = "openai" } }
+        })
+        {
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(
+                Reseal(receipt with { Usage = receipt.Usage with { SdkSource = tampered } })));
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(
+                Reseal(uncorrelated with { Usage = uncorrelated.Usage with { SdkSource = tampered } })));
+        }
+    }
+
     private static string LegacyHash(RuntimeRegistration registration, UsageSubmission usage)
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)

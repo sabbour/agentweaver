@@ -615,6 +615,8 @@ public static class ProjectConfigEndpoints
             }
         }).WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
 
+        // Validates an AgentSuite archive and stages its agents as one casting proposal. The 24 MiB request
+        // limit fits a 16 MiB archive after base64 encoding (about 21.3 MiB) plus the JSON fields around it.
         projects.MapPost("/{projectId}/agentsuite-imports", async (
             string projectId,
             ImportProjectAgentSuiteRequest request,
@@ -625,13 +627,16 @@ public static class ProjectConfigEndpoints
         {
             try
             {
+                // Import results include proposal data, so proxies and browsers must not cache them.
                 context.Response.Headers.CacheControl = "no-store";
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
+                // The object store is optional in this service. Without it there is nowhere to keep blobs: 503.
                 var store = context.RequestServices.GetService<IObjectStore>()
                     ?? throw AgentSuiteStoreUnavailable();
                 var result = await service.ImportAgentSuiteAsync(
                     caller, projectId, request, store, cancellationToken).ConfigureAwait(false);
+                // No proposal means every agent already exists unchanged: 200. Otherwise 201 with the proposal URL.
                 return result.Proposal is null
                     ? Results.Ok(result)
                     : Results.Created(
@@ -640,6 +645,7 @@ public static class ProjectConfigEndpoints
             }
             catch (AgentSuiteImportRejectedException exception)
             {
+                // Invalid archive: 422 with every validation error line, so the author can fix them all at once.
                 return Results.Problem(
                     title: "agentsuite_invalid",
                     detail: exception.Message,
@@ -652,10 +658,12 @@ public static class ProjectConfigEndpoints
             }
             catch (ProjectConfigException exception)
             {
+                // Authorization, stale revision, conflict and storage errors keep their own status code.
                 return ToProblem(exception);
             }
         }).WithMetadata(new RequestSizeLimitAttribute(24 * 1024 * 1024));
 
+        // Read-only: returns the stored import record. The service checks the caller's read role.
         projects.MapGet("/{projectId}/agentsuite-imports/{sourceIdentity}", async (
             string projectId,
             string sourceIdentity,
@@ -680,6 +688,7 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        // Read-only: returns the policy bound to one imported agent. Reading it never enforces it.
         projects.MapGet("/{projectId}/agentsuite-agents/{effectiveAgentId}/policy", async (
             string projectId,
             string effectiveAgentId,
@@ -775,6 +784,32 @@ public static class ProjectConfigEndpoints
                     return ToProblem(exception);
                 }
             });
+
+        // Returns the current project-scope spend budgets for one accepted run. Orchestrator calls this before
+        // each new dispatch.
+        projects.MapGet("/{projectId}/runs/{runId}/spend-budgets", async (
+            string projectId,
+            string runId,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                // Budgets can change at any time, so no cache may keep an older answer.
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.GetCurrentProjectSpendBudgetsAsync(
+                    caller, projectId, runId, cancellationToken).ConfigureAwait(false));
+            }
+            // Map known configuration errors, such as 403, 404, and 409, to problem responses.
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
 
         var platform = app.MapGroup("/api/platform/runtime-defaults").RequireAuthorization();
         platform.MapGet("/", async (
@@ -884,6 +919,7 @@ public static class ProjectConfigEndpoints
             extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
 
     // Retained AgentSuite blobs need the optional object store (ProjectsConfig:SkillContent:ContainerUri).
+    // 503 tells the caller this is a deployment setting, not a problem with the request.
     private static ProjectConfigException AgentSuiteStoreUnavailable() =>
         new("agentsuite_store_unavailable",
             "AgentSuite import needs object storage. Configure ProjectsConfig:SkillContent:ContainerUri.",

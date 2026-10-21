@@ -678,6 +678,18 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                 .SingleAsync(item => item.ConnectionId == ConnectionId);
             Assert.Equal(saved.ConnectionRevision, replayed.ConnectionRevision);
             Assert.Equal(saved.CredentialRevision, replayed.CredentialRevision);
+
+            var validity = await service.EvaluateCredentialValidityAsync(
+                Actor(), Issuer, ActorId, ConnectionId,
+                new RemoteMcpCredentialValidityRequest(
+                    replayed.ConfigurationRevision, replayed.EnvironmentConfigurationHash),
+                CancellationToken.None);
+
+            Assert.False(validity.Valid);
+            Assert.Equal(RemoteMcpCredentialDenial.Disconnected, validity.Denial);
+            Assert.Null(validity.ExpiresAt);
+            Assert.Empty(secrets.RedeemedReferences);
+            Assert.Empty(providerHandler.Requests);
         }
     }
 
