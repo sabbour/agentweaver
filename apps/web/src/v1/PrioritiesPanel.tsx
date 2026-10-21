@@ -96,6 +96,7 @@ function isRevisionConflict(error: unknown): boolean {
 function writeErrorText(error: unknown): string {
   const code = errorCode(error);
   if (code === 'priority_link_exists') return 'This link is already on the Priority.';
+  if (code === 'database_update_pending') return 'Database update pending. This link was not saved. Try again after the update.';
   if (code === 'priority_limit_reached') return 'You reached the Priority limit. Drop or remove one first.';
   // Any other limit code is a per-Priority limit, such as too many links or checklist items.
   if (code?.endsWith('_limit_reached')) return 'This Priority reached its limit for that item.';
@@ -426,7 +427,8 @@ function PriorityItem({ priority, index, count, notice, orderBusy, projects, pro
             : <LinkSummary link={link} projectNames={projectNames} />}
           {link.access === 'available' && link.projectId && link.number !== undefined &&
             (link.kind === 'issue' || link.kind === 'pull_request') && (
-            <PrioritySourceControl projectId={link.projectId} kind={link.kind} number={link.number} />
+            <PrioritySourceControl projectId={link.projectId} kind={link.kind} number={link.number}
+              providerId={link.providerId} repository={link.repository} />
           )}
           {link.access === 'available' && link.projectId && link.runId && (link.kind === 'run' || link.kind === 'conversation') && (
             <Button size="small" appearance="secondary" onClick={() => navigate(runPath(link.projectId!, link.runId!))}>Open</Button>
@@ -595,8 +597,8 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
       {kind === 'conversation' && available.length === 0 && <Text className={styles.meta}>No conversations to link.</Text>}
       {(kind === 'issue' || kind === 'pull_request') && projectId && <PrioritySourceControl
         projectId={projectId} kind={kind} busy={busy}
-        onSelect={(number) => void run((token, tenant) => gatewayClient.addChiefOfStaffPriorityLink(
-          token, priority.priorityId, { expectedRevision: priority.revision, kind, projectId, number }, tenant,
+        onSelect={(target) => run((token, tenant) => gatewayClient.addChiefOfStaffPriorityLink(
+          token, priority.priorityId, { expectedRevision: priority.revision, kind, projectId, ...target }, tenant,
         )).then((saved) => { if (saved) setOpen(false); })}
       />}
       {kind === 'artifact' && projectId && runId && <OutputCaptureBrowser

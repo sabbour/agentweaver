@@ -13,6 +13,7 @@ import { ErrorNotice, Loading } from './pageParts';
 type Kind = 'issue' | 'pull_request';
 type RecordRow = ProjectIssueSummary | ProjectPullRequestSummary;
 type StateFilter = 'open' | 'closed' | 'merged' | 'all';
+export type PriorityRepositoryTarget = Pick<RecordRow, 'providerId' | 'repository' | 'number'>;
 
 /** Repository identity is part of the selection, because numbers alone are not globally unique. */
 function rowKey(row: RecordRow): string {
@@ -29,9 +30,11 @@ interface Props {
   projectId: string;
   kind: Kind;
   busy?: boolean;
-  onSelect?: (number: number) => void;
+  onSelect?: (target: PriorityRepositoryTarget) => void | Promise<void>;
   /** A saved link is resolved again through the same authorized list, not cached metadata. */
   number?: number;
+  providerId?: string;
+  repository?: { owner: string; name: string };
 }
 
 /** Removes all old rows immediately when the project, identity or authority changes. */
@@ -57,7 +60,7 @@ function ScopedSourceControl(props: Props) {
   </section>;
 }
 
-function SourceControlPage({ projectId, kind, filter, onSelect, busy, number }: Props & { filter: StateFilter }) {
+function SourceControlPage({ projectId, kind, filter, onSelect, busy, number, providerId, repository }: Props & { filter: StateFilter }) {
   const { apiCall } = useAuth();
   const [rows, setRows] = useState<RecordRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -117,36 +120,19 @@ function SourceControlPage({ projectId, kind, filter, onSelect, busy, number }: 
   }, [read]);
 
   const chosen = rows.find((row) => rowKey(row) === picked);
-  const matches = rows.filter((row) => row.number === number);
-  // A saved number has no repository identity. Inspect every page before opening it.
-  const saved = !cursor && matches.length === 1 ? matches[0] : undefined;
+  const hasIdentity = providerId !== undefined && repository !== undefined;
+  const matches = rows.filter((row) => row.number === number && (!hasIdentity ||
+    (row.providerId === providerId && row.repository.owner === repository?.owner && row.repository.name === repository?.name)));
+  // New links identify one exact repository. Legacy numbers need every page checked.
+  const saved = (hasIdentity || !cursor) && matches.length === 1 ? matches[0] : undefined;
   const verifyAndSelect = async () => {
     if (!chosen || checkingRef.current) return;
     checkingRef.current = true;
     setChecking(true);
     setError(null);
     try {
-      // The Priority contract saves only a number. Check every repository and state
-      // so a second repository's identical number can never reopen the wrong item.
-      let next: string | null = null;
-      const seen = new Set<string>();
-      const candidates = new Map<string, RecordRow>();
-      do {
-        const page = await apiCall<ProjectIssuePage | ProjectPullRequestPage>((token, tenant) => kind === 'issue'
-          ? gatewayClient.listProjectIssues(token, projectId, { state: 'all', cursor: next, pageSize: 25 }, tenant)
-          : gatewayClient.listProjectPullRequests(token, projectId, { state: 'all', cursor: next, pageSize: 25 }, tenant), null);
-        if (!active.current) return;
-        for (const row of page.items)
-          if (row.number === chosen.number) candidates.set(rowKey(row), row);
-        next = page.nextCursor;
-        if (next && seen.has(next)) throw new Error('The service repeated a page. Refresh the list and try again.');
-        if (next) seen.add(next);
-      } while (next);
-      if (candidates.size > 1)
-        throw new Error('More than one repository has this number. The link cannot identify its target and was not saved.');
-      if (candidates.size !== 1 || !candidates.has(rowKey(chosen)))
-        throw new Error('This record is no longer in the stored list. The link was not saved. Refresh and choose again.');
-      onSelect?.(chosen.number);
+      // Save the exact authorized selection. The owner rechecks project access on write.
+      await onSelect?.({ providerId: chosen.providerId, repository: chosen.repository, number: chosen.number });
     } catch (reason) {
       if (!active.current) return;
       // Failed verification must remove every old choice, including protected titles.
@@ -176,7 +162,7 @@ function SourceControlPage({ projectId, kind, filter, onSelect, busy, number }: 
         </Select>
       </Field>}
       {onSelect && <Button appearance="primary" disabled={!chosen || loading || checking || busy}
-        onClick={() => void verifyAndSelect()}>{checking ? 'Checking link…' : `Link ${label.toLowerCase()}`}</Button>}
+        onClick={() => void verifyAndSelect()}>{checking ? 'Saving link…' : `Link ${label.toLowerCase()}`}</Button>}
     </> : saved ? <Text>
       {saved.repository.owner}/{saved.repository.name} #{saved.number} · {saved.title || label} · Stored state: {saved.state}{' '}
       {url && <a href={url} target="_blank" rel="noopener noreferrer">Open {label.toLowerCase()}</a>}

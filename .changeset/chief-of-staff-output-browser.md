@@ -21,8 +21,9 @@ filters, paging, explicit read failures and access-loss clearing. Reopen saved
 links from authorized records without typed navigation IDs. Keep the canonical
 project operations and metrics surfaces alongside private conversations,
 Priorities and the retained file viewer.
-Check every stored page before saving number-only repository links, and refuse
-ambiguous targets rather than opening the wrong repository. Reset gate-version
+Keep the provider and repository with new issue and pull request links, so equal
+numbers in different repositories reopen correctly. Check every stored page for
+legacy number-only links and refuse ambiguous targets. Reset gate-version
 review when another notification opens the same request.
 Keep gate counts separate from task notices and compare retained file components
 at the same desktop and mobile widths in screenshot evidence.

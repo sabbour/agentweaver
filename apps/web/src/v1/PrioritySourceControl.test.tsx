@@ -52,7 +52,9 @@ describe('Priority source control choices', () => {
       target: { value: JSON.stringify(['github', 'octo', 'api', 41]) },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Link issue' }));
-    await waitFor(() => expect(select).toHaveBeenCalledExactlyOnceWith(41));
+    await waitFor(() => expect(select).toHaveBeenCalledExactlyOnceWith({
+      number: 41, providerId: 'github', repository: { owner: 'octo', name: 'api' },
+    }));
   });
 
   it('distinguishes unavailable pull request storage from an empty stored list', async () => {
@@ -98,40 +100,45 @@ describe('Priority source control choices', () => {
       'unbound', 'p1', { state: 'all', cursor: null, pageSize: 25 }, 'tenant-1');
   });
 
-  it('refuses a number shared by repositories, even on another page or in another state', async () => {
+  it('saves the selected repository when two repositories share a number', async () => {
     const other = { ...issue(42), repository: { owner: 'other', name: 'repo' }, state: 'closed' as const };
-    let finish!: (value: ProjectIssuePage) => void;
-    vi.mocked(gatewayClient.listProjectIssues)
-      .mockResolvedValueOnce(page([issue(42)]))
-      .mockResolvedValueOnce(page([issue(42)], 'next'))
-      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    vi.mocked(gatewayClient.listProjectIssues).mockResolvedValueOnce(page([issue(42), other]));
     const select = vi.fn();
     render(<PrioritySourceControl projectId="p1" kind="issue" onSelect={select} />);
-    await screen.findByRole('option', { name: /Fix 42/ });
+    await screen.findByRole('option', { name: /other\/repo/ });
     fireEvent.change(screen.getByLabelText('Issue'), {
-      target: { value: JSON.stringify(['github', 'octo', 'api', 42]) },
+      target: { value: JSON.stringify(['github', 'other', 'repo', 42]) },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Link issue' }));
-    await waitFor(() => expect(finish).toBeDefined());
-    // The unchecked final page is not proof that the number is unique.
-    expect(select).not.toHaveBeenCalled();
-    await act(async () => { finish(page([other])); });
-    await screen.findByText('More than one repository has this number. The link cannot identify its target and was not saved.');
-    expect(select).not.toHaveBeenCalled();
-    expect(screen.queryByRole('option', { name: /Fix 42/ })).toBeNull();
-    expect(gatewayClient.listProjectIssues).toHaveBeenLastCalledWith(
-      'unbound', 'p1', { state: 'all', cursor: 'next', pageSize: 25 }, 'tenant-1');
+    await waitFor(() => expect(select).toHaveBeenCalledExactlyOnceWith({
+      number: 42, providerId: 'github', repository: other.repository,
+    }));
   });
 
   it('never reopens the first repository when another page makes the saved number ambiguous', async () => {
+    let finish!: (value: ProjectIssuePage) => void;
     vi.mocked(gatewayClient.listProjectIssues)
       .mockResolvedValueOnce(page([issue(42)], 'next'))
-      .mockResolvedValueOnce(page([{ ...issue(42), repository: { owner: 'other', name: 'repo' } }]));
+      .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     render(<PrioritySourceControl projectId="p1" kind="issue" number={42} />);
     await screen.findByRole('button', { name: 'Load more issues' });
     expect(screen.queryByRole('link', { name: 'Open issue' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Load more issues' }));
+    await waitFor(() => expect(finish).toBeDefined());
+    // An unchecked page must never count as proof that the legacy number is unique.
+    expect(screen.queryByRole('link', { name: 'Open issue' })).toBeNull();
+    await act(async () => { finish(page([{ ...issue(42), repository: { owner: 'other', name: 'repo' } }])); });
     await screen.findByText('More than one repository has this number. This link cannot identify its target.');
     expect(screen.queryByRole('link', { name: 'Open issue' })).toBeNull();
+  });
+
+  it('reopens the saved repository identity, not the first number match', async () => {
+    vi.mocked(gatewayClient.listProjectIssues).mockResolvedValueOnce(page([
+      issue(42), { ...issue(42), repository: { owner: 'other', name: 'repo' } },
+    ]));
+    render(<PrioritySourceControl projectId="p1" kind="issue" number={42}
+      providerId="github" repository={{ owner: 'other', name: 'repo' }} />);
+    expect((await screen.findByRole('link', { name: 'Open issue' })).getAttribute('href'))
+      .toBe('https://github.com/other/repo/issues/42');
   });
 });

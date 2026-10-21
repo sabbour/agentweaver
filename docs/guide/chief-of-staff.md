@@ -43,8 +43,8 @@ Each link names one item in a project the user can read:
 | --- | --- |
 | `run` | A run in the project. |
 | `conversation` | One of the user's Chief of Staff conversations. |
-| `issue` | An issue number. |
-| `pull_request` | A pull request number. |
+| `issue` | Provider, repository owner/name, and issue number. |
+| `pull_request` | Provider, repository owner/name, and pull request number. |
 | `artifact` | An artifact in a run. |
 
 Reads show the current state of run and conversation links. The Priority
@@ -166,12 +166,13 @@ you send appears in **Messages** after the agent records it.
   Older targets may require **Load more** before they can be reopened.
   Changing identity, project or state discards the old choices. A denied read
   removes titles and navigation links but leaves the user's Priority intact.
-- Issue and pull request links currently save a number, not a repository identity.
-  Before saving, the client checks every stored page and state for that number.
-  If it appears in more than one repository, saving fails rather than selecting
-  the wrong item. Reopening also waits until every page has been loaded and
-  refuses an ambiguous number. Exact links across repositories with the same
-  number require repository identity in the saved-link contract.
+- New issue and pull request links save the selected provider, repository owner
+  and name, and number. Two repositories can use the same number without changing
+  where either link opens. Before the database update is applied, saving shows
+  **Database update pending** and leaves the Priority unchanged.
+- Older number-only links are not rewritten. Reopening waits until every stored
+  page has been loaded. If more than one repository has that number, the app
+  explains that it cannot identify the target and offers no navigation link.
 - Run and conversation links show the run state. A link you can't read shows
   **Unavailable** and its kind only. A deleted target shows **Not found**.
 
@@ -241,6 +242,31 @@ Orchestrator migration 024 creates the Chief of Staff tables, and
 `infra/bicep/postgres-runtime-grants.sql` grants the runtime role access. Apply
 both through the reviewed PostgreSQL plan. For steps, see
 [Deploy Agentweaver to Azure](./deploy-to-azure.md).
+
+Core migration 033 adds nullable repository identity columns and two partial
+unique indexes to existing Priority links. It preserves every existing row
+and removes only the obsolete number-only index after its replacements exist.
+It runs in the migrator transaction and can block link writes while it validates
+and builds the indexes. Existing runtime table grants remain sufficient.
+It does not apply or require optional PR-recording migration 032.
+
+Deploy the owner built from this source before applying 033. Its startup and
+readiness checks accept the complete schema through 031, with optional 032
+and optional 033. On 031, existing operations work, while new issue/PR link
+saves return `503 database_update_pending`. On 033, repository-aware links work.
+Do not roll back to an older owner after 033: older images reject that unknown
+schema version. Rolling back to this compatible owner works on either shape.
+
+| Owner image family | Schema through 031 | Schema with 033 |
+| --- | --- | --- |
+| Before repository-identity support | Ready | Not supported; startup/readiness reject the unknown version |
+| Repository-identity compatible source | Ready; repository link saves wait for the update | Ready; full repository link behavior |
+
+The machine-readable contract is
+`services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json`.
+Its required, optional and default-apply version lists describe this image's
+behavior. The P1 plan includes 033 but skips 017 and 032; regenerating the plan
+changes its hash. Schema compatibility is not permission to apply the plan.
 
 ## Related content
 

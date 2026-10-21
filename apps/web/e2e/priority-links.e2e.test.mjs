@@ -27,6 +27,9 @@ for (const kind of ['issue', 'pull_request']) {
         : { runId: 'r-1', htmlUrl: `https://github.com/octo/api/pull/${26 - index}`, headBranch: 'fix', baseBranch: 'main',
           headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), disposition: 'created', recordedAt: NOW, updatedAt: NOW }),
     }));
+    // Two repositories use number 1. Saving must retain the selected repository.
+    records.push({ ...records[25], repository: { owner: 'other', name: 'repo' },
+      title: `Other repository ${label.toLowerCase()}`, ...(kind === 'pull_request' ? { htmlUrl: 'https://github.com/other/repo/pull/1' } : {}) });
     const app = await openApp({
       origin: server.origin,
       seed: {
@@ -44,27 +47,58 @@ for (const kind of ['issue', 'pull_request']) {
       await form.getByLabel('Link type').selectOption(kind);
       await form.getByRole('option', { name: new RegExp(`Stored ${label.toLowerCase()} 26`) }).waitFor({ state: 'attached' });
       await form.getByRole('button', { name: `Load more ${path === 'issues' ? 'issues' : 'pull requests'}` }).click();
-      await form.getByLabel(label, { exact: true }).selectOption(JSON.stringify(['github', 'octo', 'api', 1]));
+      await form.getByLabel(label, { exact: true }).selectOption(JSON.stringify(['github', 'other', 'repo', 1]));
       if (evidence) {
         await mkdir(evidence, { recursive: true });
         await form.screenshot({ path: join(evidence, `pr-${path}-picker-new-gateway-adapter.png`) });
       }
+      // A rolling-compatible owner stays ready before the schema update, but cannot lose identity.
+      app.gateway.failNext('POST', '/api/v1/chief-of-staff/priorities/pri-a/links', {
+        status: 503, body: { error: 'database_update_pending' },
+      });
+      await form.getByRole('button', { name: `Link ${label.toLowerCase()}`, exact: true }).click();
+      await row.getByText('Database update pending. This link was not saved. Try again after the update.').waitFor();
+      assert.equal(app.gateway.state.priorities[0].links.length, 0);
       await form.getByRole('button', { name: `Link ${label.toLowerCase()}`, exact: true }).click();
       await row.getByRole('button', { name: `Remove link: ${label}` }).waitFor();
       const saved = app.gateway.state.priorities[0].links[0];
       assert.equal(saved.kind, kind);
       assert.equal(saved.number, 1);
       assert.equal(saved.projectId, 'p1');
+      assert.equal(saved.providerId, 'github');
+      assert.deepEqual(saved.repository, { owner: 'other', name: 'repo' });
       // Saving a link may only mutate the caller's Priority, never provider or run state.
       assert.ok(app.gateway.writes().every((request) => request.url.pathname.startsWith('/api/v1/chief-of-staff/priorities')));
 
       await page.reload();
-      const savedList = row.getByRole('region', { name: kind === 'issue' ? 'Stored issues' : 'Stored pull requests' });
+      const savedList = row.getByRole('region', { name: kind === 'issue' ? 'Stored issues' : 'Stored pull requests' }).first();
       await savedList.getByRole('button', { name: /^Load more/ }).click();
       const open = savedList.getByRole('link', { name: `Open ${label.toLowerCase()}` });
       await open.waitFor();
-      assert.equal(await open.getAttribute('href'), `https://github.com/octo/api/${kind === 'issue' ? 'issues' : 'pull'}/1`);
+      const target = `https://github.com/other/repo/${kind === 'issue' ? 'issues' : 'pull'}/1`;
+      assert.equal(await open.getAttribute('href'), target);
+      // Follow the real navigation link, intercepting only the external test destination.
+      await page.context().route(target, (route) => route.fulfill({ contentType: 'text/html', body: '<h1>Selected repository target</h1>' }));
+      const popupPromise = page.waitForEvent('popup');
+      await open.click();
+      const popup = await popupPromise;
+      await popup.getByRole('heading', { name: 'Selected repository target' }).waitFor();
+      assert.equal(popup.url(), target);
+      await popup.close();
       if (evidence) await row.screenshot({ path: join(evidence, `pr-${path}-saved-link-new-gateway-adapter.png`) });
+
+      // A pre-upgrade number-only link remains intact but may never guess between repositories.
+      app.gateway.state.priorities[0].links.push({ ...saved, linkId: 'legacy-number-only',
+        providerId: undefined, repository: undefined });
+      await page.reload();
+      await savedList.getByRole('button', { name: /^Load more/ }).click();
+      await savedList.getByRole('link', { name: `Open ${label.toLowerCase()}` }).waitFor();
+      const legacy = row.getByRole('region', { name: kind === 'issue' ? 'Stored issues' : 'Stored pull requests' }).nth(1);
+      await legacy.getByRole('button', { name: /^Load more/ }).waitFor();
+      assert.equal(await legacy.getByRole('link').count(), 0, 'an unchecked page is not uniqueness proof');
+      await legacy.getByRole('button', { name: /^Load more/ }).click();
+      await legacy.getByText('More than one repository has this number. This link cannot identify its target.').waitFor();
+      assert.equal(await legacy.getByRole('link').count(), 0);
 
       // A denied reread must remove metadata and the external navigation target.
       app.gateway.failNext('GET', `/api/v1/projects/p1/source-control/${path}`, {

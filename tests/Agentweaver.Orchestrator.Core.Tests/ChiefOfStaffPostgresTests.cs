@@ -171,6 +171,62 @@ public sealed class ChiefOfStaffPostgresTests(CoordinationPostgresFixture fixtur
             other, Tenant, priority.PriorityId, new(priority.Revision, "Taken", null, null, null), default));
     }
 
+    [Theory]
+    [InlineData("issue")]
+    [InlineData("pull_request")]
+    public async Task RepositoryIdentitySurvivesReceiptsReloadAndPermissionLoss(string kind)
+    {
+        var (priority, _) = await _store.CreatePriorityAsync(_actor, Tenant, "repository-links", new("Ship", null, null), default);
+        // Number 42 in each repository is a separate target, not a duplicate.
+        foreach (var repository in new[] { new ProjectSourceControlRepository("octo", "api"), new("other", "repo") })
+            priority = await _store.AddLinkAsync(_actor, Tenant, priority.PriorityId,
+                new(priority.Revision, kind, Project, null, null, 42, null, "github", repository), default);
+        Assert.Equal(2, priority.Links.Length);
+        Assert.All(priority.Links, link => Assert.Equal("github", link.ProviderId));
+        var reloaded = await new ChiefOfStaffStore(fixture.DataSource, _schema)
+            .GetPriorityAsync(_actor, Tenant, priority.PriorityId, default);
+        Assert.Equal(priority.Links, reloaded!.Links);
+        var listed = await _store.ListPrioritiesAsync(_actor, Tenant, default);
+        Assert.Equal(priority.Links, Assert.Single(listed.Items).Links);
+        await AssertCodeAsync("priority_link_exists", () => _store.AddLinkAsync(_actor, Tenant, priority.PriorityId,
+            new(priority.Revision, kind, Project, null, null, 42, null, "github", new("other", "repo")), default));
+
+        // New writes must identify a repository; legacy rows stay readable without a guessed identity.
+        await AssertCodeAsync("priority_link_invalid", () => _store.AddLinkAsync(_actor, Tenant, priority.PriorityId,
+            new(priority.Revision, kind, Project, null, null, 43, null), default));
+        await ExecuteAsync($"""
+            INSERT INTO "{_schema}".chief_of_staff_priority_links
+                (priority_id, link_id, kind, project_id, item_number)
+            VALUES ('{priority.PriorityId}', 'legacy-link', '{kind}', '{Project}', 42)
+            """);
+        var legacyRead = await _store.GetPriorityAsync(_actor, Tenant, priority.PriorityId, default);
+        var legacy = Assert.Single(legacyRead!.Links, link => link.LinkId == "legacy-link");
+        Assert.Null(legacy.ProviderId);
+        Assert.Null(legacy.Repository);
+        // Legacy uniqueness stays independent of identified targets with the same number.
+        var duplicateLegacy = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync($"""
+            INSERT INTO "{_schema}".chief_of_staff_priority_links
+                (priority_id, link_id, kind, project_id, item_number)
+            VALUES ('{priority.PriorityId}', 'legacy-duplicate', '{kind}', '{Project}', 42)
+            """));
+        Assert.Equal(PostgresErrorCodes.UniqueViolation, duplicateLegacy.SqlState);
+        var partialIdentity = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync($"""
+            INSERT INTO "{_schema}".chief_of_staff_priority_links
+                (priority_id, link_id, kind, project_id, item_number, provider_id)
+            VALUES ('{priority.PriorityId}', 'partial-identity', '{kind}', '{Project}', 43, 'github')
+            """));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, partialIdentity.SqlState);
+
+        // Permission trimming removes both new identity fields as well as the old target fields.
+        var hidden = ChiefOfStaffEndpoints.Redact(legacyRead, Authority(OtherProject));
+        Assert.All(hidden.Links, link => {
+            Assert.Equal("unavailable", link.Access);
+            Assert.Null(link.ProviderId);
+            Assert.Null(link.Repository);
+            Assert.Null(link.Number);
+        });
+    }
+
     // Scenario 4: Priority edits and links never change run, request, session, or gate rows.
     [Fact]
     public async Task PriorityEditsNeverChangeExecutionState()
@@ -209,7 +265,7 @@ public sealed class ChiefOfStaffPostgresTests(CoordinationPostgresFixture fixtur
         priority = await _store.AddLinkAsync(_actor, Tenant, priority.PriorityId,
             new(priority.Revision, "run", Project, "never-accepted", null, null, null), default);
         priority = await _store.AddLinkAsync(_actor, Tenant, priority.PriorityId,
-            new(priority.Revision, "pull_request", Project, null, null, 42, null), default);
+            new(priority.Revision, "pull_request", Project, null, null, 42, null, "github", new("octo", "api")), default);
 
         await ExecuteAsync($"""
             UPDATE "{_schema}".accepted_runs
@@ -237,7 +293,8 @@ public sealed class ChiefOfStaffPostgresTests(CoordinationPostgresFixture fixtur
     {
         var request = await CreateRunRequestAsync("key-1");
         var (priority, _) = await _store.CreatePriorityAsync(_actor, Tenant, "key-1", new("Ship", null, null), default);
-        var link = new AddChiefOfStaffPriorityLinkRequest(priority.Revision, "issue", Project, null, null, 7, null);
+        var link = new AddChiefOfStaffPriorityLinkRequest(priority.Revision, "issue", Project, null, null, 7, null,
+            "github", new("octo", "api"));
         priority = await _store.AddLinkAsync(_actor, Tenant, priority.PriorityId, link, default);
         await AssertCodeAsync("priority_revision_conflict",
             () => _store.AddLinkAsync(_actor, Tenant, priority.PriorityId, link, default));
@@ -265,7 +322,7 @@ public sealed class ChiefOfStaffPostgresTests(CoordinationPostgresFixture fixtur
         priority = await _store.AddLinkAsync(_actor, Tenant, priority.PriorityId,
             new(priority.Revision, "conversation", Project, null, conversation.ConversationId, null, null), default);
         priority = await _store.AddLinkAsync(_actor, Tenant, priority.PriorityId,
-            new(priority.Revision, "issue", OtherProject, null, null, 9, null), default);
+            new(priority.Revision, "issue", OtherProject, null, null, 9, null, "github", new("octo", "api")), default);
 
         var lost = Authority(OtherProject);
         var redacted = ChiefOfStaffEndpoints.Redact(conversation, lost);
@@ -360,11 +417,11 @@ public sealed class ChiefOfStaffPostgresTests(CoordinationPostgresFixture fixtur
         return (long)(await command.ExecuteScalarAsync())!;
     }
 
-    private async Task ExecuteAsync(string sql, string run)
+    private async Task ExecuteAsync(string sql, string? run = null)
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand(sql, connection);
-        command.Parameters.AddWithValue("run", run);
+        if (run is not null) command.Parameters.AddWithValue("run", run);
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 

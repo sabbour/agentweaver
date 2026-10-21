@@ -1432,13 +1432,15 @@ else if (route.OperationId is
             ("expectedRevision", new { type = "integer", minimum = 1 }),
             ("kind", Enum("run", "conversation", "issue", "pull_request", "artifact")),
             ("projectId", Str()), ("runId", NullableStr()), ("conversationId", NullableStr()),
-            ("number", Nullable(new { type = "integer", minimum = 1 })), ("artifactId", NullableStr())),
+            ("number", Nullable(new { type = "integer", minimum = 1 })), ("artifactId", NullableStr()),
+            ("providerId", NullableStr()), ("repository", Nullable(Ref("ProjectSourceControlRepository")))),
         // Unavailable links carry only linkId, kind, and access. Issue, pull request, and artifact state is unavailable.
         ["ChiefOfStaffPriorityLink"] = StrictObj(["linkId", "kind", "access"],
             ("linkId", Str()), ("kind", Enum("run", "conversation", "issue", "pull_request", "artifact")),
             ("access", Enum("available", "missing", "unavailable")),
             ("projectId", Str()), ("runId", Str()), ("conversationId", Str()), ("number", Int()),
-            ("artifactId", Str()), ("state", Str()), ("createdAt", Date())),
+            ("artifactId", Str()), ("state", Str()), ("createdAt", Date()),
+            ("providerId", Str()), ("repository", Ref("ProjectSourceControlRepository"))),
         ["ChiefOfStaffPriority"] = StrictObj(
             ["priorityId", "outcome", "notes", "state", "checklist", "position", "revision", "links", "createdAt", "updatedAt"],
             ("priorityId", Str()), ("outcome", Str()), ("notes", NullableStr()),

@@ -3,6 +3,23 @@ import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { buildP1PostgresPlan, p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 
+test('Image compatibility permits rolling 031-to-033 without enrolling optional 032', () => {
+  const compatibility = JSON.parse(readFileSync(new URL(
+    '../../../services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json', import.meta.url)));
+  const plan = buildP1PostgresPlan();
+  const core = plan.coreVersions;
+  // The runner can read this source-owned contract before choosing deployment and migration order.
+  assert.deepEqual(compatibility.applyByDefault, core);
+  assert.deepEqual(compatibility.currentImage.requiredCoreVersions, core.filter(version => version !== 33));
+  assert.deepEqual(compatibility.currentImage.optionalCoreVersions, [32, 33]);
+  assert.equal(compatibility.currentImage.repositoryIdentityWriteVersion, 33);
+  assert.equal(compatibility.currentImage.beforeRepositoryIdentityUpdateError, 'database_update_pending');
+  assert.deepEqual(compatibility.rolloutOrder, ['deployCurrentImages', 'applyCore033']);
+  assert.deepEqual(compatibility.separateApprovalRequired, [32]);
+  assert.equal(compatibility.preRepositoryIdentityImage.acceptsCore033, false);
+  assert.equal(core.includes(32), false);
+});
+
 test('P1 plan binds five service roles to the provisioned principal IDs', () => {
   const plan = buildP1PostgresPlan();
   assert.equal(plan.target.database, 'agentweaver');
@@ -95,11 +112,11 @@ test('Only the existing casting authority function receives direct runtime EXECU
 });
 
 // Migrations 023 through 031 must be reviewed together with their exact runtime grants, never applied by these checks.
-test('Core plan includes all 30 registered versions but never 017; source approval is not execution permission', () => {
+test('Core plan includes 033 but skips 017 and optional 032; source approval is not execution permission', () => {
   // The plan must include every shipped resource without granting mutation of caller receipts.
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33]);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'user_notification_dismissals').privileges, ['SELECT', 'INSERT']);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
@@ -175,7 +192,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
       assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(23) && !applied.Contains(22))'));
@@ -188,7 +205,9 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
       assert.ok(source.includes('(applied.Contains(30) && !applied.Contains(26))'));
       assert.ok(source.includes('(applied.Contains(31) && (!applied.Contains(30) || !applied.Contains(25)))'));
-      assert.ok(source.includes('Enumerable.Range(57, 44)'));
+      assert.ok(source.includes('Enumerable.Range(57, 45)'));
+      assert.ok(source.includes('(applied.Contains(33) && !applied.Contains(24))'));
+      assert.ok(!plan.coreVersions.includes(32));
     } else {
       assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));
       assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));

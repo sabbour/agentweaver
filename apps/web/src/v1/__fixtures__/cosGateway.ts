@@ -275,6 +275,8 @@ export function createFakeGateway(seed: Partial<FakeGatewayState> = {}) {
           conversationId: body.conversationId ?? undefined,
           artifactId: body.artifactId ?? undefined,
           number: body.number ?? undefined,
+          providerId: body.providerId ?? undefined,
+          repository: body.repository ?? undefined,
           state: body.kind === 'artifact' ? 'unavailable' : target?.state ?? conversation?.runState ?? undefined,
           createdAt: NOW,
         };
