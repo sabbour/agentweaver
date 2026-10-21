@@ -123,6 +123,71 @@ describe('Gateway API client', () => {
     expect(init?.method).toBe('POST');
   });
 
+  it('renames or archives a project with the displayed project revision', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => new Response('{}', { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await client.updateProject('token', 'project/1', { expectedRevision: 4, name: 'Launch', state: 'archived' });
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe('https://gateway.example.test/api/v1/projects/project%2F1');
+    expect(init?.method).toBe('PATCH');
+    expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 4, name: 'Launch', state: 'archived' });
+  });
+
+  it('lists, assigns and revokes project roles on the role-assignment contract', async () => {
+    const assignment = {
+      assignmentId: '7f8c1a2e-0000-4000-8000-000000000001', principalId: 'user-2', role: 'viewer',
+      revision: 3, createdBy: 'admin', createdAt: '2026-01-01T00:00:00Z',
+    };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ projectId: 'p1', assignments: [assignment] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(assignment), { status: 201 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.listProjectRoleAssignments('token', 'p1')).resolves.toMatchObject({ assignments: [assignment] });
+    await client.assignProjectRole('token', 'p1', { principalId: 'user-2', role: 'viewer' });
+    await client.revokeProjectRoleAssignment('token', 'p1', assignment.assignmentId, 3);
+
+    expect(String(fetcher.mock.calls[0][0])).toBe('https://gateway.example.test/api/v1/projects/p1/role-assignments');
+    expect(fetcher.mock.calls[1][1]?.method).toBe('POST');
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toEqual({ principalId: 'user-2', role: 'viewer' });
+    expect(String(fetcher.mock.calls[2][0])).toBe(
+      `https://gateway.example.test/api/v1/projects/p1/role-assignments/${assignment.assignmentId}?expectedRevision=3`,
+    );
+    expect(fetcher.mock.calls[2][1]?.method).toBe('DELETE');
+  });
+
+  it('returns the assignment view from add and remove', async () => {
+    const view = {
+      assignmentId: 'as-1', projectId: 'p1', principalId: 'user-2', role: 'viewer', state: 'revoked',
+      revision: 4, grantedBy: 'admin', grantedAt: '2026-01-01T00:00:00Z', revokedBy: 'admin', revokedAt: '2026-01-02T00:00:00Z',
+    };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...view, state: 'active', revision: 3, revokedBy: null, revokedAt: null }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(view), { status: 200 }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.assignProjectRole('token', 'p1', { principalId: 'user-2', role: 'viewer' }))
+      .resolves.toMatchObject({ state: 'active', revision: 3 });
+    await expect(client.revokeProjectRoleAssignment('token', 'p1', 'as-1', 3)).resolves.toMatchObject({ state: 'revoked', revision: 4 });
+    expect(String(fetcher.mock.calls[1][0])).toBe('https://gateway.example.test/api/v1/projects/p1/role-assignments/as-1?expectedRevision=3');
+  });
+
+  it('rejects a role-assignment list for a different project', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ projectId: 'other', assignments: [] }), { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.listProjectRoleAssignments('token', 'p1')).rejects.toMatchObject({
+      status: 502, code: 'owner_contract_invalid',
+    });
+  });
+
   it('sends Knowledge idempotency keys in the required header', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),
@@ -303,6 +368,52 @@ describe('Gateway API client', () => {
     }
   });
 
+  it('reads suggested marketplaces and rejects a malformed list', async () => {
+    const definition = { name: 'Public', repository: 'example/skills', requestedRef: 'main', subpath: null, layoutNote: null, sourceId: null };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify([definition]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ name: 'No repository' }]), { status: 200 }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.listMarketplaceDefinitions('token', 'project/1', 'tenant-1')).resolves.toEqual([definition]);
+    expect(String(fetcher.mock.calls[0][0]))
+      .toBe('https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/definitions');
+    expect(fetcher.mock.calls[0][1]?.method ?? 'GET').toBe('GET');
+    await expect(client.listMarketplaceDefinitions('token', 'project/1')).rejects.toMatchObject({
+      status: 502, code: 'invalid_owner_response',
+    });
+  });
+
+  it('packages skill content and revokes a skill revision on the public routes', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ skills: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.packageSkillContent('token', { draft: { name: 'code-review', instructions: 'Check it.' } }, 'tenant-1'))
+      .resolves.toEqual({ skills: [] });
+    await expect(client.revokeProjectSkillRevision('token', 'project/1', 'skill/1', 3, 'No longer used.', 'tenant-1'))
+      .resolves.toBeUndefined();
+
+    expect(fetcher.mock.calls.map(([url, init]) => [String(url), init?.method, JSON.parse(String(init?.body))])).toEqual([
+      ['https://gateway.example.test/api/v1/skills/package', 'POST', { draft: { name: 'code-review', instructions: 'Check it.' } }],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skills/skill%2F1/revisions/3/revoke', 'POST', { reason: 'No longer used.' }],
+    ]);
+  });
+
+  it('lists recorded pull requests with only the set filters and checks the project', async () => {
+    const page = { projectId: 'p1', coverage: {}, items: [], nextCursor: null };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(page), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...page, projectId: 'other' }), { status: 200 }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await client.listProjectPullRequests('token', 'p1', { state: 'open', pageSize: 20 });
+    expect(String(fetcher.mock.calls[0][0]))
+      .toBe('https://gateway.example.test/api/v1/projects/p1/source-control/pull-requests?state=open&pageSize=20');
+    await expect(client.listProjectPullRequests('token', 'p1')).rejects.toMatchObject({ status: 502 });
+  });
+
   it('can replay a user intent with the same coordinator key', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),
@@ -365,6 +476,8 @@ describe('Gateway API client', () => {
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer broker-token');
     expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
     expect(init?.credentials).toBe('omit');
+    // window.fetch throws "Illegal invocation" unless it is called on the global object.
+    expect(fetcher.mock.contexts[0]).toBe(globalThis);
   });
 
   it('keeps Repo App authorization at the Gateway root and stores its callback cookie', async () => {
@@ -530,6 +643,36 @@ describe('Gateway API client', () => {
       .rejects.toMatchObject({ status: 502, code: 'invalid_owner_response' });
   });
 
+  it('lists run output captures with a paired cursor and reads one diff', async () => {
+    const capture = {
+      captureId: 'cap 1', eventId: 'e1', eventPosition: 1, capturedAt: '2026-10-08T00:00:00Z',
+      workspaceId: 'w1', branchName: 'b', baseSha: 'a', outputTreeSha: 't', manifestSha256: 'm',
+      manifestByteLength: 1, patchSha256: 'p', patchByteLength: 1, packageByteLength: 1,
+    };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ captures: [capture], nextBeforeCapturedAt: null, nextBeforeCaptureId: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ captures: [], nextBeforeCapturedAt: null, nextBeforeCaptureId: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ capture, patch: '+x' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ capture: { ...capture, captureId: 'other' }, patch: '' }), { status: 200 }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    const page = await client.listRunOutputCaptures('t', 'p1', 'r1', 's1', { limit: 20 }, 'tenant-1');
+    expect(page.captures).toHaveLength(1);
+    expect(String(fetcher.mock.calls[0][0])).toBe(
+      'https://gateway.example.test/api/v1/projects/p1/runs/r1/source-control/sessions/s1/output-captures?limit=20');
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+
+    // A half cursor is not sent; the service needs both parts together.
+    await client.listRunOutputCaptures('t', 'p1', 'r1', 's1', { beforeCapturedAt: '2026-10-08T00:00:00Z', beforeCaptureId: null }, 'tenant-1');
+    expect(String(fetcher.mock.calls[1][0])).toBe(
+      'https://gateway.example.test/api/v1/projects/p1/runs/r1/source-control/sessions/s1/output-captures');
+
+    const diff = await client.readRunOutputCaptureDiff('t', 'p1', 'r1', 's1', 'cap 1', 'tenant-1');
+    expect(diff.patch).toBe('+x');
+    expect(String(fetcher.mock.calls[2][0])).toBe(
+      'https://gateway.example.test/api/v1/projects/p1/runs/r1/source-control/sessions/s1/output-captures/cap%201/diff');
+    await expect(client.readRunOutputCaptureDiff('t', 'p1', 'r1', 's1', 'cap 1', 'tenant-1')).rejects.toMatchObject({ status: 502 });
+  });
   it('keeps repository pin run-bound and preserves legacy bodyless pin requests', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),

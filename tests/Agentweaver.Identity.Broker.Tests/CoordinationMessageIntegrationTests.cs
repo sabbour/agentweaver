@@ -5726,10 +5726,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
             try
             {
-                await page.GetByRole(AriaRole.Button, new() { Name = "Continue with Identity Broker" }).ClickAsync();
+                // The v1 sign-in screen has a single "Sign in" button. Exact match
+                // avoids hitting the run sign-in button that also starts with "Sign in".
+                await page.GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).ClickAsync();
                 if (await WaitForConsentPromptOrTokenAsync(page, reverseProxy))
                     await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
-                await page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" }).WaitForAsync();
+                // The outcome decision card is an article named after its decision title.
+                var outcomeDecision = page.GetByRole(AriaRole.Article, new() { Name = "Confirm the outcome", Exact = true });
+                var runSignIn = page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" });
+                // The run page first asks for the run sign-in silently; the button shows only when that fails.
+                // Wait for whichever appears first: the fallback button or the loaded decision card.
+                await runSignIn.Or(outcomeDecision).First.WaitForAsync();
                 var browserToken = reverseProxy.BrokerAccessToken
                     ?? throw new InvalidOperationException("The browser did not redeem a Broker access token.");
                 var browserSubject = SingleClaim(
@@ -5742,9 +5749,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         await grantAuthority.HasActiveRunBindingAsync(browserSubject, projectId, runId),
                         "The subject in the browser's Broker token must have the active run grant.");
                 }
-                await page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" }).ClickAsync();
-                await page.GetByText("Confirm the exact pending outcome gate.").WaitForAsync();
-                await page.GetByText($"Request ID: {outcomeGateRequestId}").WaitForAsync();
+                // Click the fallback button only if silent run sign-in did not succeed.
+                if (await runSignIn.IsVisibleAsync())
+                    await runSignIn.ClickAsync();
+                // Scope the text checks to the decision card so they prove this exact
+                // pending request is shown, not text elsewhere on the page.
+                await outcomeDecision.GetByText("Confirm the outcome this run should deliver.").WaitForAsync();
+                await outcomeDecision.GetByText($"request {outcomeGateRequestId}").WaitForAsync();
             }
             catch (Exception exception)
             {

@@ -241,7 +241,7 @@ the complete body before forwarding, including requests without
 `Content-Length`. Larger bodies return `413` without contacting the owner.
 Transfer version or
 team incompatibility returns `422`. These source routes do not establish
-deployment or a browser wizard.
+deployment. The web client uses them on **Agents** and the **Cast a team** page.
 
 ## List Remote MCP connections
 

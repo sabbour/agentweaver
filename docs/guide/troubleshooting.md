@@ -22,7 +22,7 @@ database credentials while collecting evidence.
 
 | Symptom | Cause to check | Action |
 | --- | --- | --- |
-| A provider cannot be resolved | The provider ID is not registered, is disabled, or does not satisfy the selected seam and capability contract. | Compare the deployment catalog with [Configure providers](../guide/configure-providers.md). Do not assume that a provider options class means the provider is selectable. |
+| A provider cannot be resolved | The provider ID is not registered, is disabled, or does not satisfy the platform component and capability contract. | Compare the deployment catalog with [Configure providers](../guide/configure-providers.md). Do not assume that a provider options class means the provider is selectable. |
 | A provider binding changes unexpectedly | The resource ID, generation, options revision, schema version, or negotiated capabilities differ from the accepted binding. | Restore the approved resource identity and catalog revision. Increase a resource generation only after wiping or replacing that resource. |
 | Knowledge fails during PostgreSQL connection | The role is missing, does not match the Knowledge managed identity name, the projected identity is wrong, or the TLS host does not match the server certificate. | Verify the PostgreSQL runtime role and grants through the approved bootstrap process. Keep the connection password-free and `SSL Mode=VerifyFull`. |
 | Knowledge rejects provider options | A required setting is absent, the schema is reserved or malformed, the generation is below `1`, or the options schema version is unsupported. | Compare the Knowledge ConfigMap with [Configure Knowledge memory](../guide/configure-knowledge.md) and the [runtime reference](../reference/runtime-configuration.md). |
@@ -52,8 +52,9 @@ database credentials while collecting evidence.
 
 ## Diagnose an indeterminate P1 project setup
 
-The P1 API and MCP runners set up and clean up their fixture project through
-the public Gateway API with the signed-in setup token:
+The P1 acceptance harness runs API and MCP checks against a deployment.
+Its runners set up and clean up their fixture project through the public
+Gateway API with the signed-in setup token:
 
 1. `createProject` creates a project named `p1-<invocation-uuid>`.
 2. `assignProjectRole` assigns the setup actor the Owner role, then the
