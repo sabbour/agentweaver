@@ -10,6 +10,10 @@ public static class EventsAndSessionsMigrator
 {
     // Project reporting requires migration 009 before this runtime serves traffic.
     private const int CurrentSchemaVersion = 9;
+
+    /// <summary>Every version <see cref="MigrateAsync"/> can apply, in order.</summary>
+    /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
+    public static IReadOnlyList<int> SupportedVersions { get; } = [.. Enumerable.Range(1, CurrentSchemaVersion)];
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
 
@@ -105,7 +109,9 @@ public static class EventsAndSessionsMigrator
                     "Events & Sessions schema version 2 has an unrecognized or ambiguous migration layout.");
         }
 
-        foreach (var version in Enumerable.Range(1, CurrentSchemaVersion).Where(version => !applied.Contains(version)))
+        // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
+        // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
+        foreach (var version in SupportedVersions.Where(version => !applied.Contains(version)))
         {
             var resourceName = version switch
             {

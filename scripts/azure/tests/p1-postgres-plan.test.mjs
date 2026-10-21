@@ -133,11 +133,9 @@ test('Initializer validates planned and installed mutation guards before it comm
   assert.ok(source.includes("has_column_privilege(@role, @table, @column, 'UPDATE')"));
   assert.doesNotMatch(source, /plan\.Services\.Any\(service => service\.Tables\.Any\(table => table\.MutationDenialRequired\)\)/);
   assert.doesNotMatch(source, /One-column row-lock grants still require reviewed mutation-denial source/);
-  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21,\\s*22,\\s*23,\\s*24,\\s*25,\\s*26,\\s*27\\]\\)'));
-  assert.ok(source.includes('21 => \\"row_lock_record_updates\\"'));
-  assert.ok(source.includes('22 => \\"run_list_completion\\"'));
-  assert.ok(source.includes('23 => \\"project_run_requests\\"'));
-  assert.ok(source.includes('24 => \\"chief_of_staff\\"'));
+  // The plan catalog is compared with the compiled migrators, not regex-pinned source text.
+  assert.doesNotMatch(source, /Enumerable\\\\\.Range\\\\\(1/);
+  assert.ok(source.includes('InitializerChecks.AssertMigrationCatalog(plan.CoreVersions, CoordinationOwnerMigrator.SupportedVersions,'));
 });
 
 // Both owner catalogs must agree with the separately reviewed initializer plan.
@@ -191,12 +189,13 @@ test('Current source catalog preserves exact Core and Events versions and embedd
   }
 });
 
-// The initializer must reject a plan or source that omits the new Events index migration.
-test('Initializer requires the reviewed Events project usage migration and exact plan versions', () => {
+// The initializer derives Core and Events versions from the plan and the compiled migrator catalogs.
+test('Initializer binds exact plan versions to compiled migrator catalogs and approved maxima', () => {
   const source = readFileSync(new URL('../../../tools/P1PostgresInitializer/Program.cs', import.meta.url), 'utf8');
-  assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));
-  assert.ok(source.includes('009_project_usage_index.sql'));
-  assert.ok(source.includes('plan.EventsVersions.SequenceEqual(Enumerable.Range(1, 9))'));
+  assert.ok(!source.includes('private const int CurrentSchemaVersion = 9;'));
+  assert.ok(source.includes('InitializerChecks.AssertMigrationCatalog(plan.EventsVersions, EventsAndSessionsMigrator.SupportedVersions,'));
+  assert.ok(source.includes('maxEventsVersion, "Events")'));
+  assert.ok(source.includes('maxCoreVersion, "Core/Orchestrator")'));
 });
 
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
