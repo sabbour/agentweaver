@@ -69,14 +69,48 @@ public sealed class ProjectsAuthorizationContextClient(
     };
 
     /// <summary>Forwards the caller token and tenant selector, then checks the owner context's identity and scope.</summary>
-    public async Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
+    public Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
         HttpContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        GetContextAsync(context, null, cancellationToken);
+
+    /// <summary>Reads fresh project authority for unbound, project-bound, or run-bound api.read callers.</summary>
+    public async Task<ProjectsAuthorizationContextResponse> GetProjectReadAsync(
+        HttpContext context, string projectId, string ownerAudience, CancellationToken cancellationToken)
+    {
+        if (!IsOpaqueIdentifier(projectId))
+            throw new ArgumentException("project_id_invalid");
+        var scopes = context.User.FindAll("scope").Concat(context.User.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        if (!scopes.Contains("api.read", StringComparer.Ordinal) ||
+            !context.User.FindAll("aud").Any(claim => claim.Value == ownerAudience))
+            throw new ProjectsAuthorizationContextException("caller_scope_invalid", HttpStatusCode.Forbidden);
+        var current = await GetContextAsync(context, projectId, cancellationToken).ConfigureAwait(false);
+        if (!current.EffectiveAuthority.Any(authority => !authority.Permissions.IsDefault &&
+                authority.Permissions.Any(permission => permission.RoleRevision > 0 &&
+                    (authority.ResourceType == "project" && authority.ResourceId == projectId &&
+                        permission.Permission is "readProjects" or "readRunSelection" ||
+                     authority.ResourceType == "tenant" && authority.ResourceId == current.TenantId &&
+                        permission.Permission == "readProjects"))))
+            throw new ProjectsAuthorizationContextException("project_read_permission_denied", HttpStatusCode.Forbidden);
+        return current;
+    }
+
+    /// <summary>Validates the uncached Projects response against either exact run scope or optional read bindings.</summary>
+    private async Task<ProjectsAuthorizationContextResponse> GetContextAsync(
+        HttpContext context, string? readProjectId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
         cancellationToken.ThrowIfCancellationRequested();
         var ownerUri = RequireOwnerUri(options);
-        var scope = RequireCaller(context, options.Audience);
+        (string? ProjectId, string? RunId) scope;
+        if (readProjectId is null)
+        {
+            var runScope = RequireCaller(context, options.Audience);
+            scope = (runScope.ProjectId, runScope.RunId);
+        }
+        else
+            scope = RequireProjectReadCaller(context, readProjectId, options.Audience);
         var bearer = RequireBearer(context);
         var tenant = ReadTenantSelector(context);
 
@@ -174,6 +208,23 @@ public sealed class ProjectsAuthorizationContextClient(
             throw new ProjectsAuthorizationContextException(
                 "projects_authorization_caller_invalid", HttpStatusCode.Forbidden);
         return scope.Value;
+    }
+
+    /// <summary>Validates optional project/run bindings without relaxing the existing run-only caller path.</summary>
+    private static (string? ProjectId, string? RunId) RequireProjectReadCaller(
+        HttpContext context, string projectId, string? audience)
+    {
+        var subjects = context.User.FindAll("sub").Take(2).ToArray();
+        var projects = context.User.FindAll("project_id").Take(2).ToArray();
+        var runs = context.User.FindAll("run_id").Take(2).ToArray();
+        if (context.User.Identity?.IsAuthenticated != true ||
+            subjects.Length != 1 || !Guid.TryParseExact(subjects[0].Value, "D", out _) ||
+            !context.User.FindAll("aud").Any(claim => claim.Value == audience) ||
+            projects.Length > 1 || runs.Length > 1 ||
+            projects.Length == 1 && projects[0].Value != projectId ||
+            runs.Length == 1 && (projects.Length == 0 || !IsOpaqueIdentifier(runs[0].Value)))
+            throw new ProjectsAuthorizationContextException("caller_binding_mismatch", HttpStatusCode.Forbidden);
+        return (projects.SingleOrDefault()?.Value, runs.SingleOrDefault()?.Value);
     }
 
     private static AuthenticationHeaderValue RequireBearer(HttpContext context)
