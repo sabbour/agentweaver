@@ -112,6 +112,7 @@ internal static partial class GatewayOpenApi
             ["promoteKnowledgeProposal"] = C("PromoteKnowledgeProposalRequest", "KnowledgeProposalPromotionResult", "200", "201"),
             ["rejectKnowledgeProposal"] = C("RejectKnowledgeProposalRequest", "KnowledgeRecordWriteResult", "200", "201"),
             ["compileKnowledgeContext"] = C(null, "MemoryContextCompilation", "200"),
+            ["readSessionTurnContent"] = C(null, "SessionTurnContent", "200"),
             ["replayRunEvents"] = C(null, "SessionEventPage", "200"),
             ["streamRunEvents"] = C(null, "SessionEventPage", "200"),
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
@@ -1235,6 +1236,8 @@ internal static partial class GatewayOpenApi
         ["KnowledgeRevisionReference"] = Obj(["kind", "recordId", "revision", "revisionId"],
             ("kind", Str()), ("recordId", Uuid()), ("revision", Int()), ("revisionId", Uuid())),
 
+        ["SessionTurnContent"] = Obj(["eventId", "identity", "text"],
+            ("eventId", Uuid()), ("identity", Ref("SessionIdentity")), ("text", Str())),
         ["SessionEventPage"] = Obj(["events", "nextCursor", "hasMore"],
             ("events", Arr(Ref("SessionEventEnvelope"))), ("nextCursor", NullableStr()), ("hasMore", Bool())),
         ["SessionEventEnvelope"] = Obj(["schemaVersion", "eventVersion", "eventId", "identity", "position", "occurredAt", "kind", "payload", "objectReferences"],

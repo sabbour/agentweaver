@@ -558,9 +558,22 @@ All routes require Journal authority and exact project/run claims.
 | GET | `/internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` | Exact bound `ReadRunSelection` authority and current provider | Read immutable Sessions pin. | No |
 | GET | No native SSE route | Exact run bearer and current Gateway/owner access checks | SSE over committed replay pages. | `/api/v1/projects/{projectId}/runs/{runId}/events/live` |
 
+### Historical turn text
+
+`GET /api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}`
+returns `{ eventId, identity, text }` from the existing Events material owner.
+Use the event and session identities from a committed `turn` event. The native
+route is `GET /internal/sessions/{sessionId}/turns/{eventId:guid}`.
+
+The caller needs an exact run-bound bearer and current project read authority.
+The owner rechecks authority after reading stored bytes. Responses use
+`Cache-Control: no-store`. Missing history returns 404; lost access returns 403.
+The route reads only turn text. It does not accept a material kind or expose
+object keys, runtime configuration, SDK cache, or remote-tool results.
+
 ### Material, messages, and accepted facts
 
-These routes are native-only. Runtime/material routes recheck current Projects,
+The following routes are native-only. Runtime/material routes recheck current Projects,
 Orchestrator, and provider state. Trusted peer checks are additional to bearer
 authentication where configured.
 

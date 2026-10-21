@@ -397,6 +397,9 @@ public static class GatewayRouteCatalog
             "streamRunEvents", "Stream committed run events using SSE", ["cursor"],
             eventStream: true,
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Events, run + "/sessions/{sessionId}/turns/{eventId:guid}",
+            "/internal/sessions/{sessionId}/turns/{eventId:guid}",
+            "readSessionTurnContent", "Read authorized session turn text", forwardTenantSelector: true);
         Add("GET", GatewayOwner.Events, run + "/usage",
             "/internal" + run + "/usage",
             "readRunUsage", "Read run usage totals", forwardTenantSelector: true);
