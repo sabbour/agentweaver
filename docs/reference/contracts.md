@@ -46,6 +46,32 @@ entries containing `MeterSource` and `ProviderId`. Native
 stored `EffectiveProviderSelection`. Both retain current owner authorization.
 No new usage-writing endpoint, model-source authority, or pricing API is introduced.
 
+## Casting proposals and transfers
+
+The Gateway exposes the existing Projects & Config casting contracts under
+`/api/v1`. See the [API reference](./api.md#casting-through-the-gateway) for routes
+and [Projects & Config](../architecture/projects-config.md#reviewed-casting-proposals-and-explicit-transfers)
+for the owner transaction boundary.
+
+| Contract | Fields and behavior |
+| --- | --- |
+| `CreateProjectCastingProposalRequest` | `expectedConfigurationRevision`, complete `draft`. |
+| `CreateScenarioProjectCastingProposalRequest` | `expectedConfigurationRevision`, catalog `templateId`. |
+| `CreateManualProjectCastingProposalRequest` | `expectedConfigurationRevision`, non-empty catalog `roleIds`. |
+| `UpdateProjectCastingProposalRequest` | `expectedDraftRevision`, replacement `draft`. |
+| `TransitionProjectCastingProposalRequest` | `expectedDraftRevision` for confirm or reject. |
+| `ProjectCastingProposal` | `proposalId`, `projectId`, `baseConfigurationRevision`, `draftRevision`, `state` (`pending`, `confirmed`, or `rejected`), `draft`, nullable `confirmedConfigurationRevision`, nullable `result`, nullable `transferProvenance`, and creation/update actor IDs and timestamps. |
+| `ProjectCastingTransfer` | `formatVersion` (1), `sourceProjectId`, `sourceConfigurationRevision`, `agentCharters`, `casting`, `contentDigest`. Contains no unrelated project settings. |
+| `ProjectCastingTransferProvenance` | Verified transfer format, source project/revision, and content digest retained on an imported proposal. |
+| `ImportProjectCastingTransferRequest` | Target `expectedConfigurationRevision` and `transfer`; creates a pending proposal. Request body limit is 1 MiB at Gateway and owner. |
+| `ProjectCastingTemplateDefinition` | `id`, `title`, `description`, `roleIds`. |
+| `ProjectCastingRoleDefinition` | `id`, `title`, `summary`, `responsibilities`, `boundaries`. |
+
+The owner rejects unknown request fields and preserves revision conflicts as
+`409`. The Gateway publishes these schemas in `GET /openapi/v1.json`, and the
+web contract module supplies types only. There is no new casting permission,
+idempotency header, or UI implementation.
+
 ## Cost and usage storage contracts
 
 `CostBinding` records the meter source, provider identity, adapter version,
@@ -390,6 +416,7 @@ caller cannot submit a resource pin or override the durable binding.
 
 | Method and path | Contract |
 | --- | --- |
+| `GET /api/projects/{projectId}/runs` | List accepted runs in the project, newest first, as a `ProjectRunPage`. The caller needs `api.read`, both Orchestrator and Projects audiences, and current project or tenant read permission from Projects & Config. A run-bound token sees only its own run. The keyset cursor is opaque and bound to the query. A state filter is applied to each run's derived state, so a selective filter can read many older runs before it fills a page. Each `ProjectRunSummary` reports the run ID, root session ID, derived state, timestamps, `completedAt`, and the accepting actor as `startedBy`. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/root` | Accept the root session for the current accepted run selection and register it with Events & Sessions. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/decisions` | Read the current typed decision state and pending gate without exposing a transferable authorization or provider pin. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/propose_outcome_spec` | Propose a schema-validated outcome specification. |

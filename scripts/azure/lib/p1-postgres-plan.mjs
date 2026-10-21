@@ -188,7 +188,8 @@ export function buildP1PostgresPlan() {
     formatVersion: 1,
     target: { ...P1_POSTGRES_TARGET },
     services,
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21],
+    // 022 adds accepted_runs.completed_at; the existing table-level UPDATE grant covers it.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22],
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',
       'A separate approval permits the five SQL login mappings, schema initialization, and exact grants.',
