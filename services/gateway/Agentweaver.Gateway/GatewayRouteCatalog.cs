@@ -177,6 +177,14 @@ public static class GatewayRouteCatalog
             "previewSkillContent", "Validate skill content without importing it",
             body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
             forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, "/skills/package", "/api/skills/package",
+            "packageSkillContent", "Turn uploaded files, a ZIP archive, or draft fields into skill candidates",
+            body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, "/projects/{projectId}/skills/{skillId}/revisions/{revision}/revoke",
+            "/api/projects/{projectId}/skills/{skillId}/revisions/{revision}/revoke",
+            "revokeProjectSkillRevision", "Revoke one project skill revision",
+            body: true, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, "/projects/{projectId}/skills/import",
             "/api/projects/{projectId}/skills/import",
             "importProjectSkill", "Import validated skill content to a project",
