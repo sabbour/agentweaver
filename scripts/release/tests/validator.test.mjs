@@ -76,6 +76,10 @@ const projectReferences = new Map([
   ['Agentweaver.Providers.Storage.AzureFiles', [
     '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
   ]],
+  ['Agentweaver.Providers.Sessions.AgentSessions', [
+    '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+  ]],
   ['Agentweaver.Knowledge', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
