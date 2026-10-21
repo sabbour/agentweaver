@@ -1,12 +1,14 @@
 /**
- * Shared run list for Orchestrations, Overview, and later Sessions and Flow.
- * The data adapter reads the browser's recent runs today. When the Gateway run
- * list (gap G2) exists, a second adapter returns the same `RunListItem` shape,
+ * Shared run list for Orchestrations, Overview, Flow, and later Sessions.
+ * The browser adapter reads the browser's recent runs; the Gateway adapter
+ * (`useGatewayRunList`) returns the same `RunListData` shape with current states,
  * so callers keep the same layout.
  */
 import { Badge, Button, Text, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
 import { DismissRegular } from '@fluentui/react-icons';
 import { useNavigate } from 'react-router-dom';
+import { errorCode, errorMessage } from './errors';
+import { ErrorNotice } from './pageParts';
 import type { RunListData } from './runListData';
 import { runState } from './runState';
 
@@ -85,22 +87,28 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
         </div>
         {data.items.length > 0 && <Badge appearance="outline">{data.items.length} {data.items.length === 1 ? 'run' : 'runs'}</Badge>}
       </div>
+      {data.error != null && <ErrorNotice code={errorCode(data.error)}>{errorMessage(data.error)}</ErrorNotice>}
       <div className={styles.list}>
-        {items.length === 0 ? <Text className={styles.empty}>{emptyText}</Text> : items.map((item) => {
+        {items.length === 0 ? <Text className={styles.empty}>{data.loading ? 'Loading runs…' : emptyText}</Text> : items.map((item) => {
           const state = runState(item.executionState);
           const path = `/projects/${encodeURIComponent(item.projectId)}/runs/${encodeURIComponent(item.runId)}`;
+          const stateNote = data.stateSource === 'service'
+            ? 'Current state'
+            : item.executionState ? 'State when last opened' : 'State not read yet';
           return (
             <div key={`${item.projectId}/${item.runId}`} className={styles.row}>
               <div className={styles.rowStatus}>
                 <Badge appearance="tint" color={state.color}>{state.label}</Badge>
-                <Text className={styles.meta}>{item.executionState ? 'State when last opened' : 'State not read yet'}</Text>
+                <Text className={styles.meta}>{stateNote}</Text>
               </div>
               <div className={styles.rowMain}>
-                <Text className={styles.task}>Run {item.runId}</Text>
+                <Text className={styles.task}>{item.title || `Run ${item.runId}`}</Text>
                 <Text className={styles.meta}>
                   {projectNames ? `${projectNames.get(item.projectId) ?? item.projectId} · ` : ''}
+                  {item.title ? `Run ${item.runId} · ` : ''}
                   {item.time.label} {formatTime(item.time.value)}
                 </Text>
+                {item.notes?.map((note) => <Text key={note} className={styles.meta}>{note}</Text>)}
               </div>
               <div className={styles.actions}>
                 <Button appearance="secondary" aria-label={`Open run ${item.runId}`} onClick={() => navigate(path)}>Open</Button>
@@ -116,6 +124,11 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
           );
         })}
       </div>
+      {data.loadMore && !limit && (
+        <div className={styles.actions}>
+          <Button appearance="secondary" onClick={data.loadMore}>Load more</Button>
+        </div>
+      )}
     </section>
   );
 }
