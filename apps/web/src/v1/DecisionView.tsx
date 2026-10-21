@@ -32,7 +32,15 @@ export interface DecisionKey {
   runId: string;
   sessionId: string;
   requestId: string;
+  /**
+   * Decision-state version the user saw, for example from a notification. When set,
+   * a reread with a different version sends nothing; the next action uses the reread version.
+   */
+  stateVersion?: number;
 }
+
+/** Shown when the reread finds a different decision-state version than the one the user opened. */
+export const STALE_DECISION_NOTICE = 'This request changed since you opened it. Nothing was sent. Review it and try again.';
 
 /** Sends an answer or decision for one exact pending request. */
 export function DecisionView({
@@ -56,6 +64,7 @@ export function DecisionView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [expectedVersion, setExpectedVersion] = useState(decisionKey.stateVersion);
   const exactGate = decisions?.pendingGate?.requestId === requestId;
   const canAct = exactGate && !busy && !snapshotBusy;
 
@@ -70,6 +79,12 @@ export function DecisionView({
       ), binding);
       if (latest.pendingGate?.requestId !== requestId) {
         setNotice('This request was already answered or replaced. The view was refreshed and nothing was sent.');
+        await refresh();
+        return;
+      }
+      if (expectedVersion !== undefined && latest.stateVersion !== expectedVersion) {
+        setExpectedVersion(latest.stateVersion);
+        setNotice(STALE_DECISION_NOTICE);
         await refresh();
         return;
       }
@@ -159,9 +174,12 @@ export function DecisionList({
   apiCall,
   refresh,
   snapshotBusy,
+  pinned,
 }: {
   projectId: string;
   runId: string;
+  /** Request and state version the user opened, for example from Flow; applies to the matching request only. */
+  pinned?: { requestId: string; stateVersion: number } | null;
   statuses: Record<string, SessionStatusSnapshot>;
   decisions: Record<string, CoordinatorDecisionStateView>;
   apiCall: ApiCall;
@@ -177,7 +195,13 @@ export function DecisionList({
           {pending.map(({ status, blocker }) => (
             <DecisionView
               key={`${status.identity.sessionId}/${blocker.requestId}`}
-              decisionKey={{ projectId, runId, sessionId: status.identity.sessionId, requestId: blocker.requestId }}
+              decisionKey={{
+                projectId,
+                runId,
+                sessionId: status.identity.sessionId,
+                requestId: blocker.requestId,
+                stateVersion: pinned?.requestId === blocker.requestId ? pinned.stateVersion : undefined,
+              }}
               blocker={blocker}
               decisions={decisions[status.identity.sessionId]}
               apiCall={apiCall}

@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionStatusBlocker } from './contracts';
-import { attentionPath, toAttentionItems, useRunAttention } from './runAttention';
+import type { SessionStatusBlocker, UserNotification } from './contracts';
+import { attentionPath, notificationAttentionItems, toAttentionItems, useRunAttention } from './runAttention';
 
 const mocks = vi.hoisted(() => {
   const apiCall = vi.fn((operation: (token: string, tenant: string) => Promise<unknown>) => operation('token', 'tenant-1'));
@@ -102,5 +102,29 @@ describe('useRunAttention', () => {
     expect((result.current.error as Error).message).toBe('The service returned a different run.');
     expect(result.current.items).toEqual([]);
     expect(mocks.getSessionTree).not.toHaveBeenCalled();
+  });
+});
+
+describe('notificationAttentionItems', () => {
+  const base: UserNotification = {
+    notificationId: 'n1', source: 'pendingGate', projectId: 'p1', runId: 'r1', sessionId: 's1',
+    requestId: 'q1', kind: 'awaitingInput', prompt: 'Which branch?', createdAt: '2026-10-20T00:00:00Z',
+    gateKind: 'question', stateVersion: 3, updatedAt: '2026-10-20T00:00:00Z', promotionId: null, taskCount: null,
+  };
+
+  it('keeps pending gates and drops backlog promotion notices', () => {
+    const promoted: UserNotification = {
+      ...base, notificationId: 'n2', source: 'backlogPromoted', requestId: null, kind: null,
+      gateKind: null, stateVersion: null, promotionId: 'pr1', taskCount: 2,
+    };
+    const items = notificationAttentionItems({ items: [base, promoted], count: 2, nextCursor: null });
+    expect(items).toEqual([expect.objectContaining({ notificationId: 'n1', requestId: 'q1', stateVersion: 3 })]);
+  });
+
+  it('treats a gate from an owner without source as a pending gate', () => {
+    const legacy = { ...base } as Partial<UserNotification>;
+    delete legacy.source;
+    const items = notificationAttentionItems({ items: [legacy as UserNotification], count: 1, nextCursor: null });
+    expect(items.map((item) => item.notificationId)).toEqual(['n1']);
   });
 });

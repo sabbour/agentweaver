@@ -80,3 +80,40 @@ describe('AttentionBell', () => {
     expect(screen.getByTestId('location').textContent).toBe('/projects/p1/runs/r1');
   });
 });
+describe('AttentionList with notifications', () => {
+  const notified: AttentionItem[] = [
+    { projectId: 'p1', runId: 'r2', sessionId: 's1', requestId: 'q1', kind: 'awaitingInput', prompt: 'Which branch?', notificationId: 'n1', stateVersion: 7 },
+  ];
+
+  it('needs no bound run and uses notification wording', () => {
+    const { unmount } = renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', loading: true })} />);
+    expect(screen.getByText('Checking notifications…')).toBeTruthy();
+    unmount();
+    renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications' })} />);
+    expect(screen.getByText('Nothing needs your input.')).toBeTruthy();
+  });
+
+  it('opens the decision pinned to the notified request and state version', () => {
+    renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', items: notified })} />);
+    fireEvent.click(screen.getByText('Which branch?'));
+    expect(screen.getByTestId('location').textContent)
+      .toBe('/projects/p1/runs/r2?view=approvals&requestId=q1&stateVersion=7');
+  });
+
+  it('offers Dismiss only when the source supports it', async () => {
+    const dismiss = vi.fn().mockResolvedValue(undefined);
+    const { unmount } = renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', items: notified })} />);
+    expect(screen.queryByRole('button', { name: /Dismiss/ })).toBeNull();
+    unmount();
+    renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', items: notified, dismiss })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Question in run r2' }));
+    expect(dismiss).toHaveBeenCalledWith(notified[0]);
+  });
+
+  it('shows a failed dismiss', async () => {
+    const dismiss = vi.fn().mockRejectedValue(new Error('Boom'));
+    renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', items: notified, dismiss })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss Question in run r2' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not dismiss. Boom');
+  });
+});

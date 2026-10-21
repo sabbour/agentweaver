@@ -1,8 +1,8 @@
 /**
- * Lists pending questions and approvals. Overview and the notification bell use
- * it today for the bound run; later the attention inbox and Chief of Staff
- * Priorities reuse it. Each item opens the run's Approvals tab, where the shared
- * decision view handles the response.
+ * Lists pending questions and approvals. The notification bell uses it for the
+ * bound run; Overview and Flow use it for the caller's notifications. Each item
+ * opens the run's Approvals tab, where the shared decision view handles the
+ * response.
  */
 import {
   Button,
@@ -38,6 +38,7 @@ const useStyles = makeStyles({
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   empty: { padding: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 },
+  row: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
   trigger: { position: 'relative', display: 'inline-flex', flexShrink: 0 },
   badge: { position: 'absolute', top: '2px', right: '2px', pointerEvents: 'none' },
   surface: {
@@ -50,28 +51,58 @@ const useStyles = makeStyles({
   scroll: { maxHeight: '360px', overflowY: 'auto' },
 });
 
-/** Renders the pending items, or a one-line state when there are none. */
+/**
+ * Renders the pending items, or a one-line state when there are none. Run attention
+ * needs a bound run; notification attention (`source: 'notifications'`) reads across
+ * runs and offers Dismiss when the source supports it.
+ */
 export function AttentionList({ attention, onNavigate }: { attention: RunAttention; onNavigate?: () => void }) {
   const styles = useStyles();
-  if (!attention.binding) return <Caption1 className={styles.empty}>Open a run to see what needs your input.</Caption1>;
-  if (attention.error) return <Caption1 className={styles.empty} role="alert">Could not check the open run. {errorMessage(attention.error)}</Caption1>;
-  if (attention.loading) return <Caption1 className={styles.empty}>Checking the open run…</Caption1>;
-  if (attention.items.length === 0) return <Caption1 className={styles.empty}>Nothing needs your input in the open run.</Caption1>;
+  const [dismissError, setDismissError] = useState<unknown>(null);
+  const notifications = attention.source === 'notifications';
+  if (!notifications && !attention.binding) return <Caption1 className={styles.empty}>Open a run to see what needs your input.</Caption1>;
+  if (attention.error) return (
+    <Caption1 className={styles.empty} role="alert">
+      {notifications ? 'Could not read notifications.' : 'Could not check the open run.'} {errorMessage(attention.error)}
+    </Caption1>
+  );
+  if (attention.loading) return <Caption1 className={styles.empty}>{notifications ? 'Checking notifications…' : 'Checking the open run…'}</Caption1>;
+  if (attention.items.length === 0) return <Caption1 className={styles.empty}>{notifications ? 'Nothing needs your input.' : 'Nothing needs your input in the open run.'}</Caption1>;
+  const dismiss = attention.dismiss;
   return (
     <div className={styles.list} role="list" aria-label="Needs your input">
-      {attention.items.map((item) => (
-        <Link
-          key={`${item.sessionId}/${item.requestId}`}
-          role="listitem"
-          className={styles.item}
-          to={attentionPath(item)}
-          onClick={onNavigate}
-        >
-          <Text weight="semibold">{DECISION_TITLES[item.kind]}</Text>
-          {item.prompt && <Text>{item.prompt}</Text>}
-          <Caption1>Run {item.runId}</Caption1>
-        </Link>
-      ))}
+      {dismissError != null && <Caption1 role="alert">Could not dismiss. {errorMessage(dismissError)}</Caption1>}
+      {attention.items.map((item) => {
+        const content = (
+          <>
+            <Text weight="semibold">{DECISION_TITLES[item.kind]}</Text>
+            {item.prompt && <Text>{item.prompt}</Text>}
+            <Caption1>Run {item.runId}</Caption1>
+          </>
+        );
+        const key = `${item.sessionId}/${item.requestId}`;
+        if (!dismiss || !item.notificationId) return (
+          <Link key={key} role="listitem" className={styles.item} to={attentionPath(item)} onClick={onNavigate}>
+            {content}
+          </Link>
+        );
+        return (
+          <div key={key} role="listitem" className={styles.row}>
+            <Link className={styles.item} to={attentionPath(item)} onClick={onNavigate}>{content}</Link>
+            <Button
+              appearance="subtle"
+              size="small"
+              aria-label={`Dismiss ${DECISION_TITLES[item.kind]} in run ${item.runId}`}
+              onClick={() => {
+                setDismissError(null);
+                void dismiss(item).catch((reason: unknown) => setDismissError(reason));
+              }}
+            >
+              Dismiss
+            </Button>
+          </div>
+        );
+      })}
     </div>
   );
 }

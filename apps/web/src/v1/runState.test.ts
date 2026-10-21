@@ -9,23 +9,24 @@ describe('runState', () => {
     expect(runState('completed')).toEqual({ label: 'Done', color: 'success' });
     expect(runState('failed')).toEqual({ label: 'Failed', color: 'danger' });
     expect(runState('indeterminate')).toEqual({ label: 'Outcome unknown', color: 'severe' });
+    expect(runState('cancelled')).toEqual({ label: 'Cancelled', color: 'subtle' });
   });
 
   it('shows missing or unknown states as Unavailable, never as Done', () => {
-    for (const value of [null, undefined, '', 'cancelled', 'COMPLETED'])
+    for (const value of [null, undefined, '', 'CANCELLED', 'COMPLETED'])
       expect(runState(value)).toEqual({ label: 'Unavailable', color: 'subtle' });
   });
 
   it('keeps every label distinct', () => {
-    const states = ['blocked', 'idle', 'active', 'completed', 'failed', 'indeterminate', null];
+    const states = ['blocked', 'idle', 'active', 'completed', 'failed', 'cancelled', 'indeterminate', null];
     const labels = states.map((state) => runState(state).label);
     expect(new Set(labels).size).toBe(states.length);
   });
 });
 
 describe('isRunFinished', () => {
-  it('is true only for completed, failed, and indeterminate', () => {
-    expect(['completed', 'failed', 'indeterminate'].every(isRunFinished)).toBe(true);
+  it('is true only for completed, failed, cancelled, and indeterminate', () => {
+    expect(['completed', 'failed', 'cancelled', 'indeterminate'].every(isRunFinished)).toBe(true);
     for (const value of ['blocked', 'idle', 'active', 'other', null, undefined])
       expect(isRunFinished(value)).toBe(false);
   });

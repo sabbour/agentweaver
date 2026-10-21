@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayError } from './api';
 import type { useAuth } from './AuthContext';
 import type { CoordinatorDecisionStateView, SessionStatusBlocker, SessionStatusSnapshot } from './contracts';
-import { DecisionList, DecisionView } from './DecisionView';
+import { DecisionList, DecisionView, STALE_DECISION_NOTICE } from './DecisionView';
 
 const mocks = vi.hoisted(() => ({
   getDecisions: vi.fn(),
@@ -110,6 +110,29 @@ describe('DecisionView', () => {
     expect(screen.getByRole('status').textContent)
       .toBe('This request was already answered or replaced. The view was refreshed and nothing was sent.');
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends nothing when the reread state version differs from the opened one', async () => {
+    mocks.getDecisions.mockResolvedValue(decisions('req-1', 6));
+    mocks.resolveGate.mockResolvedValue(accepted);
+    const { refresh } = renderView({ decisionKey: { ...decisionKey, stateVersion: 4 } });
+    await click(screen.getByTestId('approval-gate-approve-btn'));
+    expect(mocks.getDecisions).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveGate).not.toHaveBeenCalled();
+    expect(mocks.answerGate).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toBe(STALE_DECISION_NOTICE);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    await click(screen.getByTestId('approval-gate-approve-btn'));
+    expect(mocks.resolveGate).toHaveBeenCalledWith('token', 'p1', 'r1', 's1', 'req-1', 6, true, expect.any(String), 'tenant-1');
+  });
+
+  it('sends when the reread state version matches the opened one', async () => {
+    mocks.getDecisions.mockResolvedValue(decisions('req-1', 4));
+    mocks.resolveGate.mockResolvedValue(accepted);
+    renderView({ decisionKey: { ...decisionKey, stateVersion: 4 } });
+    await click(screen.getByTestId('approval-gate-approve-btn'));
+    expect(mocks.resolveGate).toHaveBeenCalledWith('token', 'p1', 'r1', 's1', 'req-1', 4, true, expect.any(String), 'tenant-1');
   });
 
   it('disables actions and warns when the snapshot no longer has this request pending', async () => {
