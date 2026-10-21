@@ -5,7 +5,7 @@ import { FileViewer } from '../components/FileViewer';
 import { EmptyState } from '../components/ui';
 import type { WorkspaceFileContent } from '../api/types';
 import { useAuth } from './AuthContext';
-import { gatewayClient } from './api';
+import { GatewayError, gatewayClient } from './api';
 import type { SourceControlOutputCaptureDetail, SourceControlOutputCapturePage } from './contracts';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading } from './pageParts';
@@ -20,6 +20,7 @@ const useStyles = makeStyles({
   files: { padding: tokens.spacingHorizontalS, overflow: 'auto', maxHeight: '480px' },
   viewer: { display: 'flex', minWidth: 0, minHeight: '300px', maxHeight: '600px', overflow: 'auto' },
   meta: { color: tokens.colorNeutralForeground3 },
+  select: { minWidth: 0, maxWidth: '100%', '& select': { minWidth: 0 } },
 });
 
 /** Keys on current authority as well as route identity so old content disappears before a new read. */
@@ -42,7 +43,7 @@ function useRead<T>(read: () => Promise<T>) {
   const [generation, setGeneration] = useState(0);
   useEffect(() => {
     let active = true;
-    void read().then(
+    void Promise.resolve().then(read).then(
       (data) => { if (active) setResult({ data }); },
       (error: unknown) => { if (active) setResult({ error }); },
     );
@@ -51,18 +52,20 @@ function useRead<T>(read: () => Promise<T>) {
   return { ...result, retry: () => { setResult({}); setGeneration((value) => value + 1); } };
 }
 
-function ReadError({ error, retry }: { error: unknown; retry: () => void }) {
+function ReadError({ error, retry, signIn }: { error: unknown; retry: () => void; signIn?: () => void }) {
   return <div>
     <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>
-    <Button onClick={retry}>Try again</Button>
+    <Button onClick={signIn ?? retry}>{signIn ? 'Sign in to run' : 'Try again'}</Button>
   </div>;
 }
 
 function CaptureRun({ projectId, runId, initialCaptureId, onSelect, busy }: Parameters<typeof OutputCaptureBrowser>[0]) {
   const styles = useStyles();
-  const { apiCall } = useAuth();
+  const { apiCall, ensureSession, authorize } = useAuth();
   const read = useCallback(async () => {
     const binding = { projectId, runId };
+    if (!await ensureSession(binding, false)) throw new GatewayError(401, { code: 'run_sign_in_required' },
+      'Sign in to this run to browse its artifacts.');
     const status = await apiCall((token, tenant) => gatewayClient.getRunStatus(token, projectId, runId, tenant), binding);
     if (status.projectId !== projectId || status.runId !== runId) throw new Error('The run changed. Open it again.');
     const tree = await apiCall((token, tenant) =>
@@ -71,17 +74,18 @@ function CaptureRun({ projectId, runId, initialCaptureId, onSelect, busy }: Para
       node.identity.projectId !== projectId || node.identity.runId !== runId))
       throw new Error('The sessions belong to a different run. Open the run again.');
     return tree;
-  }, [apiCall, projectId, runId]);
+  }, [apiCall, ensureSession, projectId, runId]);
   const result = useRead(read);
   const [pickedSession, setPickedSession] = useState('');
-  if (result.error != null) return <ReadError error={result.error} retry={result.retry} />;
+  if (result.error != null) return <ReadError error={result.error} retry={result.retry}
+    signIn={errorCode(result.error) === 'run_sign_in_required' ? () => { void authorize({ projectId, runId }).then(result.retry); } : undefined} />;
   if (!result.data) return <Loading label="Loading sessions" />;
   const tree = result.data;
   const sessionId = tree.nodes.some((node) => node.identity.sessionId === pickedSession) ? pickedSession : tree.rootSessionId;
   if (!tree.nodes.length) return <EmptyState title="No sessions" description="This run has no sessions to browse." />;
   return <section className={styles.stack} aria-label="Artifacts">
     <Field label="Session">
-      <Select value={sessionId} onChange={(_, data) => setPickedSession(data.value)}>
+      <Select className={styles.select} value={sessionId} onChange={(_, data) => setPickedSession(data.value)}>
         {tree.nodes.map((node) => <option key={node.identity.sessionId} value={node.identity.sessionId}>
           {node.identity.sessionId === tree.rootSessionId ? 'Main session' : `${node.kind} session · ${node.identity.sessionId}`}
         </option>)}
@@ -127,7 +131,7 @@ function CaptureList({ projectId, runId, sessionId, initialCaptureId, onSelect, 
   return <div className={styles.stack}>
     {page.captures.length === 0 ? <EmptyState title="No saved captures" description="Files appear here after this session saves produced output. Failed or unknown runs may withhold captures." /> : (
       <Field label="Saved capture">
-        <Select value={captureId} onChange={(_, data) => setPicked(data.value)}>
+        <Select className={styles.select} value={captureId} onChange={(_, data) => setPicked(data.value)}>
           <option value="">Choose a capture</option>
           {page.captures.map((capture) => <option key={capture.captureId} value={capture.captureId}>
             {`${capture.branchName} · ${new Date(capture.capturedAt).toLocaleString()} · ${capture.captureId}`}

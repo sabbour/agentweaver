@@ -8,6 +8,8 @@ import type { SessionTreeSnapshot } from './contracts';
 const auth = vi.hoisted(() => ({
   session: { accessToken: 'current-token' },
   authorizationContext: { tenantId: 'tenant-1', membershipRevision: 1 },
+  ensureSession: vi.fn().mockResolvedValue(true),
+  authorize: vi.fn().mockResolvedValue(undefined),
   apiCall: vi.fn((operation: (token: string, tenant: string) => Promise<unknown>, binding?: unknown) => {
     if (!binding) throw new Error('Capture reads require a run binding.');
     return operation('bound-token', 'tenant-1');

@@ -51,6 +51,7 @@ const KIND_LABELS: Record<ChiefOfStaffPriorityLinkKind, string> = {
 
 const useStyles = makeStyles({
   card: {
+    minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
@@ -64,6 +65,7 @@ const useStyles = makeStyles({
   muted: { color: tokens.colorNeutralForeground3 },
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, margin: 0, padding: 0, listStyleType: 'none' },
   item: {
+    minWidth: 0,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
@@ -76,7 +78,7 @@ const useStyles = makeStyles({
   row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   sub: { fontSize: tokens.fontSizeBase300, fontWeight: tokens.fontWeightSemibold },
   meta: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
-  form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
   inline: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
 });
 
