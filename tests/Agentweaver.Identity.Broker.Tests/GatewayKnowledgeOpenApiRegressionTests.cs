@@ -15,6 +15,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     [
         "createProjectRun",
         "cancelProjectRun",
+        "createChiefOfStaffPriority",
         "createKnowledgeRecord",
         "updateKnowledgeRecord",
         "restoreKnowledgeRecord",

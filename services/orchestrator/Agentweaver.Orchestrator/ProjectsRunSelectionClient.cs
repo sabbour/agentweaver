@@ -479,19 +479,67 @@ internal sealed class ProjectsRunSelectionClient(
             (authorization.BoundRunId is not null && authorization.BoundProjectId is null) ||
             authorization.BoundProjectId != (boundProjects.Length == 1 ? boundProjects[0].Value : null) ||
             authorization.BoundRunId != (boundRuns.Length == 1 ? boundRuns[0].Value : null) ||
-            authorization.EffectiveAuthority.IsDefault ||
-            !authorization.EffectiveAuthority.Any(authority =>
-                !authority.Permissions.IsDefault &&
-                ((authority.ResourceType == "project" && authority.ResourceId == projectId &&
-                    authority.Permissions.Any(permission =>
-                        permission.Permission is "readProjects" or "readRunSelection" &&
-                        permission.RoleRevision > 0)) ||
-                 (authority.ResourceType == "tenant" && authority.ResourceId == authorization.TenantId &&
-                    authority.Permissions.Any(permission =>
-                        permission.Permission == "readProjects" && permission.RoleRevision > 0)))))
+            !CanReadProject(authorization, projectId))
             throw new CoordinationException("project_read_permission_denied", StatusCodes.Status403Forbidden);
         return authorization;
     }
+
+    /// <summary>
+    /// Reads fresh Projects authorization for a caller-scoped read that spans projects.
+    /// </summary>
+    /// <param name="context">The authenticated request whose bearer and tenant selector are forwarded to Projects.</param>
+    /// <param name="cancellationToken">Cancels the Projects call.</param>
+    /// <returns>The validated authorization context. Use <see cref="CanReadProject"/> per project.</returns>
+    /// <exception cref="CoordinationException">The caller, token binding, or owner response is invalid.</exception>
+    /// <remarks>
+    /// The token must not be bound to a project or run, because the result covers every project the caller can read.
+    /// </remarks>
+    internal async Task<ProjectsAuthorizationContext> ReadCallerAuthorityAsync(
+        HttpContext context,
+        CancellationToken cancellationToken)
+    {
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        CoordinationIdentity.RequireReadScope(context.User);
+        if (!HasAudience(context.User, options.Audience) ||
+            !HasAudience(context.User, options.ProjectsAudience) ||
+            context.User.HasClaim(claim => claim.Type is "project_id" or "run_id"))
+            throw new CoordinationException("caller_binding_mismatch", StatusCodes.Status403Forbidden);
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        var bearer = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        var authorization = await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken)
+            .ConfigureAwait(false);
+        if (authorization.ContractVersion != 1 ||
+            authorization.Issuer != options.Issuer ||
+            authorization.ActorId != caller.Subject ||
+            string.IsNullOrWhiteSpace(authorization.TenantId) ||
+            (tenant is not null && authorization.TenantId != tenant) ||
+            authorization.MembershipRevision < 1 ||
+            authorization.BoundProjectId is not null ||
+            authorization.BoundRunId is not null ||
+            authorization.EffectiveAuthority.IsDefault)
+            throw new CoordinationException("projects_authorization_contract_invalid", StatusCodes.Status502BadGateway);
+        return authorization;
+    }
+
+    /// <summary>
+    /// Returns whether validated authority grants read access to one project.
+    /// </summary>
+    /// <remarks>
+    /// Accepts <c>readProjects</c> or <c>readRunSelection</c> on the project, or tenant-level <c>readProjects</c>.
+    /// Every accepted grant must carry a positive role revision.
+    /// </remarks>
+    internal static bool CanReadProject(ProjectsAuthorizationContext authorization, string projectId) =>
+        !authorization.EffectiveAuthority.IsDefault &&
+        authorization.EffectiveAuthority.Any(authority =>
+            !authority.Permissions.IsDefault &&
+            ((authority.ResourceType == "project" && authority.ResourceId == projectId &&
+                authority.Permissions.Any(permission =>
+                    permission.Permission is "readProjects" or "readRunSelection" &&
+                    permission.RoleRevision > 0)) ||
+             (authority.ResourceType == "tenant" && authority.ResourceId == authorization.TenantId &&
+                authority.Permissions.Any(permission =>
+                    permission.Permission == "readProjects" && permission.RoleRevision > 0))));
 
     /// <summary>
     /// Resolves every reviewed remote-tool snapshot reference before accepting the selection contract.

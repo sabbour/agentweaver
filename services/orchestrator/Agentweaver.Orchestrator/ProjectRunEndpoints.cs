@@ -112,7 +112,7 @@ public static partial class CoordinationEndpoints
     }
 
     /// <summary>Rejects ambiguous retry headers using the same bounded key syntax as the Gateway contract.</summary>
-    private static string RequireProjectRunIdempotencyKey(HttpContext context)
+    internal static string RequireProjectRunIdempotencyKey(HttpContext context)
     {
         var values = context.Request.Headers["Idempotency-Key"];
         if (values.Count != 1 || values[0] is not { Length: >= 1 and <= 128 } key ||
