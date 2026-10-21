@@ -200,6 +200,7 @@ returns `400`.
 | Method and path | Contract |
 | --- | --- |
 | `GET /openapi/v1.json` | Anonymous live OpenAPI 3.1 route and error discovery. |
+| `GET /agents/agentweaver.agent.md` | Anonymous `text/markdown; charset=utf-8` download of the operator agent definition embedded in the Gateway. It is excluded from OpenAPI, so it is not an MCP tool, and it calls no owner. |
 | `GET /api/v1/authorization/context` | Fresh no-store Projects & Config context for the validated Broker bearer and optional tenant selector; no query parameters. The context is informational, not an authorization grant. |
 | `GET /api/v1/projects/{projectId}/runs/{runId}/events` | Bounded replay from the committed Events journal. The owner remains responsible for current run authorization. |
 | `GET /api/v1/projects/{projectId}/runs/{runId}/events/live` | SSE fan-out from committed Events pages. The Gateway rechecks exact run-bound `ReadProjects` authority before writing each event; each `id` is the Events journal cursor and is accepted on reconnect through `Last-Event-ID` or `cursor`. |

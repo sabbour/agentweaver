@@ -160,6 +160,7 @@ Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | GET | `/openapi/v1.json` | Public | OpenAPI 3.1 route and schema catalog. |
+| GET | `/agents/agentweaver.agent.md` | Public | Operator agent definition as `text/markdown`; excluded from OpenAPI and the MCP catalog. |
 | GET | `/api/v1/authorization/context` | Bearer; `api.read`, non-purpose token | Fresh Projects actor, tenant, binding, and effective authority. |
 | GET | `/health/live` | Public | Process liveness. |
 | GET | `/health/ready` | Public | Gateway host readiness. |
