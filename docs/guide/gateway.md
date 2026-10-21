@@ -190,6 +190,14 @@ tools.
 
 ## Connect an MCP client
 
+Download the operator definition from `GET /agents/agentweaver.agent.md` on the
+Gateway and save it as `.github/agents/agentweaver.agent.md` in your repository.
+This anonymous route returns `text/markdown; charset=utf-8` and is excluded from
+OpenAPI and the MCP catalog. Unlike 0.x, which wrote the definition to a local
+project folder when missing, v1 provides a download only. It does not write into
+run checkouts because that would add an unrequested file to run diffs and pull
+requests.
+
 The separate `Agentweaver.Mcp` host exposes Streamable HTTP at `POST /mcp`.
 Its `tools/list` catalog comes from the Gateway's OpenAPI document; `tools/call`
 can invoke only the finite routes and schemas in that document. SSE routes and

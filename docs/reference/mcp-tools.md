@@ -14,6 +14,12 @@ For route authorization and native-only operations, see the
 
 ## Connect and authenticate
 
+Download the v1 operator definition from the Gateway at
+`GET /agents/agentweaver.agent.md`. Save it as
+`.github/agents/agentweaver.agent.md` in a repository where you want to use it.
+The download is anonymous and returns Markdown; it is not an MCP tool.
+It does not write the file into project or run repositories automatically.
+
 Before you connect, configure the absolute HTTPS Broker issuer, protected
 resource audience, and Gateway service root listed below. Obtain a valid Broker
 access token for the MCP audience. The host maps `/mcp` with the MCP SDK's

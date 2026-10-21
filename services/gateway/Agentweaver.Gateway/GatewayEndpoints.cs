@@ -17,6 +17,11 @@ public static class GatewayEndpoints
         endpoints.MapGet("/health/ready", () => Results.Ok(new { status = "ready" }))
             .AllowAnonymous();
         endpoints.MapGet(
+                "/agents/agentweaver.agent.md",
+                () => Results.Text(AgentDefinitionTemplate.Content, "text/markdown; charset=utf-8"))
+            .AllowAnonymous()
+            .ExcludeFromDescription();
+        endpoints.MapGet(
                 "/openapi/v1.json",
                 () => Results.Json(GatewayOpenApi.CreateDocument(), GatewayOpenApi.JsonOptions))
             .AllowAnonymous()
