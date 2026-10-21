@@ -186,6 +186,7 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | Operation ID | Purpose |
 | --- | --- |
 | `replayRunEvents` | Read a finite committed journal page. |
+| `readSessionTurnContent` | Read recorded turn text with current run-bound project authority. Excludes cache, configuration, and tool-result material. |
 | `readRunUsage` | Read run usage totals. |
 
 ## Results and errors

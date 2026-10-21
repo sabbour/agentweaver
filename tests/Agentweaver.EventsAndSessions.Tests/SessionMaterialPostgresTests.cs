@@ -91,6 +91,20 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         var read = await Store.ReadAsync(Principal, "session", input.EventId, kind, Historical, default);
         Assert.Equal(replay, read.Material);
         Assert.Equal(input.Bytes, read.Bytes);
+        if (kind == SessionMaterialKind.TurnContent)
+        {
+            var turn = SessionTurnContent.FromMaterial(read);
+            Assert.Equal(input.EventId, turn.EventId);
+            Assert.Equal(new SessionIdentity("project", "run", "session"), turn.Identity);
+            Assert.Equal(Encoding.UTF8.GetString(input.Bytes), turn.Text);
+            Assert.DoesNotContain(turn.Text, turn.ToString());
+            using var json = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(turn));
+            Assert.Equal(3, json.RootElement.EnumerateObject().Count());
+        }
+        else
+        {
+            Assert.Throws<ArgumentException>(() => SessionTurnContent.FromMaterial(read));
+        }
         var page = await _journal.ReplayAsync(Principal, new("session"));
         Assert.Equal(replay.Reference, Assert.Single(Assert.Single(page.Events).ObjectReferences).Reference);
         await Assert.ThrowsAsync<SessionEventConflictException>(() => Store.WriteAsync(Principal, "session",
