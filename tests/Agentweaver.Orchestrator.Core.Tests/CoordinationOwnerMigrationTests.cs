@@ -298,7 +298,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21]), reader.GetFieldValue<int[]>(9));
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 26]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));
