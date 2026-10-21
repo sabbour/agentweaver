@@ -215,6 +215,16 @@ own egress policy instead of through an operator tunnel. The
 template, applies the ServiceAccount and egress policy, performs the handover
 once, and runs the migration Jobs.
 
+`infra/bicep/db-maintenance-ci-identity.bicep` defines the identity that the
+database maintenance workflow uses, `agentweaver-id-db-maintenance`. GitHub
+Actions signs in as it only from the `v1-db-maintenance` environment. It can
+read the resource group, get cluster credentials, and manage the maintenance
+Kubernetes objects in the `agentweaver` namespace. It cannot deploy Azure
+resources or assign roles, so it uses the migration identity as it is and
+never runs the handover. `npm run db:maintenance:setup`, run once by the
+PostgreSQL Entra administrator, creates both identities, runs the handover, and
+configures the GitHub environment.
+
 ## Network and acceptance checks
 
 The canonical Identity PostgreSQL grant definition includes the four runtime

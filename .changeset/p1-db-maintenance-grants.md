@@ -10,3 +10,4 @@ The reviewed plan is embedded in the image. A run checks its exact hash, the pla
 After migrating, it grants only what the plan names, reads every grant back, and prints a marker that the database maintenance runner requires.
 Without the new migration settings, `--migrate` behaves as before.
 The Foundation Probe image build now copies the embedded plan file that its Postgres package needs.
+A new setup command creates the database maintenance workflow identity, its namespace-scoped Kubernetes role, and the GitHub environment, and runs the one-time schema ownership handover.

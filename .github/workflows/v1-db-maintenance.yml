@@ -2,6 +2,9 @@ name: v1 database maintenance
 
 # Runs the same command a person runs locally: npm run db:maintenance. It is manual only and
 # never runs on push or pull requests. Without "execute" it only checks preconditions.
+# It signs in as the workflow identity that "npm run db:maintenance:setup" creates. That identity
+# cannot create the migration identity or run the ownership handover, so a run stops early and
+# names the setup command when either is missing.
 on:
   workflow_dispatch:
     inputs:
@@ -18,7 +21,7 @@ on:
         required: false
         type: string
       handover:
-        description: Schema ownership handover (needs the PostgreSQL Entra administrator)
+        description: Schema ownership handover. auto only checks it here; the setup command runs it.
         required: true
         default: auto
         type: choice

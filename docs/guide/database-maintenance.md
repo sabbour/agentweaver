@@ -24,9 +24,10 @@ plan. An image that would apply it fails before it connects.
 | Plan check | Requires the committed plan file, the plan generator, and the pinned hash to agree. | Read-only. |
 | Cluster access | Checks the Azure account, gets a private kubeconfig for `agentweaver-aks`, and checks Kubernetes permissions. | Uses a temporary file that is always removed. |
 | Broker egress check | Compares the live Broker migration egress policy with the repository and reports any DNS name that differs. | Read-only. |
+| Setup check | Reads the migration identity, its federated credential, and the recorded handover. A workload identity that would need either one stops here and names the setup command. | Read-only. |
 | Service image check | Reads the images the Orchestrator and Events & Sessions Deployments run. | Read-only. |
 | Lock | Creates the Lease `p1-db-maintenance-lock`. A second run fails here. | Released at the end of every run. |
-| Migration identity | Deploys `infra/bicep/p1-postgres-migration-identity.bicep`: the identity and its federated credential. | The deployment is declarative. |
+| Migration identity | Uses the existing identity when it and its federated credential match. Otherwise a run signed in as the PostgreSQL Entra administrator deploys `infra/bicep/p1-postgres-migration-identity.bicep`. | The deployment is declarative. |
 | ServiceAccount and egress | Applies `p1-postgres-migration` and its egress policy with server-side apply. | Server-side apply. |
 | Ownership handover | Makes the migration identity the owner of the `orchestrator` and `events_sessions` schemas. | Recorded in the ConfigMap `p1-db-maintenance-state`; later runs skip it. |
 | Connectivity probes | A short Job under each migration egress policy resolves the PostgreSQL name, including its private link name, and opens port 5432. | Uniquely named and removed. |
@@ -57,17 +58,43 @@ marker. Older images fail the grants check after they migrate. Use
 
 ### One-time setup
 
-Do these once per environment:
+One command sets up everything that routine runs need. Run it once per
+environment, and again at any time to check the setup:
 
-1. Run the first ownership handover locally, signed in as the PostgreSQL Entra
-   administrator. The workflow's identity is not a database administrator.
-   Later runs, including workflow runs, find the recorded handover and skip it.
-2. For workflow runs, create a GitHub environment named `v1-db-maintenance`.
-   Set the repository variable `AZURE_DB_MAINTENANCE_CLIENT_ID` to an Entra
-   application federated to that environment. That identity needs AKS user
-   access and the Kubernetes permissions the runner checks, and the right to
-   deploy a user-assigned identity and its federated credential in the
-   `agentweaver` resource group.
+```powershell
+npm run db:maintenance:setup            # check only; exits 1 and lists what is missing
+npm run db:maintenance:setup -- --execute
+```
+
+With `--execute` it creates only what is missing, reads everything back, and
+writes a receipt:
+
+| Part | What it creates |
+| --- | --- |
+| P1 migration identity | The identity, its federated credential, its ServiceAccount and egress policy, and the schema ownership handover. It reuses the runner in `--prepare-only` mode, with the same preflight, lock, cleanup, and receipt. |
+| Workflow identity | `infra/bicep/db-maintenance-ci-identity.bicep`: the identity `agentweaver-id-db-maintenance`, a federated credential for the GitHub environment `v1-db-maintenance`, Reader on the resource group, AKS Cluster User on the cluster, and a custom Kubernetes role scoped to the `agentweaver` namespace. |
+| GitHub environment | The environment `v1-db-maintenance`, limited to the `v1` branch, and its variable `AZURE_DB_MAINTENANCE_CLIENT_ID`. |
+
+Run the setup with the Azure CLI signed in as the PostgreSQL Entra
+administrator, with the right to assign roles in the `agentweaver` resource
+group, and with the GitHub CLI signed in as a repository admin. This is the
+same sign-in that runs the P1 bootstrap. The command needs no prompt or
+decision, so it runs the same from a terminal, a script, or an agent session
+that already has that sign-in.
+
+The setup needs that sign-in because of the ownership handover. The P1 schemas
+start out owned by the Entra administrator's database role. PostgreSQL lets
+only a member of the owning role give objects away, and Azure Database for
+PostgreSQL has no superuser. Only the Entra administrator can also create the
+database principal for the migration identity. After the handover, the
+migration identity owns the schemas, and later runs, including workflow runs,
+need neither that sign-in nor the setup command.
+
+The workflow identity cannot deploy Azure resources or assign roles. If the
+migration identity or the handover is missing, a workflow run stops before it
+changes anything and names the setup command. Role assignments can take a few
+minutes to reach AKS. Run the workflow once without **execute** to confirm the
+workflow identity has every permission the runner checks.
 
 ## Run it locally
 
@@ -177,7 +204,8 @@ npm run db:maintenance -- --release-lock <run-id>
 - Apply Core migration 032 or any version outside the reviewed plan.
 - Reset, reinitialize, or drop a database, schema, or role.
 - Create Azure role assignments or change identities other than the P1
-  migration identity.
+  migration identity. Only the setup command assigns roles, and only the ones
+  in its template.
 - Change any Deployment setting other than the service image.
 
 These changes need their own review.

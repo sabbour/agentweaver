@@ -20,6 +20,7 @@
     "harness:p1:signin-run": "node scripts/harness-shared/p1-signin-run.mjs",
     "test:release": "node --test scripts/release/tests/*.test.mjs",
     "db:maintenance": "node scripts/azure/db-maintenance.mjs",
+    "db:maintenance:setup": "node scripts/azure/db-maintenance-setup.mjs",
     "test:azure": "node --test scripts/azure/tests/*.test.mjs",
     "test:harness": "node --test scripts/harness-shared/test/*.test.mjs scripts/api-harness/test/*.test.mjs scripts/ui-harness/test/*.test.mjs scripts/mcp-harness/test/*.test.mjs",
     "test:harness:signin-browser": "node --test scripts/harness-shared/browser-test/*.test.mjs",

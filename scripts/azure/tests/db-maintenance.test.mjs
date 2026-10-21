@@ -16,6 +16,7 @@ const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
 const fail = (stderr = 'failed', status = 1) => ({ status, stdout: '', stderr });
 const CLIENT_ID = '12345678-1234-4123-8123-123456789abc';
 const PRINCIPAL_ID = '87654321-4321-4321-8321-cba987654321';
+const ISSUER = 'https://eastus.oic.prod-aks.azure.com/tenant/cluster';
 const plan = JSON.parse(readFileSync('scripts/azure/lib/p1-postgres-plan.json', 'utf8'));
 const marker = (service, schema, versions) =>
   `P1_POSTGRES_RUNTIME_GRANTS_VERIFIED service=${service} schema=${schema} role=agentweaver-id-${service} ` +
@@ -43,7 +44,7 @@ const driftedSpec = () => {
 };
 
 function world({ lease, drift = false, state, jobOutcome = () => 'Complete', logs = goodLogs, identityExists = true,
-  relayError, appImages = {}, rolloutFails = false, probeLog } = {}) {
+  federated = true, accountType = 'user', relayError, appImages = {}, rolloutFails = false, probeLog } = {}) {
   const calls = [];
   const cluster = new Map();
   if (lease) cluster.set(`lease/${LOCK_NAME}`, lease);
@@ -57,12 +58,16 @@ function world({ lease, drift = false, state, jobOutcome = () => 'Complete', log
     if (command === 'dotnet' || command === 'kubelogin') return ok();
     if (command === 'az') {
       if (args[0] === 'account') return ok(JSON.stringify({ id: DB_MAINTENANCE_TARGET.subscriptionId,
-        tenantId: DB_MAINTENANCE_TARGET.tenantId, user: { name: 'operator@example.test' } }));
-      if (args[0] === 'aks') return ok();
+        tenantId: DB_MAINTENANCE_TARGET.tenantId, user: { name: 'operator@example.test', type: accountType } }));
+      if (args[0] === 'aks') return args.includes('--query') ? ok(`${ISSUER}\n`) : ok();
       if (args[0] === 'group') return ok('{"owner":"test"}');
+      if (args[0] === 'identity' && args[1] === 'federated-credential')
+        return ok(JSON.stringify(federated ? [{ issuer: `${ISSUER}/`, audiences: ['api://AzureADTokenExchange'],
+          subject: 'system:serviceaccount:agentweaver:p1-postgres-migration' }] : []));
       if (args[0] === 'identity') {
         if (args.includes('--query')) return ok(`${'d'.repeat(8)}-dddd-4ddd-8ddd-${'d'.repeat(12)}\n`);
-        return identityExists ? ok() : fail('not found', 3);
+        return identityExists ? ok(JSON.stringify({ clientId: CLIENT_ID, principalId: PRINCIPAL_ID }))
+          : fail(`ERROR: The Resource '${MIGRATION_IDENTITY}' was not found.`, 3);
       }
       if (args[0] === 'deployment') return ok(JSON.stringify({ name: MIGRATION_IDENTITY, clientId: CLIENT_ID,
         principalObjectId: PRINCIPAL_ID, namespace: 'agentweaver', serviceAccount: 'p1-postgres-migration' }));
@@ -286,7 +291,7 @@ test('execute applies the identity, egress, handover, and Jobs in order, then cl
     assert.equal(receipt.result, 'succeeded');
     assert.deepEqual(receipt.steps.map(step => step.name), [
       'source-verified', 'locked-restore-verified', 'plan-verified', 'cluster-access-verified', 'broker-egress-checked',
-      'app-images-checked', 'lock-acquired', 'migration-identity-ready', 'serviceaccount-and-egress-applied',
+      'migration-identity-checked', 'app-images-checked', 'lock-acquired', 'migration-identity-ready', 'serviceaccount-and-egress-applied',
       'ownership-handover-verified', 'connectivity-verified', 'connectivity-verified',
       'identity-broker-migrated', 'orchestrator-migrated', 'events-and-sessions-migrated',
     ]);
@@ -534,4 +539,55 @@ test('the connectivity probe runs under the migration egress label with no token
   assert.equal(pod.containers[0].securityContext.allowPrivilegeEscalation, false);
   assert.match(pod.containers[0].image, /@sha256:[0-9a-f]{64}$/);
   assert.match(pod.containers[0].command[2], new RegExp(CONNECTIVITY_MARKER));
+});
+const recordedState = { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } };
+
+test('a workflow identity runs without Azure deployment rights once setup is done', async () => {
+  const fake = world({ accountType: 'servicePrincipal', state: recordedState });
+  try {
+    const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
+      receiptDir: fake.receiptDir }, fake.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.ok(!fake.calls.some(call => call.command === 'az' && ['deployment', 'group'].includes(call.args[0])));
+    assert.equal(fake.relayCalls.length, 0);
+    const ready = receipt.steps.find(step => step.name === 'migration-identity-ready');
+    assert.equal(ready.created, false);
+    assert.equal(ready.deployed, false);
+    assert.equal(fake.cluster.get('serviceaccount/p1-postgres-migration').metadata.annotations['azure.workload.identity/client-id'], CLIENT_ID);
+  } finally { fake.done(); }
+});
+
+test('a workflow identity fails closed before the lock when setup is missing', async () => {
+  for (const [settings, expected] of [
+    [{}, /needs the ownership handover, which needs the PostgreSQL Entra administrator sign-in/],
+    [{ federated: false, state: recordedState }, /needs the migration identity, which needs the PostgreSQL Entra administrator sign-in/],
+    [{ identityExists: false }, /needs the migration identity and the ownership handover/],
+  ]) {
+    const fake = world({ accountType: 'servicePrincipal', ...settings });
+    try {
+      await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
+        receiptDir: fake.receiptDir }, fake.deps), expected);
+      assert.match(fake.receipts[0].receipt.error, /npm run db:maintenance:setup -- --execute/);
+      assert.ok(!kubectlActions(fake.calls).some(action => ['create', 'apply', 'delete'].includes(action)));
+      assert.ok(!fake.calls.some(call => call.command === 'az' && call.args[0] === 'deployment'));
+    } finally { fake.done(); }
+  }
+});
+
+test('--prepare-only sets up identity, egress, and handover, then stops before any Job', async () => {
+  const fake = world({ identityExists: false });
+  try {
+    const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs(['--prepare-only', '--execute']),
+      receiptDir: fake.receiptDir }, fake.deps);
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.scope, 'prepare');
+    assert.deepEqual(receipt.steps.map(step => step.name).slice(-4),
+      ['lock-acquired', 'migration-identity-ready', 'serviceaccount-and-egress-applied', 'ownership-handover-verified']);
+    assert.equal(fake.relayCalls.length, 1);
+    assert.ok(!fake.calls.some(call => call.args[4] === 'create' && call.settings.input?.includes('"kind":"Job"')));
+    assert.ok(!fake.calls.some(call => call.args[4] === 'get' && call.args[5] === 'deployment'));
+    assert.ok(![...fake.cluster.keys()].some(key => key.startsWith('lease/')));
+  } finally { fake.done(); }
+  assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', ...baseArgs]), /--prepare-only cannot be combined with --orchestrator-digest/);
+  assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', '--deploy-apps']), /--deploy-apps/);
 });

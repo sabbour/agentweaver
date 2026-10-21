@@ -49,7 +49,9 @@ release apply does not include that Job or policy.
 The Orchestrator and Events and Sessions migrations run as Jobs from the
 `migrations/p1-postgres/` overlay under the P1 migration identity. One
 command, `npm run db:maintenance`, runs the Broker and P1 Jobs, checks that
-the running service images support the new schema, and writes a receipt. See
+the running service images support the new schema, and writes a receipt.
+`npm run db:maintenance:setup` creates the identities, role assignments, and
+GitHub environment that the command and its workflow need. See
 [Database maintenance](../guide/database-maintenance.md).
 
 Orchestrator migration 032, which adds Source Control pull request records,

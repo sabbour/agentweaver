@@ -90,6 +90,8 @@ Without --execute the runner only checks preconditions and prints what it would 
                                 unready because they still run older images.
   --allow-app-image-mismatch    Migrate even though running services use other images and are not
                                 deployed here. They stay unready until the matching release is deployed.
+  --prepare-only                Stop after the identity, ServiceAccount, egress, and handover. No
+                                digests, probes, or migration Jobs. The setup command uses it.
   --release-lock <runId>        Remove a lock left by a crashed run with that exact run ID, then exit.
   --receipt-dir <path>          Receipt directory. Default ~/.agentweaver/db-maintenance (outside the checkout).
   --job-timeout-seconds <n>     Per-Job wait. Default 900.
@@ -97,7 +99,7 @@ Without --execute the runner only checks preconditions and prints what it would 
 
 /** Parses flags. Unknown or malformed flags stop the run before anything else happens. */
 export function parseDbMaintenanceArgs(argv) {
-  const options = { execute: false, handover: 'auto', reconcileBrokerEgress: false, allowAppImageMismatch: false, deployApps: false, appsOnly: false,
+  const options = { execute: false, handover: 'auto', reconcileBrokerEgress: false, allowAppImageMismatch: false, deployApps: false, appsOnly: false, prepareOnly: false,
     receiptDir: join(homedir(), '.agentweaver', 'db-maintenance'), jobTimeoutSeconds: 900, help: false };
   const valued = new Map([
     ['--orchestrator-digest', 'orchestratorDigest'], ['--events-digest', 'eventsDigest'],
@@ -112,6 +114,7 @@ export function parseDbMaintenanceArgs(argv) {
     else if (arg === '--allow-app-image-mismatch') options.allowAppImageMismatch = true;
     else if (arg === '--deploy-apps') options.deployApps = true;
     else if (arg === '--apps-only') options.appsOnly = true;
+    else if (arg === '--prepare-only') options.prepareOnly = true;
     else {
       // Accept both "--name value" and "--name=value"; a missing value is an error, never a default.
       const [name, inline] = arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg];
@@ -130,6 +133,16 @@ export function parseDbMaintenanceArgs(argv) {
   if (options.releaseLock !== undefined) {
     // Lock release is its own mode so it can never be mixed with a write run.
     if (!/^[0-9a-f]{12}$/.test(options.releaseLock)) throw new Error('--release-lock needs the 12-character run ID from the lock.');
+    return options;
+  }
+  if (options.prepareOnly) {
+    // Prepare-only never runs a Job or touches a service, so image options have no meaning.
+    const conflicting = [
+      [options.orchestratorDigest !== undefined, '--orchestrator-digest'], [options.eventsDigest !== undefined, '--events-digest'],
+      [options.brokerDigest !== undefined, '--broker-digest'], [options.deployApps, '--deploy-apps'],
+      [options.allowAppImageMismatch, '--allow-app-image-mismatch'], [options.appsOnly, '--apps-only'],
+    ].filter(([present]) => present).map(([, flag]) => flag);
+    if (conflicting.length) throw new Error(`--prepare-only cannot be combined with ${conflicting.join(', ')}.`);
     return options;
   }
   for (const [option, key] of [['--orchestrator-digest', 'orchestratorDigest'], ['--events-digest', 'eventsDigest']])
@@ -255,6 +268,37 @@ export function connectivityProbeJob({ name, workload, runId, host, namespace })
 }
 
 /** Renders a kustomize directory to plain resources. */
+/**
+ * Reads the P1 migration identity and its AKS federated credential without changing anything.
+ * ready is true only when the identity exists and one credential binds it to the exact
+ * ServiceAccount through this cluster's OIDC issuer. Any read failure other than "not found"
+ * stops the run, because guessing would let a CI run try a deployment it has no rights for.
+ */
+export function readMigrationIdentity(exec, target) {
+  const shown = exec('az', ['identity', 'show', '--resource-group', target.resourceGroup,
+    '--name', MIGRATION_IDENTITY, '-o', 'json']);
+  if (shown.status !== 0) {
+    if (/not ?found|could not be found/i.test(shown.stderr ?? '')) return { exists: false, ready: false };
+    throw new Error(`Could not read ${MIGRATION_IDENTITY}: ${redact((shown.stderr ?? '').trim())}`);
+  }
+  const identity = JSON.parse(shown.stdout);
+  if (!GUID.test(identity.clientId ?? '') || !GUID.test(identity.principalId ?? ''))
+    throw new Error(`${MIGRATION_IDENTITY} has no client or principal ID.`);
+  const issuer = exec('az', ['aks', 'show', '--resource-group', target.resourceGroup, '--name', target.clusterName,
+    '--query', 'oidcIssuerProfile.issuerUrl', '-o', 'tsv']);
+  if (issuer.status !== 0 || !issuer.stdout.trim()) throw new Error('Could not read the AKS OIDC issuer.');
+  const credentials = exec('az', ['identity', 'federated-credential', 'list', '--resource-group', target.resourceGroup,
+    '--identity-name', MIGRATION_IDENTITY, '-o', 'json']);
+  if (credentials.status !== 0) throw new Error(`Could not read the federated credentials of ${MIGRATION_IDENTITY}.`);
+  // The issuer is compared without a trailing slash, since Azure may store it either way.
+  const trim = value => (value ?? '').replace(/\/+$/, '');
+  const subject = `system:serviceaccount:${target.namespace}:p1-postgres-migration`;
+  const federated = JSON.parse(credentials.stdout || '[]').some(credential =>
+    trim(credential.issuer) === trim(issuer.stdout.trim()) && credential.subject === subject &&
+    (credential.audiences ?? []).includes('api://AzureADTokenExchange'));
+  return { exists: true, ready: federated, clientId: identity.clientId, principalObjectId: identity.principalId };
+}
+
 function render(exec, repoRoot, directory) {
   const result = exec('kubectl', ['kustomize', directory], { cwd: repoRoot });
   if (result.status !== 0) throw new Error(`Could not render ${directory}: ${result.stderr || result.stdout}`);
@@ -307,7 +351,7 @@ export async function runDbMaintenance(options, overrides = {}) {
   const runId = deps.newRunId();
   const receipt = {
     runId, mode: options.releaseLock ? 'release-lock' : options.execute ? 'execute' : 'dry-run',
-    scope: options.appsOnly ? 'apps-only' : 'migrations',
+    scope: options.appsOnly ? 'apps-only' : options.prepareOnly ? 'prepare' : 'migrations',
     startedAt: deps.now().toISOString(), target: { ...target }, planSha256: REVIEWED_PLAN_SHA256,
     steps: [], cleanup: {}, result: 'running',
   };
@@ -415,11 +459,34 @@ export async function runDbMaintenance(options, overrides = {}) {
       return receipt;
     }
 
-    // 8. Running services: their readiness check verifies the schema, so moving the schema under
+    // 8. Migration identity and handover state, read-only. A person can create the identity and
+    // run the handover; a workload identity, such as the workflow's, cannot. The handover needs the
+    // PostgreSQL Entra administrator, because only that role can create the PostgreSQL principal
+    // and only the current owner may give its objects away. So a run that would need either step
+    // and is not signed in as a user stops here, before the lock, and names the setup command.
+    let identityState;
+    let handoverNeeded = false;
+    if (!options.appsOnly) {
+      identityState = readMigrationIdentity(exec, target);
+      const state = kubectl(['get', 'configmap', STATE_NAME, '-o', 'json']);
+      if (state.status !== 0 && !/NotFound/i.test(state.stderr ?? ''))
+        throw new Error(`Could not read ${STATE_NAME}: ${redact((state.stderr ?? '').trim())}`);
+      const recorded = state.status === 0 ? JSON.parse(state.stdout).data?.handoverPrincipalObjectId : undefined;
+      handoverNeeded = options.handover === 'always' ||
+        (options.handover === 'auto' && (!identityState.exists || recorded !== identityState.principalObjectId));
+      const signedInAsUser = account.user?.type === 'user';
+      const missing = [...(identityState.ready ? [] : ['the migration identity']), ...(handoverNeeded ? ['the ownership handover'] : [])];
+      if (missing.length && !signedInAsUser)
+        throw new Error(`This run needs ${missing.join(' and ')}, which needs the PostgreSQL Entra administrator sign-in. ` +
+          'Run once with that Azure CLI sign-in: npm run db:maintenance:setup -- --execute');
+      step('migration-identity-checked', { ready: identityState.ready, handoverNeeded });
+    }
+
+    // 9. Running services: their readiness check verifies the schema, so moving the schema under
     // services on other images makes them unready. With --deploy-apps the runner rolls them to the
     // matching digests right after the migrations. Otherwise it blocks, unless the operator accepts
-    // the gap and deploys the matching release right after.
-    receipt.appImages = checkAppImages(kubectl, options);
+    // the gap and deploys the matching release right after. Prepare-only does not move the schema.
+    receipt.appImages = options.prepareOnly ? [] : checkAppImages(kubectl, options);
     const mismatched = receipt.appImages.filter(entry => entry.status === 'mismatch');
     for (const app of mismatched)
       log(`Deployment ${app.deployment} runs ${app.running}, not ${app.expected}.`);
@@ -441,10 +508,14 @@ export async function runDbMaintenance(options, overrides = {}) {
       // Dry run ends here, with the plan of record for an execute run.
       receipt.plannedSteps = options.appsOnly
         ? ['lock', ...(mismatched.length ? ['deploy-apps'] : []), 'readiness', 'cleanup', 'receipt']
-        : [
-          'lock', 'migration-identity', 'serviceaccount-and-egress',
+        : options.prepareOnly
+          ? ['lock', `migration-identity-${identityState.ready ? 'verified' : 'deploy'}`, 'serviceaccount-and-egress',
+            ...(receipt.brokerEgressDrift && options.reconcileBrokerEgress ? ['broker-egress-reconcile'] : []),
+            `handover-${handoverNeeded ? 'run' : 'skip'}`, 'cleanup', 'receipt']
+          : [
+          'lock', `migration-identity-${identityState.ready ? 'verified' : 'deploy'}`, 'serviceaccount-and-egress',
           ...(receipt.brokerEgressDrift && options.reconcileBrokerEgress ? ['broker-egress-reconcile'] : []),
-          `handover-${options.handover}`, 'connectivity-probes', ...(options.brokerDigest ? ['broker-job'] : []),
+          `handover-${handoverNeeded ? 'run' : 'skip'}`, 'connectivity-probes', ...(options.brokerDigest ? ['broker-job'] : []),
           'orchestrator-job', 'events-and-sessions-job',
           ...(options.deployApps ? ['deploy-apps'] : []), ...(options.allowAppImageMismatch ? [] : ['readiness']),
           'cleanup', 'receipt',
@@ -503,23 +574,29 @@ export async function runDbMaintenance(options, overrides = {}) {
       return receipt;
     }
 
-    // Migration identity and federated credential. The deployment is declarative, so a rerun
-    // changes nothing. A brand-new federated credential needs time before AKS tokens are accepted.
-    const existed = exec('az', ['identity', 'show', '--resource-group', target.resourceGroup,
-      '--name', MIGRATION_IDENTITY, '-o', 'none']).status === 0;
-    const tags = JSON.parse(must(exec('az', ['group', 'show', '--name', target.resourceGroup,
-      '--query', 'tags', '-o', 'json']), 'Could not read resource group tags').stdout || '{}') ?? {};
-    const deployment = JSON.parse(must(exec('az', ['deployment', 'group', 'create',
-      '--resource-group', target.resourceGroup, '--name', 'p1-postgres-migration-identity',
-      '--template-file', IDENTITY_TEMPLATE, '--parameters', `tags=${JSON.stringify(tags)}`, `sourceSha=${head}`,
-      '--query', 'properties.outputs.migrationIdentity.value', '-o', 'json'], { cwd: repoRoot, timeout: 600_000 }),
-    'Migration identity deployment failed').stdout);
+    // Migration identity and federated credential. When preflight found both in place, the run
+    // uses them as they are, so a workload identity needs no Azure deployment rights. Otherwise a
+    // person deploys the declarative template; a rerun of it changes nothing. A brand-new
+    // federated credential needs time before AKS tokens are accepted.
+    let deployment;
+    if (identityState.ready) {
+      deployment = { name: MIGRATION_IDENTITY, clientId: identityState.clientId,
+        principalObjectId: identityState.principalObjectId, serviceAccount: 'p1-postgres-migration' };
+    } else {
+      const tags = JSON.parse(must(exec('az', ['group', 'show', '--name', target.resourceGroup,
+        '--query', 'tags', '-o', 'json']), 'Could not read resource group tags').stdout || '{}') ?? {};
+      deployment = JSON.parse(must(exec('az', ['deployment', 'group', 'create',
+        '--resource-group', target.resourceGroup, '--name', 'p1-postgres-migration-identity',
+        '--template-file', IDENTITY_TEMPLATE, '--parameters', `tags=${JSON.stringify(tags)}`, `sourceSha=${head}`,
+        '--query', 'properties.outputs.migrationIdentity.value', '-o', 'json'], { cwd: repoRoot, timeout: 600_000 }),
+      'Migration identity deployment failed').stdout);
+    }
     if (deployment.name !== MIGRATION_IDENTITY || !GUID.test(deployment.clientId ?? '') ||
         !GUID.test(deployment.principalObjectId ?? '') || deployment.serviceAccount !== 'p1-postgres-migration')
       throw new Error('The migration identity deployment returned an unexpected identity.');
     receipt.migrationIdentity = { clientId: deployment.clientId, principalObjectId: deployment.principalObjectId };
-    step('migration-identity-ready', { created: !existed });
-    if (!existed) await deps.sleep(60_000);
+    step('migration-identity-ready', { created: !identityState.exists, deployed: !identityState.ready });
+    if (!identityState.ready) await deps.sleep(60_000);
 
     // ServiceAccount with the real client ID, and the P1 egress. Server-side apply is idempotent.
     const migrationAccount = structuredClone(serviceAccount);
@@ -536,12 +613,9 @@ export async function runDbMaintenance(options, overrides = {}) {
     }
 
     // Ownership handover. auto runs it once per migration principal and records that in a
-    // ConfigMap; the Jobs still prove ownership because they fail without it.
-    const state = kubectl(['get', 'configmap', STATE_NAME, '-o', 'json']);
-    const recorded = state.status === 0 ? JSON.parse(state.stdout).data?.handoverPrincipalObjectId : undefined;
-    const runHandover = options.handover === 'always' ||
-      (options.handover === 'auto' && recorded !== deployment.principalObjectId);
-    if (runHandover) {
+    // ConfigMap; the Jobs still prove ownership because they fail without it. Preflight decided
+    // whether it is needed and that the signed-in account can run it.
+    if (handoverNeeded) {
       const principal = name => {
         const value = must(exec('az', ['identity', 'show', '--resource-group', target.resourceGroup, '--name', name,
           '--query', 'principalId', '-o', 'tsv']), `Could not read ${name}`).stdout.trim();
@@ -569,6 +643,12 @@ export async function runDbMaintenance(options, overrides = {}) {
       step('ownership-handover-verified');
     } else {
       step('ownership-handover-skipped', { reason: options.handover === 'skip' ? 'requested' : 'already recorded' });
+    }
+
+    // Prepare-only ends once the identity, its network path, and schema ownership are in place.
+    if (options.prepareOnly) {
+      receipt.result = 'succeeded';
+      return receipt;
     }
 
     // Connectivity probes: before any migration Job, prove that each egress policy in use admits
