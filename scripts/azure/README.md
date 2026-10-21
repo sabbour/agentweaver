@@ -143,12 +143,19 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 22.
-These are 21 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16 and 18 through 23.
+These are 22 registered versions; version 17 remains excluded.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
+Version 23 adds durable interactive requests, cancellation receipts,
+`cancelled_at`, and the `cancelled` state. Its runtime grants are
+`SELECT,INSERT,UPDATE` on `project_run_requests` and `SELECT,INSERT` on
+`project_run_cancellations`. Its execution-state CHECK validation scans
+`accepted_runs`. Its `ACCESS EXCLUSIVE` lock blocks reads and writes to `accepted_runs`
+until the migration transaction commits. It doesn't alter `sessions` or build indexes on
+existing tables. Review the table size and plan a write pause.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan retains 95 tables and eight exact row-lock columns.
+The plan retains 97 tables and eight exact row-lock columns.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved
