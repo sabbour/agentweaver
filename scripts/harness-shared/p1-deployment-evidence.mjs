@@ -595,6 +595,7 @@ export function validateP1PublicationReceipt(
       const published = publication.published.find(record => record.id === id);
       const repository = `ghcr.io/sabbour/${componentImageRepository(id)}`;
       const expectedImage = `${repository}@${deploymentComponent.imageDigest}`;
+      // A reused image keeps the tag of the commit that built it; never expect a retag to this source.
       if (image.image !== expectedImage || published.image !== expectedImage
         || planned.destination !== `${repository}:${componentImageTag(component.version, image.reusedFrom?.sourceSha ?? sourceSha)}`) {
         throw new Error(`The release image for ${id} does not match its exact component-version tag and digest.`);

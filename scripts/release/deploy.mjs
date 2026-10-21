@@ -812,6 +812,8 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
     // An unchanged image reused by this release keeps the digest and provenance of the commit that built it.
     const reused = plan.reused;
     if (reused !== undefined || result.reused !== undefined) {
+      // Only service images from current-format receipts can be reused, and only from an earlier
+      // commit. The plan and result copies must agree, or the receipt was edited.
       if (component.kind !== 'service' || receipt.requiredPackageIds === undefined ||
           !reused || typeof reused !== 'object' || !SHA.test(reused.sourceSha ?? '') ||
           reused.sourceSha === sourceSha || !SHA.test(reused.sourceTree ?? '') ||
@@ -821,6 +823,8 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
       }
       reusedFrom.set(component.id, { sourceSha: reused.sourceSha, sourceTree: reused.sourceTree });
     }
+    // Tags and AgentHost measurements name the commit that built the image. For a reused image that
+    // is the original build commit, so check against it instead of this release's source.
     const buildSourceSha = reused?.sourceSha ?? sourceSha;
     if (component.kind === 'service') {
       const expectedImage = `${expectedRepository(component.id)}@${component.imageDigest}`;
@@ -869,6 +873,7 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
   return PRODUCT_SERVICES.map((id) => {
     const component = manifest.components.find((entry) => entry.id === id);
     const result = { id, name: SERVICE_NAMES[id], image: `${expectedRepository(id)}@${component.imageDigest}` };
+    // Pass the original build source on, so the registry label check later expects those labels.
     if (reusedFrom.has(id)) result.reusedFrom = reusedFrom.get(id);
     if (id === 'Agentweaver.AgentHost') {
       result.sandboxImage = agentHostMeasurement.image;

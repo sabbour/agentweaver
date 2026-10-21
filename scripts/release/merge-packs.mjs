@@ -71,6 +71,7 @@ function readPack(directory, kind, components, sourceSha, manifestSha256, stage)
       !Array.isArray(provenance.artifacts)) {
     fail(directory, 'provenance must match the release source, manifest, stage, and ordinary pack mode');
   }
+  // Only the image job plans reuse; a plan in the package pack means the artifacts were mixed up.
   if (kind === 'packages' && provenance.imageReuse !== undefined) fail(directory, 'package provenance cannot carry an image reuse plan');
   if (provenance.components.length !== components.length || provenance.artifacts.length !== components.length) {
     fail(directory, `provenance must contain exactly the ${kind} selection`);
@@ -171,6 +172,8 @@ export function mergePacks(manifestPath, packagesDir, imagesDir, outDir, {
   // Reused images keep their published digest, so the image pack holds only the rebuilt subset.
   const imageReuse = readJson(path.join(resolvedImages, 'provenance.json'), `${resolvedImages}/provenance.json`).imageReuse;
   if (imageReuse !== undefined) {
+    // Recheck the plan here too: merge decides which image records must exist, so a wrong plan
+    // would let a missing image pass as "reused".
     if (!platformOnly) fail('imageReuse', 'image reuse applies only to platform-only release packs');
     try {
       assertImageReusePlan(imageReuse, { sourceSha, manifest });
@@ -178,11 +181,13 @@ export function mergePacks(manifestPath, packagesDir, imagesDir, outDir, {
       fail('imageReuse', error.message);
     }
   }
+  // Without a plan, this set is empty and every selected image must have been built.
   const reused = reusedImageIds(imageReuse);
   const builtComponents = components.filter(component => !reused.has(component.id));
   const packagePack = readPack(resolvedPackages, 'packages', packages, sourceSha, manifestSha256, manifest.stage);
   const imagePack = readPack(resolvedImages, 'images', images.filter(component => !reused.has(component.id)),
     sourceSha, manifestSha256, manifest.stage);
+  // The plan was read once above, before readPack validated the pack; make sure both reads agree.
   if (JSON.stringify(imagePack.provenance.imageReuse) !== JSON.stringify(imageReuse)) {
     fail('imageReuse', 'image pack plan changed while merging');
   }

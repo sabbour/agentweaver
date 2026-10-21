@@ -334,6 +334,8 @@ export function packComponents(manifest, {
   reusePlan,
 } = {}) {
   if (typeof outDir !== 'string' || outDir.trim() === '') fail('outDir', 'expected an output directory path');
+  // Reuse is defined only against earlier automated product releases. Package packs never contain
+  // images, and integration images are tagged per source SHA with no release baseline.
   if (reusePlan !== undefined && (!imagesOnly || !platformOnly || integrationSourceSha !== undefined)) {
     fail('selection', 'an image reuse plan applies only to platform-only images-only release preparation');
   }
@@ -380,6 +382,8 @@ export function packComponents(manifest, {
   }
   if (manifest.stage === 'release' && manifest.evidence.sourceSha !== sourceSha) fail('manifest.evidence', 'released composition evidence must match preparation HEAD');
   if (reusePlan !== undefined) {
+    // The plan file came from an earlier workflow step. Check that it names this exact source and
+    // manifest before trusting its list of images to skip.
     try {
       assertImageReusePlan(reusePlan, { sourceSha, manifest });
     } catch (error) {
@@ -769,6 +773,7 @@ export function packComponents(manifest, {
   }
 
   const producedFiles = listFilesRecursive(resolvedOutDir, readdir, stat).sort();
+  // When every image is reused, an empty pack (provenance only) is the correct result.
   if (producedFiles.length === 0 && components.length > 0) fail('pack', 'dotnet pack produced no artifacts');
   if (agentHostBuilds.has(AGENTHOST_ID)) verifyAgentHostArchives(agentHostBuilds.get(AGENTHOST_ID).archives, resolvedOutDir);
 
@@ -792,6 +797,7 @@ export function packComponents(manifest, {
     manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
     stage: manifest.stage,
     createdAt: now().toISOString(),
+    // Carry the whole plan forward so merge and publish can recheck which images were skipped and why.
     ...(reusePlan !== undefined ? { imageReuse: reusePlan } : {}),
     components: components.map(({ id, kind, version, project }) => ({
       id, kind, version, project, lock: locks.get(id),
@@ -840,6 +846,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       fail('selection', '--integration-source-sha requires one exact 40-character source SHA');
     }
     const reusePlanIndex = args.indexOf('--reuse-plan');
+    // Reject a repeated flag so there is no doubt about which plan file was used.
     if (reusePlanIndex >= 0 && (args.lastIndexOf('--reuse-plan') !== reusePlanIndex ||
         !args[reusePlanIndex + 1] || args[reusePlanIndex + 1].startsWith('--'))) {
       fail('usage', '--reuse-plan requires one plan file');

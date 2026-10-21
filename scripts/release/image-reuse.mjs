@@ -61,6 +61,8 @@ export function createGitReader(root = repositoryRoot, run) {
   const git = run ?? ((...args) => execFileSync('git', args, {
     cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
   }));
+  // The planner reads the same commits many times (once per image, and again at each baseline
+  // build commit), so cache whole trees and blob text by commit and object ID.
   const trees = new Map();
   const blobs = new Map();
   return {
@@ -68,6 +70,8 @@ export function createGitReader(root = repositoryRoot, run) {
     raw: (...args) => git(...args),
     tree(commit) {
       if (!trees.has(commit)) {
+        // Read the committed tree, not the working copy, so the result depends only on the commit.
+        // -z keeps paths with spaces or special characters intact.
         const entries = new Map();
         for (const record of git('ls-tree', '-r', '--full-tree', '-z', commit).split('\0')) {
           if (!record) continue;
@@ -86,13 +90,19 @@ export function createGitReader(root = repositoryRoot, run) {
   };
 }
 
+/** Resolves a project-relative path to a repository path, or undefined when it leaves the repository. */
 function normalize(base, value) {
+  // MSBuild files use Windows separators; Git paths always use forward slashes.
   const resolved = path.posix.normalize(path.posix.join(base, value.replaceAll('\\', '/')));
+  // A path outside the repository cannot be fingerprinted from Git, so the caller treats it as unresolved.
   if (resolved === '..' || resolved.startsWith('../') || path.posix.isAbsolute(resolved)) return undefined;
   return resolved === '.' ? '' : resolved.replace(/\/$/, '');
 }
 
+/** Turns a glob such as `../Shared/**\/*.cs` into its fixed directory prefix `../Shared`. */
 function stripWildcards(value) {
+  // Watching the whole directory above the first wildcard over-includes files, which can only cause
+  // an extra rebuild. Matching the glob exactly could miss a file and reuse a stale image.
   const segments = value.split('/');
   const index = segments.findIndex(segment => /[*?]/.test(segment));
   return index < 0 ? value : segments.slice(0, index).join('/');
@@ -104,44 +114,66 @@ function stripWildcards(value) {
  */
 export function resolveImageInputs(reader, commit, component) {
   const tree = reader.tree(commit);
+  // `prefixes` are directories whose every tracked file is an input (project folders, globbed
+  // includes). `files` are single files that are inputs whether or not they exist yet.
   const prefixes = new Set();
+  // Every image depends on the release tooling and on repository-wide Docker/Git settings, so a
+  // change to any of them rebuilds all images. This is deliberately conservative.
   const files = new Set([...IMAGE_BUILD_TOOLING, ...SHARED_ROOT_INPUTS]);
   const unresolved = new Set();
   const visited = new Set();
   const addAncestors = directory => {
+    // MSBuild imports Directory.Build.* and NuGet reads its configuration from the project
+    // directory and every parent up to the root. Record each candidate path even when it does not
+    // exist, so that adding such a file later changes the fingerprint and forces a rebuild.
     const parts = directory ? directory.split('/') : [];
     for (let depth = parts.length; depth >= 0; depth -= 1) {
       const base = parts.slice(0, depth).join('/');
       for (const name of ANCESTOR_INPUTS) {
         const file = base ? `${base}/${name}` : name;
         files.add(file);
+        // An existing .props/.targets file can import or include more files, so follow it too.
         if (/\.(props|targets)$/.test(name) && tree.has(file)) walk(file);
       }
     }
   };
   const walk = file => {
+    // Project graphs can contain cycles and shared references; visit each file once.
     if (visited.has(file)) return;
     visited.add(file);
     const entry = tree.get(file);
     files.add(file);
     if (!entry) {
+      // A reference to an untracked file means Git cannot describe the real build input. Report it
+      // so the image is rebuilt instead of reused on an incomplete fingerprint.
       unresolved.add(`${file} is referenced but not tracked at ${commit}`);
       return;
     }
     const directory = path.posix.dirname(file) === '.' ? '' : path.posix.dirname(file);
     const isProject = /\.(cs|fs|vb)proj$/.test(file);
     if (isProject) {
+      // SDK-style projects compile every file under their folder by default, so the whole folder
+      // is an input, plus the ancestor MSBuild and NuGet files that apply to it.
       prefixes.add(directory);
       addAncestors(directory);
     }
     const text = reader.blob(entry.object);
+    // A text scan of path-like attributes, not a full MSBuild evaluation. It finds
+    // ProjectReference, Import, Compile/Content/None includes and similar items. Missing a
+    // conditional branch only adds inputs (extra rebuilds); it never removes them.
     for (const match of text.matchAll(/\b(Include|Update|Remove|Exclude|Project)\s*=\s*(["'])(.*?)\2/g)) {
       const [, attribute, , list] = match;
+      // MSBuild item lists are separated by semicolons.
       for (const item of list.split(';').map(value => value.trim()).filter(Boolean)) {
+        // This property is the file's own directory, which the relative resolution below already uses.
         const value = item.replaceAll('$(MSBuildThisFileDirectory)', './');
+        // PackageReference Include="Name" and similar values are package IDs, not paths. Their
+        // versions come from Directory.Packages.props, which is already an input.
         const looksLikePath = /[\\/]/.test(value) || attribute === 'Project';
         if (!looksLikePath) continue;
         if (value.includes('$(') || value.includes('@(') || value.includes('%(')) {
+          // Fail closed: without evaluating MSBuild properties we cannot know which files this
+          // path points to, so the image must be rebuilt.
           unresolved.add(`${file} uses an MSBuild expression in ${attribute}="${item}"`);
           continue;
         }
@@ -149,14 +181,18 @@ export function resolveImageInputs(reader, commit, component) {
         if (resolved === undefined) {
           unresolved.add(`${file} references ${item} outside the repository`);
         } else if (/\.((cs|fs|vb)proj|props|targets)$/.test(resolved) && !/[*?]/.test(value)) {
+          // Follow project references and imports, so transitive dependencies are covered.
           walk(resolved);
         } else if (resolved !== '' || isProject) {
+          // Plain files and globbed directories. A glob that resolves to the repository root from a
+          // non-project file is ignored rather than turning every file into an input.
           prefixes.add(resolved);
         }
       }
     }
   };
   if (component.id === 'Agentweaver.Web') {
+    // The web image bundles the Vite application and an ASP.NET host, so both are inputs.
     prefixes.add(WEB_DIRECTORY);
     walk(WEB_HOST_PROJECT);
   } else {
@@ -165,15 +201,20 @@ export function resolveImageInputs(reader, commit, component) {
     } else {
       walk(component.project);
     }
+    // AgentHost's Dockerfile copies directories that no project references; pack.mjs and this
+    // planner read the same exported list so they cannot disagree.
     if (component.id === AGENTHOST_ID) for (const directory of AGENTHOST_INPUT_DIRECTORIES) prefixes.add(directory);
   }
   const prefixList = [...prefixes].sort();
   const entries = [];
+  // Collect mode and object ID for every matching tracked file. The Git object ID changes whenever
+  // the file content changes, so content does not need to be read again here.
   for (const [file, entry] of tree) {
     if (files.has(file) || prefixList.some(prefix => prefix === '' ? false : file === prefix || file.startsWith(`${prefix}/`))) {
       entries.push([file, entry.mode, entry.object]);
     }
   }
+  // Sort by code unit, not locale, so the fingerprint is the same on every machine.
   entries.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
   return {
     prefixes: prefixList,
@@ -186,6 +227,9 @@ export function resolveImageInputs(reader, commit, component) {
 /** Hashes the component identity and every resolved input path, mode, and Git object. */
 export function imageInputFingerprint(reader, commit, component) {
   const inputs = resolveImageInputs(reader, commit, component);
+  // Include the version and project so a version bump alone changes the fingerprint, and include
+  // the schema so a change to this algorithm never matches a fingerprint made the old way.
+  // Unresolved notes are hashed too, but callers already refuse reuse when any exist.
   const fingerprint = `sha256:${hash(JSON.stringify({
     schema: IMAGE_INPUT_FINGERPRINT_SCHEMA,
     component: { id: component.id, kind: component.kind, version: component.version, project: component.project },
@@ -197,7 +241,9 @@ export function imageInputFingerprint(reader, commit, component) {
   return { fingerprint, unresolved: inputs.unresolved, inputCount: inputs.entries.length };
 }
 
+/** Splits a raw annotated tag object into its header lines and message body. */
 function parseTagMessage(text) {
+  // Git separates tag headers from the message with the first blank line.
   const separator = text.indexOf('\n\n');
   if (separator < 0) return { headers: text, message: '' };
   return { headers: text.slice(0, separator), message: text.slice(separator + 2).trim() };
@@ -208,6 +254,8 @@ function parseTagMessage(text) {
  * Partial or failed results are skipped because they prove no complete release.
  */
 export function findBaselinePublication(reader, sourceSha) {
+  // Index every publication result tag by the source commit it names. publish.mjs writes one
+  // `agentweaver-publication/<sha>/result` tag per release run, with the receipt as its message.
   const results = new Map();
   const refs = reader.git('for-each-ref', '--format=%(refname:strip=2) %(objecttype) %(objectname) %(*objectname)',
     'refs/tags/agentweaver-publication/');
@@ -215,6 +263,9 @@ export function findBaselinePublication(reader, sourceSha) {
     const [name, type, object, peeled] = line.split(' ');
     const match = PUBLICATION_RESULT.exec(name);
     if (!match) continue;
+    // Only an annotated tag carries the receipt and a tag object we can recheck. A lightweight tag,
+    // or one that points at a different commit than its name says, was not written by publish.mjs.
+    // Fail instead of skipping it: silently ignoring a corrupted record could pick an older baseline.
     if (type !== 'tag' || peeled !== match[1]) {
       fail(`durable publication result ${name} is not an annotated tag on its source commit; rerun with rebuild_all_images`);
     }
@@ -222,14 +273,19 @@ export function findBaselinePublication(reader, sourceSha) {
   }
   let parents;
   try {
+    // Walk only the first-parent chain of v1, starting before the release commit itself. Releases
+    // are published from v1 commits, so this chain is the release history. Following second parents
+    // would reach feature-branch commits and could select a receipt that v1 never released from.
     parents = reader.git('rev-list', '--first-parent', `${sourceSha}^`);
   } catch {
+    // A root commit has no parent and therefore no earlier release: every image is built.
     return undefined;
   }
   for (const commit of parents.split(/\r?\n/).filter(Boolean)) {
     const result = results.get(commit);
     if (!result) continue;
     const { headers, message } = parseTagMessage(reader.raw('cat-file', 'tag', result.tagObject));
+    // Recheck the tag object itself so that the receipt is bound to this commit and tag name.
     if (!headers.split('\n').includes(`object ${commit}`) || !headers.split('\n').includes(`tag ${result.name}`)) {
       fail(`durable publication result ${result.name} does not bind its source commit; rerun with rebuild_all_images`);
     }
@@ -242,18 +298,26 @@ export function findBaselinePublication(reader, sourceSha) {
     if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || receipt.sourceSha !== commit) {
       fail(`durable publication result ${result.name} is malformed or bound to another source; rerun with rebuild_all_images`);
     }
+    // Accept only `published`. A `partial` or `failed` run may have pushed some images but not
+    // others, and its receipt does not prove that every listed digest is complete and usable.
+    // Keep walking to an older, fully published release instead.
     if (receipt.status !== 'published') continue;
     return { sourceSha: commit, tag: result.name, tagObject: result.tagObject, receipt };
   }
   return undefined;
 }
 
+/**
+ * True for receipts from continuation, Probe-replacement or older publication modes. Their image
+ * entries do not follow the current planned/published layout, so they are never a reuse baseline.
+ */
 function isLegacyReceipt(receipt) {
   return !Array.isArray(receipt.requiredPackageIds) || receipt.schemaVersion !== 1 || receipt.mode !== undefined ||
     receipt.continuation !== undefined || receipt.initialProbeReplacement !== undefined ||
     receipt.samplerProbeReplacement !== undefined || !Array.isArray(receipt.planned) || !Array.isArray(receipt.published);
 }
 
+// Remove an older `reused` block; the planner attaches a fresh one that names the original build.
 const stripReuse = entry => {
   const { reused, ...rest } = entry;
   return rest;
@@ -263,7 +327,10 @@ const stripReuse = entry => {
 function readBaselineImage(reader, baseline, component, repository) {
   const planned = baseline.receipt.planned.filter(entry => entry?.id === component.id);
   const published = baseline.receipt.published.filter(entry => entry?.id === component.id);
+  // An image absent from the baseline (for example a new service) is simply built.
   if (planned.length === 0 && published.length === 0) return undefined;
+  // Any other inconsistency means the receipt cannot be trusted, so stop with an explicit error
+  // rather than quietly building; the operator decides whether to rerun with rebuild_all_images.
   const reject = detail => fail(`baseline receipt ${baseline.tag} has an invalid ${component.id} image entry (${detail}); rerun with rebuild_all_images`);
   if (planned.length !== 1 || published.length !== 1) reject('missing or duplicate plan/result');
   const [plan] = planned;
@@ -279,6 +346,9 @@ function readBaselineImage(reader, baseline, component, repository) {
   if (publishedRepository !== undefined && publishedRepository !== repository) {
     return { otherRepository: publishedRepository };
   }
+  // If the baseline itself reused this image, follow its record back to the commit that really
+  // built it. A chain of reuses therefore always points at the first build, never at a release
+  // commit whose source was not used to build the image.
   const buildSourceSha = plan.reused === undefined ? baseline.sourceSha : plan.reused.sourceSha;
   if (!SHA.test(buildSourceSha ?? '')) reject('build source');
   if (plan.reused !== undefined && (!SHA.test(plan.reused.sourceTree ?? '') ||
@@ -286,11 +356,15 @@ function readBaselineImage(reader, baseline, component, repository) {
       !SHA.test(plan.reused.receiptSourceSha ?? ''))) {
     reject('reuse provenance');
   }
+  // The published reference must be `<repository>@sha256:<digest>`. A tag is mutable, so only a
+  // digest proves which bytes are reused. The tag must also be the one built from buildSourceSha.
   const digest = typeof result.image === 'string' && result.image.startsWith(`${repository}@`)
     ? result.image.slice(repository.length + 1) : '';
   if (plan.destination !== `${repository}:${componentImageTag(plan.version, buildSourceSha)}` || !DIGEST.test(digest)) {
     reject('destination tag or immutable digest');
   }
+  // AgentHost carries extra OCI measurement evidence that deployment checks. It must describe the
+  // same build and digest, otherwise the reused entry would fail later at deploy time.
   if (component.id === AGENTHOST_ID) {
     const measurement = result.preparedOciMeasurement;
     if (measurement?.sourceSha !== buildSourceSha || measurement?.image?.digest !== digest ||
@@ -302,6 +376,8 @@ function readBaselineImage(reader, baseline, component, repository) {
       result.ociArchiveSha256 !== undefined) {
     reject('unexpected AgentHost evidence');
   }
+  // The build commit must exist locally and sit in the baseline's history. Otherwise its inputs
+  // cannot be fingerprinted, and an unverifiable image is not reusable.
   let isAncestor = true;
   try {
     reader.git('merge-base', '--is-ancestor', buildSourceSha, baseline.sourceSha);
@@ -315,6 +391,7 @@ function readBaselineImage(reader, baseline, component, repository) {
   } catch {
     reject(`build source ${buildSourceSha} is not available`);
   }
+  // The recorded tree is what deployment checks against the image label; it must match Git.
   if (plan.reused !== undefined && plan.reused.sourceTree !== sourceTree) reject('reuse source tree');
   return { plan: stripReuse(plan), result: stripReuse(result), buildSourceSha, sourceTree, digest };
 }
@@ -338,20 +415,25 @@ export function planImageReuse({ manifest, sourceSha, registry, rebuildAll = fal
   reader ??= createGitReader(root);
   const components = productImageComponents(manifest);
   if (components.length === 0) fail('the manifest has no product service images');
+  // Several images may share one original build commit, so cache fingerprints per commit and image.
   const fingerprints = new Map();
   const fingerprintAt = (commit, component) => {
     const key = `${commit}\0${component.id}\0${component.version}`;
     if (!fingerprints.has(key)) fingerprints.set(key, imageInputFingerprint(reader, commit, component));
     return fingerprints.get(key);
   };
+  // Choose the baseline once. Without a usable baseline every image is built, and the reason is
+  // recorded in the plan so the workflow log explains why nothing was reused.
   let baseline;
   let baselineReason;
   if (rebuildAll) {
+    // Explicit escape hatch: skip the baseline lookup entirely, including its malformed-receipt errors.
     baselineReason = 'rebuild of every product image was explicitly requested';
   } else {
     const found = findBaselinePublication(reader, sourceSha);
     if (!found) baselineReason = 'no earlier published product receipt exists on the first-parent history';
     else if (isLegacyReceipt(found.receipt)) {
+      // Older receipts are valid history but lack the layout reuse needs, so build everything once.
       baselineReason = `baseline receipt ${found.tag} predates incremental publication`;
     } else {
       baseline = found;
@@ -367,6 +449,8 @@ export function planImageReuse({ manifest, sourceSha, registry, rebuildAll = fal
     ...(baselineReason ? { baselineReason } : {}),
     components: [],
   };
+  // Decide each image independently. Every check below can only choose `build`; reuse is the single
+  // outcome reached after all checks pass.
   for (const component of components) {
     const current = fingerprintAt(sourceSha, component);
     const record = { id: component.id, version: component.version, inputFingerprint: current.fingerprint };
@@ -376,6 +460,7 @@ export function planImageReuse({ manifest, sourceSha, registry, rebuildAll = fal
       continue;
     }
     if (current.unresolved.length > 0) {
+      // An incomplete input list cannot prove "unchanged"; trade a rebuild for correctness.
       build(`inputs cannot be fully resolved: ${current.unresolved.join('; ')}`);
       continue;
     }
@@ -389,15 +474,21 @@ export function planImageReuse({ manifest, sourceSha, registry, rebuildAll = fal
       build(`baseline image was published to ${prior.otherRepository}, not ${repository}`);
       continue;
     }
+    // Require the same version: the version is baked into the image tag and labels (the web image
+    // also bakes it into IMAGE_TAG), and a retag cannot change those baked values.
     if (prior.plan.version !== component.version) {
       build(`version changed from ${prior.plan.version}`);
       continue;
     }
+    // Compare with the commit that built the image, not the baseline release commit. After a chain
+    // of reuses, small drifts between releases would otherwise add up unnoticed.
     const original = fingerprintAt(prior.buildSourceSha, component);
     if (original.unresolved.length > 0 || original.fingerprint !== current.fingerprint) {
       build(`image inputs changed since ${prior.buildSourceSha}`);
       continue;
     }
+    // Reuse: copy the original plan/result entries unchanged (tag, digest, archive hash, AgentHost
+    // measurement) and attach where they came from. Nothing claims the image was built from sourceSha.
     const reused = {
       sourceSha: prior.buildSourceSha,
       sourceTree: prior.sourceTree,
@@ -418,6 +509,8 @@ export function planImageReuse({ manifest, sourceSha, registry, rebuildAll = fal
 
 /** Validates a reuse plan shape against the exact source and product image selection. */
 export function assertImageReusePlan(plan, { sourceSha, manifest }) {
+  // The plan travels as a workflow artifact between jobs, so pack, merge and publish recheck it
+  // here instead of trusting it. Entries must follow manifest order, one per product image.
   const components = productImageComponents(manifest);
   if (!plan || typeof plan !== 'object' || Array.isArray(plan) || plan.schemaVersion !== IMAGE_REUSE_PLAN_SCHEMA ||
       plan.fingerprintSchema !== IMAGE_INPUT_FINGERPRINT_SCHEMA || plan.sourceSha !== sourceSha ||
@@ -433,6 +526,8 @@ export function assertImageReusePlan(plan, { sourceSha, manifest }) {
       fail(`reuse plan entry for ${component.id} is malformed`);
     }
     if (entry.action === 'reuse') {
+      // A reused entry must name an earlier build commit (never the current source), keep its
+      // original tag and a digest reference, and carry the same provenance in every copy.
       const repository = `${plan.registry}/${componentImageRepository(component.id)}`;
       if (plan.rebuildAll || !plan.baseline || !SHA.test(entry.reused?.sourceSha ?? '') ||
           entry.reused.sourceSha === sourceSha || entry.reused.inputFingerprint !== entry.inputFingerprint ||
@@ -445,6 +540,7 @@ export function assertImageReusePlan(plan, { sourceSha, manifest }) {
         fail(`reuse plan entry for ${component.id} has inconsistent original provenance`);
       }
     } else if (entry.reused !== undefined || entry.planned !== undefined || entry.published !== undefined) {
+      // A build entry must not smuggle in an old digest that publish would copy into the receipt.
       fail(`reuse plan build entry for ${component.id} carries reuse evidence`);
     }
   }
@@ -467,14 +563,18 @@ export function verifyReusedImages(plan, readDescriptor) {
     let byDigest;
     let byTag;
     try {
+      // Read both references: the digest proves the bytes still exist, and the tag proves nobody
+      // moved the original version tag to different bytes since the baseline was published.
       byDigest = readDescriptor(image);
       byTag = readDescriptor(entry.planned.destination);
     } catch (error) {
+      // Any registry error (missing, unauthorized, network) is a failure, not "probably fine".
       fail(`reused ${entry.id} image cannot be read from the registry (${error.message}); rerun with rebuild_all_images`);
     }
     if (byDigest?.digest !== digest) {
       fail(`reused ${entry.id} digest ${digest} is missing from the registry; rerun with rebuild_all_images`);
     }
+    // Never repair a moved tag here: tags are immutable by policy, so a mismatch needs a human.
     if (byTag?.digest !== digest) {
       fail(`original tag ${entry.planned.destination} no longer resolves to ${digest}; refusing reuse, rerun with rebuild_all_images`);
     }
@@ -502,6 +602,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     const reader = createGitReader(repositoryRoot);
     const sourceSha = reader.git('rev-parse', 'HEAD');
+    // Plan from the committed manifest and refuse a locally edited copy, so the plan describes HEAD.
     const relative = path.relative(repositoryRoot, path.resolve(manifestPath)).replaceAll('\\', '/');
     const manifest = JSON.parse(reader.raw('show', `${sourceSha}:${relative}`));
     if (JSON.stringify(manifest) !== JSON.stringify(JSON.parse(readFileSync(path.resolve(manifestPath), 'utf8')))) {
@@ -512,6 +613,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       rebuildAll: args.includes('--rebuild-all') || flag === 'true',
     });
     mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+    // `wx` refuses to overwrite an existing plan from an earlier step or run.
     writeFileSync(path.resolve(out), `${JSON.stringify(plan, null, 2)}\n`, { flag: 'wx' });
     console.log(`Image reuse plan for ${sourceSha}${plan.baseline ? ` against ${plan.baseline.tag}` : ` (${plan.baselineReason})`}:`);
     for (const entry of plan.components) console.log(`  ${entry.action.padEnd(5)} ${entry.id} ${entry.version}: ${entry.reason}`);

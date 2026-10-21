@@ -343,9 +343,11 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   // The publisher recomputes the reuse plan from its own source and tags instead of trusting the pack.
   let imageReuse;
   if (provenance.imageReuse !== undefined) {
+    // Continuation and integration modes have their own fixed artifact rules and no reuse baseline.
     if (!platformOnly || integrationImagesOnly || partialContinuation) {
       fail('image reuse applies only to platform-only product publication');
     }
+    // Accept only exact values: a typo such as "yes" must not silently mean "reuse".
     const rebuildAll = env.RELEASE_REBUILD_ALL_IMAGES;
     if (rebuildAll !== undefined && rebuildAll !== '' && rebuildAll !== 'true' && rebuildAll !== 'false') {
       fail('RELEASE_REBUILD_ALL_IMAGES must be true or false');
@@ -359,12 +361,16 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     } catch (error) {
       fail(`image reuse plan cannot be verified: ${error.message}`);
     }
+    // The pack plan is an uploaded artifact. Requiring it to equal a fresh plan means a tampered
+    // artifact, a new publication tag, or a different rebuild flag stops publication.
+    // The workflow queue runs one release at a time, so a legitimate plan does not change in between.
     if (JSON.stringify(expected) !== JSON.stringify(provenance.imageReuse)) {
       fail('image reuse plan differs from the plan recomputed for this source and registry');
     }
     imageReuse = provenance.imageReuse;
   }
   const reusedIds = reusedImageIds(imageReuse);
+  // Pack provenance and artifacts cover only rebuilt components; reused images have no archive.
   const builtComponents = components.filter(component => !reusedIds.has(component.id));
   if (!Array.isArray(provenance.components) || provenance.components.length !== builtComponents.length ||
       provenance.components.some((record, index) => {
@@ -380,6 +386,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const componentProvenanceById = new Map(provenance.components.map((record) => [record.id, record]));
   const selected = [];
   for (const component of publicationComponents) {
+    // Reused images are added to the receipt from the plan below; there is no local file to check.
     if (reusedIds.has(component.id)) continue;
     const kind = component.kind === 'service' ? 'image' : 'package';
     const filename = kind === 'image' ? `${component.id}.${component.version}.tar.gz`
@@ -467,11 +474,13 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       nugetUsesCredentials = true;
     }
   }
+  // Registry access is still needed when every image is reused, to verify the reused digests.
   if (hasImages || reusedIds.size > 0) {
     registry = parseRegistry(env.RELEASE_REGISTRY);
     if (!registry || !env.RELEASE_REGISTRY_USER || !env.RELEASE_REGISTRY_PASSWORD || !env.DOCKER_CONFIG) {
       fail('configure a normalized registry host with an optional lowercase repository path, separate secret credentials, and an isolated Docker configuration directory');
     }
+    // A digest from another registry would not exist where this release points deployments.
     if (imageReuse !== undefined && [registry.host, registry.repositoryPath].filter(Boolean).join('/') !== imageReuse.registry) {
       fail('image reuse plan registry differs from the publication registry');
     }
@@ -567,6 +576,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   if (!Array.isArray(prior) || prior.length !== 0) {
     fail('durable publication claim/result already exists or is ambiguous; inspect remote state before any retry');
   }
+  // Log in once, either for reuse checks before the claim or for pushes after it.
   let registryLoggedIn = false;
   const loginRegistry = () => {
     if (registryLoggedIn) return;
@@ -575,6 +585,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   };
   // Prove every reused digest and its original tag before the claim; nothing is retagged or pushed.
   if (reusedIds.size > 0) {
+    // Run before the claim tag so a moved or deleted image fails with no remote write at all.
     loginRegistry();
     try {
       verifyReusedImages(imageReuse, readDescriptor);
@@ -589,14 +600,18 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     destination: artifact.kind === 'package' ? env.RELEASE_NUGET_SOURCE
       : `${imageRepositories.get(component.id)}:${imageTagFor(component)}`,
   }]));
+  // Keep manifest order so receipts look the same whether an image was built or reused. Reused
+  // entries copy the original plan (old tag, archive hash) unchanged.
   const publicationOrder = publicationComponents.map(component => component.id);
-  const planned = publicationOrder.map(id => reusedEntries.get(id)?.planned ?? builtPlanned.get(id));
+  const planned =  publicationOrder.map(id => reusedEntries.get(id)?.planned ?? builtPlanned.get(id));
   const receipt = {
     schemaVersion: 1, sourceSha,
     requiredPackageIds,
     ...(integrationImagesOnly ? { mode: 'images-only', sourceTree: integrationSourceTree } : {}),
     provenanceSha256: hash(readFileSync(path.join(directory, 'provenance.json'))),
     planned, status: 'partial',
+    // Reused images are already published and verified above, so they start in `published`.
+    // A run that fails later stays `partial`, which the reuse planner never uses as a baseline.
     published: publicationOrder.filter(id => reusedEntries.has(id)).map(id => reusedEntries.get(id).published),
   };
   if (replaceProbe) receipt[replacementField] = {
@@ -745,6 +760,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
         }
       }
     }
+    // Reused entries were added first; restore manifest order before the final receipt is written.
     receipt.published.sort((left, right) => publicationOrder.indexOf(left.id) - publicationOrder.indexOf(right.id));
     receipt.status = 'published';
     return receipt;
