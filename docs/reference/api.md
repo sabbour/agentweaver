@@ -190,18 +190,20 @@ exposes project configuration and run-selection operations.
 | DELETE | `/{projectId}/role-assignments/{assignmentId:guid}` | Admin; unbound token, TenantAdmin | Revoke an assignment at `expectedRevision`. | Yes |
 | GET | `/{projectId}/configuration` | Read | Read current or requested `revision`. | Yes |
 | PUT | `/{projectId}/configuration` | Admin | Append validated configuration. | Yes |
-| POST | `/{projectId}/casting/proposals` | Admin | Create a reviewed casting proposal. | No |
-| POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | No |
-| POST | `/{projectId}/casting/proposals/manual` | Admin | Create a manual proposal. | No |
-| GET | `/{projectId}/casting/proposals` | Read | List proposals. | No |
-| GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | No |
-| PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | No |
-| POST | `/{projectId}/casting/proposals/{proposalId:guid}/confirm` | Admin | Confirm reviewed casting. | No |
-| POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | No |
-| GET | `/{projectId}/casting/export` | Admin | Export casting configuration. | No |
-| POST | `/{projectId}/casting/import` | Admin | Validate and import casting. | No |
+| POST | `/{projectId}/casting/proposals` | Admin | Stage a complete configuration draft for review. | Yes |
+| POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | Yes |
+| POST | `/{projectId}/casting/proposals/manual` | Admin | Create a manual proposal. | Yes |
+| GET | `/{projectId}/casting/proposals` | Read | List proposals with optional `limit` (1–100, default 50). | Yes |
+| GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | Yes |
+| PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | Yes |
+| POST | `/{projectId}/casting/proposals/{proposalId:guid}/confirm` | Admin | Confirm reviewed casting. | Yes |
+| POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | Yes |
+| GET | `/{projectId}/casting/export` | Admin | Export current casting or optional positive `revision`. | Yes |
+| POST | `/{projectId}/casting/import` | Admin | Stage a digest-checked transfer; request body limit 1 MiB. | Yes |
 | PUT | `/{projectId}/runs/{runId}/selection` | Selection | Accept an immutable run selection. | Yes |
 | GET | `/{projectId}/runs/{runId}/selection` | Selection | Read the accepted selection. | Yes |
+| PUT | `/{projectId}/runs/{runId}/interactive-selection` | Selection | Accept a new chat run selection from current server configuration. The Orchestrator calls this route during run creation. | No |
+| GET | `/{projectId}/runs/{runId}/cancellation-selection` | `api.read`, `projects.orchestrator`, unbound project cancellation authority | Read the saved selection after a fresh Contributor, Owner, or tenant-admin check. Used by Orchestrator cancellation, not run admission. | No |
 
 ### Project role assignments
 
@@ -299,11 +301,34 @@ Owner.
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | GET | `/api/authorization/context` | Bearer; `api.read`, non-purpose token | Read current authority. | `/api/v1/authorization/context` |
-| GET | `/api/casting/templates` | Bearer | Read built-in casting templates. | No |
-| GET | `/api/catalog/roles` | Bearer | Read built-in roles. | No |
+| GET | `/api/casting/templates` | Bearer | Read built-in casting templates. | `/api/v1/casting/templates` |
+| GET | `/api/catalog/roles` | Bearer | Read built-in roles. | `/api/v1/catalog/roles` |
 | GET | `/api/platform/runtime-defaults/` | `api.read`, `projects.admin`, unbound PlatformAdmin | Read platform runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | PUT | `/api/platform/runtime-defaults/` | Same PlatformAdmin authority | Append runtime defaults. | `/api/v1/platform/runtime-defaults` |
+| GET | `/api/platform/components` | `api.read`, unbound, current TenantAdmin for the caller's tenant or PlatformAdmin | Read active platform components and readiness for every area. See [Platform components](../guide/platform-components.md). | `/api/v1/platform/components` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
+
+### Casting through the Gateway
+
+All casting routes forward the original bearer and optional
+`X-Agentweaver-Tenant` selector to Projects & Config. The owner enforces
+`ReadProjects` for proposal reads and `WriteProjects` for mutations **and
+export**. Writes and export require `api.read`, `projects.admin`, and current
+TenantAdmin or project Owner authority. Catalog reads require authentication.
+No new roles or idempotency headers are introduced.
+
+Create requests carry `expectedConfigurationRevision` and either `draft`,
+`templateId`, or `roleIds`. Patch carries `expectedDraftRevision` and `draft`.
+Confirm and reject carry `expectedDraftRevision`. Confirmation also checks the
+proposal's base configuration revision. A stale revision returns `409`; rejection
+does not change configuration. Import accepts `expectedConfigurationRevision`
+and `transfer` and creates a pending proposal, not an applied configuration.
+Gateway and owner import request bodies are limited to 1,048,576 bytes.
+Unsupported transfer versions or incompatible teams return `422`.
+
+See [casting contracts](./contracts.md#casting-proposals-and-transfers) for
+response fields and [Use the Gateway](../guide/gateway.md#review-project-casting)
+for the review sequence.
 
 ### Skills
 
@@ -315,11 +340,12 @@ Gateway prefix: `/api/v1/projects/{projectId}/skills`.
 | GET | `/` | Admin; archived projects allowed | Read revision inventory with `cursor` and `pageSize`. | Yes, empty suffix |
 | POST | `/import` | Admin | Import validated content with idempotency and digest checks. | Yes |
 | PUT | `/{skillId}/assignment` | Admin | Save pinned skill assignment at the expected configuration revision. | Yes |
-| POST | `/{skillId}/revisions/{revision:long}/revoke` | Admin | Revoke an imported revision. | No |
+| POST | `/{skillId}/revisions/{revision:long}/revoke` | Admin | Revoke an imported revision. | Yes |
 
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | POST | `/api/skills/preview` | `api.read`; unbound request | Validate local skill files without saving. | `/api/v1/skills/preview` |
+| POST | `/api/skills/package` | `api.read`; unbound request | Group uploaded files, a ZIP archive, or draft fields into skill candidates without saving. | `/api/v1/skills/package` |
 | GET | `/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Selection; exact agent and accepted pins | Read effective run skills. | No |
 
 ### Marketplace sources
@@ -363,6 +389,208 @@ excludes caller dismissals; shared Flow reads use `includeDismissed=true`.
 Unknown or repeated query parameters return `400 query_invalid`.
 
 Source: `services/orchestrator/Agentweaver.Orchestrator/`.
+
+### Runs
+
+Native prefix: `/api/projects/{projectId}/runs`.
+Gateway prefix: `/api/v1/projects/{projectId}/runs`.
+
+These routes start a new chat run, deliver its first message, and cancel it.
+Create and start require the project Orchestrator role (`acceptRunSelection`).
+Owner or Contributor alone receives `403` when creating a chat.
+A tenant admin grants the caller the project
+Orchestrator role through
+`/api/v1/projects/{projectId}/role-assignments`.
+
+| Method | Suffix | Token | Purpose | Gateway |
+| --- | --- | --- | --- | --- |
+| POST | `/` | Not bound to a run | Save the first message, mint `runId` and `rootSessionId`, and accept the run selection. Returns `201` with `awaiting_binding`. | Yes |
+| POST | `/{runId}/start` | Bound to the run | Accept the root session and deliver the saved first message once. Returns `200` with `started`. | Yes |
+| POST | `/{runId}/cancel` | Not bound to a run | Cancel any run as a current project Contributor, Owner, or tenant admin. Viewer receives `403`. Returns `200`, including terminal no-ops. | Yes |
+
+Create and cancel require exactly one `Idempotency-Key` header. A retry with
+the same key and body returns the original result. A retry with the same key
+and a different body returns `409 idempotency_conflict`. Start takes no body
+and no key; a repeated start returns the same result without sending the first
+message again. Cancel on a finished run returns `200` with `alreadyTerminal: true`
+and does not change state. Cancellation receipts are scoped to each caller.
+Start has a 30-second deadline covering its request lock and downstream calls;
+a timeout returns `504 run_start_timeout`. Start after cancellation returns
+`409 run_terminal`.
+
+The create request body has `firstMessage` (1–32,768 UTF-8 bytes),
+`expectedProjectConfigRevision`, and optional `title` and `workflowId`. The
+Gateway accepts create bodies up to 256 KiB. Responses never include the first
+message.
+
+### Run list
+
+Native path: `/api/projects/{projectId}/runs`.
+Gateway path: `/api/v1/projects/{projectId}/runs`.
+
+| Method | Query | Auth | Purpose | Gateway |
+| --- | --- | --- | --- | --- |
+| GET | `state`, `cursor`, `pageSize` | Read | List accepted runs, newest first. | Yes, `listProjectRuns` |
+
+The caller needs the `api.read` scope and project or tenant read permission.
+A run-bound token sees only its own run. `pageSize` defaults to 25 and accepts
+1–100. `state` takes a comma-separated list of `idle`, `active`, `blocked`,
+`completed`, `failed`, `indeterminate`, and `cancelled`, or the `open` and
+`terminal` aliases. Unknown or repeated query parameters return
+`400 query_invalid`. A bad filter, cursor, or page size returns
+`400 run_state_filter_invalid`, `cursor_invalid`, or `page_size_invalid`.
+Pass `nextCursor` back with the same filter and page size.
+`title` and `goal` are `null` until a run start request stores them.
+
+### Project metrics and usage
+
+Use these read-only routes for one project's dashboard:
+
+| Gateway path (GET) | Owner path | Operation ID |
+| --- | --- | --- |
+| `/api/v1/projects/{projectId}/metrics?from=&to=&bucket=day` | Orchestrator `/api/projects/{projectId}/metrics` | `readProjectMetrics` |
+| `/api/v1/projects/{projectId}/usage?from=&to=` | Events & Sessions `/api/projects/{projectId}/usage` | `readProjectUsage` |
+
+Both owners require `api.read`, their own audience and the Projects audience,
+and a fresh Projects authorization context. The caller needs project
+`readProjects` or `readRunSelection`, or tenant `readProjects`. Unbound and
+project-bound callers can read the project. A run-bound caller sees only its
+own run. Both responses use `Cache-Control: no-store`.
+
+`from` is inclusive and `to` is exclusive. Supply ISO dates (`2026-10-01`)
+or timestamps with an explicit offset (`2026-10-01T00:00:00Z`). Dates start
+at UTC midnight. When `to` is omitted, it defaults to the current UTC time.
+When `from` is omitted, it defaults to 30 days before `to`. An interval can
+span at most 92 days. Equal bounds are valid and return no interval activity.
+Only metrics accepts `bucket`; its only value is `day`. Unknown or repeated
+query parameters, invalid dates, reversed bounds, and unsupported buckets
+return a `400` problem response with `title` and `code` set to `query_invalid`.
+The response does not include exception text. A default start date earlier
+than the supported date range is also invalid.
+
+Metrics returns `projectId`, normalized `from` and `to`, the counts below,
+and `series`. Current state and lifetime counts are not limited by the date
+range. They still respect tenant, project, and run-bound scope.
+
+| Field | v1 definition | 0.x dashboard mapping |
+| --- | --- | --- |
+| `activeRuns` | Runs whose derived state is `active`, including presenting root turns. | Active runs tile; does not include the separate active-agent count. |
+| `blockedRuns` | Runs whose derived state is `blocked`. | Additional v1 state detail, not a summary tile in 0.x. |
+| `runsInRange` | Runs with `created_at` in `[from,to)`. | Runs this week when callers select that week; Created total for the selected range. |
+| `runsTotal` | All accepted runs in the authorized scope. | Total run count. |
+| `completedRuns` | Terminal runs (`completed`, `failed`, `cancelled`, `indeterminate`) with `completed_at` in `[from,to)`. | Completed total and Done series; not the 0.x completed-task count. |
+| `succeededRuns` | Runs in `completedRuns` whose derived state is `completed`. | Numerator for v1 run success; not the 0.x agent-dependency success measure. |
+| `series[].date` | UTC calendar date, ascending, for each day intersecting the interval. | Runs over time and daily activity. |
+| `series[].created` | Runs created within the interval on that UTC day. | Created series. |
+| `series[].completed` | Terminal runs completed within the interval on that UTC day. | Done series. |
+
+Days with no activity have zero counts. An equal-bound interval has an empty
+series. A run created before the interval can contribute to its completion
+count. Terminal rows without `completed_at` do not contribute to completion
+metrics.
+
+These definitions map to the 0.x dashboard controls. v1 uses persisted
+owner data, not Application Insights, and cannot reproduce historic 0.x
+telemetry. v1 run success is `succeededRuns / completedRuns`; display it as
+unknown when the denominator is zero. 0.x used per-agent dependency success,
+so the two percentages are not equivalent.
+
+Usage returns `projectId`, normalized `from` and `to`, `usageByModel`, and
+`usageByAgent`. Each array item has `id` (persisted `model_id` or `agent_id`),
+`requestCount`, `inputTokens`, `outputTokens`, `cachedTokens`,
+`cacheWriteTokens`, `reasoningTokens`, `avgDurationMs`, `runs`, `cost`, and
+`unpricedRequestCount`. Empty intervals or projects have empty usage arrays.
+`runs` counts distinct `run_id` values represented in that group and interval.
+These groups replace the model metrics and usage portion of the agent
+leaderboard, not agent-role or agent-success telemetry.
+
+Token and request counts are sums of recorded measurements. `avgDurationMs`
+is the arithmetic mean of ledger-event durations, not a request-weighted mean.
+If any included row lacks a measurement, that aggregate is `null`, not zero.
+TTFT is not returned because the ledger does not record it.
+
+`cost[]` keeps a separate subtotal for each `(priceUnit, disposition)` pair.
+Disposition is `estimate`, `reconciled`, or `unpriced`. Never sum across
+units. An unpriced amount remains `null`, including a missing unit.
+`unpricedRequestCount` sums request counts on unpriced rows; it is `null`
+when any such row has an unknown request count, and zero when no rows are
+unpriced. Reads do not price, reprice, reserve, or change budgets.
+
+Cross-project overview is out of scope. The Gateway proxies each owner; it
+does not combine metrics and usage into one response. Clients that need
+aligned intervals should pass the same explicit bounds to both routes.
+
+### Chief of Staff
+
+Native prefix: `/api/chief-of-staff`.
+Gateway prefix: `/api/v1/chief-of-staff`.
+
+These routes store a caller's private Chief of Staff conversations and
+Priorities. They never start, cancel, or change runs, sessions, or gates.
+New chats use the [Runs](#runs) routes, and the conversation entry binds the
+returned run. For guidance, see [Chief of Staff](../guide/chief-of-staff.md).
+
+| Method | Suffix | Query | Purpose | Gateway |
+| --- | --- | --- | --- | --- |
+| GET | `/conversations` | `cursor`, `pageSize` | List my conversations, newest first. | `listChiefOfStaffConversations` |
+| POST | `/conversations` | — | Bind a run that I created to a conversation entry. Returns `200` with the same entry on repeat. | `bindChiefOfStaffConversation` |
+| GET | `/conversations/{conversationId}` | — | Read one of my conversations. | `getChiefOfStaffConversation` |
+| GET | `/priorities` | — | List my Priorities in order, with `orderRevision`. | `listChiefOfStaffPriorities` |
+| POST | `/priorities` | — | Create a Priority at the end of the list. Requires `Idempotency-Key`. Returns `201`, or `200` on replay. | `createChiefOfStaffPriority` |
+| PUT | `/priorities/order` | — | Replace the order at `expectedOrderRevision`. | `reorderChiefOfStaffPriorities` |
+| GET | `/priorities/{priorityId}` | — | Read one Priority. | `getChiefOfStaffPriority` |
+| PATCH | `/priorities/{priorityId}` | — | Change outcome, notes, state, or checklist at `expectedRevision`. | `updateChiefOfStaffPriority` |
+| POST | `/priorities/{priorityId}/links` | — | Add a typed link at `expectedRevision`. | `addChiefOfStaffPriorityLink` |
+| DELETE | `/priorities/{priorityId}/links/{linkId}` | `expectedRevision` (required) | Remove a link. | `removeChiefOfStaffPriorityLink` |
+
+Every route requires the `api.read` scope and a token that isn't bound to a
+project or run. A bound token returns `403`. The Orchestrator reads fresh
+Projects authority on each call and returns only the caller's rows; another
+user's conversation or Priority returns `404`.
+
+Access rules:
+
+- Binding a conversation requires read permission on the project and a run
+  that the caller created through `POST /api/v1/projects/{projectId}/runs`.
+  Another user's run returns `404 conversation_run_not_found`.
+- Adding a link requires read permission on the linked project. A
+  `conversation` link must name one of the caller's conversations in the same
+  project.
+- Removing a link doesn't require project access, so users can remove links
+  to projects they no longer read.
+- When the caller loses read permission on a project, conversations and links
+  in that project return `access: unavailable` with only their identifier,
+  kind, and creation time. Priority outcome, notes, and checklist are the
+  caller's own content and stay visible.
+
+Revisions and conflicts:
+
+- Each Priority has a `revision`. Writes with a stale `expectedRevision`
+  return `409 priority_revision_conflict`. Reread the Priority, then retry.
+- The list has an `orderRevision`. A stale reorder returns
+  `409 priority_order_conflict`. A reorder that doesn't name every Priority
+  exactly once returns `400 priority_order_invalid`.
+- A create replay with the same key and body returns the original Priority. A
+  changed body returns `409 idempotency_conflict`.
+- Limits: 100 Priorities (`409 priority_limit_reached`), 50 links per
+  Priority (`409 priority_link_limit_reached`), and 50 checklist items. A
+  duplicate link returns `409 priority_link_exists`.
+
+Link kinds are `run`, `conversation`, `issue`, `pull_request`, and `artifact`.
+Every link names `projectId`. `run` needs `runId`, `conversation` needs
+`conversationId`, `issue` and `pull_request` need `number`, and `artifact`
+needs `runId` and `artifactId`. Reads resolve each link:
+
+| Kind | `state` |
+| --- | --- |
+| `run` | The current run state from the run list, or `access: missing` when the run doesn't exist. |
+| `conversation` | The run state, or the request state (`awaiting_binding`, `cancelled`) before the run starts. |
+| `issue`, `pull_request`, `artifact` | `unavailable`. The owners have no current-state read for these items. |
+
+Priority `state` is `active`, `achieved`, or `dropped`. It's the user's own
+judgment and doesn't depend on run state, so an outcome survives runs ending.
+An empty `notes` value clears the notes, and `checklist` replaces the whole
+list.
 
 ### Coordination
 
@@ -494,6 +722,9 @@ Gateway prefix:
 These routes require Coordination authority and current Source Control
 selection/pins. Gateway routes require an explicit `X-Agentweaver-Tenant`.
 Merge operations also validate the current merge gate and intent.
+Output-capture reads return only admitted captures. The Gateway forwards the
+`X-Source-Control-Output-Sha256` file header and allows up to 64 MiB for capture
+reads, because a capture can hold a 32 MiB manifest and 16 MiB files.
 
 | Method | Suffix | Purpose | Gateway |
 | --- | --- | --- | --- |
@@ -503,11 +734,11 @@ Merge operations also validate the current merge gate and intent.
 | GET | `/pull-requests/{pullRequestNumber:long}/reviews` | Read reviews. | Yes |
 | POST | `/workspaces` | Prepare pinned repository workspace. | Yes |
 | POST | `/workspaces/{workspaceId}/diff` | Read repository diff. | Yes |
-| POST | `/workspaces/{workspaceId}/output-captures` | Capture verified produced output. | No |
-| GET | `/output-captures` | Read capture page. | No |
-| GET | `/output-captures/{captureId}` | Read capture metadata. | No |
-| GET | `/output-captures/{captureId}/diff` | Read captured diff. | No |
-| GET | `/output-captures/{captureId}/files` | Read exact captured file. | No |
+| POST | `/workspaces/{workspaceId}/output-captures` | Capture verified produced output. | Yes |
+| GET | `/output-captures` | Read capture page. | Yes |
+| GET | `/output-captures/{captureId}` | Read capture metadata. | Yes |
+| GET | `/output-captures/{captureId}/diff` | Read captured diff. | Yes |
+| GET | `/output-captures/{captureId}/files` | Read exact captured file. | Yes |
 | POST | `/merge-intents` | Request approval for merge intent. | Yes |
 | GET | `/merge-intents/{intentId}` | Read merge intent. | Yes |
 | POST | `/merge-intents/{intentId}/execute` | Execute approved intent. | Yes |
@@ -625,9 +856,22 @@ All routes require Journal authority and exact project/run claims.
 | GET | `/internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` | Exact bound `ReadRunSelection` authority and current provider | Read immutable Sessions pin. | No |
 | GET | No native SSE route | Exact run bearer and current Gateway/owner access checks | SSE over committed replay pages. | `/api/v1/projects/{projectId}/runs/{runId}/events/live` |
 
+### Historical turn text
+
+`GET /api/v1/projects/{projectId}/runs/{runId}/sessions/{sessionId}/turns/{eventId}`
+returns `{ eventId, identity, text }` from the existing Events material owner.
+Use the event and session identities from a committed `turn` event. The native
+route is `GET /internal/sessions/{sessionId}/turns/{eventId:guid}`.
+
+The caller needs an exact run-bound bearer and current project read authority.
+The owner rechecks authority after reading stored bytes. Responses use
+`Cache-Control: no-store`. Missing history returns 404; lost access returns 403.
+The route reads only turn text. It does not accept a material kind or expose
+object keys, runtime configuration, SDK cache, or remote-tool results.
+
 ### Material, messages, and accepted facts
 
-These routes are native-only. Runtime/material routes recheck current Projects,
+The following routes are native-only. Runtime/material routes recheck current Projects,
 Orchestrator, and provider state. Trusted peer checks are additional to bearer
 authentication where configured.
 
@@ -888,6 +1132,17 @@ has separate measured readiness as listed above.
 
 The Web host maps its own health routes and SPA/static paths. See
 [web host reference](./web.md#host-health).
+
+## Platform component owner routes
+
+Events & Sessions, Environment, Knowledge, Orchestrator, and Identity Broker
+each map `GET /internal/platform/components` only when
+`PlatformComponents:ServiceAuthentication` is configured. The route accepts only
+a service token for the private audience whose `sub` claim equals the configured
+Projects caller subject. It returns the owner's areas with `Cache-Control:
+no-store`, and it's not in the Gateway OpenAPI document. Projects calls these
+routes for `GET /api/platform/components`. See
+[Platform components](../guide/platform-components.md).
 
 ## Registration and implementation boundaries
 

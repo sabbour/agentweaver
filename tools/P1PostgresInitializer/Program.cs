@@ -70,14 +70,25 @@ if (coreParents.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 2)
     throw new InvalidOperationException("The supplied Core commit must be the actual separately reviewed merge.");
 var migratorSource = await File.ReadAllTextAsync(
     Path.Combine("services", "orchestrator", "Agentweaver.Orchestrator", "CoordinationOwnerMigrator.cs"));
-if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,\s*19,\s*20,\s*21,\s*25,\s*26,\s*30\]\)") ||
+// Core versions include durable interactive requests and must match the reviewed plan; 017 stays excluded.
+if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,\s*19,\s*20,\s*21,\s*22,\s*23,\s*24,\s*25,\s*26,\s*30\]\)") ||
     !migratorSource.Contains("16 => \"project_backlog\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("18 => \"reviewed_remote_tool_snapshots\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("21 => \"row_lock_record_updates\"", StringComparison.Ordinal) ||
+    !migratorSource.Contains("22 => \"run_list_completion\"", StringComparison.Ordinal) ||
+    !migratorSource.Contains("23 => \"project_run_requests\"", StringComparison.Ordinal) ||
+    !migratorSource.Contains("24 => \"chief_of_staff\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("25 => \"user_notification_dismissals\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("26 => \"backlog_task_content\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("30 => \"backlog_task_origin\"", StringComparison.Ordinal))
-    throw new InvalidOperationException("Reviewed Core 016/018/021/025/026/030 migration wiring is required before initialization; 017 is not permitted.");
+    throw new InvalidOperationException("Reviewed Core 016/018/021/022/023/024/025/026/030 migration wiring is required before initialization; 017 is not permitted.");
+
+// The Events reporting index is a separately reviewed live-apply prerequisite, never an implicit runtime write.
+var eventsMigratorSource = await File.ReadAllTextAsync(
+    Path.Combine("services", "events-and-sessions", "Agentweaver.EventsAndSessions", "EventsAndSessionsMigrator.cs"));
+if (!eventsMigratorSource.Contains("private const int CurrentSchemaVersion = 9;", StringComparison.Ordinal) ||
+    !eventsMigratorSource.Contains("9 => \"Agentweaver.EventsAndSessions.Migrations.009_project_usage_index.sql\"", StringComparison.Ordinal))
+    throw new InvalidOperationException("Reviewed Events 009 project usage index wiring is required before initialization.");
 
 var planJson = await RunLocalAsync("node", ["scripts/azure/lib/p1-postgres-plan.mjs", "--json"]);
 // The reviewed plan hash binds every later role, schema, relation, and grant decision to source output.
@@ -88,6 +99,8 @@ var plan = JsonSerializer.Deserialize<PostgresPlan>(planJson, new JsonSerializer
 {
     PropertyNameCaseInsensitive = true,
 }) ?? throw new InvalidOperationException("The exact source plan is missing.");
+if (plan.EventsVersions is null || !plan.EventsVersions.SequenceEqual(Enumerable.Range(1, 9)))
+    throw new InvalidOperationException("The reviewed Events migration plan must include exactly versions 001 through 009.");
 InitializerChecks.AssertPrincipalObjectIds(plan.Services);
 InitializerChecks.AssertMutationDenialPlan(plan.Services);
 InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);

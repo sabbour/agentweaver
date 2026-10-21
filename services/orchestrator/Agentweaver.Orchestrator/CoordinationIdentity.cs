@@ -56,6 +56,18 @@ internal static class CoordinationIdentity
     }
 
     /// <summary>
+    /// Requires the read scope for project-scoped reads that do not need the Orchestrator project scope.
+    /// </summary>
+    /// <exception cref="CoordinationException">The <c>api.read</c> scope is absent.</exception>
+    public static void RequireReadScope(ClaimsPrincipal principal)
+    {
+        var scopes = principal.FindAll("scope").Concat(principal.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        if (!scopes.Contains("api.read", StringComparer.Ordinal))
+            throw new CoordinationException("caller_scope_invalid", StatusCodes.Status403Forbidden);
+    }
+
+    /// <summary>
     /// Checks whether the principal contains the exact configured audience.
     /// </summary>
     public static bool HasAudience(ClaimsPrincipal principal, string expectedAudience) =>

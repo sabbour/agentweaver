@@ -10,6 +10,38 @@ public sealed class ProjectAuthorizationContextTests
     private const string ProjectId = "project-1";
     private const string RunId = "run-1";
 
+    /// <summary>Cancellation follows project access, while creating a run still needs an Orchestrator assignment.</summary>
+    [Theory]
+    [InlineData(ProjectAuthorityRole.Owner, true)]
+    [InlineData(ProjectAuthorityRole.Contributor, true)]
+    [InlineData(ProjectAuthorityRole.Viewer, false)]
+    [InlineData(ProjectAuthorityRole.Orchestrator, false)]
+    public void UnboundCancellationPermissionMatchesProjectRole(ProjectAuthorityRole role, bool canCancel)
+    {
+        var caller = CreateContext([Grant(ProjectId, role, 2)],
+            ["api.read", "projects.orchestrator"], boundProjectId: null, boundRunId: null);
+        Assert.Equal(canCancel, HasPermission(caller.ToEffectiveResponse(), ProjectAuthorizationPermission.CancelRun));
+        var bound = CreateContext([Grant(ProjectId, role, 2)], ["api.read", "projects.orchestrator"]);
+        Assert.False(HasPermission(bound.ToEffectiveResponse(), ProjectAuthorizationPermission.CancelRun));
+        Assert.Equal(role == ProjectAuthorityRole.Orchestrator,
+            HasPermission(caller.ToEffectiveResponse(), ProjectAuthorizationPermission.AcceptRunSelection));
+    }
+
+    /// <summary>Tenant administration can cancel tenant project runs but does not grant Orchestrator admission.</summary>
+    [Fact]
+    public void TenantAdminCancellationIsTenantScopedAndUnbound()
+    {
+        var grant = new ProjectAuthorizationGrant(
+            Guid.NewGuid(), ProjectAuthorityResourceType.Tenant, "tenant", ProjectAuthorityRole.TenantAdmin, 3);
+        var caller = CreateContext([grant], ["api.read", "projects.orchestrator"],
+            boundProjectId: null, boundRunId: null);
+        var authority = Assert.Single(caller.ToEffectiveResponse().EffectiveAuthority);
+        Assert.Equal("tenant", authority.ResourceId);
+        Assert.Contains(authority.Permissions, permission => permission.Permission == ProjectAuthorizationPermission.CancelRun);
+        Assert.DoesNotContain(authority.Permissions, permission =>
+            permission.Permission == ProjectAuthorizationPermission.AcceptRunSelection);
+    }
+
     [Fact]
     public void RunBoundOwnerAndOrchestratorWithSupportedScopesCanReadPrivateKnowledge()
     {

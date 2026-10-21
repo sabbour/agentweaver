@@ -168,16 +168,37 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16, 18 through 21, 25, 26,
-and 30. These are 23 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16, 18 through 26, and 30.
+These are 26 registered versions; version 17 remains excluded.
+Version 22 adds the run completion time. It needs no new grant because the
+runtime role already has table-level UPDATE on `accepted_runs`.
+Version 23 adds durable interactive requests, cancellation receipts,
+`cancelled_at`, and the `cancelled` state. Its runtime grants are
+`SELECT,INSERT,UPDATE` on `project_run_requests` and `SELECT,INSERT` on
+`project_run_cancellations`. Its execution-state CHECK validation scans
+`accepted_runs`. Its `ACCESS EXCLUSIVE` lock blocks reads and writes to `accepted_runs`
+until the migration transaction commits. It doesn't alter `sessions` or build indexes on
+existing tables. Review the table size and plan a write pause.
+Version 24 adds private Chief of Staff conversations and Priorities in four new,
+empty tables. It doesn't alter or scan existing tables. Its runtime grants are
+`SELECT,INSERT` on `chief_of_staff_conversations`, `SELECT,INSERT,UPDATE` on
+`chief_of_staff_priority_lists` and `chief_of_staff_priorities`, and
+`SELECT,INSERT,DELETE` on `chief_of_staff_priority_links`.
+Version 25 adds the empty `user_notification_dismissals` table. Its only
+predecessor is version 2, which creates `coordinator_gates`. It doesn't alter or
+scan existing tables. Its runtime grant is `SELECT,INSERT` on that table.
+Version 26 adds backlog task content columns and a unique repository issue index.
+It requires version 21, adds no tables or grants, and blocks writes to
+`backlog_tasks` until commit.
+Version 30 adds the empty `backlog_plan_promotions` and `backlog_task_origins`
+tables. It requires version 26 and doesn't alter existing tables. Its foreign keys
+take `SHARE ROW EXCLUSIVE` locks that block writes to `backlog_projects`,
+`backlog_tasks`, and `coordination_sessions` until commit. Its runtime grant is
+`SELECT,INSERT` on each new table.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan lists 98 tables and eight exact row-lock columns. Orchestrator migration
-025 adds the empty `user_notification_dismissals` table. Its runtime role needs
-only `SELECT,INSERT` on that table. The migration does not alter existing tables.
-Orchestrator migration 030 adds `backlog_plan_promotions` and
-`backlog_task_origins`, each with `SELECT,INSERT` only.
-This source change also changes the plan hash. Applying the migration or grants,
-or running initialization with the new hash, requires separate approval.
+The plan lists 104 tables and eight exact row-lock columns.
+Applying migrations or grants, or running initialization with the new plan hash,
+requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved
