@@ -6,6 +6,7 @@ using Azure.Core;
 using Agentweaver.Providers;
 using Agentweaver.Telemetry;
 using Agentweaver.Identity;
+using Agentweaver.Persistence.Postgres;
 using Agentweaver.ObjectStore.AzureBlob;
 using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Authentication;
@@ -41,12 +42,31 @@ messagingOptions.Validate();
 if (migrate)
 {
     var migrationConnection = EventsAndSessionsPostgresDataSource.ReadMigrationConnection(builder.Configuration);
+    // An optional runtime role turns on the plan-gated grant step used by the maintenance Job.
+    // The plan is checked before any connection, so a wrong hash, role, schema, or catalog
+    // stops the Job before it migrates anything.
+    var runtimeRole = builder.Configuration["EventsAndSessions:Migration:RuntimeRole"];
+    var plannedGrants = string.IsNullOrWhiteSpace(runtimeRole)
+        ? null
+        : PlannedRuntimeGrants.Load("events-and-sessions", options.Schema, runtimeRole,
+            builder.Configuration["EventsAndSessions:Migration:PlanSha256"] ?? "",
+            EventsAndSessionsMigrator.SupportedVersions);
     var migrationCredential = EventsAndSessionsPostgresDataSource.CreateCredential(migrationConnection);
     try
     {
         await using var migrationDataSource = EventsAndSessionsPostgresDataSource.Create(
             migrationConnection.ConnectionString, migrationCredential);
         await EventsAndSessionsMigrator.MigrateAsync(migrationDataSource, options.Schema);
+        if (plannedGrants is not null)
+        {
+            // Applied versions are skipped by the migrator, so a rerun only repeats the idempotent
+            // grants. The marker carries the final ledger for the run receipt.
+            await using var grantConnection = await migrationDataSource.OpenConnectionAsync();
+            await PlannedRuntimeGrants.ApplyAndVerifyAsync(grantConnection, plannedGrants);
+            var applied = await PlannedRuntimeGrants.ReadVersionsAsync(
+                grantConnection, options.Schema, "sessions_schema_migrations");
+            Console.WriteLine(PlannedRuntimeGrants.FormatMarker(plannedGrants, applied));
+        }
     }
     finally
     {
