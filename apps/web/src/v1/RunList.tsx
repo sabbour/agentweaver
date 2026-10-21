@@ -1,7 +1,7 @@
 /**
  * Shared run list for Orchestrations, Overview, and later Sessions and Flow.
- * The data adapter reads the browser's recent runs today. When the Gateway run
- * list (gap G2) exists, a second adapter returns the same `RunListItem` shape,
+ * The data adapter reads the browser's recent runs today. When the service
+ * offers a run list, a second adapter can return the same `RunListItem` shape,
  * so callers keep the same layout.
  */
 import { Badge, Button, Text, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
@@ -57,6 +57,7 @@ const useStyles = makeStyles({
 /** Formats an ISO time for list rows. */
 function formatTime(value: string): string {
   const parsed = new Date(value);
+  // Show the raw text if the value is not a valid date, rather than "Invalid Date".
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
@@ -75,6 +76,7 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
 }) {
   const navigate = useNavigate();
   const styles = useStyles();
+  // `limit` trims the rows shown. The count badge still shows the full total.
   const items = limit ? data.items.slice(0, limit) : data.items;
   return (
     <section className={styles.section} aria-label={title}>
@@ -88,11 +90,14 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
       <div className={styles.list}>
         {items.length === 0 ? <Text className={styles.empty}>{emptyText}</Text> : items.map((item) => {
           const state = runState(item.executionState);
+          // Encode both IDs; they come from storage and may hold URL characters.
           const path = `/projects/${encodeURIComponent(item.projectId)}/runs/${encodeURIComponent(item.runId)}`;
           return (
             <div key={`${item.projectId}/${item.runId}`} className={styles.row}>
               <div className={styles.rowStatus}>
                 <Badge appearance="tint" color={state.color}>{state.label}</Badge>
+                {/* The state is a saved copy from the last time the run was
+                    opened. It is not live, so the caption says so. */}
                 <Text className={styles.meta}>{item.executionState ? 'State when last opened' : 'State not read yet'}</Text>
               </div>
               <div className={styles.rowMain}>
@@ -104,6 +109,8 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
               </div>
               <div className={styles.actions}>
                 <Button appearance="secondary" aria-label={`Open run ${item.runId}`} onClick={() => navigate(path)}>Open</Button>
+                {/* Remove appears only when the data source supports it. It
+                    forgets the run in this browser and does not touch the run. */}
                 {data.remove && (
                   <Tooltip content="Remove from this list. The run is not changed." relationship="description">
                     <Button appearance="subtle" icon={<DismissRegular />} aria-label={`Remove run ${item.runId} from this list`} onClick={() => data.remove?.(item)}>

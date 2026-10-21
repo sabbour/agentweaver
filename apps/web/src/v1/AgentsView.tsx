@@ -1,9 +1,9 @@
 /**
- * Agents in the 0.x Team layout: metric row, filter tabs, agent tiles, and a
- * detail drawer with Overview and Charter tabs. Agents come from the project
- * configuration's `agentCharters`; "In the team" means the agent has a casting
- * entry. Charter edits save a new configuration revision. Casting, adding, and
- * removing agents need casting through the Gateway (gap G4) and are not shown.
+ * Agents page: a metric row, filter tabs, agent tiles, and a detail drawer
+ * with Overview and Charter tabs. Agents come from the project configuration's
+ * `agentCharters`; "In the team" means the agent has a casting entry. Charter
+ * edits save a new configuration revision. Casting, adding, and removing agents
+ * are not shown, because the Gateway does not offer casting yet.
  */
 import {
   Badge, Button, DrawerBody, DrawerHeader, DrawerHeaderTitle, Field, Input, OverlayDrawer,
@@ -45,12 +45,16 @@ function AgentDetail({ projectId, agent, configuration, readOnly, onClose, onSav
   const [charter, setCharter] = useState(agent.charter);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // The casting entry, if any, says whether and where this agent sits in the team.
   const casting = configuration.casting.find((item) => item.agentId === agent.agentId);
+  // An enabled skill applies to this agent when it lists no agents (applies to all) or lists this agent.
   const skills = configuration.skills.filter((skill) => skill.enabled && (!skill.agentIds?.length || skill.agentIds.includes(agent.agentId)));
   const dirty = role !== agent.role || charter !== agent.charter;
   const save = async () => {
     setSaving(true);
     setSaved(false);
+    // Send the whole configuration with only this agent's role and charter replaced.
+    // The parent saves it as a new revision and resolves true on success.
     const ok = await onSave({
       ...configuration,
       agentCharters: configuration.agentCharters.map((item) => item.agentId === agent.agentId ? { ...item, role: role.trim(), charter } : item),
@@ -127,10 +131,14 @@ export function AgentsView({ projectId, configuration, readOnly, onSave }: {
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // IDs of agents with a casting entry, meaning they are in the team.
   const cast = new Set(configuration.casting.map((item) => item.agentId));
   const agents = configuration.agentCharters;
   const teamCount = agents.filter((agent) => cast.has(agent.agentId)).length;
+  // "all" shows everyone. "team" keeps cast agents and "other" keeps the rest.
   const visible = agents.filter((agent) => filter === 'all' || (filter === 'team') === cast.has(agent.agentId));
+  // Look the agent up by ID on every render, so the drawer shows the latest saved
+  // configuration and closes if the agent no longer exists.
   const selected = agents.find((agent) => agent.agentId === selectedId) ?? null;
 
   if (agents.length === 0) {
@@ -169,6 +177,7 @@ export function AgentsView({ projectId, configuration, readOnly, onSave }: {
       )}
       <OverlayDrawer open={selected !== null} onOpenChange={(_, data) => { if (!data.open) setSelectedId(null); }} position="end" size="medium">
         {selected && (
+          // Keying by agent ID resets the drawer's draft fields when a different agent is opened.
           <AgentDetail
             key={selected.agentId}
             projectId={projectId}

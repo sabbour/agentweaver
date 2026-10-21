@@ -52,7 +52,8 @@ database credentials while collecting evidence.
 
 ## Diagnose an indeterminate P1 project setup
 
-The P1 API and MCP runners record privileged command failures under
+The P1 acceptance harness runs API and MCP checks against a deployment. Its
+runners create a test project for each invocation. The runners record privileged command failures under
 `observations.fixtureSetup.commandFailures`. Each entry contains
 `productErrorCode`, `kubectlExitCode`, `processErrorClass`, and `stderrClass`.
 The runner keeps only known product error codes and fixed classifications.

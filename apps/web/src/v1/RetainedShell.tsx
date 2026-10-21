@@ -74,6 +74,8 @@ export function RetainedShell({ children }: { children: ReactNode }) {
   const attention = useRunAttention();
   const match = useMatch('/projects/:projectId/*');
   const projectId = match?.params.projectId;
+  // The loaded project list is tagged with the access token it was loaded
+  // with. After sign-out or a token change, the old list is ignored.
   const [directory, setDirectory] = useState<{
     scope: string;
     projects: ProjectSummary[];
@@ -81,6 +83,10 @@ export function RetainedShell({ children }: { children: ReactNode }) {
   } | null>(null);
   const scope = session?.accessToken ?? '';
 
+  // Reload the switcher's project list when the token or the current project
+  // changes. Opening a new project re-reads the list so a just-created project
+  // appears. The `active` flag drops a late result after the effect re-runs or
+  // the shell unmounts, so an old request cannot overwrite newer data.
   useEffect(() => {
     let active = true;
     void apiCall((token, tenant) => gatewayClient.listProjects(token, tenant), null)
@@ -88,6 +94,8 @@ export function RetainedShell({ children }: { children: ReactNode }) {
         if (active) setDirectory({ scope, projects, error: null });
       })
       .catch((error: unknown) => {
+        // Keep an empty list and an error message. The switcher shows its
+        // load-error state and the page shows the message above the content.
         if (active) setDirectory({
           scope, projects: [],
           error: error instanceof Error ? error.message : 'Projects could not load. Try again from Projects.',
@@ -96,15 +104,21 @@ export function RetainedShell({ children }: { children: ReactNode }) {
     return () => { active = false; };
   }, [apiCall, scope, projectId]);
 
+  // Use the list only if it was loaded with the current token. Otherwise treat
+  // it as still loading.
   const current = directory?.scope === scope ? directory : null;
   return (
     <div className="aw-app-shell">
+      {/* The rail shows only the pages that v1 implements. The New session
+          button stays hidden because the service cannot create runs yet. */}
       <LeftNavView
         visibleGlobalKeys={['overview', 'projects']}
         visibleProjectKeys={['dashboard', 'orchestrations', 'agents', 'skills', 'memories']}
         showNewSession={false}
         projectId={projectId}
         pathname={location.pathname}
+        // v1 routes that the shared nav config does not know: knowledge pages
+        // highlight Memories, and run pages highlight Orchestrations.
         activeKey={location.pathname.includes('/knowledge') ? 'memories'
           : location.pathname.includes('/runs/') ? 'orchestrations'
           : resolveActiveKey(location.pathname, projectId)}
@@ -113,8 +127,11 @@ export function RetainedShell({ children }: { children: ReactNode }) {
           <ProjectSwitcherView
             projectId={projectId}
             pathname={location.pathname}
+            // Map v1 project summaries to the switcher's 0.x shape.
             projects={(current?.projects ?? []).map((project) => ({ project_id: project.projectId, name: project.name }))}
             loading={!current}
+            // Sign-in problems are handled by the auth layer, so the switcher
+            // never shows its own sign-in error here.
             authError={false}
             loadError={Boolean(current?.error)}
           />

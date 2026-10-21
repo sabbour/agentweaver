@@ -134,7 +134,9 @@ export interface ModelSelectionSettings {
   reference: string;
   credentialReference?: { id: string; version: string } | null;
   connectionId?: string;
+  /** Where the model runs: the hosted Copilot service, or the project's own key (`byok`). */
   sourceMode?: 'hostedCopilot' | 'byok' | null;
+  /** How much reasoning the model should do. Null or missing uses the model default. */
   reasoningEffort?: ReasoningEffort | null;
 }
 
@@ -148,6 +150,7 @@ export type ModelTaskKind = 'planning' | 'review' | 'design' | 'security'
 /** A project task override inherits any omitted model or reasoning value. */
 export interface ModelTaskOverride {
   taskKind: ModelTaskKind;
+  /** Values for this task kind. A missing or null field uses the project default. */
   selection: { reference?: string | null; reasoningEffort?: ReasoningEffort | null };
 }
 
@@ -381,6 +384,7 @@ export function isCopilotConnectionBegin(value: unknown): value is CopilotConnec
 /** Mutable owner configuration, including model, skills, source control, and run limits. */
 export interface ProjectConfiguration {
   modelSelection?: ModelSelectionSettings | null;
+  /** Per-task model choices that replace parts of `modelSelection` for that kind of task. */
   modelTaskOverrides?: ModelTaskOverride[];
   providerOverrides: Array<{ seam: string; providerId: string }>;
   orderedProviderOverrides: Array<{ seam: string; providerIds: string[] }>;
@@ -1070,9 +1074,11 @@ export interface ProjectRoleAssignment {
   /** Member subject under the caller's issuer. */
   principalId: string;
   role: ProjectRole;
-  /** Concurrency token for revoke (`expectedRevision`). */
+  /** Increases on every change. Revoke sends it as `expectedRevision` so a stale revoke fails. */
   revision: number;
+  /** Subject of the member who made the assignment. */
   createdBy: string;
+  /** ISO 8601 time the assignment was made. */
   createdAt: string;
 }
 

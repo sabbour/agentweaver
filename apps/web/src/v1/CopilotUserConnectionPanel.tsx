@@ -59,6 +59,9 @@ function receiptForProject(
   connectionId: string,
   projectId: string,
 ): CopilotConnectionReceipt {
+  // Accept the receipt only if it has the right shape and belongs to the
+  // connection we asked about, scoped to this exact project. Anything else
+  // could show another project's connection status here.
   if (!isCopilotConnectionReceipt(value) ||
       value.connectionId !== connectionId ||
       value.scope !== 'project' ||
@@ -68,11 +71,16 @@ function receiptForProject(
   return value;
 }
 
-/** Builds the same-origin HTTPS callback expected by the Gateway nonce cookie. */
+/**
+ * Builds the address GitHub returns to after sign-in. It must be HTTPS on this
+ * app's own site, because the Gateway checks a one-time cookie on that callback
+ * and the browser only sends the cookie to the same site.
+ */
 function copilotCallbackUri(): string {
   if (window.location.protocol !== 'https:') {
     throw new Error('Open project settings over HTTPS before connecting GitHub Copilot.');
   }
+  // The Gateway URL may be relative; resolve it against this page before comparing sites.
   const gatewayUrl = new URL(gatewayBaseUrl, window.location.origin);
   if (gatewayUrl.origin !== window.location.origin) {
     throw new Error('The GitHub Copilot connection must use the same site as this app.');
@@ -297,7 +305,10 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
   }, [completeFlow, failFlow, isCurrentScope]);
 
   const connect = async () => {
+    // Only one connection attempt at a time.
     if (startingRef.current || pendingRef.current) return;
+    // Open the popup now, inside the click handler. Browsers block popups opened
+    // after an await. It stays blank until the Gateway returns the GitHub address.
     const popup = window.open(
       'about:blank',
       'agentweaver-copilot-user',
@@ -309,6 +320,8 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
       return;
     }
 
+    // Remember which project, identity, and scope generation this attempt started
+    // under. Every later step checks them, so a project or sign-in change cancels it.
     const attempt: StartingConnection = {
       popup,
       projectId,
@@ -316,6 +329,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
       generation: scopeGenerationRef.current,
     };
     startingRef.current = attempt;
+    // Make any status refresh still in flight ignore its result.
     statusRequestRef.current += 1;
     setRefreshing(false);
     setStarting(true);
@@ -323,9 +337,12 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
     setNotice(null);
     setReceipt(null);
     try {
+      // Check the callback address before calling the service, so a bad setup fails fast.
       const callbackUri = copilotCallbackUri();
       const result = await apiCall(async (token, tenantSelector) => {
+        // Read the signed-in actor ID. The callback is later accepted only for this same actor.
         const context = await gatewayClient.getAuthorizationContext(token, tenantSelector);
+        // Stop before starting a connection if the user switched project or identity meanwhile.
         if (startingRef.current !== attempt ||
             !isCurrentScope(attempt.projectId, attempt.accessToken, attempt.generation)) {
           throw new Error('The selected project or identity changed during GitHub authorization.');
@@ -338,21 +355,27 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
         );
         return { actorId: context.actorId, begin };
       });
+      // The attempt was replaced or its scope changed while we waited: drop it quietly.
       if (startingRef.current !== attempt ||
           !isCurrentScope(attempt.projectId, attempt.accessToken, attempt.generation)) {
         if (!popup.closed) popup.close();
         return;
       }
+      // The new connection must belong to this project.
       if (!isCopilotConnectionBegin(result.begin) ||
           result.begin.connection.scope !== 'project' ||
           result.begin.connection.scopeId !== attempt.projectId) {
         throw new Error('The server returned a connection outside this project.');
       }
+      // Read the expected `state` value from the GitHub address. The callback must
+      // echo it back, which proves the response belongs to this attempt.
       const state = expectedCopilotCallbackState(result.begin.authorizationUri, callbackUri);
       if (popup.closed) {
         throw new Error('The GitHub authorization popup was closed before it could start.');
       }
 
+      // Move from "starting" to "pending". From here the message listener and the
+      // popup watchdog effects own the flow until it completes, fails, or times out.
       const active: PendingConnection = {
         popup,
         state,
@@ -368,9 +391,13 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
       setReceipt(result.begin.connection);
       setPhase('Waiting for GitHub authorization…');
       setFlowActive(true);
+      // Bumping the revision restarts the effect that watches for a closed popup and a timeout.
       setFlowRevision((current) => current + 1);
       popup.location.replace(result.begin.authorizationUri);
     } catch (reason) {
+      // If the attempt already became the pending flow, end that flow (closes the popup).
+      // Otherwise, if this attempt is still current, close the popup and show the error.
+      // A stale attempt shows nothing, so it cannot overwrite newer state.
       const active = pendingRef.current;
       if (active?.popup === attempt.popup &&
           active.generation === attempt.generation &&

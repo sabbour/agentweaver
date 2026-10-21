@@ -1,7 +1,7 @@
 /**
  * Data adapters for the shared run list. The browser adapter reads runs the
- * user opened in this browser. A Gateway adapter for the run list (gap G2)
- * returns the same `RunListData` shape, so callers keep the same layout.
+ * user opened in this browser. A future server-backed adapter can return the
+ * same `RunListData` shape, so callers keep the same layout.
  */
 import { useCallback, useMemo, useState } from 'react';
 import { useAuth } from './AuthContext';
@@ -32,14 +32,17 @@ export interface RunListData {
 export function useBrowserRunList(projectId?: string): RunListData {
   const { authorizationContext } = useAuth();
   const tenantId = authorizationContext?.tenantId;
+  // localStorage does not notify React, so bump this to read it again after a change.
   const [generation, setGeneration] = useState(0);
   const remove = useCallback((item: RunListItem) => {
+    // No confirmed tenant means we do not know which list to edit.
     if (!tenantId) return;
     forgetRun(tenantId, item.projectId, item.runId);
     setGeneration((value) => value + 1);
   }, [tenantId]);
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
   const items = useMemo(() => {
+    // `generation < 0` is never true; it only makes the memo depend on `generation`.
     if (!tenantId || generation < 0) return [];
     return readRecentRuns(tenantId, projectId).map((run) => ({
       projectId: run.projectId,

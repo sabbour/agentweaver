@@ -58,7 +58,7 @@ Open `/projects/:projectId`. The **Dashboard** shows:
 
 Select **Refresh** to reload the project and its configuration. The Dashboard
 shows only real configuration and browser run data. Run metrics and activity
-charts need a future metrics API (gap G3).
+charts are not shown, because the service has no project metrics API.
 
 ## Open an existing run
 
@@ -78,7 +78,8 @@ take a run off the list. Removing doesn't change the run. Select **Refresh** to
 reload the list. When the list is empty, it shows **Runs you open appear
 here.** Signing out clears the list.
 
-You don't type a run ID. A full run list needs a future service API (gap G2).
+You don't type a run ID. The list can't show every run in the project, because
+the service has no run list API.
 See [Runs and sessions](./runs-sessions.md) for the data the run page reads.
 
 ## Understand project states and errors

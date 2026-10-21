@@ -60,8 +60,8 @@ In **Changes**, use **GitHub App repository access** to
 
 The service accepts messages only between sessions of the run. The app sends
 the message from another active session: the coordinator, or the first active
-session when you message the coordinator. Direct messages from you to the
-coordinator need a service API that doesn't exist yet.
+session when you message the coordinator. You can't message the
+coordinator directly, because the service has no API for messages from a user.
 
 **Expected result:** The page shows **Message accepted.** and lists the
 message under the composer. The list is local to the page; reloading clears
@@ -70,8 +70,8 @@ retry the same text, the app reuses the same request, so the message isn't
 sent twice. The journal contains typed events and opaque object references;
 the page has no message-content reader.
 
-You can't start a new chat or run from the browser yet. That needs a service
-API that doesn't exist yet (gap G1).
+You can't start a new chat or run from the browser, because the service has no
+API to start one.
 
 ## Answer a gate
 

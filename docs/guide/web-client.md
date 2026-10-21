@@ -128,10 +128,11 @@ run off the list only; the run doesn't change. An empty list shows **Runs you
 open appear here.** Signing out clears the list. The list is stored in this
 browser and holds only IDs and the last state read.
 
-A full run list needs a future service API (gap G2). The browser can't start a
-new chat or run yet; that also needs a service API (gap G1). Dashboard metrics
-need a metrics API (gap G3). Agents has no cast, add, or sync controls (gap
-G4).
+The service has no run list API, so the client can't list every run. It has no
+API to start a run, so the browser can't start a new chat or run. It has no
+project metrics API, so the Dashboard shows no metrics. **Agents** has no
+**Cast**, **Add**, or **Sync** controls, because the Gateway doesn't expose
+casting.
 
 ### Unavailable destinations
 
@@ -247,9 +248,8 @@ credential for this model.** **Save changes** stays disabled until you enter
 a matching credential.
 
 Available model and provider choices are not returned through the current
-Gateway catalog. Enter existing references; the client does not substitute a
-hardcoded catalog. This API gap is tracked in
-[#2132](https://github.com/sabbour/agentweaver/issues/2132).
+Gateway catalog. Enter existing references. The client does not substitute a
+hardcoded catalog.
 
 Saving adds a configuration revision. Runs that already started keep their
 settings. In **History**, enter a revision number and select **View revision**
@@ -369,8 +369,7 @@ service. It rejects responses for another project or connection.
 
 Use **Connection setup** for registration and authorization metadata. Enter
 the checksum from the saved project connection setup. The current API does
-not return a connection directory or that checksum. This gap is tracked in
-[#2135](https://github.com/sabbour/agentweaver/issues/2135). The browser does not
+not return a connection directory or that checksum. The browser does not
 calculate a replacement checksum from its JSON formatting.
 
 Authorize opens the service-provided HTTPS address in a tracked popup. After
@@ -439,21 +438,22 @@ the intended route mapping; they do not establish a running portal or backend.
 
 The client opens runs you already opened in this browser, from a link, or from
 a notification. You don't type a run ID. The client can't start a new chat or
-run (gap G1) or list every run (gap G2). It does not expose run-root acceptance,
+run, and it can't list every run, because the service has no APIs for them. It does not expose run-root acceptance,
 typed outcome/workflow/work-plan proposals, or child-session
 registration/spawn/fork controls, even where owner routes exist. The client
 can message existing sessions and request supported detach/archive actions.
 The Gateway does not expose journal object-content reads, so the UI displays
 opaque references rather than inventing transcript text.
 
-Run-produced-file browsing is unavailable. The run-bound artifact manifest,
-diff, and object-version producer needed to browse files after workspace
-changes has not been admitted. The Web client does not proxy a host filesystem
-or claim parity with older file endpoints.
+You can't browse the files that a run produced. The service has no run-bound
+artifact manifest, diff, or object-version API for files that change in the
+workspace. The Web client does not read a host file system, and it does not
+offer the older 0.x file endpoints.
 
 The run's **Run settings** tab shows the model reference and the allowed
 implementations for each platform component, in order. It doesn't show the
-implementation that is running or a runtime SDK model ID (gap G5). Usage
+implementation that is running or a runtime SDK model ID, because the service
+has no platform components API. Usage
 reports run totals without per-event model-binding details. The UI does not
 infer those identities from configuration or usage, and it does not replace
 missing measurements with zero.

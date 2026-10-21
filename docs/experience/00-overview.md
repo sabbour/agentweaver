@@ -39,9 +39,9 @@ and the authorization checks behind Agentweaver scopes.
 
 You don't type a run ID. A run appears in **Recent runs in this browser** after
 you open it once in this browser, for example from a link or a notification.
-The browser can't start a new chat or run yet. That needs a service API that
-doesn't exist yet (gap G1). A full run list also needs a future service API
-(gap G2).
+The browser can't start a new chat or run, because the service has no API to
+start one. The browser also can't list every run in a project, because the
+service has no run list API. Use **Recent runs in this browser** instead.
 
 ## Browser routes
 
@@ -127,8 +127,8 @@ The [MCP host](../reference/mcp-tools.md) turns nonstreaming Gateway OpenAPI
 operations into `agentweaver_` tools. This includes owner operations that have
 no browser control. It excludes browser connection callbacks and live SSE.
 
-The active app entry exports `apps/web/src/v1/App.tsx`. It reuses the 0.x shell,
-sign-in card, and shared components, but not the 0.x page data hooks.
+The v1 app reuses the 0.x shell, sign-in card, and shared components. It does
+not reuse the 0.x page data hooks, because they call the 0.x API.
 
 For implementation details, see the [web reference](../reference/web.md),
 [Gateway guide](../guide/gateway.md), and

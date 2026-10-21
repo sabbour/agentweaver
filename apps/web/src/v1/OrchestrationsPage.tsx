@@ -1,8 +1,9 @@
 /**
  * Project Orchestrations in the 0.x layout: header with Refresh, status pills,
  * then In progress and Finished run sections. Runs come from this browser's run
- * history because the service has no run list yet (gap G2). Starting, stopping,
- * and deleting runs need gap G1 and are not shown.
+ * history because the service has no run list yet. Starting, stopping, and
+ * deleting runs need service support that does not exist yet, so they are not
+ * shown.
  */
 import { Button, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
@@ -33,8 +34,12 @@ export function OrchestrationsPage() {
   const styles = useStyles();
   const { projectId = '' } = useParams();
   const runs = useBrowserRunList(projectId);
+  // Split by the state saved when each run was last opened. A run never
+  // opened has no saved state and counts as in progress.
   const inProgress = runs.items.filter((item) => !isRunFinished(item.executionState));
   const finished = runs.items.filter((item) => isRunFinished(item.executionState));
+  // Count runs per display label for the status pills. A Map keeps the order
+  // in which labels first appear.
   const counts = new Map<string, number>();
   for (const item of runs.items) {
     const label = runState(item.executionState).label;
@@ -56,6 +61,8 @@ export function OrchestrationsPage() {
           ))}
         </div>
       )}
+      {/* With no runs, show one empty list. Otherwise show only the sections
+          that have runs, each reusing the same data source with a filtered list. */}
       {runs.items.length === 0 ? (
         <RunList title="Recent runs in this browser" data={runs} emptyText="Runs you open appear here." />
       ) : (

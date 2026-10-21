@@ -1,7 +1,8 @@
 /**
  * Reads the pending questions and approvals of the run the Broker session is
  * bound to. Run reads need a token bound to that exact run, so only the bound
- * run can be checked. A cross-run inbox needs the notifications contract (gap G6).
+ * run can be checked. Checking every run at once needs a notifications API
+ * that does not exist yet.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from './AuthContext';
@@ -53,21 +54,29 @@ export function useRunAttention(): RunAttention {
   const binding = session?.binding ?? null;
   const projectId = binding?.projectId ?? '';
   const runId = binding?.runId ?? '';
+  // The scope names the token and run being read. A result is kept only if the scope
+  // is unchanged when it arrives, so a late answer for an old token or run is dropped.
   const scope = JSON.stringify([session?.accessToken ?? null, projectId, runId]);
   const [state, setState] = useState<{ scope: string; items: AttentionItem[]; error: unknown; loaded: boolean }>(
     { scope: '', items: [], error: null, loaded: false },
   );
+  // Bumped by `reload` to restart the poll right away.
   const [generation, setGeneration] = useState(0);
+  // Latest scope, readable from async code that captured an older one.
   const scopeRef = useRef(scope);
   useEffect(() => { scopeRef.current = scope; }, [scope]);
 
   useEffect(() => {
+    // An unbound session cannot read any run, so there is nothing to poll.
     if (!projectId || !runId) return undefined;
+    // Cleared on unmount or scope change so a pending read does not schedule another.
     let active = true;
     let timer = 0;
+    // Every call passes this binding so it uses the token bound to this exact run.
     const runBinding = { projectId, runId };
     const read = async () => {
       try {
+        // Read the run, then its session tree, then each session's status (where blockers live).
         const run = await apiCall((token, tenant) => gatewayClient.getRunStatus(token, projectId, runId, tenant), runBinding);
         if (run.projectId !== projectId || run.runId !== runId)
           throw new Error('The service returned a different run.');
@@ -78,6 +87,7 @@ export function useRunAttention(): RunAttention {
           token, projectId, runId, node.identity.sessionId, tenant,
         ), runBinding)));
         const sessions = statuses
+          // Drop any status that does not belong to this run.
           .filter((status) => status.identity.projectId === projectId && status.identity.runId === runId)
           .map((status) => ({ sessionId: status.identity.sessionId, blockers: status.blockers }));
         if (active && scopeRef.current === scope)
@@ -86,8 +96,10 @@ export function useRunAttention(): RunAttention {
         if (active && scopeRef.current === scope)
           setState({ scope, items: [], error: reason, loaded: true });
       }
+      // Schedule the next read only after this one finishes, so reads never overlap.
       if (active) timer = window.setTimeout(() => { void read(); }, ATTENTION_POLL_MS);
     };
+    // First read on the next tick, outside the effect body.
     timer = window.setTimeout(() => { void read(); }, 0);
     return () => {
       active = false;
@@ -96,6 +108,7 @@ export function useRunAttention(): RunAttention {
   }, [apiCall, projectId, runId, scope, generation]);
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
+  // Hide state saved for an older scope until the first read for the new scope lands.
   const current = state.scope === scope;
   return {
     binding: binding ? { projectId, runId } : null,

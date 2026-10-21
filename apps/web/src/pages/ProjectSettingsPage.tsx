@@ -757,8 +757,11 @@ export function ProjectSettingsPage() {
     ? activeSection
     : 'unattended';
   const activeDef = visibleSections.find((s) => s.id === displayedSection) ?? visibleSections[0];
+  // The deployment auth mode comes only from the public auth config. The
+  // project access overview that used to override it is no longer loaded.
   const resolvedAuthMode = authConfigModeToAuthMode(authConfig?.mode);
   const authModeLabel = resolvedAuthMode ? AUTH_MODE_LABELS[resolvedAuthMode] : 'GitHub';
+  // Without the access overview, the only role we can show is the project owner.
   const projectRoleSummary = project?.owner ? `Owner (${project.owner})` : 'Unspecified';
 
   return (

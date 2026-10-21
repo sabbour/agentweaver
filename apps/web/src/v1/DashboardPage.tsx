@@ -2,8 +2,8 @@
  * Project Dashboard in the 0.x layout: breadcrumb header with update time and
  * Refresh, a status card with quick actions and summary tiles, recent runs, and
  * the team. Values come from the project summary, the saved configuration, and
- * the browser's recent runs. Run metrics and activity charts wait for the
- * metrics contract (gap G3).
+ * the browser's recent runs. Run metrics and activity charts are not shown
+ * because the service has no metrics API yet.
  */
 import { Badge, Button, Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
@@ -122,11 +122,18 @@ export function DashboardPage() {
   const configuration = useProjectConfiguration(projectId);
   const runs = useBrowserRunList(projectId);
   const base = `/projects/${encodeURIComponent(projectId)}`;
+  // Refresh re-reads the summary and the saved configuration. Browser run
+  // history is local and needs no reload.
   const refresh = () => { project.reload(); configuration.reload(); };
   const loading = project.loading || configuration.loading;
+  // Show one error at a time. A summary error is shown before a configuration error.
   const error = project.error ?? configuration.error;
   const config = configuration.data?.configuration;
+  // Readiness needs the configuration. An archived project gets the archived
+  // status card no matter how complete its setup is.
   const readiness = config ? projectReadiness(config, project.data?.state === 'archived') : null;
+  // These counts use the state each run had when it was last opened in this
+  // browser, not live state. The tile captions say so.
   const needsInput = runs.items.filter((run) => run.executionState === 'blocked').length;
   const working = runs.items.filter((run) => run.executionState === 'active').length;
   const enabledSkills = config?.skills.filter((skill) => skill.enabled).length ?? 0;
@@ -144,6 +151,7 @@ export function DashboardPage() {
         )}
       />
       {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
+      {/* Show the spinner only until the first configuration arrives. A refresh keeps the old cards visible. */}
       {loading && !readiness && <Loading label="Loading dashboard" />}
       {readiness && config && configuration.data && (
         <>
@@ -166,6 +174,7 @@ export function DashboardPage() {
                 <Link to={`${base}/${readiness.primaryAction.path}`} className={mergeClasses(styles.actionLink, styles.primaryActionLink)}>
                   {readiness.primaryAction.label}
                 </Link>
+                {/* Skip the extra Orchestrations link when the primary action already goes there. */}
                 {readiness.primaryAction.path !== 'orchestrations' && <Link to={`${base}/orchestrations`} className={styles.actionLink}>Open Orchestrations</Link>}
                 <Link to={`${base}/memories`} className={styles.actionLink}>Open Memories</Link>
               </div>
@@ -205,6 +214,7 @@ export function DashboardPage() {
               <Text as="h2" id="dashboard-team-title" className={styles.panelTitle}>Team</Text>
               {config.agentCharters.length === 0 ? <Text className={styles.muted}>No agents yet. Add agents in Agents.</Text> : (
                 <ul className={styles.teamList}>
+                  {/* Show at most eight agents here; the Agents page lists them all. */}
                   {config.agentCharters.slice(0, 8).map((agent) => (
                     <li key={agent.agentId} className={styles.teamRow}>
                       <Text weight="semibold">{agent.name}</Text>

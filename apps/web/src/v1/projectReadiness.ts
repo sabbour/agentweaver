@@ -1,7 +1,7 @@
 /**
  * Builds the Dashboard status card from the project's saved configuration.
  * Every check reads a real configuration field; nothing is estimated. Run
- * counts and success rates need the metrics contract (gap G3) and are not shown.
+ * counts and success rates are not shown because the server has no metrics API yet.
  */
 import type { ProjectConfiguration } from './contracts';
 
@@ -29,6 +29,7 @@ export interface ProjectReadiness {
 export function projectReadiness(configuration: ProjectConfiguration, archived = false): ProjectReadiness {
   const repository = configuration.sourceControl?.repository;
   const enabledSkills = configuration.skills.filter((skill) => skill.enabled).length;
+  // Each check links to the page that fixes it. The list order is the order shown on the card.
   const checks: ReadinessCheck[] = [
     {
       key: 'model',
@@ -63,6 +64,7 @@ export function projectReadiness(configuration: ProjectConfiguration, archived =
       action: 'Assign skills',
     },
   ];
+  // An archived project cannot run, so its state wins over setup progress.
   if (archived) {
     return {
       ready: false,
@@ -88,6 +90,7 @@ export function projectReadiness(configuration: ProjectConfiguration, archived =
       primaryAction: { label: 'Open Orchestrations', path: 'orchestrations' },
     };
   }
+  // Not ready: the primary action points at the first blocking check.
   return {
     ready: false,
     badge: { label: 'Setup needed', color: 'warning' },

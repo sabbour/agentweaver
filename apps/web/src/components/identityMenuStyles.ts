@@ -9,6 +9,7 @@ export const useIdentityMenuStyles = makeStyles({
     justifyContent: 'flex-start',
   },
   triggerCollapsed: {
+    // In the collapsed rail only the avatar shows, so center it.
     justifyContent: 'center',
   },
   triggerInner: {
@@ -29,6 +30,8 @@ export const useIdentityMenuStyles = makeStyles({
     flexShrink: 0,
   },
   fallbackAvatar: {
+    // Used when there is no avatar image, such as the v1 Broker menu whose
+    // token carries no picture.
     width: '28px',
     height: '28px',
     borderRadius: '50%',
@@ -40,6 +43,7 @@ export const useIdentityMenuStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
   },
   label: {
+    // Long names are cut with an ellipsis so the rail width stays fixed.
     minWidth: 0,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -99,6 +103,7 @@ export const useIdentityMenuStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
     minWidth: 0,
+    // Push the status and version to the right edge, across from Sign out.
     marginLeft: 'auto',
   },
 });

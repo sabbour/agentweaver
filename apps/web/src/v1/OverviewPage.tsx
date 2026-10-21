@@ -2,7 +2,8 @@
  * Cross-project Overview in the 0.x layout: Operations card, Recent projects,
  * Recent runs in this browser, and Needs attention. Counts come from the project
  * list, browser run history, and the open run. The 0.x usage charts and
- * activity feed need the metrics contract (gap G3) and are not shown. This page
+ * activity feed need a service metrics API that does not exist yet, so they are
+ * not shown. This page
  * is the planned home for Chief of Staff priorities.
  */
 import { Button, Text, makeStyles, tokens } from '@fluentui/react-components';
@@ -116,6 +117,9 @@ export function OverviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
 
+  // Loads the project list. The project list is not bound to a project or run,
+  // so the binding argument is null. On failure we keep the last good list on
+  // screen and only show the error banner.
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -129,17 +133,26 @@ export function OverviewPage() {
     }
   }, [apiCall]);
 
+  // Start the first load in a zero-delay timer instead of calling it directly
+  // in the effect. This keeps state updates out of the effect body. The cleanup
+  // cancels the timer if the page unmounts before it fires.
   useEffect(() => {
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  // Project ID to name lookup, so the cross-project run list can show names.
   const projectNames = useMemo(
     () => new Map((projects ?? []).map((project) => [project.projectId, project.name])),
     [projects],
   );
+  // Only active projects count as recent. Archived projects are counted in the
+  // Operations card but not listed. ISO timestamps sort correctly as strings,
+  // so newest first is a reverse string compare.
   const active = (projects ?? []).filter((project) => project.state === 'active');
   const recent = [...active].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT_PROJECT_LIMIT);
+  // Refresh re-reads both the project list and the open run's pending items.
+  // Browser run history is local, so it needs no reload here.
   const refresh = () => { void load(); attention.reload(); };
 
   return (
@@ -156,6 +169,7 @@ export function OverviewPage() {
         )}
       />
       {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
+      {/* Show the spinner only on the first load. A refresh keeps the old data visible. */}
       {loading && !projects && <Loading label="Loading overview" />}
       {projects && (
         <>

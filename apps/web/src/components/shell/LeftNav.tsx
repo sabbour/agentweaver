@@ -84,6 +84,8 @@ function formatVersionBadge(version: string): string {
 export function LeftNav({
   ...props
 }: LeftNavProps) {
+  // The 0.x app wires the shared rail to its legacy hooks and APIs here. The
+  // v1 shell renders LeftNavView directly with its own slots instead.
   const version = useAppVersion();
   return (
     <LeftNavView
@@ -103,10 +105,15 @@ export interface LeftNavViewProps extends LeftNavProps {
   version: string;
   projectSwitcher: ReactNode;
   notifications?: ReactNode;
+  /** Renders the footer identity. Receives the collapsed state and the status/version footer content. */
   identity: (collapsed: boolean, footerMeta: ReactNode) => ReactNode;
+  /** Replaces the default New session navigation when set. */
   onNewSession?: () => void;
+  /** Extra content shown after the Sessions group. */
   sessionAction?: ReactNode;
+  /** Global item keys to show. Omit to show all. */
   visibleGlobalKeys?: readonly string[];
+  /** Project item keys to show. Omit to show all. */
   visibleProjectKeys?: readonly string[];
   showNewSession?: boolean;
 }
@@ -139,6 +146,10 @@ export function LeftNavView({
       return false;
     }
   });
+  // Apply the optional allow-lists. With no list, every item shows, as in 0.x.
+  // Sessions is pulled out of the global items because it renders in its own
+  // group with the New session button. Project sections left with no items
+  // are dropped so no empty heading or divider shows.
   const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
     globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
     globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
@@ -163,6 +174,7 @@ export function LeftNavView({
   };
 
   const startNewSession = () => {
+    // A caller handler replaces the default route to the 0.x assistant.
     if (onNewSession) {
       onNewSession();
       return;
@@ -428,6 +440,8 @@ export function LeftNavView({
 
       {/* Footer: signed-in identity. Status and version appear in its menu footer. */}
       <div className="aw-rail-footer">
+        {/* The caller decides which identity control to show. The rail passes
+            the status dot and version badge so they keep the 0.x footer layout. */}
         {identity(collapsed, (
             <>
               <StatusDot />

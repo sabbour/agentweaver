@@ -318,18 +318,26 @@ export function SkillsMarketplacePanel({
   onAssignmentPendingChange,
   onConfigurationChanged,
 }: SkillsMarketplacePanelProps) {
+  // The project and actions this panel currently serves. Async handlers compare
+  // against these after each await and drop results that belong to an old scope.
   const activeProjectId = useRef(projectId);
   const activeActions = useRef(actions);
+  // One counter per request kind. Each request remembers its number, and only the
+  // latest request of that kind may update the screen.
   const sourceRequest = useRef(0);
   const browseRequest = useRef(0);
   const inventoryRequest = useRef(0);
   const skillRequest = useRef(0);
   const marketplaceRequest = useRef(0);
+  // Mirrors marketplaceBusy without waiting for a re-render, so guards see an import that just started.
   const marketplaceBusyRef = useRef<'preview' | 'import' | null>(null);
+  // Reused for retries of the same marketplace import so the service imports it only once.
   const marketplaceImportKey = useRef<string | null>(null);
+  // React has no prop for folder picking, so set the browser attribute directly.
   const folderInputRef = useCallback((input: HTMLInputElement | null) => {
     input?.setAttribute('webkitdirectory', '');
   }, []);
+  // Which tab is shown, and whether the marketplace and import dialogs are open.
   const [tab, setTab] = useState<'catalog' | 'assignments'>('catalog');
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -362,6 +370,8 @@ export function SkillsMarketplacePanel({
   const [importReceiptKind, setImportReceiptKind] = useState<'local' | 'marketplace' | null>(null);
   const [pendingImportKey, setPendingImportKey] = useState<string | null>(null);
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
+  // The newest assignments we know about. It starts from props and is replaced by
+  // the service response after an assignment save, which can be newer than the props.
   const [assignmentSnapshot, setAssignmentSnapshot] = useState<{
     projectId: string;
     revision: number | null;
@@ -369,6 +379,7 @@ export function SkillsMarketplacePanel({
   }>({ projectId, revision: configurationRevision, skills: assignments });
 
   const clearMarketplaceSelection = useCallback(() => {
+    // Bumping the counter makes any preview or import still in flight ignore its result.
     marketplaceRequest.current += 1;
     marketplaceBusyRef.current = null;
     marketplaceImportKey.current = null;
@@ -380,6 +391,8 @@ export function SkillsMarketplacePanel({
     setMarketplaceImportComplete(false);
   }, []);
   const clearMarketplaceBrowse = useCallback(() => {
+    // Ignore any browse in flight. A selection only makes sense for the current
+    // browse results, so it is cleared too.
     browseRequest.current += 1;
     setBrowsePage(null);
     setBrowseResultQuery(null);
@@ -390,11 +403,13 @@ export function SkillsMarketplacePanel({
   const refreshSources = useCallback(async () => {
     if (!actions) return;
 
+    // Old browse results may point at a source revision that is about to change.
     clearMarketplaceBrowse();
     const scope = projectId;
     const requestId = ++sourceRequest.current;
     try {
       const result = await listMarketplaceSources(actions, scope);
+      // Drop the result if the project changed or a newer source request started.
       if (activeProjectId.current !== scope || sourceRequest.current !== requestId) return;
       setSources(result);
       setSourcesProjectId(scope);
@@ -407,8 +422,12 @@ export function SkillsMarketplacePanel({
     }
   }, [actions, clearMarketplaceBrowse, projectId]);
 
+  // Reset state when the project or the actions change. This runs before paint,
+  // so the user never sees data from the previous project for even one frame.
   useLayoutEffect(() => {
     if (activeProjectId.current === projectId) {
+      // Same project, new actions (for example after a new sign-in): drop loaded
+      // data that came from the old actions, but keep the user's drafts and imports.
       if (activeActions.current === actions) return;
       activeActions.current = actions;
       sourceRequest.current += 1;
@@ -422,6 +441,8 @@ export function SkillsMarketplacePanel({
       return;
     }
 
+    // New project: cancel every request kind and clear all project-specific state,
+    // including drafts, selected files, previews, and import receipts.
     activeProjectId.current = projectId;
     activeActions.current = actions;
     sourceRequest.current += 1;
@@ -449,6 +470,7 @@ export function SkillsMarketplacePanel({
     setSelectedAgentIds([]);
   }, [actions, assignments, clearMarketplaceBrowse, configurationRevision, projectId]);
 
+  // Load the source list when the panel opens and whenever the project or actions change.
   useEffect(() => {
     if (!actions) return;
     const scope = projectId;
@@ -466,13 +488,19 @@ export function SkillsMarketplacePanel({
     });
   }, [actions, projectId]);
 
+  // Adopt the assignments from props when the project changes or the props carry
+  // a newer configuration revision than the snapshot. This runs during render, which
+  // React allows for state derived from props; it never moves to an older revision.
   if (assignmentSnapshot.projectId !== projectId ||
       (configurationRevision !== null &&
         (assignmentSnapshot.revision === null || configurationRevision > assignmentSnapshot.revision))) {
     setAssignmentSnapshot({ projectId, revision: configurationRevision, skills: assignments });
   }
 
+  // Derived values below only trust state that matches the current project and
+  // selection. Mismatched leftovers are treated as absent instead of shown.
   const currentSources = actions && sourcesProjectId === projectId ? sources : null;
+  // Keep the chosen source if it still exists; otherwise fall back to the first one.
   const currentSelectedSourceId = currentSources?.some((source) => source.sourceId === selectedSourceId)
     ? selectedSourceId
     : currentSources?.[0]?.sourceId ?? '';
@@ -480,6 +508,7 @@ export function SkillsMarketplacePanel({
     ? 'unavailable'
     : sourcesProjectId === projectId ? 'loaded' : 'loading';
   const selectedSource = currentSources?.find((source) => source.sourceId === currentSelectedSourceId) ?? null;
+  // Browse results count only for the selected source, at the same revision, for the same search text.
   const currentBrowsePage = browsePage &&
       selectedSource &&
       browsePage.sourceId === selectedSource.sourceId &&
@@ -487,6 +516,8 @@ export function SkillsMarketplacePanel({
       browseResultQuery === browseQuery.trim()
     ? browsePage
     : null;
+  // A marketplace selection counts only if it still matches the visible browse
+  // page exactly: same project, source, revision, commit, search, page, and item.
   const currentMarketplaceSelection = marketplaceSelection &&
       currentBrowsePage &&
       marketplaceSelection.projectId === projectId &&
@@ -501,6 +532,7 @@ export function SkillsMarketplacePanel({
     ? marketplaceSelection
     : null;
   const currentMarketplacePreview = currentMarketplaceSelection ? marketplacePreview : null;
+  // Until the snapshot catches up with a project change, fall back to the props.
   const currentAssignments = assignmentSnapshot.projectId === projectId
     ? assignmentSnapshot.skills
     : assignments;
@@ -517,9 +549,12 @@ export function SkillsMarketplacePanel({
     cursor: string | null,
     cursors: Array<string | null>,
   ) => {
+    // `cursor` is the page to load. `cursors` is the trail of pages up to and
+    // including it, used by the Previous page button.
     if (!actions) return;
     const scope = projectId;
     const requestId = ++inventoryRequest.current;
+    // Keep the current page on screen while loading, unless it came from another project or actions.
     setSkillInventory((current) => current?.projectId === scope && current.actions === actions
       ? { ...current, loading: true, error: null }
       : { projectId: scope, actions, page: null, cursors: [null], loading: true, error: null });
@@ -540,6 +575,7 @@ export function SkillsMarketplacePanel({
       });
     } catch (reason) {
       if (activeProjectId.current !== scope || inventoryRequest.current !== requestId) return;
+      // Show the error but keep the last good page and cursor trail for this scope.
       setSkillInventory((current) => ({
         projectId: scope,
         actions,
@@ -562,6 +598,7 @@ export function SkillsMarketplacePanel({
 
   const addSource = async (event: FormEvent) => {
     event.preventDefault();
+    // Source changes are blocked during a marketplace import, because the import is pinned to a source revision.
     if (!actions || !projectId || !newSource.repository.trim() ||
         marketplaceBusyRef.current === 'import') return;
     const scope = projectId;
@@ -576,6 +613,7 @@ export function SkillsMarketplacePanel({
       setNewSource(sourceDraft());
       setSourceNotice(`Source ${created.repository} was saved at revision ${created.revision}.`);
       setBrowsePage(null);
+      // Reload the list from the service instead of inserting the new source locally.
       await refreshSources();
     } catch (reason) {
       if (activeProjectId.current === scope) setSourceError(messageForError(reason));
@@ -594,11 +632,13 @@ export function SkillsMarketplacePanel({
     setSourceError(null);
     setSourceNotice(null);
     try {
+      // Send the revision shown, so the service rejects the save if the source changed since.
       const updated = await actions.updateSource(scope, source.sourceId, {
         ...sourceInput(draft),
         expectedRevision: source.revision,
       });
       if (activeProjectId.current !== scope) return;
+      // A successful save must return a newer revision than the one we sent.
       validateSource(updated, 'active', source.revision);
       setSourceNotice(`Source ${updated.repository} was saved at revision ${updated.revision}.`);
       setBrowsePage(null);
@@ -618,6 +658,7 @@ export function SkillsMarketplacePanel({
     setSourceError(null);
     setSourceNotice(null);
     try {
+      // Removal is a soft delete: the service marks the source removed at a new revision.
       const removed = await actions.removeSource(scope, source.sourceId, source.revision);
       if (activeProjectId.current !== scope) return;
       validateSource(removed, 'removed', source.revision);
@@ -636,6 +677,7 @@ export function SkillsMarketplacePanel({
         marketplaceBusyRef.current === 'import') return;
     const scope = projectId;
     const source = selectedSource;
+    // Start fresh: cancel older browses and drop any selection from previous results.
     clearMarketplaceBrowse();
     const requestId = ++browseRequest.current;
     const query = browseQuery.trim();
@@ -643,6 +685,8 @@ export function SkillsMarketplacePanel({
     setSourceError(null);
     setBrowsePage(null);
     try {
+      // Pin the browse to the source revision we show. The service answers with the
+      // exact commit it read, which preview and import later reuse.
       const result = await actions.browseSource(scope, source.sourceId, {
         expectedSourceRevision: source.revision,
         query: query || undefined,
@@ -650,6 +694,7 @@ export function SkillsMarketplacePanel({
         pageSize: 25,
       });
       if (activeProjectId.current !== scope || browseRequest.current !== requestId) return;
+      // Reject results for a different source, revision, or page than we asked for.
       if (result.sourceId !== source.sourceId ||
           result.sourceRevision !== source.revision ||
           result.page !== page ||
@@ -658,6 +703,7 @@ export function SkillsMarketplacePanel({
         throw new Error('The server returned browse results for a different source revision or page.');
       }
       setBrowsePage(result);
+      // Remember the search text these results are for. Editing the search hides them.
       setBrowseResultQuery(query);
     } catch (reason) {
       if (activeProjectId.current === scope && browseRequest.current === requestId)
@@ -674,11 +720,15 @@ export function SkillsMarketplacePanel({
     const scope = projectId;
     const source = selectedSource;
     const page = currentBrowsePage;
+    // Only preview an item that is on the page shown right now.
     if (page.candidates.every((candidate) =>
       candidate.location !== item.location || candidate.name !== item.name)) return;
 
+    // Clearing bumps the request counter. Take the new value as this request's number.
     clearMarketplaceSelection();
     const requestId = marketplaceRequest.current;
+    // Record everything the preview is pinned to, so the selection can be checked
+    // against the visible page on every render.
     const selection: MarketplaceSkillSelection = {
       projectId: scope,
       sourceId: source.sourceId,
@@ -695,6 +745,7 @@ export function SkillsMarketplacePanel({
     setMarketplaceError(null);
     setMarketplaceNotice(null);
     try {
+      // The service reads the skill from GitHub at the pinned commit. The browser sends no files.
       const result = await actions.previewMarketplaceSkill(scope, source.sourceId, {
         expectedSourceRevision: page.sourceRevision,
         resolvedCommitSha: page.resolvedCommitSha,
@@ -722,17 +773,22 @@ export function SkillsMarketplacePanel({
     const scope = projectId;
     const selection = currentMarketplaceSelection;
     const selectedPreview = currentMarketplacePreview;
+    // Do not bump the counter here: the import continues the current selection.
     const requestId = marketplaceRequest.current;
     marketplaceBusyRef.current = 'import';
     setMarketplaceBusy('import');
     setMarketplaceError(null);
     setMarketplaceNotice(null);
     try {
+      // Reuse one key for all retries of this import, so a retry after a lost
+      // response does not create a second copy.
       let idempotencyKey = marketplaceImportKey.current;
       if (!idempotencyKey) {
         idempotencyKey = makeIdempotencyKey();
         marketplaceImportKey.current = idempotencyKey;
       }
+      // Import exactly what was previewed: same revision, commit, path, and content digest.
+      // If the content changed since the preview, the digest no longer matches and the service refuses.
       const request: MarketplaceSkillContentImportRequest = {
         expectedSourceRevision: selection.sourceRevision,
         resolvedCommitSha: selection.resolvedCommitSha,
@@ -745,6 +801,7 @@ export function SkillsMarketplacePanel({
       validateSkillImportReceipt(result, selectedPreview);
       setImportReceipt(result);
       setImportReceiptKind('marketplace');
+      // Switch to Assignments so the user can assign the new skill next.
       setTab('assignments');
       setMarketplaceImportComplete(true);
       setMarketplaceNotice(`The Skills owner imported ${result.name} at revision ${result.revision}.`);
@@ -766,14 +823,17 @@ export function SkillsMarketplacePanel({
     setSkillBusy('preview');
     setSkillError(null);
     setSkillNotice(null);
+    // A new preview replaces everything from the previous local import attempt.
     setCandidate(null);
     setPreview(null);
     setImportReceipt(null);
     setImportReceiptKind(null);
     setPendingImportKey(null);
     try {
+      // Read the chosen files into one skill package (SKILL.md plus resources).
       const nextCandidate = await buildCandidate(selectedFiles);
       if (activeProjectId.current !== scope || skillRequest.current !== requestId) return;
+      // Ask the service to validate the package without saving it.
       const result = await actions.previewSkillContent(nextCandidate);
       if (activeProjectId.current !== scope || skillRequest.current !== requestId) return;
       validateSkillPreview(result);
@@ -798,10 +858,12 @@ export function SkillsMarketplacePanel({
     setSkillNotice(null);
     let idempotencyKey = pendingImportKey;
     try {
+      // Keep the key in state so a retry of this same import reuses it and the service imports it only once.
       if (!idempotencyKey) {
         idempotencyKey = makeIdempotencyKey();
         setPendingImportKey(idempotencyKey);
       }
+      // Send the previewed package with its digest. The service refuses if the content differs from the preview.
       const result = await actions.importSkillContent(scope, {
         idempotencyKey,
         expectedContentDigest: preview.contentDigest,
@@ -811,6 +873,7 @@ export function SkillsMarketplacePanel({
       validateSkillImportReceipt(result, preview);
       setImportReceipt(result);
       setImportReceiptKind('local');
+      // Switch to Assignments so the user can assign the new skill next.
       setTab('assignments');
       setSkillNotice(`The Skills owner imported ${result.name} at revision ${result.revision}.`);
     } catch (reason) {
@@ -838,13 +901,17 @@ export function SkillsMarketplacePanel({
     }
     const scope = projectId;
     const requestId = ++skillRequest.current;
+    // Keep an existing assignment's position. A new assignment goes after the last one (0 if none).
     const existing = currentAssignments.find((item) => item.skillId === importReceipt.skillId);
     const order = existing?.order ?? Math.max(-1, ...currentAssignments.map((item) => item.order)) + 1;
     setSkillBusy('assignment');
+    // Tell the parent a configuration save is in progress, so it can hold off conflicting edits.
     onAssignmentPendingChange?.(true);
     setSkillError(null);
     setSkillNotice(null);
     try {
+      // Pin the exact imported revision and digest, and send the configuration
+      // revision we know. The service rejects the save if the configuration changed since.
       const result = await actions.updateSkillAssignment(scope, importReceipt.skillId, {
         expectedProjectConfigurationRevision: currentConfigurationRevision,
         revision: importReceipt.revision,
@@ -854,11 +921,14 @@ export function SkillsMarketplacePanel({
         agentIds: selectedAgentIds,
       });
       if (activeProjectId.current !== scope) return;
+      // The response must be a newer revision of this project's configuration.
       if (result.projectId !== scope ||
           !Number.isSafeInteger(result.revision) ||
           result.revision <= currentConfigurationRevision) {
         throw new Error('The server returned an assignment for a different project or configuration revision.');
       }
+      // And it must contain exactly the assignment we asked for: enabled, same
+      // order, revision, digest, and the same set of agents.
       const savedAssignment = result.configuration.skills.find((item) =>
         item.skillId === importReceipt.skillId);
       if (!savedAssignment ||
@@ -871,6 +941,7 @@ export function SkillsMarketplacePanel({
           selectedAgentIds.some((agentId) => !savedAssignment.agentIds?.includes(agentId))) {
         throw new Error('The server returned a revision without the requested skill assignment.');
       }
+      // Use the saved configuration right away, before the parent passes new props.
       setAssignmentSnapshot({
         projectId: scope,
         revision: result.revision,
@@ -884,6 +955,7 @@ export function SkillsMarketplacePanel({
       if (activeProjectId.current === scope && skillRequest.current === requestId)
         setSkillError(messageForError(reason));
     } finally {
+      // Always release the parent's save lock, even if this project is no longer shown.
       onAssignmentPendingChange?.(false);
       if (activeProjectId.current === scope && skillRequest.current === requestId)
         setSkillBusy(null);
@@ -891,6 +963,7 @@ export function SkillsMarketplacePanel({
   };
 
   const enabledAssignmentCount = currentAssignments.filter((assignment) => assignment.enabled).length;
+  // Local import messages. They show inside the Import dialog while it is open, and on the page otherwise.
   const skillMessages = (
     <>
       {skillError && <MessageBar intent="error" role="alert"><MessageBarBody>{skillError}</MessageBarBody></MessageBar>}
@@ -898,7 +971,8 @@ export function SkillsMarketplacePanel({
     </>
   );
 
-  // 0.x Skills layout: stat strip, toolbar dialogs, and Catalog/Assignments tabs.
+  // Layout: a metric row, toolbar buttons that open the Import and Marketplace
+  // dialogs, and Catalog and Assignments tabs.
   return (
     <div className="v1-stack">
       {!actions && (
@@ -919,6 +993,7 @@ export function SkillsMarketplacePanel({
         <Button icon={<ArrowUpload24Regular />} disabled={!actions} onClick={() => setImportOpen(true)}>Import skill</Button>
         <Button icon={<PuzzlePiece20Regular />} disabled={!actions} onClick={() => setMarketplaceOpen(true)}>Browse marketplaces</Button>
       </div>
+      {/* Show local import messages here only when the Import dialog is closed; the dialog shows them itself. */}
       {!importOpen && skillMessages}
       <TabList
         selectedValue={tab}
@@ -928,6 +1003,7 @@ export function SkillsMarketplacePanel({
         <Tab value="catalog">Catalog</Tab>
         <Tab value="assignments">Assignments</Tab>
       </TabList>
+      {/* Catalog: stored skill revisions and assignments from the inventory API, paged with cursors. */}
       {tab === 'catalog' && (
         <section className="v1-stack" aria-labelledby="skill-inventory-heading">
           <h3 id="skill-inventory-heading">Imported skill inventory</h3>
@@ -968,6 +1044,7 @@ export function SkillsMarketplacePanel({
                 type="button"
                 disabled={currentSkillInventory?.loading}
                 onClick={() => {
+                  // Drop the last cursor to go back one page, then load the page before it.
                   const cursors = currentSkillInventory?.cursors.slice(0, -1) ?? [null];
                   void loadSkillInventory(cursors.at(-1) ?? null, cursors);
                 }}
@@ -1008,6 +1085,7 @@ export function SkillsMarketplacePanel({
                 ) : skillInventoryPage.revisions.map((revision) => {
                   const assignment = skillInventoryPage.assignments.find((item) =>
                     item.skillId === revision.skillId);
+                  // This revision is the one in use only if the assignment is enabled and pins this exact revision and digest.
                   const assignedExactRevision = assignment?.enabled === true &&
                     assignment.revision === revision.revision &&
                     assignment.contentDigest === revision.contentDigest;
@@ -1043,6 +1121,7 @@ export function SkillsMarketplacePanel({
           )}
         </section>
       )}
+      {/* Assignments: current project assignments, plus a form to assign the skill just imported. */}
       {tab === 'assignments' && (
         <section className="v1-stack" aria-labelledby="skill-assignment-heading">
           <h3 id="skill-assignment-heading">Project assignments</h3>
@@ -1114,6 +1193,7 @@ export function SkillsMarketplacePanel({
         </section>
       )}
 
+      {/* Marketplace dialog: manage sources, browse one source, preview a skill, and import it. */}
       <Dialog open={marketplaceOpen} onOpenChange={(_, data) => setMarketplaceOpen(data.open)}>
         <DialogSurface className="v1-dialog-surface--wide">
           <DialogBody>
@@ -1355,6 +1435,7 @@ export function SkillsMarketplacePanel({
         </DialogSurface>
       </Dialog>
 
+      {/* Import dialog: pick local files, validate them, then import. */}
       <Dialog open={importOpen} onOpenChange={(_, data) => setImportOpen(data.open)}>
         <DialogSurface className="v1-dialog-surface--wide">
           <DialogBody>
@@ -1375,6 +1456,7 @@ export function SkillsMarketplacePanel({
                       aria-label="Skill folder or files"
                       disabled={!actions || skillBusy !== null || marketplaceBusy !== null}
                       onChange={(event) => {
+                        // Ignore file changes while a request runs. New files reset the whole local import attempt.
                         if (skillBusy !== null || marketplaceBusy !== null) return;
                         setSelectedFiles(Array.from(event.currentTarget.files ?? []));
                         setCandidate(null);

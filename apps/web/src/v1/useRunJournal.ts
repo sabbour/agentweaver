@@ -86,12 +86,15 @@ export function useRunJournal(
     };
 
     const connect = async () => {
+      // The cursor is the last event we have; replay and reconnects resume from it.
       let cursor: string | null = null;
       let replayed = false;
       let reconnectDelay = 500;
+      // Counts failed connections in a row. Any received event resets it.
       let transientFailures = 0;
       try {
         while (!signal.aborted) {
+          // Step 1, once: page through stored history up to now, before going live.
           if (!replayed) {
             let pageCount = 0;
             while (!signal.aborted) {
@@ -100,6 +103,7 @@ export function useRunJournal(
               );
               if (!isActive()) return;
               addEvents(page.events);
+              // A page that says "more" but does not move the cursor would loop forever.
               if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor))
                 throw new Error('The server returned hasMore without advancing its journal cursor.');
               if (page.nextCursor) cursor = page.nextCursor;
@@ -112,6 +116,7 @@ export function useRunJournal(
             updateState((current) => ({ ...current, loading: false }));
           }
 
+          // Step 2: follow the live stream from the cursor until it ends or fails.
           try {
             updateState((current) => ({ ...current, connected: true, error: null }));
             for await (const frame of gatewayClient.streamEvents(
@@ -134,11 +139,13 @@ export function useRunJournal(
           } catch (error) {
             if (signal.aborted) return;
             updateState((current) => ({ ...current, connected: false }));
+            // Client errors (except timeout and rate limit) will not fix themselves: stop.
             if (error instanceof GatewayError && error.status >= 400 &&
                 error.status < 500 && error.status !== 408 && error.status !== 429) {
               updateState((current) => ({ ...current, error }));
               return;
             }
+            // An event from another project or run is a safety stop, never retried.
             if (error instanceof JournalScopeError) {
               updateState((current) => ({ ...current, error }));
               return;

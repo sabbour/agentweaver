@@ -1046,6 +1046,8 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : (message ?? rawSubText));
   const roleText   = agentRoleTitle ?? def.roleDescription;
   const coordinatorClickable = key === 'coordinator' && !isPlanned && Boolean(openSession);
+  // A caller-supplied label (for example the v1 run graph, which reports its
+  // own status words) wins over the label derived from legacy step states.
   const statusText = statusLabelOverride ?? (isPlanned ? 'Planned' : isHumanWaiting ? 'Awaiting' : statusLabel(effectiveStatus));
   const handleTestId = (suffix: string) => handleTestIdPrefix ? `${handleTestIdPrefix}-${suffix}` : undefined;
 
@@ -1086,6 +1088,8 @@ export function WorkflowNode({ data, selected }: NodeProps) {
           View session
         </Button>
       )}
+      {/* "View execution" needs an execution modal. Hide it when the caller
+          gives no openModal handler, so the button never does nothing. */}
       {key === 'agent' && !isPlanned && openModal && (
         <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>View execution</Button>
       )}

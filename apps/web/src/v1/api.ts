@@ -207,6 +207,7 @@ export class AgentweaverGatewayClient {
     const result = await this.request<ProjectRoleAssignmentList>(
       token, `/projects/${encodeSegments(projectId)}/role-assignments`, {}, this.baseUrl, tenantSelector,
     );
+    // Check the owner answered for the project we asked about before showing anyone's roles.
     if (result?.projectId !== projectId || !Array.isArray(result.assignments))
       throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned role assignments for a different project.');
     return result;
@@ -236,6 +237,7 @@ export class AgentweaverGatewayClient {
     expectedRevision: number,
     tenantSelector?: string | null,
   ): Promise<unknown> {
+    // The revision guards against revoking an assignment that changed since it was shown.
     return this.request(
       token,
       `/projects/${encodeSegments(projectId)}/role-assignments/${encodeSegments(assignmentId)}?expectedRevision=${expectedRevision}`,
@@ -271,6 +273,7 @@ export class AgentweaverGatewayClient {
     tenantSelector?: string | null,
     revision?: number,
   ): Promise<VersionedProjectConfiguration> {
+    // Without `revision` the owner returns the current configuration; with it, that saved version.
     return this.request(
       token,
       `/projects/${encodeSegments(projectId)}/configuration${revision === undefined ? '' : `?revision=${revision}`}`,

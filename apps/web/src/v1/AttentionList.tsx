@@ -53,6 +53,8 @@ const useStyles = makeStyles({
 /** Renders the pending items, or a one-line state when there are none. */
 export function AttentionList({ attention, onNavigate }: { attention: RunAttention; onNavigate?: () => void }) {
   const styles = useStyles();
+  // Check states in order: no open run, error, loading, empty, then the list.
+  // The list only covers the run bound in this browser, not every run.
   if (!attention.binding) return <Caption1 className={styles.empty}>Open a run to see what needs your input.</Caption1>;
   if (attention.error) return <Caption1 className={styles.empty} role="alert">Could not check the open run. {errorMessage(attention.error)}</Caption1>;
   if (attention.loading) return <Caption1 className={styles.empty}>Checking the open run…</Caption1>;
@@ -65,6 +67,7 @@ export function AttentionList({ attention, onNavigate }: { attention: RunAttenti
           role="listitem"
           className={styles.item}
           to={attentionPath(item)}
+          // Lets the bell close its popover when the user follows a link.
           onClick={onNavigate}
         >
           <Text weight="semibold">{DECISION_TITLES[item.kind]}</Text>
@@ -84,6 +87,7 @@ export function AttentionList({ attention, onNavigate }: { attention: RunAttenti
 export function AttentionBell({ attention }: { attention: RunAttention }) {
   const styles = useStyles();
   const navigate = useNavigate();
+  // The popover is controlled so a link click or "Open run" can close it.
   const [open, setOpen] = useState(false);
   const count = attention.items.length;
   return (
@@ -94,6 +98,7 @@ export function AttentionBell({ attention }: { attention: RunAttention }) {
             <Button
               appearance="subtle"
               icon={<Alert24Regular />}
+              // The count is in the accessible name because the visual badge is aria-hidden.
               aria-label={count > 0 ? `Notifications, ${count} need${count === 1 ? 's' : ''} your input` : 'Notifications'}
               data-testid="notification-bell"
             />
@@ -104,6 +109,8 @@ export function AttentionBell({ attention }: { attention: RunAttention }) {
           <div className={styles.scroll}>
             <AttentionList attention={attention} onNavigate={() => setOpen(false)} />
           </div>
+          {/* "Open run" goes to the bound run even when nothing is pending. The
+              `attention.binding &&` guard makes the non-null assertions inside safe. */}
           {attention.binding && (
             <Button appearance="subtle" onClick={() => {
               setOpen(false);

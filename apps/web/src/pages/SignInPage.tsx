@@ -113,6 +113,8 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
         return 'Authentication could not be completed. Start a new sign-in.';
     }
   })() : null;
+  // The 0.x page sends the user to the server-side Entra sign-in route. The
+  // shared view below only draws the card.
   return (
     <SignInView
       heading="Sign in with Microsoft Entra ID"
@@ -123,7 +125,11 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
   );
 }
 
-/** Retains the sign-in presentation while each product line owns authorization. */
+/**
+ * Retains the sign-in presentation while each product line owns authorization.
+ * The caller supplies the heading, the sign-in button (`action`), and any error
+ * text. The view starts no sign-in flow by itself.
+ */
 export function SignInView({ heading, sessionError, action, error, note }: {
   heading: string;
   sessionError?: string | null;
@@ -158,6 +164,7 @@ export function SignInView({ heading, sessionError, action, error, note }: {
 
         <div className={styles.actions}>
           {action}
+          {/* role="alert" makes screen readers announce a sign-in failure. */}
           {error && (
             <Text role="alert" className={styles.error}>{error}</Text>
           )}

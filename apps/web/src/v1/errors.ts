@@ -5,6 +5,7 @@ import { RepoAppBrokerError } from './repoApp';
 /** Formats Gateway and unexpected failures for display in page-level notices. */
 export function errorMessage(error: unknown): string {
   if (error instanceof GatewayError) {
+    // Show the status and code too; they help when reporting a problem.
     const code = error.code ? ` (${error.code})` : '';
     return `HTTP ${error.status}${code}: ${error.message}`;
   }

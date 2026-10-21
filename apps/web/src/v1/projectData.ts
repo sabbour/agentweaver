@@ -32,11 +32,16 @@ function useScopedLoad<T>(
   accept: (value: T) => boolean = () => true,
 ): Loaded<T> {
   const { session, apiCall } = useAuth();
+  // The scope names the token and the thing being read. Stored data is shown only while the
+  // scope still matches, so a new token or project never shows the previous one's data.
   const scope = JSON.stringify([session?.accessToken ?? null, key]);
   const [state, setState] = useState<{ scope: string; data: T | null; error: unknown; loadedAt: Date | null }>(
     { scope: '', data: null, error: null, loadedAt: null },
   );
+  // Bumped by `reload` to read again.
   const [generation, setGeneration] = useState(0);
+  // Keep the latest callbacks in refs. Callers pass new inline functions each render,
+  // and using them as effect dependencies would re-read on every render.
   const readRef = useRef(read);
   const acceptRef = useRef(accept);
   useEffect(() => {
@@ -46,18 +51,24 @@ function useScopedLoad<T>(
   const hasReader = read !== null;
 
   useEffect(() => {
+    // A null reader means there is nothing to load yet (for example no project in the route).
     if (!hasReader) return;
+    // Cleared on cleanup so a response for an old scope is dropped.
     let active = true;
+    // Start on the next tick, outside the effect body.
     const timer = window.setTimeout(() => {
       const reader = readRef.current;
       if (!reader) return;
+      // Project reads use the unbound session, not a run-bound one.
       void apiCall(reader, null)
         .then((value) => {
           if (!active) return;
+          // Reject data for a different project instead of showing it.
           if (!acceptRef.current(value)) throw new Error('The service returned data for a different project.');
           setState({ scope, data: value, error: null, loadedAt: new Date() });
         })
         .catch((reason: unknown) => {
+          // On a failed reload, keep the last good data for this scope and show the error with it.
           if (active) setState((previous) => ({
             scope,
             data: previous.scope === scope ? previous.data : null,
@@ -75,6 +86,7 @@ function useScopedLoad<T>(
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
   const replace = useCallback((next: T) => setState({ scope, data: next, error: null, loadedAt: new Date() }), [scope]);
   const current = state.scope === scope;
+  // Loading until this scope has either data or an error.
   return {
     data: current ? state.data : null,
     loading: hasReader && (!current || (state.data === null && state.error === null)),
@@ -137,11 +149,13 @@ export function permissionsForProject(
 ): PermissionSource[] {
   const sources: PermissionSource[] = [];
   for (const grant of context.effectiveAuthority) {
+    // A tenant grant counts only for the caller's own tenant; a project grant only for this project.
     const applies = grant.resourceType === 'platform'
       || (grant.resourceType === 'tenant' && grant.resourceId === context.tenantId)
       || (grant.resourceType === 'project' && projectId !== undefined && grant.resourceId === projectId);
     if (!applies) continue;
     for (const permission of grant.permissions) {
+      // Keep one entry per permission and scope, even if several grants repeat it.
       if (!sources.some((item) => item.permission === permission.permission && item.scope === grant.resourceType))
         sources.push({ permission: permission.permission, scope: grant.resourceType });
     }

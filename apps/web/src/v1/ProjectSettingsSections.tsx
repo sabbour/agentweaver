@@ -26,14 +26,19 @@ export function GeneralSection({ project, onUpdated }: { project: ProjectSummary
   const trimmed = name.trim();
   const save = async (event: FormEvent) => {
     event.preventDefault();
+    // Skip the request when the name is empty or did not change.
     if (!trimmed || trimmed === project.name) return;
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
+      // Send the revision we loaded. If someone else changed the project since,
+      // the service rejects the update instead of overwriting their change.
+      // The state is sent unchanged because the update replaces name and state together.
       const updated = await apiCall((token, tenant) => gatewayClient.updateProject(
         token, project.projectId, { expectedRevision: project.revision, name: trimmed, state: project.state }, tenant,
       ), null);
+      // The parent stores the new project, including its new revision, so the next save uses it.
       onUpdated(updated);
       setSaved(true);
     } catch (reason) {
@@ -66,13 +71,17 @@ export function GeneralSection({ project, onUpdated }: { project: ProjectSummary
 }
 
 /**
- * Shows what the signed-in user can do in this project. Listing, adding, and
- * removing role assignments wait for the role-assignment API.
+ * Shows what the signed-in user can do in this project, followed by the project
+ * members panel. Member change controls appear only for tenant administrators.
  */
 export function AccessSection({ projectId }: { projectId: string }) {
   const context = useAuthorizationContext();
+  // Keep only the permissions that apply to this project: project, tenant-wide, or platform grants.
   const permissions = context.data ? permissionsForProject(context.data, projectId) : [];
-  // Tenant-wide "Change project settings" is reported only for TenantAdmin with admin scope, the role that can change members.
+  // The service reports a tenant-wide "Change project settings" permission only for
+  // a tenant administrator with admin scope. That is also the only role that can
+  // add or remove members, so it decides whether the member controls appear.
+  // The service still checks every change; this flag only hides controls.
   const canManageMembers = permissions.some((item) => item.scope === 'tenant' && item.permission === 'writeProjects');
   return (
     <>
@@ -94,6 +103,7 @@ export function AccessSection({ projectId }: { projectId: string }) {
           </ul>
         ))}
     </PageSection>
+    {/* Show members only after permissions load, so the panel knows whether to show change controls. */}
     {context.data && <ProjectMembersPanel projectId={projectId} canManage={canManageMembers} />}
     </>
   );
@@ -105,10 +115,13 @@ export function RepositoryFields({ configuration, onChange, readOnly }: {
   onChange: (next: ProjectConfiguration) => void;
   readOnly: boolean;
 }) {
+  // Older configurations may have no source control block. Use empty values so the inputs stay controlled.
   const sourceControl = configuration.sourceControl ?? {};
   const repository = sourceControl.repository ?? { owner: '', name: '' };
   const setRepository = (part: 'owner' | 'name', value: string) => {
     const next = { ...repository, [part]: value.trim() };
+    // When both owner and name are empty, drop the repository instead of saving
+    // an empty one. Other source control fields, such as the sign-in method, stay.
     onChange({
       ...configuration,
       sourceControl: { ...sourceControl, repository: next.owner || next.name ? next : undefined },
@@ -127,6 +140,7 @@ export function RepositoryFields({ configuration, onChange, readOnly }: {
           <Select
             value={sourceControl.authMode ?? ''}
             disabled={readOnly}
+            // "Not set" has an empty value. Save it as undefined so the field is left out.
             onChange={(_, data) => onChange({
               ...configuration,
               sourceControl: { ...sourceControl, authMode: (data.value || undefined) as SourceControlAuthMode | undefined },
@@ -157,6 +171,7 @@ export function RunLimitsFields({ configuration, onChange, readOnly }: {
   onChange: (next: ProjectConfiguration) => void;
   readOnly: boolean;
 }) {
+  // Network restrictions are only summarized here. They are edited in the Advanced section.
   const egress = configuration.egressNarrowing ?? [];
   return (
     <PageSection title="Run limits" description="Each run stops at these limits. Leave a field empty to use the platform limit.">
@@ -170,6 +185,8 @@ export function RunLimitsFields({ configuration, onChange, readOnly }: {
               placeholder="Platform limit"
               readOnly={readOnly}
               onChange={(_, data) => {
+                // Only positive whole numbers are kept. Empty or invalid input saves
+                // null, which means "use the platform limit".
                 const parsed = Number.parseInt(data.value, 10);
                 onChange({
                   ...configuration,
@@ -195,11 +212,14 @@ export function DangerZoneSection({ project, onUpdated }: { project: ProjectSumm
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // The same button archives an active project or restores an archived one.
   const archiving = project.state === 'active';
   const confirm = async () => {
     setBusy(true);
     setError(null);
     try {
+      // Same update call as rename: keep the name, flip the state, and send the
+      // loaded revision so a concurrent change is rejected instead of overwritten.
       const updated = await apiCall((token, tenant) => gatewayClient.updateProject(
         token, project.projectId,
         { expectedRevision: project.revision, name: project.name, state: archiving ? 'archived' : 'active' },
@@ -208,6 +228,7 @@ export function DangerZoneSection({ project, onUpdated }: { project: ProjectSumm
       onUpdated(updated);
       setOpen(false);
     } catch (reason) {
+      // Keep the dialog open on failure so the user sees the error and can retry or cancel.
       setError(reason);
     } finally {
       setBusy(false);

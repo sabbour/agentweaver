@@ -27,7 +27,10 @@ export function runState(executionState: string | null | undefined): { label: Ru
   }
 }
 
-/** True when the owner reports the run finished, successfully or not. */
+/**
+ * True when the owner reports the run finished, successfully or not.
+ * `indeterminate` counts as finished: the run stopped, but its result is not known.
+ */
 export function isRunFinished(executionState: string | null | undefined): boolean {
   return executionState === 'completed' || executionState === 'failed' || executionState === 'indeterminate';
 }
