@@ -708,9 +708,10 @@ authority:
 A `BacklogTaskOrigin` contains `task` (`projectId` and `taskId`),
 `promotionId`, `runId`, `rootSessionId`, `workPlanId`, and `workItemId`.
 Tasks added by ordinary capture or the run `POST /tasks` route have no origin
-record. These routes require migration `030_backlog_task_origin.sql`, which is
-unapplied. Migration application, the new table grants, and the changed
-PostgreSQL plan hash require separate operator approval.
+record. Migration `030_backlog_task_origin.sql` must be applied before these
+routes work. Applying the migration, granting access to the new tables, and
+accepting the changed PostgreSQL plan hash each require separate operator
+approval.
 
 ### Source Control
 

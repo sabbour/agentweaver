@@ -102,6 +102,8 @@ public static partial class CoordinationEndpoints
                     string.IsNullOrWhiteSpace(request.WorkPlanId) ||
                     request.ExpectedDecisionStateVersion < 1 || request.ExpectedExecutionFence < 1)
                     throw new CoordinationException("backlog_promotion_invalid", StatusCodes.Status400BadRequest);
+                // Check the request against the current decision before opening the backlog transaction.
+                // The store checks again under its locks.
                 var identity = new SessionIdentity(projectId, runId, request.RootSessionId);
                 var decision = await decisions.ReadCurrentAsync(actor, identity, selection, ct)
                     .ConfigureAwait(false);
@@ -111,6 +113,8 @@ public static partial class CoordinationEndpoints
                     decision.State.ConfirmedWorkPlan is not { } confirmedPlan ||
                     !string.Equals(confirmedPlan.Plan.Id, request.WorkPlanId, StringComparison.Ordinal))
                     throw new CoordinationException("backlog_promotion_stale", StatusCodes.Status409Conflict);
+                // Use the selection context stored at confirmation. If none is stored, rebuild it from the
+                // selection snapshot, unless the plan needs a provider binding that only the stored context has.
                 var selectionContext = await runSelectionContexts.ReadAsync(
                     selection.Selection, decision.State.Fence, ct).ConfigureAwait(false);
                 if (selectionContext is null && RequiresProviderBinding(decision.State, confirmedPlan.Plan))

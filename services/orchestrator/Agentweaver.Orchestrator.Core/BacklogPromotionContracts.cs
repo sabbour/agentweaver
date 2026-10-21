@@ -55,6 +55,7 @@ public static class BacklogPlanPromotionIds
         ArgumentException.ThrowIfNullOrWhiteSpace(runId);
         ArgumentException.ThrowIfNullOrWhiteSpace(workPlanId);
         ArgumentException.ThrowIfNullOrWhiteSpace(workItemId);
+        // Prefix each value with its length so different splits of the same text can't produce the same hash.
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(string.Concat(
             new[] { projectId, runId, workPlanId, workItemId }.Select(value => $"{value.Length}:{value}"))));
         return "plan-" + Convert.ToHexStringLower(hash)[..32];
