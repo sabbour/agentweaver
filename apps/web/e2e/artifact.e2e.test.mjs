@@ -6,7 +6,8 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { createServer as createViteServer } from 'vite';
 import { startStaticServer, openApp, runRoom } from './harness.mjs';
@@ -117,6 +118,8 @@ test('artifact: choose run/session/capture/file, link whole capture, reopen afte
     assert.ok(outputReads.length >= 8);
     if (evidence) await writeFile(join(evidence, 'artifact-journey.json'), JSON.stringify({
       fixtureBacked: true, liveAcceptance: false,
+      prHead: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+      mobileAppViewportWidth: 390, mobileFileSurfaceWidth: Math.round(bounds.width),
       reference: 'origin/dev fb24c71c4d912354998ccaf775af12be4a049798',
       reused: ['FilesTabPanel', 'FileViewer'], newGatewayAdapters: ['saved capture list', 'capture detail', 'Priority artifact picker'],
       outputReads, writes: linkWrite.map((request) => ({ method: request.method, path: request.url.pathname, body: request.body })),
@@ -138,7 +141,9 @@ test('retained 0.x file tree/viewer screenshot reference', { skip: !evidence }, 
     await surface.screenshot({ path: join(evidence, '0x-files-preview.png') });
     await surface.getByRole('tab', { name: 'Source' }).click();
     await surface.screenshot({ path: join(evidence, '0x-files-source.png') });
-    await app.page.setViewportSize({ width: 390, height: 844 });
+    const journey = JSON.parse(await readFile(join(evidence, 'artifact-journey.json'), 'utf8'));
+    // Match the component width inside the PR shell, not the outer app viewport.
+    await app.page.setViewportSize({ width: journey.mobileFileSurfaceWidth, height: 844 });
     await surface.screenshot({ path: join(evidence, '0x-files-mobile.png') });
   } finally { await app.close(); await vite.close(); }
 });

@@ -9,3 +9,7 @@ lists, manifest size/hash checks, explicit read errors and stale-read removal.
 Priority links reopen the run's Changes tab. The capture list and Priority
 picker are new Gateway adapters. Issue and pull request pickers remain pending,
 so A2 is still partial.
+
+Use the canonical pending-gate notification contract while keeping unrelated
+notices out of Needs input. Retain fixture-backed browser and matched component
+screenshot evidence; these checks do not claim live acceptance.
