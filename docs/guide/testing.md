@@ -429,7 +429,10 @@ This read-only probe requires an already authorized client and real Environment
 creation receipt. Stored rows alone do not prove dispatch, a late provider
 callback, or verified resource release. The full harness runner checks source
 and deployment evidence before it reads credentials or starts a surface
-client. It does not sign in, refresh tokens, or grant authority. For setup
+client. It does not sign in, refresh tokens, or grant authority. When the
+publication receipt reuses an unchanged image, the deployment evidence checks
+that image's registry labels against the commit that originally built it, not
+the release commit. For setup
 requirements, see the
 [API harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/api-harness/README.md),
 [UI harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),

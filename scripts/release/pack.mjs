@@ -21,6 +21,7 @@ import {
 } from './agenthost-image.mjs';
 import { measureAgentHostArchiveSync } from './measure-agenthost-image.mjs';
 import { readDockerArchiveConfig } from './docker-archive.mjs';
+import { assertImageReusePlan, reusedImageIds } from './image-reuse.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sha = /^[a-f0-9]{40}$/;
@@ -330,8 +331,12 @@ export function packComponents(manifest, {
   foundationProbeOnly = false,
   platformOnly = false,
   integrationSourceSha,
+  reusePlan,
 } = {}) {
   if (typeof outDir !== 'string' || outDir.trim() === '') fail('outDir', 'expected an output directory path');
+  if (reusePlan !== undefined && (!imagesOnly || !platformOnly || integrationSourceSha !== undefined)) {
+    fail('selection', 'an image reuse plan applies only to platform-only images-only release preparation');
+  }
   const integrationImagesOnly = integrationSourceSha !== undefined;
   if (integrationImagesOnly && !sha.test(integrationSourceSha)) {
     fail('selection', 'integration image preparation requires an exact 40-character source SHA');
@@ -354,10 +359,13 @@ export function packComponents(manifest, {
     ? manifest.components.filter((component) => component.kind !== 'service')
     : manifest.components;
   // The release workflow builds package and image outputs independently; platform-only image packs omit the acceptance Probe.
-  const components = imagesOnly
+  const selectedComponents = imagesOnly
     ? compositionComponents.filter((component) => component.kind === 'service')
     : compositionComponents;
-  if (components.length === 0) fail('manifest.components', 'no components to prepare');
+  if (selectedComponents.length === 0) fail('manifest.components', 'no components to prepare');
+  // Images whose inputs and version are unchanged keep their published digest and are not rebuilt.
+  const reused = reusePlan === undefined ? new Set() : reusedImageIds(reusePlan);
+  const components = selectedComponents.filter(component => !reused.has(component.id));
   if (integrationImagesOnly && (manifest.stage !== 'draft' || manifest.evidence !== undefined)) {
     fail('manifest', 'integration image preparation requires a tracked draft manifest with no deployment evidence');
   }
@@ -371,6 +379,13 @@ export function packComponents(manifest, {
     fail('git', 'integration source SHA must match the exact clean local HEAD');
   }
   if (manifest.stage === 'release' && manifest.evidence.sourceSha !== sourceSha) fail('manifest.evidence', 'released composition evidence must match preparation HEAD');
+  if (reusePlan !== undefined) {
+    try {
+      assertImageReusePlan(reusePlan, { sourceSha, manifest });
+    } catch (error) {
+      fail('reusePlan', error.message);
+    }
+  }
   // Shared product images carry the exact commit tree in both release and integration packs.
   const sourceTree = git('rev-parse', `${sourceSha}^{tree}`);
   if (!sha.test(sourceTree)) {
@@ -754,7 +769,7 @@ export function packComponents(manifest, {
   }
 
   const producedFiles = listFilesRecursive(resolvedOutDir, readdir, stat).sort();
-  if (producedFiles.length === 0) fail('pack', 'dotnet pack produced no artifacts');
+  if (producedFiles.length === 0 && components.length > 0) fail('pack', 'dotnet pack produced no artifacts');
   if (agentHostBuilds.has(AGENTHOST_ID)) verifyAgentHostArchives(agentHostBuilds.get(AGENTHOST_ID).archives, resolvedOutDir);
 
   const artifacts = producedFiles.filter(file =>
@@ -777,6 +792,7 @@ export function packComponents(manifest, {
     manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
     stage: manifest.stage,
     createdAt: now().toISOString(),
+    ...(reusePlan !== undefined ? { imageReuse: reusePlan } : {}),
     components: components.map(({ id, kind, version, project }) => ({
       id, kind, version, project, lock: locks.get(id),
       ...(webSources.has(id) ? { source: webSources.get(id), build: webBuilds.get(id) } : {}),
@@ -823,9 +839,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         (args.lastIndexOf('--integration-source-sha') !== integrationIndex || !sha.test(integrationSourceSha ?? ''))) {
       fail('selection', '--integration-source-sha requires one exact 40-character source SHA');
     }
+    const reusePlanIndex = args.indexOf('--reuse-plan');
+    if (reusePlanIndex >= 0 && (args.lastIndexOf('--reuse-plan') !== reusePlanIndex ||
+        !args[reusePlanIndex + 1] || args[reusePlanIndex + 1].startsWith('--'))) {
+      fail('usage', '--reuse-plan requires one plan file');
+    }
     const excludedIndices = new Set([
       ...(integrationIndex >= 0 ? [integrationIndex + 1] : []),
       ...(outIndex >= 0 ? [outIndex + 1] : []),
+      ...(reusePlanIndex >= 0 ? [reusePlanIndex + 1] : []),
     ]);
     const manifestArg = args.find((arg, index) => !arg.startsWith('--') && !excludedIndices.has(index));
     const packagesOnly = args.includes('--packages-only');
@@ -833,11 +855,23 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const foundationProbeOnly = args.includes('--foundation-probe-only');
     const platformOnly = args.includes('--platform-only');
     if (!manifestArg || (outIndex >= 0 && !args[outIndex + 1])) {
-      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only | --images-only [--platform-only] | --foundation-probe-only | --platform-only | --integration-source-sha <sha>] [--out <dir>]');
+      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only | --images-only [--platform-only [--reuse-plan <plan.json>]] | --foundation-probe-only | --platform-only | --integration-source-sha <sha>] [--out <dir>]');
+    }
+    let reusePlan;
+    if (reusePlanIndex >= 0) {
+      try {
+        reusePlan = JSON.parse(readFileSync(path.resolve(args[reusePlanIndex + 1]), 'utf8'));
+      } catch (error) {
+        fail('reusePlan', `cannot read image reuse plan: ${error.message}`);
+      }
     }
     const provenance = packComponentsFromFile(manifestArg, {
       root: repositoryRoot, outDir: out, packagesOnly, imagesOnly, foundationProbeOnly, platformOnly, integrationSourceSha,
+      reusePlan,
     });
+    for (const entry of reusePlan?.components ?? []) {
+      if (entry.action === 'reuse') console.log(`  reused ${entry.id} ${entry.version} from ${entry.reused.sourceSha}`);
+    }
     console.log(`Packed ${provenance.components.length} component(s) at source ${provenance.sourceSha} into ${out}`);
     for (const artifact of provenance.artifacts) {
       console.log(`  ${artifact.path} (${artifact.sha256})`);

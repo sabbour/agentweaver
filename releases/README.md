@@ -467,15 +467,60 @@ workflows to pass on the exact source commit.
 
 The release workflow validates the composition and changeset coverage, then
 starts two independent jobs. `packages` creates the NuGet package artifacts.
-`images` prepares the source-pinned build inputs and builds the product Docker
-images without the acceptance-only Foundation Probe. Each job uploads its
+`images` prepares the source-pinned build inputs, plans image reuse, and builds
+only the product Docker images that need a new build, without the
+acceptance-only Foundation Probe. Each job uploads its
 source-bound artifacts. `publish` waits for both jobs, verifies that their
 source SHA, manifest hash, selected components, and artifact files agree, then
 publishes only NuGet packages whose versions changed in the verified receipt,
-plus all ten product service images, to GitHub Packages and `ghcr.io/sabbour`.
+plus the rebuilt product service images, to GitHub Packages and `ghcr.io/sabbour`.
 The publisher rechecks artifact hashes and image contracts before its first
-external write. Each service image uses a tag containing its component version
-and the full source SHA, so a later receipt cannot move an existing version tag.
+external write. Each built service image uses a tag containing its component
+version and the full source SHA, so a later receipt cannot move an existing
+version tag.
+
+#### Incremental image reuse
+
+`npm run release:plan-image-reuse` (`scripts/release/image-reuse.mjs`) decides,
+per service image, whether to build or reuse. It finds the newest
+`agentweaver-publication/<sha>/result` tag with status `published` on the
+first-parent history of the release commit, then reads that result's receipt.
+An image is reused only when all of these hold:
+
+- the baseline receipt published the same component version to the same
+  registry repository, with an immutable `sha256` digest;
+- the image's input fingerprint at the baseline build commit equals the
+  fingerprint at the release commit.
+
+The fingerprint is a hash of Git blob IDs. It covers the project, its
+transitive `ProjectReference` closure, out-of-directory `Include` items,
+`Directory.Build.*`, `Directory.Packages.props`, `global.json`, `nuget.config`,
+the Dockerfile or SDK `ContainerBaseImage` pin, the web application directory,
+the AgentHost build directories, and the release workflow and scripts that
+build images. This is one derived closure that
+the planner and the publisher both use, so no hand-written path list can drift.
+An MSBuild expression the planner cannot resolve forces a build.
+
+Every other case builds: no baseline (the first release), an older receipt
+without reuse metadata, a version change, a different registry, an image
+missing from the baseline, or a changed fingerprint. Malformed baseline
+results, receipts, tags, or digests stop the run with an error instead of
+being treated as reusable.
+
+A reused image is not rebuilt, retagged, or pushed. The receipt records its
+original `<version>-<buildSha>` tag, digest, and a `reused` block with the
+original build source SHA and tree. Deployment pins the digest and verifies its
+OCI labels against that original build source, not the new release commit. A
+chain of reuses keeps the first build's source.
+
+Before claiming publication, the publisher recomputes the plan and requires it
+to match the pack provenance. It then resolves every reused tag in the registry
+and requires the recorded digest. A moved or missing tag fails before any
+registry or receipt write.
+
+Set the `rebuild_all_images` input on a manual dispatch to rebuild every image.
+The first release after a change to the image tooling also rebuilds every image,
+because the tooling is part of each fingerprint.
 The workflow queues receipt-triggered runs in FIFO order instead of replacing
 an earlier pending release.
 

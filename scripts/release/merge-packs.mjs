@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateFile } from './validate.mjs';
+import { assertImageReusePlan, reusedImageIds } from './image-reuse.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sha = /^[a-f0-9]{40}$/;
@@ -70,6 +71,7 @@ function readPack(directory, kind, components, sourceSha, manifestSha256, stage)
       !Array.isArray(provenance.artifacts)) {
     fail(directory, 'provenance must match the release source, manifest, stage, and ordinary pack mode');
   }
+  if (kind === 'packages' && provenance.imageReuse !== undefined) fail(directory, 'package provenance cannot carry an image reuse plan');
   if (provenance.components.length !== components.length || provenance.artifacts.length !== components.length) {
     fail(directory, `provenance must contain exactly the ${kind} selection`);
   }
@@ -166,11 +168,27 @@ export function mergePacks(manifestPath, packagesDir, imagesDir, outDir, {
   }
 
   const manifestSha256 = createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
+  // Reused images keep their published digest, so the image pack holds only the rebuilt subset.
+  const imageReuse = readJson(path.join(resolvedImages, 'provenance.json'), `${resolvedImages}/provenance.json`).imageReuse;
+  if (imageReuse !== undefined) {
+    if (!platformOnly) fail('imageReuse', 'image reuse applies only to platform-only release packs');
+    try {
+      assertImageReusePlan(imageReuse, { sourceSha, manifest });
+    } catch (error) {
+      fail('imageReuse', error.message);
+    }
+  }
+  const reused = reusedImageIds(imageReuse);
+  const builtComponents = components.filter(component => !reused.has(component.id));
   const packagePack = readPack(resolvedPackages, 'packages', packages, sourceSha, manifestSha256, manifest.stage);
-  const imagePack = readPack(resolvedImages, 'images', images, sourceSha, manifestSha256, manifest.stage);
+  const imagePack = readPack(resolvedImages, 'images', images.filter(component => !reused.has(component.id)),
+    sourceSha, manifestSha256, manifest.stage);
+  if (JSON.stringify(imagePack.provenance.imageReuse) !== JSON.stringify(imageReuse)) {
+    fail('imageReuse', 'image pack plan changed while merging');
+  }
   const records = new Map([...packagePack.componentRecords, ...imagePack.componentRecords]);
   const artifactRecords = [...packagePack.artifacts, ...imagePack.artifacts].sort((a, b) => a.path.localeCompare(b.path));
-  if (records.size !== components.length || artifactRecords.length !== components.length) {
+  if (records.size !== builtComponents.length || artifactRecords.length !== builtComponents.length) {
     fail('provenance', 'combined component set does not match the selected manifest');
   }
 
@@ -192,7 +210,8 @@ export function mergePacks(manifestPath, packagesDir, imagesDir, outDir, {
     manifestSha256,
     stage: manifest.stage,
     createdAt: now().toISOString(),
-    components: components.map(component => records.get(component.id)),
+    ...(imageReuse !== undefined ? { imageReuse } : {}),
+    components: builtComponents.map(component => records.get(component.id)),
     artifacts: artifactRecords,
   };
   const provenancePath = path.join(resolvedOut, 'provenance.json');
