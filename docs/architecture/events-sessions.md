@@ -195,7 +195,8 @@ pin before it can price a source receipt. `RequireTrustedAzureByok` performs tha
 check. The receipt consumer applies the same source checks, without the dispatch
 message ID, to every receipt that claims Azure BYOK and rejects a failed claim, so
 untrusted usage never enters the ledger. Native SDK usage without a dispatch
-message ID is admitted as `Unpriced`.
+message ID is admitted as `Unpriced`. Events keeps these token totals but does not
+assign a cost because it cannot attribute the usage to a dispatch.
 
 Azure BYOK pricing is off by default. To turn it on, configure the
 `EventsAndSessions:Cost:Azure` section with `AzureCostProviderOptions` fields and

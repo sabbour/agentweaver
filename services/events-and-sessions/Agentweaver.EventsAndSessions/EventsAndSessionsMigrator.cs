@@ -8,7 +8,12 @@ namespace Agentweaver.EventsAndSessions;
 /// <summary>Applies explicit Events &amp; Sessions schema migrations and verifies current owner tables and guards.</summary>
 public static class EventsAndSessionsMigrator
 {
-    private const int CurrentSchemaVersion = 8;
+    // Project reporting requires migration 009 before this runtime serves traffic.
+    private const int CurrentSchemaVersion = 9;
+
+    /// <summary>Every version <see cref="MigrateAsync"/> can apply, in order.</summary>
+    /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
+    public static IReadOnlyList<int> SupportedVersions { get; } = [.. Enumerable.Range(1, CurrentSchemaVersion)];
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
 
@@ -60,7 +65,8 @@ public static class EventsAndSessionsMigrator
             (applied.Contains(5) && !applied.Contains(4)) ||
             (applied.Contains(6) && !applied.Contains(5)) ||
             (applied.Contains(7) && !applied.Contains(6)) ||
-            (applied.Contains(8) && !applied.Contains(7)))
+            (applied.Contains(8) && !applied.Contains(7)) ||
+            (applied.Contains(9) && !applied.Contains(8)))
             throw new InvalidOperationException("Unsupported Events & Sessions schema version.");
 
         // Version 2 was used by two historical source layouts, so table presence must disambiguate version 3.
@@ -103,7 +109,9 @@ public static class EventsAndSessionsMigrator
                     "Events & Sessions schema version 2 has an unrecognized or ambiguous migration layout.");
         }
 
-        foreach (var version in Enumerable.Range(1, CurrentSchemaVersion).Where(version => !applied.Contains(version)))
+        // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
+        // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
+        foreach (var version in SupportedVersions.Where(version => !applied.Contains(version)))
         {
             var resourceName = version switch
             {
@@ -117,6 +125,7 @@ public static class EventsAndSessionsMigrator
                 6 => "Agentweaver.EventsAndSessions.Migrations.006_native_sdk_usage.sql",
                 7 => "Agentweaver.EventsAndSessions.Migrations.007_native_usage_receipts.sql",
                 8 => "Agentweaver.EventsAndSessions.Migrations.008_row_lock_record_updates.sql",
+                9 => "Agentweaver.EventsAndSessions.Migrations.009_project_usage_index.sql",
                 _ => throw new InvalidOperationException("Unsupported Events & Sessions schema version.")
             };
             await using var resource = typeof(EventsAndSessionsMigrator).Assembly.GetManifestResourceStream(resourceName)
@@ -155,7 +164,7 @@ public static class EventsAndSessionsMigrator
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 3),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 4),
-                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8)),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -199,7 +208,9 @@ public static class EventsAndSessionsMigrator
                     WHERE tgrelid = to_regclass(@forkLineage) AND tgname = 'session_fork_lineage_no_update'
                       AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
                       AND tgenabled = 'O' AND NOT tgisinternal
-                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0)
+                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 9) = 1,
+                to_regclass(@projectUsageIndex) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.sessions");
         command.Parameters.AddWithValue("bindings", NpgsqlDbType.Text, $"{schema}.session_provider_bindings");
@@ -220,6 +231,7 @@ public static class EventsAndSessionsMigrator
         command.Parameters.AddWithValue("usageReceipts", NpgsqlDbType.Text, $"{schema}.usage_source_receipts");
         command.Parameters.AddWithValue("forkLineage", NpgsqlDbType.Text, $"{schema}.session_fork_lineage");
         command.Parameters.AddWithValue("updateGuard", NpgsqlDbType.Text, $"{schema}.reject_row_lock_record_update()");
+        command.Parameters.AddWithValue("projectUsageIndex", NpgsqlDbType.Text, $"{schema}.ix_usage_ledger_project_occurred");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) ||
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
@@ -229,7 +241,7 @@ public static class EventsAndSessionsMigrator
             reader.GetInt64(24) != 1 || reader.GetInt64(25) != 1 ||
             !reader.GetBoolean(26) || !reader.GetBoolean(27) ||
             reader.GetInt64(28) != 1 || !reader.GetBoolean(29) || !reader.GetBoolean(30) ||
-            Enumerable.Range(31, 4).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(31, 6).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Events & Sessions schema is not current; run the explicit --migrate command.");
     }

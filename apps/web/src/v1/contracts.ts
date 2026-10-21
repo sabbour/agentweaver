@@ -1,4 +1,40 @@
 /** JSON contracts exchanged by the v1 browser, Gateway, and resource owners. */
+/** Interactive run input persisted before the existing Broker run-binding redirect. */
+export interface CreateProjectRunRequest {
+  firstMessage: string;
+  expectedProjectConfigRevision: number;
+  title?: string;
+  workflowId?: string;
+}
+
+/** Stable run and root identities used to resume a new chat after a reload. */
+export interface CreateProjectRunResponse {
+  runId: string;
+  rootSessionId: string;
+  state: 'awaiting_binding';
+  binding: { projectId: string; runId: string };
+}
+
+/** Receipt for idempotent first-message delivery to the accepted root. */
+export interface StartProjectRunResponse {
+  runId: string;
+  rootSessionId: string;
+  state: 'started';
+}
+
+/** Optional human-readable explanation saved with a cancellation. */
+export interface CancelProjectRunRequest {
+  reason?: string;
+}
+
+/** Durable cancellation receipt; ended runs are successful no-ops with no new cancellation timestamp. */
+export interface CancelProjectRunResponse {
+  runId: string;
+  state: 'cancelled' | 'completed' | 'failed' | 'indeterminate';
+  cancelledAt: string | null;
+  alreadyTerminal: boolean;
+}
+
 /** Problem details returned for failed Gateway requests. */
 export interface Problem {
   type?: string;
@@ -385,6 +421,89 @@ export interface ProjectConfiguration {
   sourceControl?: SourceControlProjectSettings | null;
 }
 
+/** Owner-reviewed casting draft and its configuration and draft revision fences. */
+export interface ProjectCastingProposal {
+  proposalId: string;
+  projectId: string;
+  baseConfigurationRevision: number;
+  draftRevision: number;
+  state: 'pending' | 'confirmed' | 'rejected';
+  draft: ProjectConfiguration;
+  confirmedConfigurationRevision: number | null;
+  result: ProjectConfiguration | null;
+  transferProvenance: ProjectCastingTransferProvenance | null;
+  createdByActorId: string;
+  createdAt: string;
+  updatedByActorId: string;
+  updatedAt: string;
+}
+
+/** Complete configuration staged for review without applying it. */
+export interface CreateProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  draft: ProjectConfiguration;
+}
+
+/** Built-in scenario selected at the current configuration revision. */
+export interface CreateScenarioProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  templateId: string;
+}
+
+/** Catalog roles selected at the current configuration revision. */
+export interface CreateManualProjectCastingProposalRequest {
+  expectedConfigurationRevision: number;
+  roleIds: string[];
+}
+
+/** Replacement draft fenced to the pending proposal's draft revision. */
+export interface UpdateProjectCastingProposalRequest {
+  expectedDraftRevision: number;
+  draft: ProjectConfiguration;
+}
+
+/** Expected draft revision used for confirmation or rejection. */
+export interface TransitionProjectCastingProposalRequest {
+  expectedDraftRevision: number;
+}
+
+/** Verified source identity and digest retained on an imported proposal. */
+export interface ProjectCastingTransferProvenance {
+  formatVersion: 1;
+  sourceProjectId: string;
+  sourceConfigurationRevision: number;
+  contentDigest: string;
+}
+
+/** Versioned, digest-checked charter and casting payload; excludes other settings. */
+export interface ProjectCastingTransfer extends ProjectCastingTransferProvenance {
+  agentCharters: ProjectConfiguration['agentCharters'];
+  casting: ProjectConfiguration['casting'];
+}
+
+/** Transfer staged for review against the target project's current revision. */
+export interface ImportProjectCastingTransferRequest {
+  expectedConfigurationRevision: number;
+  transfer: ProjectCastingTransfer;
+}
+
+/** Built-in scenario that seeds a proposal from catalog role identifiers. */
+export interface ProjectCastingTemplateDefinition {
+  id: string;
+  title: string;
+  description: string;
+  roleIds: string[];
+}
+
+/** Built-in role text used to generate a project agent charter. */
+export interface ProjectCastingRoleDefinition {
+  id: string;
+  title: string;
+  summary: string;
+  responsibilities: string[];
+  boundaries: string[];
+}
+
 /** Revision and optional agent scope for one assigned skill. */
 export interface ProjectSkillAssignment {
   skillId: string;
@@ -554,6 +673,287 @@ export interface SkillContentInventoryPage {
   revisions: SkillContentRevisionSummary[];
   pageSize: number;
   nextCursor: string | null;
+}
+
+/** Derived run state reported by the project run list. */
+export type ProjectRunState =
+  | 'idle'
+  | 'active'
+  | 'blocked'
+  | 'completed'
+  | 'failed'
+  | 'indeterminate'
+  | 'cancelled';
+
+/** Run-list state filter: one or more states, or the `open` and `terminal` aliases. */
+export type ProjectRunStateFilter = ProjectRunState | 'open' | 'terminal';
+
+/** Actor whose accepted run selection created the run. */
+export interface ProjectRunStartedBy {
+  issuer: string;
+  subject: string;
+}
+
+/** One run in a project run list. Title and goal stay null until a start request stores them. */
+export interface ProjectRunSummary {
+  runId: string;
+  rootSessionId: string | null;
+  title: string | null;
+  goal: string | null;
+  state: ProjectRunState;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  startedBy: ProjectRunStartedBy;
+}
+
+/** One newest-first page of project runs. Pass `nextCursor` back with the same filter and page size. */
+export interface ProjectRunPage {
+  projectId: string;
+  items: ProjectRunSummary[];
+  nextCursor: string | null;
+}
+
+/** Repository owner and name as Agentweaver stored them. */
+export interface ProjectSourceControlRepository {
+  owner: string;
+  name: string;
+}
+
+/** Stored issue state filter for `listProjectIssues`. The default is `open`. */
+export type ProjectIssueStateFilter = 'open' | 'closed' | 'all';
+
+/**
+ * One synced issue from the project backlog. The read makes no provider call,
+ * and the stored issue has no URL or author.
+ */
+export interface ProjectIssueSummary {
+  taskId: string;
+  taskState: 'backlog' | 'ready' | 'claimed';
+  providerId: string;
+  repository: ProjectSourceControlRepository;
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One page of synced issues, highest number first. Pass `nextCursor` back with the same filter and page size. */
+export interface ProjectIssuePage {
+  projectId: string;
+  items: ProjectIssueSummary[];
+  nextCursor: string | null;
+}
+
+/** Recorded pull request state filter for `listProjectPullRequests`. The default is `open`. */
+export type ProjectPullRequestStateFilter = 'open' | 'closed' | 'merged' | 'all';
+
+/**
+ * One pull request that a project run created or reused, as the run recorded it.
+ * The read makes no provider call, so `state` and `title` can be out of date.
+ */
+export interface ProjectPullRequestSummary {
+  providerId: string;
+  repository: ProjectSourceControlRepository;
+  number: number;
+  title: string | null;
+  htmlUrl: string;
+  state: 'open' | 'closed' | 'merged';
+  headBranch: string;
+  headSha: string;
+  baseBranch: string;
+  baseSha: string;
+  /** The run that created or reused the pull request. */
+  runId: string;
+  disposition: 'created' | 'reused';
+  /** When the run first recorded the pull request. */
+  recordedAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Which pull requests the record can contain. Recording starts when Orchestrator migration 032
+ * is applied; earlier pull requests aren't recorded, so the list isn't a complete history.
+ */
+export interface ProjectPullRequestCoverage {
+  recordedSince: string;
+  includesEarlierPullRequests: false;
+}
+
+/**
+ * One page of recorded pull requests, most recently recorded first. Pass `nextCursor` back with the
+ * same filter and page size. Before migration 032 is applied, the route returns 503
+ * `pull_request_records_unavailable` instead of a page.
+ */
+export interface ProjectPullRequestPage {
+  projectId: string;
+  coverage: ProjectPullRequestCoverage;
+  items: ProjectPullRequestSummary[];
+  nextCursor: string | null;
+}
+
+/** Created and terminal-completed run counts on one UTC calendar day. */
+export interface ProjectMetricsDay {
+  date: string;
+  created: number;
+  completed: number;
+}
+
+/** Orchestrator-owned current state, lifetime total, and half-open interval run metrics. */
+export interface ProjectMetrics {
+  projectId: string;
+  from: string;
+  to: string;
+  activeRuns: number;
+  blockedRuns: number;
+  runsInRange: number;
+  runsTotal: number;
+  completedRuns: number;
+  succeededRuns: number;
+  series: ProjectMetricsDay[];
+}
+
+/** Persisted cost subtotal; consumers must not combine units or replace unknown amounts with zero. */
+export interface ProjectUsageCost {
+  priceUnit: string | null;
+  disposition: 'estimate' | 'reconciled' | 'unpriced';
+  amount: number | null;
+}
+
+/** Model or agent ledger aggregate; any missing measurement makes its aggregate null. */
+export interface ProjectUsageItem {
+  id: string;
+  requestCount: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  avgDurationMs: number | null;
+  runs: number;
+  unpricedRequestCount: number | null;
+  cost: ProjectUsageCost[];
+}
+
+/** Events-owned usage grouped independently by persisted model and agent IDs. */
+export interface ProjectUsage {
+  projectId: string;
+  from: string;
+  to: string;
+  usageByModel: ProjectUsageItem[];
+  usageByAgent: ProjectUsageItem[];
+}
+
+/** `unavailable` means the caller can no longer read the project; project-owned fields are then null or absent. */
+export type ChiefOfStaffAccess = 'available' | 'unavailable';
+
+/** Binds a run that the caller created through `createProjectRun` to the caller's private conversation list. */
+export interface BindChiefOfStaffConversationRequest {
+  projectId: string;
+  runId: string;
+}
+
+/** One private Chief of Staff conversation. It stores no message content; messages stay with the run. */
+export interface ChiefOfStaffConversation {
+  conversationId: string;
+  access: ChiefOfStaffAccess;
+  projectId: string | null;
+  runId: string | null;
+  rootSessionId: string | null;
+  title: string | null;
+  requestState: 'awaiting_binding' | 'started' | 'cancelled' | null;
+  runState: ProjectRunState | null;
+  createdAt: string;
+}
+
+/** One newest-first page of the caller's conversations. */
+export interface ChiefOfStaffConversationPage {
+  items: ChiefOfStaffConversation[];
+  nextCursor: string | null;
+}
+
+/** One manual checklist item. Omit `itemId` for a new item; the owner assigns it. */
+export interface ChiefOfStaffChecklistItem {
+  itemId?: string | null;
+  text: string;
+  done: boolean;
+}
+
+/** The user's own judgment of a Priority. It never depends on run state. */
+export type ChiefOfStaffPriorityState = 'active' | 'achieved' | 'dropped';
+
+/** Creates a Priority at the end of the list. Send it with one `Idempotency-Key`. */
+export interface CreateChiefOfStaffPriorityRequest {
+  outcome: string;
+  notes?: string | null;
+  checklist?: ChiefOfStaffChecklistItem[] | null;
+}
+
+/** Changes a Priority at `expectedRevision`. Omitted fields keep their values; `checklist` replaces the list. */
+export interface UpdateChiefOfStaffPriorityRequest {
+  expectedRevision: number;
+  outcome?: string | null;
+  notes?: string | null;
+  state?: ChiefOfStaffPriorityState | null;
+  checklist?: ChiefOfStaffChecklistItem[] | null;
+}
+
+/** Replaces the full order at `expectedOrderRevision`. Name every Priority exactly once. */
+export interface ReorderChiefOfStaffPrioritiesRequest {
+  expectedOrderRevision: number;
+  priorityIds: string[];
+}
+
+export type ChiefOfStaffPriorityLinkKind = 'run' | 'conversation' | 'issue' | 'pull_request' | 'artifact';
+
+/** Adds a typed link at `expectedRevision`. Required fields depend on `kind`. */
+export interface AddChiefOfStaffPriorityLinkRequest {
+  expectedRevision: number;
+  kind: ChiefOfStaffPriorityLinkKind;
+  projectId: string;
+  runId?: string | null;
+  conversationId?: string | null;
+  number?: number | null;
+  artifactId?: string | null;
+}
+
+/**
+ * A link resolved against current access. `missing` means the project is readable but the target doesn't exist.
+ * `state` is the run state for run and conversation links, and `unavailable` for issue, pull request, and artifact
+ * links. An unavailable link carries only `linkId`, `kind`, and `access`.
+ */
+export interface ChiefOfStaffPriorityLink {
+  linkId: string;
+  kind: ChiefOfStaffPriorityLinkKind;
+  access: ChiefOfStaffAccess | 'missing';
+  projectId?: string;
+  runId?: string;
+  conversationId?: string;
+  number?: number;
+  artifactId?: string;
+  state?: string;
+  createdAt?: string;
+}
+
+/** One Priority. Outcome, notes, and checklist are the caller's own content and stay visible after access loss. */
+export interface ChiefOfStaffPriority {
+  priorityId: string;
+  outcome: string;
+  notes: string | null;
+  state: ChiefOfStaffPriorityState;
+  checklist: Array<{ itemId: string; text: string; done: boolean }>;
+  position: number;
+  revision: number;
+  links: ChiefOfStaffPriorityLink[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The caller's ordered Priorities and the revision that guards their order. */
+export interface ChiefOfStaffPriorityList {
+  orderRevision: number;
+  items: ChiefOfStaffPriority[];
 }
 
 /** Revision-fenced skill assignment update sent to the Projects owner. */
@@ -742,6 +1142,34 @@ export type CoordinationBlockerKind =
   | 'awaitingPlanApproval'
   | 'awaitingApproval'
   | 'awaitingOutcomeConfirmation';
+
+/** One pending owner gate for the existing bell, attention list, and shared Flow view. */
+export interface UserNotification {
+  notificationId: string;
+  projectId: string;
+  runId: string;
+  sessionId: string;
+  requestId: string;
+  kind: CoordinationBlockerKind;
+  prompt: string | null;
+  createdAt: string;
+  gateKind:
+    | 'outcomeConfirmation'
+    | 'generatedWorkflowConfirmation'
+    | 'workPlanConfirmation'
+    | 'scopeChangeConfirmation'
+    | 'question'
+    | 'approval';
+  stateVersion: number;
+  updatedAt: string;
+}
+
+/** Newest-first notifications and total pending count, after the requested dismissal filter. */
+export interface UserNotificationPage {
+  items: UserNotification[];
+  count: number;
+  nextCursor: string | null;
+}
 
 /** Pending request and allowed response forms associated with a blocked session. */
 export interface SessionStatusBlocker {
@@ -1043,4 +1471,100 @@ export interface BrokerTokenResponse {
   expires_in: number;
   refresh_token?: string;
   scope?: string;
+}
+
+/** Stable platform component area identifiers. */
+export type PlatformComponentArea =
+  | 'sessions'
+  | 'snapshots'
+  | 'sandbox'
+  | 'storage'
+  | 'memory'
+  | 'policy'
+  | 'guardrails'
+  | 'networkPolicy'
+  | 'cost'
+  | 'applicationHosting'
+  | 'canvas'
+  | 'secrets'
+  | 'sourceControl'
+  | 'telemetry'
+  | 'messaging'
+  | 'objectStore';
+
+/** Owner service that reports a platform component area; `none` has no backend owner. */
+export type PlatformComponentOwner =
+  | 'eventsAndSessions'
+  | 'environment'
+  | 'knowledge'
+  | 'orchestrator'
+  | 'identityBroker'
+  | 'none';
+
+/** How many implementations can serve a platform component area. */
+export type PlatformComponentCardinality =
+  | 'exclusive'
+  | 'orderedComposite'
+  | 'platformSingleton'
+  | 'layered'
+  | 'keyedByMeterSource'
+  | 'perApplication'
+  | 'perCanvas';
+
+/** Readiness of an area or implementation as reported by its owner. */
+export type PlatformComponentReadiness =
+  | 'ready'
+  | 'degraded'
+  | 'notReady'
+  | 'disabled'
+  | 'notAvailable'
+  | 'unknown';
+
+/** Reason code for an area or implementation that isn't `ready`. */
+export type PlatformComponentReason =
+  | 'ownerUnavailable'
+  | 'noBackendOwner'
+  | 'notSelected'
+  | 'notImplemented'
+  | 'readinessCheckFailed'
+  | 'readinessTimedOut';
+
+/** One implementation that currently serves a platform component area. */
+export interface PlatformComponentActiveImplementation {
+  implementationId: string;
+  displayName: string;
+  version: string;
+  hosting: string;
+  layer: 'l3l4' | 'l7' | null;
+  meterSource: string | null;
+  order: number | null;
+  readiness: PlatformComponentReadiness;
+  reason: PlatformComponentReason | null;
+  observedAt: string;
+}
+
+/** One registered implementation that an owner could select for an area. */
+export interface PlatformComponentAvailableImplementation {
+  implementationId: string;
+  displayName: string;
+  version: string;
+  enabled: boolean;
+}
+
+/** Active and available implementations for one platform component area. */
+export interface PlatformComponentAreaReport {
+  area: PlatformComponentArea;
+  purpose: string;
+  owner: PlatformComponentOwner;
+  cardinality: PlatformComponentCardinality;
+  readiness: PlatformComponentReadiness;
+  reason: PlatformComponentReason | null;
+  active: PlatformComponentActiveImplementation[];
+  available: PlatformComponentAvailableImplementation[];
+}
+
+/** Response of `GET /api/v1/platform/components`; every area is always present. */
+export interface PlatformComponentReport {
+  observedAt: string;
+  areas: PlatformComponentAreaReport[];
 }
