@@ -13,3 +13,6 @@ so A2 is still partial.
 Use the canonical pending-gate notification contract while keeping unrelated
 notices out of Needs input. Retain fixture-backed browser and matched component
 screenshot evidence; these checks do not claim live acceptance.
+
+Explain web behavior in plain reader-facing docs and inline code comments.
+This adds no behavior change.
