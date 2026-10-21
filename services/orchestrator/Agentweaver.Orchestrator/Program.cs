@@ -84,6 +84,18 @@ if (agentGovernancePolicyOptions is not null)
     builder.Services.AddSingleton(agentGovernancePolicyOptions);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(services => new IssueSyncStore(
+    services.GetRequiredService<NpgsqlDataSource>(), options.Schema));
+var issueSyncEnabled = IssueSyncServiceTransport.AddChannel(builder, IssueSyncAuthorityClient.Channel,
+    "Orchestrator:IssueSync:IdentityTls", "Orchestrator", "IdentityBroker", false);
+builder.Services.AddHttpClient(string.Empty)
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+if (issueSyncEnabled)
+{
+    builder.Services.AddScoped<IIssueSyncAuthority, IssueSyncAuthorityClient>();
+    builder.Services.AddScoped<IssueSyncEngine>();
+    builder.Services.AddHostedService<IssueSyncWorker>();
+}
 builder.Services.AddSingleton(services => new CoordinationOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
@@ -101,7 +113,22 @@ builder.Services.AddSingleton(services => new CoordinatorDecisionOwnerStore(
     options.Schema,
     services.GetRequiredService<CoordinatorRunSelectionContextStore>(),
     services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(services => new ChiefOfStaffStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
+builder.Services.AddSingleton(services => new ProjectRunReadStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
+builder.Services.AddSingleton(services => new ProjectIssueReadStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
+builder.Services.AddSingleton(services => new ProjectPullRequestReadStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
 builder.Services.AddSingleton(services => new BacklogOwnerStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
+builder.Services.AddSingleton(services => new UserNotificationStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema));
 builder.Services.AddSingleton(services => new SourceControlOwnerStore(
@@ -152,6 +179,8 @@ builder.Services.AddHttpClient<GitHubSourceControlAdapter>(client =>
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddTransient<ISourceControlAdapter>(services =>
     services.GetRequiredService<GitHubSourceControlAdapter>());
+builder.Services.AddTransient<ISourceControlIssueAdapter>(services =>
+    services.GetRequiredService<GitHubSourceControlAdapter>());
 if (sourceControlWorkspaceRoot is not null)
     builder.Services.AddSingleton(new GitWorkspaceManager(sourceControlWorkspaceRoot));
 builder.Services.AddTransient<IExecutableActionPolicyEvaluationJournal>(services =>
@@ -164,6 +193,8 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
     services.GetRequiredService<TimeProvider>(),
     services.GetService<IExecutableActionSourceReceiptWriter>(),
     services.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
+// Registers the ordered Guardrails checks. Prompt Shields is added only when its settings section exists.
+builder.Services.AddGuardrails(builder.Configuration, options.Schema);
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
 var remoteToolTlsSection = builder.Configuration.GetSection("Orchestrator:RemoteToolResults:Tls");
 if (remoteToolTlsSection.Exists())
@@ -219,6 +250,9 @@ builder.Services.AddOpenIddict().AddValidation(validation =>
     validation.UseAspNetCore();
 });
 builder.Services.AddAuthorization();
+var platformComponentAuthentication =
+    PlatformComponentServiceAuthenticationOptions.ReadOptional(builder.Configuration, audience);
+builder.Services.AddPlatformComponentServiceAuthentication(platformComponentAuthentication);
 builder.Services.ConfigureHttpJsonOptions(json =>
 {
     json.SerializerOptions.UnmappedMemberHandling =
@@ -251,7 +285,12 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapCoordinationEndpoints();
+app.MapProjectRunEndpoints();
+app.MapProjectSourceControlEndpoints();
+app.MapChiefOfStaffEndpoints();
 app.MapBacklogEndpoints();
+app.MapIssueSync();
+app.MapUserNotificationEndpoints();
 app.MapSuspendResumeEndpoints();
 app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
@@ -263,6 +302,23 @@ if (runtimeRegistrationEnabled)
 }
 if (runtimeUsageEnabled)
     app.MapRuntimeUsageSourceEndpoints();
+// Reports Policy, Guardrails, and Source Control from the frozen provider catalog.
+app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
+    PlatformComponentCatalogReporter.CreateOwnerReportAsync(
+        PlatformComponentOwners.Orchestrator,
+        async token =>
+        {
+            await CoordinationOwnerMigrator.VerifyAsync(dataSource, schema, token);
+            return true;
+        },
+        (readiness, observedAt) =>
+        [
+            PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.Policy, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.Guardrails, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.SourceControl, readiness, observedAt),
+        ],
+        services.GetRequiredService<TimeProvider>(),
+        ct));
 app.Run();
 
 // Reads a required non-blank configuration value or fails application startup.

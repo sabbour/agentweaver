@@ -73,6 +73,7 @@ sequenceDiagram
 
 | Route | Operation |
 | --- | --- |
+| `GET /api/projects/{projectId}/skill-marketplaces/definitions` | List the suggested marketplaces. Each entry includes `sourceId` when the project already has an active source at the same repository, ref, and subpath. |
 | `GET /api/projects/{projectId}/skill-marketplaces/sources` | List active sources. Pass `includeRemoved=true` to include retained removal tombstones. |
 | `POST /api/projects/{projectId}/skill-marketplaces/sources` | Add a source at revision 1. |
 | `PUT /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}` | Replace source settings with `expectedRevision`. |
@@ -122,6 +123,30 @@ without case among active sources in a project. Updates and removals use
 compare-and-swap revision checks; stale writes return `409`. Removal increments
 the revision and retains a tombstone instead of deleting the source row.
 
+## Suggested marketplaces
+
+The definitions route lists marketplaces that an administrator offers to every
+project. It requires `api.read` and current project read authority, rejects
+query parameters, and returns entries sorted by name. Each entry contains
+`name`, `repository`, `requestedRef`, `subpath`, `layoutNote`, and `sourceId`.
+A definition is a suggestion only. To use one, add it with the source create
+route; the usual authority, validation, and revision rules apply.
+
+Projects & Config reads definitions from the
+`ProjectsConfig:SkillMarketplaces:Definitions` configuration section. Each item
+accepts `Name`, `Repository`, `RequestedRef` (default `main`), `Subpath`,
+`LayoutNote`, and `Enabled` (default `true`). When the section is absent, the
+service offers the two defaults from Agentweaver 0.x:
+
+| Name | Repository | Subpath |
+| --- | --- | --- |
+| Azure Skills | `microsoft/skills` | `.github/plugins/azure-sdk-dotnet/skills` |
+| GitHub Awesome Copilot | `github/awesome-copilot` | `skills` |
+
+To offer no suggestions, configure the section with only disabled items. The
+service validates definitions at startup with the source rules and fails to
+start on an invalid definition or a duplicate name.
+
 ## Bounded browse
 
 Browse resolves the configured ref to a full Git commit SHA and reads the
@@ -170,8 +195,10 @@ revision. The Skills service owns accepted content receipts and runtime
 assignment. The source-selected preview/import adapter is implemented in this
 Projects owner candidate. It uses the existing content services and does not add
 a second loader or catalog. A moving branch/tag or later source removal must
-not replace already accepted bytes. Assignment still uses the existing Skills
-assignment service.
+not replace already accepted bytes. After you remove a source, browse, preview,
+and import return `404` with `marketplace_source_not_found`. Skills that you
+already imported keep their stored revisions, assignments, and runtime
+delivery. Assignment still uses the existing Skills assignment service.
 
 Preview requires current project read authority. Import also requires
 `projects.admin` and current project write authority. Both routes re-resolve the
@@ -193,13 +220,14 @@ Errors use Problem Details with a stable `code`:
 | `503` | Upstream service or content storage is unavailable. |
 | `504` | Request timed out. |
 
-The checked-in v1 Gateway catalog maps source list/create/update/tombstone,
+The checked-in v1 Gateway catalog maps suggested-marketplace definitions, source list/create/update/tombstone,
 pinned browse, selected-content preview/import, inline Skills preview/import,
-project assignment, and metadata-only inventory reads to these Projects owner
+local upload packaging, project assignment, revision revocation, and
+metadata-only inventory reads to these Projects owner
 paths. Its OpenAPI contract includes the owner DTOs, exact required source
 revision query values, optional inventory cursor/page-size parameters with their
-bounds, and 3 MiB request-body limits for both inline and selected-source
-preview/import. The first-party MCP catalog is built from that same OpenAPI
+bounds, and 3 MiB request-body limits for inline packaging and for both inline
+and selected-source preview/import. The first-party MCP catalog is built from that same OpenAPI
 document. The Gateway remains a forwarder; these contracts do not prove a joined
 or deployed owner implementation.
 
@@ -207,7 +235,8 @@ The retained Web project settings page uses the source management and pinned
 browse routes, then offers explicit selected-source preview and import. The
 source request contains no file bytes; the owner receipt must match the preview
 digest before the imported skill can be assigned to agents in the current
-project cast. Local file preview/import remains a separate path. The API has no
+project cast. Local files, ZIP archives, and new skills use the separate
+package, preview, and import path. The API has no
 actor-safe runtime-loaded status producer; the page reports that gap instead of
 inferring runtime use from an assignment or accepted run configuration. The
 source and Gateway routes are present in v1; deployment and live availability

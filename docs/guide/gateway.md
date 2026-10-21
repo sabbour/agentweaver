@@ -60,6 +60,7 @@ Set the following configuration before you start the host:
 | `Gateway:Owners:Knowledge` | HTTPS service root for Knowledge. |
 | `Gateway:Owners:Events` | HTTPS service root for Events. |
 | `Gateway:Owners:IdentityBrokerAddress` | HTTPS service root for the Identity Broker. |
+| `Gateway:Owners:Environment` | Optional HTTPS service root for Environment. Without it, Environment routes return 503 `owner_not_configured`. |
 | `Gateway:WebOrigin` | The Web application's exact HTTPS origin, for example `https://portal.<managed-domain>`. |
 | `Gateway:OwnerRequestTimeoutSeconds` | Finite timeout from 1 through 120 seconds. The default is 15 seconds. |
 
@@ -120,6 +121,10 @@ Use these routes to browse and select Skills:
   `expectedSourceRevision`; selected-content preview and import reject query
   parameters.
 - Inline Skill preview and import request bodies are limited to 3 MiB.
+  The Gateway buffers every explicitly bounded route before contacting its
+  owner, including these skill-content routes and requests without
+  `Content-Length`. Oversized requests return `413` with
+  `request_body_too_large` and are not forwarded.
   Marketplace-selected preview and import use the same request-body limit.
 
 The owner remains authoritative for permission checks, revision validation,
@@ -127,18 +132,149 @@ content validation, and persistence. A returned Skill assignment or inventory
 record does not prove that a runtime loaded the Skill. The current public API
 does not provide actor-safe runtime-loaded status.
 
-## Send Knowledge writes
+## List project runs
 
-The following Knowledge operations require exactly one `Idempotency-Key`
-header: `createKnowledgeRecord`, `updateKnowledgeRecord`,
-`restoreKnowledgeRecord`, `approveKnowledgeDecision`,
-`importKnowledgeRecords`, `promoteKnowledgeProposal`, and
-`rejectKnowledgeProposal`. Use a value of 1–128 ASCII letters or digits, or
-`.`, `_`, `-`, or `:`. Reuse the same key when retrying the same write.
+Use `GET /api/v1/projects/{projectId}/runs` to list a project's runs without
+knowing a run ID. The Gateway forwards the request to the Orchestrator owner
+and returns its status and body with `Cache-Control: no-store`.
+
+- `pageSize` defaults to 25 and accepts 1 through 100.
+- `state` filters by a comma-separated list of derived states, or by the
+  `open` (`idle`, `active`, `blocked`) and `terminal` aliases.
+- `cursor` continues from the previous page's `nextCursor`. Send the same
+  `state` and `pageSize` values with it.
+- Items are ordered by creation time, newest first. Pages are not a snapshot;
+  a run created after the first page is not repeated.
+
+The owner checks the caller's current project or tenant read permission with
+Projects & Config. A run-bound token sees only its own run. The list reads
+persisted run records only. `title` and `goal` are `null` until a run start
+request stores them.
+
+## List project issues and pull requests
+
+Use `GET /api/v1/projects/{projectId}/source-control/issues` and
+`GET /api/v1/projects/{projectId}/source-control/pull-requests` to fill issue
+and pull request pickers. The Gateway forwards each request to the Orchestrator
+owner and returns its status and body with `Cache-Control: no-store`. Both
+lists read stored Agentweaver data. They don't call the source control provider.
+
+- `pageSize` defaults to 25 and accepts 1 through 100.
+- `cursor` continues from the previous page's `nextCursor`. Send the same
+  `state` and `pageSize` values with it.
+- `state` defaults to `open`. Issues also accept `closed` and `all`. Pull
+  requests also accept `closed`, `merged`, and `all`.
+
+The issue list returns issues that periodic issue sync linked to backlog tasks.
+It needs project or tenant read permission and rejects run-bound tokens. Items
+don't include an issue URL or author, because the backlog doesn't store them.
+
+The pull request list returns pull requests that the project's runs created or
+reused. It needs the same permission as the run list. It isn't a complete
+history: recording starts when Orchestrator migration 032 is applied, and the
+response reports that time in `coverage.recordedSince`. Before migration 032 is
+applied, the list returns `503 pull_request_records_unavailable` instead of an
+empty list.
+
+The web picker doesn't use these lists yet.
+
+## Read project metrics and usage
+
+Send `GET /api/v1/projects/{projectId}/metrics` for run counts and a daily
+series. Send `GET /api/v1/projects/{projectId}/usage` for usage grouped by
+model and agent. The Gateway forwards these requests to Orchestrator and
+Events & Sessions, respectively. It does not aggregate the responses.
+
+Use the same explicit `from` and `to` values for aligned intervals. Bounds
+are inclusive and exclusive, respectively, and use UTC. ISO dates and
+timestamps with explicit offsets are accepted. If omitted, `to` is now and
+`from` is 30 days earlier. The maximum interval is 92 days. Metrics supports
+only `bucket=day`; usage does not accept a bucket. Unknown or repeated query
+keys return `400`.
+
+Both routes require `api.read`, the owning service and Projects audiences,
+and current project or tenant read permission. Run-bound callers see only
+their own run. Responses use `Cache-Control: no-store`. Reads do not change
+stored data.
+
+Read the [metrics definitions](../reference/api.md#project-metrics-and-usage)
+before comparing v1 with the 0.x dashboard. Run success uses completed runs,
+not agent dependencies. Usage retains unknown values and separate cost units.
+These routes do not price usage or change budgets. Cross-project overview
+is out of scope.
+
+## Review project casting
+
+Casting routes use the Projects & Config owner. The Gateway forwards the
+validated bearer and optional `X-Agentweaver-Tenant` selector without granting
+authority. Proposal reads require current `ReadProjects`; mutations and export
+require current `WriteProjects`, including `api.read` and `projects.admin`.
+Catalog reads require an authenticated bearer.
+
+1. Read `GET /api/v1/casting/templates` or `GET /api/v1/catalog/roles`.
+2. Read the current project configuration revision.
+3. Send `POST /api/v1/projects/{projectId}/casting/proposals/scenario` with
+   `expectedConfigurationRevision` and `templateId`. For manual selection, use
+   `/proposals/manual` with `roleIds`. To supply a complete draft, use
+   `/proposals` with `draft`.
+4. Review the returned pending proposal. List proposals with `GET /proposals`
+   and optional `limit` (1 through 100, default 50). Read or patch one at
+   `/proposals/{proposalId}`; patch requires `expectedDraftRevision` and `draft`.
+5. Send `POST /proposals/{proposalId}/confirm` or `/reject` with
+   `expectedDraftRevision`. Confirmation appends a configuration revision;
+   rejection leaves configuration unchanged.
+
+The proposal paths in steps 4 and 5 are relative to
+`/api/v1/projects/{projectId}/casting`. A stale draft or base configuration
+revision returns `409`. Read the latest state and review it again; do not
+automatically confirm a replacement draft. Casting uses revision checks in
+request bodies, not an `Idempotency-Key` header.
+The owner returns `403` when the caller lacks current `WriteProjects`
+authority for a casting write, including confirm, reject, and import.
+
+To transfer a team, read `/casting/export` under the project path, optionally
+with a positive `revision`. Send the returned transfer to `/casting/import`
+with the target `expectedConfigurationRevision`. Import checks the format and
+digest and stages a proposal for review. It does not apply the team. Both the
+Gateway and owner limit import request bodies to 1 MiB. The Gateway checks
+the complete body before forwarding, including requests without
+`Content-Length`. Larger bodies return `413` without contacting the owner.
+Transfer version or
+team incompatibility returns `422`. These source routes do not establish
+deployment or a browser wizard.
+
+## List Remote MCP connections
+
+`GET /api/v1/projects/{projectId}/remote-mcp/connections` lists the project's
+Remote MCP connections. The Gateway forwards the request to the Environment
+`/api/projects/{projectId}/remote-mcp/directory` route with the bearer token
+and tenant selector. It accepts `pageSize` (1 through 100, default 50) and
+`after`, the last connection ID of the previous page. Each entry includes the
+configuration revision, the configuration SHA-256, the state, the Identity
+binding flag, and the current discovery revision and catalog SHA-256. Entries
+never include credentials, tokens, or tool schemas. Environment requires
+current `ReadProjects` authority. For the full contract, see
+[Remote MCP connections](../architecture/remote-mcp-connections.md).
+
+## Send idempotent writes
+
+The following operations require exactly one `Idempotency-Key` header:
+
+- Runs: `createProjectRun` and `cancelProjectRun`.
+- Chief of Staff: `createChiefOfStaffPriority`.
+- Knowledge: `createKnowledgeRecord`, `updateKnowledgeRecord`,
+  `restoreKnowledgeRecord`, `approveKnowledgeDecision`,
+  `importKnowledgeRecords`, `promoteKnowledgeProposal`, and
+  `rejectKnowledgeProposal`.
+
+Use a value of 1–128 ASCII letters or digits, or `.`, `_`, `-`, or `:`. Reuse
+the same key when you retry the same write. Browser preflight allows the
+header only for these operations.
 
 The key provides idempotency only. It does not establish identity or authorize
-an operation. Knowledge rejects missing, duplicate, blank, and invalid keys.
+an operation. The owner rejects missing, duplicate, blank, and invalid keys.
 Reads, including `exportKnowledgeRecords`, do not require this header.
+`startProjectRun` does not take a key, because the owner replays start by run.
 
 ## Use the Identity Broker browser routes
 
@@ -254,10 +390,13 @@ Gateway request bodies are limited to 64 KiB by default. The Knowledge import
 endpoint accepts up to 1 MiB. Inline Skill preview and import each accept up to
 3 MiB. The MCP JSON-RPC envelope adds a separate 64 KiB allowance.
 
-The Gateway does not expose journal object-content reads or run-produced-file
-browsing in v1. The durable run-bound artifact manifest and object-version
-producer has not been admitted, so neither the Gateway nor the retained Web
-client claims host-file access or parity with older monolithic file routes.
+The Gateway does not expose journal object-content reads in v1. It exposes
+run-produced files only through the Source Control output-capture routes:
+capture, list, read, diff, and file. Each capture is a pinned, immutable copy
+of a run's workspace output, so neither the Gateway nor the retained Web client
+reads a host filesystem. The three read routes accept owner responses up to
+64 MiB, and the file route exposes the `X-Source-Control-Output-Sha256` header
+to browser callers.
 
 ## Build and test the host
 

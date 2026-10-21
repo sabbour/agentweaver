@@ -46,7 +46,8 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
         Func<HttpMessageHandler> projectsHandlerFactory,
         Func<GatewayOwner, HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> ownerHandler,
         Action<HttpRequestMessage>? observeProjectsRequest = null,
-        TimeSpan? ownerRequestTimeout = null)
+        TimeSpan? ownerRequestTimeout = null,
+        Uri? environmentOwner = null)
     {
         var issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer);
         var audience = "https://api.test";
@@ -59,7 +60,8 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
             new Uri("https://events.test/"),
             new Uri("https://identity-broker.test/"),
             new Uri("https://web.test/"),
-            ownerRequestTimeout ?? TimeSpan.FromSeconds(10));
+            ownerRequestTimeout ?? TimeSpan.FromSeconds(10),
+            environmentOwner);
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();

@@ -75,12 +75,36 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
             @params = new { },
         });
         var tools = list.GetProperty("result").GetProperty("tools");
+        foreach (var operation in new[] { "readIssueSync", "configureIssueSync", "createIssueSyncGrant",
+            "readIssueSyncGrant", "revokeIssueSyncGrant", "listProjectIssues", "listProjectPullRequests" })
+        {
+            var tool = Assert.Single(tools.EnumerateArray(),
+                tool => tool.GetProperty("name").GetString() == "agentweaver_" + operation);
+            Assert.Contains(tool.GetProperty("inputSchema").GetProperty("required").EnumerateArray(),
+                field => field.GetString() == "projectId");
+        }
         var knowledgeTool = Assert.Single(
             tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_createKnowledgeRecord");
         Assert.DoesNotContain(
             tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_streamRunEvents");
+        // Project reporting tools inherit owner query schemas without requiring a run ID.
+        foreach (var operation in new[] { "readProjectMetrics", "readProjectUsage" })
+        {
+            var reporting = Assert.Single(tools.EnumerateArray(),
+                tool => tool.GetProperty("name").GetString() == "agentweaver_" + operation);
+            var schema = reporting.GetProperty("inputSchema");
+            Assert.Contains("projectId", schema.GetProperty("required").EnumerateArray()
+                .Select(value => value.GetString()));
+            Assert.False(schema.GetProperty("properties").TryGetProperty("runId", out _));
+            foreach (var name in new[] { "from", "to" })
+                Assert.True(schema.GetProperty("properties").GetProperty(name).TryGetProperty("pattern", out _));
+            if (operation == "readProjectMetrics")
+                Assert.Equal("day", schema.GetProperty("properties").GetProperty("bucket").GetProperty("enum")[0].GetString());
+            else
+                Assert.False(schema.GetProperty("properties").TryGetProperty("bucket", out _));
+        }
         var runtimeObservationTool = Assert.Single(
             tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_readRuntimeObservationV1");

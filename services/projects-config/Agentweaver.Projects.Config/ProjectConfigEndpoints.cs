@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Projects.Config;
 
@@ -535,6 +536,7 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        // Match the public Gateway bound before binding a transfer payload.
         projects.MapPost("/{projectId}/casting/import", async (
             string projectId,
             ImportProjectCastingTransferRequest request,
@@ -554,6 +556,29 @@ public static class ProjectConfigEndpoints
                 return Results.Created(
                     $"/api/projects/{projectId}/casting/proposals/{proposal.ProposalId}",
                     proposal);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
+
+        // This owner-only helper applies the existing Orchestrator role gate without exposing platform defaults.
+        projects.MapPut("/{projectId}/runs/{runId}/interactive-selection", async (
+            string projectId,
+            string runId,
+            InteractiveRunSelectionRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                return Results.Ok(await service.AcceptInteractiveRunSelectionAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId, runId, request, cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
             {
@@ -584,7 +609,35 @@ public static class ProjectConfigEndpoints
             }
         });
 
-        projects.MapGet("/{projectId}/runs/{runId}/selection", async (
+        // Cancellation reads use fresh project-access roles without granting Orchestrator admission.
+        foreach (var forCancellation in new[] { false, true })
+            projects.MapGet(forCancellation
+                ? "/{projectId}/runs/{runId}/cancellation-selection"
+                : "/{projectId}/runs/{runId}/selection", async (
+                string projectId,
+                string runId,
+                HttpContext context,
+                ProjectsConfigService service,
+                ProjectAuthorizationOwner authorizationOwner,
+                CancellationToken cancellationToken) =>
+            {
+                try
+                {
+                    context.Response.Headers.CacheControl = "no-store";
+                    var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Ok(await service.GetRunSelectionAsync(
+                        caller, projectId, runId, cancellationToken, forCancellation).ConfigureAwait(false));
+                }
+                catch (ProjectConfigException exception)
+                {
+                    return ToProblem(exception);
+                }
+            });
+
+        // Returns the current project-scope spend budgets for one accepted run. Orchestrator calls this before
+        // each new dispatch.
+        projects.MapGet("/{projectId}/runs/{runId}/spend-budgets", async (
             string projectId,
             string runId,
             HttpContext context,
@@ -594,12 +647,14 @@ public static class ProjectConfigEndpoints
         {
             try
             {
+                // Budgets can change at any time, so no cache may keep an older answer.
                 context.Response.Headers.CacheControl = "no-store";
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
-                return Results.Ok(await service.GetRunSelectionAsync(
+                return Results.Ok(await service.GetCurrentProjectSpendBudgetsAsync(
                     caller, projectId, runId, cancellationToken).ConfigureAwait(false));
             }
+            // Map known configuration errors, such as 403, 404, and 409, to problem responses.
             catch (ProjectConfigException exception)
             {
                 return ToProblem(exception);
@@ -644,6 +699,28 @@ public static class ProjectConfigEndpoints
                 return ToProblem(exception);
             }
         });
+
+        // Reports active platform components for TenantAdmin or PlatformAdmin callers.
+        app.MapGet("/api/platform/components", async (
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            [Microsoft.AspNetCore.Mvc.FromServices] PlatformComponentCollector collector,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await service.EnsurePlatformComponentReaderAsync(caller, cancellationToken).ConfigureAwait(false);
+                return Results.Ok(await collector.CollectAsync(cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).RequireAuthorization();
 
         if (enableBrokerRunBinding)
         {

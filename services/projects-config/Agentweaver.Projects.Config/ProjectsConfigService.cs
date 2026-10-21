@@ -504,7 +504,25 @@ public sealed partial class ProjectsConfigService
         string projectId,
         string runId,
         AcceptRunSelectionRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        await AcceptRunSelectionCoreAsync(caller, projectId, runId, request, false, cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary>Accepts an interactive selection using owner-held platform revisions and configured provider choices.</summary>
+    public Task<EffectiveRunSelection> AcceptInteractiveRunSelectionAsync(
+        ProjectAuthorizationContext caller, string projectId, string runId,
+        InteractiveRunSelectionRequest request, CancellationToken cancellationToken) =>
+        AcceptRunSelectionCoreAsync(caller, projectId, runId, new AcceptRunSelectionRequest
+        {
+            ExpectedProjectConfigRevision = request.ExpectedProjectConfigRevision,
+            ExpectedPlatformRuntimeRevision = 0,
+            Context = new RunSelectionContext { Revision = "interactive-v1" }
+        }, true, cancellationToken);
+
+    /// <summary>Shares the same authority locks, replay checks and selection transaction for both admission contracts.</summary>
+    private async Task<EffectiveRunSelection> AcceptRunSelectionCoreAsync(
+        ProjectAuthorizationContext caller, string projectId, string runId,
+        AcceptRunSelectionRequest request, bool interactive, CancellationToken cancellationToken)
     {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
@@ -559,12 +577,14 @@ public sealed partial class ProjectsConfigService
                 "platform_runtime_unconfigured",
                 "Platform runtime defaults must be configured before accepting a run.",
                 StatusCodes.Status409Conflict);
-        if (platformHead.CurrentRevision != request.ExpectedPlatformRuntimeRevision)
+        if (!interactive && platformHead.CurrentRevision != request.ExpectedPlatformRuntimeRevision)
             throw ProjectConfigException.Conflict("The platform runtime revision has changed.");
         var platformVersion = await db.PlatformRuntimeRevisions.AsNoTracking()
             .SingleAsync(item => item.Revision == platformHead.CurrentRevision, cancellationToken)
             .ConfigureAwait(false);
         var defaults = Deserialize<PlatformRuntimeDefaults>(platformVersion.ConfigurationJson);
+        if (interactive)
+            request = request with { Context = CreateInteractiveRunContext(projectConfiguration, defaults) };
 
         var modelSelections = ResolveModelSelections(projectConfiguration, defaults, request.Context);
         var providers = ResolveProviders(projectConfiguration, request.Context);
@@ -676,12 +696,21 @@ public sealed partial class ProjectsConfigService
         ProjectAuthorizationContext caller,
         string projectId,
         string runId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forCancellation = false)
     {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
         caller.RequireResourceBinding(projectId, runId);
-        if (!await HasCurrentRoleAsync(
+        // Only the cancellation owner route permits project-access roles without run binding.
+        var canCancel = forCancellation && caller.BoundRunId is null &&
+            (await HasCurrentRoleAsync(caller, ProjectAuthorityResourceType.Tenant, caller.TenantId,
+                ProjectAuthorityRole.TenantAdmin, cancellationToken).ConfigureAwait(false) ||
+             await HasCurrentRoleAsync(caller, ProjectAuthorityResourceType.Project, projectId,
+                ProjectAuthorityRole.Owner, cancellationToken).ConfigureAwait(false) ||
+             await HasCurrentRoleAsync(caller, ProjectAuthorityResourceType.Project, projectId,
+                ProjectAuthorityRole.Contributor, cancellationToken).ConfigureAwait(false));
+        if (forCancellation ? !canCancel : !await HasCurrentRoleAsync(
             caller,
             ProjectAuthorityResourceType.Project,
             projectId,
@@ -694,6 +723,68 @@ public sealed partial class ProjectsConfigService
             .ConfigureAwait(false)
             ?? throw ProjectConfigException.NotFound();
         return DeserializeRunSelection(selection.SnapshotJson);
+    }
+
+    /// <summary>
+    /// Returns the project-scope spend budgets from the current project and platform configuration, not from the
+    /// run's stored snapshot. Orchestrator calls this for each new dispatch, so a stricter project budget applies
+    /// to the next dispatch of every run that is already accepted.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The caller, project, run selection, or current configuration is not valid.</exception>
+    public async Task<CurrentProjectSpendBudgets> GetCurrentProjectSpendBudgetsAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        // Only Orchestrator can read budgets, and only for the project and run that its token is bound to.
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
+        caller.RequireResourceBinding(projectId, runId);
+        // Check the current role assignment as well as the token, so a revoked role takes effect at once.
+        if (!await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Project,
+            projectId,
+            ProjectAuthorityRole.Orchestrator,
+            cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+        var project = await FindTenantProjectAsync(caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        // The run must have been accepted for this project. An unknown run returns 404.
+        if (!await db.RunSelections.AsNoTracking()
+            .AnyAsync(item => item.ProjectId == project.ProjectId && item.RunId == runId, cancellationToken)
+            .ConfigureAwait(false))
+            throw ProjectConfigException.NotFound();
+
+        // Load and validate the project's current configuration revision.
+        var projectVersion = await db.ProjectConfigurationRevisions.AsNoTracking()
+            .SingleAsync(item => item.ProjectId == project.ProjectId &&
+                item.Revision == project.ConfigurationRevision, cancellationToken)
+            .ConfigureAwait(false);
+        var projectConfiguration = ProjectConfigurationValidator.Validate(
+            Deserialize<ProjectConfiguration>(projectVersion.ConfigurationJson));
+        // Platform defaults are the ceiling for project budgets. Without them, budgets can't be resolved,
+        // so return 409 instead of an empty list that would look like "no budgets".
+        var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
+        if (platformHead.CurrentRevision == 0)
+            throw new ProjectConfigException(
+                "platform_runtime_unconfigured",
+                "Platform runtime defaults must be configured before reading spend budgets.",
+                StatusCodes.Status409Conflict);
+        var platformVersion = await db.PlatformRuntimeRevisions.AsNoTracking()
+            .SingleAsync(item => item.Revision == platformHead.CurrentRevision, cancellationToken)
+            .ConfigureAwait(false);
+        var defaults = Deserialize<PlatformRuntimeDefaults>(platformVersion.ConfigurationJson);
+        // Merge the two layers with the same rules used at configuration time, so the project can't widen
+        // a platform budget here either.
+        var limits = ProjectConfigurationValidator.ResolveLimits(defaults, projectConfiguration.RunLimits);
+        // Return only project-scope budgets. Run and agent budgets come from the run's stored snapshot.
+        // Both revisions are included so the caller can tell which configuration produced the result.
+        return new CurrentProjectSpendBudgets(
+            project.ProjectId,
+            project.ConfigurationRevision,
+            platformHead.CurrentRevision,
+            [.. (limits.SpendBudgets ?? []).Where(budget => budget.Scope == SpendBudgetScopes.Project)]);
     }
 
     /// <summary>
@@ -1424,6 +1515,34 @@ public sealed partial class ProjectsConfigService
             ProjectAuthorityRole.PlatformAdmin,
             cancellationToken).ConfigureAwait(false))
             throw ProjectConfigException.Forbidden();
+    }
+
+    /// <summary>
+    /// Requires API read scope, an unbound request, and a current TenantAdmin assignment for the
+    /// caller's tenant or a current PlatformAdmin assignment before the platform components report.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The caller lacks a current qualifying assignment.</exception>
+    public async Task EnsurePlatformComponentReaderAsync(
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireUnboundRequest();
+        if (await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Tenant,
+                caller.TenantId,
+                ProjectAuthorityRole.TenantAdmin,
+                cancellationToken).ConfigureAwait(false) ||
+            await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Platform,
+                ProjectAuthorizationOwner.PlatformResourceId,
+                ProjectAuthorityRole.PlatformAdmin,
+                cancellationToken).ConfigureAwait(false))
+            return;
+        throw ProjectConfigException.Forbidden();
     }
 
     /// <summary>Rejects stale or revoked membership revisions before project operations.</summary>
