@@ -1,4 +1,4 @@
-// Ported without behavior changes from 0.x packages/Agentweaver.Squad/BlueprintPackages (origin/dev).
+// Ported without behavior changes from the 0.x Agentweaver.Squad blueprint package code.
 // The AgentSuite blueprint converter uses it so 0.x packages are checked by the exact 0.x rules.
 using System.Collections.Immutable;
 using System.Security.Cryptography;
@@ -17,6 +17,8 @@ public sealed class BlueprintPackageSource
         IEnumerable<KeyValuePair<string, byte[]>> payloads,
         string? containerSha256 = null)
     {
+        // Copy the inputs so later changes by the caller can't change what was validated.
+        // Payload paths compare ordinally, so they are case-sensitive.
         _rawManifest = ImmutableArray.CreateRange(rawManifest.ToArray());
         _payloads = payloads.ToImmutableDictionary(
             pair => pair.Key,
@@ -57,6 +59,7 @@ public sealed record BlueprintPackageDefinition(
     long Size,
     string Sha256);
 
+// The four kinds of definition a package can hold. Each kind has its own canonical folder.
 public enum BlueprintPackageDefinitionKind
 {
     Blueprint,
@@ -99,6 +102,7 @@ public sealed class BlueprintPackageValidationResult
     public bool IsValid => Package is not null && Errors.Length == 0;
 
     internal static BlueprintPackageValidationResult Success(BlueprintPackage package) => new(package, []);
+    // Cap the error list so a hostile package can't produce unbounded diagnostics.
     internal static BlueprintPackageValidationResult Failure(IEnumerable<string> errors) =>
         new(null, errors.Take(BlueprintPackageLimits.MaximumErrors).ToImmutableArray());
 }
@@ -106,6 +110,7 @@ public sealed class BlueprintPackageValidationResult
 /// <summary>Hard limits shared by the parser, validation rules, and JSON schema.</summary>
 public static class BlueprintPackageLimits
 {
+    // These limits bound memory and CPU use when reading untrusted packages.
     public const int MaximumManifestBytes = 1_048_576;
     public const int MaximumDefinitions = 256;
     public const int MaximumPayloadBytes = 1_048_576;

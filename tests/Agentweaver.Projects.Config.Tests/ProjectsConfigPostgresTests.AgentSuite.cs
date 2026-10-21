@@ -148,6 +148,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var owner = await SeedCallerAsync(
             db, authorityStore, "agentsuite-team-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        // The blueprint below uses the restricted sandbox, which needs platform runtime defaults to exist.
         await ConfigurePlatformDefaultsAsync(db, authorityStore, service, suffix, tenantId);
         var project = await service.CreateProjectAsync(owner, "Team target", CancellationToken.None);
         var revision = project.ConfigurationRevision;
@@ -173,7 +174,8 @@ public sealed partial class ProjectsConfigPostgresTests
             Blueprint = new ProjectAgentSuiteBlueprint { SkillBindings = [new("planner", ["docs"])] },
         });
         Assert.Equal("invalid_agentsuite_blueprint", badBlueprint.Code);
-        // The projection must also pass the 0.x blueprint rules; only the default workflow exists until #1914.
+        // The projection must also pass the 0.x blueprint rules; only the default workflow is registered today,
+        // so naming another workflow is rejected.
         var unavailableWorkflow = await InvalidAsync(AgentSuiteRequest(revision, "team") with
         {
             Blueprint = new ProjectAgentSuiteBlueprint { Workflows = ["default", "feature-development"] },
@@ -242,6 +244,7 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal([new BlueprintWorkflowReference("web-team", "default")], proposal.Draft.BlueprintWorkflowReferences.ToArray());
         Assert.Equal("default", proposal.Draft.DefaultWorkflowId);
         Assert.True(proposal.Draft.EgressNarrowing is { IsEmpty: true });
+        // The "writer" role's "docs" skill isn't installed in this project, so the binding is reported, not applied.
         Assert.Equal(
             [new BlueprintUnresolvedSkillBinding("writer", "docs", BlueprintUnresolvedSkillBinding.SkillNotInstalled)],
             imported.UnresolvedSkillBindings.ToArray());
@@ -269,6 +272,7 @@ public sealed partial class ProjectsConfigPostgresTests
 
         var replay = await service.ImportAgentSuiteAsync(owner, project.ProjectId, request, store, CancellationToken.None);
         Assert.Equal(proposal.ProposalId, replay.Proposal?.ProposalId);
+        // A replayed import returns the same unresolved bindings as the first import.
         Assert.Equal(imported.UnresolvedSkillBindings.ToArray(), replay.UnresolvedSkillBindings.ToArray());
         var rebound = await InvalidAsync(AgentSuiteRequest(revision, "team"));
         Assert.Equal("agentsuite_import_conflict", rebound.Code);
@@ -284,6 +288,7 @@ public sealed partial class ProjectsConfigPostgresTests
     [Fact]
     public async Task AgentSuiteImportOfConvertedBuiltInsMatchesInlineBlueprintApply()
     {
+        // Arrange: a tenant admin, and platform defaults so built-ins with the restricted sandbox can apply.
         await using var db = CreateDbContext();
         var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
         var service = CreateCastingProposalService(db);
@@ -297,10 +302,12 @@ public sealed partial class ProjectsConfigPostgresTests
 
         foreach (var builtIn in ProjectBlueprintCatalog.Blueprints)
         {
+            // Each built-in gets a fresh project so earlier imports can't affect it.
             var project = await service.CreateProjectAsync(owner, builtIn.Name, CancellationToken.None);
             var current = await service.GetProjectConfigurationAsync(owner, project.ProjectId, null, CancellationToken.None);
-            // Only the default workflow is available until #1914, so both paths use it.
+            // Only the default workflow is registered today, so both paths use it.
             var blueprint = builtIn with { Workflows = ["default"] };
+            // Convert the built-in to an archive and send it with its projection, as a client would.
             var package = AgentSuiteBlueprintConverter.Convert(blueprint, AgentSuiteBlueprintConverterTests.TestOnlyInputs);
             var request = new ImportProjectAgentSuiteRequest
             {
@@ -310,14 +317,18 @@ public sealed partial class ProjectsConfigPostgresTests
                 Blueprint = package.Blueprint,
             };
 
+            // Act: import the archive through the service, and build the inline 0.x draft from the same starting
+            // configuration for comparison.
             var imported = await service.ImportAgentSuiteAsync(
                 owner, project.ProjectId, request, store, CancellationToken.None);
             var inline = ProjectBlueprintCatalog.CreateDraft(current.Configuration, null, blueprint);
 
+            // Import creates a proposal. Map its effective agent IDs back to native IDs so the drafts compare directly.
             var proposal = Assert.IsType<ProjectCastingProposal>(imported.Proposal);
             var native = imported.Import.Agents.ToDictionary(
                 agent => agent.EffectiveAgentId, agent => agent.NativeId, StringComparer.Ordinal);
             string Native(string agentId) => native.GetValueOrDefault(agentId, agentId);
+            // Assert: charters, casting, workflows, egress and unresolved bindings match the inline apply.
             Assert.Equal(
                 inline.Draft.AgentCharters.Select(item => (item.AgentId, item.Name, item.Role, item.Charter)),
                 proposal.Draft.AgentCharters.Select(item => (Native(item.AgentId), item.Name, item.Role, item.Charter)));
@@ -330,6 +341,8 @@ public sealed partial class ProjectsConfigPostgresTests
             Assert.Equal(inline.Draft.EgressNarrowing?.ToArray(), proposal.Draft.EgressNarrowing?.ToArray());
             Assert.Equal(inline.UnresolvedSkillBindings.ToArray(), imported.UnresolvedSkillBindings.ToArray());
 
+            // Confirm the proposal, then import the same archive again at the new revision. Nothing changes, so
+            // no new proposal is created, but the unresolved bindings are still reported.
             var confirmed = await service.ConfirmCastingProposalAsync(
                 owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
             var repeat = await service.ImportAgentSuiteAsync(
@@ -383,10 +396,12 @@ public sealed partial class ProjectsConfigPostgresTests
         ProjectsConfigDbContext db, ProjectsConfigPrivilegedAuthorityStore authorityStore, ProjectsConfigService service,
         string suffix, string tenantId)
     {
+        // Changing platform defaults needs a platform admin, so seed one for this test run.
         var admin = await SeedCallerAsync(
             db, authorityStore, "agentsuite-platform-admin-" + suffix, tenantId, ["api.read", "projects.admin"],
             ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
             ProjectAuthorityRole.PlatformAdmin);
+        // Platform defaults are shared by all tests, so only write them if no test has done so yet (revision 0).
         var head = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
         if (head.Revision == 0)
             await service.UpdatePlatformRuntimeDefaultsAsync(admin, head.Revision, PlatformDefaults(), CancellationToken.None);

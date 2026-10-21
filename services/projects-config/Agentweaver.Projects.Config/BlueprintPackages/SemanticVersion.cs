@@ -1,4 +1,4 @@
-// Ported without behavior changes from 0.x packages/Agentweaver.Squad/BlueprintPackages (origin/dev).
+// Ported without behavior changes from the 0.x Agentweaver.Squad blueprint package code.
 // The AgentSuite blueprint converter uses it so 0.x packages are checked by the exact 0.x rules.
 using System.Collections.Immutable;
 using System.Numerics;
@@ -12,6 +12,7 @@ namespace Agentweaver.Projects.Config.BlueprintPackages;
 /// </summary>
 public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<SemanticVersion>
 {
+    // SemVer 2.0.0 grammar. Core numbers have no leading zeros and no size limit.
     private static readonly Regex Pattern = new(
         @"\A(?<major>0|[1-9][0-9]*)\.(?<minor>0|[1-9][0-9]*)\.(?<patch>0|[1-9][0-9]*)(?:-(?<pre>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+(?<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?\z",
         RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
@@ -28,6 +29,7 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
         Build = build;
     }
 
+    // Version numbers are kept as decimal strings so arbitrarily large numbers stay exact.
     public string Major { get; }
     public string Minor { get; }
     public string Patch { get; }
@@ -37,12 +39,14 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
     public static bool TryParse(string? value, out SemanticVersion? version)
     {
         version = null;
+        // Bound the length first so a huge input can't make the regex expensive.
         if (value is null || value.Length > BlueprintPackageLimits.MaximumVersionLength) return false;
         Match match;
         try
         {
             match = Pattern.Match(value);
         }
+        // A regex timeout means the input is too complex; treat it as invalid.
         catch (RegexMatchTimeoutException)
         {
             return false;
@@ -58,6 +62,7 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
             identifier.Length > 1 && identifier[0] == '0' && identifier.All(char.IsAsciiDigit)))
             return false;
 
+        // Build metadata is kept for display but ignored when comparing.
         version = new SemanticVersion(
             match.Groups["major"].Value,
             match.Groups["minor"].Value,
@@ -73,6 +78,7 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
     public int CompareTo(SemanticVersion? other)
     {
         if (other is null) return 1;
+        // Compare major, minor, then patch by numeric value.
         var result = CompareDecimal(Major, other.Major);
         if (result != 0) return result;
         result = CompareDecimal(Minor, other.Minor);
@@ -80,14 +86,17 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
         result = CompareDecimal(Patch, other.Patch);
         if (result != 0) return result;
 
+        // A version without a prerelease ranks higher than the same version with one.
         if (_preRelease.Length == 0 || other._preRelease.Length == 0)
             return _preRelease.Length == other._preRelease.Length ? 0 : _preRelease.Length == 0 ? 1 : -1;
 
+        // Compare prerelease identifiers left to right; the first difference decides.
         for (var index = 0; index < Math.Min(_preRelease.Length, other._preRelease.Length); index++)
         {
             result = ComparePrerelease(_preRelease[index], other._preRelease[index]);
             if (result != 0) return result;
         }
+        // If all shared identifiers are equal, the longer prerelease list ranks higher.
         return _preRelease.Length.CompareTo(other._preRelease.Length);
     }
 
@@ -95,6 +104,7 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
     public override bool Equals(object? obj) => obj is SemanticVersion version && Equals(version);
     public override int GetHashCode()
     {
+        // Build metadata is left out, matching Equals, which ignores it.
         var hash = new HashCode();
         hash.Add(Major, StringComparer.Ordinal);
         hash.Add(Minor, StringComparer.Ordinal);
@@ -110,11 +120,13 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
     {
         var leftNumeric = left.All(char.IsAsciiDigit);
         var rightNumeric = right.All(char.IsAsciiDigit);
+        // Numeric identifiers compare by value and rank below alphanumeric ones; others compare as ASCII text.
         if (leftNumeric && rightNumeric) return CompareDecimal(left, right);
         if (leftNumeric != rightNumeric) return leftNumeric ? -1 : 1;
         return string.CompareOrdinal(left, right);
     }
 
+    // Inputs are digit strings without leading zeros, so more digits means a larger number.
     private static int CompareDecimal(string left, string right) =>
         left.Length != right.Length ? left.Length.CompareTo(right.Length) : string.CompareOrdinal(left, right);
 }

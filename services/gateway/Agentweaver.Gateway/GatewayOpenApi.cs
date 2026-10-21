@@ -929,6 +929,7 @@ else if (route.OperationId is
             ("expectedConfigurationRevision", Int()), ("format", Enum("oci-layout-tar", "content-tar-gzip")),
             ("archive", Str()), ("toolConnections", Arr(Ref("ProjectAgentSuiteToolConnection"))),
             ("blueprint", NullableRef("ProjectAgentSuiteBlueprint"))),
+        // A blueprint skill binding the import couldn't apply, with its stable reason code.
         ["BlueprintUnresolvedSkillBinding"] = Obj(["role", "skillId", "code"],
             ("role", Str()), ("skillId", Str()),
             ("code", Enum("skill_not_installed", "skill_not_pinned", "skill_disabled"))),

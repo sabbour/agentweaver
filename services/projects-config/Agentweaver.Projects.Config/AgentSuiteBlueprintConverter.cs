@@ -115,13 +115,16 @@ public static class AgentSuiteBlueprintConverter
         AgentSuiteBuildInputs inputs)
     {
         ArgumentNullException.ThrowIfNull(inputs);
+        // Validate the package with the 0.x rules and turn its role payloads into bespoke roles.
         var content = BlueprintPackageV1.Read(manifest, payloads);
+        // Add each role's default model from the package. Role models in the build inputs win, so only fill gaps.
         var roleModels = inputs.RoleModels;
         foreach (var (roleId, model) in content.RoleDefaultModels)
         {
             if (!roleModels.ContainsKey(roleId))
                 roleModels = roleModels.SetItem(roleId, new AgentSuiteModelInput(inputs.Model.Protocol, model));
         }
+        // Convert with the merged role models; all other build inputs stay as given.
         return Convert(content.Blueprint, inputs with { RoleModels = roleModels });
     }
 
@@ -131,19 +134,27 @@ public static class AgentSuiteBlueprintConverter
     {
         ArgumentNullException.ThrowIfNull(blueprint);
         ArgumentNullException.ThrowIfNull(inputs);
+        // Collect every error first so the caller sees all problems in one exception.
         var errors = new List<string>();
         // Workflow availability is checked when the blueprint is applied, so packages keep every 0.x workflow.
         errors.AddRange(ProjectBlueprintCatalog.Validate(blueprint, requireAvailableWorkflows: false).Errors);
+        // The blueprint ID becomes the suite name, so it must also match the AgentSuite ID grammar.
+        // Skip this check when the blueprint is already invalid, to avoid noisy follow-on errors.
         if (errors.Count == 0 && !IdPattern.IsMatch(blueprint.Id))
             errors.Add($"Blueprint id '{blueprint.Id}' isn't a valid suite name.");
+        // A default (uninitialized) roster counts as empty so validation can't throw.
+        // The result is the sorted list of architectures to build compositions for.
         var platforms = ValidateInputs(inputs, blueprint.Roster.IsDefault ? [] : blueprint.Roster, errors);
         if (errors.Count > 0)
             throw new AgentSuiteConversionException(errors.ToImmutableArray());
 
+        // Files keyed by suite-relative path. Ordinal sorting keeps the output deterministic.
         var files = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+        // Suite manifest references, collected while each agent and composition file is written.
         var agentRefs = new JsonArray();
         var compositionRefs = new JsonArray();
 
+        // Build profile: the digest-pinned runtime base and harness images that every composition uses.
         var profile = Canonical(new JsonObject
         {
             ["schemaVersion"] = SpecVersion,
@@ -156,6 +167,7 @@ public static class AgentSuiteBlueprintConverter
         var profilePath = $"build-profiles/{inputs.BuildProfileId}.json";
         files[profilePath] = profile;
 
+        // The spec requires a tool provider catalog. It is empty because 0.x blueprints declare no tool providers.
         var catalog = Canonical(new JsonObject
         {
             ["schemaVersion"] = SpecVersion,
@@ -164,13 +176,17 @@ public static class AgentSuiteBlueprintConverter
         });
         files["tool-providers/catalog.json"] = catalog;
 
+        // One agent per roster role: an instructions file, an agent manifest, and one composition per platform.
         foreach (var roleId in blueprint.Roster)
         {
+            // Bespoke roles win over the shared role catalog.
             var (title, charter) = ProjectBlueprintCatalog.ResolveRole(blueprint, roleId);
+            // Strict UTF-8 fails on invalid text instead of silently writing replacement characters.
             var instructions = StrictUtf8.GetBytes(charter);
             var instructionsPath = $"instructions/{roleId}.md";
             files[instructionsPath] = instructions;
 
+            // Use the role-specific model when there is one; otherwise use the default model.
             var model = inputs.RoleModels.TryGetValue(roleId, out var roleModel) ? roleModel : inputs.Model;
             var agent = Canonical(new JsonObject
             {
@@ -187,6 +203,7 @@ public static class AgentSuiteBlueprintConverter
             });
             var agentPath = $"agents/{roleId}.json";
             files[agentPath] = agent;
+            // The suite manifest points to the agent by path and by the digest of its exact bytes.
             agentRefs.Add(new JsonObject
             {
                 ["id"] = roleId,
@@ -194,6 +211,7 @@ public static class AgentSuiteBlueprintConverter
                 ["descriptor"] = Descriptor(AgentMediaType, agent),
             });
 
+            // One composition per architecture binds the agent to the build profile for that platform.
             foreach (var architecture in platforms)
             {
                 var composition = Canonical(new JsonObject
@@ -217,6 +235,7 @@ public static class AgentSuiteBlueprintConverter
             }
         }
 
+        // Write the suite manifest last, because it needs the digests of every other file.
         files["agentsuite.json"] = Canonical(new JsonObject
         {
             ["schemaVersion"] = SpecVersion,
@@ -238,10 +257,13 @@ public static class AgentSuiteBlueprintConverter
             }),
         });
 
+        // Pack the files into the deterministic content archive and record the archive digest.
         var fileList = files
             .Select(pair => new AgentSuiteFile(pair.Key, ImmutableArray.Create(pair.Value)))
             .ToImmutableArray();
         var archive = WriteContentArchive(fileList);
+        // The projection carries the team data that has no AgentSuite field: workflows, default workflow,
+        // review policy, sandbox profile and skill bindings.
         return new(
             blueprint.Id,
             fileList,
@@ -258,19 +280,23 @@ public static class AgentSuiteBlueprintConverter
     public static byte[] WriteContentArchive(IEnumerable<AgentSuiteFile> files)
     {
         ArgumentNullException.ThrowIfNull(files);
+        // A null value marks a directory entry. Ordinal sorting fixes the entry order, so equal input gives equal bytes.
         var entries = new SortedDictionary<string, AgentSuiteFile?>(StringComparer.Ordinal);
         foreach (var file in files)
         {
             entries[file.Path] = file;
+            // Add an entry for every parent directory. Directory names end in '/', as tar expects.
             for (var slash = file.Path.LastIndexOf('/'); slash > 0; slash = file.Path.LastIndexOf('/', slash - 1))
                 entries.TryAdd(file.Path[..slash] + "/", null);
         }
 
+        // Write an uncompressed ustar archive first, then gzip it.
         using var tar = new MemoryStream();
         using (var writer = new TarWriter(tar, TarEntryFormat.Ustar, leaveOpen: true))
         {
             foreach (var (path, file) in entries)
             {
+                // Fixed time, owner and mode keep machine-specific metadata out of the archive.
                 var entry = new UstarTarEntry(file is null ? TarEntryType.Directory : TarEntryType.RegularFile, path)
                 {
                     ModificationTime = DateTimeOffset.UnixEpoch,
@@ -282,12 +308,14 @@ public static class AgentSuiteBlueprintConverter
                     Uid = 0,
                     Gid = 0,
                 };
+                // Only regular files have content; directory entries carry no data.
                 if (file is not null)
                     entry.DataStream = new MemoryStream(file.Content.ToArray(), writable: false);
                 writer.WriteEntry(entry);
             }
         }
 
+        // GZipStream writes no file name and leaves the header modification time at 0.
         using var compressed = new MemoryStream();
         using (var gzip = new GZipStream(compressed, CompressionLevel.SmallestSize, leaveOpen: true))
             gzip.Write(tar.GetBuffer(), 0, (int)tar.Length);
@@ -307,11 +335,14 @@ public static class AgentSuiteBlueprintConverter
         ImmutableArray<string> roster,
         List<string> errors)
     {
+        // The build profile ID is used in file names and references, so it must match the AgentSuite ID grammar.
         if (string.IsNullOrEmpty(inputs.BuildProfileId) || !IdPattern.IsMatch(inputs.BuildProfileId))
             errors.Add("BuildProfileId must match ^[a-z0-9][a-z0-9._-]{0,127}$.");
+        // Reproducible builds need a real, positive build time.
         if (inputs.SourceEpoch < 1)
             errors.Add("SourceEpoch must be at least 1.");
         ValidateModel(inputs.Model, "Model", errors);
+        // A role model for a role that isn't in the roster is almost always a mistake, so reject it.
         foreach (var (roleId, model) in inputs.RoleModels)
         {
             if (!roster.Contains(roleId, StringComparer.Ordinal))
@@ -319,10 +350,12 @@ public static class AgentSuiteBlueprintConverter
             ValidateModel(model, $"RoleModels['{roleId}']", errors);
         }
 
+        // Every composition needs both a runtime base image and a harness image for its architecture.
         var runtime = ValidateImages(inputs.RuntimeBase, "RuntimeBase", errors);
         var harness = ValidateImages(inputs.Harness, "Harness", errors);
         if (!runtime.SetEquals(harness))
             errors.Add("RuntimeBase and Harness must list images for the same architectures.");
+        // Sorted so compositions are generated in a stable order.
         return runtime.Order(StringComparer.Ordinal).ToImmutableArray();
     }
 
@@ -338,6 +371,7 @@ public static class AgentSuiteBlueprintConverter
         List<string> errors)
     {
         var architectures = new HashSet<string>(StringComparer.Ordinal);
+        // The converter never invents images, so at least one real image is required.
         if (images.IsDefaultOrEmpty)
         {
             errors.Add($"{name} must list at least one digest-pinned image.");
@@ -350,12 +384,15 @@ public static class AgentSuiteBlueprintConverter
                 errors.Add($"{name} must not contain empty entries.");
                 continue;
             }
+            // Only the two Linux architectures the AgentSuite spec supports are allowed, each at most once.
             if (image.Architecture is not ("amd64" or "arm64"))
                 errors.Add($"{name} architecture '{image.Architecture}' must be amd64 or arm64.");
             else if (!architectures.Add(image.Architecture))
                 errors.Add($"{name} lists architecture '{image.Architecture}' more than once.");
+            // Images must be pinned by digest. Tags are rejected because a tag can move to a different image.
             if (string.IsNullOrEmpty(image.ImageRef) || !ImageRefPattern.IsMatch(image.ImageRef))
                 errors.Add($"{name} image '{image.ImageRef}' must be registry/path@sha256:<64 hex> with no tag.");
+            // The descriptor must carry the real manifest size so consumers can verify what they fetch.
             if (image.Size < 1)
                 errors.Add($"{name} image '{image.ImageRef}' must have the image manifest size.");
         }
@@ -364,6 +401,7 @@ public static class AgentSuiteBlueprintConverter
 
     private static JsonArray Images(ImmutableArray<AgentSuiteImageInput> images) =>
         new(images
+            // Sort by architecture so the build profile bytes are deterministic.
             .OrderBy(image => image.Architecture, StringComparer.Ordinal)
             .Select(image => (JsonNode)new JsonObject
             {
@@ -372,6 +410,7 @@ public static class AgentSuiteBlueprintConverter
                 ["image"] = new JsonObject
                 {
                     ["mediaType"] = ImageManifestMediaType,
+                    // The digest is the part of the image reference after '@'.
                     ["digest"] = image.ImageRef[(image.ImageRef.LastIndexOf('@') + 1)..],
                     ["size"] = image.Size,
                 },
@@ -384,6 +423,7 @@ public static class AgentSuiteBlueprintConverter
     private static JsonObject Descriptor(string mediaType, byte[] bytes) =>
         new() { ["mediaType"] = mediaType, ["digest"] = Digest(bytes), ["size"] = bytes.LongLength };
 
+    // Canonical JSON bytes, so file digests are the same on every run and platform.
     private static byte[] Canonical(JsonObject value) =>
         CanonicalJson.Canonicalize(Encoding.UTF8.GetBytes(value.ToJsonString()));
 }

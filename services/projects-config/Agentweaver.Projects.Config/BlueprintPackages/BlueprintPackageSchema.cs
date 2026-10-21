@@ -1,4 +1,4 @@
-// Ported without behavior changes from 0.x packages/Agentweaver.Squad/BlueprintPackages (origin/dev).
+// Ported without behavior changes from the 0.x Agentweaver.Squad blueprint package code.
 // The AgentSuite blueprint converter uses it so 0.x packages are checked by the exact 0.x rules.
 using System.Text.Json;
 using System.Net;
@@ -30,12 +30,15 @@ public static class BlueprintPackageSchema
     public static void ValidateCustomKeywords(JsonElement manifest, ICollection<string> errors)
     {
         ArgumentNullException.ThrowIfNull(errors);
+        // Shape errors are reported by the manifest parser; this pass only checks the custom keywords.
         if (manifest.ValueKind != JsonValueKind.Object) return;
 
+        // Each definition path must be exactly the canonical path for its kind and ID.
         if (manifest.TryGetProperty("definitions", out var definitions) && definitions.ValueKind == JsonValueKind.Array)
         {
             foreach (var definition in definitions.EnumerateArray())
             {
+                // Skip malformed entries; the manifest parser already reports them.
                 if (definition.ValueKind != JsonValueKind.Object
                     || !definition.TryGetProperty("kind", out var kind)
                     || !definition.TryGetProperty("id", out var id)
@@ -50,6 +53,7 @@ public static class BlueprintPackageSchema
             }
         }
 
+        // Provenance strings are optional, but when present they must use the strict formats below.
         if (manifest.TryGetProperty("provenance", out var provenance) && provenance.ValueKind == JsonValueKind.Object)
         {
             if (provenance.TryGetProperty("repository", out var repository)
@@ -72,31 +76,39 @@ public static class BlueprintPackageSchema
             "role" => $"definitions/roles/{id}.json",
             "workflow" => $"definitions/workflows/{id}.yaml",
             "skill" => $"definitions/skills/{id}.md",
+            // An unknown kind has no canonical path, so the comparison fails.
             _ => null,
         }, StringComparison.Ordinal);
 
     /// <summary>Returns whether text is an absolute, credential-free HTTPS URI in the package profile.</summary>
     public static bool IsHttpsRepositoryUri(string value)
     {
+        // Only https URIs, with an upper bound on length.
         if (string.IsNullOrEmpty(value) || value.Length > 2048 || !value.StartsWith("https://", StringComparison.Ordinal))
             return false;
 
+        // The authority starts right after "https://" (8 characters).
         const int authorityStart = 8;
+        // Reject backslashes and repeated '?' or '#', which different URI parsers handle differently.
         if (value.IndexOf('\\') >= 0 || !HasAtMostOneDelimiter(value, '?', authorityStart)
             || !HasAtMostOneDelimiter(value, '#', authorityStart))
             return false;
 
+        // A fragment ('#') can't come before the query ('?').
         var queryStart = value.IndexOf('?', authorityStart);
         var fragmentStart = value.IndexOf('#', authorityStart);
         if (queryStart >= 0 && fragmentStart >= 0 && fragmentStart < queryStart)
             return false;
 
+        // The authority ends at the first '/', '?', '#', or the end of the text.
         var pathStart = value.IndexOf('/', authorityStart);
         var authorityEnd = FirstNonNegative(pathStart, queryStart, fragmentStart, value.Length);
         var authority = value[authorityStart..authorityEnd];
+        // An '@' means user info (credentials), which is not allowed.
         if (authority.Length == 0 || authority.Contains('@', StringComparison.Ordinal) || !IsValidAuthority(authority))
             return false;
 
+        // Path, query and fragment may only use RFC 3986 characters or valid percent escapes.
         var pathEnd = FirstNonNegative(queryStart, fragmentStart, value.Length);
         return IsValidUriComponent(value.AsSpan(authorityEnd, pathEnd - authorityEnd))
             && (queryStart < 0 || IsValidUriComponent(value.AsSpan(queryStart + 1, (fragmentStart < 0 ? value.Length : fragmentStart) - queryStart - 1)))
@@ -106,12 +118,14 @@ public static class BlueprintPackageSchema
     /// <summary>Returns whether text is an exact Gregorian RFC 3339 timestamp in the package profile.</summary>
     public static bool IsRfc3339Timestamp(string value)
     {
+        // Fixed layout first: YYYY-MM-DDTHH:MM:SS with an uppercase 'T'.
         if (value is null || value.Length < 20
             || !HasDigits(value, 0, 4) || value[4] != '-' || !HasDigits(value, 5, 2) || value[7] != '-'
             || !HasDigits(value, 8, 2) || value[10] != 'T' || !HasDigits(value, 11, 2) || value[13] != ':'
             || !HasDigits(value, 14, 2) || value[16] != ':' || !HasDigits(value, 17, 2))
             return false;
 
+        // Then check that the date exists and the time is in range. A leap second (60) is rejected.
         var year = ParseDigits(value, 0, 4);
         var month = ParseDigits(value, 5, 2);
         var day = ParseDigits(value, 8, 2);
@@ -122,6 +136,7 @@ public static class BlueprintPackageSchema
             || day > DateTime.DaysInMonth(year, month) || hour > 23 || minute > 59 || second > 59)
             return false;
 
+        // Optional fractional seconds: a '.' followed by at least one digit.
         var offsetIndex = 19;
         if (offsetIndex < value.Length && value[offsetIndex] == '.')
         {
@@ -130,12 +145,14 @@ public static class BlueprintPackageSchema
             if (offsetIndex == fractionStart) return false;
         }
 
+        // The offset is an uppercase 'Z' or +HH:MM / -HH:MM, and it must end the text.
         if (offsetIndex == value.Length - 1 && value[offsetIndex] == 'Z') return true;
         if (offsetIndex + 6 != value.Length || value[offsetIndex] is not ('+' or '-')
             || !HasDigits(value, offsetIndex + 1, 2) || value[offsetIndex + 3] != ':'
             || !HasDigits(value, offsetIndex + 4, 2))
             return false;
 
+        // Offsets range from -14:00 to +14:00.
         var offsetHour = ParseDigits(value, offsetIndex + 1, 2);
         var offsetMinute = ParseDigits(value, offsetIndex + 4, 2);
         return offsetHour < 14 && offsetMinute < 60 || offsetHour == 14 && offsetMinute == 0;
@@ -145,6 +162,7 @@ public static class BlueprintPackageSchema
     {
         string host;
         string? port = null;
+        // A bracketed host is an IPv6 literal, optionally followed by :port.
         if (authority[0] == '[')
         {
             var closingBracket = authority.IndexOf(']');
@@ -155,6 +173,7 @@ public static class BlueprintPackageSchema
                 if (authority[closingBracket + 1] != ':') return false;
                 port = authority[(closingBracket + 2)..];
             }
+            // Zone IDs ('%') are not allowed, and the literal must parse as IPv6.
             if (host.Contains('%', StringComparison.Ordinal)
                 || !IPAddress.TryParse(host, out var address)
                 || address.AddressFamily != AddressFamily.InterNetworkV6)
@@ -162,6 +181,7 @@ public static class BlueprintPackageSchema
         }
         else
         {
+            // Otherwise the host is a DNS name or IPv4 address, with at most one ':' before the port.
             var colon = authority.IndexOf(':');
             if (colon >= 0)
             {
@@ -175,6 +195,7 @@ public static class BlueprintPackageSchema
             }
             if (!IsValidDnsOrIpv4Host(host)) return false;
         }
+        // The port is optional, but when present it must be valid.
         return port is null || IsValidPort(port);
     }
 
@@ -186,6 +207,7 @@ public static class BlueprintPackageSchema
 
     private static int FirstNonNegative(int first, int second, int fallback)
     {
+        // Return the smaller index that was found (not -1), or the fallback when neither was found.
         if (first < 0) return second < 0 ? fallback : second;
         return second < 0 ? first : Math.Min(first, second);
     }
@@ -198,6 +220,7 @@ public static class BlueprintPackageSchema
         for (var index = 0; index < component.Length; index++)
         {
             var character = component[index];
+            // A '%' must start a two-digit hex escape.
             if (character == '%')
             {
                 if (index + 2 >= component.Length || !IsHex(component[index + 1]) || !IsHex(component[index + 2]))
@@ -206,6 +229,7 @@ public static class BlueprintPackageSchema
                 continue;
             }
 
+            // Any other character must be unreserved, a sub-delimiter, ':', '@' or '/'.
             if (!IsUnreserved(character) && !IsSubDelimiter(character) && character is not (':' or '@' or '/'))
                 return false;
         }
@@ -221,9 +245,11 @@ public static class BlueprintPackageSchema
     private static bool IsValidDnsOrIpv4Host(string host)
     {
         if (host.Length is 0 or > 253) return false;
+        // Only digits and dots means an IPv4 address, so it must parse as one.
         if (host.All(character => IsDigit(character) || character == '.'))
             return IPAddress.TryParse(host, out var address) && address.AddressFamily == AddressFamily.InterNetwork;
 
+        // DNS labels: 1-63 letters, digits or hyphens, starting and ending with a letter or digit.
         foreach (var label in host.Split('.'))
         {
             if (label.Length is 0 or > 63 || !char.IsAsciiLetterOrDigit(label[0]) || !char.IsAsciiLetterOrDigit(label[^1]))
@@ -233,6 +259,7 @@ public static class BlueprintPackageSchema
         return true;
     }
 
+    // Port: 1-5 digits, no leading zero, at most 65535.
     private static bool IsValidPort(string port) =>
         port.Length is > 0 and <= 5
         && (port.Length == 1 || port[0] != '0')
@@ -256,6 +283,7 @@ public static class BlueprintPackageSchema
 
     private static string Load(string resourceName = ResourceName)
     {
+        // The schema is embedded in the assembly, so a missing resource is a build error, not bad input.
         using var stream = typeof(BlueprintPackageSchema).Assembly.GetManifestResourceStream(resourceName)
             ?? throw new InvalidOperationException($"Missing embedded Blueprint package schema: {resourceName}");
         using var reader = new StreamReader(stream);

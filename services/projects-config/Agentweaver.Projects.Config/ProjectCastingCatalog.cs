@@ -85,6 +85,7 @@ public static class ProjectCastingCatalog
             "Evaluates agent behavior for safety, alignment, and policy compliance.",
             ["Review agent behavior for safety and alignment risks", "Verify compliance with applicable policies", "Red-team prompts and flows for failure modes"],
             ["Does not implement agent features", "Does not waive safety requirements"]),
+        // Roles below are needed by the built-in blueprints ported from 0.x.
         Role("agent-architect", "Agent Architect",
             "Designs the architecture and orchestration of AI agent systems.",
             ["Design agent topologies and orchestration patterns", "Define tool interfaces and integration boundaries", "Set guardrails for agent autonomy and scope"],
@@ -224,11 +225,13 @@ public static class ProjectCastingCatalog
         // Use "\n" on every host so charters and the packages built from them are the same everywhere.
         var charter = new StringBuilder(role.Summary);
         charter.Append("\n\nResponsibilities:\n");
+        // One bullet line per responsibility, then a blank line before the boundaries section.
         foreach (var responsibility in role.Responsibilities)
             charter.Append("- ").Append(responsibility).Append('\n');
         charter.Append("\nBoundaries:\n");
         foreach (var boundary in role.Boundaries)
             charter.Append("- ").Append(boundary).Append('\n');
+        // Drop the trailing newline so the charter ends on its last bullet.
         return charter.ToString().TrimEnd();
     }
 

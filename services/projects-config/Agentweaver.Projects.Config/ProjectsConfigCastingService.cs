@@ -93,8 +93,11 @@ public sealed partial class ProjectsConfigService
         BlueprintDefinition? blueprint,
         CancellationToken cancellationToken)
     {
+        // Fail fast on missing write permission before opening a transaction.
         RequireCastingWrite(caller, projectId);
         var unresolved = ImmutableArray<BlueprintUnresolvedSkillBinding>.Empty;
+        // The shared helper locks the project, checks the expected revision, and passes in the current
+        // configuration, so the draft is always built from the revision the caller saw.
         var proposal = await CreateCastingProposalFromCurrentConfigurationAsync(
             caller,
             projectId,
@@ -102,6 +105,7 @@ public sealed partial class ProjectsConfigService
             current =>
             {
                 var application = ProjectBlueprintCatalog.CreateDraft(current, blueprintId, blueprint);
+                // Capture the unresolved bindings as a side output; if the transaction retries, the last run wins.
                 unresolved = application.UnresolvedSkillBindings;
                 return application.Draft;
             },

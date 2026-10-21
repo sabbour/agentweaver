@@ -751,6 +751,7 @@ export interface AgentSuiteImportResult {
     state: string | number;
     draft: ProjectConfiguration;
   } | null;
+  /** Blueprint skill bindings that don't take effect; empty when no blueprint was supplied. */
   unresolvedSkillBindings: BlueprintUnresolvedSkillBinding[];
 }
 

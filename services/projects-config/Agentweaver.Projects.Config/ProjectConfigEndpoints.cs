@@ -86,9 +86,12 @@ public static class ProjectConfigEndpoints
             return Results.Ok(ProjectCastingCatalog.Roles);
         }).WithName("ListProjectCastingRoles");
 
+        // Blueprint routes are not project-scoped: any signed-in user can browse and check blueprints.
+        // Neither route changes state; applying a blueprint goes through the project casting proposal route.
         var blueprints = app.MapGroup("/api/blueprints").RequireAuthorization();
         blueprints.MapGet("/", (HttpContext context) =>
         {
+            // Availability can change between releases, so clients must not cache the list.
             context.Response.Headers.CacheControl = "no-store";
             return Results.Ok(ProjectBlueprintCatalog.List());
         }).WithName("ListBlueprints");
@@ -96,6 +99,7 @@ public static class ProjectConfigEndpoints
         blueprints.MapPost("/validate", (ValidateBlueprintRequest request, HttpContext context) =>
         {
             context.Response.Headers.CacheControl = "no-store";
+            // A missing blueprint is a bad request; an invalid blueprint is a 200 with Valid = false and its errors.
             return request.Blueprint is null
                 ? ToProblem(ProjectConfigException.Invalid("invalid_blueprint_request", "A blueprint is required."))
                 : Results.Ok(ProjectBlueprintCatalog.Validate(request.Blueprint));
@@ -412,6 +416,8 @@ public static class ProjectConfigEndpoints
             try
             {
                 context.Response.Headers.CacheControl = "no-store";
+                // The service checks casting write permission and the expected revision; this only creates a
+                // pending proposal, and nothing changes until it is confirmed.
                 var result = await service.CreateBlueprintCastingProposalAsync(
                     await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
                     projectId,
@@ -419,12 +425,14 @@ public static class ProjectConfigEndpoints
                     request.BlueprintId,
                     request.Blueprint,
                     cancellationToken).ConfigureAwait(false);
+                // Point Location at the new proposal; the body also carries the unresolved skill bindings.
                 return Results.Created(
                     $"/api/projects/{projectId}/casting/proposals/{result.Proposal.ProposalId}",
                     result);
             }
             catch (ProjectConfigException exception)
             {
+                // Map known service failures to their problem responses.
                 return ToProblem(exception);
             }
         });

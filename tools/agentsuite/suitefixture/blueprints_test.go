@@ -16,10 +16,13 @@ const blueprintFixtures = "../../../tests/Agentweaver.Projects.Config.Tests/Fixt
 // TestConvertedBlueprintsPassUpstreamValidation checks that every converted
 // built-in blueprint is a conformant native AgentSuite package.
 func TestConvertedBlueprintsPassUpstreamValidation(t *testing.T) {
+	// Find the golden archives that the .NET converter tests write.
 	archives, err := filepath.Glob(filepath.Join(blueprintFixtures, "*.tar.gz"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	// One archive per built-in blueprint; a lower count means a fixture is missing
+	// and would otherwise be skipped silently.
 	if len(archives) != 5 {
 		t.Fatalf("expected 5 converted blueprints, found %d", len(archives))
 	}
@@ -30,10 +33,13 @@ func TestConvertedBlueprintsPassUpstreamValidation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Unpack the archive into the on-disk layout the upstream validator reads.
 			dir := t.TempDir()
 			if _, err := WriteLayout(dir, layer, DefaultLayout()); err != nil {
 				t.Fatal(err)
 			}
+			// Run the upstream AgentSuite validator; any error means the converter
+			// produced a package the reference implementation rejects.
 			if _, err := agentsuite.ValidatePath(dir); err != nil {
 				t.Fatalf("upstream validation rejected %s: %v", name, err)
 			}

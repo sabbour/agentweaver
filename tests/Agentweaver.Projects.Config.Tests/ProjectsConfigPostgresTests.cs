@@ -2023,6 +2023,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var current = await service.GetProjectConfigurationAsync(
             owner, project.ProjectId, null, CancellationToken.None);
 
+        // A built-in whose workflows aren't registered yet can't be staged.
         var unavailable = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.CreateBlueprintCastingProposalAsync(
                 owner,
@@ -2033,6 +2034,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 CancellationToken.None));
         Assert.Equal("blueprint_unavailable", unavailable.Code);
 
+        // A valid inline blueprint (two catalog roles, the default workflow) is staged as a proposal.
         var proposal = (await service.CreateBlueprintCastingProposalAsync(
             owner,
             project.ProjectId,
@@ -2049,6 +2051,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             },
             CancellationToken.None)).Proposal;
 
+        // The pending draft casts the roster and references the blueprint's workflow. The default sandbox
+        // leaves egress unset.
         Assert.Equal(ProjectCastingProposalState.Pending, proposal.State);
         Assert.Equal(new[] { "backend-engineer", "qa-engineer" }, proposal.Draft.Casting.Select(item => item.AgentId));
         Assert.Equal(
@@ -2056,10 +2060,12 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             proposal.Draft.BlueprintWorkflowReferences);
         Assert.Equal("default", proposal.Draft.DefaultWorkflowId);
         Assert.Null(proposal.Draft.EgressNarrowing);
+        // Staging a proposal doesn't change the live configuration.
         var unchanged = await service.GetProjectConfigurationAsync(
             owner, project.ProjectId, null, CancellationToken.None);
         Assert.Equal(current.Revision, unchanged.Revision);
 
+        // Confirming applies the draft, including the new default workflow.
         var confirmed = await service.ConfirmCastingProposalAsync(
             owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
         Assert.Equal(ProjectCastingProposalState.Confirmed, confirmed.State);
