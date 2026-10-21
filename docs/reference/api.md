@@ -772,6 +772,58 @@ All routes use Coordination authority and current owner task/graph revisions.
 | PUT | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Add dependency. |
 | DELETE | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Remove dependency. |
 | POST | `/tasks/{taskId}/claim` | Atomically claim with current prerequisite evidence. |
+| POST | `/promotions` | Promote the run's confirmed work plan into backlog tasks. |
+
+#### Plan promotion and task origin
+
+`POST /promotions` turns the current confirmed work plan of a coordinator run
+into backlog tasks. The body contains `rootSessionId`, `workPlanId`,
+`expectedDecisionStateVersion`, `expectedExecutionFence`,
+`expectedGraphRevision`, and `idempotencyKey` (1-128 characters). The owner
+checks that the plan is still the confirmed, dispatchable plan of the root
+session, that the fence and decision version match, and that the run has no
+registered children and no MAF dispatch records.
+
+Each plan item becomes one open task. The task title is the item title and the
+description is the item task text. The task ID is `plan-` followed by 32
+lowercase hexadecimal characters of a SHA-256 hash of the length-prefixed project,
+run, plan, and item IDs. Each item dependency becomes a task dependency. The tasks, edges,
+promotion record, and one origin record per task commit in one transaction.
+The decision state does not change. After promotion, MAF dispatch rejects the
+promoted plan with `maf_execution_dispatch_stale`.
+
+A retry with the same key and values returns the stored promotion. The
+response is a `BacklogPlanPromotion` with `promotionId`, `projectId`, `runId`,
+`rootSessionId`, `workPlanId`, `workflowId`, `workflowRevision`,
+`decisionStateVersion`, `executionFence`, `graphRevision`, `promotedAt`, and
+`tasks` (`taskId` and `workItemId`, ordered by `workItemId`).
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `backlog_promotion_invalid` | 400 | A required value is missing or out of range. |
+| `backlog_promotion_stale` | 409 | The plan, decision version, or fence is no longer current. |
+| `backlog_promotion_run_started` | 409 | The run has children or dispatch records. |
+| `backlog_promotion_conflict` | 409 | The plan was already promoted with another key. |
+| `backlog_promotion_idempotency_conflict` | 409 | The key was used with different values. |
+| `backlog_promotion_selection_unavailable` | 409 | The pinned selection context is missing. |
+
+A stale graph revision returns `409` with typed backlog issues.
+
+Two native project routes read the recorded data with current `ReadProjects`
+authority:
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET | `/api/projects/{projectId}/backlog/promotions` | `{ promotions }`, oldest first. |
+| GET | `/api/projects/{projectId}/backlog/origins` | `{ origins }`, ordered by task ID. |
+
+A `BacklogTaskOrigin` contains `task` (`projectId` and `taskId`),
+`promotionId`, `runId`, `rootSessionId`, `workPlanId`, and `workItemId`.
+Tasks added by ordinary capture or the run `POST /tasks` route have no origin
+record. Migration `030_backlog_task_origin.sql` must be applied before these
+routes work. Applying the migration, granting access to the new tables, and
+accepting the changed PostgreSQL plan hash each require separate operator
+approval.
 
 ### Source Control
 

@@ -19,10 +19,10 @@ the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`52aecfbe48673b90dc11cdf0dc90dba8326eafb02647d2bbd1c31d51ca510c02`.
+`ba035fd7a50bc742e7e550676e2ba7d7e88e3f9729bdd9537017781a1940e898`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-29. Version 027 requires 026 only.
+placeholder. The Core list is 1-16, 18-30. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
 027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
 plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
@@ -55,6 +55,18 @@ The Core version list changes the PostgreSQL plan hash. Applying migration
 026, reconciling existing grants, and accepting the new exact plan hash are
 separate, unapplied operator steps that require approval. Source checks do
 not authorize or perform them.
+
+Orchestrator migration `030_backlog_task_origin.sql` adds the
+`backlog_plan_promotions` and `backlog_task_origins` tables. They record
+each promotion of a confirmed work plan into backlog tasks and the origin of
+each promoted task. The migration does not alter `backlog_tasks`. Its foreign
+keys take `SHARE ROW EXCLUSIVE` locks on `backlog_projects`,
+`backlog_tasks`, and `coordination_sessions`, which block writes to those
+tables until commit. The plan grants the orchestrator role exactly
+`SELECT, INSERT` on both new tables, with no `UPDATE`, `DELETE`, or default
+privileges. Migration 030 must be applied before the promotion routes work.
+Applying it, granting those privileges, and accepting the new exact plan hash
+are separate operator steps that require approval.
 
 Run these commands from the repository root:
 
@@ -208,8 +220,8 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 26.
-These are 25 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16 and 18 through 30.
+These are 29 registered versions; version 17 remains excluded.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,
@@ -230,10 +242,16 @@ scan existing tables. Its runtime grant is `SELECT,INSERT` on that table.
 Version 26 adds backlog task content columns and a unique repository issue index.
 It requires version 21, adds no tables or grants, and blocks writes to
 `backlog_tasks` until commit.
+Version 30 adds the empty `backlog_plan_promotions` and `backlog_task_origins`
+tables. It requires version 26 and doesn't alter existing tables. The migrator
+applies it after version 29 because it follows catalog order. Its foreign keys
+take `SHARE ROW EXCLUSIVE` locks that block writes to `backlog_projects`,
+`backlog_tasks`, and `coordination_sessions` until commit. Its runtime grant is
+`SELECT,INSERT` on each new table.
 Events requires versions 1 through 9 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 105 tables and eight exact row-lock columns.
+The plan lists 109 tables and eight exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

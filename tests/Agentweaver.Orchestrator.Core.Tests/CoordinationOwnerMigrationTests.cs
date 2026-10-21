@@ -43,12 +43,14 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(28)]
     // Version 29 adds the spend budget reservation and accounting cursor tables.
     [InlineData(29)]
+    // Version 30 adds the plan promotion and task origin tables.
+    [InlineData(30)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         await ApplyMigrationsThroughAsync(version);
         var historyBefore = await ReadMigrationHistoryAsync(version);
-        // Any schema older than the newest migration, 29, fails verification until it is migrated.
-        if (version < 29)
+        // Any schema older than the newest migration, 30, fails verification until it is migrated.
+        if (version < 30)
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -148,6 +150,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData("reviewed_remote_tool_snapshots")]
     [InlineData("user_notification_dismissals")]
     [InlineData("guardrails_evaluations")]
+    [InlineData("backlog_plan_promotions")]
+    [InlineData("backlog_task_origins")]
     public async Task VerificationRequiresRegisteredTables(string table)
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -221,7 +225,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (27, "027_periodic_issue_sync.sql"),
             (28, "028_guardrails_evaluations.sql"),
             // The spend budget migration follows 028.
-            (29, "029_spend_budget_exposure.sql")
+            (29, "029_spend_budget_exposure.sql"),
+            (30, "030_backlog_task_origin.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -350,8 +355,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        // The migration history ends with 29 after the upgrade.
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]), reader.GetFieldValue<int[]>(9));
+        // The migration history ends with 30 after the upgrade.
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));

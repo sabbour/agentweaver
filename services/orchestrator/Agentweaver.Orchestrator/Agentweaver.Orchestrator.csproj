@@ -50,6 +50,7 @@
     <EmbeddedResource Include="Migrations\027_periodic_issue_sync.sql" />
     <EmbeddedResource Include="Migrations\028_guardrails_evaluations.sql" />
     <EmbeddedResource Include="Migrations\029_spend_budget_exposure.sql" />
+    <EmbeddedResource Include="Migrations\030_backlog_task_origin.sql" />
     <EmbeddedResource Include="Migrations\032_source_control_pull_request_records.sql" />
   </ItemGroup>
 </Project>
