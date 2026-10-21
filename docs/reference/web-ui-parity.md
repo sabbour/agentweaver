@@ -22,7 +22,8 @@ source changes:
 | `RunList` | Overview, Sessions, Dashboard, and Orchestrations, on the project run list | Flow |
 | `DecisionView` | Run Approvals tab | Flow and a priorities view |
 | `AttentionList` | Overview and the notification bell, on your notifications across projects | An attention inbox and a priorities view |
-| `NewChatComposer` | Run Chat tab and the New session page | Start task |
+| `NewChatComposer` | Run Chat tab and the New session page | — |
+| `CaptureTaskForm` | Board Intake and the Start task dialog | — |
 | `ProjectMetricsSections` | Dashboard and Overview, on project metrics and usage | — |
 | `PlatformComponentsTable` | Run settings tab | — |
 
@@ -49,7 +50,9 @@ flowchart LR
   orch --> run[Run page]
   sessions --> run
   attention --> decision[Decision view]
-  attention -.-> board[Board, needs work items API]
+  dashboard --> board[Board]
+  attention --> board
+  starttask[Start task] --> board
   run --> decision
   run --> chat
   flow[Flow, needs work items API] -.-> decision
@@ -70,11 +73,11 @@ surface is hidden for a reason other than a missing API.
 | Sign-in | Broker sign-in in the 0.x card. The 0.x explanatory checklist and the tab note are removed. | None |
 | Consent | Permission explanations in the sign-in card. | None |
 | Shell and breadcrumbs | 0.x rail with **Overview**, **Projects**, and **Sessions**, the **New session** button, project switcher, persona menu, and `Projects / project / page` breadcrumbs. | None |
-| Notification bell | Your notifications across projects. The badge shows the pending count from the service. Pending gates open the run's Approvals tab. Backlog promotions show **N subtasks created** and link to the project Board. Each item has **Dismiss**. | Board and workflows (for the promotion link) |
+| Notification bell | Your notifications across projects. The badge shows the pending count from the service. Pending gates open the run's Approvals tab. Backlog promotions show **N subtasks created** and link to the project Board. Each item has **Dismiss**. | None |
 | Overview | **Operations** card, recent projects, metrics and usage for one chosen project, recent runs across projects, and **Needs attention**. | Cross-project metrics |
 | Sessions | Runs across your projects, newest first, with **Load more**, **Refresh**, and **New session**. | None |
 | New session | `/assistant` picks a project, creates the run with the first message, signs in silently for that run, starts it, and opens Chat. | None |
-| Start task | Not shown. | Board and workflows |
+| Start task | 0.x floating **Start task** button on project pages, shown only with permission to change the project. Its dialog captures a task into that project's Backlog and opens the Board. It does not start a run or offer a project picker. | None |
 | Projects gallery | 0.x tiles with state and your access: **Can edit**, **Can view**, or **No access**. | None |
 | Create blank project | Dialog with a project name. | None |
 | Create from GitHub | Dialog creates the project, then saves `sourceControl.repository` with GitHub App sign-in. Without access to the new project, the repository is not saved and a note says so. | Owner grant on create |
@@ -103,7 +106,7 @@ surface is hidden for a reason other than a missing API.
 | Settings > Danger zone | Archive and restore. | Project delete |
 | Settings > Advanced | Full configuration JSON, as a fallback. | None |
 | Platform settings | All 16 platform component areas with owner, readiness, and active and available implementations. An area whose owner did not report reads **Status not reported**. Only tenant and platform administrators can read it. | Operations summary (for the other administrator pages) |
-| Board | Hidden. | Board and workflows |
+| Board | 0.x kanban look with **Backlog**, **Ready**, **Active**, and **Done** columns, column counts, summary strip, and zoom. Cards show title, description, prerequisites, linked issue with its state, and **Automation running**. **Intake** captures a task. Cards edit title and description. Moving tasks is disabled with the note "Moving tasks between columns is not available yet." The Human Review and Problems columns are not shown. | Backlog task moves |
 | Flow | Hidden. | Board and workflows |
 | Workspace | Hidden. Run Changes covers the run's repository. | — |
 | Workflows | Hidden. | Board and workflows |
@@ -115,7 +118,7 @@ surface is hidden for a reason other than a missing API.
 Hidden routes use one shared **Not available in this version** page with a
 reason and a link back. They do not appear in navigation. Unknown addresses
 show **Page not found**. The hidden routes are `/observability/*` and the
-project `board`, `flow`, `workspace`, `workflows`, `observability/*`,
+project `flow`, `workspace`, `workflows`, `observability/*`,
 `diagnostics`, `heartbeat`, and `cluster` paths.
 
 `/console` opens `/assistant`, and `/projects/:projectId/sessions` opens
@@ -128,7 +131,8 @@ them. Until an API exists, the pages that need it stay hidden or limited.
 
 | API | Unblocks |
 | --- | --- |
-| Board and workflows | Board, Flow, Workflows, Start task, and the target of backlog promotion links. |
+| Board and workflows | Flow and Workflows. |
+| Backlog task moves | Moving, reordering, and archiving tasks on the Board, editing dependencies, and sending all Backlog tasks to Ready. |
 | Cross-project metrics | Metrics totaled across projects on Overview. |
 | AI casting | The AI Formulate and Analyze modes and the Universe picker on Cast a team. |
 | Skill management | Suggested marketplaces, and deleting, uploading, and creating skills. |
@@ -143,6 +147,18 @@ Other gaps:
   your permissions. A `503 role_assignment_unavailable` response shows "Role
   changes aren't available yet."
 - **Project delete:** no endpoint. Danger zone offers archive and restore.
+- **Backlog task moves:** the Board reads with
+  `GET /api/v1/projects/{projectId}/backlog` and
+  `GET /api/v1/projects/{projectId}/source-control/issues`, captures with
+  `POST /api/v1/projects/{projectId}/backlog/tasks`, and edits with
+  `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/content`. Moving
+  a card needs `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/state`
+  with `{ state, expectedGraphRevision, expectedTaskRevision }`. Reordering
+  needs a position operation. Archiving needs
+  `POST /api/v1/projects/{projectId}/backlog/tasks/{taskId}/archive`.
+  Dependencies need `PUT` and `DELETE` on
+  `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}`.
+  These operations exist only on run-scoped orchestrator routes today.
 - **Project health:** no endpoint for a live status dot. The dashboard shows
   readiness from saved configuration.
 - **Owner grant on create:** creating a project does not grant the creator

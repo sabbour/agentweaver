@@ -7,9 +7,13 @@ import { BrokerIdentity, RetainedShell } from './RetainedShell';
 import { useSharedRunAttention } from './RunAttentionContext';
 import type { RunAttention } from './runAttention';
 
-const mocks = vi.hoisted(() => ({ apiCall: vi.fn(), useRunAttention: vi.fn(), instances: 0 }));
+const mocks = vi.hoisted(() => ({ apiCall: vi.fn(), useRunAttention: vi.fn(), instances: 0, listProjects: vi.fn(), getAuthorizationContext: vi.fn() }));
 const signOut = vi.fn();
 vi.mock('./AuthContext', () => ({ useAuth: () => ({ signOut, session: { accessToken: 'token' }, apiCall: mocks.apiCall }) }));
+vi.mock('./api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./api')>(),
+  gatewayClient: { listProjects: mocks.listProjects, getAuthorizationContext: mocks.getAuthorizationContext },
+}));
 vi.mock('./runAttention', async (importOriginal) => ({
   ...await importOriginal<typeof import('./runAttention')>(),
   // Counts hook instances: each mounted instance would run its own poll.
@@ -26,11 +30,21 @@ const attention: RunAttention = {
 beforeEach(() => {
   mocks.instances = 0;
   mocks.useRunAttention.mockReset().mockReturnValue(attention);
-  // The shell loads the project list for the switcher.
-  mocks.apiCall.mockReset().mockResolvedValue([
+  // The shell loads the project list for the switcher, and Start task reads the caller's access.
+  mocks.apiCall.mockReset().mockImplementation((operation: (token: string, tenant: string) => Promise<unknown>) => operation('token', 'tenant-1'));
+  mocks.listProjects.mockReset().mockResolvedValue([
     { projectId: 'p1', name: 'Alpha', state: 'active', revision: 1, configurationRevision: 1, createdAt: '', updatedAt: '' },
   ]);
+  mocks.getAuthorizationContext.mockReset().mockResolvedValue(authorization(['readProjects', 'writeProjects']));
 });
+
+function authorization(permissions: string[]) {
+  return {
+    contractVersion: 1, issuer: 'https://broker.test', actorId: 'user-1', tenantId: 'tenant-1', membershipRevision: 1,
+    boundProjectId: null, boundRunId: null,
+    effectiveAuthority: [{ resourceType: 'project', resourceId: 'p1', permissions: permissions.map((permission) => ({ permission, roleRevision: 1 })) }],
+  };
+}
 
 /** A page that reads the shared notifications state, like the Overview list. */
 function AttentionReader({ onRead }: { onRead: (value: RunAttention) => void }) {
@@ -90,5 +104,25 @@ describe('RetainedShell', () => {
     expect(screen.getByRole('button', { name: 'Settings' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBeNull();
     await waitFor(() => expect(mocks.apiCall).toHaveBeenCalled());
+  });
+
+  it('shows Board in the project rail and Start task for users who can change the project', async () => {
+    renderShell('/projects/p1');
+    expect((await screen.findByRole('link', { name: 'Board' })).getAttribute('href')).toBe('/projects/p1/board');
+    expect(await screen.findByRole('button', { name: 'Start task' })).toBeTruthy();
+  });
+
+  it('hides Start task from users who can only view the project', async () => {
+    mocks.getAuthorizationContext.mockResolvedValue(authorization(['readProjects']));
+    renderShell('/projects/p1');
+    await waitFor(() => expect(mocks.getAuthorizationContext).toHaveBeenCalled());
+    await screen.findByRole('link', { name: 'Board' });
+    expect(screen.queryByRole('button', { name: 'Start task' })).toBeNull();
+  });
+
+  it('hides Start task outside a project', async () => {
+    renderShell('/overview');
+    await waitFor(() => expect(mocks.listProjects).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: 'Start task' })).toBeNull();
   });
 });

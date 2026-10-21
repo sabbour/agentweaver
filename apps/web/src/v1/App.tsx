@@ -102,6 +102,7 @@ import { isRunFinished, runState } from './runState';
 import { DashboardPage } from './DashboardPage';
 import { OverviewPage } from './OverviewPage';
 import { OrchestrationsPage } from './OrchestrationsPage';
+import { BoardPage } from './BoardPage';
 import { SessionsPage } from './SessionsPage';
 import { NewSessionPage } from './NewSessionPage';
 import { readPendingRun } from './pendingRun';
@@ -3232,6 +3233,7 @@ function AuthenticatedRoutes() {
       {/* "knowledge" is the older address for Memories; both show the same page. */}
       <Route path="/projects/:projectId/knowledge" element={<Shell><KnowledgePage /></Shell>} />
       <Route path="/projects/:projectId/memories" element={<Shell><KnowledgePage /></Shell>} />
+      <Route path="/projects/:projectId/board" element={<Shell><BoardPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations" element={<Shell><OrchestrationsPage /></Shell>} />
       <Route path="/projects/:projectId/sessions" element={<Navigate to="/sessions" replace />} />
       <Route path="/projects/:projectId/runs/:runId" element={<Shell><RunPage /></Shell>} />
@@ -3260,7 +3262,6 @@ function CoordinatorRunRedirect() {
  * page that explains this, instead of calling the old monolith APIs or showing "not found".
  */
 const unavailableProjectPages = [
-  { segment: 'board', title: 'Board', description: 'The project board is not available in this version. Open Orchestrations to review runs and approvals.' },
   { segment: 'flow', title: 'Flow', description: 'Project-wide agent activity is not available in this version. Open Orchestrations, then a run, to view its session topology.' },
   { segment: 'workspace', title: 'Workspace', description: 'Project file browsing is not available in this version. A run shows its changes in the Changes tab.' },
   { segment: 'workflows', title: 'Workflows', description: 'The workflow editor is not available in this version. Workflow references remain in Project settings.' },

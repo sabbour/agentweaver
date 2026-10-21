@@ -10,6 +10,7 @@ import { PageContainer } from '../components/ui/PageContainer';
 import { AttentionBell } from './AttentionList';
 import { useAuth } from './AuthContext';
 import { RunAttentionProvider, useSharedRunAttention } from './RunAttentionContext';
+import { StartTaskAction } from './StartTaskAction';
 import { gatewayClient } from './api';
 import type { ProjectSummary } from './contracts';
 import packageInfo from '../../package.json';
@@ -145,7 +146,7 @@ export function RetainedShell({ children }: { children: ReactNode }) {
             Sessions group with its New session button. */}
         <LeftNavView
           visibleGlobalKeys={['overview', 'projects', 'sessions']}
-          visibleProjectKeys={['dashboard', 'orchestrations', 'agents', 'skills', 'memories']}
+          visibleProjectKeys={['dashboard', 'board', 'orchestrations', 'agents', 'skills', 'memories']}
           showNewSession
           projectId={projectId}
           pathname={location.pathname}
@@ -169,6 +170,9 @@ export function RetainedShell({ children }: { children: ReactNode }) {
         />
         <div className="aw-shell-canvas">
           <main className="aw-shell-content" aria-label="Main content">
+            {/* 0.x placed Start task above the page. Inside a project it adds a task
+                to that project's backlog; outside a project there is no target, so it is hidden. */}
+            {projectId && <StartTaskAction projectId={projectId} projectName={projectNames.get(projectId)} />}
             <div className="aw-shell-scroll">
               <PageContainer>
                 {current?.error && <MessageBar intent="error"><MessageBarBody>{current.error}</MessageBarBody></MessageBar>}

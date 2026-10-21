@@ -76,6 +76,7 @@ The client uses these routes:
 | `/projects` | Browse project tiles and create a project. Creating a project does not make you its owner. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, metrics, usage, recent runs, team, and quick actions. |
 | `/projects/:projectId/orchestrations` | List this project's active and finished runs and open a run. |
+| `/projects/:projectId/board` | Read the project **Board**: backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture a task and edit a task's title and description. |
 | `/projects/:projectId/team` | Read agents, edit an agent's role and charter, add a member, and export or import the team. |
 | `/projects/:projectId/team/cast` | Cast a team from a template or chosen roles, then review and confirm the proposal. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
@@ -110,7 +111,7 @@ are two kinds of item:
 - A pending question or approval in a run. Select it to open that run's
   **Approvals** tab.
 - A backlog promotion, shown as **N subtasks created**. It links to the
-  project **Board**, which isn't available in this version.
+  project **Board**.
 
 Each item has **Dismiss**. Dismissing hides the item for you only. It does not
 answer or resolve the request.
@@ -131,6 +132,7 @@ Within a project, use these destinations:
 | Destination | Route | What you can do |
 | --- | --- | --- |
 | Dashboard | `/projects/:projectId` | Read setup readiness from the saved configuration, metric tiles, the **Activity** chart, run totals, model and agent usage, recent runs, and the team. Use quick actions to finish setup or open Orchestrations and Memories. |
+| Board | `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture a task in **Intake** and edit a task's title and description. Select **Refresh** to reload. |
 | Orchestrations | `/projects/:projectId/orchestrations` | List the project's runs in **Active** and **Recent** sections, with a status summary. Select **Refresh** to reload. |
 | Agents | `/projects/:projectId/team` | Read the **Total**, **In the team**, and **Not in the team** counts. Filter the agent tiles. Open an agent to read its ID, team position, and skills, or edit its role and charter. Use **Cast team**, **Add member**, and **Sync**. |
 | Skills | `/projects/:projectId/skills` | Browse marketplace sources, preview and import Skills, read the inventory, and assign Skills to agents. |
@@ -140,6 +142,33 @@ Open **Settings** in the rail to reach **Account settings** or **Project
 settings**. In project settings, use **Connections** for the GitHub Repo App,
 Copilot, and Remote MCP. Existing `/orchestrations/:runId` links keep their
 query parameters when they open the run.
+
+### Board and Start task
+
+The **Board** shows the project's backlog. It reads the backlog graph and
+the repository issues synced to tasks:
+
+- **Backlog** holds captured tasks. **Ready** holds tasks waiting to be
+  claimed. **Active** holds claimed tasks. **Done** holds tasks whose issue or
+  lifecycle is closed. Archived tasks are not shown.
+- A card shows the task title and description, its prerequisites by title,
+  and its linked issue as `owner/name#number` with **Open** or **Closed**.
+  **Automation running** marks a task that an automation is changing.
+- With permission to change the project, use **Intake** to capture a task
+  into **Backlog**. Select the edit button on a card to change its title and
+  description. Edit is hidden while an automation runs on the task.
+- A write sends the revision the Board last read. If another change got there
+  first, a capture retries once with the new revision. Edits reload the Board
+  and ask you to try again.
+- Moving tasks between columns is not available yet. Cards can't be dragged.
+- Without read access, the Board says you don't have permission to view it.
+  A failed read shows the reason and **Try again**.
+
+**Start task** is the floating button at the top of every project page. It
+appears only when you can change the project. It opens **Start a task**, adds
+the task to that project's **Backlog**, and then opens the Board with a
+confirmation. Unlike 0.x, it doesn't start a run; open **New session** for
+that.
 
 ### Find a run
 
@@ -232,7 +261,7 @@ message.
 
 ### Unavailable destinations
 
-Board, Flow, Workspace, Workflows, Observability, Diagnostics, Heartbeat, and
+Flow, Workspace, Workflows, Observability, Diagnostics, Heartbeat, and
 Cluster are not navigation choices. Their old links show one **Not available
 in this version** page with a reason and a link back. Unknown addresses show
 **Page not found**. Neither page invents data or calls the old monolith.
@@ -557,8 +586,10 @@ missing measurements with zero.
 
 These 0.x features are not in this version:
 
-- The project **Board** page. Backlog promotion notifications link to it, and
-  the link opens the **Not available in this version** page.
+- Moving, reordering, or archiving tasks on the **Board**, and editing task
+  dependencies. The Board says "Moving tasks between columns is not available
+  yet." and cards can't be dragged.
+- The **Human Review** and **Problems** columns on the **Board**.
 - The suggested skill marketplaces panel on **Skills**.
 - The **AI Formulate** and **Analyze** casting modes and the **Universe**
   picker on **Cast a team**.

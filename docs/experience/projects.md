@@ -1,7 +1,8 @@
 # Projects
 
 Use this page to browse projects visible to your current identity, create a
-project, and use a project's **Dashboard** and **Orchestrations** pages.
+project, and use a project's **Dashboard**, **Board**, and **Orchestrations**
+pages.
 Project access and configuration are owned by Projects & Config. The app
 does not grant access. To start a run, see
 [Runs and sessions](./runs-sessions.md#start-a-new-chat).
@@ -73,6 +74,45 @@ project only.
 Select **Refresh** to reload the project, its configuration, the run list,
 and the metrics.
 
+## Use the project Board
+
+**Prerequisites:** Permission to view the project. Capturing and editing tasks
+need permission to change the project.
+
+1. Select **Board** in the project rail, or open `/projects/:projectId/board`.
+   A backlog promotion notification opens the same page.
+2. Read the tasks in their columns:
+   - **Backlog**: captured tasks that are not queued yet.
+   - **Ready**: tasks queued and waiting to be claimed.
+   - **Active**: tasks that a run has claimed.
+   - **Done**: tasks whose lifecycle is closed.
+3. To add a task, enter a title under **Intake** and select **Add**.
+4. To change a task, select its edit button, change **Title** or
+   **Description**, and select **Save**.
+
+Each card shows the title, description, prerequisites by title, and the
+linked repository issue as `owner/name#number` with **Open** or **Closed**.
+**Automation running** marks a task that an automation is changing. You
+can't edit that task until the automation finishes. Archived tasks are not
+shown. The summary strip shows queued, active, and done counts and jumps to
+a column. Use the zoom controls or Ctrl and the scroll wheel to zoom.
+
+**Start task** is the floating button at the top of every project page. It
+opens **Start a task**. Enter a title and select **Add**. The app adds the
+task to the project's Backlog and opens the Board, which confirms the new
+task. Start task does not start a run. To start a run, use **New session**.
+
+Each write sends the backlog revision the app last read. If another change
+was saved first, a capture reads the backlog again and retries once. An edit
+reloads the Board and asks you to try again.
+
+**Expected result:** The new task appears in **Backlog**. A saved edit shows
+**Task saved.**
+
+Moving tasks between columns is not available yet, and cards can't be
+dragged. The Board also has no archive, reorder, or dependency controls,
+and no **Human Review** or **Problems** columns.
+
 ## Open an existing run
 
 1. Open **Orchestrations** for the project.
@@ -97,13 +137,16 @@ See [Runs and sessions](./runs-sessions.md) for the data the run page reads.
 - An empty gallery shows **No projects yet**. The owner returned no projects
   for the current identity and role assignments.
 - Failed requests show the error message and structured error code when present.
+- Without permission to view a project's backlog, the Board shows **No access
+  to this board**. Other Board read failures show **Couldn't load the board**
+  with **Try again**. An empty backlog shows **No tasks yet**.
 - The app rejects a project response that does not match the route's project ID.
 - Project access and configuration access are separate owner checks. Listing a
   project does not grant permission to change it.
 
 You can rename, archive, and restore a project in
 [Project settings](./configuration.md). The v1 browser has no controls for
-project deletion, a kanban board, or repository cloning.
+project deletion or repository cloning.
 
 ## Requests
 
@@ -121,6 +164,10 @@ are source candidates; the route list does not confirm deployment.
 | List runs | `GET /api/v1/projects/{projectId}/runs` | Orchestrator | Returns one page of runs, newest first. The `state` filter and `cursor` select the rows. |
 | Read run metrics | `GET /api/v1/projects/{projectId}/metrics` | Orchestrator | Returns run counts and daily buckets for a UTC range of up to 92 days. |
 | Read usage | `GET /api/v1/projects/{projectId}/usage` | Events & Sessions | Returns usage and cost subtotals by model and agent for the same range. |
+| Read the backlog | `GET /api/v1/projects/{projectId}/backlog` | Orchestrator | Returns the backlog graph: revision, tasks, and dependencies. |
+| Capture a task | `POST /api/v1/projects/{projectId}/backlog/tasks` | Orchestrator | Adds a task to Backlog with a client-chosen task ID and the expected graph revision. |
+| Edit a task | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/content` | Orchestrator | Replaces the title and description with the expected graph and task revisions. |
+| List synced issues | `GET /api/v1/projects/{projectId}/source-control/issues` | Orchestrator | Returns repository issues synced to backlog tasks. The Board reads every page with `state=all`. |
 
 The app includes the tenant selector only when its current authorization
 context confirms one. See the

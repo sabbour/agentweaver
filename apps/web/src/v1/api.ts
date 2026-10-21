@@ -15,6 +15,11 @@ import type {
   ProjectCastingTemplateDefinition,
   ProjectCastingTransfer,
   UpdateProjectCastingProposalRequest,
+  BacklogGraph,
+  CaptureBacklogTaskRequest,
+  EditBacklogTaskContentRequest,
+  ProjectIssuePage,
+  ProjectIssueStateFilter,
   ProjectMetrics,
   ProjectRunPage,
   ProjectRunStateFilter,
@@ -98,7 +103,12 @@ function problemMessage(problem: Record<string, unknown>, status: number): strin
   const detail = typeof problem.detail === 'string' ? problem.detail : undefined;
   const title = typeof problem.title === 'string' ? problem.title : undefined;
   const code = typeof problem.code === 'string' ? problem.code : undefined;
-  return detail ?? title ?? code ?? `The request failed with HTTP ${status}.`;
+  // Backlog writes reject with `{ issues: [{ code, path, message }] }` instead of a
+  // problem document, so fall back to the first issue message when no detail exists.
+  const issues = Array.isArray(problem.issues) ? problem.issues : [];
+  const firstIssue = issues.find((issue): issue is { message: string } =>
+    !!issue && typeof issue === 'object' && typeof (issue as { message?: unknown }).message === 'string');
+  return detail ?? title ?? code ?? firstIssue?.message ?? `The request failed with HTTP ${status}.`;
 }
 
 /** Encodes each path segment independently so identifiers cannot alter route structure. */
@@ -1274,6 +1284,101 @@ export class AgentweaverGatewayClient {
     if (metrics?.projectId !== projectId || !Array.isArray(metrics.series))
       throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned metrics for a different project.');
     return metrics;
+  }
+
+  /** Rejects a backlog graph that is malformed or belongs to another project. */
+  private static checkedBacklogGraph(graph: BacklogGraph | undefined, projectId: string): BacklogGraph {
+    // The board trusts revision numbers for optimistic writes, so a graph without
+    // them, or for another project, must never reach the page.
+    if (graph?.projectId !== projectId
+      || typeof graph.revision !== 'number'
+      || !Array.isArray(graph.tasks)
+      || !Array.isArray(graph.dependencies))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned a backlog for a different project.');
+    return graph;
+  }
+
+  /** Reads the project's backlog tasks and dependencies. Needs read access to the project. */
+  async readProjectBacklog(token: string, projectId: string, tenantSelector?: string | null): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /**
+   * Adds one task to the project backlog and returns the new graph. Needs write
+   * access. A stale `expectedGraphRevision` is rejected with HTTP 409.
+   */
+  async captureBacklogTask(
+    token: string,
+    projectId: string,
+    request: CaptureBacklogTaskRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /**
+   * Replaces one task's content and returns the new graph. Needs write access.
+   * Stale revisions, archived tasks, and tasks with a pending automation
+   * invocation are rejected with HTTP 409; an unknown task with HTTP 404.
+   */
+  async editBacklogTaskContent(
+    token: string,
+    projectId: string,
+    taskId: string,
+    request: EditBacklogTaskContentRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'content')}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /**
+   * Lists one page of the project's synced repository issues. The service reads
+   * stored issues only. Pass `cursor` from the previous page with the same filter.
+   */
+  async listProjectIssues(
+    token: string,
+    projectId: string,
+    options: { state?: ProjectIssueStateFilter; cursor?: string | null; pageSize?: number } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectIssuePage> {
+    // Only set parameters are sent, so the service applies its own defaults.
+    const query = new URLSearchParams();
+    if (options.state) query.set('state', options.state);
+    if (options.cursor) query.set('cursor', options.cursor);
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    const encoded = query.toString();
+    const suffix = encoded ? `?${encoded}` : '';
+    const page = await this.request<ProjectIssuePage>(
+      token,
+      `/projects/${encodeSegments(projectId, 'source-control', 'issues')}${suffix}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (page?.projectId !== projectId || !Array.isArray(page.items))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned issues for a different project.');
+    return page;
   }
 
   /** Reads token use and cost grouped by model and by agent for the same range rules as metrics. */

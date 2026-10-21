@@ -841,6 +841,93 @@ export interface ProjectIssuePage {
   nextCursor: string | null;
 }
 
+/** Queue state of one backlog task. `claimed` means a run has taken the task. */
+export type BacklogTaskState = 'backlog' | 'ready' | 'claimed';
+
+/** Whether the task's work is still open. Issue sync closes a task when its issue closes. */
+export type BacklogTaskLifecycle = 'open' | 'closed';
+
+/** Identifies one task inside one project's backlog. */
+export interface BacklogTaskReference {
+  projectId: string;
+  taskId: string;
+}
+
+/** The repository issue that a backlog task tracks. One issue links to at most one task per project. */
+export interface BacklogRepositoryIssueLink {
+  providerId: string;
+  repository: ProjectSourceControlRepository;
+  issueNumber: number;
+}
+
+/**
+ * Editable task content. The title is 1 to 512 characters without control
+ * characters, and the description is at most 65536 characters.
+ */
+export interface BacklogTaskContent {
+  title: string;
+  description?: string | null;
+  lifecycle?: BacklogTaskLifecycle;
+  repositoryIssue?: BacklogRepositoryIssueLink | null;
+}
+
+/** One task in the backlog graph. `revision` changes on every write to the task. */
+export interface BacklogTaskSnapshot {
+  reference: BacklogTaskReference;
+  revision: number;
+  state: BacklogTaskState;
+  isArchived: boolean;
+  /** True while an automation invocation for the task is pending. The task can't be edited then. */
+  isAutomationInvocationPending: boolean;
+  title: string;
+  description?: string | null;
+  lifecycle: BacklogTaskLifecycle;
+  repositoryIssue?: BacklogRepositoryIssueLink | null;
+}
+
+/** `task` can start only after `prerequisite` is done. */
+export interface BacklogDependencyEdge {
+  task: BacklogTaskReference;
+  prerequisite: BacklogTaskReference;
+}
+
+/** A project's backlog tasks and their dependencies. `revision` changes on every write to the graph. */
+export interface BacklogGraph {
+  projectId: string;
+  revision: number;
+  tasks: BacklogTaskSnapshot[];
+  dependencies: BacklogDependencyEdge[];
+}
+
+/**
+ * Adds one task to the project backlog. The caller picks `taskId` and keeps it
+ * for retries, so a repeated request can't add the task twice.
+ */
+export interface CaptureBacklogTaskRequest {
+  taskId: string;
+  content: BacklogTaskContent;
+  expectedGraphRevision: number;
+}
+
+/** Replaces one task's content when both revisions still match. */
+export interface EditBacklogTaskContentRequest {
+  content: BacklogTaskContent;
+  expectedGraphRevision: number;
+  expectedTaskRevision: number;
+}
+
+/** One reason a backlog write was rejected. `code` is a camelCase issue name such as `staleGraphRevision`. */
+export interface BacklogIssue {
+  code: string;
+  path: string;
+  message: string;
+}
+
+/** Error body of a rejected backlog write (400, 404, or 409). */
+export interface BacklogIssues {
+  issues: BacklogIssue[];
+}
+
 /** Recorded pull request state filter for `listProjectPullRequests`. The default is `open`. */
 export type ProjectPullRequestStateFilter = 'open' | 'closed' | 'merged' | 'all';
 

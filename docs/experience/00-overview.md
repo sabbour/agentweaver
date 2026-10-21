@@ -52,6 +52,7 @@ first, and load more rows with **Load more**.
 | `/projects` | Browse project tiles and create a project. |
 | `/projects/:projectId` | Read the project **Dashboard**: setup readiness, run metrics, usage, recent runs, team, and quick actions. |
 | `/projects/:projectId/orchestrations` | List this project's **Active** and **Recent** runs and open a run. |
+| `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns, capture a task, and edit a task's title and description. |
 | `/projects/:projectId/team` | Review the project's agents, edit a charter, add a member, and export or import the team. |
 | `/projects/:projectId/team/cast` | Cast a team from a template or a list of roles, then review and confirm it. |
 | `/projects/:projectId/skills` | Browse, preview, import, and assign Skills. |
@@ -66,7 +67,7 @@ The run page's `view` query parameter accepts `chat`, `topology`,
 **Chat** opens by default and for an unknown `view` value. The older
 `/projects/:projectId/orchestrations/:runId` route redirects to the run route.
 
-Navigation hides 0.x destinations that have no v1 API: Board, Flow,
+Navigation hides 0.x destinations that have no v1 API: Flow,
 Workspace, Workflows, Observability, Diagnostics, Heartbeat, and Cluster.
 Their old addresses open one **Not available in this version** page that
 explains why and links back. The old project sessions address opens
@@ -78,9 +79,13 @@ projects:
 - A question or approval that needs your input. Select it to open that run's
   **Approvals** tab.
 - A backlog promotion, shown as **N subtasks created**. It links to the
-  project Board, which is not available in this version.
+  project Board.
 
 Select **Dismiss** to hide a notification for you only.
+
+On project pages, a floating **Start task** button adds a task to the
+project's Backlog and opens the Board. It appears only when you can change
+the project. See [Projects](./projects.md#use-the-project-board).
 
 ## Model defaults
 

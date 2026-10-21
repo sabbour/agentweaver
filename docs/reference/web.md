@@ -38,6 +38,8 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/ProjectMetricsSections.tsx`, `src/v1/projectMetrics.ts` | Project run metrics and usage over 7, 30, or 90 days. Costs show one subtotal for each price unit and disposition and are never added together. |
 | `src/v1/DashboardPage.tsx` | Project dashboard: readiness from configuration, metrics and usage, recent runs, team summary, and quick actions. |
 | `src/v1/OrchestrationsPage.tsx` | Project **Active** and **Recent** run lists with a status summary. |
+| `src/v1/BoardPage.tsx`, `src/v1/boardData.ts` | Project Board: backlog graph and synced issues in **Backlog**, **Ready**, **Active**, and **Done** columns, task capture, and title and description edits with revision checks. Column moves are disabled because no move operation exists. |
+| `src/v1/StartTaskAction.tsx` | Floating **Start task** button and dialog on project pages. It captures a task into the project backlog with the retained `CaptureTaskForm` and opens the Board. Hidden without permission to change the project. |
 | `src/v1/RunList.tsx`, `src/v1/runListData.ts` | Shared run list and its data source: the project run list API, with state filters and cursor paging. |
 | `src/v1/DecisionView.tsx`, `src/v1/decisionTitles.ts` | Shared decision view that rereads a gate before it approves or rejects. |
 | `src/v1/AttentionList.tsx`, `src/v1/runAttention.ts` | Caller notifications across projects, for Overview and the notification bell: pending gates and backlog promotions, each with **Dismiss**. |
@@ -73,6 +75,7 @@ data hooks are not mounted.
 | `/projects/:projectId/skills` | `ProjectConfigurationPage` on its Skills section. |
 | `/projects/:projectId/team` | `ProjectConfigurationPage` on its Agents section. |
 | `/projects/:projectId/orchestrations` | `OrchestrationsPage`. |
+| `/projects/:projectId/board` | `BoardPage`. Each navigation reloads the backlog, so backlog promotion links and **Start task** show current tasks. |
 | `/projects/:projectId/knowledge`, `/projects/:projectId/memories` | `KnowledgePage`; `runId` and `agentId` query values prefill scope. |
 | `/projects/:projectId/team/:agentName/memory` | Redirect to Memories with `agentId` prefilled. |
 | `/settings` | Account settings: clear the session and manage the Repo App account. |
@@ -88,7 +91,7 @@ data hooks are not mounted.
 | `/auth/remote-mcp/oauth/callback` | Remote MCP OAuth popup callback, handled before the main route tree. |
 | `/console` | Redirect to `/assistant`. |
 | `/projects/:projectId/sessions` | Redirect to `/sessions`. |
-| `/observability/*` and the project `board`, `flow`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
+| `/observability/*` and the project `flow`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
 | Other paths | `UnavailablePage` with **Page not found**. |
 
 The production host serves `index.html` for client routes. Missing `/assets`

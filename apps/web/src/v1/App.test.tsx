@@ -58,6 +58,9 @@ const mocks = vi.hoisted(() => ({
   getAuthorizationContext: vi.fn(),
   listProjectRoleAssignments: vi.fn(),
   createProject: vi.fn(),
+  readProjectBacklog: vi.fn(),
+  captureBacklogTask: vi.fn(),
+  listProjectIssues: vi.fn(),
 }));
 
 vi.mock('./api', () => ({
@@ -104,6 +107,9 @@ vi.mock('./api', () => ({
     getAuthorizationContext: mocks.getAuthorizationContext,
     listProjectRoleAssignments: mocks.listProjectRoleAssignments,
     createProject: mocks.createProject,
+    readProjectBacklog: mocks.readProjectBacklog,
+    captureBacklogTask: mocks.captureBacklogTask,
+    listProjectIssues: mocks.listProjectIssues,
   },
   GatewayError: class GatewayError extends Error {
     status: number;
@@ -467,6 +473,9 @@ describe('v1 web project scoping', () => {
       }],
     });
     mocks.listProjectRoleAssignments.mockReset().mockResolvedValue({ projectId: 'p1', assignments: [] });
+    mocks.readProjectBacklog.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, revision: 1, tasks: [], dependencies: [] }));
+    mocks.captureBacklogTask.mockReset();
+    mocks.listProjectIssues.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, items: [], nextCursor: null }));
     mocks.streamEvents.mockReset();
     mocks.streamEvents.mockImplementation(() => {
       throw new Error('The event stream is not used by this test.');
@@ -532,7 +541,8 @@ describe('v1 web project scoping', () => {
     const nav = screen.getByRole('navigation', { name: 'Primary navigation' });
     expect(within(nav).getByRole('link', { name: 'Orchestrations' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Skills' })).toBeTruthy();
-    for (const name of ['Board', 'Flow', 'Workspace', 'Workflows', 'Observability', 'Diagnostics', 'Heartbeat', 'Cluster']) {
+    expect(within(nav).getByRole('link', { name: 'Board' }).getAttribute('href')).toBe('/projects/p1/board');
+    for (const name of ['Flow', 'Workspace', 'Workflows', 'Observability', 'Diagnostics', 'Heartbeat', 'Cluster']) {
       expect(within(nav).queryByRole('link', { name })).toBeNull();
     }
     fireEvent.click(screen.getByRole('button', { name: 'Collapse navigation' }));
@@ -541,7 +551,7 @@ describe('v1 web project scoping', () => {
     expect(nav.getAttribute('data-collapsed')).toBe('false');
   });
 
-  it.each(['board', 'flow', 'workspace', 'workflows', 'observability/traces', 'diagnostics', 'heartbeat', 'cluster'])(
+  it.each(['flow', 'workspace', 'workflows', 'observability/traces', 'diagnostics', 'heartbeat', 'cluster'])(
     'explains unsupported old %s links without pretending the route is Projects',
     async (path) => {
       window.history.replaceState({}, '', `/projects/p1/${path}`);
@@ -551,6 +561,35 @@ describe('v1 web project scoping', () => {
       expect(window.location.pathname).toBe(`/projects/p1/${path}`);
     },
   );
+
+  it('opens the project Board from its address and adds a task through Start task', async () => {
+    const task = (taskId: string, title: string, revision: number) => ({
+      reference: { projectId: 'p1', taskId }, revision, state: 'backlog', isArchived: false,
+      isAutomationInvocationPending: false, title, description: null, lifecycle: 'open', repositoryIssue: null,
+    });
+    mocks.readProjectBacklog.mockResolvedValue({ projectId: 'p1', revision: 3, tasks: [task('t1', 'Existing task', 1)], dependencies: [] });
+    mocks.captureBacklogTask.mockImplementation(async (_token: string, projectId: string, request: { taskId: string; content: { title: string } }) => {
+      // After the capture, reads return the graph with the new task.
+      const graph = { projectId, revision: 4, tasks: [task('t1', 'Existing task', 1), task(request.taskId, request.content.title, 1)], dependencies: [] };
+      mocks.readProjectBacklog.mockResolvedValue(graph);
+      return graph;
+    });
+    window.history.replaceState({}, '', '/projects/p1/board');
+    render(<App />);
+    const backlog = await screen.findByTestId('column-backlog');
+    expect(await within(backlog).findByText('Existing task')).toBeTruthy();
+    expect(screen.queryByText('Not available in this version')).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start task' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'New task title' }), { target: { value: 'Write release notes' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(mocks.captureBacklogTask).toHaveBeenCalledWith(
+      'broker-token', 'p1', expect.objectContaining({ content: { title: 'Write release notes' }, expectedGraphRevision: 3 }), 'tenant-1'));
+    expect(await within(screen.getByTestId('column-backlog')).findByText('Write release notes')).toBeTruthy();
+    expect(window.location.pathname).toBe('/projects/p1/board');
+  });
 
   it('distinguishes unknown addresses from unavailable legacy features', async () => {
     window.history.replaceState({}, '', '/unknown-page');
