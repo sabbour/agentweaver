@@ -711,6 +711,97 @@ export interface SkillContentInventoryPage {
   nextCursor: string | null;
 }
 
+/** Derived run state reported by the project run list. */
+export type ProjectRunState =
+  | 'idle'
+  | 'active'
+  | 'blocked'
+  | 'completed'
+  | 'failed'
+  | 'indeterminate'
+  | 'cancelled';
+
+/** Run-list state filter: one or more states, or the `open` and `terminal` aliases. */
+export type ProjectRunStateFilter = ProjectRunState | 'open' | 'terminal';
+
+/** Actor whose accepted run selection created the run. */
+export interface ProjectRunStartedBy {
+  issuer: string;
+  subject: string;
+}
+
+/** One run in a project run list. Title and goal stay null until a start request stores them. */
+export interface ProjectRunSummary {
+  runId: string;
+  rootSessionId: string | null;
+  title: string | null;
+  goal: string | null;
+  state: ProjectRunState;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  startedBy: ProjectRunStartedBy;
+}
+
+/** One newest-first page of project runs. Pass `nextCursor` back with the same filter and page size. */
+export interface ProjectRunPage {
+  projectId: string;
+  items: ProjectRunSummary[];
+  nextCursor: string | null;
+}
+
+/** Created and terminal-completed run counts on one UTC calendar day. */
+export interface ProjectMetricsDay {
+  date: string;
+  created: number;
+  completed: number;
+}
+
+/** Orchestrator-owned current state, lifetime total, and half-open interval run metrics. */
+export interface ProjectMetrics {
+  projectId: string;
+  from: string;
+  to: string;
+  activeRuns: number;
+  blockedRuns: number;
+  runsInRange: number;
+  runsTotal: number;
+  completedRuns: number;
+  succeededRuns: number;
+  series: ProjectMetricsDay[];
+}
+
+/** Persisted cost subtotal; consumers must not combine units or replace unknown amounts with zero. */
+export interface ProjectUsageCost {
+  priceUnit: string | null;
+  disposition: 'estimate' | 'reconciled' | 'unpriced';
+  amount: number | null;
+}
+
+/** Model or agent ledger aggregate; any missing measurement makes its aggregate null. */
+export interface ProjectUsageItem {
+  id: string;
+  requestCount: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  avgDurationMs: number | null;
+  runs: number;
+  unpricedRequestCount: number | null;
+  cost: ProjectUsageCost[];
+}
+
+/** Events-owned usage grouped independently by persisted model and agent IDs. */
+export interface ProjectUsage {
+  projectId: string;
+  from: string;
+  to: string;
+  usageByModel: ProjectUsageItem[];
+  usageByAgent: ProjectUsageItem[];
+}
+
 /** Revision-fenced skill assignment update sent to the Projects owner. */
 export interface SkillAssignmentRequest {
   expectedProjectConfigurationRevision: number;
