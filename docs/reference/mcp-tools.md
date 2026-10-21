@@ -14,6 +14,12 @@ For route authorization and native-only operations, see the
 
 ## Connect and authenticate
 
+Download the v1 operator definition from the Gateway at
+`GET /agents/agentweaver.agent.md`. Save it as
+`.github/agents/agentweaver.agent.md` in a repository where you want to use it.
+The download is anonymous and returns Markdown; it is not an MCP tool.
+It does not write the file into project or run repositories automatically.
+
 Before you connect, configure the absolute HTTPS Broker issuer, protected
 resource audience, and Gateway service root listed below. Obtain a valid Broker
 access token for the MCP audience. The host maps `/mcp` with the MCP SDK's
@@ -62,9 +68,20 @@ the configured Gateway.
 
 ## Tool index
 
-Every name below has the `agentweaver_` prefix. For example, the first entry is
+Every name below has the `agentweaver_` prefix. For example, `listProjects` is
 `agentweaver_listProjects`. These are the operation IDs in the checked-in
 `GatewayRouteCatalog`.
+
+### Caller attention
+
+| Operation ID | Purpose |
+| --- | --- |
+| `listUserNotifications` | Read pending attention across authorized projects and runs; supports cursor, page size, project filter and dismissed-item inclusion. |
+| `dismissUserNotification` | Dismiss a notification for the caller without resolving its gate. |
+
+These operations come from the same Gateway catalog as the existing tools.
+There is no separate Chief of Staff notification store or bell. See
+[Notifications](../guide/notifications.md).
 
 ### Projects and configuration
 
@@ -74,18 +91,57 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `createProject` | Create a project; does not assign an Owner. |
 | `getProject` | Read project metadata. |
 | `updateProject` | Update metadata at an expected revision. |
+| `listProjectRoleAssignments` | Read project role assignments. |
+| `assignProjectRole` | Assign a project role through owner authorization. |
+| `revokeProjectRoleAssignment` | Revoke a project role assignment. |
 | `getProjectConfiguration` | Read current or retained configuration. |
 | `updateProjectConfiguration` | Append a configuration revision. |
 | `getAuthorizationContext` | Read current tenant and effective authority. |
 | `getPlatformRuntimeDefaults` | Read platform defaults. |
 | `updatePlatformRuntimeDefaults` | Append platform defaults. |
+| `getPlatformComponents` | Read active platform components and their readiness. |
 | `acceptRunSelection` | Accept an immutable run selection. |
 | `getRunSelection` | Read the accepted selection. |
+| `readIssueSync` | Read periodic issue sync status. |
+| `configureIssueSync` | Enable, disable, and bound periodic issue sync. |
+| `createIssueSyncGrant` | Create project issue-sync authority. |
+| `readIssueSyncGrant` | Validate current issue-sync authority. |
+| `revokeIssueSyncGrant` | Revoke project issue-sync authority. |
+| `listRemoteMcpConnections` | List Remote MCP connections with configuration checksums. |
+
+### Casting
+
+Casting tools forward the bearer and optional tenant selector to Projects.
+Revision checks stay inside `body`; no idempotency header is required.
+
+| Operation ID | Purpose |
+| --- | --- |
+| `createProjectCastingProposal` | Stage a complete configuration draft. |
+| `createScenarioProjectCastingProposal` | Stage a built-in scenario. |
+| `createManualProjectCastingProposal` | Stage selected catalog roles. |
+| `listProjectCastingProposals` | List proposals with optional `limit`. |
+| `getProjectCastingProposal` | Read a proposal. |
+| `updateProjectCastingProposal` | Replace a pending draft at its expected revision. |
+| `confirmProjectCastingProposal` | Confirm reviewed casting at current revisions. |
+| `rejectProjectCastingProposal` | Reject without changing configuration. |
+| `exportProjectCasting` | Export charters and casting; requires write authority. |
+| `importProjectCasting` | Stage a digest-checked transfer; request body limit 1 MiB. |
+| `listProjectCastingTemplates` | Read built-in templates. |
+| `listProjectCastingRoles` | Read built-in roles. |
+
+### Project backlog
+
+| Operation ID | Purpose |
+| --- | --- |
+| `readProjectBacklog` | Read project backlog tasks and dependencies. |
+| `captureBacklogTask` | Capture project backlog work. |
+| `editBacklogTaskContent` | Replace backlog task content and lifecycle. |
 
 ### Skills and marketplace
 
 | Operation ID | Purpose |
 | --- | --- |
+| `listMarketplaceDefinitions` | List suggested marketplaces for a project. |
 | `listMarketplaceSources` | List project marketplace sources. |
 | `createMarketplaceSource` | Add a public source. |
 | `updateMarketplaceSource` | Append a source revision. |
@@ -94,15 +150,34 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `previewMarketplaceSkill` | Validate selected content at the pinned commit. |
 | `importMarketplaceSkill` | Import the selected, previewed content. |
 | `previewSkillContent` | Validate submitted local content without importing. |
+| `packageSkillContent` | Turn uploaded files, a ZIP archive, or draft fields into skill candidates. |
 | `importProjectSkill` | Import validated local content. |
 | `updateProjectSkillAssignment` | Update project assignments at an expected configuration revision. |
 | `listProjectSkillInventory` | Read paginated revision metadata. |
+| `revokeProjectSkillRevision` | Revoke one imported skill revision with a reason. |
 
 ### Coordination
 
 | Operation ID | Purpose |
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
+| `createProjectRun` | Create an interactive run. |
+| `startProjectRun` | Deliver the first run message. |
+| `cancelProjectRun` | Cancel a run. |
+| `listProjectRuns` | List accepted project runs, newest first. |
+| `listProjectIssues` | List synced repository issues stored in the project backlog. |
+| `listProjectPullRequests` | List pull requests that project runs recorded after migration 032 was applied. |
+| `readProjectMetrics` | Read bounded project run counts and daily UTC activity from Orchestrator. |
+| `listChiefOfStaffConversations` | List my private Chief of Staff conversations. |
+| `bindChiefOfStaffConversation` | Bind a run I created to a Chief of Staff conversation. |
+| `getChiefOfStaffConversation` | Read one of my Chief of Staff conversations. |
+| `listChiefOfStaffPriorities` | List my ordered Priorities with resolved links. |
+| `createChiefOfStaffPriority` | Create a Priority. Requires `Idempotency-Key`. |
+| `reorderChiefOfStaffPriorities` | Reorder my Priorities at an expected order revision. |
+| `getChiefOfStaffPriority` | Read one Priority. |
+| `updateChiefOfStaffPriority` | Change a Priority at an expected revision. Never changes run state. |
+| `addChiefOfStaffPriorityLink` | Link a Priority to a run, conversation, issue, pull request, or artifact. |
+| `removeChiefOfStaffPriorityLink` | Remove a Priority link at an expected revision. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |
@@ -139,6 +214,16 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `readPolicyEvaluation` | Read a policy receipt. |
 | `validatePolicyEvaluationAdmission` | Revalidate receipt admission. |
 
+`readProjectMetrics` accepts optional `from`, `to`, and `bucket=day`.
+`readProjectUsage` accepts optional `from` and `to`, and reads Events &
+Sessions ledger totals grouped by model and agent. Both tools use fresh
+project read authority and a half-open UTC interval of at most 92 days,
+defaulting to the last 30 days. A run-bound caller sees only its own run.
+Cost units and dispositions remain separate, unknown values remain `null`,
+and usage reads do not price or change budgets. Cross-project overview is out
+of scope. See [Project metrics and usage](./api.md#project-metrics-and-usage)
+for metric definitions and differences from the 0.x dashboard.
+
 ### Source Control
 
 | Operation ID | Purpose |
@@ -152,6 +237,11 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `prepareSourceControlMergeIntent` | Request merge approval. |
 | `readSourceControlMergeIntent` | Read a merge intent. |
 | `executeSourceControlMergeIntent` | Execute an approved intent. |
+| `captureSourceControlWorkspaceOutput` | Capture the produced output of a workspace. |
+| `listSourceControlOutputCaptures` | List admitted output captures, newest first. |
+| `readSourceControlOutputCapture` | Read a capture and its file list. |
+| `readSourceControlOutputCaptureDiff` | Read the diff of a capture. |
+| `readSourceControlOutputCaptureFile` | Read one captured file. The tool returns the body as text. |
 
 ### Knowledge
 
@@ -175,7 +265,9 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | Operation ID | Purpose |
 | --- | --- |
 | `replayRunEvents` | Read a finite committed journal page. |
+| `readSessionTurnContent` | Read recorded turn text with current run-bound project authority. Excludes cache, configuration, and tool-result material. |
 | `readRunUsage` | Read run usage totals. |
+| `readProjectUsage` | Read persisted project usage grouped by model and agent. |
 
 ## Results and errors
 
@@ -205,7 +297,7 @@ Local error codes include `unknown_tool`, `invalid_arguments`,
   `/api/v1/`.
 - `streamRunEvents` is excluded because it is SSE. Use finite replay tools.
 - Browser connection lifecycle routes and callbacks are outside the catalog.
-- Native-only casting, backlog, runtime, Environment, and private material routes
+- Native-only run backlog, runtime, Environment, and private material routes
   are not tools.
 - Catalog downloads are limited to 2 MiB; owner responses are limited to 8 MiB.
   Gateway request deadlines are ten seconds.

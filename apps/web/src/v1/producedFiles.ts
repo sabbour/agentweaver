@@ -16,4 +16,20 @@ export function decodeCapturedFile(path: string, bytes: Uint8Array): WorkspaceFi
     // Not valid UTF-8, so show it as binary.
     return { path, content: null, is_binary: true, language: null };
   }
+
+}
+
+/** Keeps file identities visible when the retained viewer renders a whole-capture patch. */
+export function splitCapturePatch(patch: string): { filename: string; patch: string }[] {
+  // Only Git headers start an unprefixed "diff --git" line; file content has a diff marker.
+  return patch.split(/(?=^diff --git )/m).filter((section) => section.length > 0).map((section) => {
+    const lines = section.split('\n');
+    const newPath = lines.find((line) => line.startsWith('+++ '))?.slice(4);
+    const oldPath = lines.find((line) => line.startsWith('--- '))?.slice(4);
+    // Deletions have /dev/null as the new path. Keep quoted Git paths escaped rather than
+    // guessing at their encoding; a header fallback also identifies binary and rename-only diffs.
+    const path = newPath && newPath !== '/dev/null' ? newPath : oldPath;
+    const filename = path?.replace(/^[ab]\//, '') ?? lines.find((line) => line.startsWith('diff --git ')) ?? '';
+    return { filename, patch: section };
+  });
 }

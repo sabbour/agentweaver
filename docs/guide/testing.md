@@ -239,6 +239,10 @@ checks. Run the source preflight without starting PostgreSQL:
 dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresInitializerTests
 ```
 
+These source checks include the migration catalog maximum, live-history prefix,
+runtime CONNECT, relation, and schema ACL checks used by
+`--apply-pending-migrations`.
+
 Run the production catalog SQL cases and continuation checks against the
 disposable PostgreSQL fixture:
 
@@ -341,6 +345,24 @@ check the existing provider-catalog reference and environment prefix. They
 do not read or verify a live catalog, create database roles, apply migrations
 or grants, publish images, or deploy a service.
 
+## Test platform component reporting
+
+Run the report tests:
+
+```powershell
+dotnet test tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj --filter FullyQualifiedName~PlatformComponentReportTests
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --filter FullyQualifiedName~PlatformComponentCollectorTests
+dotnet test tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj --filter FullyQualifiedName~PlatformComponentReaderRequiresCurrentTenantAdminOrPlatformAdmin
+```
+
+The first command checks the 16-area catalog, report composition, readiness
+rules, and that the area list matches the table in
+[Provider extensibility](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/provider-seams.md).
+The second checks parallel owner collection, the three-second owner limit, and
+the owner HTTP client. The third needs Docker. It checks that only a current
+TenantAdmin or PlatformAdmin can read the report. These tests don't call
+deployed owner services.
+
 ## Planned GitHub Canvas adapter acceptance
 
 GitHub Canvas adapter cases are unexecuted requirements, not a passing suite
@@ -438,7 +460,7 @@ Use the following table when you report test results:
 | --- | --- | --- |
 | Release and deployment tooling | Source manifests, receipts, release validation, controlled GitHub/registry/Kubernetes transports, and failure handling. | Artifact publication, write access to external registries, a live deployment, or release approval. |
 | Providers and resource selection | Catalog validation, cardinality and override rules, capability negotiation, immutable selection pins, meter-source compatibility, and adapter request contracts. | Resource provisioning, SDK model-source provenance, cloud access, pricing, or network-policy enforcement. |
-| Orchestrator | Workflow grammar and step-DAG validation, bounded WorkPlans, schedule and event-predicate evaluation, backlog graph edits, readiness evidence, MAF capture checks, provider pins, Policy evaluation, and action-guard receipts. PostgreSQL cases exercise backlog edits, concurrent claims, restart replay, and rollback on lost authority. | Automatic workflow initiation, full child dispatch, live model output, deployed authorization, production Prompt Shields transport, trusted Guardrails adapters, MAF gate wiring, or protected-effect call-site enforcement. A compiled PostgreSQL case is not database execution evidence. |
+| Orchestrator | Workflow grammar and step-DAG validation, bounded WorkPlans, schedule and event-predicate evaluation, backlog graph edits, readiness evidence, MAF capture checks, provider pins, Policy evaluation, action-guard receipts, and ordered Guardrails checks with a stubbed Prompt Shields transport. PostgreSQL cases exercise backlog edits, concurrent claims, restart replay, rollback on lost authority, and immutable Guardrails evidence. | Automatic workflow initiation, full child dispatch, live model output, deployed authorization, a live Content Safety resource, MAF gate wiring, or protected-effect call-site enforcement. A compiled PostgreSQL case is not database execution evidence. |
 | Gateway and Identity | Broker-issued tokens, owner authorization fixtures, route contracts, status forwarding, current-grant checks, and reauthorization before event writes. | Deployed Gateway or owner availability, live OAuth, native TLS handshakes, live Kubernetes ownership, or an external identity-provider response. |
 | AgentHost and model execution | The pinned SDK sends real test turns to an isolated loopback endpoint. Tests check bearer, model, request path, session marker, response receipt, and measured compaction under a bounded token limit. | Hosted Copilot, production BYOK access, paid model execution, or deployed runtime behavior. |
 | Cost and usage | Published Copilot rate cards, model-scoped Azure token arithmetic, explicit `Unpriced` results, immutable source bindings, controlled SDK evidence, real disposable PostgreSQL transactions, and replay. The combined Broker scenario controls the external SDK transport and credential backend. | A paid model call, live Azure pricing, or deployed Broker/provider behavior. |

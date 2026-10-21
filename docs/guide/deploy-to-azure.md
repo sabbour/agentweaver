@@ -232,6 +232,25 @@ private `session-material` container only. If an existing target is missing
 that container or grant, use the separately approved
 [focused repair procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#session-material-container-repair);
 do not redeploy the full foundation to repair these resources.
+Orchestrator migration 023 adds interactive run requests and cancellation
+receipts. The reviewed P1 plan includes that migration and grants
+`SELECT, INSERT, UPDATE` on `project_run_requests` and `SELECT, INSERT` on
+`project_run_cancellations`. Migration 023 changes the execution-state CHECK
+constraint on `accepted_runs`, which scans the whole table. The ALTER takes an
+`ACCESS EXCLUSIVE` lock, so reads and writes to `accepted_runs` block until
+the transaction commits. It doesn't alter `sessions` or build indexes on existing
+tables. Review table size and plan a write pause.
+Orchestrator migration 024 adds private Chief of Staff conversations and
+Priorities. It creates four new, empty tables and doesn't alter or scan
+existing tables. The reviewed plan grants `SELECT, INSERT` on
+`chief_of_staff_conversations`, `SELECT, INSERT, UPDATE` on
+`chief_of_staff_priority_lists` and `chief_of_staff_priorities`, and
+`SELECT, INSERT, DELETE` on `chief_of_staff_priority_links`.
+Orchestrator migration 025 adds caller-specific notification dismissals. It
+creates one new, empty table, `user_notification_dismissals`, and doesn't alter
+or scan existing tables. The reviewed plan grants `SELECT, INSERT` on that
+table.
+
 Then review and run the source-bound PostgreSQL initializer:
 
 ```powershell
@@ -256,6 +275,14 @@ verify the database and roles with read-only catalog queries before installing
 the product bundle. The Broker runtime identity does not own the schema. If
 the identity or database setup is not approved or complete, stop before
 applying product workloads.
+
+If the database is already initialized, don't rerun initialization. Read its
+state with `--inspect`, then add later approved migrations with
+`--apply-pending-migrations` and explicit maximum versions. Run that command with
+`--dry-run` first. The
+[Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#applying-later-approved-migrations)
+describes both modes. Services verify their schema version at startup, so
+apply migrations before you install workloads that expect them.
 
 For each database workload, verify that:
 
@@ -598,8 +625,9 @@ The command reports whether it created the grant or found the same active
 grant. A different active TenantAdmin stops the command without changes.
 After the Job succeeds, remove the Job and Secret and delete the local token
 file. Sign in as the approved user and load the Projects page. The page should
-open without `403`. The runtime database role remains SELECT-only on authority
-tables.
+open without `403`. The runtime database role stays read-only on authority
+tables until an operator applies the separately approved role-assignment
+grants. See [Runtime authority writes](../reference/runtime-configuration.md#runtime-authority-writes).
 
 3. Check readiness, the deployed image digests, and the exact ServiceAccount
    on each workload. Review only the affected pod's logs if a rollout fails.

@@ -9,7 +9,9 @@ export function needsModelCredential(
   savedSelection: ModelSelectionSettings | null | undefined,
 ): boolean {
   const selection = configuration.modelSelection;
+  // No pin to lose (nothing was pinned, no model chosen, or hosted Copilot needs no key).
   if (!savedSelection?.credentialReference || !selection?.reference || selection.sourceMode === 'hostedCopilot') return false;
+  // Otherwise the draft needs a complete pin of its own: both id and version.
   return !selection.credentialReference?.id.trim() || !selection.credentialReference.version.trim();
 }
 

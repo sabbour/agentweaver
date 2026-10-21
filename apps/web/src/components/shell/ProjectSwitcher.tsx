@@ -94,6 +94,8 @@ export interface ProjectSwitcherProps {
 export function ProjectSwitcher({
   ...props
 }: ProjectSwitcherProps) {
+  // The 0.x app loads projects with its legacy hook. The v1 shell renders
+  // ProjectSwitcherView directly with projects from the Gateway.
   const state = useProjectList();
   return <ProjectSwitcherView {...props} {...state} />;
 }

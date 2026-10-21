@@ -1,14 +1,12 @@
 /**
- * Shared run list for Orchestrations, Overview, and later Sessions and Flow.
- * The data adapter reads the browser's recent runs today. When the Gateway run
- * list (gap G2) exists, a second adapter returns the same `RunListItem` shape,
- * so callers keep the same layout.
+ * Shared run list for Orchestrations, Sessions, Dashboard, and Overview, in the
+ * 0.x row layout. Rows come from a `RunListData` adapter that reads the
+ * service run list.
  */
-import { Badge, Button, Text, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
-import { DismissRegular } from '@fluentui/react-icons';
-import { useNavigate } from 'react-router-dom';
+import { Badge, Button, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Link } from 'react-router-dom';
 import type { RunListData } from './runListData';
-import { runState } from './runState';
+import { isRunFinished, runState } from './runState';
 
 const useStyles = makeStyles({
   section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
@@ -52,18 +50,21 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalL}`,
     color: tokens.colorNeutralForeground2,
   },
+  footer: { display: 'flex', justifyContent: 'center' },
 });
 
 /** Formats an ISO time for list rows. */
 function formatTime(value: string): string {
   const parsed = new Date(value);
+  // Show the raw text if the value is not a valid date, rather than "Invalid Date".
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
 /**
  * Renders a run list in the 0.x Orchestrations row layout: state, run, time,
- * and an Open action. `projectNames` adds the project name when the list spans
- * projects.
+ * and an Open link to the run page. `projectNames` adds the project name when
+ * the list spans projects. `limit` shows only the first rows and hides Load
+ * more, for summary cards that link to the full list.
  */
 export function RunList({ title, description, data, emptyText, projectNames, limit }: {
   title: string;
@@ -73,9 +74,11 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
   projectNames?: ReadonlyMap<string, string>;
   limit?: number;
 }) {
-  const navigate = useNavigate();
   const styles = useStyles();
   const items = limit ? data.items.slice(0, limit) : data.items;
+  const count = data.items.length;
+  // A "+" shows that the service has more runs than the ones loaded.
+  const countText = `${count}${data.hasMore ? '+' : ''} ${count === 1 && !data.hasMore ? 'run' : 'runs'}`;
   return (
     <section className={styles.section} aria-label={title}>
       <div className={styles.sectionHeader}>
@@ -83,39 +86,41 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
           <Text as="h2" className={styles.sectionTitle}>{title}</Text>
           {description && <Text className={styles.sectionDescription}>{description}</Text>}
         </div>
-        {data.items.length > 0 && <Badge appearance="outline">{data.items.length} {data.items.length === 1 ? 'run' : 'runs'}</Badge>}
+        {count > 0 && <Badge appearance="outline">{countText}</Badge>}
       </div>
       <div className={styles.list}>
         {items.length === 0 ? <Text className={styles.empty}>{emptyText}</Text> : items.map((item) => {
           const state = runState(item.executionState);
+          // Encode both IDs; they come from the service and may hold URL characters.
           const path = `/projects/${encodeURIComponent(item.projectId)}/runs/${encodeURIComponent(item.runId)}`;
           return (
             <div key={`${item.projectId}/${item.runId}`} className={styles.row}>
               <div className={styles.rowStatus}>
                 <Badge appearance="tint" color={state.color}>{state.label}</Badge>
-                <Text className={styles.meta}>{item.executionState ? 'State when last opened' : 'State not read yet'}</Text>
+                <Text className={styles.meta}>{isRunFinished(item.executionState) ? 'Finished' : 'Live run'}</Text>
               </div>
               <div className={styles.rowMain}>
-                <Text className={styles.task}>Run {item.runId}</Text>
+                <Text className={styles.task} title={item.label}>{item.label}</Text>
                 <Text className={styles.meta}>
                   {projectNames ? `${projectNames.get(item.projectId) ?? item.projectId} · ` : ''}
                   {item.time.label} {formatTime(item.time.value)}
                 </Text>
               </div>
               <div className={styles.actions}>
-                <Button appearance="secondary" aria-label={`Open run ${item.runId}`} onClick={() => navigate(path)}>Open</Button>
-                {data.remove && (
-                  <Tooltip content="Remove from this list. The run is not changed." relationship="description">
-                    <Button appearance="subtle" icon={<DismissRegular />} aria-label={`Remove run ${item.runId} from this list`} onClick={() => data.remove?.(item)}>
-                      Remove
-                    </Button>
-                  </Tooltip>
-                )}
+                <Link className="v1-link-button" to={path} aria-label={`Open run ${item.label}`}>Open</Link>
               </div>
             </div>
           );
         })}
       </div>
+      {/* Load more appears only on full lists, and only when the service has another page. */}
+      {!limit && data.hasMore && (
+        <div className={styles.footer}>
+          <Button appearance="secondary" disabled={data.loadingMore} onClick={data.loadMore}>
+            {data.loadingMore ? 'Loading more runs…' : 'Load more'}
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

@@ -56,7 +56,8 @@ public sealed class GatewayOwnerClient(
         {
             var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
             using var timeout = CreateOwnerTimeout(cancellationToken);
-            using var request = CreateOwnerRequest(context, route, bearer);
+            using var boundedBody = await BufferBoundedRequestAsync(context, route, timeout.Token).ConfigureAwait(false);
+            using var request = CreateOwnerRequest(context, route, bearer, boundedBody);
             using var response = await SendAsync(route.Owner, request, timeout.Token).ConfigureAwait(false);
             if (IsRedirect(response.StatusCode))
             {
@@ -110,7 +111,7 @@ public sealed class GatewayOwnerClient(
                 await context.Response.Body.WriteAsync(projectedBody, timeout.Token).ConfigureAwait(false);
                 return;
             }
-            if (response.Content.Headers.ContentLength is > MaximumProxyResponseBytes)
+            if (response.Content.Headers.ContentLength is { } ownerLength && ownerLength > MaximumResponseBytes(route))
             {
                 await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
                     .ConfigureAwait(false);
@@ -121,6 +122,7 @@ public sealed class GatewayOwnerClient(
             context.Response.Headers.CacheControl = "no-store";
             context.Response.Headers.XContentTypeOptions = "nosniff";
             CopyResponseHeaders(context, response, route.Owner, route.ForwardSetCookie);
+            CopyExposedResponseHeaders(context, response, route);
             if (response.Content.Headers.ContentType is { } contentType)
                 context.Response.ContentType = contentType.ToString();
             if (response.Content.Headers.ContentLength is { } contentLength)
@@ -131,7 +133,7 @@ public sealed class GatewayOwnerClient(
                 await CopyBoundedAsync(
                     await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false),
                     context.Response.Body,
-                    MaximumProxyResponseBytes,
+                    MaximumResponseBytes(route),
                     timeout.Token).ConfigureAwait(false);
         }
         catch (GatewayOwnerFailureException exception)
@@ -827,17 +829,70 @@ public sealed class GatewayOwnerClient(
             body);
     }
 
-    private HttpRequestMessage CreateOwnerRequest(
+    /// <summary>Buffers every explicitly bounded route, including 3 MiB skill content, before contacting an owner.</summary>
+    private static async Task<MemoryStream?> BufferBoundedRequestAsync(
         HttpContext context,
         GatewayRoute route,
-        AuthenticationHeaderValue bearer) =>
-        CreateOwnerRequest(context, route, bearer, out _);
+        CancellationToken cancellationToken)
+    {
+        if (!route.HasJsonBody || route.MaximumRequestBodyBytes is not { } maximumBytes)
+            return null;
+
+        if (context.Request.ContentLength > maximumBytes)
+            throw RequestBodyTooLarge();
+
+        var body = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
+        {
+            while (true)
+            {
+                var count = await context.Request.Body.ReadAsync(
+                    buffer.AsMemory(0, (int)Math.Min(buffer.Length, maximumBytes - body.Length + 1)),
+                    cancellationToken).ConfigureAwait(false);
+                if (count == 0)
+                    break;
+                if (body.Length + count > maximumBytes)
+                    throw RequestBodyTooLarge();
+                await body.WriteAsync(buffer.AsMemory(0, count), cancellationToken).ConfigureAwait(false);
+            }
+            body.Position = 0;
+            return body;
+        }
+        catch (BadHttpRequestException exception) when (exception.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            body.Dispose();
+            throw RequestBodyTooLarge();
+        }
+        catch
+        {
+            body.Dispose();
+            throw;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    /// <summary>Uses the Gateway problem contract when an inbound request exceeds its route bound.</summary>
+    private static GatewayOwnerFailureException RequestBodyTooLarge() =>
+        new(StatusCodes.Status413PayloadTooLarge, "application/problem+json",
+            ProblemBody("request_body_too_large", StatusCodes.Status413PayloadTooLarge));
 
     private HttpRequestMessage CreateOwnerRequest(
         HttpContext context,
         GatewayRoute route,
         AuthenticationHeaderValue bearer,
-        out string? tenantSelector)
+        Stream? requestBody = null) =>
+        CreateOwnerRequest(context, route, bearer, out _, requestBody);
+
+    private HttpRequestMessage CreateOwnerRequest(
+        HttpContext context,
+        GatewayRoute route,
+        AuthenticationHeaderValue bearer,
+        out string? tenantSelector,
+        Stream? requestBody = null)
     {
         tenantSelector = null;
         var path = ExpandOwnerPath(route.OwnerPath, context);
@@ -867,7 +922,7 @@ public sealed class GatewayOwnerClient(
                     "application/problem+json",
                     ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
             }
-            request.Content = new StreamContent(context.Request.Body);
+            request.Content = new StreamContent(requestBody ?? context.Request.Body);
             if (context.Request.ContentLength is { } contentLength)
                 request.Content.Headers.ContentLength = contentLength;
             request.Content.Headers.ContentType = contentType is null
@@ -975,8 +1030,17 @@ public sealed class GatewayOwnerClient(
         return result;
     }
 
-    private Uri BuildOwnerUri(GatewayOwner owner, string pathAndQuery) =>
-        new(options.GetOwnerBaseAddress(owner), pathAndQuery);
+    private Uri BuildOwnerUri(GatewayOwner owner, string pathAndQuery)
+    {
+        // The Environment owner address is optional configuration. Without it, return a clear 503 to the
+        // client instead of letting GetOwnerBaseAddress throw and surface as a 500.
+        if (owner == GatewayOwner.Environment && options.EnvironmentOwnerBaseAddress is null)
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status503ServiceUnavailable,
+                "application/problem+json",
+                ProblemBody("owner_not_configured", StatusCodes.Status503ServiceUnavailable));
+        return new(options.GetOwnerBaseAddress(owner), pathAndQuery);
+    }
 
     private HttpClient OwnerHttpClient(GatewayOwner owner) =>
         clients.CreateClient(owner.ToString());
@@ -1025,6 +1089,22 @@ public sealed class GatewayOwnerClient(
                 ProblemBody("request_header_invalid", StatusCodes.Status400BadRequest));
         if (values.Count == 1 && values[0] is { } value)
             request.Headers.TryAddWithoutValidation(name, value);
+    }
+
+    /// <summary>Returns the route's response size limit, or the default proxy limit.</summary>
+    private static long MaximumResponseBytes(GatewayRoute route) =>
+        route.MaximumResponseBytes ?? MaximumProxyResponseBytes;
+
+    /// <summary>Copies the owner response headers that the route declares as part of its public contract.</summary>
+    private static void CopyExposedResponseHeaders(
+        HttpContext context,
+        HttpResponseMessage response,
+        GatewayRoute route)
+    {
+        if (route.ExposedResponseHeaders.IsDefaultOrEmpty)
+            return;
+        foreach (var name in route.ExposedResponseHeaders)
+            CopyHeader(response.Headers, context.Response.Headers, name);
     }
 
     private void CopyResponseHeaders(

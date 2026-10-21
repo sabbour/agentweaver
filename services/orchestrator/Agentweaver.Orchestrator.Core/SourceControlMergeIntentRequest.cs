@@ -33,7 +33,8 @@ public sealed class SourceControlMergeIntentRequest
         WorkPlanId = workPlanId;
         AssemblyRequestId = assemblyRequestId;
         WorkflowStepId = workflowStepId;
-        PullRequest = pullRequest;
+        // The title is display data that can change remotely; it must not affect stored intent data.
+        PullRequest = pullRequest with { Title = null };
         Method = method;
         CreatedAt = createdAt;
     }

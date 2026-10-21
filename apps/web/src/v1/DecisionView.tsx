@@ -51,20 +51,29 @@ export function DecisionView({
   snapshotBusy: boolean;
 }) {
   const { projectId, runId, sessionId, requestId } = decisionKey;
+  // Every API call is bound to this project and run, so the auth layer uses
+  // the matching run-scoped token.
   const binding = { projectId, runId };
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The controls are live only when this request is still the session's
+  // pending gate in the last snapshot, and no send or refresh is running.
   const exactGate = decisions?.pendingGate?.requestId === requestId;
   const canAct = exactGate && !busy && !snapshotBusy;
 
+  // Sends one response. `approve` is used for approvals; `choiceId` or
+  // `freeformAnswer` is used for questions.
   const submit = async (approve?: boolean, choiceId?: string, freeformAnswer?: string) => {
     if (!exactGate) return;
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
+      // Read the decision state again right before sending. The snapshot on
+      // screen may be old. If another tab or user already resolved or replaced
+      // this request, stop here and refresh instead of sending.
       const latest = await apiCall((token, tenantSelector) => gatewayClient.getDecisions(
         token, projectId, runId, sessionId, tenantSelector,
       ), binding);
@@ -73,7 +82,12 @@ export function DecisionView({
         await refresh();
         return;
       }
+      // A new key per click. The service uses it to drop duplicate deliveries
+      // of this one request. The fresh state version makes the service reject
+      // the send if the decision state changed after the read above.
       const idempotencyKey = crypto.randomUUID();
+      // Questions are answered; approvals, plan approvals, and outcome
+      // confirmations are resolved with approve or deny.
       const result = blocker.kind === 'awaitingInput'
         ? await apiCall((token, tenantSelector) => gatewayClient.answerGate(
           token, projectId, runId, sessionId, requestId, latest.stateVersion,
@@ -83,6 +97,8 @@ export function DecisionView({
           token, projectId, runId, sessionId, requestId, latest.stateVersion, Boolean(approve),
           idempotencyKey, tenantSelector,
         ), binding);
+      // A reply that is not accepted is a normal outcome, not an error. Show
+      // the service's validation issues so the user can see why.
       if (!result.accepted) {
         const details = result.issues.map((issue) => `${issue.message} (${issue.path})`).join(' ');
         setNotice(`The service did not accept this response.${details ? ` ${details}` : ''}`);
@@ -92,6 +108,8 @@ export function DecisionView({
       await refresh();
     } catch (reason) {
       setError(reason);
+      // 409 means the state version we sent is out of date: the request
+      // changed between our read and our send. Refresh so the user sees it.
       if (reason instanceof GatewayError && reason.status === 409) {
         setNotice('This request changed while you were viewing it. The view was refreshed.');
         await refresh();
@@ -101,6 +119,9 @@ export function DecisionView({
     }
   };
 
+  // The answer box holds either a clicked choice or typed text. If the text
+  // matches no listed choice, it is sent as a free-form answer instead of a
+  // choice ID.
   const freeformChosen = !blocker.choices.includes(answer);
   return (
     <article className="v1-record" aria-label={DECISION_TITLES[blocker.kind]}>
@@ -123,6 +144,7 @@ export function DecisionView({
           )}
           <Button
             appearance="primary"
+            // A free-form answer needs non-empty text and a request that allows free form.
             disabled={!canAct || (freeformChosen && !(blocker.allowsFreeform && answer.trim()))}
             onClick={() => void submit(undefined, freeformChosen ? undefined : answer, freeformChosen ? answer : undefined)}
           >
@@ -168,6 +190,8 @@ export function DecisionList({
   refresh: () => Promise<void>;
   snapshotBusy: boolean;
 }) {
+  // One entry per blocker across all sessions in the run. A session can block
+  // on more than one request, so the list key includes the request ID.
   const pending = Object.values(statuses).flatMap((status) =>
     status.blockers.map((blocker) => ({ status, blocker })));
   return (

@@ -1,7 +1,31 @@
 import { gatewayBaseUrl } from './config';
-import { isProjectAuthorizationContextResponse } from './contracts';
+import { isProjectAuthorizationContextResponse, isRemoteMcpConnectionDirectoryPage } from './contracts';
 import type {
+  CancelProjectRunResponse,
   CopilotAuthorizationCallback,
+  CreateProjectRunRequest,
+  CreateProjectRunResponse,
+  CreateManualProjectCastingProposalRequest,
+  CreateScenarioProjectCastingProposalRequest,
+  CreateProjectCastingProposalRequest,
+  ImportProjectCastingTransferRequest,
+  PlatformComponentReport,
+  ProjectCastingProposal,
+  ProjectCastingRoleDefinition,
+  ProjectCastingTemplateDefinition,
+  ProjectCastingTransfer,
+  UpdateProjectCastingProposalRequest,
+  BacklogGraph,
+  CaptureBacklogTaskRequest,
+  EditBacklogTaskContentRequest,
+  ProjectIssuePage,
+  ProjectIssueStateFilter,
+  ProjectMetrics,
+  ProjectRunPage,
+  ProjectRunStateFilter,
+  ProjectUsage,
+  StartProjectRunResponse,
+  UserNotificationPage,
   CopilotConnectionBegin,
   CopilotConnectionMutation,
   CopilotConnectionReceipt,
@@ -27,16 +51,22 @@ import type {
   ProjectAuthorizationContextResponse,
   ProjectConfiguration,
   ProjectRole,
-  ProjectRoleAssignment,
   ProjectRoleAssignmentList,
+  ProjectRoleAssignmentView,
+  ProjectPullRequestPage,
+  ProjectPullRequestStateFilter,
   SkillAssignmentRequest,
   SkillContentCandidateRequest,
   SkillContentInventoryPage,
   SkillContentInventoryQuery,
   SkillContentImportReceipt,
   SkillContentImportRequest,
+  SkillContentPackageResult,
   SkillContentPreview,
+  SkillMarketplaceDefinition,
+  SkillPackageRequest,
   ProjectSummary,
+  RemoteMcpConnectionDirectoryPage,
   RemoteMcpOAuthCallbackRequest,
   RemoteMcpOAuthConsentPreparation,
   RemoteMcpOAuthConsentRequest,
@@ -53,11 +83,11 @@ import type {
   SessionEventPage,
   SessionStatusSnapshot,
   SessionTreeSnapshot,
-  SourceControlRepositoryPinView,
-  SourceControlOutputCaptureDetail,
   SourceControlOutputCaptureDiff,
-  SourceControlOutputCapturePage,
+  SourceControlOutputCaptureDetail,
   SourceControlOutputFileContent,
+  SourceControlOutputCapturePage,
+  SourceControlRepositoryPinView,
   UsageRunTotals,
   VersionedProjectConfiguration,
 } from './contracts';
@@ -82,7 +112,12 @@ function problemMessage(problem: Record<string, unknown>, status: number): strin
   const detail = typeof problem.detail === 'string' ? problem.detail : undefined;
   const title = typeof problem.title === 'string' ? problem.title : undefined;
   const code = typeof problem.code === 'string' ? problem.code : undefined;
-  return detail ?? title ?? code ?? `The request failed with HTTP ${status}.`;
+  // Backlog writes reject with `{ issues: [{ code, path, message }] }` instead of a
+  // problem document, so fall back to the first issue message when no detail exists.
+  const issues = Array.isArray(problem.issues) ? problem.issues : [];
+  const firstIssue = issues.find((issue): issue is { message: string } =>
+    !!issue && typeof issue === 'object' && typeof (issue as { message?: unknown }).message === 'string');
+  return detail ?? title ?? code ?? firstIssue?.message ?? `The request failed with HTTP ${status}.`;
 }
 
 /** Encodes each path segment independently so identifiers cannot alter route structure. */
@@ -125,8 +160,7 @@ export class AgentweaverGatewayClient {
     }
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
-    // Default to JSON, but keep an Accept header the caller set. The captured-file read asks for
-    // application/octet-stream to receive raw bytes.
+    // Captured files request bytes; JSON remains the default for other routes.
     if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     if (tenantSelector !== undefined && tenantSelector !== null)
       headers.set('X-Agentweaver-Tenant', tenantSelector);
@@ -154,8 +188,7 @@ export class AgentweaverGatewayClient {
       throw new GatewayError(response.status, body, problemMessage(body, response.status));
     }
     if (response.status === 204) return undefined as T;
-    // Callers that need the body bytes or response headers get the Response itself. Errors were
-    // already turned into GatewayError above, so only successful responses reach this point.
+    // Return bytes and headers only after the shared HTTP error handling has succeeded.
     if (rawResponse) return response as T;
     return await response.json() as T;
   }
@@ -217,35 +250,47 @@ export class AgentweaverGatewayClient {
     const result = await this.request<ProjectRoleAssignmentList>(
       token, `/projects/${encodeSegments(projectId)}/role-assignments`, {}, this.baseUrl, tenantSelector,
     );
+    // Check the owner answered for the project we asked about before showing anyone's roles.
     if (result?.projectId !== projectId || !Array.isArray(result.assignments))
       throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned role assignments for a different project.');
     return result;
   }
 
-  /** Assigns a role to a member. TenantAdmin only; 409 `role_assignment_exists` for duplicates. */
+  /**
+   * Assigns a role to a tenant member. TenantAdmin only. The body is exactly
+   * `{ principalId, role }`. The service answers `201` with the new assignment,
+   * `409 role_assignment_exists` for a duplicate, and `404 principal_not_found`
+   * when the person has no active membership in the tenant.
+   */
   assignProjectRole(
     token: string,
     projectId: string,
     request: { principalId: string; role: ProjectRole },
     tenantSelector?: string | null,
-  ): Promise<ProjectRoleAssignment> {
+  ): Promise<ProjectRoleAssignmentView> {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId)}/role-assignments`,
-      { method: 'POST', body: JSON.stringify(request) },
+      { method: 'POST', body: JSON.stringify({ principalId: request.principalId, role: request.role }) },
       this.baseUrl,
       tenantSelector,
     );
   }
 
-  /** Revokes one assignment at its current revision. TenantAdmin only. */
+  /**
+   * Revokes one assignment at its current revision. TenantAdmin only. Returns
+   * the assignment with `state: 'revoked'`. A stale revision returns
+   * `409 revision_conflict`; the last owner of an active project returns
+   * `409 last_project_owner`.
+   */
   revokeProjectRoleAssignment(
     token: string,
     projectId: string,
     assignmentId: string,
     expectedRevision: number,
     tenantSelector?: string | null,
-  ): Promise<unknown> {
+  ): Promise<ProjectRoleAssignmentView> {
+    // The revision guards against revoking an assignment that changed since it was shown.
     return this.request(
       token,
       `/projects/${encodeSegments(projectId)}/role-assignments/${encodeSegments(assignmentId)}?expectedRevision=${expectedRevision}`,
@@ -281,6 +326,7 @@ export class AgentweaverGatewayClient {
     tenantSelector?: string | null,
     revision?: number,
   ): Promise<VersionedProjectConfiguration> {
+    // Without `revision` the owner returns the current configuration; with it, that saved version.
     return this.request(
       token,
       `/projects/${encodeSegments(projectId)}/configuration${revision === undefined ? '' : `?revision=${revision}`}`,
@@ -302,6 +348,35 @@ export class AgentweaverGatewayClient {
       method: 'PUT',
       body: JSON.stringify({ expectedRevision, configuration }),
     }, this.baseUrl, tenantSelector);
+  }
+
+  /**
+   * Lists the suggested skill marketplaces for a project. Each entry carries
+   * `sourceId` when the project already has an active source at the same
+   * location. The route takes no query parameters and needs project read access.
+   */
+  async listMarketplaceDefinitions(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<SkillMarketplaceDefinition[]> {
+    const definitions = await this.request<unknown>(
+      token,
+      `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'definitions')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    // The panel renders these directly, so reject a response that is not a list
+    // of named repository locations instead of showing broken rows.
+    if (!Array.isArray(definitions) || definitions.some((item) =>
+      !item || typeof item !== 'object' ||
+      typeof (item as SkillMarketplaceDefinition).name !== 'string' ||
+      typeof (item as SkillMarketplaceDefinition).repository !== 'string' ||
+      typeof (item as SkillMarketplaceDefinition).requestedRef !== 'string')) {
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The suggested marketplace list is not valid.');
+    }
+    return definitions as SkillMarketplaceDefinition[];
   }
 
   /** Lists configured skill marketplace sources for a project. */
@@ -442,6 +517,49 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /**
+   * Turns uploaded files, one ZIP archive, or draft form fields into skill
+   * candidates without saving anything. The request must hold exactly one of
+   * `files`, `archive`, or `draft`. The route limits the JSON body to 3 MiB and
+   * needs an unbound token with read scope; it is not scoped to a project.
+   */
+  packageSkillContent(
+    token: string,
+    request: SkillPackageRequest,
+    tenantSelector?: string | null,
+  ): Promise<SkillContentPackageResult> {
+    return this.request(
+      token,
+      '/skills/package',
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Revokes one imported skill revision. The service keeps the record but marks
+   * it revoked, and a repeat call for the same revision succeeds without change.
+   * `reason` is required (1 to 2000 characters). Needs project admin authority.
+   * The route returns `204` with no body.
+   */
+  async revokeProjectSkillRevision(
+    token: string,
+    projectId: string,
+    skillId: string,
+    revision: number,
+    reason: string,
+    tenantSelector?: string | null,
+  ): Promise<void> {
+    await this.request<void>(
+      token,
+      `/projects/${encodeSegments(projectId, 'skills', skillId, 'revisions', String(revision), 'revoke')}`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
   /** Imports a validated skill-content selection into the project. */
   importSkillContent(
     token: string,
@@ -476,6 +594,33 @@ export class AgentweaverGatewayClient {
       this.baseUrl,
       tenantSelector,
     );
+  }
+
+  /** Lists the project's Remote MCP connections with configuration checksums. */
+  async listRemoteMcpConnections(
+    token: string,
+    projectId: string,
+    options: { pageSize?: number; after?: string } = {},
+    tenantSelector?: string | null,
+  ): Promise<RemoteMcpConnectionDirectoryPage> {
+    // Send only the paging options the caller set, so the Gateway applies its own defaults.
+    const query = new URLSearchParams();
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    if (options.after !== undefined) query.set('after', options.after);
+    const suffix = query.toString();
+    const page = await this.request<unknown>(
+      token,
+      `/projects/${encodeSegments(projectId, 'remote-mcp', 'connections')}${suffix ? `?${suffix}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    // Check the response shape before use. A malformed owner response is reported as a 502, the same
+    // as other owner failures, rather than reaching the UI as untyped data.
+    if (!isRemoteMcpConnectionDirectoryPage(page)) {
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The Remote MCP connection list is not valid.');
+    }
+    return page;
   }
 
   /** Changes a skill assignment and returns the resulting versioned configuration. */
@@ -783,33 +928,61 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Lists the saved output captures for a run session, newest first, 50 per page. */
-  listSourceControlOutputCaptures(
+  /**
+   * Lists admitted captures of the files one run session produced, newest first.
+   * The route needs a token bound to this run and an explicit tenant. Pass both
+   * cursor values from the previous page to read the next one.
+   */
+  async listRunOutputCaptures(
     token: string,
     projectId: string,
     runId: string,
     sessionId: string,
+    options: { limit?: number; beforeCapturedAt?: string | null; beforeCaptureId?: string | null },
     tenantSelector: string | null,
-    before?: { capturedAt: string; captureId: string },
   ): Promise<SourceControlOutputCapturePage> {
-    const query = new URLSearchParams({ limit: '50' });
-    // The cursor has two parts because two captures can share a timestamp. The owner needs both
-    // values to find the exact position, so set them together or not at all.
-    if (before) {
-      query.set('beforeCapturedAt', before.capturedAt);
-      query.set('beforeCaptureId', before.captureId);
+    const query = new URLSearchParams();
+    if (options.limit !== undefined) query.set('limit', String(options.limit));
+    // The service pages by the last capture's time and ID together, so send both or neither.
+    if (options.beforeCapturedAt && options.beforeCaptureId) {
+      query.set('beforeCapturedAt', options.beforeCapturedAt);
+      query.set('beforeCaptureId', options.beforeCaptureId);
     }
-    return this.request(
+    const encoded = query.toString();
+    const page = await this.request<SourceControlOutputCapturePage>(
       token,
-      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures')}?${query}`,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures')}${encoded ? `?${encoded}` : ''}`,
       {},
       this.baseUrl,
       tenantSelector,
     );
+    if (!page || !Array.isArray(page.captures))
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The service returned an invalid capture list.');
+    return page;
   }
 
-  /** Reads one saved capture and its file list (the manifest). */
-  readSourceControlOutputCapture(
+  /** Reads the text patch of one admitted capture. The token must be bound to this run. */
+  async readRunOutputCaptureDiff(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    captureId: string,
+    tenantSelector: string | null,
+  ): Promise<SourceControlOutputCaptureDiff> {
+    const diff = await this.request<SourceControlOutputCaptureDiff>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'diff')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (!diff || typeof diff.patch !== 'string' || diff.capture?.captureId !== captureId)
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The service returned a diff for a different capture.');
+    return diff;
+  }
+  /** Reads a saved file set and its manifest without accessing the live workspace. */
+  async readSourceControlOutputCapture(
     token: string,
     projectId: string,
     runId: string,
@@ -817,37 +990,20 @@ export class AgentweaverGatewayClient {
     tenantSelector: string | null,
     captureId: string,
   ): Promise<SourceControlOutputCaptureDetail> {
-    return this.request(
+    const detail = await this.request<SourceControlOutputCaptureDetail>(
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId)}`,
       {},
       this.baseUrl,
       tenantSelector,
     );
+    // Reject a mismatched capture before offering its manifest as the file navigation.
+    if (detail?.capture?.captureId !== captureId || !Array.isArray(detail.manifest?.files))
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The service returned an invalid file set.');
+    return detail;
   }
 
-  /** Reads the diff saved with one capture. */
-  readSourceControlOutputCaptureDiff(
-    token: string,
-    projectId: string,
-    runId: string,
-    sessionId: string,
-    tenantSelector: string | null,
-    captureId: string,
-  ): Promise<SourceControlOutputCaptureDiff> {
-    return this.request(
-      token,
-      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'diff')}`,
-      {},
-      this.baseUrl,
-      tenantSelector,
-    );
-  }
-
-  /**
-   * Reads the exact bytes of one captured file. The path must come from the capture's file list;
-   * the owner rejects any path that the manifest does not list.
-   */
+  /** Reads the exact bytes of a path listed in the saved file manifest. */
   async readSourceControlOutputCaptureFile(
     token: string,
     projectId: string,
@@ -857,8 +1013,7 @@ export class AgentweaverGatewayClient {
     captureId: string,
     path: string,
   ): Promise<SourceControlOutputFileContent> {
-    // Send the path as a query value, not as URL segments, so slashes and special characters in
-    // the path are encoded once and cannot change which route is called.
+    // Encode the path as one query value so slashes cannot change the API route.
     const response = await this.request<Response>(
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'files')}?${new URLSearchParams({ path })}`,
@@ -867,8 +1022,7 @@ export class AgentweaverGatewayClient {
       tenantSelector,
       true,
     );
-    // Read the body as bytes, not text, so the content is exactly what was captured. The digest
-    // header is null when the browser can't read it (for example, if CORS doesn't expose it).
+    // Keep bytes unchanged. A null digest means the browser could not read the header.
     return {
       bytes: new Uint8Array(await response.arrayBuffer()),
       sha256: response.headers.get('X-Source-Control-Output-Sha256'),
@@ -1196,6 +1350,475 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'usage')}`,
       {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Lists one page of the project's runs, newest first. Send `cursor` back
+   * unchanged with the same `states`; a null `nextCursor` marks the last page.
+   */
+  async listProjectRuns(
+    token: string,
+    projectId: string,
+    options: { states?: ProjectRunStateFilter[]; cursor?: string | null; pageSize?: number } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectRunPage> {
+    // Add only the parameters that are set. The service rejects empty or repeated ones.
+    const query = new URLSearchParams();
+    if (options.states?.length) query.set('state', options.states.join(','));
+    if (options.cursor) query.set('cursor', options.cursor);
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    const suffix = query.toString();
+    const page = await this.request<ProjectRunPage>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs')}${suffix ? `?${suffix}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    // Don't show runs that the service returned for a different project.
+    if (page?.projectId !== projectId || !Array.isArray(page.items))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned runs for a different project.');
+    return page;
+  }
+
+  /**
+   * Creates a new chat run with its saved first message. Needs a token that is
+   * not bound to a run. Reuse the same `idempotencyKey` when retrying the same
+   * message, so the service returns the run it already created.
+   */
+  createProjectRun(
+    token: string,
+    projectId: string,
+    request: CreateProjectRunRequest,
+    idempotencyKey: string,
+    tenantSelector?: string | null,
+  ): Promise<CreateProjectRunResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs')}`,
+      { method: 'POST', body: JSON.stringify(request), headers: { 'Idempotency-Key': idempotencyKey } },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Delivers the saved first message. Needs a token bound to this run. A repeat
+   * call returns the same result and does not send the message again, so a
+   * `504 run_start_timeout` is safe to retry.
+   */
+  startProjectRun(
+    token: string,
+    projectId: string,
+    runId: string,
+    tenantSelector?: string | null,
+  ): Promise<StartProjectRunResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'start')}`,
+      { method: 'POST' },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Stops a run. Needs the project token that is not bound to a run; a
+   * run-bound token gets 403. A run that already ended returns `alreadyTerminal`.
+   */
+  cancelProjectRun(
+    token: string,
+    projectId: string,
+    runId: string,
+    idempotencyKey: string,
+    reason?: string,
+    tenantSelector?: string | null,
+  ): Promise<CancelProjectRunResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'cancel')}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(reason ? { reason } : {}),
+        headers: { 'Idempotency-Key': idempotencyKey },
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Builds the shared `from`/`to` query for metrics and usage. Both ends are optional. */
+  private static rangeQuery(range: { from?: string; to?: string }, extra: Record<string, string> = {}): string {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    for (const [key, value] of Object.entries(extra)) query.set(key, value);
+    const text = query.toString();
+    return text ? `?${text}` : '';
+  }
+
+  /**
+   * Reads run counts and a daily series for a half-open UTC range. The service
+   * uses the last 30 days when the range is omitted and allows at most 92 days.
+   */
+  async getProjectMetrics(
+    token: string,
+    projectId: string,
+    range: { from?: string; to?: string } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectMetrics> {
+    const metrics = await this.request<ProjectMetrics>(
+      token,
+      `/projects/${encodeSegments(projectId, 'metrics')}${AgentweaverGatewayClient.rangeQuery(range, { bucket: 'day' })}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (metrics?.projectId !== projectId || !Array.isArray(metrics.series))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned metrics for a different project.');
+    return metrics;
+  }
+
+  /** Rejects a backlog graph that is malformed or belongs to another project. */
+  private static checkedBacklogGraph(graph: BacklogGraph | undefined, projectId: string): BacklogGraph {
+    // The board trusts revision numbers for optimistic writes, so a graph without
+    // them, or for another project, must never reach the page.
+    if (graph?.projectId !== projectId
+      || typeof graph.revision !== 'number'
+      || !Array.isArray(graph.tasks)
+      || !Array.isArray(graph.dependencies))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned a backlog for a different project.');
+    return graph;
+  }
+
+  /** Reads the project's backlog tasks and dependencies. Needs read access to the project. */
+  async readProjectBacklog(token: string, projectId: string, tenantSelector?: string | null): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /**
+   * Adds one task to the project backlog and returns the new graph. Needs write
+   * access. A stale `expectedGraphRevision` is rejected with HTTP 409.
+   */
+  async captureBacklogTask(
+    token: string,
+    projectId: string,
+    request: CaptureBacklogTaskRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /**
+   * Replaces one task's content and returns the new graph. Needs write access.
+   * Stale revisions, archived tasks, and tasks with a pending automation
+   * invocation are rejected with HTTP 409; an unknown task with HTTP 404.
+   */
+  async editBacklogTaskContent(
+    token: string,
+    projectId: string,
+    taskId: string,
+    request: EditBacklogTaskContentRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'content')}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /**
+   * Lists one page of the project's synced repository issues. The service reads
+   * stored issues only. Pass `cursor` from the previous page with the same filter.
+   */
+  async listProjectIssues(
+    token: string,
+    projectId: string,
+    options: { state?: ProjectIssueStateFilter; cursor?: string | null; pageSize?: number } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectIssuePage> {
+    // Only set parameters are sent, so the service applies its own defaults.
+    const query = new URLSearchParams();
+    if (options.state) query.set('state', options.state);
+    if (options.cursor) query.set('cursor', options.cursor);
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    const encoded = query.toString();
+    const suffix = encoded ? `?${encoded}` : '';
+    const page = await this.request<ProjectIssuePage>(
+      token,
+      `/projects/${encodeSegments(projectId, 'source-control', 'issues')}${suffix}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (page?.projectId !== projectId || !Array.isArray(page.items))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned issues for a different project.');
+    return page;
+  }
+
+  /**
+   * Lists pull requests that project runs created or reused, newest recorded
+   * first. The read makes no provider call, so `state` is the recorded state.
+   * Only the set options are sent, so the service applies its defaults
+   * (`open`, default page size).
+   */
+  async listProjectPullRequests(
+    token: string,
+    projectId: string,
+    options: { state?: ProjectPullRequestStateFilter; cursor?: string | null; pageSize?: number } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectPullRequestPage> {
+    const query = new URLSearchParams();
+    if (options.state) query.set('state', options.state);
+    if (options.cursor) query.set('cursor', options.cursor);
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    const encoded = query.toString();
+    const page = await this.request<ProjectPullRequestPage>(
+      token,
+      `/projects/${encodeSegments(projectId, 'source-control', 'pull-requests')}${encoded ? `?${encoded}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    // Show nothing rather than another project's pull requests.
+    if (page?.projectId !== projectId || !Array.isArray(page.items))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned pull requests for a different project.');
+    return page;
+  }
+
+  /** Reads token use and cost grouped by model and by agent for the same range rules as metrics. */
+  async getProjectUsage(
+    token: string,
+    projectId: string,
+    range: { from?: string; to?: string } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectUsage> {
+    const usage = await this.request<ProjectUsage>(
+      token,
+      `/projects/${encodeSegments(projectId, 'usage')}${AgentweaverGatewayClient.rangeQuery(range)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (usage?.projectId !== projectId || !Array.isArray(usage.usageByModel) || !Array.isArray(usage.usageByAgent))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned usage for a different project.');
+    return usage;
+  }
+
+  /**
+   * Lists the caller's pending questions and approvals across projects. Needs a
+   * token that is not bound to a project or run; use `projectId` to narrow it.
+   */
+  listNotifications(
+    token: string,
+    options: { projectId?: string; cursor?: string | null; pageSize?: number; includeDismissed?: boolean } = {},
+    tenantSelector?: string | null,
+  ): Promise<UserNotificationPage> {
+    const query = new URLSearchParams();
+    if (options.projectId) query.set('projectId', options.projectId);
+    if (options.cursor) query.set('cursor', options.cursor);
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    if (options.includeDismissed !== undefined) query.set('includeDismissed', String(options.includeDismissed));
+    const suffix = query.toString();
+    return this.request(token, `/notifications${suffix ? `?${suffix}` : ''}`, {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Hides one notification for this caller. The gate stays open. Repeating the call is safe. */
+  dismissNotification(token: string, notificationId: string, tenantSelector?: string | null): Promise<void> {
+    return this.request(
+      token,
+      `/notifications/${encodeSegments(notificationId, 'dismiss')}`,
+      { method: 'POST' },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Reads every platform component area and its readiness. Needs a token that
+   * is not bound to a run and a tenant or platform administrator. An owner that
+   * can't be reached appears as `unknown` with `ownerUnavailable`.
+   */
+  getPlatformComponents(token: string, tenantSelector?: string | null): Promise<PlatformComponentReport> {
+    return this.request(token, '/platform/components', {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Lists the built-in team templates that a casting proposal can start from. */
+  listCastingTemplates(token: string, tenantSelector?: string | null): Promise<ProjectCastingTemplateDefinition[]> {
+    return this.request(token, '/casting/templates', {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Lists the built-in roles that a manual casting proposal can pick from. */
+  listCatalogRoles(token: string, tenantSelector?: string | null): Promise<ProjectCastingRoleDefinition[]> {
+    return this.request(token, '/catalog/roles', {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Lists the project's casting proposals, newest first, up to `limit` (1–100). */
+  listCastingProposals(
+    token: string,
+    projectId: string,
+    limit?: number,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal[]> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals')}${limit !== undefined ? `?limit=${limit}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Creates a casting proposal from a template or from picked roles. The
+   * proposal is a draft; nothing changes until it is confirmed.
+   */
+  createCastingProposal(
+    token: string,
+    projectId: string,
+    request:
+      | ({ mode: 'scenario' } & CreateScenarioProjectCastingProposalRequest)
+      | ({ mode: 'manual' } & CreateManualProjectCastingProposalRequest),
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    // The service rejects unknown fields, so send the body without `mode`.
+    const { mode, ...body } = request;
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', mode)}`,
+      { method: 'POST', body: JSON.stringify(body) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Confirms or rejects a pending proposal. `expectedDraftRevision` must match
+   * the draft that was shown, or the service returns 409.
+   */
+  transitionCastingProposal(
+    token: string,
+    projectId: string,
+    proposalId: string,
+    action: 'confirm' | 'reject',
+    expectedDraftRevision: number,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId, action)}`,
+      { method: 'POST', body: JSON.stringify({ expectedDraftRevision }) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads one casting proposal, including its draft and current state. */
+  getCastingProposal(
+    token: string,
+    projectId: string,
+    proposalId: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Stages a complete configuration draft as a casting proposal. Used when the
+   * browser builds the draft itself, for example to add one member.
+   */
+  createCastingDraftProposal(
+    token: string,
+    projectId: string,
+    request: CreateProjectCastingProposalRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Replaces the draft of a pending proposal. `expectedDraftRevision` must
+   * match the draft that was shown, or the service returns 409.
+   */
+  updateCastingProposal(
+    token: string,
+    projectId: string,
+    proposalId: string,
+    request: UpdateProjectCastingProposalRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId)}`,
+      { method: 'PATCH', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Exports the project's agent charters and casting, at `revision` or the current revision. */
+  exportCastingTransfer(
+    token: string,
+    projectId: string,
+    revision?: number,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingTransfer> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'export')}${revision === undefined ? '' : `?revision=${revision}`}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Stages an exported team as a pending proposal in this project. The service
+   * checks the digest and rejects bodies over 1 MiB (413) or invalid transfers (422).
+   */
+  importCastingTransfer(
+    token: string,
+    projectId: string,
+    request: ImportProjectCastingTransferRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'import')}`,
+      { method: 'POST', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
     );

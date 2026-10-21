@@ -94,18 +94,26 @@ import type { RunBinding } from './authProtocol';
 import { useRunJournal } from './useRunJournal';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading, Panel } from './pageParts';
+import { RunOutputCapturesPanel } from './RunOutputCaptures';
 import { rememberRun } from './recentRuns';
 import { DecisionList } from './DecisionView';
-import { ProducedFilesPanel } from './ProducedFilesPanel';
 import { NewChatComposer } from './NewChatComposer';
 import { PlatformComponentsTable } from './PlatformComponentsTable';
 import { isRunFinished, runState } from './runState';
 import { DashboardPage } from './DashboardPage';
+import { ClusterPage, DiagnosticsPage, FlowPage, HeartbeatPage, ProjectObservabilityPage, WorkflowsPage, WorkspacePage } from './OperationsPages';
 import { OverviewPage } from './OverviewPage';
 import { OrchestrationsPage } from './OrchestrationsPage';
+import { BoardPage } from './BoardPage';
+import { SessionsPage } from './SessionsPage';
+import { NewSessionPage } from './NewSessionPage';
+import { readPendingRun } from './pendingRun';
+import { StopRunButton } from './StopRunButton';
 import { AgentsView } from './AgentsView';
+import { CastTeamPage } from './CastTeamPage';
+import { PlatformSettingsPage } from './PlatformSettingsPage';
 import { accessSummary, permissionsForProject, useAuthorizationContext, useProjectConfiguration, useProjectSummary } from './projectData';
-import { useBrowserRunList } from './runListData';
+import { runListErrorMessage, useProjectRunList } from './runListData';
 import { CONFIGURATION_SECTIONS, SETTINGS_SECTIONS, settingsSection } from './settingsSections';
 import type { SettingsSection } from './settingsSections';
 
@@ -167,6 +175,8 @@ function SignInScreen() {
 
 /** Splits `owner/name` or a github.com URL into repository parts, or returns null. */
 function parseRepository(value: string): { owner: string; name: string } | null {
+  // Strip an optional github.com prefix and ".git" suffix, then require exactly
+  // two path parts. Anything else (extra path parts, spaces) is rejected.
   const match = value.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').match(/^([\w.-]+)\/([\w.-]+)\/?$/);
   return match ? { owner: match[1], name: match[2] } : null;
 }
@@ -211,7 +221,10 @@ function ProjectsPage() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  // The repository only counts when "GitHub repository" is selected. A typed value
+  // stays in the input if the user switches back to "Blank project", but is ignored.
   const repository = startFrom === 'github' ? parseRepository(repositoryInput) : null;
+  // The same rule disables the button and guards submit, so Enter cannot bypass it.
   const createDisabled = busy || !projectName.trim() || (startFrom === 'github' && !repository);
 
   const create = async (event: FormEvent) => {
@@ -226,8 +239,13 @@ function ProjectsPage() {
       );
       let message = `Project ${created.name} was created.`;
       if (repository) {
+        // Second step: save the repository in the new project's configuration.
+        // Creating a project does not grant access to it, so this can fail.
+        // A failure here must not undo or hide the project that was created.
         try {
           await apiCall(async (token, tenantSelector) => {
+            // Read the current revision first. The update is checked against it,
+            // and the existing configuration fields are kept as they are.
             const current = await gatewayClient.getProjectConfiguration(token, created.projectId, tenantSelector);
             const sourceControl = { ...(current.configuration.sourceControl ?? {}), repository, authMode: 'githubApp' as const };
             return gatewayClient.updateProjectConfiguration(
@@ -239,6 +257,8 @@ function ProjectsPage() {
           message += ` The repository was not saved. Add it in Settings > Repository after you have access.`;
         }
       }
+      // Reset the form and close the dialog only after the project exists.
+      // On error the dialog stays open with the user's input and the error.
       setProjectName('');
       setRepositoryInput('');
       setStartFrom('blank');
@@ -271,6 +291,7 @@ function ProjectsPage() {
                   primary={project.name}
                   secondary={project.projectId}
                   badges={<Badge appearance="tint" size="small" color={project.state === 'active' ? 'success' : 'subtle'}>{project.state}</Badge>}
+                  /* The access badge shows only after the caller's role assignments load. */
                   meta={<><Badge appearance="outline" size="small">Revision {project.revision}</Badge>{authorization.data && <Badge appearance="outline" size="small">{accessSummary(permissionsForProject(authorization.data, project.projectId))}</Badge>}</>}
                   actions={<Button appearance="primary" size="small" onClick={() => navigate(`/projects/${encodeURIComponent(project.projectId)}`)}>Open</Button>}
                   actionsAlwaysVisible
@@ -281,6 +302,7 @@ function ProjectsPage() {
           )}
       <AppDialog open={createOpen} onOpenChange={setCreateOpen} title="Create a project">
           <form className="v1-form" onSubmit={(event) => void create(event)}>
+            {/* The dialog covers the page, so the create error is repeated here where the user can see it. */}
             {error != null && <ErrorNotice>{errorMessage(error)}</ErrorNotice>}
             <Field label="Project name">
               <Input value={projectName} onChange={(_, data) => setProjectName(data.value)} maxLength={120} />
@@ -572,14 +594,24 @@ function ProjectRepoAppConnectionPanel() {
   );
 }
 
-/** Edits project configuration and reports rejected or stale updates. */
+/**
+ * Edits project configuration and reports rejected or stale updates.
+ * One component serves three routes: Settings (sectioned form), Skills, and Agents.
+ * All three share one loaded configuration, one draft, and one save path.
+ */
 function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | 'skills' | 'agents' }) {
   const { projectId = '' } = useParams();
   const { session, apiCall } = useAuth();
   const [searchParams] = useSearchParams();
+  // An unknown or missing ?section= falls back to a default section.
   const section = settingsSection(searchParams.get('section'));
+  // The project summary is only needed by the General and Danger sections.
+  // An empty ID tells the hook not to fetch on the Skills and Agents routes.
   const project = useProjectSummary(view === 'settings' ? projectId : '');
   const [versioned, setVersioned] = useState<VersionedProjectConfiguration | null>(null);
+  // Two copies of the unsaved configuration: `editor` is the raw JSON text in the
+  // Advanced section, and `configurationDraft` is the parsed object the form
+  // sections edit. Form edits update both, so they stay in sync.
   const [editor, setEditor] = useState('');
   const [configurationDraft, setConfigurationDraft] = useState<ProjectConfiguration | null>(null);
   const [loading, setLoading] = useState(true);
@@ -590,8 +622,11 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeScope, setNoticeScope] = useState<string | null>(null);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
+  // A scope is the (access token, project) pair a request was made for. Results
+  // and messages are kept with their scope, and only shown while it is still current.
   const requestScope = JSON.stringify([session?.accessToken ?? null, projectId]);
   const activeScope = useRef(requestScope);
+  // Each load gets a new number, so an older load that finishes late is ignored.
   const loadGeneration = useRef(0);
 
   const load = useCallback(async () => {
@@ -609,8 +644,10 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
         null,
       );
       if (activeScope.current !== scope || loadGeneration.current !== generation) return;
+      // Never show another project's configuration on this project's page.
       if (result.projectId !== projectId)
         throw new Error('The server returned configuration for a different project.');
+      // A fresh load replaces both draft copies, discarding unsaved edits.
       setVersioned(result);
       setEditor(JSON.stringify(result.configuration, null, 2));
       setConfigurationDraft(result.configuration);
@@ -640,7 +677,11 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
   /** Saves a full configuration document against the loaded revision. Resolves true on success. */
   const persist = async (configuration: ProjectConfiguration): Promise<boolean> => {
     const scope = requestScope;
+    // Save only against a configuration loaded for this exact scope and project,
+    // and not while a skill assignment is writing its own revision.
     if (!versioned || loadedScope !== scope || versioned.projectId !== projectId || skillAssignmentPending) return false;
+    // A model change that still needs a credential is blocked here as well as in
+    // the form, so the Agents view (which also calls persist) cannot skip the check.
     if (needsModelCredential(configuration, versioned.configuration.modelSelection)) return false;
     setSavingScope(scope);
     setError(null);
@@ -648,12 +689,15 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     setNotice(null);
     setNoticeScope(null);
     try {
+      // The update names the loaded revision. If someone saved in between, the
+      // server rejects it as stale instead of overwriting their change.
       const updated = await apiCall(
         (token, tenantSelector) => gatewayClient.updateProjectConfiguration(
           token, projectId, versioned.revision, configuration, tenantSelector,
         ),
         null,
       );
+      // The user moved to another project or token while saving: drop the result.
       if (activeScope.current !== scope) return false;
       if (updated.projectId !== projectId)
         throw new Error('The server returned an update for a different project.');
@@ -676,6 +720,8 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
+    // The form always submits the JSON text. Form sections keep that text in
+    // sync, so this one path saves both form edits and Advanced JSON edits.
     let configuration: ProjectConfiguration;
     try {
       const parsed: unknown = JSON.parse(editor);
@@ -709,6 +755,16 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       (token, tenantSelector) => gatewayClient.listMarketplaceSources(token, scope, tenantSelector),
       null,
     ),
+    listDefinitions: (scope: string) => apiCall(
+      (token, tenantSelector) => gatewayClient.listMarketplaceDefinitions(token, scope, tenantSelector),
+      null,
+    ),
+    packageSkillContent: (request: Parameters<typeof gatewayClient.packageSkillContent>[1]) =>
+      apiCall((token, tenantSelector) =>
+        gatewayClient.packageSkillContent(token, request, tenantSelector), null),
+    revokeSkillRevision: (scope: string, skillId: string, revision: number, reason: string) =>
+      apiCall((token, tenantSelector) =>
+        gatewayClient.revokeProjectSkillRevision(token, scope, skillId, revision, reason, tenantSelector), null),
     createSource: (scope: string, request: Parameters<typeof gatewayClient.createMarketplaceSource>[2]) =>
       apiCall((token, tenantSelector) =>
         gatewayClient.createMarketplaceSource(token, scope, request, tenantSelector), null),
@@ -768,12 +824,17 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
         : null;
 
   const busy = savingScope === requestScope || skillAssignmentPending;
+  // False when the JSON text was edited by hand and no longer matches the parsed
+  // draft. The form sections then turn read-only, so the two copies cannot diverge.
   const draftInSync = Boolean(configurationDraft && editor === JSON.stringify(configurationDraft, null, 2));
+  // Shared props for every form section. Each change updates the draft and the JSON text together.
   const fieldProps = configurationDraft ? {
     configuration: configurationDraft,
     readOnly: busy || !draftInSync,
     onChange: (next: ProjectConfiguration) => { setConfigurationDraft(next); setEditor(JSON.stringify(next, null, 2)); },
   } : null;
+  // Save is off while busy, when the text is empty, when nothing changed from the
+  // saved revision, or when a new model still needs a credential.
   const saveDisabled = busy || !editor.trim()
     || Boolean(currentConfiguration && editor === JSON.stringify(currentConfiguration.configuration, null, 2))
     || Boolean(configurationDraft && draftInSync && currentConfiguration
@@ -785,16 +846,27 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     </>
   );
 
-  if (view === 'agents') return (
+  // Agents route: the Agents view renders its own header with the team
+  // controls once the configuration is loaded, and saves through persist().
+  if (view === 'agents') return currentConfiguration && !currentLoading ? (
+    <AgentsView
+      projectId={projectId}
+      configuration={currentConfiguration.configuration}
+      configurationRevision={currentConfiguration.revision}
+      readOnly={busy}
+      onSave={persist}
+      status={statusMessages}
+      onReload={() => void load()}
+    />
+  ) : (
     <>
       <PageHeading title="Agents" description="The cast working on this project." page="Agents" />
       {statusMessages}
-      {currentLoading ? <Loading label="Loading agents" /> : currentConfiguration && (
-        <AgentsView projectId={projectId} configuration={currentConfiguration.configuration} readOnly={busy} onSave={persist} />
-      )}
+      {currentLoading && <Loading label="Loading agents" />}
     </>
   );
 
+  // Skills route: assignments write their own configuration revision on the server.
   if (view === 'skills') return (
     <>
       <PageHeading title="Skills" description="Reusable instructions your agents can use. Browse a marketplace, preview a skill, then import and assign it." page="Skills" />
@@ -809,6 +881,8 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
           assignmentDisabledReason={assignmentDisabledReason}
           onAssignmentPendingChange={setSkillAssignmentPending}
           onConfigurationChanged={(updated) => {
+            // Ignore late results for another project or token. Otherwise adopt the
+            // new revision so the next save is not rejected as stale.
             if (activeScope.current !== requestScope || updated.projectId !== projectId) return;
             setVersioned(updated);
             setEditor(JSON.stringify(updated.configuration, null, 2));
@@ -821,6 +895,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     </>
   );
 
+  // Settings route: a left rail of sections, selected through ?section= in the URL.
   const base = `/projects/${encodeURIComponent(projectId)}/settings`;
   return (
     <>
@@ -839,6 +914,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
         </nav>
         <div className="v1-stack v1-settings-pane">
           {statusMessages}
+          {/* General and Danger edit the project record, not its configuration document. */}
           {section === 'general' && (project.data
             ? <GeneralSection key={project.data.revision} project={project.data} onUpdated={project.replace} />
             : project.error != null ? <ErrorNotice code={errorCode(project.error)}>{errorMessage(project.error)}</ErrorNotice> : <Loading />)}
@@ -855,10 +931,12 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
             </>
           )}
           {section === 'history' && (currentLoading ? <Loading /> : currentConfiguration && (
+            // The key remounts the history list after each save, so it reloads.
             <ConfigurationHistory key={`${requestScope}/${currentConfiguration.revision}`}
               projectId={projectId} currentRevision={currentConfiguration.revision} />
           ))}
           {CONFIGURATION_SECTIONS.has(section) && (currentLoading ? <Loading /> : currentConfiguration && fieldProps && (
+            // Sections that edit the configuration document share one form and one Save button.
             <form className="v1-form" onSubmit={(event) => void save(event)}>
               {section === 'repository' && <RepositoryFields {...fieldProps} />}
               {section === 'models' && <ConfigurationFields {...fieldProps} part="models" savedSelection={currentConfiguration.configuration.modelSelection} />}
@@ -1006,24 +1084,32 @@ function KnowledgePage() {
     () => runId.trim() ? { projectId, runId: runId.trim() } : null,
     [projectId, runId],
   );
-  const recentRuns = useBrowserRunList(projectId);
+  // The newest runs in this project, for the run select. The service caps a
+  // page at 100 runs.
+  const projectRuns = useProjectRunList(projectId, { pageSize: 100 });
   const knowledgeConfiguration = useProjectConfiguration(projectId);
-  /** Recent runs in this browser, plus the run from the URL so a deep link keeps its choice. */
+  /** The project's newest runs, plus the run from the URL so a deep link keeps its choice. */
   const runOptions = useMemo(() => {
-    const options = recentRuns.items.map((item) => ({ value: item.runId, label: `${item.runId} · ${runState(item.executionState).label}` }));
+    const options = projectRuns.items.map((item) => ({ value: item.runId, label: `${item.label} · ${runState(item.executionState).label}` }));
+    // A run from a link can be older than the loaded page. Add it at the top so
+    // the select can show it.
     const current = searchParams.get('runId');
     if (current && !options.some((option) => option.value === current)) options.unshift({ value: current, label: current });
     return options;
-  }, [recentRuns.items, searchParams]);
+  }, [projectRuns.items, searchParams]);
   /** Agents from the project configuration, plus the agent from the URL (for example, a session opened from Topology). */
   const agentOptions = useMemo(() => {
     const options = (knowledgeConfiguration.data?.configuration.agentCharters ?? [])
       .map((agent) => ({ value: agent.agentId, label: `${agent.name} · ${agent.role}` }));
+    // A run session ID from a link is not a configured agent. Keep it as an option
+    // with its raw ID as the label; the server still checks access for it.
     const current = searchParams.get('agentId');
     if (current && !options.some((option) => option.value === current)) options.unshift({ value: current, label: current });
     return options;
   }, [knowledgeConfiguration.data, searchParams]);
   const correctlyScoped = isSameBinding(session?.binding, binding);
+  // Memories need a sign-in bound to the chosen run. Try to get one without a
+  // prompt first; the sign-in button appears only if that attempt fails.
   const silentBind = useSilentRunSession(binding, correctlyScoped, ensureSession);
   const requestScope = JSON.stringify([
     session?.accessToken ?? null,
@@ -1508,11 +1594,14 @@ function KnowledgePage() {
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="info"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
       <Panel title="Show memories for">
-        {runOptions.length === 0 ? (
-          <EmptyState title="No runs yet" description="Memories belong to a run. Open a run from Orchestrations, then come back here."
+        {projectRuns.error != null && <ErrorNotice code={errorCode(projectRuns.error)}>{runListErrorMessage(projectRuns.error)}</ErrorNotice>}
+        {/* Wait for the run list before saying there are no runs. */}
+        {runOptions.length === 0 && projectRuns.loading ? <Loading label="Loading runs" /> : runOptions.length === 0 ? (
+          <EmptyState title="No runs yet" description="Memories belong to a run. Start a run in this project, then come back here."
             action={<Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/orchestrations`}>Open Orchestrations</Link>} />
         ) : (
           <form className="v1-form v1-inline-form" onSubmit={setScope}>
+            {/* Run and agent are picked from lists, not typed, to avoid mistyped IDs. */}
             <Field label="Run">
               <select className="v1-select" value={runId} onChange={(event) => setRunId(event.target.value)}>
                 <option value="">Choose a run</option>
@@ -1528,6 +1617,7 @@ function KnowledgePage() {
             <Button appearance="primary" type="submit" disabled={!runId.trim() || !agentId.trim()}>Show memories</Button>
           </form>
         )}
+        {/* While the silent attempt runs, show a loader instead of a sign-in button. */}
         {binding && !correctlyScoped && (silentBind === 'failed' ? (
           <div className="v1-scope-action">
             <p className="v1-muted">Each run needs its own sign-in. Sign in again to read this run's memories.</p>
@@ -1827,6 +1917,8 @@ function createTopology(
     const description = status
       ? `${status.activity}${status.activityUnavailableCode ? ` (${status.activityUnavailableCode})` : ''} · ${status.lifecycle}${status.blockers.length ? ` · ${status.blockers.length} blocker(s)` : ''}`
       : 'Status unavailable';
+    // Each session uses the shared workflow node card. Columns are tree depth and
+    // rows are the order within that depth.
     return {
       id: node.identity.sessionId,
       type: 'workflow',
@@ -1834,9 +1926,12 @@ function createTopology(
       data: {
         def: { key: node.kind, label: node.kind, roleDescription: node.kind, Icon: iconForRole(node.kind) },
         state: {
+          // Map session state onto the card's three states: busy is running,
+          // completed is done, and anything else (idle, unknown) shows as pending.
           status: status?.activity === 'busy' ? 'started' : node.lifecycle === 'completed' ? 'completed' : 'pending',
           message: description,
         },
+        // Show the real activity and lifecycle text instead of the card's own status words.
         statusLabelOverride: status ? `${status.activity} · ${status.lifecycle}` : 'Status unavailable',
         agentName: node.identity.sessionId,
         dir: 'LR',
@@ -1963,7 +2058,7 @@ interface PendingMessage {
  * Renders run chat. Messages go to `targetSessionId`: the coordinator unless the user
  * selected another active session in the run tree. The v1 message API delivers between
  * sessions in a run, so the page sends through another active session (the coordinator
- * when it is not the recipient). Pending messages show until the journal reports them.
+ * when it is not the recipient). Sent messages show on this page until it reloads.
  */
 function ChatView({
   projectId,
@@ -1985,7 +2080,11 @@ function ChatView({
   const activeNodes = useMemo(() => nodes.filter((node) => node.lifecycle === 'active'), [nodes]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  // Only active sessions can send or receive. The target may be missing when the
+  // selected session ended; then the panel explains that sending is unavailable.
   const target = activeNodes.find((node) => node.identity.sessionId === targetSessionId);
+  // The API needs a sender session that is not the recipient. Prefer the
+  // coordinator; otherwise use any other active session.
   const sender = activeNodes.find((node) => node.kind === 'coordinator' && node !== target) ??
     activeNodes.find((node) => node !== target);
   const targetName = target ? sessionName(target) : 'Coordinator';
@@ -1993,6 +2092,9 @@ function ChatView({
   const send = async (text: string, idempotencyKey: string) => {
     if (!target || !sender) return;
     setNotice(null);
+    // Errors are not caught here. They reach the composer, which shows them and
+    // keeps the text. The composer also supplies the idempotency key, so a retry
+    // of the same message is not delivered twice.
     const result = await apiCall((token, tenantSelector) => gatewayClient.sendMessage(
       token, projectId, runId, sender.identity.sessionId, target.identity.sessionId, text, idempotencyKey, 'immediate', tenantSelector,
     ), { projectId, runId });
@@ -2353,9 +2455,13 @@ function RunPage() {
   const { session, apiCall, authorize, ensureSession, authorizationContext } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('view');
+  // Chat is the default tab when ?view= is missing or unknown.
   const tab: RunTab = isRunTab(requestedTab) ? requestedTab : 'chat';
+  // Run data needs a sign-in bound to this exact project and run. If the current
+  // session is bound elsewhere, try to switch without a prompt first.
   const authorized = isSameBinding(session?.binding, binding);
   const silentBind = useSilentRunSession(binding, authorized, ensureSession);
+  // The clock only ticks once the run page is usable, for the elapsed-time chip.
   const now = useTickingNow(authorized);
   const snapshotScope = useMemo(() => ({
     projectId,
@@ -2364,6 +2470,7 @@ function RunPage() {
   }), [projectId, runId, session?.accessToken]);
   const activeSnapshotScope = useRef(snapshotScope);
   const tenantId = authorizationContext?.tenantId;
+  // Run-scoped reads send the tenant only after the run binding is confirmed.
   const runTenantSelector = authorized ? tenantId : undefined;
   const journal = useRunJournal(
     authorized ? session?.accessToken : undefined,
@@ -2386,6 +2493,7 @@ function RunPage() {
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
 
   useEffect(() => {
+    // Rewrite an unknown ?view= to chat. Replace keeps the bad URL out of history.
     if (requestedTab === null || isRunTab(requestedTab)) return;
     const normalizedParams = new URLSearchParams(searchParams);
     normalizedParams.set('view', 'chat');
@@ -2459,6 +2567,7 @@ function RunPage() {
     }
     setRunStatus(currentRun);
     // Only a confirmed snapshot for this exact run goes into the browser's recent-run list.
+    // The list is kept per tenant, so skip it until the tenant is known.
     if (tenantId)
       rememberRun(tenantId, { projectId, runId, executionState: currentRun.executionState });
     if (selectionResult.status === 'fulfilled' &&
@@ -2570,6 +2679,7 @@ function RunPage() {
     return (
       <>
         <PageHeading title="Orchestration" description={`Run ${runId}`} page="Orchestrations" />
+        {/* Show a loader while the silent sign-in runs. Ask the user only if it failed. */}
         {silentBind === 'failed' ? (
           <Panel title="Sign in to open this run">
             <p>Each run needs its own sign-in. Sign in again to open this run.</p>
@@ -2585,6 +2695,7 @@ function RunPage() {
   const currentTree = snapshotIsCurrent ? tree : null;
   const currentStatuses = snapshotIsCurrent ? statuses : {};
   const currentDecisions = snapshotIsCurrent ? decisions : {};
+  // Every blocker (question, approval, plan, or outcome) counts as one decision for the user.
   const pendingDecisionCount = Object.values(currentStatuses).reduce((total, status) => total + (status?.blockers.length ?? 0), 0);
   const currentSelection = snapshotIsCurrent ? selection : null;
   const currentUsage = snapshotIsCurrent ? usage : null;
@@ -2625,10 +2736,14 @@ function RunPage() {
     }
   };
 
+  // The run start time is the root session's creation time. NaN means unknown,
+  // and the heading and elapsed chip then leave the time out.
   const rootNode = currentTree?.nodes.find((node) => node.identity.sessionId === currentTree.rootSessionId);
   const startedAt = rootNode ? Date.parse(rootNode.createdAt) : Number.NaN;
   const finished = isRunFinished(currentRunStatus?.executionState);
   const streamLabel = journal.connected ? 'Live' : journal.loading ? 'Connecting' : 'Reconnecting';
+  // Chat goes to the selected session only while it is active. Otherwise it
+  // falls back to the root (coordinator) session.
   const chatTarget = nodeById.get(selectedSession)?.lifecycle === 'active'
     ? selectedSession
     : currentTree?.rootSessionId ?? '';
@@ -2641,7 +2756,16 @@ function RunPage() {
         title="Orchestration"
         description={Number.isNaN(startedAt) ? `Run ${runId}` : `Run ${runId} · Started ${new Date(startedAt).toLocaleString()}`}
         page="Orchestrations"
-        actions={<Button appearance="secondary" aria-label="Refresh run" icon={<ArrowClockwiseRegular />} disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh</Button>}
+        actions={<>
+          {/* Stop shows only while the run is open; a stop reloads the run state. */}
+          <StopRunButton
+            projectId={projectId}
+            runId={runId}
+            state={currentRunStatus?.executionState}
+            onStopped={() => void refreshRef.current()}
+          />
+          <Button appearance="secondary" aria-label="Refresh run" icon={<ArrowClockwiseRegular />} disabled={snapshotBusy} onClick={() => void refreshRef.current()}>Refresh</Button>
+        </>}
       />
       {currentSnapshotMessage && <MessageBar intent="info"><MessageBarBody>{currentSnapshotMessage}</MessageBarBody></MessageBar>}
       {Object.entries(pageErrors).map(([key, message]) => (
@@ -2651,6 +2775,7 @@ function RunPage() {
       {currentRunStatus && (
         <>
           <div className="v1-run-strip" aria-label="Run progress">
+            {/* Summary strip: state, session count, elapsed time (only while running), open decisions, and live-stream state. */}
             <Badge appearance="tint" color={runState(currentRunStatus.executionState).color}>{runState(currentRunStatus.executionState).label}</Badge>
             <span className="v1-run-chip">{nodes.length === 1 ? '1 session' : `${nodes.length} sessions`}</span>
             {!finished && !Number.isNaN(startedAt) && <span className="v1-run-chip">{formatElapsed(now - startedAt)} elapsed</span>}
@@ -2663,6 +2788,7 @@ function RunPage() {
             </details>
           </div>
           <div className="v1-run-body">
+            {/* Left: the run tree. Selecting a session there drives Topology details and the chat target. */}
             <RunTree
               tree={currentTree}
               statuses={currentStatuses}
@@ -2743,6 +2869,7 @@ function RunPage() {
           )}
           {tab === 'changes' && (
             <div className="v1-stack">
+              {/* Only runs that use a GitHub App connection have a branch or pull request to show. */}
               {currentSelection?.projectConfiguration.sourceControl?.authMode === 'githubApp' ? (
                 <RunGitHubAppPanel
                   projectId={projectId}
@@ -2753,9 +2880,10 @@ function RunPage() {
               ) : (
                 <EmptyState title="No repository changes" description="This run does not use a GitHub App repository connection, so it has no branch or pull request to show." />
               )}
-              {/* Read captures for the run's root session. The panel shows for every run, with or
-                  without a GitHub App repository connection. */}
-              <ProducedFilesPanel projectId={projectId} runId={runId} sessionId={currentRunStatus.rootSessionId} />
+              {/* Produced files are read from the root session, which every started run has. */}
+              {currentRunStatus.rootSessionId && (
+                <RunOutputCapturesPanel projectId={projectId} runId={runId} sessionId={currentRunStatus.rootSessionId} />
+              )}
             </div>
           )}
           {tab === 'usage' && (
@@ -2788,9 +2916,11 @@ function sessionName(node: SessionTreeNode): string {
 
 /** Formats a duration in the 0.x elapsed style, for example "1h 4m" or "42s". */
 function formatElapsed(milliseconds: number): string {
+  // Clamp to zero so a small clock difference never shows a negative time.
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
+  // Show only the two largest units, as 0.x did.
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
   return `${seconds}s`;
@@ -2800,6 +2930,7 @@ function formatElapsed(milliseconds: number): string {
 function useTickingNow(enabled: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    // No timer while disabled, so hidden or signed-out pages do not re-render every second.
     if (!enabled) return undefined;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
@@ -2817,11 +2948,17 @@ function useSilentRunSession(
   ensureSession: AuthReturn['ensureSession'],
 ): 'pending' | 'failed' {
   const key = binding ? `${binding.projectId}/${binding.runId}` : '';
+  // Remembers which run's silent attempt failed. Storing the key (not a boolean)
+  // means a different run gets its own fresh attempt.
   const [failedKey, setFailedKey] = useState<string | null>(null);
   useEffect(() => {
+    // Skip when there is no run, the session is already bound to it, or this run
+    // already failed. The last check stops an endless retry loop.
     // A held session activates at once; a new one is requested once, and concurrent calls share it.
     if (!binding || authorized || failedKey === key) return;
     void ensureSession(binding).then((ok) => {
+      // On success the auth context changes and `authorized` becomes true, so
+      // only the failure needs local state.
       if (!ok) setFailedKey(key);
     });
   }, [authorized, binding, ensureSession, failedKey, key]);
@@ -2839,11 +2976,13 @@ function RunTree({ tree, statuses, selectedSession, onSelect }: {
 }) {
   const ordered = useMemo(() => {
     if (!tree) return [];
+    // Group sessions by parent ID. The root has no parent and is stored under ''.
     const children = new Map<string, SessionTreeNode[]>();
     for (const node of tree.nodes) {
       const parent = node.parentSessionId ?? '';
       children.set(parent, [...(children.get(parent) ?? []), node]);
     }
+    // Depth-first walk from the root, so each child is listed under its parent.
     const rows: { node: SessionTreeNode; depth: number }[] = [];
     const visit = (node: SessionTreeNode, depth: number) => {
       rows.push({ node, depth });
@@ -2858,6 +2997,8 @@ function RunTree({ tree, statuses, selectedSession, onSelect }: {
   }, [tree]);
   const stateText = (node: SessionTreeNode) => {
     const status = statuses[node.identity.sessionId];
+    // Order matters: a waiting decision is shown first because it needs the user.
+    // Then an ended session shows how it ended, and an active one shows its activity.
     if (status && status.blockers.length > 0) return 'Needs input';
     if (node.lifecycle !== 'active') return node.lifecycle === 'completed' ? 'Done' : node.lifecycle === 'cancelled' ? 'Cancelled' : 'Archived';
     return status?.activity === 'busy' ? 'Working' : status?.activity === 'idle' ? 'Idle' : 'Status unknown';
@@ -2927,7 +3068,9 @@ function ReactFlowView({
 /** Displays the in-window Broker sign-in exchange and redirects after a session is established. */
 function CallbackPage() {
   const { session, error, busy } = useAuth();
-  if (session) return <Navigate to="/projects" replace />;
+  // A full-page sign-in for a new chat returns here. Go back to New session,
+  // which starts the saved chat; otherwise open Projects.
+  if (session) return <Navigate to={readPendingRun() ? '/assistant' : '/projects'} replace />;
   return (
     <div className="v1-auth-page">
       <section className="v1-auth-card">
@@ -3086,31 +3229,42 @@ function AuthenticatedRoutes() {
   if (!session) return <SignInScreen />;
   return (
     <Routes>
+      {/* App-wide pages. Pages without a v1 service show an explanation instead of failing. */}
       <Route path="/" element={<Navigate to="/overview" replace />} />
       <Route path="/overview" element={<Shell><OverviewPage /></Shell>} />
-      <Route path="/sessions" element={<Shell><UnavailablePage title="Sessions" description="Starting and listing chat sessions needs a service update. Open a project, then choose a run in Orchestrations." /></Shell>} />
-      <Route path="/assistant" element={<Shell><UnavailablePage title="New session" description="Starting a new chat needs a service update. Open a project, then choose a run in Orchestrations to read and send messages." /></Shell>} />
+      <Route path="/sessions" element={<Shell><SessionsPage /></Shell>} />
+      <Route path="/assistant" element={<Shell><NewSessionPage /></Shell>} />
       <Route path="/console" element={<Navigate to="/assistant" replace />} />
       <Route path="/settings" element={<Shell><AccountSettingsPage /></Shell>} />
-      <Route path="/platform-settings" element={<Shell><UnavailablePage title="Platform settings" description="Platform administration is not available in this web client." /></Shell>} />
+      <Route path="/platform-settings" element={<Shell><PlatformSettingsPage /></Shell>} />
       <Route path="/auth/callback" element={<CallbackPage />} />
       <Route path="/projects" element={<Shell><ProjectsPage /></Shell>} />
       <Route path="/projects/:projectId" element={<Shell><DashboardPage /></Shell>} />
+      {/* Settings, Skills, and Agents are three views of the same configuration page. */}
       <Route path="/projects/:projectId/settings" element={<Shell><ProjectConfigurationPage /></Shell>} />
       <Route path="/projects/:projectId/skills" element={<Shell><ProjectConfigurationPage view="skills" /></Shell>} />
       <Route path="/projects/:projectId/team" element={<Shell><ProjectConfigurationPage view="agents" /></Shell>} />
-      <Route path="/projects/:projectId/team/cast" element={<Shell><UnavailablePage title="Cast a team" description="Interactive team casting is not available in this version. Review the current team in Agents and edit its configuration in Project settings." /></Shell>} />
+      <Route path="/projects/:projectId/team/cast" element={<Shell><CastTeamPage /></Shell>} />
       <Route path="/projects/:projectId/team/:agentName/memory" element={<AgentMemoryRedirect />} />
+      {/* "knowledge" is the older address for Memories; both show the same page. */}
       <Route path="/projects/:projectId/knowledge" element={<Shell><KnowledgePage /></Shell>} />
       <Route path="/projects/:projectId/memories" element={<Shell><KnowledgePage /></Shell>} />
+      <Route path="/projects/:projectId/board" element={<Shell><BoardPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations" element={<Shell><OrchestrationsPage /></Shell>} />
       <Route path="/projects/:projectId/sessions" element={<Navigate to="/sessions" replace />} />
       <Route path="/projects/:projectId/runs/:runId" element={<Shell><RunPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunRedirect />} />
-      {unavailableProjectPages.map(({ segment, title, description }) => (
-        <Route key={segment} path={`/projects/:projectId/${segment}`} element={<Shell><UnavailablePage title={title} description={description} /></Shell>} />
-      ))}
-      <Route path="/observability/*" element={<Shell><UnavailablePage title="Observability" description="Project trace and agent summaries are not available in this version. Open an existing run for its Activity and Usage views." /></Shell>} />
+      {/* 0.x operations pages. Each shows the parts current reads support and names what is missing. */}
+      <Route path="/projects/:projectId/flow" element={<Shell><FlowPage /></Shell>} />
+      <Route path="/projects/:projectId/workflows" element={<Shell><WorkflowsPage /></Shell>} />
+      <Route path="/projects/:projectId/workspace" element={<Shell><WorkspacePage /></Shell>} />
+      <Route path="/projects/:projectId/observability/*" element={<Shell><ProjectObservabilityPage /></Shell>} />
+      <Route path="/projects/:projectId/diagnostics" element={<Shell><DiagnosticsPage /></Shell>} />
+      <Route path="/projects/:projectId/heartbeat" element={<Shell><HeartbeatPage /></Shell>} />
+      <Route path="/projects/:projectId/cluster" element={<Shell><ClusterPage /></Shell>} />
+      {/* The cross-project summary has no read yet; each project has its own Observability page. */}
+      <Route path="/observability/*" element={<Shell><UnavailablePage title="Observability" description="A summary across all projects is not available in this version. Open a project and choose Observability for its runs and usage." /></Shell>} />
+      {/* Unknown addresses show "Page not found" inside the app shell, so navigation stays available. */}
       <Route path="*" element={<Shell><UnavailablePage title="Page not found" description="This address does not match an Agentweaver page. Use the navigation to choose a destination." /></Shell>} />
     </Routes>
   );
@@ -3120,23 +3274,13 @@ function AuthenticatedRoutes() {
 function CoordinatorRunRedirect() {
   const { projectId = '', runId = '' } = useParams();
   const location = useLocation();
+  // Keep the query and hash (for example ?view=approvals) so old links open the same tab.
   return <Navigate to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}${location.search}${location.hash}`} replace />;
 }
 
-/** Legacy destinations stay addressable without falling back to monolith APIs. */
-const unavailableProjectPages = [
-  { segment: 'board', title: 'Board', description: 'The project board is not available in this version. Open Orchestrations to review runs and approvals.' },
-  { segment: 'flow', title: 'Flow', description: 'Project-wide agent activity is not available in this version. Open Orchestrations, then a run, to view its session topology.' },
-  { segment: 'workspace', title: 'Workspace', description: 'Project file browsing is not available in this version. Open a run and select Changes to browse the files it produced.' },
-  { segment: 'workflows', title: 'Workflows', description: 'The workflow editor is not available in this version. Workflow references remain in Project settings.' },
-  { segment: 'observability/*', title: 'Observability', description: 'Project trace and agent summaries are not available in this version. Open a run for Activity and Usage.' },
-  { segment: 'diagnostics', title: 'Diagnostics', description: 'Project diagnostics are not available in this version. Run Activity shows the status reported for each session.' },
-  { segment: 'heartbeat', title: 'Heartbeat', description: 'Project heartbeat monitoring is not available in this version.' },
-  { segment: 'cluster', title: 'Cluster', description: 'Cluster management is not available in this web client.' },
-];
-
-/** Uses the incumbent empty-state pattern for a capability with no admitted API. */
+/** Explains that a page is not available in this version, using the standard empty state. */
 function UnavailablePage({ title, description }: { title: string; description: string }) {
+  // Inside a project, link back to its dashboard; otherwise link to the project list.
   const { projectId } = useParams();
   return <>
     <PageHeading title={title} />
@@ -3145,7 +3289,10 @@ function UnavailablePage({ title, description }: { title: string; description: s
   </>;
 }
 
-/** Account connections use their existing owner checks, not a new identity store. */
+/**
+ * Account-level settings: sign out and the GitHub App connection. Each connection
+ * panel runs its own server checks; this page stores no identity data itself.
+ */
 function AccountSettingsPage() {
   const { signOut } = useAuth();
   return <>
@@ -3156,11 +3303,16 @@ function AccountSettingsPage() {
   </>;
 }
 
-/** A legacy display name is a search input, never an authorization claim. */
+/**
+ * Redirects the older per-agent memory address to the Memories page. The agent
+ * name from the old URL only pre-fills the agent choice; it grants no access,
+ * and the server still checks every request.
+ */
 function AgentMemoryRedirect() {
   const { projectId = '', agentName = '' } = useParams();
   const location = useLocation();
   const search = new URLSearchParams(location.search);
+  // An explicit ?agentId= in the old link wins over the name in its path.
   if (!search.has('agentId')) search.set('agentId', agentName);
   return <Navigate to={`/projects/${encodeURIComponent(projectId)}/memories?${search}`} replace />;
 }

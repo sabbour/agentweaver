@@ -126,12 +126,12 @@ describe('ProjectMembersPanel', () => {
     await waitFor(() => expect(screen.queryByText('bob')).toBeNull());
   });
 
-  it('explains when role changes are not available yet', async () => {
+  it('explains when the member store is unavailable', async () => {
     mocks.listProjectRoleAssignments.mockResolvedValue(listOf(owner));
     mocks.assignProjectRole.mockRejectedValue(new GatewayError(503, {}, 'Unavailable'));
     await renderPanel(true);
     await addMember('bob');
-    expect(await screen.findByText(/^Role changes aren't available yet/)).toBeTruthy();
+    expect(await screen.findByText('Member changes are not available right now. Try again later.')).toBeTruthy();
   });
 
   it('explains when the member already has the role', async () => {
@@ -141,6 +141,14 @@ describe('ProjectMembersPanel', () => {
     await addMember('alice', 'owner');
     expect(await screen.findByText('This member already has that role.')).toBeTruthy();
     expect((screen.getByRole('textbox', { name: /Member ID/ }) as HTMLInputElement).value).toBe('alice');
+  });
+
+  it('explains when the member ID does not match a user or service account', async () => {
+    mocks.listProjectRoleAssignments.mockResolvedValue(listOf(owner));
+    mocks.assignProjectRole.mockRejectedValue(new GatewayError(404, { code: 'principal_not_found' }, 'Not found'));
+    await renderPanel(true);
+    await addMember('nobody');
+    expect(await screen.findByText('No user or service account has this ID. Check the ID and try again.')).toBeTruthy();
   });
 
   it('explains when removing the last owner is refused', async () => {
@@ -154,10 +162,10 @@ describe('ProjectMembersPanel', () => {
     expect(await screen.findByText('A project needs at least one owner. Add another owner first.')).toBeTruthy();
   });
 
-  it('says the list is not available when the service returns 404', async () => {
+  it('says the project was not found when the list returns 404', async () => {
     mocks.listProjectRoleAssignments.mockRejectedValue(new GatewayError(404, {}, 'Not found'));
     await renderPanel(true);
-    expect(await screen.findByText('The member list isn\'t available in this version of the service.')).toBeTruthy();
+    expect(await screen.findByText('This project was not found. It may have been deleted.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add member' })).toBeNull();
   });
 

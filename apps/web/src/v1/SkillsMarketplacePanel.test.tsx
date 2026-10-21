@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { GatewayError } from './api';
 import {
   SkillsMarketplacePanel,
 } from './SkillsMarketplacePanel';
@@ -10,7 +11,9 @@ import type {
   MarketplaceBrowsePage,
   MarketplaceSource,
   SkillContentInventoryPage,
+  SkillContentPackageResult,
   SkillContentPreview,
+  SkillMarketplaceDefinition,
 } from './contracts';
 import type {
   VersionedProjectConfiguration,
@@ -56,9 +59,22 @@ const browsePage: MarketplaceBrowsePage = {
   hasMore: false,
 };
 
+/** The candidate the package route returns for an uploaded sample skill. */
+const packagedCandidate = {
+  skillMarkdown: btoa('# Sample skill'),
+  resources: [{ relativePath: 'README.md', content: btoa('Read me') }],
+};
+
+const packageResult: SkillContentPackageResult = {
+  skills: [{ location: '', candidate: packagedCandidate, preview, error: null, skippedPaths: [] }],
+};
+
 function createActions(overrides: Partial<SkillsMarketplaceActions> = {}): SkillsMarketplaceActions {
   return {
     listSources: vi.fn().mockResolvedValue([]),
+    listDefinitions: vi.fn().mockResolvedValue([]),
+    packageSkillContent: vi.fn().mockResolvedValue(packageResult),
+    revokeSkillRevision: vi.fn().mockResolvedValue(undefined),
     createSource: vi.fn().mockResolvedValue(source),
     updateSource: vi.fn().mockResolvedValue({ ...source, revision: source.revision + 1 }),
     removeSource: vi.fn().mockResolvedValue({ ...source, state: 'removed', revision: source.revision + 1 }),
@@ -126,11 +142,11 @@ describe('Skills and marketplace panel', () => {
   it('does not assume owner state or enable actions when Gateway actions are absent', () => {
     renderPanel(null);
 
-    expect(screen.getByText(/No source, import, assignment, or runtime state is assumed/)).toBeTruthy();
+    expect(screen.getByText(/Skills actions are not available because you are not signed in/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Browse marketplaces' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Import skill' }).hasAttribute('disabled')).toBe(true);
     fireEvent.click(screen.getByRole('tab', { name: 'Assignments' }));
-    expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
+    expect(screen.getByText(/does not show whether a running agent has loaded a skill/)).toBeTruthy();
   });
 
   it('shows the 0.x stat strip, toolbar, and Catalog/Assignments tabs from loaded data', async () => {
@@ -226,7 +242,7 @@ describe('Skills and marketplace panel', () => {
     await screen.findByText('Enabled for agents: agent-1');
     expect(screen.getByText('Marketplace source source-1 · source revision 7 · commit 0123456789abcdef · skills/sample'))
       .toBeTruthy();
-    expect(screen.getByText(/does not show whether a runtime loaded a skill/)).toBeTruthy();
+    expect(screen.getByText(/does not show whether a running agent has loaded a skill/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Next inventory page' }));
     await screen.findByText('Revoked skill');
@@ -283,7 +299,7 @@ describe('Skills and marketplace panel', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill' }));
-    await screen.findByText(/The Skills owner imported Sample skill at revision 3/);
+    await screen.findByText(/Imported Sample skill at revision 3/);
     const request = vi.mocked(actions.importMarketplaceSkill).mock.calls[0][2];
     expect(request).toEqual({
       expectedSourceRevision: 7,
@@ -334,7 +350,7 @@ describe('Skills and marketplace panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
     await screen.findByLabelText('Marketplace skill preview');
     fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill' }));
-    await screen.findByText(/The Skills owner imported Sample skill at revision 3/);
+    await screen.findByText(/Imported Sample skill at revision 3/);
     const nextKey = vi.mocked(actions.importMarketplaceSkill).mock.calls[2][2].idempotencyKey;
     expect(nextKey).not.toBe(firstKey);
 
@@ -384,7 +400,7 @@ describe('Skills and marketplace panel', () => {
     });
 
     expect(screen.queryByLabelText('Marketplace skill preview')).toBeNull();
-    expect(screen.queryByText(/The Skills owner validated this source skill/)).toBeNull();
+    expect(screen.queryByText(/valid at the selected commit/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Import selected source skill' })).toBeNull();
   });
 
@@ -433,7 +449,7 @@ describe('Skills and marketplace panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
     await screen.findByLabelText('Marketplace skill preview');
     fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill' }));
-    await screen.findByText(/The Skills owner imported Sample skill at revision 3/);
+    await screen.findByText(/Imported Sample skill at revision 3/);
 
     const nextKey = vi.mocked(refreshedActions.importMarketplaceSkill).mock.calls[0][2].idempotencyKey;
     expect(nextKey).not.toBe(firstKey);
@@ -512,8 +528,8 @@ describe('Skills and marketplace panel', () => {
     await screen.findByLabelText('Marketplace skill preview');
     fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill' }));
 
-    await screen.findByText('The Skills owner returned an import receipt that does not match the preview.');
-    expect(screen.queryByText(/The Skills owner imported Sample skill/)).toBeNull();
+    await screen.findByText('The server returned an import result that does not match the preview.');
+    expect(screen.queryByText(/Imported Sample skill at revision/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Assign to selected agents' })).toBeNull();
   });
 
@@ -528,7 +544,7 @@ describe('Skills and marketplace panel', () => {
     renderPanel(actions);
     openImport();
 
-    const fileInput = screen.getByLabelText('Skill folder or files') as HTMLInputElement;
+    const fileInput = screen.getByLabelText('Skill files or ZIP') as HTMLInputElement;
     fireEvent.change(fileInput, {
       target: {
         files: [
@@ -537,7 +553,7 @@ describe('Skills and marketplace panel', () => {
         ],
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check skill files' }));
 
     await waitFor(() => expect(actions.previewSkillContent).toHaveBeenCalledOnce());
     expect(fileInput.disabled).toBe(true);
@@ -553,10 +569,14 @@ describe('Skills and marketplace panel', () => {
 
     expect(await screen.findByText('Skill A')).toBeTruthy();
     expect(screen.getByText('2 file(s) selected.')).toBeTruthy();
-    expect(actions.previewSkillContent).toHaveBeenCalledWith({
-      skillMarkdown: btoa('# Skill A'),
-      resources: [{ relativePath: 'README.md', content: btoa('Resource A') }],
+    // The browser sends the raw files; the service builds the candidate.
+    expect(actions.packageSkillContent).toHaveBeenCalledWith({
+      files: [
+        { relativePath: 'SKILL.md', content: btoa('# Skill A') },
+        { relativePath: 'README.md', content: btoa('Resource A') },
+      ],
     });
+    expect(actions.previewSkillContent).toHaveBeenCalledWith(packagedCandidate);
     expect((screen.getByRole('button', { name: 'Import skill to project' }) as HTMLButtonElement).disabled)
       .toBe(false);
   });
@@ -594,19 +614,22 @@ describe('Skills and marketplace panel', () => {
 
     const skillFile = new File(['# Sample skill'], 'SKILL.md', { type: 'text/markdown' });
     const resourceFile = new File(['Read me'], 'README.md', { type: 'text/markdown' });
-    fireEvent.change(screen.getByLabelText('Skill folder or files'), {
+    fireEvent.change(screen.getByLabelText('Skill files or ZIP'), {
       target: { files: [skillFile, resourceFile] },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check skill files' }));
 
     await screen.findByText('sha256:sample');
-    expect(actions.previewSkillContent).toHaveBeenCalledWith({
-      skillMarkdown: btoa('# Sample skill'),
-      resources: [{ relativePath: 'README.md', content: btoa('Read me') }],
+    expect(actions.packageSkillContent).toHaveBeenCalledWith({
+      files: [
+        { relativePath: 'SKILL.md', content: btoa('# Sample skill') },
+        { relativePath: 'README.md', content: btoa('Read me') },
+      ],
     });
+    expect(actions.previewSkillContent).toHaveBeenCalledWith(packagedCandidate);
 
     fireEvent.click(screen.getByRole('button', { name: 'Import skill to project' }));
-    await screen.findByText(/The Skills owner imported Sample skill at revision 3/);
+    await screen.findByText(/Imported Sample skill at revision 3/);
     await waitFor(() => expect(actions.importSkillContent).toHaveBeenCalledWith(
       'project-1',
       expect.objectContaining({
@@ -625,7 +648,7 @@ describe('Skills and marketplace panel', () => {
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Assignments' }).getAttribute('aria-selected')).toBe('true'));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Agent One' }));
     fireEvent.click(screen.getByRole('button', { name: 'Assign to selected agents' }));
-    await screen.findByText(/saved this assignment in configuration revision 5/);
+    await screen.findByText(/Saved this assignment in configuration revision 5/);
     expect(actions.updateSkillAssignment).toHaveBeenCalledWith('project-1', 'skill-1', {
       expectedProjectConfigurationRevision: 4,
       revision: 3,
@@ -635,7 +658,7 @@ describe('Skills and marketplace panel', () => {
       agentIds: ['agent-1'],
     });
     expect(screen.getByText(importedSkill.skillId)).toBeTruthy();
-    expect(screen.getByText(/does not prove a runtime loaded it/)).toBeTruthy();
+    expect(screen.getByText(/New runs use it/)).toBeTruthy();
   });
 
   it('shows source owner errors instead of replacing them with success-shaped state', async () => {
@@ -646,5 +669,179 @@ describe('Skills and marketplace panel', () => {
     openMarketplaces();
 
     expect((await screen.findByRole('alert')).textContent).toContain('source owner denied this request');
+  });
+
+  it('lists suggested marketplaces and adds a picked one as a source without typing', async () => {
+    const definition: SkillMarketplaceDefinition = {
+      name: 'Public skills',
+      repository: 'example/public-skills',
+      requestedRef: 'main',
+      subpath: 'skills',
+      layoutNote: 'One folder per skill.',
+      sourceId: null,
+    };
+    const added: SkillMarketplaceDefinition = { ...definition, name: 'Added skills', repository: 'example/added', layoutNote: null, sourceId: 'source-9' };
+    const listDefinitions = vi.fn()
+      .mockResolvedValueOnce([definition, added])
+      .mockResolvedValue([{ ...definition, sourceId: 'source-1' }, added]);
+    const actions = createActions({ listDefinitions });
+    renderPanel(actions);
+    openMarketplaces();
+
+    expect(await screen.findByText('One folder per skill.')).toBeTruthy();
+    // An already-added suggestion shows a status instead of a button.
+    expect(screen.queryByRole('button', { name: 'Add Added skills' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Public skills' }));
+
+    await screen.findByText('Public skills was added as a marketplace source.');
+    expect(actions.createSource).toHaveBeenCalledWith('project-1', {
+      name: 'Public skills',
+      repository: 'example/public-skills',
+      requestedRef: 'main',
+      subpath: 'skills',
+    });
+    // Both lists reload, so the suggestion now shows as added.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Add Public skills' })).toBeNull());
+    expect(listDefinitions).toHaveBeenCalledTimes(2);
+  });
+
+  it('explains a 403 and an empty list for suggested marketplaces', async () => {
+    const denied = createActions({
+      listDefinitions: vi.fn().mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'forbidden')),
+    });
+    const { unmount } = renderPanel(denied);
+    openMarketplaces();
+    expect(await screen.findByText('You do not have permission for this action in this project.')).toBeTruthy();
+    unmount();
+
+    renderPanel(createActions());
+    openMarketplaces();
+    expect(await screen.findByText('No suggested marketplaces are available.')).toBeTruthy();
+  });
+
+  it('creates a skill from the Add skill form through package, preview, and import', async () => {
+    const actions = createActions();
+    renderPanel(actions);
+    fireEvent.click(screen.getByRole('button', { name: 'Add skill' }));
+
+    fireEvent.change(screen.getByRole('textbox', { name: /Name/ }), { target: { value: 'code-review' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Description/ }), { target: { value: 'Reviews code' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Instructions/ }), { target: { value: 'Check the diff.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create skill' }));
+
+    await screen.findByText(/Created Sample skill at revision 3/);
+    expect(actions.packageSkillContent).toHaveBeenCalledWith({
+      draft: { name: 'code-review', description: 'Reviews code', instructions: 'Check the diff.' },
+    });
+    expect(actions.previewSkillContent).toHaveBeenCalledWith(packagedCandidate);
+    expect(actions.importSkillContent).toHaveBeenCalledWith('project-1', expect.objectContaining({
+      expectedContentDigest: preview.contentDigest,
+      candidate: packagedCandidate,
+    }));
+    expect(screen.getByRole('tab', { name: 'Assignments' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('shows the package error for an invalid draft and imports nothing', async () => {
+    const actions = createActions({
+      packageSkillContent: vi.fn().mockRejectedValue(
+        new GatewayError(400, { code: 'invalid_request', detail: 'Skill instructions are required.' }, 'Skill instructions are required.'),
+      ),
+    });
+    renderPanel(actions);
+    fireEvent.click(screen.getByRole('button', { name: 'Add skill' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /Name/ }), { target: { value: 'code-review' } });
+    fireEvent.change(screen.getByRole('textbox', { name: /Instructions/ }), { target: { value: ' x ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create skill' }));
+
+    expect(await screen.findByText('Skill instructions are required.')).toBeTruthy();
+    expect(actions.packageSkillContent).toHaveBeenCalledWith({ draft: { name: 'code-review', instructions: 'x' } });
+    expect(actions.importSkillContent).not.toHaveBeenCalled();
+  });
+
+  it('sends one ZIP file as an archive and lets the user pick between found skills', async () => {
+    const second = { ...packagedCandidate, skillMarkdown: btoa('# Other') };
+    const actions = createActions({
+      packageSkillContent: vi.fn().mockResolvedValue({
+        skills: [
+          { location: 'a', candidate: packagedCandidate, preview, error: null, skippedPaths: [] },
+          { location: 'b', candidate: second, preview: { ...preview, name: 'Other skill' }, error: null, skippedPaths: ['b/image.png'] },
+          { location: 'c', candidate: null, preview: null, error: 'SKILL.md has no name.', skippedPaths: [] },
+        ],
+      } satisfies SkillContentPackageResult),
+    });
+    renderPanel(actions);
+    openImport();
+    fireEvent.change(screen.getByLabelText('Skill files or ZIP'), {
+      target: { files: [new File(['zip-bytes'], 'skills.zip', { type: 'application/zip' })] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Check skill files' }));
+
+    expect(await screen.findByText('2 skills were found. Pick one to check and import.')).toBeTruthy();
+    expect(actions.packageSkillContent).toHaveBeenCalledWith({ archive: btoa('zip-bytes') });
+    expect(screen.getByText('SKILL.md has no name.')).toBeTruthy();
+    expect(screen.getByText('Skipped: b/image.png')).toBeTruthy();
+    expect(actions.previewSkillContent).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pick Other skill' }));
+    await waitFor(() => expect(actions.previewSkillContent).toHaveBeenCalledWith(second));
+  });
+
+  it('refuses an upload over 2 MB before sending it', async () => {
+    const actions = createActions();
+    renderPanel(actions);
+    openImport();
+    const large = new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'SKILL.md');
+    fireEvent.change(screen.getByLabelText('Skill files or ZIP'), { target: { files: [large] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check skill files' }));
+
+    expect(await screen.findByText('The upload is larger than 2 MB. Remove large files and try again.')).toBeTruthy();
+    expect(actions.packageSkillContent).not.toHaveBeenCalled();
+  });
+
+  it('removes a skill by revoking its current revision after confirmation, then reloads the inventory', async () => {
+    const revision = {
+      skillId: 'skill-1',
+      name: 'Sample skill',
+      description: 'A sample',
+      contentDigest: 'sha256:sample',
+      resourceCount: 1,
+      totalBytes: 32,
+      createdByActorId: 'actor-1',
+      createdAt: '2026-10-10T00:00:00Z',
+      sourceId: null,
+      sourceRevision: null,
+      requestedRef: null,
+      resolvedCommitSha: null,
+      selectedPath: null,
+      isRevoked: false,
+      revokedByActorId: null,
+      revokedAt: null,
+    };
+    const inventory = (revoked: boolean): SkillContentInventoryPage => ({
+      configurationRevision: 4,
+      assignments: [],
+      revisions: [
+        { ...revision, revision: 1 },
+        { ...revision, revision: 2, isRevoked: revoked, revokedByActorId: revoked ? 'actor-1' : null, revokedAt: revoked ? '2026-10-11T00:00:00Z' : null },
+      ],
+      pageSize: 25,
+      nextCursor: null,
+    });
+    const actions = createActions({
+      listSkillInventory: vi.fn().mockResolvedValueOnce(inventory(false)).mockResolvedValue(inventory(true)),
+    });
+    renderPanel(actions);
+    fireEvent.click(screen.getByRole('button', { name: 'Load skill inventory' }));
+
+    // Only the newest active revision offers the action.
+    const removeButtons = await screen.findAllByRole('button', { name: 'Remove skill Sample skill' });
+    expect(removeButtons).toHaveLength(1);
+    fireEvent.click(removeButtons[0]);
+    expect(await screen.findByText(/will be revoked/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove skill' }));
+
+    await screen.findByText('Removed Sample skill. Revision 2 is revoked.');
+    expect(actions.revokeSkillRevision).toHaveBeenCalledWith('project-1', 'skill-1', 2, 'Removed from the Skills page.');
+    await waitFor(() => expect(actions.listSkillInventory).toHaveBeenCalledTimes(2));
   });
 });

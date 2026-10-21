@@ -102,10 +102,12 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
             "__ef_migrations_history", ProjectsConfigDbContext.Schema));
 });
 builder.Services.AddScoped<ProjectsConfigService>();
+builder.Services.AddScoped<ProjectRoleAssignmentService>();
 builder.Services.AddScoped<MarketplaceSourceStore>();
 builder.Services.AddScoped<IProjectMarketplaceSourceStore>(
     provider => provider.GetRequiredService<MarketplaceSourceStore>());
 builder.Services.AddScoped<ProjectMarketplaceSourceService>();
+builder.Services.AddSingleton(SkillMarketplaceCatalog.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectMarketplaceSkillContentService>();
 builder.Services.AddHttpClient<SkillMarketplaceBrowseService>();
 var skillContentContainer = builder.Configuration["ProjectsConfig:SkillContent:ContainerUri"];
@@ -136,6 +138,8 @@ builder.Services.AddScoped<SkillContentService>(services => new SkillContentServ
 builder.Services.AddScoped<ISkillContentService>(services => services.GetRequiredService<SkillContentService>());
 builder.Services.AddScoped<ISkillAssignmentService>(services => services.GetRequiredService<SkillContentService>());
 builder.Services.AddSingleton(TimeProvider.System);
+// Platform component owners are optional; unconfigured owners are reported as unknown.
+builder.Services.AddPlatformComponentCollector(builder.Configuration);
 builder.Services.AddSingleton(provider =>
     ProviderCatalogConfiguration.Load(provider.GetRequiredService<IConfiguration>()));
 
@@ -170,6 +174,8 @@ if (brokerRunBindingAudience is not null)
     brokerRunBindingAudienceUri = parsedBrokerAudience;
 }
 BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is not null);
+var issueSyncIdentity = Agentweaver.Identity.IssueSyncServiceTransport.AddChannel(builder,
+    IssueSyncAuthorityEndpoints.Channel, "ProjectsConfig:IssueSync:IdentityTls", "Projects", "IdentityBroker", true);
 
 builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(authorityUri.AbsoluteUri));
 builder.Services.AddScoped<ProjectAuthorizationOwner>();
@@ -238,6 +244,7 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapProjectConfigEndpoints(enableBrokerRunBinding: brokerRunBindingAudienceUri is not null);
+app.MapIssueSyncAuthority(issueSyncIdentity);
 app.MapSkillMarketplaceEndpoints();
 app.MapSkillContentEndpoints();
 app.Run();

@@ -1,18 +1,84 @@
 # Runs and sessions
 
-Use this page to inspect an existing run, respond to owner-reported requests,
-and read committed activity and usage. A **session** is a node in the run's
-owner-reported tree. The browser does not create or schedule runs.
+Use this page to start or cancel a run, inspect an existing run, respond to
+owner-reported requests, and read committed activity and usage. A **session**
+is a node in the run's owner-reported tree.
 
 ## Prerequisites
 
-- Open the run once in this browser, for example from a link or a
-  notification. After that, it appears in **Recent runs in this browser**.
 - Sign in with a Broker token bound to that project and run.
+- To create a chat, have the project Orchestrator role (`acceptRunSelection`).
+  Owner or Contributor alone receives `403`. A tenant admin grants the role through
+  `/api/v1/projects/{projectId}/role-assignments`.
+- Create requests need a token that requests `api.read` and
+  `projects.orchestrator` and is not bound to a run.
 
-Open the run from **Overview**, the project **Dashboard**, or
-**Orchestrations**. The app signs in to the run silently. You don't type a run
-ID. If the silent sign-in fails, select **Sign in for this project and run**.
+Open a run from **Sessions**, **Overview**, the project **Dashboard**, or
+**Orchestrations**. These lists read the project run list. The app signs in to
+the run silently. You don't type a run ID. If the silent sign-in fails, select
+**Sign in for this project and run**.
+
+## Start a new chat
+
+In the browser, select **New session** in the rail or on **Sessions**:
+
+1. Choose a project.
+2. Write the first message and send it.
+
+The app creates the run, signs in for that run without a prompt when it can,
+starts the run, and opens its **Chat** tab. If the run sign-in needs you, the
+page shows **Sign in**. The app keeps the created run in session storage, so it
+continues after a sign-in that leaves the page. If a step fails, select **Try
+again**. **Dismiss** drops the pending run from the page; the run stays listed
+in **Sessions**.
+
+A new chat creates a run with a saved first message. Starting it is a
+two-step flow, because the run ID does not exist until create returns. The
+app follows these steps, and other clients can do the same:
+
+1. Send `POST /api/v1/projects/{projectId}/runs` with an `Idempotency-Key`
+   header and a token that is not bound to a run. The body has `firstMessage`,
+   `expectedProjectConfigRevision`, and optional `title` and `workflowId`.
+2. Read `runId`, `rootSessionId`, and `binding` from the `201` response. The
+   run state is `awaiting_binding`.
+3. Persist the pending `runId` and `rootSessionId` across the redirect. Use a
+   top-level PKCE authorize redirect with `prompt=none`, `project_id` set to
+   `binding.projectId`, and `run_id` set to `binding.runId`. With an existing
+   Broker session and consent for the same scopes, this returns a code without
+   UI. Exchange it for a run-bound token. On `login_required` or
+   `consent_required`, fall back to interactive sign-in instead of retrying
+   silently.
+4. Send `POST /api/v1/projects/{projectId}/runs/{runId}/start` with no body.
+
+**Expected result:** Start returns `started`. The Orchestrator accepts the root
+session and delivers the saved first message once, using the idempotency key
+`{runId}:first`. Retrying create with the same key returns the same run.
+Retrying start returns the same result without sending the message again.
+
+The first message is limited to 32,768 UTF-8 bytes. The default title is the
+first 80 characters of the message. Start has a 30-second deadline, including
+database lock waits and downstream calls. A timeout returns `504 run_start_timeout`;
+retry start with the same run ID.
+
+## Cancel a run
+
+In the browser, open the run and select **Stop run** in the page header, then
+confirm in the **Stop this run?** dialog. The button appears only while the
+run is idle, active, or blocked. A retry after a failure reuses the same idempotency key, so the
+service treats both requests as one stop.
+
+Other clients send `POST /api/v1/projects/{projectId}/runs/{runId}/cancel` with an
+`Idempotency-Key` header, a token that is not bound to a run, and an optional
+`reason` of up to 2,048 characters. The caller needs a current project
+Contributor or Owner role, or the tenant administrator role. The caller does
+not need to have started the run. A Viewer receives `403`.
+
+**Expected result:** The response reports `cancelled` and `cancelledAt`. The
+Orchestrator advances the run's execution fence, so later writes that use the
+old fence fail. Active sessions become `cancelled`. A run that was created but
+not started is cancelled without delivering its first message. Cancelling a
+finished run returns `200` with `alreadyTerminal: true` without changing its
+state or sending another event. Idempotency receipts are scoped to each caller.
 
 ## Inspect an existing run
 
@@ -60,8 +126,8 @@ In **Changes**, use **GitHub App repository access** to
 
 The service accepts messages only between sessions of the run. The app sends
 the message from another active session: the coordinator, or the first active
-session when you message the coordinator. Direct messages from you to the
-coordinator need a service API that doesn't exist yet.
+session when you message the coordinator. You can't message the
+coordinator directly, because the service has no API for messages from a user.
 
 **Expected result:** The page shows **Message accepted.** and lists the
 message under the composer. The list is local to the page; reloading clears
@@ -69,9 +135,6 @@ it. The receipt does not prove delivery or completion. If a send fails and you
 retry the same text, the app reuses the same request, so the message isn't
 sent twice. The journal contains typed events and opaque object references;
 the page has no message-content reader.
-
-You can't start a new chat or run from the browser yet. That needs a service
-API that doesn't exist yet (gap G1).
 
 ## Answer a gate
 
@@ -89,8 +152,9 @@ no longer the pending one.** A `409` response causes the app to reload owner
 state without assuming that the decision was applied.
 
 You can also open a pending request from the notification bell or from
-**Needs attention** on **Overview**. Both list requests from the run you have
-open.
+**Needs attention** on **Overview**. Both list your notifications across all
+projects. **Dismiss** hides a notification for you only; it doesn't answer
+the request.
 
 **Expected result:** The owner reports whether it accepted the request. A
 refreshed snapshot, not the receipt, shows the resulting gate state.
@@ -130,23 +194,27 @@ partially priced usage summary does not mean that unpriced usage cost zero.
 ## Requests
 
 All versioned routes use the Gateway. The common prefix is
-`/api/v1/projects/{projectId}/runs/{runId}`.
+`/api/v1/projects/{projectId}/runs`. Create uses the prefix alone.
 
 | Operation | Method and path after the prefix | Owner in source |
 | --- | --- | --- |
-| Run snapshot | `GET /coordination/status` | Orchestrator |
-| Session tree | `GET /coordination/sessions/{sessionId}/tree` | Orchestrator |
-| Session status | `GET /coordination/sessions/{sessionId}/status` | Orchestrator |
-| Decision state | `GET /coordination/sessions/{sessionId}/decisions` | Orchestrator |
-| Send message | `POST /coordination/sessions/{sessionId}/messages` | Orchestrator |
-| Answer question | `POST /coordination/sessions/{sessionId}/decisions/gates/{requestId}/answer` | Orchestrator |
-| Approve or reject | `POST /coordination/sessions/{sessionId}/decisions/gates/{requestId}/approve` or `/reject` | Orchestrator |
-| Detach | `POST /coordination/sessions/{sessionId}/detach` | Orchestrator |
-| Archive child | `POST /coordination/sessions/{parentSessionId}/children/{childSessionId}/archive` | Orchestrator |
-| Read accepted selection | `GET /selection` | Projects & Config |
-| Read usage | `GET /usage` | Events & Sessions |
-| Replay events | `GET /events?cursor=...&limit=100` | Events & Sessions |
-| Follow live events | `GET /events/live?cursor=...` | Gateway SSE over Events replay |
+| Create run | `POST /` (empty suffix) | Orchestrator |
+| List runs | `GET /` (empty suffix) with optional `state`, `cursor`, and `pageSize` | Orchestrator |
+| Start run | `POST /{runId}/start` | Orchestrator |
+| Cancel run | `POST /{runId}/cancel` | Orchestrator |
+| Run snapshot | `GET /{runId}/coordination/status` | Orchestrator |
+| Session tree | `GET /{runId}/coordination/sessions/{sessionId}/tree` | Orchestrator |
+| Session status | `GET /{runId}/coordination/sessions/{sessionId}/status` | Orchestrator |
+| Decision state | `GET /{runId}/coordination/sessions/{sessionId}/decisions` | Orchestrator |
+| Send message | `POST /{runId}/coordination/sessions/{sessionId}/messages` | Orchestrator |
+| Answer question | `POST /{runId}/coordination/sessions/{sessionId}/decisions/gates/{requestId}/answer` | Orchestrator |
+| Approve or reject | `POST /{runId}/coordination/sessions/{sessionId}/decisions/gates/{requestId}/approve` or `/reject` | Orchestrator |
+| Detach | `POST /{runId}/coordination/sessions/{sessionId}/detach` | Orchestrator |
+| Archive child | `POST /{runId}/coordination/sessions/{parentSessionId}/children/{childSessionId}/archive` | Orchestrator |
+| Read accepted selection | `GET /{runId}/selection` | Projects & Config |
+| Read usage | `GET /{runId}/usage` | Events & Sessions |
+| Replay events | `GET /{runId}/events?cursor=...&limit=100` | Events & Sessions |
+| Follow live events | `GET /{runId}/events/live?cursor=...` | Gateway SSE over Events replay |
 
 The Orchestrator, Events & Sessions, and Projects & Config entries identify
 owners in checked-in source. These include source-only or unpublished service
