@@ -151,6 +151,33 @@ resource bytes, or object keys.
 
 ### Reviewed casting proposals and explicit transfers
 
+The Gateway exposes these owner routes under `/api/v1`, including templates
+and roles. It forwards the bearer and optional tenant selector; Projects remains
+the authorization and persistence owner. Import request bodies have the same
+1 MiB limit at both entry points. Export requires `WriteProjects`, not just read
+authority. See [Gateway casting](../reference/api.md#casting-through-the-gateway).
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant Projects as Projects & Config
+    participant DB as PostgreSQL
+    Client->>Gateway: Create proposal (expectedConfigurationRevision, draft or catalog selection)
+    Gateway->>Projects: Forward bearer, tenant selector, and body
+    Projects->>DB: Check current WriteProjects; stage revision-bound proposal
+    Projects-->>Client: 201 pending proposal through Gateway
+    Client->>Gateway: Confirm reviewed proposal (expectedDraftRevision)
+    Gateway->>Projects: Forward unchanged
+    Projects->>DB: Lock project; recheck authority and both revisions
+    alt Revisions are current
+        Projects->>DB: Append configuration and confirm proposal atomically
+        Projects-->>Client: 200 confirmed proposal through Gateway
+    else Revision is stale
+        Projects-->>Client: 409 through Gateway; configuration unchanged
+    end
+```
+
 Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
 
 Authorized project readers can list and read proposals. Project writers can
