@@ -2,8 +2,8 @@
 
 These dependency-free tools define and inspect infrastructure.
 They do not deploy a service or prove workload identity.
-The [#1777 specification](../../docs/specs/1777-azure-p0-infrastructure.md)
-describes source receipts, target guards, and the separate #1784 runtime gate.
+The [infrastructure specification](../../docs/specs/1777-azure-p0-infrastructure.md)
+describes source receipts, target guards, and the separate runtime acceptance checks.
 
 ## Offline validation
 
@@ -19,10 +19,10 @@ the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`ba035fd7a50bc742e7e550676e2ba7d7e88e3f9729bdd9537017781a1940e898`.
+`899871e2030bf1b887a337868561ee3754b723e57169565b0981930ddd979fd1`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-30. Version 027 requires 026 only.
+placeholder. The Core list is 1-16, 18-31. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
 027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
 plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
@@ -220,8 +220,8 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 30.
-These are 29 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16 and 18 through 31.
+These are 30 registered versions; version 17 remains excluded.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,
@@ -248,10 +248,16 @@ applies it after version 29 because it follows catalog order. Its foreign keys
 take `SHARE ROW EXCLUSIVE` locks that block writes to `backlog_projects`,
 `backlog_tasks`, and `coordination_sessions` until commit. Its runtime grant is
 `SELECT,INSERT` on each new table.
+Version 31 adds the empty `user_notification_promotion_dismissals` table.
+It stores caller dismissals of backlog promotion notices and has a foreign key
+to `backlog_plan_promotions`, so it requires migrations 025 and 030.
+The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
+`backlog_plan_promotions` until commit. Its runtime role needs only
+`SELECT,INSERT` on the new table.
 Events requires versions 1 through 9 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 109 tables and eight exact row-lock columns.
+The plan lists 110 tables and eight exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.
@@ -431,7 +437,7 @@ cost by 50%, plus per-node service charges. Quota headroom does not prove region
 
 AKS opts into Advanced Container Networking Services (ACNS) with security
 enabled and observability disabled, the security-only configuration needed for
-the #1784 FQDN-filtering work. Runtime Kubernetes must be version 1.29 or later.
+runtime fully qualified domain name filtering. Runtime Kubernetes must be version 1.29 or later.
 The template leaves `kubernetesVersion` empty so AKS selects its currently
 supported default rather than pinning an older version.
 
@@ -943,7 +949,7 @@ no retries, and a 360-to-420-second deadline. The observed pod must belong to
 that Job by UID, run in the exact namespace with the expected ServiceAccount,
 have the Azure workload-identity projection, and terminate with exit code 0.
 
-The immutable target ConfigMap must contain the strict #1784 `ProbeTarget` for
+The immutable target ConfigMap must contain the strict runtime `ProbeTarget` for
 the exact reviewed SHA, Git tree, infrastructure hash, deployment, identities,
 resources, database target, and read-only Key Vault secret name/version.
 The native probe receipt must preserve the exact federation issuer, subject,
@@ -997,7 +1003,7 @@ Key Vault Secrets User remains read-only.
 The probe requires a separately approved fixture with an exact secret name and version.
 Probe secret creation, deletion, and purge are not permitted by this contract.
 Purge protection remains enabled.
-The executable #1784 probe must adopt this read-only fixture before cloud acceptance.
+The executable runtime probe must use this read-only fixture before cloud acceptance.
 
 The exported Blob diagnostic is operator-only and requires separate write approval.
 It creates a local fixture under `artifacts\azure`, uses a generated owned blob,

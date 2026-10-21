@@ -250,6 +250,12 @@ Orchestrator migration 025 adds caller-specific notification dismissals. It
 creates one new, empty table, `user_notification_dismissals`, and doesn't alter
 or scan existing tables. The reviewed plan grants `SELECT, INSERT` on that
 table.
+Orchestrator migration 031 adds caller-specific promotion dismissals in the
+new `user_notification_promotion_dismissals` table. It requires migrations
+025 and 030. Its foreign key to `backlog_plan_promotions` takes a
+`SHARE ROW EXCLUSIVE` lock on that table until commit. The reviewed plan
+grants only `SELECT, INSERT` on the new table. Migration 031 and its grants
+are source changes only; applying them requires separate approval.
 
 Then review and run the source-bound PostgreSQL initializer:
 

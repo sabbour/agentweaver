@@ -94,16 +94,17 @@ test('Only the existing casting authority function receives direct runtime EXECU
     ['projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)']);
 });
 
-// Migrations 023 through 030 must be reviewed together with their exact runtime grants, never applied by these checks.
-test('Core plan includes all 29 registered versions but never 017; source approval is not execution permission', () => {
+// Migrations 023 through 031 must be reviewed together with their exact runtime grants, never applied by these checks.
+test('Core plan includes all 30 registered versions but never 017; source approval is not execution permission', () => {
+  // The plan must include every shipped resource without granting mutation of caller receipts.
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'user_notification_dismissals').privileges, ['SELECT', 'INSERT']);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'guardrails_evaluations').privileges, ['SELECT', 'INSERT']);
-  for (const name of ['backlog_plan_promotions', 'backlog_task_origins'])
+  for (const name of ['backlog_plan_promotions', 'backlog_task_origins', 'user_notification_promotion_dismissals'])
     assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
       .find(table => table.table === name).privileges, ['SELECT', 'INSERT']);
   assert.equal(plan.executionRequirements.length, 6);
@@ -130,6 +131,7 @@ test('Plans and hashes are deterministic and independent copies', () => {
 });
 
 test('Initializer validates planned and installed mutation guards before it commits grants', () => {
+  // Read source only: these assertions must not mint credentials or initialize a database.
   const source = readFileSync(new URL('../../../tools/P1PostgresInitializer/Program.cs', import.meta.url), 'utf8')
     .replace(/\r\n/g, '\n');
   const planGuard = source.indexOf('InitializerChecks.AssertMutationDenialPlan(plan.Services)');
@@ -152,6 +154,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       plan.eventsVersions],
   ];
   for (const [owner, migrator, versions] of owners) {
+    // Version registration, embedded resources, and the reviewed plan must describe the same catalog.
     const directory = new URL(`../../../services/${owner}/`, import.meta.url);
     const source = readFileSync(new URL(migrator, directory), 'utf8').replace(/\r\n/g, '\n');
     const project = readFileSync(new URL(`${owner.split('/')[1]}.csproj`, directory), 'utf8');
@@ -172,7 +175,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
       assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(23) && !applied.Contains(22))'));
@@ -184,7 +187,8 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
       assert.ok(source.includes('(applied.Contains(30) && !applied.Contains(26))'));
-      assert.ok(source.includes('Enumerable.Range(57, 42)'));
+      assert.ok(source.includes('(applied.Contains(31) && (!applied.Contains(30) || !applied.Contains(25)))'));
+      assert.ok(source.includes('Enumerable.Range(57, 44)'));
     } else {
       assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));
       assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));
@@ -206,8 +210,9 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 });
 
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
+  // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 109);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 110);
   const orchestrator = plan.services.find(service => service.schema === 'orchestrator');
   assert.deepEqual(orchestrator.tables.find(table => table.table === 'project_run_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);

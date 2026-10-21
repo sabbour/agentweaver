@@ -18,7 +18,7 @@ public static class CoordinationOwnerMigrator
     /// </summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30])];
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -66,7 +66,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Optional 032 is a known version here, so a database where 032 was applied separately is
         // accepted, but 032 is not in the default list below and is never applied by this method.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 32)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -99,6 +99,8 @@ public static class CoordinationOwnerMigrator
             // Promotion and origin tables reference backlog tasks with the content columns from 026.
             // The migrator still applies 030 after 029 because it follows catalog order.
             (applied.Contains(30) && !applied.Contains(26)) ||
+            // Promotion dismissals reference both caller dismissals from 025 and promotions from 030.
+            (applied.Contains(31) && (!applied.Contains(30) || !applied.Contains(25))) ||
             // 032 records reference repository pins, which migration 012 adds.
             (applied.Contains(32) && !applied.Contains(12)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
@@ -139,6 +141,7 @@ public static class CoordinationOwnerMigrator
                 28 => "guardrails_evaluations",
                 29 => "spend_budget_exposure",
                 30 => "backlog_task_origin",
+                31 => "user_notification_promotion_dismissals",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -233,6 +236,7 @@ public static class CoordinationOwnerMigrator
         // tables, columns, constraints, and triggers. Three columns cover version 029: its migration
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
+        // Two columns cover version 031: its migration record and the promotion dismissal table.
         // They sit just before the optional-032 check, which stays the last column.
         await using var command = new NpgsqlCommand($"""
             SELECT
@@ -252,7 +256,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -369,6 +373,9 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@backlogPromotionPlanUnique) IS NOT NULL,
                 to_regclass(@backlogPromotionIdempotencyUnique) IS NOT NULL,
                 to_regclass(@backlogOriginItemUnique) IS NOT NULL,
+                -- Version 031 checks: the migration is recorded once and the promotion dismissal table exists.
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 31) = 1,
+                to_regclass(@userPromotionDismissals) IS NOT NULL,
                 -- 032 is optional at startup: the PR list reports it as not available until it is applied.
                 -- Accept "not applied" (no ledger row, no table) or "fully applied" (row, table, and
                 -- index). Anything in between is a partial apply and fails verification.
@@ -391,6 +398,8 @@ public static class CoordinationOwnerMigrator
             "projectRunCancellations", NpgsqlDbType.Text, $"{schema}.project_run_cancellations");
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("userDismissals", NpgsqlDbType.Text, $"{schema}.user_notification_dismissals");
+        // Bind the relation name as data; schema validation alone does not prove the table exists.
+        command.Parameters.AddWithValue("userPromotionDismissals", NpgsqlDbType.Text, $"{schema}.user_notification_promotion_dismissals");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
         command.Parameters.AddWithValue("messages", NpgsqlDbType.Text, $"{schema}.coordination_messages");
         command.Parameters.AddWithValue("requests", NpgsqlDbType.Text, $"{schema}.coordination_requests");
@@ -494,9 +503,9 @@ public static class CoordinationOwnerMigrator
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
             // Columns 57 onward are boolean checks. The three version 028 checks, the three version 029
-            // checks, and the six version 030 checks come just before the optional-032 check, which stays
-            // the last column.
-            Enumerable.Range(57, 42).Any(column => !reader.GetBoolean(column)))
+            // checks, the six version 030 checks, and the two version 031 checks come just before the
+            // optional-032 check, which stays the last column.
+            Enumerable.Range(57, 44).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }
