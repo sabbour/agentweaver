@@ -10,6 +10,21 @@ To configure a provider, follow [Configure providers](../guide/configure-provide
 For runtime settings and deployment configuration, see
 [Runtime configuration](./runtime-configuration.md).
 
+## Caller attention
+
+The Orchestrator's `UserNotification` projects persisted pending coordinator
+gates for the existing bell and attention list. `UserNotificationPage` contains
+`items`, the total matching pending `count`, and nullable `nextCursor`.
+Each item carries `notificationId`, `projectId`, `runId`, `sessionId`,
+`requestId`, `kind`, `prompt`, `gateKind`, `stateVersion`, `createdAt`, and
+`updatedAt`. The session-status `CoordinationBlockerKind` mapping is reused.
+
+`GET /api/v1/notifications` checks fresh project read authority on both sides
+of the read. `projectId` only narrows that authority. `includeDismissed=true`
+exposes unresolved shared work even if the caller dismissed its notification.
+Dismissal is a separate caller record, not a decision. See
+[Read notifications across runs](../guide/notifications.md).
+
 ## Azure public routing
 
 The managed Azure Gateway uses one HTTPS listener for the wildcard managed
