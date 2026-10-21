@@ -355,7 +355,13 @@ public sealed record UsageSpendEvidenceRequest(
     string MeterSource,
     string Unit,
     UsageSpendPeriod? ProjectPeriod,
-    ImmutableArray<string> DispatchIds);
+    ImmutableArray<string> DispatchIds)
+{
+    /// <summary>Optional agent whose run total the evidence also reports.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? AgentId { get; init; }
+}
 
 /// <summary>Priced amount and event counts for one spend bucket. Unpriced events never add to the amount.</summary>
 public sealed record UsageSpendTotal(decimal PricedAmount, long PricedEvents, long UnpricedEvents);
@@ -364,7 +370,8 @@ public sealed record UsageSpendTotal(decimal PricedAmount, long PricedEvents, lo
 /// Events-owned represented-spend evidence. Every total and dispatch witness comes from one ledger
 /// snapshot. <see cref="AccountingCursor"/> counts the append-only ledger events for the project and
 /// meter source in that snapshot, so a later read always has an equal or higher cursor and represents
-/// every charge an earlier read represented.
+/// every charge an earlier read represented. Dispatch witnesses match any run in the project, because
+/// project budgets hold exposure for dispatches from other runs.
 /// </summary>
 public sealed record UsageSpendEvidence(
     int ContractVersion,
@@ -377,7 +384,13 @@ public sealed record UsageSpendEvidence(
     UsageSpendTotal Run,
     UsageSpendTotal? ProjectPeriod,
     string? ProjectPeriodId,
-    ImmutableArray<UsageDispatchAccountingWitness> Dispatches);
+    ImmutableArray<UsageDispatchAccountingWitness> Dispatches)
+{
+    /// <summary>Run total for the requested agent. Present only when the request names an agent.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public UsageSpendTotal? Agent { get; init; }
+}
 
 /// <summary>Validates represented-spend requests and the evidence returned for them.</summary>
 public static class UsageSpendEvidenceContract
@@ -396,6 +409,7 @@ public static class UsageSpendEvidenceContract
             string.IsNullOrWhiteSpace(request.MeterSource) || request.MeterSource.Length > 256 ||
             string.IsNullOrWhiteSpace(request.Unit) || request.Unit.Length > 64 ||
             request.DispatchIds.IsDefault || request.DispatchIds.Length > MaximumDispatches ||
+            request.AgentId is { } agentId && (string.IsNullOrWhiteSpace(agentId) || agentId.Length > 256) ||
             request.ProjectPeriod is { } period &&
                 (string.IsNullOrWhiteSpace(period.PeriodId) || period.PeriodId.Length > 128 ||
                  period.EndsAt <= period.StartsAt))
@@ -422,6 +436,7 @@ public static class UsageSpendEvidenceContract
             (request.ProjectPeriod is null
                 ? evidence.ProjectPeriod is not null || evidence.ProjectPeriodId is not null
                 : !IsValid(evidence.ProjectPeriod) || evidence.ProjectPeriodId != request.ProjectPeriod.PeriodId) ||
+            (request.AgentId is null ? evidence.Agent is not null : !IsValid(evidence.Agent)) ||
             evidence.Dispatches.IsDefault || evidence.Dispatches.Length != request.DispatchIds.Length)
             throw new ArgumentException("The spend evidence does not match its request.");
         var scope = new UsageDispatchAccountingScope(

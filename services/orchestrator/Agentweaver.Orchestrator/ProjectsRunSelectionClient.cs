@@ -154,6 +154,74 @@ internal sealed class ProjectsRunSelectionClient(
     }
 
     /// <summary>
+    /// Reads the current project-scope spend budgets so that a tightened project budget applies to the next dispatch.
+    /// </summary>
+    /// <param name="context">The authenticated request context forwarded to Projects.</param>
+    /// <param name="projectId">The project that owns the budgets.</param>
+    /// <param name="runId">The run whose dispatch is being admitted.</param>
+    /// <param name="cancellationToken">Cancels the Projects call.</param>
+    /// <returns>The validated current project-scope budgets.</returns>
+    /// <exception cref="CoordinationException">Thrown when the caller is denied or the owner response is invalid.</exception>
+    public async Task<CurrentProjectSpendBudgets> ReadCurrentProjectSpendBudgetsAsync(
+        HttpContext context,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
+        var bearer = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(owner,
+            $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/spend-budgets"));
+        request.Headers.Authorization = bearer;
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            throw new CoordinationException("run_selection_permission_denied", StatusCodes.Status403Forbidden);
+        // A Projects owner without the spend budget route has no project budgets to enforce.
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return new(projectId, 1, 1, []);
+        if (response.StatusCode != HttpStatusCode.OK || response.Headers.CacheControl?.NoStore != true)
+            throw InvalidSelectionContract();
+        try
+        {
+            var current = await response.Content.ReadFromJsonAsync<CurrentProjectSpendBudgets>(
+                JsonOptions, cancellationToken).ConfigureAwait(false) ?? throw InvalidSelectionContract();
+            ValidateCurrentProjectSpendBudgets(current, projectId);
+            return current;
+        }
+        catch (JsonException)
+        {
+            throw InvalidSelectionContract();
+        }
+    }
+
+    /// <summary>
+    /// Requires a current project budget response for the requested project that contains only valid project-scope budgets.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the response is malformed.</exception>
+    internal static void ValidateCurrentProjectSpendBudgets(CurrentProjectSpendBudgets current, string projectId)
+    {
+        try
+        {
+            if (current is null || current.ProjectId != projectId || current.ProjectConfigurationRevision < 1 ||
+                current.PlatformRuntimeRevision < 1)
+                throw InvalidSelectionContract();
+            SpendBudgetContract.ValidateSet(current.Budgets);
+            if (current.Budgets.Any(budget => budget.Scope != SpendBudgetScopes.Project))
+                throw InvalidSelectionContract();
+        }
+        catch (ArgumentException)
+        {
+            throw InvalidSelectionContract();
+        }
+    }
+
+    private static CoordinationException InvalidSelectionContract() =>
+        new("projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+
+    /// <summary>
     /// Requires the Projects authorization context to grant this runtime binding read-selection access.
     /// </summary>
     /// <exception cref="CoordinationException">Thrown when actor, tenant, project, run, membership, or permission binding differs.</exception>

@@ -34,11 +34,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(19)]
     [InlineData(20)]
     [InlineData(21)]
+    [InlineData(24)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         await ApplyMigrationsThroughAsync(version);
         var historyBefore = await ReadMigrationHistoryAsync(version);
-        if (version < 21)
+        if (version < 24)
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -198,7 +199,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (18, "018_reviewed_remote_tool_snapshots.sql"),
             (19, "019_session_suspend_resume.sql"),
             (20, "020_maf_buildtest_workspace_seed.sql"),
-            (21, "021_row_lock_record_updates.sql")
+            (21, "021_row_lock_record_updates.sql"),
+            (24, "024_spend_budget_exposure.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -265,7 +267,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 (SELECT count(*) FROM pg_trigger
                  WHERE tgrelid = to_regclass(@snapshots)
                    AND tgname = 'reviewed_remote_tool_snapshots_immutable'
-                   AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal)
+                   AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal),
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid IN (to_regclass(@reservations), to_regclass(@cursors))
+                   AND tgname IN ('spend_budget_reservations_guard', 'spend_budget_reservations_no_truncate',
+                       'spend_budget_accounting_cursors_guard', 'spend_budget_accounting_cursors_no_truncate')
+                   AND tgenabled = 'O' AND NOT tgisinternal)
             """, connection);
         command.Parameters.AddWithValue("schema", _schema);
         command.Parameters.AddWithValue("manifests", $"{_schema}.session_consistency_manifests");
@@ -275,6 +282,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         command.Parameters.AddWithValue("backlogTasks", $"{_schema}.backlog_tasks");
         command.Parameters.AddWithValue("backlogDependencies", $"{_schema}.backlog_dependencies");
         command.Parameters.AddWithValue("snapshots", $"{_schema}.reviewed_remote_tool_snapshots");
+        command.Parameters.AddWithValue("reservations", $"{_schema}.spend_budget_reservations");
+        command.Parameters.AddWithValue("cursors", $"{_schema}.spend_budget_accounting_cursors");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -296,12 +305,13 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21]), reader.GetFieldValue<int[]>(9));
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 24]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));
         Assert.True(reader.GetBoolean(13));
         Assert.Equal(1L, reader.GetInt64(14));
+        Assert.Equal(4L, reader.GetInt64(15));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

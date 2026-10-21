@@ -115,6 +115,12 @@ Startup requires the migration and each enabled, unconditional update trigger.
 It rejects missing, disabled, conditional, column-limited, or wrong-function triggers.
 The migration does not change foreign-key deletion rules or rewrite earlier migration records.
 
+Migration `024_spend_budget_exposure.sql` adds `spend_budget_reservations` and
+`spend_budget_accounting_cursors` for scoped spend budgets. They hold dispatch exposure and
+the highest observed Events accounting cursor, not spend amounts. The runtime role needs
+`SELECT`, `INSERT`, and `UPDATE` on both tables. See
+[Scoped spend budgets and dispatch exposure](./provider-seams.md#scoped-spend-budgets-and-dispatch-exposure).
+
 Accepted WorkPlan revisions increment a persisted attempt count.
 The owner enforces the accepted `maxRevisionAttempts` limit before accepting another revision.
 A zero limit permits no revisions.

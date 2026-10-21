@@ -164,6 +164,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
              OR l.price_disposition = 'Unpriced' AND (l.price_unit IS NULL OR l.price_unit = @unit))
             """;
         const string InPeriod = "(@period_start IS NOT NULL AND l.occurred_at >= @period_start AND l.occurred_at < @period_end)";
+        const string InAgent = "(@agent IS NOT NULL AND l.run_id = @run AND l.agent_id = @agent)";
         await using var totals = new NpgsqlCommand($"""
             SELECT count(*),
                 coalesce(sum(l.price_amount) FILTER (WHERE l.run_id = @run AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit), 0),
@@ -171,7 +172,10 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 count(*) FILTER (WHERE l.run_id = @run AND l.price_disposition = 'Unpriced' AND {Bucket}),
                 coalesce(sum(l.price_amount) FILTER (WHERE {InPeriod} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit), 0),
                 count(*) FILTER (WHERE {InPeriod} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit),
-                count(*) FILTER (WHERE {InPeriod} AND l.price_disposition = 'Unpriced' AND {Bucket})
+                count(*) FILTER (WHERE {InPeriod} AND l.price_disposition = 'Unpriced' AND {Bucket}),
+                coalesce(sum(l.price_amount) FILTER (WHERE {InAgent} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit), 0),
+                count(*) FILTER (WHERE {InAgent} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit),
+                count(*) FILTER (WHERE {InAgent} AND l.price_disposition = 'Unpriced' AND {Bucket})
             FROM {_quotedSchema}.usage_ledger l
             WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id AND l.meter_source = @meter_source
             """, connection, transaction);
@@ -179,6 +183,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
         long cursor;
         UsageSpendTotal run;
         UsageSpendTotal? projectPeriod;
+        UsageSpendTotal? agent;
         try
         {
             await using var reader = await totals.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -187,6 +192,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
             cursor = reader.GetInt64(0);
             run = new(reader.GetDecimal(1), reader.GetInt64(2), reader.GetInt64(3));
             projectPeriod = period is null ? null : new(reader.GetDecimal(4), reader.GetInt64(5), reader.GetInt64(6));
+            agent = request.AgentId is null ? null : new(reader.GetDecimal(7), reader.GetInt64(8), reader.GetInt64(9));
         }
         catch (OverflowException exception)
         {
@@ -206,7 +212,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
                        l.price_disposition, l.price_amount
                 FROM {_quotedSchema}.usage_ledger l
                 JOIN {_quotedSchema}.usage_source_receipts s ON s.event_id = l.event_id
-                WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id AND l.run_id = @run
+                WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id
                     AND l.meter_source = @meter_source AND {Bucket}
                     AND (@period_start IS NULL OR {InPeriod})
                     AND {DispatchIdSql} = ANY(@dispatches)
@@ -238,7 +244,10 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 null, null, null);
         }).ToImmutableArray();
         return new UsageSpendEvidence(UsageSpendEvidenceContract.CurrentVersion, tenantId, projectId, runId,
-            request.MeterSource, request.Unit, cursor, run, projectPeriod, period?.PeriodId, witnesses);
+            request.MeterSource, request.Unit, cursor, run, projectPeriod, period?.PeriodId, witnesses)
+        {
+            Agent = agent
+        };
     }
 
     private static void AddSpendParameters(
@@ -253,6 +262,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
             request.ProjectPeriod is { } start ? start.StartsAt : DBNull.Value);
         command.Parameters.AddWithValue("period_end", NpgsqlDbType.TimestampTz,
             request.ProjectPeriod is { } end ? end.EndsAt : DBNull.Value);
+        command.Parameters.AddWithValue("agent", NpgsqlDbType.Varchar, (object?)request.AgentId ?? DBNull.Value);
     }
 
     /// <summary>Aggregates measurements without substituting zero for missing values.</summary>

@@ -93,10 +93,10 @@ test('Only the existing casting authority function receives direct runtime EXECU
     ['projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)']);
 });
 
-test('Core plan includes all 20 registered versions but never 017; source approval is not execution permission', () => {
+test('Core plan includes all 21 registered versions but never 017; source approval is not execution permission', () => {
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 24]);
   assert.equal(plan.executionRequirements.length, 6);
   assert.ok(plan.executionRequirements.some(item => item.includes('separate approval')));
   const replacementGrant = plan.executionRequirements.find(item =>
@@ -129,8 +129,9 @@ test('Initializer validates planned and installed mutation guards before it comm
   assert.ok(source.includes("has_column_privilege(@role, @table, @column, 'UPDATE')"));
   assert.doesNotMatch(source, /plan\.Services\.Any\(service => service\.Tables\.Any\(table => table\.MutationDenialRequired\)\)/);
   assert.doesNotMatch(source, /One-column row-lock grants still require reviewed mutation-denial source/);
-  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21\\]\\)'));
+  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21,\\s*24\\]\\)'));
   assert.ok(source.includes('21 => \\"row_lock_record_updates\\"'));
+  assert.ok(source.includes('24 => \\"spend_budget_exposure\\"'));
 });
 
 test('Current source catalog preserves exact Core and Events versions and embedded resources', () => {
@@ -157,14 +158,15 @@ test('Current source catalog preserves exact Core and Events versions and embedd
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 24])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
+      assert.ok(source.includes('(applied.Contains(24) && !applied.Contains(21))'));
       assert.ok(!source.includes('if (!applied.Contains(21))'));
       const allowed = source.match(/WHERE version NOT IN \(([\d, ]+)\)/);
       assert.deepEqual(allowed[1].split(',').map(Number), versions);
       assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
-      assert.ok(source.includes('Enumerable.Range(57, 10)'));
+      assert.ok(source.includes('Enumerable.Range(57, 13)'));
     } else {
       assert.ok(source.includes('private const int CurrentSchemaVersion = 8;'));
       assert.ok(source.includes('(applied.Contains(8) && !applied.Contains(7))'));
@@ -176,9 +178,9 @@ test('Current source catalog preserves exact Core and Events versions and embedd
 
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 95);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [4, 0, 4, 4, 17]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 29);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 97);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [4, 0, 4, 4, 20]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 32);
   const projectSetupGuard = plan.services
     .find(service => service.schema === 'projects_config')
     ?.functions.find(item => item.signature === 'reject_project_setup_operation_mutation()');

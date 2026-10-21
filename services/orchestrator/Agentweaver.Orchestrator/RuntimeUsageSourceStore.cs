@@ -41,6 +41,7 @@ internal sealed class RuntimeUsageSourceStore(
     private readonly string _guards = $"\"{options.Schema}\".maf_execution_run_guards";
     private readonly string _outboxEvents = $"\"{options.Schema}\".outbox_events";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
+    private readonly SpendBudgetExposureStore _spendBudgets = new(dataSource, options, timeProvider);
 
     /// <summary>
     /// Reads credit-guard, dispatch, and tool-reservation evidence from one repeatable-read snapshot.
@@ -722,13 +723,18 @@ internal sealed class RuntimeUsageSourceStore(
     /// <summary>
     /// Persists the prepared native dispatch and returns a prior denial when the hard limit blocks sending.
     /// </summary>
-    /// <remarks>The root session is locked before the MAF execution lock; an existing dispatch is accepted only as the same first prepared revision.</remarks>
-    internal async Task<RuntimeNativeCreditDenialReceipt?> PrepareNativeTurnWithinTransactionAsync(
+    /// <remarks>
+    /// The root session is locked before the MAF execution lock; an existing dispatch is accepted only as the same first prepared revision.
+    /// Spend budgets are admitted after the credit check and before the dispatch row is written, so a denied dispatch holds no reservation.
+    /// </remarks>
+    internal async Task<RuntimeNativePreparationOutcome> PrepareNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, SessionIdentity root,
         MafExecutionCheckpointSnapshot checkpoint, MafExecutionDispatchIntent intent,
         RuntimeRegistration registration, RuntimeA2ASendRequest message,
         Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>> readCostSnapshot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SpendBudgetAdmissionContext? spendBudgets = null,
+        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
     {
         var source = await ReadCurrentSourceAsync(connection, transaction, registration, cancellationToken)
             .ConfigureAwait(false);
@@ -797,11 +803,21 @@ internal sealed class RuntimeUsageSourceStore(
                 connection, transaction, registration, source.Source, root.SessionId, snapshot, cancellationToken)
                 .ConfigureAwait(false);
             if (creditDecision.HardLimitReached)
-                return await RecordNativeCreditDenialAsync(
+                return new(await RecordNativeCreditDenialAsync(
                     connection, transaction, registration, source, intent.MessageId,
                     RuntimeCreditLimitDenialStage.Preparation, checkpointHash, creditDecision,
                     marker?.State ?? "absent", marker?.OwnerRevision ?? 0, cancellationToken)
-                    .ConfigureAwait(false);
+                    .ConfigureAwait(false), null);
+        }
+        if (spendBudgets is { IsEmpty: false })
+        {
+            var budgetDenial = await _spendBudgets.AdmitWithinTransactionAsync(
+                connection, transaction, registration, source.Source.MeterSource, intent.MessageId, spendBudgets,
+                readSpendEvidence ?? throw new RuntimeAuthorizationException(
+                    SpendBudgetAdmissionMath.EvidenceUnavailable),
+                cancellationToken).ConfigureAwait(false);
+            if (budgetDenial is not null)
+                return new(null, budgetDenial);
         }
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_dispatches}
@@ -846,7 +862,7 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_conflict");
         if (retained.State != "prepared" || retained.OwnerRevision != 1)
             throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
-        return null;
+        return new(null, null);
     }
 
     /// <summary>

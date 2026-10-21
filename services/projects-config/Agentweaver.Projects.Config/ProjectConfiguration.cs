@@ -98,6 +98,9 @@ public sealed record CopilotRunLimitOverrides
     public decimal? CopilotSoftCreditLimit { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public decimal? CopilotHardCreditLimit { get; init; }
+    /// <summary>Spend budgets. A budget with a platform budget ID may only narrow that platform budget.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<SpendBudget>? SpendBudgets { get; init; }
 }
 
 /// <summary>Validated effective runtime limits after project overrides are bounded by platform defaults.</summary>
@@ -117,6 +120,9 @@ public sealed record CopilotRunLimits
     public decimal? CopilotSoftCreditLimit { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public decimal? CopilotHardCreditLimit { get; init; }
+    /// <summary>Effective spend budgets for the run.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<SpendBudget>? SpendBudgets { get; init; }
 }
 
 /// <summary>Versioned project runtime settings, team, provider choices, skills, and optional source-control references.</summary>
@@ -628,6 +634,7 @@ public static class ProjectConfigurationValidator
             CopilotHardCreditLimit = ResolveOptionalCreditLimit(
                 project.CopilotHardCreditLimit, platform.RunLimits.CopilotHardCreditLimit,
                 nameof(project.CopilotHardCreditLimit)),
+            SpendBudgets = ResolveSpendBudgets(platform.RunLimits.SpendBudgets, project.SpendBudgets),
         };
         ValidateLimits(resolved);
         return resolved;
@@ -723,6 +730,7 @@ public static class ProjectConfigurationValidator
         ValidateCreditLimit(limits.CopilotSoftCreditLimit, "runLimits.copilotSoftCreditLimit");
         ValidateCreditLimit(limits.CopilotHardCreditLimit, "runLimits.copilotHardCreditLimit");
         ValidateCreditLimitOrder(limits.CopilotSoftCreditLimit, limits.CopilotHardCreditLimit);
+        ValidateSpendBudgets(limits.SpendBudgets);
     }
 
     private static void ValidateLimitOverrides(CopilotRunLimitOverrides limits)
@@ -737,6 +745,56 @@ public static class ProjectConfigurationValidator
         ValidateCreditLimit(limits.CopilotSoftCreditLimit, "runLimits.copilotSoftCreditLimit");
         ValidateCreditLimit(limits.CopilotHardCreditLimit, "runLimits.copilotHardCreditLimit");
         ValidateCreditLimitOrder(limits.CopilotSoftCreditLimit, limits.CopilotHardCreditLimit);
+        ValidateSpendBudgets(limits.SpendBudgets);
+    }
+
+    private static ImmutableArray<SpendBudget>? ResolveSpendBudgets(
+        ImmutableArray<SpendBudget>? platform,
+        ImmutableArray<SpendBudget>? project)
+    {
+        if (project is not { } projectBudgets)
+            return platform;
+        var platformBudgets = platform ?? [];
+        var resolved = ImmutableArray.CreateBuilder<SpendBudget>();
+        foreach (var ceiling in platformBudgets)
+        {
+            var narrowed = projectBudgets.FirstOrDefault(budget => budget.BudgetId == ceiling.BudgetId);
+            if (narrowed is null)
+            {
+                resolved.Add(ceiling);
+                continue;
+            }
+
+            try
+            {
+                SpendBudgetContract.RequireNarrowing(ceiling, narrowed);
+            }
+            catch (ArgumentException exception)
+            {
+                throw Invalid(exception.Message);
+            }
+            resolved.Add(narrowed);
+        }
+
+        resolved.AddRange(projectBudgets.Where(budget =>
+            !platformBudgets.Any(ceiling => ceiling.BudgetId == budget.BudgetId)));
+        var budgets = resolved.ToImmutable();
+        ValidateSpendBudgets(budgets);
+        return budgets;
+    }
+
+    private static void ValidateSpendBudgets(ImmutableArray<SpendBudget>? budgets)
+    {
+        if (budgets is not { } values)
+            return;
+        try
+        {
+            SpendBudgetContract.ValidateSet(values);
+        }
+        catch (ArgumentException exception)
+        {
+            throw Invalid($"Invalid 'runLimits.spendBudgets': {exception.Message}");
+        }
     }
 
     private static void ValidateCreditLimit(decimal? value, string name)

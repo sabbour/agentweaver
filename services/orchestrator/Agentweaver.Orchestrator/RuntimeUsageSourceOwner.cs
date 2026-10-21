@@ -41,6 +41,22 @@ internal sealed class RuntimeUsageBrokerClient(HttpClient client, RuntimeUsageSo
             $"/internal/projects/{Uri.EscapeDataString(scope.ProjectId)}/runs/{Uri.EscapeDataString(scope.RunId)}" +
             "/usage/copilot-cost-snapshot", actor, request, cancellationToken);
     }
+
+    /// <summary>
+    /// Reads Events spend evidence for one budget bucket and the dispatches that still hold exposure in it.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the configured Events owner address is invalid.</exception>
+    internal Task<UsageSpendEvidence> ReadSpendEvidenceAsync(
+        RuntimeActorAuthorization actor, string eventsOwnerAddress, string projectId, string runId,
+        UsageSpendEvidenceRequest request, CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(eventsOwnerAddress, UriKind.Absolute, out var address))
+            throw new RuntimeAuthorizationException("runtime_usage_cost_owner_unavailable");
+        return RuntimeOwnerHttpTransport.SendAsync<UsageSpendEvidence>(
+            client, RuntimeOwnerHttpTransport.RequireOwnerAddress(address),
+            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
+            "/usage/spend-evidence", actor, request, cancellationToken);
+    }
 }
 
 /// <summary>
@@ -259,13 +275,17 @@ internal sealed class RuntimeUsageSourceOwner(
     /// Persists native-turn admission and cost evidence before the host submits the native model request.
     /// </summary>
     /// <exception cref="RuntimeAuthorizationException">Thrown when actor credentials, registration, grant, owner state, or cost admission is invalid.</exception>
-    /// <remarks>The caller's owner recheck runs before and after the transaction work; any denial is surfaced after the lock is released.</remarks>
+    /// <remarks>
+    /// The caller's owner recheck runs before and after the transaction work; any denial is surfaced after the lock is released.
+    /// Spend budget admission reads Events spend evidence inside the same transaction, so its reservation commits with the dispatch.
+    /// </remarks>
     internal async Task PrepareNativeTurnAsync(
         HttpContext context, RuntimeRegistration expected, SessionIdentity root,
         MafExecutionCheckpointSnapshot checkpoint, MafExecutionDispatchIntent intent,
         RuntimeA2ASendRequest message,
         Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> requireCurrentOwner,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SpendBudgetAdmissionContext? spendBudgets = null)
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
         var expiry = context.User.GetExpirationDate() ?? authentication.Properties?.ExpiresUtc;
@@ -273,11 +293,11 @@ internal sealed class RuntimeUsageSourceOwner(
             throw new RuntimeAuthorizationException("runtime_actor_expired");
         var bearer = new SecretCredential(
             CoordinationIdentity.RequireBearer(context).Parameter!, expiry.Value, timeProvider);
-        RuntimeNativeCreditDenialReceipt? denial;
+        RuntimeNativePreparationOutcome outcome;
         try
         {
             var actor = new RuntimeActorAuthorization(bearer, CoordinationIdentity.ReadTenantSelector(context));
-            denial = await store.ExecuteLockedAsync(expected.RuntimeInstanceId,
+            outcome = await store.ExecuteLockedAsync(expected.RuntimeInstanceId,
             (connection, transaction, token) => registrations.ExecuteCurrentAsync(
                 context, expected.RuntimeInstanceId, async (registration, currentToken) =>
                 {
@@ -287,7 +307,11 @@ internal sealed class RuntimeUsageSourceOwner(
                     var admitted = await store.PrepareNativeTurnWithinTransactionAsync(
                         connection, transaction, root, checkpoint, intent, registration, message,
                         (source, quoteToken) => broker.ReadCostSnapshotAsync(
-                            actor, options.EventsOwnerBaseAddress, new(1, registration, source), quoteToken), currentToken)
+                            actor, options.EventsOwnerBaseAddress, new(1, registration, source), quoteToken), currentToken,
+                        spendBudgets,
+                        (spendRequest, spendToken) => broker.ReadSpendEvidenceAsync(
+                            actor, options.EventsOwnerBaseAddress, registration.Binding.ProjectId,
+                            registration.Binding.RunId, spendRequest, spendToken))
                         .ConfigureAwait(false);
                     await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
                     if (!bearer.IsUsable() ||
@@ -301,8 +325,10 @@ internal sealed class RuntimeUsageSourceOwner(
         {
             bearer.Invalidate();
         }
-        if (denial is not null)
+        if (outcome.CreditDenial is not null)
             throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+        if (outcome.SpendBudgetDenialCode is { } spendBudgetDenial)
+            throw new RuntimeAuthorizationException(spendBudgetDenial);
     }
 
     /// <summary>

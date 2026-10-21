@@ -523,6 +523,28 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        projects.MapGet("/{projectId}/runs/{runId}/spend-budgets", async (
+            string projectId,
+            string runId,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.GetCurrentProjectSpendBudgetsAsync(
+                    caller, projectId, runId, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
         var platform = app.MapGroup("/api/platform/runtime-defaults").RequireAuthorization();
         platform.MapGet("/", async (
             HttpContext context,
