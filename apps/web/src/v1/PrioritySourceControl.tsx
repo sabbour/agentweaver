@@ -140,6 +140,7 @@ function SourceControlPage({ projectId, kind, filter, onSelect, busy, number, pr
       setCursor(null);
       setPicked('');
       setCoverage(null);
+      seenCursors.current.clear();
       setError(reason);
     } finally {
       checkingRef.current = false;

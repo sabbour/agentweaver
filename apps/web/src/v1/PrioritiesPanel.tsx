@@ -132,6 +132,7 @@ export function PrioritiesPanel({ priorities, projects, conversations }: {
   const write = async (
     priorityId: string,
     operation: (token: string, tenant: string | null) => Promise<ChiefOfStaffPriority>,
+    projectId?: string,
   ): Promise<boolean> => {
     try {
       // Priority routes use the unbound session (null binding); they are not tied to a run.
@@ -146,6 +147,18 @@ export function PrioritiesPanel({ priorities, projects, conversations }: {
       setNotices((current) => ({ ...current, [priorityId]: undefined }));
       return true;
     } catch (reason) {
+      if (projectId && reason instanceof GatewayError && reason.status === 403) {
+        // A denied link write invalidates cached targets for that project immediately, not only this form.
+        priorities.replace((current) => current && {
+          ...current,
+          items: current.items.map((item) => ({ ...item, links: item.links.map((link): ChiefOfStaffPriorityLink =>
+            link.projectId === projectId ? { linkId: link.linkId, kind: link.kind, access: 'unavailable' } : link) })),
+        });
+        setNotices((current) => ({ ...current, [priorityId]: { kind: 'error', error: reason } }));
+        // The owner reread restores only currently authorized targets. The picker must also clear its choices.
+        void priorities.reload();
+        throw reason;
+      }
       // A stale revision or a Priority that no longer exists means our copy is out of date.
       // Reread the list and show the conflict notice. We return false so the caller keeps
       // its draft (form text, new item text) and the user can try again.
@@ -289,6 +302,7 @@ function CreatePriorityForm({ priorities }: { priorities: PriorityListState }) {
 type WriteFn = (
   priorityId: string,
   operation: (token: string, tenant: string | null) => Promise<ChiefOfStaffPriority>,
+  projectId?: string,
 ) => Promise<boolean>;
 
 /** One Priority with its edit form, checklist, and links. Drafts survive a conflict reread. */
@@ -315,10 +329,10 @@ function PriorityItem({ priority, index, count, notice, orderBusy, projects, pro
   const label = priority.outcome;
 
   // Runs one write for this Priority and disables its controls while it is in flight.
-  const run = async (operation: Parameters<WriteFn>[1]) => {
+  const run = async (operation: Parameters<WriteFn>[1], projectId?: string) => {
     setBusy(true);
     try {
-      return await write(id, operation);
+      return await write(id, operation, projectId);
     } finally {
       setBusy(false);
     }
@@ -501,7 +515,7 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
   projects: ProjectSummary[] | null;
   projectNames: ReadonlyMap<string, string>;
   conversations: ConversationListState;
-  run: (operation: Parameters<WriteFn>[1]) => Promise<boolean>;
+  run: (operation: Parameters<WriteFn>[1], projectId?: string) => Promise<boolean>;
 }) {
   const styles = useStyles();
   const [open, setOpen] = useState(false);
@@ -599,7 +613,7 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
         projectId={projectId} kind={kind} busy={busy}
         onSelect={(target) => run((token, tenant) => gatewayClient.addChiefOfStaffPriorityLink(
           token, priority.priorityId, { expectedRevision: priority.revision, kind, projectId, ...target }, tenant,
-        )).then((saved) => { if (saved) setOpen(false); })}
+        ), projectId).then((saved) => { if (saved) setOpen(false); })}
       />}
       {kind === 'artifact' && projectId && runId && <OutputCaptureBrowser
         projectId={projectId} runId={runId} busy={busy}

@@ -109,6 +109,21 @@ for (const kind of ['issue', 'pull_request']) {
       assert.equal(await open.count(), 0);
       assert.equal(await savedList.getByText('Stored', { exact: false }).count(), 0);
       assert.ok(await row.getByText('Prepare the release', { exact: true }).count());
+      // Losing access after choices loaded must also clear them when the write, not the list read, is denied.
+      await row.getByRole('button', { name: 'Add link to Prepare the release' }).click();
+      await form.getByLabel('Link type').selectOption(kind);
+      await form.getByRole('option', { name: new RegExp(`Stored ${label.toLowerCase()} 26`) }).waitFor({ state: 'attached' });
+      await form.getByLabel(label, { exact: true }).selectOption(JSON.stringify(['github', 'octo', 'api', 26]));
+      app.gateway.state.priorities[0].links = app.gateway.state.priorities[0].links.map((link) =>
+        ({ linkId: link.linkId, kind: link.kind, access: 'unavailable' }));
+      app.gateway.failNext('POST', '/api/v1/chief-of-staff/priorities/pri-a/links', {
+        status: 403, body: { error: 'project_read_permission_denied' },
+      });
+      await form.getByRole('button', { name: `Link ${label.toLowerCase()}`, exact: true }).click();
+      await row.getByText('You can no longer read that project.').waitFor();
+      assert.equal(await form.getByRole('option', { name: /Stored|Other repository/ }).count(), 0);
+      assert.equal(await row.getByRole('link', { name: `Open ${label.toLowerCase()}` }).count(), 0);
+      assert.ok(await row.getByText('Prepare the release', { exact: true }).count());
       // Every owner list read uses the caller-wide session, never a run token.
       const reads = app.gateway.requests.filter((request) => request.url.pathname.endsWith(`/source-control/${path}`));
       assert.ok(reads.length >= 4);

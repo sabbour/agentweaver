@@ -27,3 +27,5 @@ legacy number-only links and refuse ambiguous targets. Reset gate-version
 review when another notification opens the same request.
 Keep gate counts separate from task notices and compare retained file components
 at the same desktop and mobile widths in screenshot evidence.
+Clear cached repository choices and links when a link save reports lost access,
+then reread the owner's permission-trimmed Priority list.
