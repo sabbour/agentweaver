@@ -64,6 +64,10 @@ internal static partial class GatewayOpenApi
             ["prepareSourceControlMergeIntent"] = C("PrepareSourceControlMergeIntentRequest", "SourceControlMergeApprovalView", "200", "202"),
             ["readSourceControlMergeIntent"] = C(null, "SourceControlMergeIntentView", "200"),
             ["executeSourceControlMergeIntent"] = C(null, "SourceControlMergeExecutionView", "200"),
+            ["listProjectRuns"] = C(null, "ProjectRunPage", "200"),
+            // Reporting contracts stay separate across the two data owners.
+            ["readProjectMetrics"] = C(null, "ProjectMetrics", "200"),
+            ["readProjectUsage"] = C(null, "ProjectUsage", "200"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
             ["proposeOutcome"] = C("ProposeCoordinatorOutcomeRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readRunStatus"] = C(null, "OwnerRunStatus", "200"),
@@ -299,6 +303,18 @@ internal static partial class GatewayOpenApi
                 "The owner hides foreign projects and memberships found inactive or stale during the inventory recheck. " +
                 "Inactive membership rejected during initial caller resolution returns 403.");
         }
+        else if (route.OperationId is "readProjectMetrics" or "readProjectUsage")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected an unknown or repeated query key, an invalid ISO date or offset timestamp, " +
+                "a reversed interval, a range longer than 92 days, or a bucket other than day.");
+        }
+        else if (route.OperationId == "listProjectRuns")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected an unknown or repeated query key, unknown state, invalid cursor, " +
+                "or page size outside 1 through 100.");
+        }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
             responses["400"] = ProblemResponse(
@@ -360,6 +376,22 @@ internal static partial class GatewayOpenApi
                 "after the read and permits archived projects. The opaque cursor uses stable SkillId-ascending " +
                 "order in C collation, then revision-descending order. It does not make multiple pages a " +
                 "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
+        }
+        else if (route.OperationId is "readProjectMetrics" or "readProjectUsage")
+        {
+            description +=
+                " Requires api.read, the owner and Projects audiences, and fresh Projects readProjects or " +
+                "readRunSelection project authority, or tenant readProjects. A run-bound caller sees only its run. " +
+                "Responses are no-store. The half-open UTC interval [from,to) defaults to the preceding 30 days " +
+                "and cannot exceed 92 days. Cross-project overview is out of scope. Usage reads never price or budget.";
+        }
+        else if (route.OperationId == "listProjectRuns")
+        {
+            description +=
+                " This read requires api.read and fresh Projects readProjects or readRunSelection authority on " +
+                "the project, or tenant readProjects authority. A run-bound token sees only its own run. Runs are " +
+                "ordered by createdAt descending, then runId descending. The opaque cursor is valid only with " +
+                "the same project, state filter, and page size, and multiple pages are not a snapshot.";
         }
         else if (route.OperationId.Contains("Casting", StringComparison.Ordinal))
         {
@@ -476,11 +508,32 @@ internal static partial class GatewayOpenApi
 
     private static object QuerySchema(string operationId, string name)
     {
+        // Reporting owners accept dates and explicitly offset timestamps, never local-time strings.
+        if (operationId is "readProjectMetrics" or "readProjectUsage")
+            return name == "bucket"
+                ? new { type = "string", @enum = new[] { "day" }, @default = "day" }
+                : new
+                {
+                    type = "string",
+                    pattern = @"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|[+-]\d{2}:\d{2}))?$",
+                    description = "ISO date or timestamp with explicit offset; UTC half-open range, at most 92 days."
+                };
+
         if (operationId == "listProjectCastingProposals" && name == "limit")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 50 };
 
         if (operationId == "listProjectSkillInventory" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
+        if (operationId == "listProjectRuns" && name == "pageSize")
+            return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
+        if (operationId == "listProjectRuns" && name == "state")
+            return new
+            {
+                type = "string",
+                description = "Comma-separated run states, or the open and terminal aliases.",
+                pattern = "^(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal)" +
+                    "(,(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal))*$",
+            };
 
         if ((operationId is "removeMarketplaceSource" or "revokeProjectRoleAssignment" && name == "expectedRevision") ||
             (operationId == "browseMarketplaceSource" && name == "expectedSourceRevision"))
@@ -879,6 +932,38 @@ internal static partial class GatewayOpenApi
             ("advertisedCapabilities", Arr(Str())), ("requiredCapabilities", Arr(Str())),
             ("layer", Nullable(Enum("l3L4", "l7")))),
 
+        ["ProjectRunStartedBy"] = StrictObj(["issuer", "subject"], ("issuer", Str()), ("subject", Str())),
+        ["ProjectRunSummary"] = StrictObj(
+            ["runId", "rootSessionId", "title", "goal", "state", "createdAt", "updatedAt", "completedAt", "startedBy"],
+            ("runId", Str()), ("rootSessionId", NullableStr()), ("title", NullableStr()), ("goal", NullableStr()),
+            ("state", Enum("idle", "active", "blocked", "completed", "failed", "indeterminate", "cancelled")),
+            ("createdAt", Date()), ("updatedAt", Date()), ("completedAt", Nullable(Date())),
+            ("startedBy", Ref("ProjectRunStartedBy"))),
+        ["ProjectRunPage"] = StrictObj(["projectId", "items", "nextCursor"],
+            ("projectId", Str()), ("items", Arr(Ref("ProjectRunSummary"))), ("nextCursor", NullableStr())),
+        // Strict reporting schemas preserve nullable measurements and independent cost units.
+        ["ProjectMetricsDay"] = StrictObj(["date", "created", "completed"],
+            ("date", new { type = "string", format = "date" }), ("created", Int()), ("completed", Int())),
+        ["ProjectMetrics"] = StrictObj(
+            ["projectId", "from", "to", "activeRuns", "blockedRuns", "runsInRange", "runsTotal",
+                "completedRuns", "succeededRuns", "series"],
+            ("projectId", Str()), ("from", Date()), ("to", Date()),
+            ("activeRuns", Int()), ("blockedRuns", Int()), ("runsInRange", Int()), ("runsTotal", Int()),
+            ("completedRuns", Int()), ("succeededRuns", Int()), ("series", Arr(Ref("ProjectMetricsDay")))),
+        ["ProjectUsageCost"] = StrictObj(["priceUnit", "disposition", "amount"],
+            ("priceUnit", NullableStr()), ("disposition", Enum("estimate", "reconciled", "unpriced")),
+            ("amount", NullableNumber())),
+        ["ProjectUsageItem"] = StrictObj(
+            ["id", "requestCount", "inputTokens", "outputTokens", "cachedTokens", "cacheWriteTokens",
+                "reasoningTokens", "avgDurationMs", "runs", "unpricedRequestCount", "cost"],
+            ("id", Str()), ("requestCount", NullableInt()), ("inputTokens", NullableNumber()),
+            ("outputTokens", NullableNumber()), ("cachedTokens", NullableNumber()),
+            ("cacheWriteTokens", NullableNumber()), ("reasoningTokens", NullableNumber()),
+            ("avgDurationMs", NullableNumber()), ("runs", Int()), ("unpricedRequestCount", NullableInt()),
+            ("cost", Arr(Ref("ProjectUsageCost")))),
+        ["ProjectUsage"] = StrictObj(["projectId", "from", "to", "usageByModel", "usageByAgent"],
+            ("projectId", Str()), ("from", Date()), ("to", Date()),
+            ("usageByModel", Arr(Ref("ProjectUsageItem"))), ("usageByAgent", Arr(Ref("ProjectUsageItem")))),
         ["AcceptRootRequest"] = Obj(["sessionId"], ("sessionId", Str())),
         ["ProposeCoordinatorOutcomeRequest"] = Obj(["expectedStateVersion", "idempotencyKey", "requestId", "specification"],
             ("expectedStateVersion", Int()), ("idempotencyKey", Str()), ("requestId", Str()),

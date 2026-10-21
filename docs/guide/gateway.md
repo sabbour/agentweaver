@@ -132,6 +132,50 @@ content validation, and persistence. A returned Skill assignment or inventory
 record does not prove that a runtime loaded the Skill. The current public API
 does not provide actor-safe runtime-loaded status.
 
+## List project runs
+
+Use `GET /api/v1/projects/{projectId}/runs` to list a project's runs without
+knowing a run ID. The Gateway forwards the request to the Orchestrator owner
+and returns its status and body with `Cache-Control: no-store`.
+
+- `pageSize` defaults to 25 and accepts 1 through 100.
+- `state` filters by a comma-separated list of derived states, or by the
+  `open` (`idle`, `active`, `blocked`) and `terminal` aliases.
+- `cursor` continues from the previous page's `nextCursor`. Send the same
+  `state` and `pageSize` values with it.
+- Items are ordered by creation time, newest first. Pages are not a snapshot;
+  a run created after the first page is not repeated.
+
+The owner checks the caller's current project or tenant read permission with
+Projects & Config. A run-bound token sees only its own run. The list reads
+persisted run records only. `title` and `goal` are `null` until a run start
+request stores them.
+
+## Read project metrics and usage
+
+Send `GET /api/v1/projects/{projectId}/metrics` for run counts and a daily
+series. Send `GET /api/v1/projects/{projectId}/usage` for usage grouped by
+model and agent. The Gateway forwards these requests to Orchestrator and
+Events & Sessions, respectively. It does not aggregate the responses.
+
+Use the same explicit `from` and `to` values for aligned intervals. Bounds
+are inclusive and exclusive, respectively, and use UTC. ISO dates and
+timestamps with explicit offsets are accepted. If omitted, `to` is now and
+`from` is 30 days earlier. The maximum interval is 92 days. Metrics supports
+only `bucket=day`; usage does not accept a bucket. Unknown or repeated query
+keys return `400`.
+
+Both routes require `api.read`, the owning service and Projects audiences,
+and current project or tenant read permission. Run-bound callers see only
+their own run. Responses use `Cache-Control: no-store`. Reads do not change
+stored data.
+
+Read the [metrics definitions](../reference/api.md#project-metrics-and-usage)
+before comparing v1 with the 0.x dashboard. Run success uses completed runs,
+not agent dependencies. Usage retains unknown values and separate cost units.
+These routes do not price usage or change budgets. Cross-project overview
+is out of scope.
+
 ## Review project casting
 
 Casting routes use the Projects & Config owner. The Gateway forwards the
