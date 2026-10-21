@@ -61,6 +61,32 @@ entries containing `MeterSource` and `ProviderId`. Native
 stored `EffectiveProviderSelection`. Both retain current owner authorization.
 No new usage-writing endpoint, model-source authority, or pricing API is introduced.
 
+## Casting proposals and transfers
+
+The Gateway exposes the existing Projects & Config casting contracts under
+`/api/v1`. See the [API reference](./api.md#casting-through-the-gateway) for routes
+and [Projects & Config](../architecture/projects-config.md#reviewed-casting-proposals-and-explicit-transfers)
+for the owner transaction boundary.
+
+| Contract | Fields and behavior |
+| --- | --- |
+| `CreateProjectCastingProposalRequest` | `expectedConfigurationRevision`, complete `draft`. |
+| `CreateScenarioProjectCastingProposalRequest` | `expectedConfigurationRevision`, catalog `templateId`. |
+| `CreateManualProjectCastingProposalRequest` | `expectedConfigurationRevision`, non-empty catalog `roleIds`. |
+| `UpdateProjectCastingProposalRequest` | `expectedDraftRevision`, replacement `draft`. |
+| `TransitionProjectCastingProposalRequest` | `expectedDraftRevision` for confirm or reject. |
+| `ProjectCastingProposal` | `proposalId`, `projectId`, `baseConfigurationRevision`, `draftRevision`, `state` (`pending`, `confirmed`, or `rejected`), `draft`, nullable `confirmedConfigurationRevision`, nullable `result`, nullable `transferProvenance`, and creation/update actor IDs and timestamps. |
+| `ProjectCastingTransfer` | `formatVersion` (1), `sourceProjectId`, `sourceConfigurationRevision`, `agentCharters`, `casting`, `contentDigest`. Contains no unrelated project settings. |
+| `ProjectCastingTransferProvenance` | Verified transfer format, source project/revision, and content digest retained on an imported proposal. |
+| `ImportProjectCastingTransferRequest` | Target `expectedConfigurationRevision` and `transfer`; creates a pending proposal. Request body limit is 1 MiB at Gateway and owner. |
+| `ProjectCastingTemplateDefinition` | `id`, `title`, `description`, `roleIds`. |
+| `ProjectCastingRoleDefinition` | `id`, `title`, `summary`, `responsibilities`, `boundaries`. |
+
+The owner rejects unknown request fields and preserves revision conflicts as
+`409`. The Gateway publishes these schemas in `GET /openapi/v1.json`, and the
+web contract module supplies types only. There is no new casting permission,
+idempotency header, or UI implementation.
+
 ## Cost and usage storage contracts
 
 `CostBinding` records the meter source, provider identity, adapter version,
@@ -86,6 +112,27 @@ admitted, BYOK receipt accounting remains `Unpriced`; provisioned-throughput
 usage also remains unpriced without trusted usage-share evidence.
 
 ## Gateway API and server-sent events
+
+Project reporting uses two separate owner contracts. `ProjectMetrics` returns
+current active and blocked counts, lifetime accepted runs, bounded created and
+terminal-completed counts, succeeded runs, and zero-filled UTC daily points.
+`ProjectUsage` returns ledger measurements grouped by model ID and agent ID.
+The Gateway never aggregates across owners. Cross-project overview is out of
+scope. See [Project metrics and usage](./api.md#project-metrics-and-usage) for
+the field definitions and 0.x dashboard mapping.
+
+Both contracts echo normalized `from` and `to` bounds. The half-open interval
+defaults to the last 30 days and cannot exceed 92 days. Only metrics accepts
+`bucket=day`. Both owners validate fresh project read authority, return
+`Cache-Control: no-store`, and narrow run-bound tokens to their own run.
+OpenAPI defines strict response objects and query schemas. Invalid or repeated
+query values return a `400` problem response with `title` and `code` set to
+`query_invalid`, without exception text.
+
+Usage measurements remain nullable when source data is missing. Cost subtotals
+are grouped by unit and disposition; consumers must not add different units
+or treat unpriced usage as zero. The read path does not invoke pricing or
+budgeting.
 
 The `Agentweaver.Gateway` source exposes a finite, versioned client API at
 `/api/v1`. The service is a source candidate; these mappings do not confirm a
@@ -188,9 +235,9 @@ IDs server-side.
 The browser lifecycle, user-level selection APIs, and callbacks are not exposed
 as first-party MCP tools. Run-bound repository operations in the finite OpenAPI
 catalog remain available as ordinary MCP tools and require `tenantSelector`.
-Run-produced-file list/diff/content reads remain unavailable until the durable
-manifest/object-version owner in P2 #1917 is admitted; no raw filesystem Gateway
-proxy is part of this contract.
+Run-produced files are available through the Source Control output-capture
+operations: capture, list, read, diff, and file. They read pinned, immutable
+captures; no raw filesystem Gateway proxy is part of this contract.
 
 ## First-party MCP client
 
@@ -405,6 +452,11 @@ caller cannot submit a resource pin or override the durable binding.
 
 | Method and path | Contract |
 | --- | --- |
+| `POST /api/projects/{projectId}/runs` | Create a new chat run. The bearer must not carry a run binding. Requires one `Idempotency-Key`, current project `acceptRunSelection` authority, and a body with `firstMessage` and `expectedProjectConfigRevision`. Persists the request in `project_run_requests`, mints `runId` and `rootSessionId`, and accepts the selection through the Projects `interactive-selection` route. Returns `201` with `awaiting_binding` and the binding selectors. A replay with the same key and body returns the same run; a changed body returns `409 idempotency_conflict`. |
+| `POST /api/projects/{projectId}/runs/{runId}/start` | Run-bound and bodyless. Locks the saved request, accepts the root session, and delivers the saved first message as a root-to-root addressed message with key `{runId}:first`. The owner accepts this self-addressed message only when its payload matches the saved request. Returns `200` with `started`; a replay does not deliver again. |
+| `POST /api/projects/{projectId}/runs/{runId}/cancel` | Requires a token not bound to a run and fresh Projects `cancelRun` permission from a Contributor, Owner, or tenant admin; Viewer receives `403`. Requires one `Idempotency-Key` and accepts an optional `reason`. For an accepted run, advances the fence, sets `cancelled_at` and `completed_at`, and cancels active sessions. Pending requests are cancelled without root admission. Saves a caller-scoped receipt and `orchestrator.run.cancelled` event atomically. A finished run returns `200` with `alreadyTerminal: true` without mutation or another event. |
+| `GET /api/projects/{projectId}/runs` | List accepted runs in the project, newest first, as a `ProjectRunPage`. The caller needs `api.read`, both Orchestrator and Projects audiences, and current project or tenant read permission from Projects & Config. A run-bound token sees only its own run. The keyset cursor is opaque and bound to the query. A state filter is applied to each run's derived state, so a selective filter can read many older runs before it fills a page. Each `ProjectRunSummary` reports the run ID, root session ID, derived state, timestamps, `completedAt`, and the accepting actor as `startedBy`. |
+| `/api/chief-of-staff/conversations` and `/api/chief-of-staff/priorities` | Caller-private Chief of Staff records in Orchestrator migration 024. Requires `api.read`, both audiences, and a token that is not bound to a project or run. Each call reads fresh Projects authority, filters rows by tenant, issuer, and subject, and redacts conversations and links in projects the caller can no longer read to `access: unavailable`. A conversation binds a `project_run_requests` row that the caller created; it holds no message content. Priorities use per-item `revision` and list `orderRevision` checks, and create requires one `Idempotency-Key`. Links store owner identity only. Reads resolve run and conversation links to the derived run state and report issue, pull request, and artifact state as `unavailable`. No route writes `accepted_runs`, `project_run_requests`, sessions, or gates. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/root` | Accept the root session for the current accepted run selection and register it with Events & Sessions. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/decisions` | Read the current typed decision state and pending gate without exposing a transferable authorization or provider pin. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/propose_outcome_spec` | Propose a schema-validated outcome specification. |
@@ -415,7 +467,7 @@ caller cannot submit a resource pin or override the durable binding.
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures` | List admitted captures after current read-authority and accepted-selection checks. `limit` defaults to 50 and is bounded to 100. Continue with both `beforeCapturedAt` and `beforeCaptureId` from the preceding page; the pair must be supplied together. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}` | Return the admitted capture summary and canonical manifest. Pending or unadmitted records are not exposed. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/diff` | Return the verified captured patch for this admitted capture. |
-| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/files?path={relativePath}` | Return one manifest-listed file as `application/octet-stream` and its SHA-256 in `X-Source-Control-Output-Sha256`. The path is a safe relative workspace path, not a host path. |
+| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/files?path={relativePath}` | Return one manifest-listed file as `application/octet-stream` and its SHA-256 in `X-Source-Control-Output-Sha256`. The path is a safe relative workspace path, not a host path. The Gateway serves the same five output-capture routes under `/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}` with a required `X-Agentweaver-Tenant` header, and the MCP host exposes them as `agentweaver_` tools. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents` | Read current PR facts from the pinned provider, persist an immutable merge request, then open typed Approval for that exact intent and accepted Merge step. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}` | Read an owner-bound merge intent without exposing credential values or transferable authority. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}/execute` | Execute only through the current source-specific grant and existing action guard, under a repository-scoped lock and exact-head/check preflight. The expected base is a fresh preflight, not an atomic compare-and-swap. |
@@ -1010,6 +1062,29 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
 
+## Platform components report
+
+`PlatformComponentReport` in `Agentweaver.Abstractions` is the shared record for
+`GET /api/v1/platform/components`. Each owner service returns a
+`PlatformComponentOwnerReport` from `GET /internal/platform/components`.
+For behavior and examples, see [Platform components](../guide/platform-components.md).
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /api/platform/components` | Projects & Config requires `api.read`, an unbound non-purpose token, and a current TenantAdmin assignment for the caller's tenant or a current PlatformAdmin assignment. It asks the five owners in parallel with a three-second limit each, then returns all 16 areas in catalog order with `Cache-Control: no-store`. |
+| `GET /internal/platform/components` | Owner-only route, mapped only when `PlatformComponents:ServiceAuthentication` is configured. It accepts only a token for the private audience whose `sub` equals the configured Projects caller subject. Not in the Gateway OpenAPI document. |
+
+The report rules are:
+
+- Every area is present. A missing, failed, slow, or invalid owner answer
+  makes each of its areas `unknown` with reason `ownerUnavailable`.
+- Projects never reports a configured value as active without the owner's answer.
+- Canvas is always `notAvailable` with reason `noBackendOwner`.
+- An area's readiness is the least ready value among its active implementations.
+  An area with nothing selected is `disabled` with reason `notSelected`.
+- The report contains no option values, option revisions, endpoints,
+  credentials, or resource identifiers.
+
 ## Projects & Config host configuration
 
 For complete deployment-setting guidance, see
@@ -1218,6 +1293,12 @@ The consumer validates the native probe receipt against the admitted source SHA,
 
 Projects & Config validates skill markdown and text resources before storage.
 `POST /api/skills/preview` returns a content digest without storing the upload.
+`POST /api/skills/package` accepts exactly one of `files` (relative paths and
+base64 content), `archive` (a base64 ZIP), or `draft` (name, description, and
+instructions). It returns one package for each `SKILL.md` root, with the
+candidate, its preview, a per-skill error, and the binary or oversized paths it
+skipped. The upload is limited to 1,024 files and 2 MiB, and it stores nothing.
+Pass each candidate and digest to the import route.
 `POST /api/projects/{projectId}/skills/import` stores a new immutable revision
 and returns its receipt. The request supplies the expected digest, an idempotency
 key, and optional expected revision and source provenance. A repeated key with

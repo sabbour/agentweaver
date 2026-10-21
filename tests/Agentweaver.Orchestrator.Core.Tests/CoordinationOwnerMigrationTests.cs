@@ -34,6 +34,9 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(19)]
     [InlineData(20)]
     [InlineData(21)]
+    [InlineData(22)]
+    [InlineData(23)]
+    [InlineData(24)]
     [InlineData(25)]
     [InlineData(26)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
@@ -113,6 +116,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(15)]
     [InlineData(19)]
     [InlineData(20)]
+    [InlineData(21)]
     public async Task RejectsMissingPrerequisitesWithoutRewritingHistory(int missingVersion)
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -203,6 +207,9 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (19, "019_session_suspend_resume.sql"),
             (20, "020_maf_buildtest_workspace_seed.sql"),
             (21, "021_row_lock_record_updates.sql"),
+            (22, "022_run_list_completion.sql"),
+            (23, "023_project_run_requests.sql"),
+            (24, "024_chief_of_staff.sql"),
             (25, "025_user_notification_dismissals.sql"),
             (26, "026_backlog_task_content.sql")
         ];
@@ -271,8 +278,31 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 (SELECT count(*) FROM pg_trigger
                  WHERE tgrelid = to_regclass(@snapshots)
                    AND tgname = 'reviewed_remote_tool_snapshots_immutable'
-                   AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal)
+                   AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal),
+                (SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = @schema AND table_name = 'accepted_runs'
+                   AND column_name = 'completed_at' AND is_nullable = 'YES'),
+                to_regclass(@runListIndex) IS NOT NULL,
+                to_regclass(@runCompletedIndex) IS NOT NULL,
+                (SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = @schema AND table_name = 'accepted_runs'
+                   AND column_name = 'cancelled_at' AND is_nullable = 'YES'),
+                to_regclass(@projectRunRequests) IS NOT NULL,
+                to_regclass(@projectRunCancellations) IS NOT NULL,
+                (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                 WHERE conrelid = to_regclass(@runs) AND conname = 'accepted_runs_execution_state_check'),
+                to_regclass(@cosConversations) IS NOT NULL,
+                to_regclass(@cosPriorities) IS NOT NULL,
+                to_regclass(@cosLinks) IS NOT NULL
             """, connection);
+        command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
+        command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
+        command.Parameters.AddWithValue("runs", $"{_schema}.accepted_runs");
+        command.Parameters.AddWithValue("cosConversations", $"{_schema}.chief_of_staff_conversations");
+        command.Parameters.AddWithValue("cosPriorities", $"{_schema}.chief_of_staff_priorities");
+        command.Parameters.AddWithValue("cosLinks", $"{_schema}.chief_of_staff_priority_links");
+        command.Parameters.AddWithValue("runListIndex", $"{_schema}.ix_accepted_runs_project_created");
+        command.Parameters.AddWithValue("runCompletedIndex", $"{_schema}.ix_accepted_runs_project_completed");
         command.Parameters.AddWithValue("schema", _schema);
         command.Parameters.AddWithValue("manifests", $"{_schema}.session_consistency_manifests");
         command.Parameters.AddWithValue("operations", $"{_schema}.coordination_execution_operations");
@@ -302,12 +332,22 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 25, 26]), reader.GetFieldValue<int[]>(9));
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));
         Assert.True(reader.GetBoolean(13));
         Assert.Equal(1L, reader.GetInt64(14));
+        Assert.Equal(1L, reader.GetInt64(15));
+        Assert.True(reader.GetBoolean(16));
+        Assert.True(reader.GetBoolean(17));
+        Assert.Equal(1L, reader.GetInt64(18));
+        Assert.True(reader.GetBoolean(19));
+        Assert.True(reader.GetBoolean(20));
+        Assert.Contains("'cancelled'", reader.GetString(21));
+        Assert.True(reader.GetBoolean(22));
+        Assert.True(reader.GetBoolean(23));
+        Assert.True(reader.GetBoolean(24));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)
