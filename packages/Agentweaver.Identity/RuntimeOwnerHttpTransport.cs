@@ -314,6 +314,7 @@ public static class RuntimeOwnerHttpTransport
                     System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden =>
                         "runtime_owner_denied",
                     System.Net.HttpStatusCode.Conflict => "runtime_owner_binding_changed",
+                    System.Net.HttpStatusCode.PreconditionRequired => "runtime_owner_content_required",
                     _ => "runtime_owner_unavailable"
                 });
         if (response.Headers.CacheControl?.NoStore != true)

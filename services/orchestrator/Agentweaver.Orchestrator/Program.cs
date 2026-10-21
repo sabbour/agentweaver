@@ -164,6 +164,7 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
     services.GetRequiredService<TimeProvider>(),
     services.GetService<IExecutableActionSourceReceiptWriter>(),
     services.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
+builder.Services.AddGuardrails(builder.Configuration, options.Schema);
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
 var remoteToolTlsSection = builder.Configuration.GetSection("Orchestrator:RemoteToolResults:Tls");
 if (remoteToolTlsSection.Exists())

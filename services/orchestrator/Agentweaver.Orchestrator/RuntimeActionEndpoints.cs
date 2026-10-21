@@ -31,7 +31,8 @@ internal sealed class RuntimeActionOwner(
     /// <exception cref="RuntimeAuthorizationException">Thrown when registration, cost budget, selection, grant, or policy does not allow the action.</exception>
     /// <remarks>For tool invocations, the guarded callback writes the durable reservation before the SDK effect is performed by AgentHost.</remarks>
     internal async Task<RuntimeActionAdmission> AuthorizeAsync(
-        HttpContext context, RuntimeActionRequest request, CancellationToken cancellationToken)
+        HttpContext context, RuntimeActionRequest request, CancellationToken cancellationToken,
+        byte[]? content = null)
     {
         RuntimeActionContract.Validate(request);
         var registration = await registrations.ReadCurrentAsync(
@@ -47,9 +48,20 @@ internal sealed class RuntimeActionOwner(
         var policyBinding = await SourceControlEndpoints.ResolvePolicyBindingAsync(
             accepted.Selection.Snapshot, binding.RunId, catalog, resolver, policy,
             policyOptions, cancellationToken).ConfigureAwait(false);
+        var guardrails = RuntimeGuardrailsGate.Prepare(services, request, accepted, content);
         var grant = await grants.IssueRuntimeActionGrantAsync(
             context, registration, request, cancellationToken).ConfigureAwait(false);
         await RequireCurrentAsync(context, registration, cancellationToken).ConfigureAwait(false);
+        // Guardrails checks run before the guarded callback, so withheld content never gets a policy receipt.
+        if (guardrails is not null)
+            await RuntimeGuardrailsGate.RequireAllowedAsync(services, policy, guardrails,
+                RuntimeGuardrailsGate.AuthorityCheck(
+                    token => registrations.ReadCurrentAsync(context, registration.RuntimeInstanceId, token),
+                    token => projects.ReadAcceptedSelectionWithAuthorityAsync(
+                        context, binding.ProjectId, binding.RunId, token),
+                    registration, RuntimeGuardrailsGate.SelectionHash(accepted.Selection)),
+                registration, accepted, request, grant, policyBinding, policyOptions,
+                cancellationToken).ConfigureAwait(false);
         var invocation = new ExecutableActionInvocation(context.User, binding.SessionId, binding.WorkflowStepId!,
             request.ActionId, RuntimeActionContract.Purpose, grant, binding.ExecutionFence, policyBinding, request.EventId);
         // The guarded callback admits dispatch; the native SDK effect remains in AgentHost.
@@ -241,6 +253,9 @@ internal sealed class RuntimeActionOwner(
 /// </summary>
 public static class RuntimeActionEndpoints
 {
+    // JSON escaping can expand the 256 KiB content limit up to six times, plus the request envelope.
+    private const long ContentRequestBodyLimit = 2 * 1024 * 1024;
+
     /// <summary>
     /// Adds the protected runtime action routes to the endpoint builder.
     /// </summary>
@@ -250,6 +265,16 @@ public static class RuntimeActionEndpoints
         endpoints.MapPost("/internal/runtime/actions/authorize",
             (HttpContext context, RuntimeActionRequest request, [FromServices] RuntimeActionOwner owner,
                 CancellationToken token) => ExecuteAsync(context, () => owner.AuthorizeAsync(context, request, token)))
+            .RequireAuthorization();
+        // Model-turn admission with the UTF-8 content that the platform Guardrails checks inspect.
+        endpoints.MapPost("/internal/runtime/actions/authorize-content",
+            (HttpContext context, RuntimeActionContentRequest request, [FromServices] RuntimeActionOwner owner,
+                CancellationToken token) => ExecuteAsync(context, () =>
+                {
+                    var content = RuntimeActionContract.ValidateContent(request);
+                    return owner.AuthorizeAsync(context, request.Request, token, content);
+                }))
+            .WithMetadata(new RequestSizeLimitAttribute(ContentRequestBodyLimit))
             .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/actions/verify",
             (HttpContext context, RuntimeActionAdmission admission, [FromServices] RuntimeActionOwner owner,
@@ -278,7 +303,10 @@ public static class RuntimeActionEndpoints
         }
         catch (RuntimeAuthorizationException failure)
         {
-            var status = failure.Code == "runtime_fixed_credit_guard_unavailable"
+            var status = failure.Code == RuntimeGuardrailsGate.ContentRequiredCode
+                ? StatusCodes.Status428PreconditionRequired
+                : failure.Code == "runtime_fixed_credit_guard_unavailable" ||
+                RuntimeGuardrailsGate.IsTransient(failure.Code)
                 ? StatusCodes.Status503ServiceUnavailable
                 : StatusCodes.Status403Forbidden;
             return Results.Json(new { error = failure.Code }, statusCode: status);

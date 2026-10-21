@@ -19,7 +19,7 @@ namespace Agentweaver.Orchestrator;
 internal static partial class SourceControlEndpoints
 {
     private static readonly TimeSpan MergeSettlementTimeout = TimeSpan.FromSeconds(30);
-    private static readonly JsonSerializerOptions ProviderSelectionJsonOptions = new(JsonSerializerDefaults.Web)
+    internal static readonly JsonSerializerOptions ProviderSelectionJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,

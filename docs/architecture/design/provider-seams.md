@@ -690,17 +690,50 @@ and tool results. Later ordered checks can add Microsoft Purview DLP, Llama Guar
 Guardrails. Projects can select or reorder only platform-enabled checks. The ordered result, versions, and
 failures are journaled; classifier transport and credentials remain outside prompt content.
 
-The Orchestrator Core `GuardrailsContentGate` source is a typed, fail-closed candidate for this contract.
-It consumes an owner-produced ordered stage/content pin, runs checks in that exact order, sends bounded
-finding codes to the existing AGT provider, records redacted provider/version metadata through an injected
-journal contract, and rechecks owner authority after classifier and journal waits. It hashes the exact
-immutable classifier input with SHA-256 and includes that digest beside the owner snapshot digest in
-authority checks and evidence. Its declared default capabilities are limited to text at the user-input
-and tool-result stages; model input/output, MCP discovery, structured results, and non-text content require
-an exact capability on every check in the accepted stage pin. No production Prompt Shields transport,
-trusted journal writer, current-authority adapter, or MAF gate is wired in this source candidate, so it
-does not prove runtime content protection. Permission metadata and MCP annotations are provenance only
-and never grant tool authority.
+The Orchestrator Core `GuardrailsContentGate` is the fail-closed gate for this contract. It consumes an
+owner-produced ordered stage/content pin, runs checks in that exact order, sends bounded finding codes to
+the existing AGT provider, records redacted provider/version metadata through the evidence journal, and
+rechecks owner authority after classifier and journal waits. It hashes the exact immutable classifier
+input with SHA-256 and includes that digest beside the owner snapshot digest in authority checks and
+evidence. Its declared default capabilities are limited to text at the user-input and tool-result stages;
+model input/output, MCP discovery, structured results, and non-text content require an exact capability
+on every check in the accepted stage pin. Permission metadata and MCP annotations are provenance only and
+never grant tool authority.
+
+### P2 runtime gate for model-turn user input
+
+In P2, the Orchestrator runs the ordered Guardrails checks on model-turn user input during runtime action
+admission (`/internal/runtime/actions/authorize`):
+
+1. The Orchestrator reads the ordered Guardrails selection that Projects recorded in the accepted run
+   snapshot. When the snapshot has no Guardrails selection, admission is unchanged and the runtime never
+   sends prompt text.
+2. When checks apply, plain admission returns HTTP 428 with `runtime_guardrails_content_required` before
+   it issues a grant. The runtime then calls `/internal/runtime/actions/authorize-content` with the exact
+   UTF-8 text whose SHA-256 digest is the request input hash. The limit is 256 KiB of text.
+3. `GuardrailsStagePlanResolver` binds the accepted checks to the registered classifiers for the
+   `UserInput` stage and `Text` content class. A reordered, added, disabled, stale, or unregistered check
+   fails closed.
+4. After the grant is issued and before the policy receipt is written, `GuardrailsContentGate` runs each
+   check in order. `PromptShieldsClassifier` calls Azure AI Content Safety `text:shieldPrompt` with the
+   Orchestrator workload identity. A detected attack becomes the `prompt_shields.user_prompt_attack`
+   finding.
+5. The gate sends the findings to AGT as the `guardrails_stage`, `guardrails_content_class`,
+   `guardrails_finding_count`, and `guardrails_findings` context keys. AGT makes the final decision.
+6. The Orchestrator appends one immutable evidence row per operation to the `guardrails_evaluations`
+   table (Orchestrator migration 028). The row holds digests, provider IDs, versions, finding codes, and
+   the AGT outcome. It never holds the content. Classifier timeouts and unavailable classifiers aren't
+   recorded, so a retry can reach the final decision.
+
+A withheld turn has no policy receipt, so the runtime can't verify or perform it. Classifier timeouts and
+unavailable classifiers, journals, or owners return HTTP 503 and fail closed. Tool-approval denial and
+concurrency behavior are unchanged: tool actions never carry content, and a 428 for an action without
+content fails with `runtime_guardrails_content_unsupported`.
+
+Prompt Shields is the only supported P2 check. Tool and MCP result checks integrate with the Tool & MCP
+gateway work in [#1925](https://github.com/sabbour/agentweaver/issues/1925) and
+[#1929](https://github.com/sabbour/agentweaver/issues/1929). For configuration, see
+[Guardrails settings](../../reference/runtime-configuration.md#guardrails-settings).
 
 ## Network Policy
 
