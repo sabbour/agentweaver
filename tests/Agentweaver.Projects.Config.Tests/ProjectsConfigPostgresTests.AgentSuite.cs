@@ -148,6 +148,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var owner = await SeedCallerAsync(
             db, authorityStore, "agentsuite-team-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        await ConfigurePlatformDefaultsAsync(db, authorityStore, service, suffix, tenantId);
         var project = await service.CreateProjectAsync(owner, "Team target", CancellationToken.None);
         var revision = project.ConfigurationRevision;
         const string connectionId = "6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f";
@@ -292,6 +293,7 @@ public sealed partial class ProjectsConfigPostgresTests
         var owner = await SeedCallerAsync(
             db, authorityStore, "agentsuite-blueprint-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        await ConfigurePlatformDefaultsAsync(db, authorityStore, service, suffix, tenantId);
 
         foreach (var builtIn in ProjectBlueprintCatalog.Blueprints)
         {
@@ -374,5 +376,19 @@ public sealed partial class ProjectsConfigPostgresTests
             }
         }
         return output.ToArray();
+    }
+
+    /// <summary>Configures platform runtime defaults, which a restricted sandbox's egress narrowing requires.</summary>
+    private static async Task ConfigurePlatformDefaultsAsync(
+        ProjectsConfigDbContext db, ProjectsConfigPrivilegedAuthorityStore authorityStore, ProjectsConfigService service,
+        string suffix, string tenantId)
+    {
+        var admin = await SeedCallerAsync(
+            db, authorityStore, "agentsuite-platform-admin-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var head = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+        if (head.Revision == 0)
+            await service.UpdatePlatformRuntimeDefaultsAsync(admin, head.Revision, PlatformDefaults(), CancellationToken.None);
     }
 }

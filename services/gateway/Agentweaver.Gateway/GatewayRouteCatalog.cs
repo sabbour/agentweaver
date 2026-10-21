@@ -175,6 +175,11 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/skills",
             "listProjectSkillInventory", "Read current project skill inventory",
             ["cursor", "pageSize"], forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-imports",
+            "/api/projects/{projectId}/agentsuite-imports",
+            "importProjectAgentSuite", "Validate an AgentSuite archive and stage a casting proposal", body: true,
+            // Fits a base64 archive of the owner's 16 MiB decoded limit plus request fields.
+            maximumRequestBodyBytes: 24 * 1024 * 1024, forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-imports/{sourceIdentity}",
             "/api/projects/{projectId}/agentsuite-imports/{sourceIdentity}",
             "getProjectAgentSuiteImport", "Read a retained AgentSuite import record",

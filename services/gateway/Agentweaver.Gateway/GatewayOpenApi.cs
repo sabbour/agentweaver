@@ -50,6 +50,7 @@ internal static partial class GatewayOpenApi
             ["importProjectSkill"] = C("ImportSkillContentRequest", "SkillContentImportReceipt", "200"),
             ["updateProjectSkillAssignment"] = C("UpdateSkillAssignmentRequest", "VersionedProjectConfiguration", "200"),
             ["listProjectSkillInventory"] = C(null, "ProjectSkillInventoryPage", "200"),
+            ["importProjectAgentSuite"] = C("ImportProjectAgentSuiteRequest", "ProjectAgentSuiteImportResult", "200", "201"),
             ["getProjectAgentSuiteImport"] = C(null, "ProjectAgentSuiteImport", "200"),
             ["getProjectAgentSuiteAgentPolicy"] = C(null, "ProjectAgentSuiteAgentPolicy", "200"),
             ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
@@ -300,6 +301,16 @@ internal static partial class GatewayOpenApi
                 "The owner hides foreign projects and memberships found inactive or stale during the inventory recheck. " +
                 "Inactive membership rejected during initial caller resolution returns 403.");
         }
+        else if (route.OperationId == "importProjectAgentSuite")
+        {
+            responses["400"] = ProblemResponse("The format, archive encoding, tool connection, or blueprint data is invalid.");
+            responses["403"] = ProblemResponse("The owner denied current WriteProjects authority.");
+            responses["404"] = ProblemResponse("The owner did not find an accessible project.");
+            responses["409"] = ProblemResponse("The configuration revision is stale, or an effective agent ID or source identity conflicts.");
+            responses["413"] = ProblemResponse("The request or decoded archive exceeds its limit.");
+            responses["422"] = ProblemResponse("The archive failed AgentSuite validation or is incompatible with the project configuration.");
+            responses["503"] = ProblemResponse("The AgentSuite object store is not configured.");
+        }
         else if (route.OperationId == "getProjectAgentSuiteImport")
         {
             responses["400"] = ProblemResponse("The source identity is not sha256: followed by 64 lowercase hex characters.");
@@ -376,19 +387,6 @@ internal static partial class GatewayOpenApi
                 "order in C collation, then revision-descending order. It does not make multiple pages a " +
                 "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
         }
-        else if (route.OperationId == "getProjectAgentSuiteImport")
-        {
-            description +=
-                " This read requires current project read authority. It returns the immutable record for one native " +
-                "source identity: native digests and IDs, effective agent IDs, capability blockers, and retained " +
-                "blob digests. Import and proposal review are native Projects routes and are not exposed here.";
-        }
-        else if (route.OperationId == "getProjectAgentSuiteAgentPolicy")
-        {
-                description +=
-                    " This read requires current project read authority. It returns the policy bound to one imported " +
-                    "effective agent ID, or a null policy when none is bound. A policy is retained, not enforced.";
-        }
         else if (route.OperationId.Contains("Casting", StringComparison.Ordinal))
         {
             description += route.OperationId switch
@@ -400,6 +398,27 @@ internal static partial class GatewayOpenApi
                 _ => " The owner requires current WriteProjects authority, including api.read and projects.admin. " +
                     "Revision comparisons remain in request bodies; no Idempotency-Key header is required.",
             };
+        }
+        else if (route.OperationId == "getProjectAgentSuiteImport")
+        {
+            description +=
+                " This read requires current project read authority. It returns the immutable record for one native " +
+                "source identity: native digests and IDs, effective agent IDs, capability blockers, and retained " +
+                "blob digests.";
+        }
+        else if (route.OperationId == "importProjectAgentSuite")
+        {
+            description +=
+                " This write requires current WriteProjects authority and the current expectedConfigurationRevision. " +
+                "It validates the archive offline, retains original blobs, and stages one casting proposal. It does " +
+                "not activate, build, or run agents, contact tool endpoints, or choose a model. A repeated request " +
+                "returns the same proposal. 200 with a null proposal means every agent already exists unchanged.";
+        }
+        else if (route.OperationId == "getProjectAgentSuiteAgentPolicy")
+        {
+            description +=
+                " This read requires current project read authority. It returns the policy bound to one imported " +
+                "effective agent ID, or a null policy when none is bound. A policy is retained, not enforced.";
         }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
@@ -762,6 +781,16 @@ internal static partial class GatewayOpenApi
             ("toolConnections", Arr(Ref("ProjectAgentSuiteToolConnection"))),
             ("blueprint", Ref("ProjectAgentSuiteBlueprint")),
             ("runtimeProfiles", Arr(Str())), ("blobs", Arr(Ref("ProjectAgentSuiteBlob")))),
+        ["ImportProjectAgentSuiteRequest"] = StrictObj(["expectedConfigurationRevision", "format", "archive"],
+            ("expectedConfigurationRevision", Int()), ("format", Enum("oci-layout-tar", "content-tar-gzip")),
+            ("archive", Str()), ("toolConnections", Arr(Ref("ProjectAgentSuiteToolConnection"))),
+            ("blueprint", NullableRef("ProjectAgentSuiteBlueprint"))),
+        ["BlueprintUnresolvedSkillBinding"] = Obj(["role", "skillId", "code"],
+            ("role", Str()), ("skillId", Str()),
+            ("code", Enum("skill_not_installed", "skill_not_pinned", "skill_disabled"))),
+        ["ProjectAgentSuiteImportResult"] = Obj(["import", "proposal", "unresolvedSkillBindings"],
+            ("import", Ref("ProjectAgentSuiteImport")), ("proposal", NullableRef("ProjectCastingProposal")),
+            ("unresolvedSkillBindings", Arr(Ref("BlueprintUnresolvedSkillBinding")))),
         ["ProjectAgentSuiteAgentPolicy"] = Obj(["effectiveAgentId", "sourceIdentity", "policy"],
             ("effectiveAgentId", Str()), ("sourceIdentity", Str()),
             ("policy", NullableRef("ProjectAgentSuitePolicy"))),

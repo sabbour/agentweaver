@@ -646,7 +646,7 @@ public static class ProjectConfigEndpoints
             {
                 return ToProblem(exception);
             }
-        });
+        }).WithMetadata(new RequestSizeLimitAttribute(24 * 1024 * 1024));
 
         projects.MapGet("/{projectId}/agentsuite-imports/{sourceIdentity}", async (
             string projectId,

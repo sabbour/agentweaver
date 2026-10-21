@@ -20,7 +20,7 @@ is the only source for built-in and uploaded team blueprints.
 ```
 
 - `format` is `oci-layout-tar` (a tar of an OCI image layout) or `content-tar-gzip` (the raw
-  content layer). The decoded archive is limited to 16 MiB.
+  content layer). The decoded archive is limited to 16 MiB, and the request body to 24 MiB.
 - `toolConnections` and `blueprint` are optional. The response is `201 Created` with the import
   record, the proposal, and `unresolvedSkillBindings`, or `200 OK` with a null proposal when every
   agent already exists unchanged and the blueprint changes nothing.
@@ -130,7 +130,9 @@ proposal through the same path as an inline blueprint:
    nothing. Only the `default` workflow is available today.
 2. Each workflow becomes a workflow reference under `sourceBlueprintId`, and `defaultWorkflow`
    becomes the project default workflow.
-3. The `restricted` sandbox profile removes all project egress. `default` keeps it.
+3. The `restricted` sandbox profile removes all project egress. `default` keeps it. A
+   `restricted` profile needs platform runtime defaults. If they aren't configured, the import
+   returns `409 platform_runtime_unconfigured`.
 4. Each bound role's effective agent ID is added to a skill that the project already installed
    and pinned. Import never installs a skill or changes whether it's enabled.
    `unresolvedSkillBindings` lists each binding that doesn't take effect, with a code:
