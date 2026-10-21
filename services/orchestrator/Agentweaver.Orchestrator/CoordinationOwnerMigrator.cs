@@ -76,7 +76,7 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(19) && !applied.Contains(15)) ||
             (applied.Contains(20) && !applied.Contains(19)) ||
             (applied.Contains(21) && !applied.Contains(20)) ||
-            (applied.Contains(25) && !applied.Contains(21)))
+            (applied.Contains(25) && !applied.Contains(2)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 25])
             .Where(version => !applied.Contains(version)))

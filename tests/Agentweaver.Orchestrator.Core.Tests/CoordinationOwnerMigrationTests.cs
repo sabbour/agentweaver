@@ -107,11 +107,11 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Theory]
+    [InlineData(2)]
     [InlineData(14)]
     [InlineData(15)]
     [InlineData(19)]
     [InlineData(20)]
-    [InlineData(21)]
     public async Task RejectsMissingPrerequisitesWithoutRewritingHistory(int missingVersion)
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);

@@ -24,19 +24,20 @@ internal sealed class ProjectsRunSelectionClient(
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
     };
 
-    /// <summary>Reads fresh caller authority for cross-run attention without requiring a run binding.</summary>
+    /// <summary>
+    /// Reads fresh caller-wide authority for cross-run attention. Only unbound tokens are accepted;
+    /// a project or run binding does not narrow this caller-wide endpoint.
+    /// </summary>
     internal async Task<ProjectsAuthorizationContext> ReadNotificationAuthorityAsync(
         HttpContext context, CancellationToken cancellationToken)
     {
         var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         var scopes = context.User.FindAll("scope").Concat(context.User.FindAll("scp"))
             .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
-        var projects = context.User.FindAll("project_id").Take(2).ToArray();
-        var runs = context.User.FindAll("run_id").Take(2).ToArray();
         if (!scopes.Contains("api.read", StringComparer.Ordinal) ||
             !HasAudience(context.User, options.Audience) ||
             !HasAudience(context.User, options.ProjectsAudience) ||
-            projects.Length > 1 || runs.Length > 1 || (runs.Length == 1 && projects.Length == 0))
+            context.User.HasClaim(claim => claim.Type is "project_id" or "run_id"))
             throw new CoordinationException("caller_binding_mismatch", StatusCodes.Status403Forbidden);
         var tenant = CoordinationIdentity.ReadTenantSelector(context);
         var authority = await ReadAuthorizationAsync(
@@ -45,8 +46,7 @@ internal sealed class ProjectsRunSelectionClient(
         if (authority.ContractVersion != 1 || authority.Issuer != options.Issuer ||
             authority.ActorId != caller.Subject || string.IsNullOrWhiteSpace(authority.TenantId) ||
             (tenant is not null && tenant != authority.TenantId) || authority.MembershipRevision < 1 ||
-            authority.BoundProjectId != (projects.Length == 1 ? projects[0].Value : null) ||
-            authority.BoundRunId != (runs.Length == 1 ? runs[0].Value : null) ||
+            authority.BoundProjectId is not null || authority.BoundRunId is not null ||
             authority.EffectiveAuthority.IsDefault ||
             authority.EffectiveAuthority.Any(item => item is null || item.Permissions.IsDefault ||
                 item.Permissions.Any(permission => permission is null)))
