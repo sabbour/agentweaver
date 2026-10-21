@@ -190,18 +190,24 @@ Transfer version or
 team incompatibility returns `422`. These source routes do not establish
 deployment or a browser wizard.
 
-## Send Knowledge writes
+## Send idempotent writes
 
-The following Knowledge operations require exactly one `Idempotency-Key`
-header: `createKnowledgeRecord`, `updateKnowledgeRecord`,
-`restoreKnowledgeRecord`, `approveKnowledgeDecision`,
-`importKnowledgeRecords`, `promoteKnowledgeProposal`, and
-`rejectKnowledgeProposal`. Use a value of 1–128 ASCII letters or digits, or
-`.`, `_`, `-`, or `:`. Reuse the same key when retrying the same write.
+The following operations require exactly one `Idempotency-Key` header:
+
+- Runs: `createProjectRun` and `cancelProjectRun`.
+- Knowledge: `createKnowledgeRecord`, `updateKnowledgeRecord`,
+  `restoreKnowledgeRecord`, `approveKnowledgeDecision`,
+  `importKnowledgeRecords`, `promoteKnowledgeProposal`, and
+  `rejectKnowledgeProposal`.
+
+Use a value of 1–128 ASCII letters or digits, or `.`, `_`, `-`, or `:`. Reuse
+the same key when you retry the same write. Browser preflight allows the
+header only for these operations.
 
 The key provides idempotency only. It does not establish identity or authorize
-an operation. Knowledge rejects missing, duplicate, blank, and invalid keys.
+an operation. The owner rejects missing, duplicate, blank, and invalid keys.
 Reads, including `exportKnowledgeRecords`, do not require this header.
+`startProjectRun` does not take a key, because the owner replays start by run.
 
 ## Use the Identity Broker browser routes
 
