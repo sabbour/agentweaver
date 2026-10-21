@@ -55,6 +55,8 @@ const GROUPS = {
   },
   orchestrator: {
     SELECT: 'coordination_schema_migrations outbox_schema_migrations',
+    // This group includes spend_budget_reservations and spend_budget_accounting_cursors. The runtime
+    // role gets no DELETE on them; their guard triggers also reject deletes and allow only forward updates.
     'SELECT,INSERT,UPDATE': 'accepted_runs coordination_sessions coordination_messages coordination_requests parent_notifications coordinator_gates executable_action_grants coordination_tree_commands coordination_idle_subscriptions coordination_execution_operations runtime_registration_heads source_control_merge_intents source_control_output_captures maf_execution_run_guards maf_execution_dispatches outbox_streams outbox_events backlog_projects backlog_tasks spend_budget_reservations spend_budget_accounting_cursors',
     'SELECT,INSERT,DELETE': 'backlog_dependencies',
     'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots',
@@ -144,6 +146,8 @@ const FUNCTIONS = {
     'enforce_suspend_resume_operation_phase()',
     'reject_session_consistency_manifest_mutation()',
     'reject_row_lock_record_update()',
+    // Spend budget trigger functions: reservations only move from outstanding to retired, cursors only
+    // move forward, rows cannot be deleted, and both tables reject TRUNCATE.
     'guard_spend_budget_reservation_mutation()',
     'guard_spend_budget_cursor_mutation()',
     'reject_spend_budget_truncate()',
@@ -192,6 +196,8 @@ export function buildP1PostgresPlan() {
     target: { ...P1_POSTGRES_TARGET },
     services,
     // 022 adds accepted_runs.completed_at; the existing table-level UPDATE grant covers it.
+    // 029 adds the spend budget tables and follows 022 directly. The list is noncontiguous:
+    // 017 and 023 through 028 are not part of the Core catalog.
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 29],
     // Bind the separately approved Events reporting migration into the reviewed plan hash.
     eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),

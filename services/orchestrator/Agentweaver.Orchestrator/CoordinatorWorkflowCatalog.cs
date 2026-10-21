@@ -192,18 +192,24 @@ internal static class CoordinatorWorkflowCatalog
     public static ImmutableArray<SpendBudget> ReadSpendBudgets(JsonElement selection)
     {
         var runLimits = ReadRunLimits(selection);
+        // Selections accepted before spend budgets existed have no list; treat that as no budgets.
         if (!runLimits.TryGetProperty("spendBudgets", out var value) || value.ValueKind == JsonValueKind.Null)
             return [];
         try
         {
             if (value.ValueKind != JsonValueKind.Array)
                 throw new JsonException();
+            // Unknown JSON members are rejected, so a field this version does not understand cannot
+            // be silently ignored.
             var budgets = value.Deserialize<ImmutableArray<SpendBudget>>(SpendBudgetJsonOptions);
+            // A null array or a null entry is malformed input, not an empty budget.
             if (budgets.IsDefault || budgets.Any(budget => budget is null))
                 throw new JsonException();
             SpendBudgetContract.ValidateSet(budgets);
             return budgets;
         }
+        // Every parse or validation failure means the pinned selection is invalid, so dispatch stops
+        // instead of running without budgets.
         catch (Exception exception) when (exception is JsonException or ArgumentException or NotSupportedException)
         {
             throw new CoordinationException(

@@ -887,6 +887,25 @@ each applicable bucket, Orchestrator:
 Reservations count as exposure, so dispatches that start before their usage reaches Events can't exceed
 the hard limit together. A retry of the same dispatch reserves once.
 
+The design makes these choices:
+
+- **Full reserve until retirement.** Events can hold some receipts of a dispatch before it holds all of
+  them. Counting a partial priced amount instead of the full reserve could undercount, so a reservation
+  keeps its full reserve until every receipt is witnessed.
+- **Forward-only cursor.** Two Events reads can return out of order. If an older read were accepted
+  after a newer read retired a reservation, the older total wouldn't include that dispatch's spend and
+  capacity would reopen. Rejecting a lower cursor prevents this.
+- **Bucket identity without revision or limits.** Editing a budget's limits, revision, or period end
+  keeps the same bucket, so reservations from before the edit still count against the new limit.
+- **Bounded witnesses.** One Events read witnesses at most 64 dispatches. A hard bucket with more
+  outstanding reservations can't prove which ones are accounted for, so admission denies the dispatch
+  instead of guessing.
+- **Sorted lock order.** A dispatch can match several buckets. Orchestrator locks them in bucket-key order,
+  so two dispatches that share buckets can't deadlock.
+- **One transaction.** Admission, reservations, cursor, notifications, and the dispatch row commit
+  together. If any step fails, including an outbox write or an owner authority check, the transaction
+  rolls back and nothing is reserved or sent.
+
 A denial records the `orchestrator.run.spend_budget_dispatch_denied` outbox event, stores no
 reservation, and stops the dispatch before send. Dispatch preparation then fails with the error code, the
 same way it fails for a Copilot hard credit limit, so no new turn starts. The first time

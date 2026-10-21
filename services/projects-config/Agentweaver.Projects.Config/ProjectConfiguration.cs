@@ -98,7 +98,7 @@ public sealed record CopilotRunLimitOverrides
     public decimal? CopilotSoftCreditLimit { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public decimal? CopilotHardCreditLimit { get; init; }
-    /// <summary>Spend budgets. A budget with a platform budget ID may only narrow that platform budget.</summary>
+    /// <summary>Spend budgets. A budget that reuses a platform budget ID can only make that platform budget stricter.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ImmutableArray<SpendBudget>? SpendBudgets { get; init; }
 }
@@ -608,15 +608,21 @@ public static class ProjectConfigurationValidator
         return defaults with { EgressBaseline = normalizedEgress };
     }
 
-    /// <summary>Inherits omitted project limits and rejects any override above its configured platform cap.</summary>
+    /// <summary>
+    /// Builds the effective run limits. A limit the project leaves out takes the platform value. A limit the
+    /// project sets must not be above the platform value. Spend budgets follow the same rule per budget ID.
+    /// </summary>
     /// <exception cref="ProjectConfigException">An override is outside its supported range or widens a platform limit.</exception>
     public static CopilotRunLimits ResolveLimits(
         PlatformRuntimeDefaults platform,
         CopilotRunLimitOverrides project)
     {
+        // Check both inputs on their own first, so errors name the layer that is wrong.
         ValidateLimits(platform.RunLimits);
         ValidateLimitOverrides(project);
 
+        // Each Resolve* call returns the platform value when the project value is missing,
+        // and throws when the project value is above the platform value.
         var resolved = new CopilotRunLimits
         {
             MaxModelTurns = ResolveLimit(project.MaxModelTurns, platform.RunLimits.MaxModelTurns, nameof(project.MaxModelTurns)),
@@ -636,6 +642,7 @@ public static class ProjectConfigurationValidator
                 nameof(project.CopilotHardCreditLimit)),
             SpendBudgets = ResolveSpendBudgets(platform.RunLimits.SpendBudgets, project.SpendBudgets),
         };
+        // Check the merged result too, because a merge of two valid layers can still break a cross-field rule.
         ValidateLimits(resolved);
         return resolved;
     }
@@ -718,6 +725,7 @@ public static class ProjectConfigurationValidator
         return value;
     }
 
+    // Checks a complete set of limits, such as platform defaults or a resolved result. Every value is required.
     private static void ValidateLimits(CopilotRunLimits limits)
     {
         ValidateRange(limits.MaxModelTurns, 1, 1000, "runLimits.maxModelTurns");
@@ -733,6 +741,7 @@ public static class ProjectConfigurationValidator
         ValidateSpendBudgets(limits.SpendBudgets);
     }
 
+    // Checks project overrides. Every value is optional, but any value that is present must be in range.
     private static void ValidateLimitOverrides(CopilotRunLimitOverrides limits)
     {
         ValidateOptionalRange(limits.MaxModelTurns, 1, 1000, "runLimits.maxModelTurns");
@@ -748,10 +757,16 @@ public static class ProjectConfigurationValidator
         ValidateSpendBudgets(limits.SpendBudgets);
     }
 
+    // Merges platform and project spend budgets by budget ID:
+    // - a platform budget the project doesn't mention stays as is;
+    // - a project budget with the same ID as a platform budget replaces it, but only when it is equal or stricter;
+    // - a project budget with a new ID is added.
+    // A project can't remove a platform budget, so the platform limits always apply.
     private static ImmutableArray<SpendBudget>? ResolveSpendBudgets(
         ImmutableArray<SpendBudget>? platform,
         ImmutableArray<SpendBudget>? project)
     {
+        // When the project sets no budgets, the platform budgets apply unchanged.
         if (project is not { } projectBudgets)
             return platform;
         var platformBudgets = platform ?? [];
@@ -765,6 +780,7 @@ public static class ProjectConfigurationValidator
                 continue;
             }
 
+            // Convert the contract error into a configuration validation error for the API response.
             try
             {
                 SpendBudgetContract.RequireNarrowing(ceiling, narrowed);
@@ -776,17 +792,21 @@ public static class ProjectConfigurationValidator
             resolved.Add(narrowed);
         }
 
+        // Add project budgets whose IDs don't match any platform budget.
         resolved.AddRange(projectBudgets.Where(budget =>
             !platformBudgets.Any(ceiling => ceiling.BudgetId == budget.BudgetId)));
         var budgets = resolved.ToImmutable();
+        // Check the merged list, because a new project budget can repeat the bucket of a platform budget.
         ValidateSpendBudgets(budgets);
         return budgets;
     }
 
+    // Checks an optional budget list. A missing list is valid and means "no budgets at this layer".
     private static void ValidateSpendBudgets(ImmutableArray<SpendBudget>? budgets)
     {
         if (budgets is not { } values)
             return;
+        // Convert the contract error into a configuration validation error that names the field.
         try
         {
             SpendBudgetContract.ValidateSet(values);

@@ -168,6 +168,8 @@ internal sealed class ProjectsRunSelectionClient(
         string runId,
         CancellationToken cancellationToken)
     {
+        // Call Projects as the original caller: forward the caller's bearer token and tenant
+        // selector, so Projects applies its own authorization to the read.
         var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);
         var bearer = CoordinationIdentity.RequireBearer(context);
         var tenant = CoordinationIdentity.ReadTenantSelector(context);
@@ -177,15 +179,18 @@ internal sealed class ProjectsRunSelectionClient(
         if (tenant is not null)
             request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        // A denied read blocks the dispatch. It is never treated as "no budgets".
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             throw new CoordinationException("run_selection_permission_denied", StatusCodes.Status403Forbidden);
         // A Projects owner without the spend budget route has no project budgets to enforce.
         if (response.StatusCode == HttpStatusCode.NotFound)
             return new(projectId, 1, 1, []);
+        // Budgets must be current, so a cacheable response is rejected like any other unexpected status.
         if (response.StatusCode != HttpStatusCode.OK || response.Headers.CacheControl?.NoStore != true)
             throw InvalidSelectionContract();
         try
         {
+            // A null body, malformed JSON, or an invalid budget set is a broken owner contract (502).
             var current = await response.Content.ReadFromJsonAsync<CurrentProjectSpendBudgets>(
                 JsonOptions, cancellationToken).ConfigureAwait(false) ?? throw InvalidSelectionContract();
             ValidateCurrentProjectSpendBudgets(current, projectId);
@@ -205,15 +210,21 @@ internal sealed class ProjectsRunSelectionClient(
     {
         try
         {
+            // The response must be for the requested project, with real revisions. Revision 1 is
+            // the lowest valid value.
             if (current is null || current.ProjectId != projectId || current.ProjectConfigurationRevision < 1 ||
                 current.PlatformRuntimeRevision < 1)
                 throw InvalidSelectionContract();
+            // Apply the shared budget rules: each budget must be valid, and budget IDs and buckets must be unique.
             SpendBudgetContract.ValidateSet(current.Budgets);
+            // This route returns project budgets only. Run and agent budgets come from the accepted
+            // selection, so any other scope here is a contract error.
             if (current.Budgets.Any(budget => budget.Scope != SpendBudgetScopes.Project))
                 throw InvalidSelectionContract();
         }
         catch (ArgumentException)
         {
+            // Budget validation failures are reported as an invalid owner response.
             throw InvalidSelectionContract();
         }
     }

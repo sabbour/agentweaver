@@ -442,6 +442,7 @@ public sealed class ProjectConfigurationValidatorTests
     [Fact]
     public void SpendBudgetsInheritAddProjectBudgetsAndCanOnlyNarrowPlatformBudgets()
     {
+        // Platform run budget: soft 5, hard 10, reserve 1. A project period for project-scoped budgets.
         var period = new UsageSpendPeriod("2026-09",
             new(2026, 9, 1, 0, 0, 0, TimeSpan.Zero), new(2026, 10, 1, 0, 0, 0, TimeSpan.Zero));
         var platformBudget = new SpendBudget("platform-aic", 1, SpendBudgetScopes.Run,
@@ -450,8 +451,10 @@ public sealed class ProjectConfigurationValidatorTests
         {
             RunLimits = PlatformDefaults().RunLimits with { SpendBudgets = [platformBudget] }
         };
+        // A project that sets no budgets inherits the platform budget unchanged.
         Assert.Equal(new[] { platformBudget }, ProjectConfigurationValidator.ResolveLimits(platform, new()).SpendBudgets!.Value.ToArray());
 
+        // A project can add its own project budget and lower the platform budget's limits.
         var projectBudget = new SpendBudget("azure-month", 1, SpendBudgetScopes.Project,
             SdkMeterSources.ByokTokens, "USD", 50m, 100m, 0.5m) { Period = period };
         var narrowed = platformBudget with { SoftLimit = 2m, HardLimit = 4m };
@@ -461,6 +464,9 @@ public sealed class ProjectConfigurationValidatorTests
         }).SpendBudgets!.Value;
         Assert.Equal(new[] { narrowed, projectBudget }, resolved.ToArray());
 
+        // Each set is rejected: raising the platform hard limit (11 > 10), removing the platform soft limit,
+        // changing the platform unit, a project budget without a period, a soft limit above the hard limit
+        // (101 > 100), and two budgets in the same bucket.
         foreach (var invalid in new ImmutableArray<SpendBudget>[]
         {
             [platformBudget with { HardLimit = 11m }],
@@ -472,6 +478,7 @@ public sealed class ProjectConfigurationValidatorTests
         })
             Assert.Throws<ProjectConfigException>(() =>
                 ProjectConfigurationValidator.ResolveLimits(platform, new() { SpendBudgets = invalid }));
+        // The platform defaults are validated too: a hard budget with reserve 0 is rejected.
         Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.ResolveLimits(
             PlatformDefaults() with
             {

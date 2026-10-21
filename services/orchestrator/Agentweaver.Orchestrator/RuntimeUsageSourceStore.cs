@@ -736,11 +736,17 @@ internal sealed class RuntimeUsageSourceStore(
         SpendBudgetAdmissionContext? spendBudgets = null,
         Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
     {
+        // Every check below runs in the caller's transaction. Any throw rolls back the whole preparation,
+        // so a failed check leaves no dispatch row and no spend budget reservation behind.
+        // Read the SDK source that is current for this registration and make sure the message was
+        // built for that same source grant. A different grant means the host is using a stale source.
         var source = await ReadCurrentSourceAsync(connection, transaction, registration, cancellationToken)
             .ConfigureAwait(false);
         ValidateNativePreparation(root, checkpoint, intent, registration, source.Source, message);
         if (source.SourceGrantId != message.Message.Metadata.Runtime.SourceGrantId)
             throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
+        // Lock the root session row. The session must still be active and must still carry the
+        // execution fence from the registration; otherwise a newer owner has taken over the run.
         await using (var owner = new NpgsqlCommand($"""
             SELECT session_id FROM {_sessions}
             WHERE project_id = @project AND run_id = @run AND session_id = @root
@@ -754,7 +760,11 @@ internal sealed class RuntimeUsageSourceStore(
             if (await owner.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not string)
                 throw new RuntimeAuthorizationException("runtime_native_turn_preparation_invalid");
         }
+        // Take the MAF execution lock after the session row lock. This fixed order prevents deadlocks
+        // with other writers that use the same two locks.
         await AcquireNativeExecutionLockAsync(connection, transaction, root, cancellationToken).ConfigureAwait(false);
+        // Build the dispatch row that this call wants to write, so it can be compared with any row
+        // that already exists for the same message.
         var admission = new RuntimeNativeTurnAdmissionReceipt(
             registration, source.Source, intent.MessageId, intent.PromptHash,
             RuntimeNativeTurnContract.RequestHash(message), 2);
@@ -764,12 +774,17 @@ internal sealed class RuntimeUsageSourceStore(
             source.Source.ModelSelectionReference, source.Source.ModelId, intent.PromptHash, admission.RequestHash,
             1, "prepared", checkpoint.State.WorkPlanId, intent.AssociationId, checkpoint.Info.CheckpointId,
             checkpoint.State.Revision, checkpoint.State.DecisionStateVersion, null, null);
+        // The dispatch must belong to the checkpoint that is stored for this run.
         var checkpointHash = await RequireNativeCheckpointAsync(
             connection, transaction, registration, admission, prepared, cancellationToken).ConfigureAwait(false);
         var marker = await ReadNativeDispatchMarkerAsync(
             connection, transaction, registration, intent.MessageId, cancellationToken).ConfigureAwait(false);
         if (marker is not null)
         {
+            // A dispatch row already exists for this message, for example from a retried request.
+            // Accept it only when it describes the same work and is still the first prepared revision.
+            // A different row is a conflict; a row that already moved past "prepared" means the
+            // earlier attempt may have been sent, so the result is indeterminate.
             var existingDispatch = await ReadNativeDispatchAsync(
                 connection, transaction, registration, intent.MessageId, cancellationToken).ConfigureAwait(false);
             RequireNativeDispatch(existingDispatch, admission, source.CanonicalPayloadHash);
@@ -786,6 +801,8 @@ internal sealed class RuntimeUsageSourceStore(
         }
         if (registration.Binding.MaxModelTurns is { } maxModelTurns)
         {
+            // Native limit: count the cost-producing dispatches already stored for the run. The current
+            // message is excluded so a retry of the same dispatch does not count twice.
             await using var count = new NpgsqlCommand($"""
                 SELECT count(*) FROM {_dispatches}
                 WHERE project_id = @project AND run_id = @run AND is_cost_producing
@@ -798,10 +815,15 @@ internal sealed class RuntimeUsageSourceStore(
         }
         if (RequiresCopilotCreditSnapshot(registration.Binding))
         {
+            // Credit check: read the current Copilot cost snapshot from Events and compare it with the
+            // run's credit limits.
             var snapshot = await readCostSnapshot(source.Source, cancellationToken).ConfigureAwait(false);
             var creditDecision = await ReconcileNativeCreditLimitsAsync(
                 connection, transaction, registration, source.Source, root.SessionId, snapshot, cancellationToken)
                 .ConfigureAwait(false);
+            // A reached hard credit limit returns a denial instead of throwing, so the denial receipt
+            // is committed. The method returns before spend budget admission and before the dispatch
+            // insert, so the denied dispatch holds no reservation and is never sent.
             if (creditDecision.HardLimitReached)
                 return new(await RecordNativeCreditDenialAsync(
                     connection, transaction, registration, source, intent.MessageId,
@@ -809,16 +831,27 @@ internal sealed class RuntimeUsageSourceStore(
                     marker?.State ?? "absent", marker?.OwnerRevision ?? 0, cancellationToken)
                     .ConfigureAwait(false), null);
         }
+        // Spend budget admission runs after the session, fence, native limit, and credit checks and
+        // before the dispatch insert. It compares committed Events spend plus all outstanding
+        // reservations plus this dispatch's reserve with each hard limit. A soft limit only sends a
+        // notification. When the dispatch is admitted, its reservations are written in this
+        // transaction, so they commit or roll back together with the dispatch row.
         if (spendBudgets is { IsEmpty: false })
         {
+            // Budgets without an evidence reader cannot be checked. Fail closed instead of sending
+            // the dispatch without a budget check.
             var budgetDenial = await _spendBudgets.AdmitWithinTransactionAsync(
                 connection, transaction, registration, source.Source.MeterSource, intent.MessageId, spendBudgets,
                 readSpendEvidence ?? throw new RuntimeAuthorizationException(
                     SpendBudgetAdmissionMath.EvidenceUnavailable),
                 cancellationToken).ConfigureAwait(false);
+            // A denied budget returns before the dispatch insert. The denial notification commits,
+            // but no reservation and no dispatch row are written, so the caller does not send.
             if (budgetDenial is not null)
                 return new(null, budgetDenial);
         }
+        // Write the prepared dispatch. ON CONFLICT DO NOTHING keeps an existing row for the same
+        // message; the row is read back and verified below in both cases.
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_dispatches}
                 (project_id, run_id, dispatch_id, root_session_id, child_session_id, work_plan_id,
@@ -852,6 +885,8 @@ internal sealed class RuntimeUsageSourceStore(
             insert.Parameters.AddWithValue("model", NpgsqlDbType.Varchar, prepared.ModelId);
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
+        // Read the stored row back. It must match the dispatch built above and still be the first
+        // prepared revision; anything else means another writer changed it.
         var retained = await ReadNativeDispatchAsync(
             connection, transaction, registration, intent.MessageId, cancellationToken).ConfigureAwait(false);
         RequireNativeDispatch(retained, admission, source.CanonicalPayloadHash);
@@ -862,6 +897,7 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_conflict");
         if (retained.State != "prepared" || retained.OwnerRevision != 1)
             throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
+        // No credit denial and no spend budget denial: the dispatch is admitted.
         return new(null, null);
     }
 

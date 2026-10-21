@@ -77,26 +77,40 @@ internal static class SpendBudgetAdmissionMath
     {
         ArgumentNullException.ThrowIfNull(context);
         var selected = ImmutableArray.CreateBuilder<ApplicableSpendBudget>();
+        // Run and agent budgets come from the accepted selection, so they use the project configuration
+        // revision that the selection pinned. Editing the project later doesn't change them for this run.
         foreach (var budget in context.PinnedBudgets.IsDefault ? [] : context.PinnedBudgets)
         {
+            // A budget limits only usage from its own meter, for example one model provider.
             if (budget.MeterSource != meterSource)
                 continue;
+            // Run budgets apply to every agent in the run. Agent budgets apply only to the named agent.
+            // The bucket key includes the run ID so two runs never share run or agent exposure.
             if (budget.Scope == SpendBudgetScopes.Run ||
                 budget.Scope == SpendBudgetScopes.Agent && budget.AgentId == agentId)
                 selected.Add(new(budget, RunBucketKey(runId, budget), pinnedProjectConfigurationRevision));
         }
+        // Project budgets are read from the current project configuration for each new dispatch, so a
+        // budget edit takes effect on the next dispatch, even inside a run that is already in progress.
         if (context.Project is { } project && !project.Budgets.IsDefault)
         {
             var projectBudgets = project.Budgets.Where(budget =>
                 budget.Scope == SpendBudgetScopes.Project && budget.MeterSource == meterSource).ToArray();
+            // Only the period that contains the current time limits this dispatch. The bucket key has no
+            // run ID, so every run in the project shares the same project bucket.
             foreach (var budget in projectBudgets.Where(budget => Covers(budget.Period!, now)))
                 selected.Add(new(budget, SpendBudgetContract.BucketKey(budget), project.ProjectConfigurationRevision));
+            // A hard project limit must always cover the current time. If a hard budget exists for this meter
+            // and unit but none of its periods contains "now", the send fails closed instead of running
+            // without a limit. Another hard budget for the same unit whose period covers "now" is enough.
             foreach (var uncovered in projectBudgets.Where(budget => budget.HardLimit is not null &&
                          !Covers(budget.Period!, now)))
                 if (!projectBudgets.Any(other => other.Unit == uncovered.Unit && other.HardLimit is not null &&
                         Covers(other.Period!, now)))
                     throw new RuntimeAuthorizationException(PeriodUncovered);
         }
+        // Sort by bucket key so every admission takes the per-bucket locks in the same order. A fixed lock
+        // order prevents deadlocks between concurrent admissions that share more than one bucket.
         return [.. selected.OrderBy(item => item.BucketKey, StringComparer.Ordinal)];
     }
 
@@ -112,13 +126,20 @@ internal static class SpendBudgetAdmissionMath
         SpendBudget budget, UsageSpendTotal? committed, decimal outstandingExposure, bool staleEvidence = false)
     {
         ArgumentNullException.ThrowIfNull(budget);
+        // Without usable evidence, a hard budget fails closed: the send is denied because spend can't be
+        // proven to be under the limit. A soft-only budget fails open because it only notifies.
         if (committed is null)
             return new(budget.HardLimit is null ? null : staleEvidence ? EvidenceStale : EvidenceUnavailable, false);
+        // The soft limit compares only committed priced spend. Exposure isn't spent yet, so it doesn't
+        // trigger the soft-limit notification.
         var softReached = budget.SoftLimit is { } soft && committed.PricedAmount >= soft;
         if (budget.HardLimit is not { } hard)
             return new(null, softReached);
+        // Unpriced usage has an unknown cost, so the bucket total can't be compared with a hard limit.
         if (committed.UnpricedEvents > 0)
             return new(PricingMissing, softReached);
+        // Count the full reserve of every outstanding dispatch plus the reserve of this new dispatch.
+        // This is the worst case if all of them spend their full reserve before Events records the usage.
         return committed.PricedAmount + outstandingExposure + budget.ReservePerDispatch > hard
             ? new(Exhausted, softReached)
             : new(null, softReached);
@@ -127,6 +148,8 @@ internal static class SpendBudgetAdmissionMath
     /// <summary>Returns the Events total that a budget's scope limits.</summary>
     public static UsageSpendTotal? CommittedTotal(SpendBudget budget, UsageSpendEvidence evidence) => budget.Scope switch
     {
+        // Events returns one total per scope. Project budgets use the total for the budget period.
+        // Any other scope value falls through to the run total.
         SpendBudgetScopes.Project => evidence.ProjectPeriod,
         SpendBudgetScopes.Agent => evidence.Agent,
         _ => evidence.Run
@@ -142,15 +165,22 @@ internal static class SpendBudgetAdmissionMath
 
     /// <summary>Builds the Events request for a budget bucket and its outstanding dispatches.</summary>
     public static UsageSpendEvidenceRequest EvidenceRequest(SpendBudget budget, ImmutableArray<string> dispatchIds) =>
+        // Only project budgets send a period, because run and agent totals cover the whole run.
+        // The agent filter is set only for agent budgets. The dispatch IDs ask Events to return an
+        // accounting witness for each outstanding dispatch, in the same order.
         new(UsageSpendEvidenceContract.CurrentVersion, budget.MeterSource, budget.Unit,
             budget.Scope == SpendBudgetScopes.Project ? budget.Period : null, dispatchIds)
         {
             AgentId = budget.Scope == SpendBudgetScopes.Agent ? budget.AgentId : null
         };
 
+    // Prefixes the budget bucket key with "run" and the run ID, separated by the unit separator control
+    // character (U+001F). The key has no revision or limits, so editing a budget keeps prior exposure in the
+    // same bucket.
     private static string RunBucketKey(string runId, SpendBudget budget) =>
         string.Join('\u001f', "run", runId, SpendBudgetContract.BucketKey(budget));
 
+    // A period includes its start time and excludes its end time, so back-to-back periods never overlap.
     private static bool Covers(UsageSpendPeriod period, DateTimeOffset now) =>
         period.StartsAt <= now && now < period.EndsAt;
 }
@@ -169,6 +199,8 @@ internal sealed class SpendBudgetExposureStore(
     private readonly string _outboxEvents = $"\"{options.Schema}\".outbox_events";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
 
+    // One evaluated bucket. AlreadyReserved is true when a retry of this dispatch already stored the
+    // reservation, so admission doesn't insert it again.
     private sealed record Pending(ApplicableSpendBudget Applicable, bool AlreadyReserved);
 
     /// <summary>
@@ -190,14 +222,21 @@ internal sealed class SpendBudgetExposureStore(
         Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>> readEvidence,
         CancellationToken cancellationToken)
     {
+        // No budget means no limit, so skip the locks and the Events read.
         if (budgets.IsEmpty)
             return null;
         var binding = registration.Binding;
+        // Selection can throw PeriodUncovered when a hard project budget has no period for the current time.
         var applicable = SpendBudgetAdmissionMath.SelectApplicable(
             budgets, binding.RunId, binding.AgentId, meterSource, binding.ProjectConfigurationRevision,
             timeProvider.GetUtcNow());
         if (applicable.IsEmpty)
             return null;
+        // Lock every bucket before reading anything. Concurrent admissions in other runs can share a
+        // project bucket, and without the lock two of them could each see room for one more dispatch and
+        // both be admitted. The advisory lock is transaction scoped, so PostgreSQL releases it on commit or
+        // rollback. The buckets are already sorted, so every caller takes the locks in the same order and
+        // can't deadlock. Tenant and project are part of the lock key so other tenants never wait.
         foreach (var item in applicable)
         {
             await using var lockCommand = new NpgsqlCommand(
@@ -210,8 +249,12 @@ internal sealed class SpendBudgetExposureStore(
 
         var pending = new List<Pending>();
         string? denial = null;
+        // Evaluate every bucket, even after one denies, so each bucket can still record its notifications
+        // and retire accounted reservations in this transaction.
         foreach (var item in applicable)
         {
+            // A retry of an admitted dispatch already holds this reservation. Don't evaluate it again, or
+            // its own reserve would count twice and a dispatch that was admitted could be denied.
             if (await ReadExistingReservationAsync(
                     connection, transaction, registration, dispatchId, item, cancellationToken).ConfigureAwait(false))
             {
@@ -221,6 +264,8 @@ internal sealed class SpendBudgetExposureStore(
             var decision = await EvaluateBucketAsync(
                 connection, transaction, registration, meterSource, dispatchId, item, readEvidence,
                 cancellationToken).ConfigureAwait(false);
+            // The soft-limit notification has no dispatch ID in its key, so it's sent once per bucket,
+            // period, and budget revision, not once per dispatch.
             if (decision.SoftLimitReached)
                 await EnqueueNotificationAsync(connection, transaction, registration, item, null,
                     "orchestrator.run.spend_budget_soft_limit_reached", cancellationToken).ConfigureAwait(false);
@@ -229,12 +274,17 @@ internal sealed class SpendBudgetExposureStore(
                 await EnqueueNotificationAsync(connection, transaction, registration, item, dispatchId,
                     "orchestrator.run.spend_budget_dispatch_denied", cancellationToken,
                     decision.DenialCode).ConfigureAwait(false);
+                // Report the first denial in bucket order so the code is the same on every retry.
                 denial ??= decision.DenialCode;
             }
             pending.Add(new(item, false));
         }
+        // On denial, return before inserting any reservation. The caller still commits the transaction, so
+        // notifications and retirements persist, but a denied dispatch never holds exposure.
         if (denial is not null)
             return denial;
+        // Admission is all or nothing: reservations are inserted only after every bucket admitted.
+        // A zero reserve adds no exposure, and the table rejects zero amounts, so it isn't stored.
         foreach (var item in pending.Where(item => !item.AlreadyReserved &&
                      item.Applicable.Budget.ReservePerDispatch > 0))
             await InsertReservationAsync(
@@ -243,6 +293,11 @@ internal sealed class SpendBudgetExposureStore(
         return null;
     }
 
+    /// <summary>
+    /// Decides one locked bucket. Reads the outstanding reservations of other dispatches, reads Events
+    /// evidence, retires reservations that Events fully accounts for, and compares committed spend plus the
+    /// remaining exposure with the budget.
+    /// </summary>
     private async Task<SpendBudgetDecision> EvaluateBucketAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         string meterSource, Guid dispatchId, ApplicableSpendBudget item,
@@ -252,6 +307,9 @@ internal sealed class SpendBudgetExposureStore(
         var binding = registration.Binding;
         var budget = item.Budget;
         var outstanding = new List<(Guid DispatchId, string RunId, decimal Reserve)>();
+        // Read the reservations that other dispatches still hold in this bucket. The current dispatch is
+        // excluded because Decide adds its reserve separately. Ordering by creation time witnesses the
+        // oldest dispatches first, and the dispatch ID breaks ties so the order is stable.
         await using (var read = new NpgsqlCommand($"""
             SELECT dispatch_id, run_id, reserve_amount FROM {_reservations}
             WHERE tenant_id = @tenant AND project_id = @project AND bucket_key = @bucket
@@ -265,8 +323,12 @@ internal sealed class SpendBudgetExposureStore(
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 outstanding.Add((reader.GetGuid(0), reader.GetString(1), reader.GetDecimal(2)));
         }
+        // One Events read can witness at most MaximumDispatches dispatches (64). With more outstanding
+        // dispatches, some reservations can't be checked or retired, so the exposure can't be bounded.
+        // A hard budget denies in that case. A soft-only budget continues because it never blocks.
         if (budget.HardLimit is not null && outstanding.Count > UsageSpendEvidenceContract.MaximumDispatches)
             return new(SpendBudgetAdmissionMath.ExposureUnbounded, false);
+        // For a soft-only budget, ask about the oldest dispatches only. The rest stay outstanding.
         var witnessed = outstanding.Take(UsageSpendEvidenceContract.MaximumDispatches).ToArray();
         var request = SpendBudgetAdmissionMath.EvidenceRequest(
             budget, [.. witnessed.Select(item => item.DispatchId.ToString("D"))]);
@@ -274,26 +336,39 @@ internal sealed class SpendBudgetExposureStore(
         try
         {
             evidence = await readEvidence(request, cancellationToken).ConfigureAwait(false);
+            // Check that the response answers this exact request for this tenant, project, and run, with one
+            // witness per requested dispatch. Evidence for a different scope is treated as unavailable.
             UsageSpendEvidenceContract.ValidateEvidence(
                 evidence, request, binding.TenantId, binding.ProjectId, binding.RunId);
         }
+        // Any read or validation failure means "no evidence": hard budgets deny and soft-only budgets
+        // admit. Cancellation that the caller requested isn't caught, so it still stops the operation.
         catch (Exception exception) when (exception is not OperationCanceledException ||
                                           !cancellationToken.IsCancellationRequested)
         {
             return SpendBudgetAdmissionMath.Decide(budget, null, 0m);
         }
+        // Reject a response older than one that admission already used. Old evidence can miss recent
+        // spend, so it could otherwise reopen budget capacity that was already used.
         if (!await AdvanceCursorAsync(connection, transaction, binding, meterSource, evidence.AccountingCursor,
                 cancellationToken).ConfigureAwait(false))
             return SpendBudgetAdmissionMath.Decide(budget, null, 0m, staleEvidence: true);
 
         var retired = new HashSet<Guid>();
+        // Events returns witnesses in request order, so evidence.Dispatches[index] belongs to
+        // witnessed[index].
         for (var index = 0; index < witnessed.Length; index++)
         {
+            // A reservation retires only when the dispatch finished accounting locally and Events shows
+            // every receipt the dispatch acknowledged. Until then its spend can be missing from the Events
+            // total, so the full reserve stays counted as exposure.
             var required = await ReadAccountedReceiptsAsync(
                 connection, transaction, binding.ProjectId, witnessed[index].RunId, witnessed[index].DispatchId,
                 cancellationToken).ConfigureAwait(false);
             if (required is null || !SpendBudgetAdmissionMath.IsAccounted(required, evidence.Dispatches[index]))
                 continue;
+            // Record the cursor that proved the accounting. The state filter makes the update a no-op
+            // if the reservation is already retired.
             await using var retire = new NpgsqlCommand($"""
                 UPDATE {_reservations}
                 SET reservation_state = 'retired', retired_cursor = @cursor, retired_at = clock_timestamp()
@@ -305,6 +380,8 @@ internal sealed class SpendBudgetExposureStore(
             await retire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             retired.Add(witnessed[index].DispatchId);
         }
+        // Exposure is the full reserve of every reservation that is still outstanding. Retired dispatches
+        // are excluded because their real spend is now part of the Events total.
         var exposure = outstanding.Where(reservation => !retired.Contains(reservation.DispatchId))
             .Sum(reservation => reservation.Reserve);
         return SpendBudgetAdmissionMath.Decide(
@@ -319,6 +396,8 @@ internal sealed class SpendBudgetExposureStore(
         NpgsqlConnection connection, NpgsqlTransaction transaction, string projectId, string runId,
         Guid dispatchId, CancellationToken cancellationToken)
     {
+        // Only a completed dispatch whose accounting finished (priced or unpriced) can be retired. A dispatch
+        // that is still running or still accounting returns no row, so its reservation stays outstanding.
         await using var read = new NpgsqlCommand($"""
             SELECT acknowledgment_references::text, source_completion_manifest_json::text
             FROM {_dispatches}
@@ -331,10 +410,13 @@ internal sealed class SpendBudgetExposureStore(
         await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return null;
+        // Required receipts are the union of the receipts the dispatch acknowledged and the receipts in its
+        // completion manifest. Events must show all of them before the reservation retires.
         var required = ImmutableHashSet.CreateBuilder<Guid>();
         using (var references = JsonDocument.Parse(reader.GetString(0)))
             foreach (var reference in references.RootElement.EnumerateArray())
                 required.Add(Property(reference, "sourceReceiptId").GetGuid());
+        // The completion manifest column can be NULL. In that case only the acknowledged receipts are required.
         if (!reader.IsDBNull(1))
         {
             using var manifest = JsonDocument.Parse(reader.GetString(1));
@@ -344,6 +426,9 @@ internal sealed class SpendBudgetExposureStore(
         return required.ToImmutable();
     }
 
+    // Returns a JSON property by name. The match ignores case so it doesn't depend on the naming policy used
+    // when the JSON was stored. A missing property means the stored accounting is malformed, so the call
+    // fails closed.
     private static JsonElement Property(JsonElement element, string name)
     {
         foreach (var property in element.EnumerateObject())
@@ -357,6 +442,8 @@ internal sealed class SpendBudgetExposureStore(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeBinding binding, string meterSource,
         long cursor, CancellationToken cancellationToken)
     {
+        // Create the cursor row on first use. If the row already exists, keep the stored value; the
+        // comparison below decides whether to move it.
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_cursors} (tenant_id, project_id, meter_source, accounting_cursor)
             VALUES (@tenant, @project, @meter, @cursor)
@@ -367,6 +454,8 @@ internal sealed class SpendBudgetExposureStore(
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         long stored;
+        // The cursor is shared by every bucket for this meter, including buckets that other admissions
+        // lock. FOR UPDATE locks the row so concurrent admissions compare and update it one at a time.
         await using (var read = new NpgsqlCommand($"""
             SELECT accounting_cursor FROM {_cursors}
             WHERE tenant_id = @tenant AND project_id = @project AND meter_source = @meter
@@ -376,10 +465,13 @@ internal sealed class SpendBudgetExposureStore(
             AddCursorScope(read, binding, meterSource, cursor);
             stored = (long)(await read.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
         }
+        // An older cursor means this Events response is out of date compared with evidence already used.
         if (cursor < stored)
             return false;
+        // The same cursor is current evidence. Nothing changes, so skip the update.
         if (cursor == stored)
             return true;
+        // A newer cursor moves forward. The table trigger also rejects any move backward.
         await using var update = new NpgsqlCommand($"""
             UPDATE {_cursors} SET accounting_cursor = @cursor, updated_at = clock_timestamp()
             WHERE tenant_id = @tenant AND project_id = @project AND meter_source = @meter
@@ -408,6 +500,9 @@ internal sealed class SpendBudgetExposureStore(
         await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return false;
+        // A retry must match the stored reservation exactly. A different owner, budget revision, reserve,
+        // configuration revision, or accepted selection means the dispatch ID was reused for a different
+        // request. Reusing the old reservation would hide a change, so admission fails with a conflict.
         if (reader.GetString(0) != binding.TenantId || reader.GetString(1) != binding.ProjectId ||
             reader.GetString(2) != binding.RunId || reader.GetString(3) != binding.AgentId ||
             reader.GetString(4) != item.Budget.BudgetId || reader.GetInt64(5) != item.Budget.Revision ||
@@ -418,6 +513,10 @@ internal sealed class SpendBudgetExposureStore(
         return true;
     }
 
+    /// <summary>
+    /// Stores the reservation for one admitted bucket. The insert is idempotent: a matching existing row is
+    /// accepted, and a different existing row is a conflict.
+    /// </summary>
     private async Task InsertReservationAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         Guid dispatchId, ApplicableSpendBudget item, CancellationToken cancellationToken)
@@ -447,9 +546,13 @@ internal sealed class SpendBudgetExposureStore(
             budget.Period is { } start ? start.StartsAt : DBNull.Value);
         insert.Parameters.AddWithValue("ends", NpgsqlDbType.TimestampTz,
             budget.Period is { } end ? end.EndsAt : DBNull.Value);
+        // Store the full budget identity with the reservation so a retry can be compared with it, and so the
+        // reserve amount stays fixed even if the budget is edited later.
         insert.Parameters.AddWithValue("reserve", NpgsqlDbType.Numeric, budget.ReservePerDispatch);
         insert.Parameters.AddWithValue("configuration", NpgsqlDbType.Bigint, item.ProjectConfigurationRevision);
         insert.Parameters.AddWithValue("selection", NpgsqlDbType.Char, binding.AcceptedSelectionHash);
+        // Zero rows inserted means a row with this (dispatch, bucket) key already exists. Accept it only if
+        // it matches this request; ReadExistingReservationAsync throws a conflict when it differs.
         if (await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 0 &&
             !await ReadExistingReservationAsync(
                 connection, transaction, registration, dispatchId, item, cancellationToken).ConfigureAwait(false))
@@ -467,11 +570,17 @@ internal sealed class SpendBudgetExposureStore(
     {
         var binding = registration.Binding;
         var budget = item.Budget;
+        // Build a deterministic notification ID from the event type and its scope. The same inputs always
+        // produce the same ID, so retries and later dispatches find the existing notification instead of
+        // sending a duplicate. Including the budget revision sends a new notification after a budget edit.
         var key = string.Join('\0', eventType, binding.TenantId, binding.ProjectId, item.BucketKey,
             budget.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture),
             dispatchId?.ToString("D") ?? string.Empty);
+        // Use the first 32 hex characters of the hash as the GUID.
         var notificationId = Guid.ParseExact(
             RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(key))[..32], "N");
+        // Skip the notification if the outbox already has it. The bucket lock serializes callers, so this
+        // check and the insert below can't race for the same bucket.
         await using (var exists = new NpgsqlCommand(
             $"SELECT EXISTS (SELECT 1 FROM {_outboxEvents} WHERE id = @id)", connection, transaction))
         {
@@ -479,6 +588,8 @@ internal sealed class SpendBudgetExposureStore(
             if ((bool)(await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
                 return;
         }
+        // Enqueue in the caller's transaction so the notification commits together with the admission
+        // decision. The payload describes the budget limits, not spend totals, because Events owns spend.
         await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
             notificationId, $"coordination/{binding.ProjectId}/{binding.RunId}/spend-budgets",
             $"spend-budget/{notificationId:N}", eventType, 1,
@@ -502,6 +613,8 @@ internal sealed class SpendBudgetExposureStore(
             .ConfigureAwait(false);
     }
 
+    // Adds the parameters that identify one bucket. Tenant and project are always included so a query
+    // can't read or change another project's reservations.
     private static void AddBucketScope(NpgsqlCommand command, RuntimeBinding binding, ApplicableSpendBudget item)
     {
         command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, binding.TenantId);
@@ -509,6 +622,7 @@ internal sealed class SpendBudgetExposureStore(
         command.Parameters.AddWithValue("bucket", NpgsqlDbType.Varchar, item.BucketKey);
     }
 
+    // Adds the parameters that identify one cursor row (tenant, project, meter) and the new cursor value.
     private static void AddCursorScope(
         NpgsqlCommand command, RuntimeBinding binding, string meterSource, long cursor)
     {

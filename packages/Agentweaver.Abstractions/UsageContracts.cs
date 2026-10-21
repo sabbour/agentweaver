@@ -400,11 +400,16 @@ public static class UsageSpendEvidenceContract
     /// <summary>Maximum number of dispatch witnesses returned by one read.</summary>
     public const int MaximumDispatches = 64;
 
-    /// <summary>Requires an explicit bucket, a well-formed optional period, and unique canonical dispatch IDs.</summary>
+    /// <summary>
+    /// Checks a spend evidence request: it names a meter source and unit, any agent ID or period is well formed,
+    /// and the dispatch IDs are unique GUIDs in canonical form.
+    /// </summary>
     /// <exception cref="ArgumentException">The request is invalid.</exception>
     public static void ValidateRequest(UsageSpendEvidenceRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        // Check the version, the bucket (meter source and unit), the size of the dispatch list,
+        // the optional agent ID, and the optional project period. Length limits keep requests bounded.
         if (request.ContractVersion != CurrentVersion ||
             string.IsNullOrWhiteSpace(request.MeterSource) || request.MeterSource.Length > 256 ||
             string.IsNullOrWhiteSpace(request.Unit) || request.Unit.Length > 64 ||
@@ -414,6 +419,8 @@ public static class UsageSpendEvidenceContract
                 (string.IsNullOrWhiteSpace(period.PeriodId) || period.PeriodId.Length > 128 ||
                  period.EndsAt <= period.StartsAt))
             throw new ArgumentException("The spend evidence request is invalid.");
+        // Each dispatch ID must be a nonempty GUID written in lowercase "D" format, and must appear once.
+        // A single canonical form means the same dispatch always matches the same ledger rows.
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var dispatchId in request.DispatchIds)
             if (!Guid.TryParseExact(dispatchId, "D", out var parsed) || parsed == Guid.Empty ||
@@ -421,7 +428,10 @@ public static class UsageSpendEvidenceContract
                 throw new ArgumentException("The spend evidence dispatch set is invalid.");
     }
 
-    /// <summary>Requires evidence that answers exactly the requested scope with consistent witnesses.</summary>
+    /// <summary>
+    /// Checks that the evidence answers exactly this request for this tenant, project, and run, and that
+    /// every dispatch witness is consistent. The caller rejects forged or mismatched evidence this way.
+    /// </summary>
     /// <exception cref="ArgumentException">The evidence does not answer the request.</exception>
     public static void ValidateEvidence(
         UsageSpendEvidence evidence, UsageSpendEvidenceRequest request,
@@ -429,6 +439,9 @@ public static class UsageSpendEvidenceContract
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ValidateRequest(request);
+        // The evidence must echo the caller's binding (tenant, project, run) and the requested bucket.
+        // Totals must be nonnegative. A project period total and an agent total must be present exactly
+        // when the request asks for them, and there must be one witness for each requested dispatch.
         if (evidence.ContractVersion != CurrentVersion || evidence.TenantId != tenantId ||
             evidence.ProjectId != projectId || evidence.RunId != runId ||
             evidence.MeterSource != request.MeterSource || evidence.Unit != request.Unit ||
@@ -439,10 +452,17 @@ public static class UsageSpendEvidenceContract
             (request.AgentId is null ? evidence.Agent is not null : !IsValid(evidence.Agent)) ||
             evidence.Dispatches.IsDefault || evidence.Dispatches.Length != request.DispatchIds.Length)
             throw new ArgumentException("The spend evidence does not match its request.");
+        // Every witness must carry this exact accounting scope.
         var scope = new UsageDispatchAccountingScope(
             tenantId, projectId, runId, request.MeterSource, request.Unit, request.ProjectPeriod?.PeriodId);
         for (var index = 0; index < request.DispatchIds.Length; index++)
         {
+            // Witnesses come back in request order. Each witness must:
+            // - name the requested dispatch and scope, and use the same watermark as the evidence cursor;
+            // - have receipt counts that add up to the number of receipts;
+            // - never claim SourceComplete, because spend evidence doesn't prove that a source finished;
+            // - be Unknown when it has no receipts and Partial when it has some;
+            // - carry a receipt digest that matches a fresh hash of its receipts, so receipts can't be altered.
             var witness = evidence.Dispatches[index];
             if (witness is null || witness.DispatchId != request.DispatchIds[index] || witness.Scope != scope ||
                 witness.AccountingWatermark != evidence.AccountingCursor ||
@@ -458,6 +478,7 @@ public static class UsageSpendEvidenceContract
         }
     }
 
+    // A total is valid when it is present and no amount or count is negative.
     private static bool IsValid(UsageSpendTotal? total) =>
         total is { PricedAmount: >= 0, PricedEvents: >= 0, UnpricedEvents: >= 0 };
 }

@@ -35,11 +35,13 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(20)]
     [InlineData(21)]
     [InlineData(22)]
+    // Version 29 adds the spend budget reservation and accounting cursor tables.
     [InlineData(29)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         await ApplyMigrationsThroughAsync(version);
         var historyBefore = await ReadMigrationHistoryAsync(version);
+        // Any schema older than the newest migration, 29, fails verification until it is migrated.
         if (version < 29)
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
@@ -203,6 +205,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (20, "020_maf_buildtest_workspace_seed.sql"),
             (21, "021_row_lock_record_updates.sql"),
             (22, "022_run_list_completion.sql"),
+            // Versions 23 to 28 are reserved for other changes, so the spend budget migration is 29.
             (29, "029_spend_budget_exposure.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
@@ -292,6 +295,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         command.Parameters.AddWithValue("backlogTasks", $"{_schema}.backlog_tasks");
         command.Parameters.AddWithValue("backlogDependencies", $"{_schema}.backlog_dependencies");
         command.Parameters.AddWithValue("snapshots", $"{_schema}.reviewed_remote_tool_snapshots");
+        // The two spend budget tables whose guard triggers the last column counts.
         command.Parameters.AddWithValue("reservations", $"{_schema}.spend_budget_reservations");
         command.Parameters.AddWithValue("cursors", $"{_schema}.spend_budget_accounting_cursors");
         await using var reader = await command.ExecuteReaderAsync();
@@ -315,6 +319,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
+        // The migration history ends with 29 after the upgrade.
         Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 29]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
@@ -324,6 +329,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(15));
         Assert.True(reader.GetBoolean(16));
         Assert.True(reader.GetBoolean(17));
+        // Both spend budget tables have an enabled guard trigger and no-truncate trigger: 2 tables x 2 = 4.
         Assert.Equal(4L, reader.GetInt64(18));
     }
 

@@ -56,6 +56,10 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
+        // Reject an unknown or out-of-order history before applying anything. The catalog is
+        // noncontiguous: 017 and 023 through 028 are not part of it, and no placeholder files exist
+        // for them. Each version requires the version it builds on; 029 (spend budget exposure)
+        // requires 022 because it is ordered directly after 022.
         if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 29)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
@@ -79,9 +83,14 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(22) && !applied.Contains(21)) ||
             (applied.Contains(29) && !applied.Contains(22)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
+        // Apply the missing versions in catalog order inside this transaction. The P1 initializer and
+        // the P1 plan check the exact text of this version list and of the migration names below,
+        // so keep them on their current lines.
         foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 29])
             .Where(version => !applied.Contains(version)))
         {
+            // Map each version to its migration name. The embedded file name is built from it below;
+            // version 10 is the only file without a numeric prefix.
             var migrationName = version switch
             {
                 1 => "coordination_owner",
@@ -139,6 +148,10 @@ public static class CoordinationOwnerMigrator
         ValidateSchema(schema);
         var quotedSchema = Quote(schema);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        // Read every check as one row of columns. Migration counts come first; then the existence of
+        // tables, columns, constraints, and triggers. The last three columns cover version 029: its
+        // migration record, the spend_budget_reservations table, and the
+        // spend_budget_accounting_cursors table.
         await using var command = new NpgsqlCommand($"""
             SELECT
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),
@@ -296,11 +309,15 @@ public static class CoordinationOwnerMigrator
             "reviewedRemoteToolSnapshots", NpgsqlDbType.Text, $"{schema}.reviewed_remote_tool_snapshots");
         command.Parameters.AddWithValue(
             "snapshotMutationFunction", NpgsqlDbType.Text, $"{schema}.reject_reviewed_remote_tool_snapshot_mutation()");
+        // Table names for the version 029 existence checks.
         command.Parameters.AddWithValue(
             "spendBudgetReservations", NpgsqlDbType.Text, $"{schema}.spend_budget_reservations");
         command.Parameters.AddWithValue(
             "spendBudgetCursors", NpgsqlDbType.Text, $"{schema}.spend_budget_accounting_cursors");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        // Each required version must be recorded exactly once, no unknown versions may exist, and every
+        // existence check must be true. Columns 57 through 72 hold the checks for versions 016, 018,
+        // 021, 022, and 029, so adding a check to the query also requires extending this final range.
         if (!await reader.ReadAsync(cancellationToken) ||
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
             reader.GetInt64(3) != 1 || reader.GetInt64(4) != 1 || reader.GetInt64(5) != 1 ||

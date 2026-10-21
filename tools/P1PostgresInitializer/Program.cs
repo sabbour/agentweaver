@@ -71,6 +71,9 @@ if (coreParents.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 2)
 var migratorSource = await File.ReadAllTextAsync(
     Path.Combine("services", "orchestrator", "Agentweaver.Orchestrator", "CoordinationOwnerMigrator.cs"));
 // Core versions must match the reviewed plan exactly; 017 stays excluded.
+// The catalog is noncontiguous: 029 (spend budget exposure) follows 022, and 023 through 028 are not
+// part of it. The migrator source must contain this exact version list and the exact name for each
+// reviewed migration; any other wiring stops initialization before a database is touched.
 if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,\s*19,\s*20,\s*21,\s*22,\s*29\]\)") ||
     !migratorSource.Contains("16 => \"project_backlog\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("18 => \"reviewed_remote_tool_snapshots\"", StringComparison.Ordinal) ||
