@@ -232,6 +232,31 @@ private `session-material` container only. If an existing target is missing
 that container or grant, use the separately approved
 [focused repair procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#session-material-container-repair);
 do not redeploy the full foundation to repair these resources.
+Orchestrator migration 023 adds interactive run requests and cancellation
+receipts. The reviewed P1 plan includes that migration and grants
+`SELECT, INSERT, UPDATE` on `project_run_requests` and `SELECT, INSERT` on
+`project_run_cancellations`. Migration 023 changes the execution-state CHECK
+constraint on `accepted_runs`, which scans the whole table. The ALTER takes an
+`ACCESS EXCLUSIVE` lock, so reads and writes to `accepted_runs` block until
+the transaction commits. It doesn't alter `sessions` or build indexes on existing
+tables. Review table size and plan a write pause.
+Orchestrator migration 024 adds private Chief of Staff conversations and
+Priorities. It creates four new, empty tables and doesn't alter or scan
+existing tables. The reviewed plan grants `SELECT, INSERT` on
+`chief_of_staff_conversations`, `SELECT, INSERT, UPDATE` on
+`chief_of_staff_priority_lists` and `chief_of_staff_priorities`, and
+`SELECT, INSERT, DELETE` on `chief_of_staff_priority_links`.
+Orchestrator migration 025 adds caller-specific notification dismissals. It
+creates one new, empty table, `user_notification_dismissals`, and doesn't alter
+or scan existing tables. The reviewed plan grants `SELECT, INSERT` on that
+table.
+Orchestrator migration 031 adds caller-specific promotion dismissals in the
+new `user_notification_promotion_dismissals` table. It requires migrations
+025 and 030. Its foreign key to `backlog_plan_promotions` takes a
+`SHARE ROW EXCLUSIVE` lock on that table until commit. The reviewed plan
+grants only `SELECT, INSERT` on the new table. Migration 031 and its grants
+are source changes only; applying them requires separate approval.
+
 Then review and run the source-bound PostgreSQL initializer:
 
 ```powershell
