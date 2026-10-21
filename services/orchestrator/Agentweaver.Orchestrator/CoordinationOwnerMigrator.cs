@@ -18,7 +18,7 @@ public static class CoordinationOwnerMigrator
     /// </summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26])];
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -63,7 +63,7 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -87,7 +87,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(23) && !applied.Contains(22)) ||
             (applied.Contains(24) && !applied.Contains(23)) ||
             (applied.Contains(25) && !applied.Contains(2)) ||
-            (applied.Contains(26) && !applied.Contains(21)))
+            (applied.Contains(26) && !applied.Contains(21)) ||
+            (applied.Contains(27) && !applied.Contains(26)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         foreach (var version in SupportedVersions.Where(version => !applied.Contains(version)))
         {
@@ -118,6 +119,7 @@ public static class CoordinationOwnerMigrator
                 24 => "chief_of_staff",
                 25 => "user_notification_dismissals",
                 26 => "backlog_task_content",
+                27 => "periodic_issue_sync",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -169,7 +171,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -263,7 +265,10 @@ public static class CoordinationOwnerMigrator
                     WHERE attrelid = to_regclass(@backlogTasks) AND NOT attisdropped
                       AND attname IN ('title', 'description', 'lifecycle', 'issue_provider_id',
                           'issue_repository_owner', 'issue_repository_name', 'issue_number')) = 7,
-                to_regclass(@backlogIssueUnique) IS NOT NULL
+                to_regclass(@backlogIssueUnique) IS NOT NULL,
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 27) = 1,
+                to_regclass(@issueSyncProjects) IS NOT NULL,
+                to_regclass(@issueSyncReceipts) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");
@@ -327,6 +332,8 @@ public static class CoordinationOwnerMigrator
             "sourceControlOutputCaptures", NpgsqlDbType.Text, $"{schema}.source_control_output_captures");
         command.Parameters.AddWithValue("backlogProjects", NpgsqlDbType.Text, $"{schema}.backlog_projects");
         command.Parameters.AddWithValue("backlogTasks", NpgsqlDbType.Text, $"{schema}.backlog_tasks");
+        command.Parameters.AddWithValue("issueSyncProjects", NpgsqlDbType.Text, $"{schema}.issue_sync_projects");
+        command.Parameters.AddWithValue("issueSyncReceipts", NpgsqlDbType.Text, $"{schema}.issue_sync_receipts");
         command.Parameters.AddWithValue("backlogIssueUnique", NpgsqlDbType.Text,
             $"{schema}.backlog_tasks_repository_issue_unique");
         command.Parameters.AddWithValue("backlogDependencies", NpgsqlDbType.Text, $"{schema}.backlog_dependencies");
@@ -351,7 +358,7 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
-            Enumerable.Range(57, 26).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(57, 29).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

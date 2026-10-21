@@ -9,6 +9,33 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class GatewayBacklogOpenApiTests
 {
     [Fact]
+    public async Task IssueSyncRoutesExposeSafeTypedSettingsAndGrantReceiptsNotTokens()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call an owner."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var paths = document.RootElement.GetProperty("paths");
+        Assert.Equal("readIssueSync", paths.GetProperty("/api/v1/projects/{projectId}/issue-sync")
+            .GetProperty("get").GetProperty("operationId").GetString());
+        Assert.Equal("configureIssueSync", paths.GetProperty("/api/v1/projects/{projectId}/issue-sync")
+            .GetProperty("put").GetProperty("operationId").GetString());
+        Assert.Equal("createIssueSyncGrant", paths.GetProperty("/api/v1/projects/{projectId}/issue-sync/grants")
+            .GetProperty("post").GetProperty("operationId").GetString());
+        Assert.Equal("revokeIssueSyncGrant",
+            paths.GetProperty("/api/v1/projects/{projectId}/issue-sync/grants/{grantId}/revoke")
+                .GetProperty("post").GetProperty("operationId").GetString());
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        Assert.Equal("#/components/schemas/IssueSyncSettings", schemas.GetProperty("ConfigureIssueSyncRequest")
+            .GetProperty("properties").GetProperty("settings").GetProperty("$ref").GetString());
+        Assert.False(schemas.GetProperty("IssueSyncGrantReceipt").GetProperty("properties")
+            .TryGetProperty("accessToken", out _));
+        Assert.DoesNotContain(paths.EnumerateObject(), path => path.Name.StartsWith("/internal/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ProjectBacklogRoutesHaveTypedRequestAndResponseSchemas()
     {
         using var rsa = RSA.Create(2048);

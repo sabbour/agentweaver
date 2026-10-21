@@ -58,7 +58,8 @@ const GROUPS = {
     // Migration 023 grants mutable requests and append-only cancellation receipts separately.
     // Migration 024 grants private Chief of Staff rows; only Priority links are deleted.
     // Migration 025 grants caller-specific dismissal receipts as append-only rows.
-    'SELECT,INSERT,UPDATE': 'accepted_runs coordination_sessions coordination_messages coordination_requests parent_notifications coordinator_gates executable_action_grants coordination_tree_commands coordination_idle_subscriptions coordination_execution_operations runtime_registration_heads source_control_merge_intents source_control_output_captures maf_execution_run_guards maf_execution_dispatches outbox_streams outbox_events backlog_projects backlog_tasks project_run_requests chief_of_staff_priority_lists chief_of_staff_priorities',
+    // Migration 026 adds backlog task columns only; 027 grants issue sync settings and receipts.
+    'SELECT,INSERT,UPDATE': 'accepted_runs coordination_sessions coordination_messages coordination_requests parent_notifications coordinator_gates executable_action_grants coordination_tree_commands coordination_idle_subscriptions coordination_execution_operations runtime_registration_heads source_control_merge_intents source_control_output_captures maf_execution_run_guards maf_execution_dispatches outbox_streams outbox_events backlog_projects backlog_tasks project_run_requests chief_of_staff_priority_lists chief_of_staff_priorities issue_sync_projects issue_sync_receipts',
     'SELECT,INSERT,DELETE': 'backlog_dependencies chief_of_staff_priority_links',
     'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots project_run_cancellations chief_of_staff_conversations user_notification_dismissals',
   },
@@ -193,8 +194,8 @@ export function buildP1PostgresPlan() {
     services,
     // 022 adds completed_at; 023 adds interactive requests and cancellation with the exact grants above.
     // 024 adds private Chief of Staff conversations and Priorities; 025 adds caller dismissal receipts;
-    // 026 adds backlog task content columns and needs no new grants.
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26],
+    // 026 adds backlog task content columns and needs no new grants; 027 adds periodic issue sync settings and receipts.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27],
     // Bind the separately approved Events reporting migration into the reviewed plan hash.
     eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),
     executionRequirements: [

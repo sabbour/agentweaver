@@ -5,6 +5,38 @@ This reference describes the non-secret ConfigMap keys in
 them. It covers the v1 source contract; it does not turn a source candidate
 into a deployed or selectable provider.
 
+## Optional periodic issue-sync service channels
+
+Issue sync is disabled as a host capability unless its explicit TLS profiles
+are configured. No checked-in runtime snapshot enables it. Orchestrator uses
+`Orchestrator:IssueSync:IdentityTls` (`LocalServiceName=Orchestrator`,
+`PeerServiceName=IdentityBroker`). Identity requires both
+`IdentityBroker:IssueSync:WorkerTls` (`IdentityBroker` to `Orchestrator`) and
+`IdentityBroker:IssueSync:ProjectsTls` (`IdentityBroker` to `Projects`), plus
+the existing `IdentityBroker:GitHubRepoApp` configuration. Projects uses
+`ProjectsConfig:IssueSync:IdentityTls` (`Projects` to `IdentityBroker`).
+
+Each profile uses the existing `RuntimeServiceTlsOptions` fields:
+`LocalServiceName`, `LocalServicePrincipalId`, `LocalCertificatePemPath`,
+`LocalPrivateKeyPemPath`, `LocalCertificateSha256`, `ListenerPort`,
+`PeerServiceName`, `PeerServicePrincipalId`, `PeerOwnerAddress`, and
+`PeerCertificateSha256Pins`. Certificate/key paths are absolute; principal
+IDs and peer certificates must be distinct, addresses HTTPS owner origins,
+and certificate digests SHA-256. Service clients trust the mounted
+`/var/run/service-backend-ca/ca.crt`, validate peer names and certificate
+pins, and never follow redirects.
+
+Identity's dedicated listener is `Kestrel:Endpoints:IssueSyncWorker:Url`;
+Projects' is `Kestrel:Endpoints:IssueSyncIdentity:Url`. Each must be HTTPS
+on the profile's own `ListenerPort`, not a public or another private listener.
+Client-only profiles do not create listeners. There is no bearer-token
+fallback or shared run-authority path.
+
+These are source configuration contracts, not permission to create
+certificates, grants or infrastructure. Per-project enable/disable, intervals
+and cycle limits are persisted through the
+[issue-sync API](api.md#periodic-issue-sync), not environment defaults.
+
 ## Configuration rules
 
 - The runtime ConfigMaps use environment-variable names with `__` between
