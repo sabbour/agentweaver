@@ -215,9 +215,13 @@ internal static class InitializerChecks
     /// </remarks>
     internal static void AssertMigrationCatalog(int[]? planned, IReadOnlyList<int> supported, int? maximum, string service)
     {
+        // The reviewed plan must list exactly the versions compiled into the migrator, in strictly rising order.
+        // Duplicates or reordering would make "pending" ambiguous, so they are rejected too.
         if (planned is null || planned.Length == 0 || !planned.SequenceEqual(supported) ||
             planned.Distinct().Count() != planned.Length || !planned.Zip(planned.Skip(1)).All(pair => pair.First < pair.Second))
             throw new InvalidOperationException($"The reviewed {service} migration plan differs from the source migrator catalog.");
+        // The operator names the highest version they approved. If the source has moved past it, stop rather
+        // than apply only part of the catalog, because the migrator cannot be told to stop early.
         if (maximum is { } value && planned[^1] != value)
             throw new InvalidOperationException(
                 $"The {service} source catalog ends at {planned[^1]}, not the approved maximum {value}. Refusing to apply unapproved versions.");
@@ -288,12 +292,15 @@ internal static class InitializerChecks
     /// <summary>Requires a service schema to be operator-owned with only owner CREATE/USAGE and runtime USAGE.</summary>
     internal static void AssertServiceSchemaAcl(ServicePlan service, SchemaAclState? state, uint operatorOid, uint runtimeOid)
     {
+        // The only allowed schema grants: the operator's own owner privileges, and USAGE for the runtime role.
+        // Grant options are never allowed, so the runtime role cannot pass privileges on.
         AclGrant[] expected =
         [
             new(operatorOid, operatorOid, "CREATE", false),
             new(operatorOid, operatorOid, "USAGE", false),
             new(operatorOid, runtimeOid, "USAGE", false),
         ];
+        // A missing schema, an unresolved role id, a different owner, or any extra grant fails closed.
         if (state is null || operatorOid == 0 || runtimeOid == 0 || state.OwnerOid != operatorOid ||
             !SameGrants(expected, state.Grants))
             throw new InvalidOperationException(
@@ -303,17 +310,24 @@ internal static class InitializerChecks
     /// <summary>Returns the planned versions missing from live history after proving that history is an exact plan prefix.</summary>
     internal static int[] PendingMigrationVersions(int[] planned, int[] applied, string service)
     {
+        // Live history must be the first N planned versions. For example, live 1..23 against plan 1..27 is
+        // fine, but live 1..21 plus 23, or a version the plan does not know, means the database was changed
+        // outside this tool and needs a person to look at it.
         var ordered = applied.Order().ToArray();
         if (ordered.Distinct().Count() != ordered.Length || ordered.Length > planned.Length ||
             !planned.Take(ordered.Length).SequenceEqual(ordered))
             throw new InvalidOperationException(
                 $"The live {service} migration history is not an exact prefix of the reviewed plan. Refusing to continue.");
+        // Whatever follows the applied prefix is what the migrator will add. This may be empty.
         return planned.Skip(ordered.Length).ToArray();
     }
 
     /// <summary>Requires each runtime role to already hold exactly one non-grantable database CONNECT from the expected grantor.</summary>
     internal static void AssertRuntimeDatabaseConnect(ExistingBoundary boundary, uint[] runtimeOids)
     {
+        // There are exactly five distinct runtime roles. Each must have one CONNECT grant on the database, from
+        // the grantor recorded at initialization, with no grant option and no other database privilege.
+        // This mode does not add CONNECT, so a role without it means initialization never finished.
         if (runtimeOids.Length != 5 || runtimeOids.Any(oid => oid == 0) ||
             runtimeOids.Distinct().Count() != runtimeOids.Length ||
             runtimeOids.Any(oid => !boundary.Grants.Where(grant => grant.Grantee == oid)
@@ -328,6 +342,8 @@ internal static class InitializerChecks
     {
         foreach (var relation in relations)
         {
+            // Work out the most the runtime role may hold on this relation: its planned table privileges,
+            // or nothing for owner-only tables and sequences. Anything the plan does not list gets null.
             var table = service.Tables.SingleOrDefault(item => item.Table == relation.Name);
             string[]? allowed = relation.Kind switch
             {
@@ -336,6 +352,8 @@ internal static class InitializerChecks
                 "S" when service.OwnerOnlySequences.Contains(relation.Name) => [],
                 _ => null,
             };
+            // Fail on an unplanned relation, an owner other than the operator, or any runtime privilege beyond
+            // the plan. Having fewer privileges is allowed, because the grant step adds the missing ones.
             if (allowed is null || relation.Owner != owner || relation.RuntimePrivileges is null ||
                 relation.RuntimePrivileges.Except(allowed, StringComparer.Ordinal).Any())
                 throw new InvalidOperationException(

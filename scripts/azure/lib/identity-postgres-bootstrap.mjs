@@ -191,6 +191,8 @@ function buildProxy(repoRoot, outputDirectory, {
 }
 
 const P1_MODES = new Set(['initialize', 'inspect', 'apply-pending', 'apply-pending-dry-run']);
+// Each initializer mode prints its own final marker line. The runner accepts success only when it sees the
+// marker for the mode it asked for, so a run that stopped early or ran a different mode cannot pass.
 const P1_MARKERS = {
   initialize: 'P1_POSTGRES_OPERATOR_INITIALIZATION_FINISHED runtimeIdentityProof=false deploymentProof=false',
   inspect: 'P1_POSTGRES_INSPECTION_FINISHED writes=false',
@@ -211,10 +213,14 @@ function isApprovedMaximum(value) {
 
 /** Builds the exact P1 initializer arguments for one validated mode. */
 export function p1InitializerArguments(mode, settings) {
+  // Inspection needs only the source commit and plan hash. It takes no Core merge, maxima or receipt.
   const source = ['--source-sha', settings.sourceSha];
   if (mode === 'inspect') return ['--inspect', ...source, '--plan-sha256', settings.planSha256];
   const bound = [...source, '--core-merge-sha', settings.coreMergeSha, '--plan-sha256', settings.planSha256];
+  // Fresh initialization keeps its original argument list.
   if (mode === 'initialize') return ['--initialize', ...bound, '--receipt', settings.receiptPath];
+  // Pending-migration modes pass the approved maxima. A dry run writes nothing, so it gets no receipt;
+  // the real run writes a new receipt file.
   return [
     '--apply-pending-migrations', ...bound,
     '--max-core-version', String(settings.maxCoreVersion),
@@ -262,6 +268,7 @@ export async function bootstrapIdentityPostgres({
     if (p1Initializer === null || typeof p1Initializer !== 'object') {
       throw new Error('Combined PostgreSQL initialization requires a P1 initializer receipt configuration.');
     }
+    // A missing mode means the original fresh-initialize call.
     const p1Mode = p1Initializer.mode ?? 'initialize';
     if (!P1_MODES.has(p1Mode))
       throw new Error('The P1 initializer mode must be initialize, inspect, apply-pending, or apply-pending-dry-run.');
@@ -273,6 +280,12 @@ export async function bootstrapIdentityPostgres({
     const receiptPath = typeof p1Initializer.receiptPath === 'string'
       ? resolve(p1Initializer.receiptPath) : '';
     const receiptRelativePath = receiptPath ? relative(resolve(repoRoot, 'Temp'), receiptPath) : '';
+    // Validate every setting before opening any tunnel:
+    // - verifyOnly must be false only for initialize, so an initialized database is never re-bootstrapped;
+    // - the source and plan hashes must be exact, and the plan hash must match this checkout;
+    // - the Core merge SHA is required except for inspection, where it is forbidden;
+    // - maxima are required for the pending modes and forbidden for the others;
+    // - writing modes need a new receipt path inside Temp; read-only modes must not pass one.
     if (verifyOnly !== (p1Mode !== 'initialize') || !GUID_PATTERN.test(runtimePrincipalObjectId ?? '') ||
         !GUID_PATTERN.test(migrationPrincipalObjectId ?? '') ||
         !/^[0-9a-f]{40}$/.test(p1Initializer.sourceSha ?? '') ||
@@ -468,6 +481,7 @@ export async function bootstrapIdentityPostgres({
     };
 
     if (p1Initializer) {
+      // Run the initializer through the same tunnel used for the Identity Broker step.
       const p1Mode = p1Initializer.mode ?? 'initialize';
       const p1Result = execDotnet([
         'run', '--project', join(repoRoot, 'tools', 'P1PostgresInitializer', 'P1PostgresInitializer.csproj'),
@@ -475,6 +489,7 @@ export async function bootstrapIdentityPostgres({
       ], { check: false, cwd: repoRoot, timeout: 600_000 });
       const p1Output = [p1Result.stderr, p1Result.stdout].filter(Boolean).join('\n').trim();
       const p1Marker = P1_MARKERS[p1Mode];
+      // Success needs both a zero exit code and this mode's marker. Error output is redacted before it is shown.
       if (p1Result.status !== 0 || !p1Result.stdout.includes(p1Marker))
         throw new Error(`P1 PostgreSQL ${p1Mode === 'initialize' ? 'initialization' : p1Mode} failed${p1Initializer.receiptPath ? `; inspect its stage receipt ${p1Initializer.receiptPath}` : ' without writing'}: ${redact(p1Output || `dotnet exited with status ${p1Result.status}`)}`);
       bootstrapReceipt.p1Initializer = {

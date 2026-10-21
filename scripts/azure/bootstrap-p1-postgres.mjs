@@ -26,16 +26,20 @@ const isVersion = value => Number.isSafeInteger(value) && value > 0 && value < 1
 
 /** Maps CLI switches to one mode, rejecting ambiguous or partial combinations. */
 export function p1PostgresMode(values) {
+  // Inspection is its own read-only mode, so combining it with a write mode or its dry run is a usage error.
   if (values.inspect && (values['apply-pending-migrations'] || values['dry-run'])) {
     throw new Error('Use either --inspect or --apply-pending-migrations.');
   }
   if (values.inspect) return 'inspect';
   if (values['apply-pending-migrations']) return values['dry-run'] ? 'apply-pending-dry-run' : 'apply-pending';
+  // --dry-run alone would silently mean a fresh initialize plan, so reject it instead of guessing.
   if (values['dry-run']) throw new Error('--dry-run applies only to --apply-pending-migrations.');
+  // With no mode switch, keep the original behavior: the fresh-initialize path.
   return 'initialize';
 }
 
 function parseVersion(value) {
+  // Accept plain decimal digits only, so values like "27.0", "0x1b" or " 27" never become a version.
   if (value === undefined) return undefined;
   if (!/^[1-9][0-9]{0,3}$/.test(value)) throw new Error('Maximum migration versions must be positive integers.');
   return Number(value);
@@ -65,10 +69,15 @@ export async function bootstrapP1Postgres({
   if (typeof execute !== 'boolean' || !MODES.has(mode)) {
     throw new Error('P1 PostgreSQL work requires a supported mode and explicit execution state.');
   }
+  // Inspection is not tied to a Core merge, so it must not take one. Every other mode is bound to the
+  // reviewed Core merge commit and needs its exact SHA.
   const pending = mode.startsWith('apply-pending');
   if (mode === 'inspect' ? coreMergeSha !== undefined : !CORE_MERGE_SHA_PATTERN.test(coreMergeSha ?? '')) {
     throw new Error('P1 PostgreSQL initialization and continuation require an exact Core merge SHA; inspection takes none.');
   }
+  // Pending-migration modes must name the highest approved Core and Events versions. The initializer
+  // later requires each to equal the end of the source catalog, so a newer source cannot apply more.
+  // Other modes must not pass maxima, so a value is never silently ignored.
   if (pending ? !isVersion(maxCoreVersion) || !isVersion(maxEventsVersion)
     : maxCoreVersion !== undefined || maxEventsVersion !== undefined) {
     throw new Error('Only pending-migration continuation takes, and requires, explicit maximum Core and Events versions.');
@@ -119,6 +128,7 @@ export async function bootstrapP1Postgres({
 
   const postgresValues = readPostgresValues(config, boundAz);
 
+  // Only modes that write to the database get a receipt file. Read-only modes leave nothing behind.
   const writesReceipt = mode === 'initialize' || mode === 'apply-pending';
   const receiptPath = writesReceipt
     ? join(repoRoot, 'Temp', `p1-postgres-${randomUUID().replaceAll('-', '')}.jsonl`) : undefined;
@@ -135,6 +145,7 @@ export async function bootstrapP1Postgres({
     // Never re-bootstrap Identity Broker when the database is already initialized.
     verifyOnly: mode !== 'initialize',
     p1Initializer: {
+      // Omit the mode for initialize so the lower layer sees the same settings it always did.
       ...(mode === 'initialize' ? {} : { mode }),
       sourceSha: source.sha,
       ...(coreMergeSha === undefined ? {} : { coreMergeSha }),

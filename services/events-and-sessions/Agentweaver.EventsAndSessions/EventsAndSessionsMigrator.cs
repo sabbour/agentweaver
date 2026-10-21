@@ -109,6 +109,8 @@ public static class EventsAndSessionsMigrator
                     "Events & Sessions schema version 2 has an unrecognized or ambiguous migration layout.");
         }
 
+        // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
+        // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
         foreach (var version in SupportedVersions.Where(version => !applied.Contains(version)))
         {
             var resourceName = version switch

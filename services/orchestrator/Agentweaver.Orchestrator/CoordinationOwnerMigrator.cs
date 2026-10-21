@@ -90,6 +90,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(26) && !applied.Contains(21)) ||
             (applied.Contains(27) && !applied.Contains(26)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
+        // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
+        // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
         foreach (var version in SupportedVersions.Where(version => !applied.Contains(version)))
         {
             var migrationName = version switch

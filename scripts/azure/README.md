@@ -131,17 +131,20 @@ identity to exist before deployment.
 
 ### P1 PostgreSQL initializer status
 
-The operator record shows that the approved database was initialized on
-2026-10-15 through `--continue-after-projects-config`. Continuation run
-`5745606c2d09` used source `c24d0000fe5fc6163e4f38594c39dff782d3a46d`, Core
-merge `b9ff7debcb00417d64e00200a5e583d0e141583d`, and plan hash
-`a056bf074940b858b7eb05c78c7e96e2e6663d5b7ea291d99997eaccbbf073c8`. Its final
-stage was `continuation_all_runtime_grants_committed`. That plan predates later
-catalog additions, so treat this record as a starting state only. It does not
-prove that any later migration ran. Use `--inspect` to read the live versions,
-and `--apply-pending-migrations` to add later approved versions; see
+The approved database is already initialized. The operator record shows that
+`--continue-after-projects-config` completed on 2026-10-15 and reached its final
+stage, `continuation_all_runtime_grants_committed`. That run used source
+`c24d0000fe5fc6163e4f38594c39dff782d3a46d`, Core merge
+`b9ff7debcb00417d64e00200a5e583d0e141583d`, and plan hash
+`a056bf074940b858b7eb05c78c7e96e2e6663d5b7ea291d99997eaccbbf073c8`.
+
+That plan is older than the current migration catalog. Treat it as the
+starting state only: it does not show that any later migration ran. To see the
+live versions, use `--inspect`. To add later approved versions, use
+`--apply-pending-migrations`, described in
 [Applying later approved migrations](#applying-later-approved-migrations).
-Never rerun `--initialize` against this database.
+Never run `--initialize` against this database, because it requires an empty
+target.
 
 The attempts below preceded that run and are kept as history.
 Earlier initializer attempts did not complete successfully against the approved database.
@@ -265,8 +268,9 @@ dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~
 
 Use these modes for a database that is already initialized. Neither needs a
 prior receipt, recreates roles or schemas, resets data, or reruns the Identity
-Broker bootstrap. Both still require a clean checkout whose `HEAD` and fetched
-`origin/v1` match `--source-sha`, and the exact plan hash.
+Broker bootstrap. Both still require a clean checkout whose `HEAD` matches the
+fetched `origin/v1`. The script passes that commit to the initializer as the
+source, together with the plan hash computed from it.
 
 `--inspect` is read-only. Both database sessions run with
 `default_transaction_read_only=on`, and the tool checks that setting before it
