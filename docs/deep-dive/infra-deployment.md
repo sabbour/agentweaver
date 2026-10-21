@@ -138,7 +138,9 @@ tree. `deploy-integration.mjs` verifies that receipt and registry provenance
 before rendering or applying the composition.
 
 The release workflow prepares independently versioned packages and images
-from exact source. Publication is a separate confirmed operation. Deployment
+from exact source. It rebuilds only images whose version or input fingerprint
+changed since the last published release, and reuses the others by their
+original digest and build provenance. Publication is a separate confirmed operation. Deployment
 consumes an already-published `v1.x.y` release, its manifest, and publication
 receipt.
 

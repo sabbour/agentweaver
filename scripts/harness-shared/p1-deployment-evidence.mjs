@@ -443,11 +443,12 @@ export async function observeP1ServiceDeployments({
         && pod.metadata?.annotations?.[SOURCE_ANNOTATION] !== providerCatalog.sourceCommit) {
         throw new Error('The running Projects Pod does not bind the validated provider catalog source commit.');
       }
+      // A reused image is bound to the commit that built it, not to this release's source.
       const registry = await verifyRegistryImage(
         image.image,
         status[0].imageID,
-        sourceSha,
-        sourceTree,
+        image.reusedFrom?.sourceSha ?? sourceSha,
+        image.reusedFrom?.sourceTree ?? sourceTree,
         fetchImpl,
       );
       podEvidence.push({
@@ -594,8 +595,9 @@ export function validateP1PublicationReceipt(
       const published = publication.published.find(record => record.id === id);
       const repository = `ghcr.io/sabbour/${componentImageRepository(id)}`;
       const expectedImage = `${repository}@${deploymentComponent.imageDigest}`;
+      // A reused image keeps the tag of the commit that built it; never expect a retag to this source.
       if (image.image !== expectedImage || published.image !== expectedImage
-        || planned.destination !== `${repository}:${componentImageTag(component.version, sourceSha)}`) {
+        || planned.destination !== `${repository}:${componentImageTag(component.version, image.reusedFrom?.sourceSha ?? sourceSha)}`) {
         throw new Error(`The release image for ${id} does not match its exact component-version tag and digest.`);
       }
       // Keep the AgentHost archive pins so the later local measurement can match this publication.

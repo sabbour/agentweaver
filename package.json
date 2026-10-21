@@ -15,6 +15,7 @@
     "release:deploy-bootstrap": "node scripts/release/deploy.mjs --pre-acceptance",
     "release:deploy-integration": "node scripts/release/deploy-integration.mjs",
     "release:prepare-build-inputs": "node scripts/release/prepare-build-inputs.mjs",
+    "release:plan-image-reuse": "node scripts/release/image-reuse.mjs releases/foundation.json",
     "harness:p1": "node scripts/harness-shared/run-p1.mjs",
     "harness:p1:signin-run": "node scripts/harness-shared/p1-signin-run.mjs",
     "test:release": "node --test scripts/release/tests/*.test.mjs",

@@ -2592,6 +2592,55 @@ test('publication provenance proves every image and every package selected for t
   }
 });
 
+test('deployment accepts reused images bound to their original build source and rejects tampered reuse', () => {
+  const manifest = releaseManifest();
+  const buildSha = 'e'.repeat(40);
+  const reused = { sourceSha: buildSha, sourceTree: 'f'.repeat(40), inputFingerprint: `sha256:${'1'.repeat(64)}`, receiptSourceSha: buildSha };
+  const reuse = (receipt, id) => {
+    const plan = receipt.planned.find(entry => entry.id === id);
+    const result = receipt.published.find(entry => entry.id === id);
+    const component = manifest.components.find(entry => entry.id === id);
+    plan.destination = `ghcr.io/sabbour/${componentImageRepository(id)}:${componentImageTag(component.version, buildSha)}`;
+    plan.reused = structuredClone(reused);
+    result.reused = structuredClone(reused);
+    if (id === 'Agentweaver.AgentHost') {
+      result.preparedOciMeasurement.sourceSha = buildSha;
+      result.preparedOciMeasurement.sourceTree = reused.sourceTree;
+    }
+    return { plan, result };
+  };
+  const receipt = publicationReceipt(manifest);
+  reuse(receipt, 'Agentweaver.Gateway');
+  reuse(receipt, 'Agentweaver.AgentHost');
+  const images = validatePublicationReceipt(receipt, manifest, sourceSha);
+  assert.deepEqual(images.find(({ id }) => id === 'Agentweaver.Gateway').reusedFrom, { sourceSha: buildSha, sourceTree: reused.sourceTree });
+  assert.deepEqual(images.find(({ id }) => id === 'Agentweaver.AgentHost').reusedFrom, { sourceSha: buildSha, sourceTree: reused.sourceTree });
+  assert.equal(images.find(({ id }) => id === 'Agentweaver.Mcp').reusedFrom, undefined);
+
+  for (const [label, change, pattern] of [
+    ['result disagrees', r => { r.published.find(({ id }) => id === 'Agentweaver.Gateway').reused.sourceSha = 'd'.repeat(40); },
+      /invalid reused-image provenance/],
+    ['reuse claims the release source', r => {
+      for (const list of [r.planned, r.published]) list.find(({ id }) => id === 'Agentweaver.Gateway').reused.sourceSha = sourceSha;
+    }, /invalid reused-image provenance/],
+    ['result-only reuse', r => { delete r.planned.find(({ id }) => id === 'Agentweaver.Gateway').reused; },
+      /invalid reused-image provenance/],
+    ['tag bound to the new source', r => {
+      const component = manifest.components.find(({ id }) => id === 'Agentweaver.Gateway');
+      r.planned.find(({ id }) => id === 'Agentweaver.Gateway').destination =
+        `ghcr.io/sabbour/${componentImageRepository(component.id)}:${componentImageTag(component.version, sourceSha)}`;
+    }, /disagree on the published image/],
+    ['AgentHost measured at another source', r => {
+      r.published.find(({ id }) => id === 'Agentweaver.AgentHost').preparedOciMeasurement.sourceSha = sourceSha;
+    }, /AgentHost publication receipt lacks/],
+    ['legacy receipt reuse', r => { delete r.requiredPackageIds; }, /invalid reused-image provenance/],
+  ]) {
+    const invalid = structuredClone(receipt);
+    change(invalid);
+    assert.throws(() => validatePublicationReceipt(invalid, manifest, sourceSha), pattern, label);
+  }
+});
+
 test('runtime manifest requires nine shared workloads and pins AgentHost through Environment options', () => {
   const manifest = releaseManifest();
   const images = validatePublicationReceipt(publicationReceipt(manifest), manifest, sourceSha);
