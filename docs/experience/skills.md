@@ -123,6 +123,7 @@ source.
 
 | Action | Request |
 | --- | --- |
+| List suggested marketplaces | `GET /api/v1/projects/{projectId}/skill-marketplaces/definitions` |
 | List or add sources | `GET` or `POST /api/v1/projects/{projectId}/skill-marketplaces/sources` |
 | Update source | `PUT /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}` |
 | Tombstone source | `DELETE /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}?expectedRevision=...` |

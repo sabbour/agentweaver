@@ -118,6 +118,7 @@ Revision checks stay inside `body`; no idempotency header is required.
 
 | Operation ID | Purpose |
 | --- | --- |
+| `listMarketplaceDefinitions` | List suggested marketplaces for a project. |
 | `listMarketplaceSources` | List project marketplace sources. |
 | `createMarketplaceSource` | Add a public source. |
 | `updateMarketplaceSource` | Append a source revision. |

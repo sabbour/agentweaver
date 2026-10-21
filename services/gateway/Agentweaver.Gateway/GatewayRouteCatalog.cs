@@ -168,6 +168,10 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, "/catalog/roles", "/api/catalog/roles",
             "listProjectCastingRoles", "List built-in casting roles", forwardTenantSelector: true);
         const long skillContentMaximumRequestBytes = 3 * 1024 * 1024;
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/skill-marketplaces/definitions",
+            "/api/projects/{projectId}/skill-marketplaces/definitions",
+            "listMarketplaceDefinitions", "List suggested skill marketplaces for a project",
+            forwardTenantSelector: true);
         var marketplaceSources = "/projects/{projectId}/skill-marketplaces/sources";
         Add("GET", GatewayOwner.Projects, marketplaceSources, "/api" + marketplaceSources,
             "listMarketplaceSources", "List project marketplace sources",

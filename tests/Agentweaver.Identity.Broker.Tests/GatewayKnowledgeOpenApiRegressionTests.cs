@@ -230,6 +230,20 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var paths = document.RootElement.GetProperty("paths");
 
+        var definitions = FindOperation(paths, "listMarketplaceDefinitions");
+        Assert.DoesNotContain(
+            definitions.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("in").GetString() == "query");
+        Assert.Equal(
+            "#/components/schemas/SkillMarketplaceDefinitionList",
+            definitions.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        var definitionProperties = document.RootElement.GetProperty("components").GetProperty("schemas")
+            .GetProperty("SkillMarketplaceDefinition").GetProperty("properties");
+        AssertPropertyType(definitionProperties, "repository", "string");
+        AssertNullablePropertyType(definitionProperties, "subpath", "string");
+        AssertNullablePropertyType(definitionProperties, "sourceId", "string");
+
         AssertRevisionQuery(
             FindOperation(paths, "removeMarketplaceSource"),
             "expectedRevision",
@@ -705,6 +719,10 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
 
         var ownerRequests = new (HttpMethod Method, string PublicPath, string OwnerPath, string Body)[]
         {
+            (HttpMethod.Get,
+                "/api/v1/projects/project-1/skill-marketplaces/definitions",
+                "/api/projects/project-1/skill-marketplaces/definitions",
+                string.Empty),
             (HttpMethod.Get,
                 "/api/v1/projects/project-1/skill-marketplaces/sources",
                 "/api/projects/project-1/skill-marketplaces/sources",

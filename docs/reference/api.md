@@ -425,6 +425,10 @@ use Admin authority. Upstream content reads recheck current authority.
 | POST | `/{sourceId}/preview` | Validate selected content at a resolved commit. | Yes |
 | POST | `/{sourceId}/import` | Import selected content with digest and idempotency checks. | Yes |
 
+`GET /api/projects/{projectId}/skill-marketplaces/definitions` uses Read
+authority and lists the suggested marketplaces. The Gateway path is
+`/api/v1/projects/{projectId}/skill-marketplaces/definitions`.
+
 See [Projects & Config](../architecture/projects-config.md) and
 [Skill marketplace sources](../architecture/skill-marketplace.md).
 
