@@ -70,14 +70,16 @@ if (coreParents.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 2)
     throw new InvalidOperationException("The supplied Core commit must be the actual separately reviewed merge.");
 var migratorSource = await File.ReadAllTextAsync(
     Path.Combine("services", "orchestrator", "Agentweaver.Orchestrator", "CoordinationOwnerMigrator.cs"));
-if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,\s*19,\s*20,\s*21,\s*25,\s*26,\s*27\]\)") ||
+// Core versions must match the reviewed plan exactly; 017 stays excluded.
+if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,\s*19,\s*20,\s*21,\s*22,\s*25,\s*26,\s*27\]\)") ||
     !migratorSource.Contains("16 => \"project_backlog\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("18 => \"reviewed_remote_tool_snapshots\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("21 => \"row_lock_record_updates\"", StringComparison.Ordinal) ||
+    !migratorSource.Contains("22 => \"run_list_completion\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("25 => \"user_notification_dismissals\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("26 => \"backlog_task_content\"", StringComparison.Ordinal) ||
     !migratorSource.Contains("27 => \"periodic_issue_sync\"", StringComparison.Ordinal))
-    throw new InvalidOperationException("Reviewed Core 016/018/021/025/026/027 migration wiring is required before initialization; 017 is not permitted.");
+    throw new InvalidOperationException("Reviewed Core 016/018/021/022/025/026/027 migration wiring is required before initialization; 017 is not permitted.");
 
 var planJson = await RunLocalAsync("node", ["scripts/azure/lib/p1-postgres-plan.mjs", "--json"]);
 // The reviewed plan hash binds every later role, schema, relation, and grant decision to source output.

@@ -19,10 +19,10 @@ the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`e4e9653364b6695189ff8924f0d742617f826506bc391cb2f8928ecbee20d7ec`.
+`f52ad84a894cff0a1060db42927370dc280ab51c7b3ad65161c5f09b5c034891`.
 It is not an approval receipt. The runner uses its explicit registered version
-list, not contiguous numbering; the absent 017 and 022-024 do not require
-placeholders. The Core list is 1-16, 18-21, 25, 26, 27. Version 027 requires
+list, not contiguous numbering; the absent 017, 023 and 024 do not require
+placeholders. The Core list is 1-16, 18-22, 25, 26, 27. Version 027 requires
 026 only. Merge order is #2197, then #2186, then #2196.
 
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
@@ -174,8 +174,10 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 21.
-These are 20 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16 and 18 through 22.
+These are 21 registered versions; version 17 remains excluded.
+Version 22 adds the run completion time. It needs no new grant because the
+runtime role already has table-level UPDATE on `accepted_runs`.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
 The plan lists 96 tables and eight exact row-lock columns. Orchestrator migration
 025 adds the empty `user_notification_dismissals` table. Its runtime role needs

@@ -445,6 +445,25 @@ Unknown or repeated query parameters return `400 query_invalid`.
 
 Source: `services/orchestrator/Agentweaver.Orchestrator/`.
 
+### Run list
+
+Native path: `/api/projects/{projectId}/runs`.
+Gateway path: `/api/v1/projects/{projectId}/runs`.
+
+| Method | Query | Auth | Purpose | Gateway |
+| --- | --- | --- | --- | --- |
+| GET | `state`, `cursor`, `pageSize` | Read | List accepted runs, newest first. | Yes, `listProjectRuns` |
+
+The caller needs the `api.read` scope and project or tenant read permission.
+A run-bound token sees only its own run. `pageSize` defaults to 25 and accepts
+1–100. `state` takes a comma-separated list of `idle`, `active`, `blocked`,
+`completed`, `failed`, `indeterminate`, and `cancelled`, or the `open` and
+`terminal` aliases. Unknown or repeated query parameters return
+`400 query_invalid`. A bad filter, cursor, or page size returns
+`400 run_state_filter_invalid`, `cursor_invalid`, or `page_size_invalid`.
+Pass `nextCursor` back with the same filter and page size.
+`title` and `goal` are `null` until a run start request stores them.
+
 ### Coordination
 
 Native prefix: `/api/projects/{projectId}/runs/{runId}/coordination`.

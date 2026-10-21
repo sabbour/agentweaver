@@ -131,6 +131,25 @@ content validation, and persistence. A returned Skill assignment or inventory
 record does not prove that a runtime loaded the Skill. The current public API
 does not provide actor-safe runtime-loaded status.
 
+## List project runs
+
+Use `GET /api/v1/projects/{projectId}/runs` to list a project's runs without
+knowing a run ID. The Gateway forwards the request to the Orchestrator owner
+and returns its status and body with `Cache-Control: no-store`.
+
+- `pageSize` defaults to 25 and accepts 1 through 100.
+- `state` filters by a comma-separated list of derived states, or by the
+  `open` (`idle`, `active`, `blocked`) and `terminal` aliases.
+- `cursor` continues from the previous page's `nextCursor`. Send the same
+  `state` and `pageSize` values with it.
+- Items are ordered by creation time, newest first. Pages are not a snapshot;
+  a run created after the first page is not repeated.
+
+The owner checks the caller's current project or tenant read permission with
+Projects & Config. A run-bound token sees only its own run. The list reads
+persisted run records only. `title` and `goal` are `null` until a run start
+request stores them.
+
 ## Review project casting
 
 Casting routes use the Projects & Config owner. The Gateway forwards the

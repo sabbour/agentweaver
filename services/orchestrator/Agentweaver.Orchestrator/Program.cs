@@ -113,6 +113,9 @@ builder.Services.AddSingleton(services => new CoordinatorDecisionOwnerStore(
     options.Schema,
     services.GetRequiredService<CoordinatorRunSelectionContextStore>(),
     services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(services => new ProjectRunReadStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
 builder.Services.AddSingleton(services => new BacklogOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema));
@@ -268,6 +271,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapCoordinationEndpoints();
+app.MapProjectRunEndpoints();
 app.MapBacklogEndpoints();
 app.MapIssueSync();
 app.MapUserNotificationEndpoints();
