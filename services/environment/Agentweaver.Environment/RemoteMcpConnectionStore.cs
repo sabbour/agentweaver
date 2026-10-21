@@ -180,8 +180,11 @@ public sealed class RemoteMcpConnectionStore(
         Guid? afterConnectionId,
         CancellationToken cancellationToken)
     {
+        // Reuse the authorized list so the directory has the same authority checks, paging, and
+        // removed-row filter. Only the projection differs.
         var page = await ListAsync(caller, projectId, pageSize, afterConnectionId, cancellationToken)
             .ConfigureAwait(false);
+        // FromSnapshot copies only safe fields. It drops the Identity binding reference and tool schemas.
         return new(
             page.Connections.Select(RemoteMcpConnectionDirectoryEntry.FromSnapshot).ToImmutableArray(),
             page.NextConnectionId);
@@ -199,9 +202,13 @@ public sealed class RemoteMcpConnectionStore(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(reviewed);
+        // GetAsync checks ReadProjects authority on every call, so a caller who lost access since the
+        // review gets an authority failure instead of a validity answer.
         var snapshot = await GetAsync(
             caller, reviewed.Connection.ProjectId, reviewed.Connection.ConnectionId, cancellationToken)
             .ConfigureAwait(false);
+        // The comparison itself is pure. It compares the review pins with the current head and never
+        // updates the reference, so a changed connection always needs a new review.
         return RemoteMcpConnectionReview.Evaluate(reviewed, snapshot, toolName, toolRevision);
     }
 
@@ -213,6 +220,8 @@ public sealed class RemoteMcpConnectionStore(
         CancellationToken cancellationToken)
     {
         ValidateProjectId(projectId);
+        // Registry reads don't touch connection rows, so one authority check is enough. Callers choose
+        // write authority when the read prepares a connection change.
         await AuthorizeAsync(
             caller,
             projectId,
@@ -228,15 +237,22 @@ public sealed class RemoteMcpConnectionStore(
         CancellationToken cancellationToken)
     {
         ValidateProjectId(projectId);
+        // Authorize first. The tenant ID from this grant scopes the row read.
         var initial = await AuthorizeAsync(
             caller, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken).ConfigureAwait(false);
         RemoteMcpConnectionSnapshot? snapshot;
+        // Close the database connection before the authority re-check, so no connection stays open during
+        // that remote call or the discovery network reads that follow.
         await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
             snapshot = await ReadSnapshotAsync(
                 connection, null, initial.TenantId, projectId, connectionId, cancellationToken).ConfigureAwait(false);
+        // Check authority again after the read. A grant revoked during the read must not let the
+        // caller see the snapshot or start discovery.
         await EnsureCurrentAuthorityAsync(
             caller, initial, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
             .ConfigureAwait(false);
+        // Report a missing row only after the authority checks, so the response doesn't reveal
+        // whether a connection exists to a caller without access.
         return snapshot ?? throw NotFound();
     }
 
@@ -254,8 +270,11 @@ public sealed class RemoteMcpConnectionStore(
     {
         ValidateProjectId(projectId);
         ValidateIdempotencyKey(idempotencyKey);
+        // A replay returns a saved snapshot, so it needs the same write authority as a new discovery.
         var initial = await AuthorizeAsync(
             caller, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken).ConfigureAwait(false);
+        // Idempotency keys are scoped to the tenant and project, not to one connection. Read the saved
+        // operation and connection so a key reused for different work can be rejected below.
         (string Operation, Guid? ConnectionId, string ResultJson)? saved;
         await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -272,9 +291,11 @@ public sealed class RemoteMcpConnectionStore(
                 : null;
         }
 
+        // Check authority again after the read, before returning any saved data.
         await EnsureCurrentAuthorityAsync(
             caller, initial, projectId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
             .ConfigureAwait(false);
+        // No saved row means this key is new, so the caller runs a fresh discovery.
         if (saved is not { } value)
             return null;
         var snapshot = DeserializeSnapshot(value.ResultJson);

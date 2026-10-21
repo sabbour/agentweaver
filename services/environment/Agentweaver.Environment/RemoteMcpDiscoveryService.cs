@@ -11,8 +11,8 @@ public sealed record RemoteMcpToolsListResponse(
 
 /// <summary>
 /// Trusted network source for Registry metadata and remote tools/list pages. The Environment owner
-/// parses and pins every byte it returns. The trusted transport (issue #1929) supplies the
-/// production implementation; it applies the project egress policy and returns the applied policy.
+/// parses and pins every byte it returns. The trusted transport supplies the production
+/// implementation; it applies the project egress policy and returns the applied policy.
 /// </summary>
 public interface IRemoteMcpDiscoverySource
 {
@@ -77,9 +77,13 @@ public sealed class RemoteMcpDiscoveryService(
         string? cursor,
         CancellationToken cancellationToken)
     {
+        // Validate the caller-supplied cursor before any authority or network work. The cursor is
+        // forwarded to the Registry, so it must stay within the parser limit and contain no control characters.
         if (cursor is { Length: > RemoteMcpMetadataParser.MaximumCursorLength } || cursor?.Any(char.IsControl) == true)
             throw new ArgumentException("The Registry cursor is too long or contains control characters.", nameof(cursor));
+        // Browsing only reads, so current read authority on the project is enough.
         await store.EnsureAuthorityAsync(caller, projectId, write: false, cancellationToken).ConfigureAwait(false);
+        // An empty cursor means the first page. The source expects null for that case.
         var bytes = await ReadRegistryAsync(
             () => source.ReadRegistryServersAsync(string.IsNullOrEmpty(cursor) ? null : cursor, cancellationToken))
             .ConfigureAwait(false);
@@ -101,17 +105,23 @@ public sealed class RemoteMcpDiscoveryService(
         string? registryExactVersion,
         CancellationToken cancellationToken)
     {
+        // No Registry selection: the caller supplied the endpoint directly, so there is nothing to resolve.
         if (registryServerName is null && registryExactVersion is null)
             return new(displayName, endpointUri, resourceUri, authenticationMode);
+        // A Registry selection needs both parts. A name without a version would let the Registry pick one.
         if (string.IsNullOrWhiteSpace(registryServerName) || string.IsNullOrWhiteSpace(registryExactVersion))
             throw new ArgumentException("Registry selection requires both a server name and an exact version.");
+        // "latest" is a floating alias. A pin must name one immutable version so its digest can't drift.
         if (string.Equals(registryExactVersion, "latest", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Registry selection requires an exact server version.", nameof(registryExactVersion));
 
-                    await store.EnsureAuthorityAsync(caller, projectId, write: true, cancellationToken).ConfigureAwait(false);
-                    var bytes = await ReadRegistryAsync(
+        // Resolving a draft prepares a connection change, so it needs write authority before the network read.
+        await store.EnsureAuthorityAsync(caller, projectId, write: true, cancellationToken).ConfigureAwait(false);
+        var bytes = await ReadRegistryAsync(
             () => source.ReadRegistryServerVersionAsync(registryServerName, registryExactVersion, cancellationToken))
             .ConfigureAwait(false);
+        // The parser checks that the version advertises the requested endpoint and returns the
+        // Registry's canonical form of it. The draft stores that canonical endpoint, not the raw input.
         var selection = ParseRegistry(() => RemoteMcpMetadataParser.ParseRegistryServerVersion(
             bytes, registryServerName, registryExactVersion, endpointUri));
         return new(displayName, selection.SelectedEndpointUri, resourceUri, authenticationMode, selection.Server);
@@ -131,14 +141,19 @@ public sealed class RemoteMcpDiscoveryService(
         string idempotencyKey,
         CancellationToken cancellationToken)
     {
+        // Row revisions start at 1, so a smaller value can't match any row.
         if (expectedRowRevision < 1)
             throw new ArgumentOutOfRangeException(nameof(expectedRowRevision));
+        // Check for a replay first. A retried request with the same idempotency key returns the saved
+        // result and makes no network calls, even if the remote server is now unavailable.
         var replay = await store.ReadDiscoveryReplayAsync(
             caller, projectId, connectionId, expectedRowRevision, idempotencyKey, cancellationToken)
             .ConfigureAwait(false);
         if (replay is not null)
             return replay;
 
+        // Read the current row and reject early if it moved or isn't enabled. The save step checks the
+        // revision again, because the row can still change while the network reads below run.
         var current = await store.GetForDiscoveryAsync(caller, projectId, connectionId, cancellationToken)
             .ConfigureAwait(false);
         if (current.Head.RowRevision != expectedRowRevision)
@@ -152,6 +167,9 @@ public sealed class RemoteMcpDiscoveryService(
                 "Only an enabled connection can be discovered.",
                 (int)HttpStatusCode.Conflict);
 
+        // For a Registry-pinned connection, read the exact version again and compare its digest with the pin.
+        // A Registry publisher can change a version's metadata after the pin. In that case discovery stops
+        // and keeps the old catalog, so an unreviewed change never reaches the catalog.
         string? registryMetadataSha256 = null;
         if (current.Configuration.RegistryServer is { } registry)
         {
@@ -170,6 +188,8 @@ public sealed class RemoteMcpDiscoveryService(
 
         var (catalog, appliedPolicy) = await ReadCatalogAsync(current.Configuration, cancellationToken)
             .ConfigureAwait(false);
+        // The store saves the catalog only if the row is still at the expected revision. A disable,
+        // update, or remove that committed during the network reads makes this save fail with a conflict.
         return await store.SaveDiscoveryAsync(
             caller,
             projectId,
@@ -187,9 +207,12 @@ public sealed class RemoteMcpDiscoveryService(
         CancellationToken cancellationToken)
     {
         var tools = new List<RemoteMcpToolSchemaPin>();
+        // Track every cursor the server returned. A repeated cursor would loop forever, so it fails discovery.
         var seenCursors = new HashSet<string>(StringComparer.Ordinal);
         RemoteMcpAppliedNetworkPolicyReference? policy = null;
         string? cursor = null;
+        // Follow tools/list pages until the server returns no next cursor. The page, tool, and cursor
+        // limits bound the work even when the remote server misbehaves.
         for (var page = 0; ; page++)
         {
             if (page == MaximumToolsListPages)
@@ -204,14 +227,20 @@ public sealed class RemoteMcpDiscoveryService(
             {
                 throw RemoteUnavailable();
             }
+            // A timeout surfaces as TaskCanceledException without the caller's token being canceled.
+            // Report it as an unavailable server. A real caller cancellation still propagates.
             catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 throw RemoteUnavailable();
             }
 
             ArgumentNullException.ThrowIfNull(response);
+            // The catalog is pinned for one protocol version. A server that negotiates another version
+            // could describe tools differently, so the result isn't accepted.
             if (!string.Equals(response.NegotiatedProtocolVersion, RequiredProtocolVersion, StringComparison.Ordinal))
                 throw DiscoveryInvalid("The remote server negotiated an unsupported MCP protocol version.");
+            // Every page must come through the same applied network policy. The catalog records one
+            // policy, so a change between pages means the pages can't be trusted as one catalog.
             if (policy is null)
                 policy = response.AppliedNetworkPolicy;
             else if (response.AppliedNetworkPolicy != policy)
@@ -221,6 +250,7 @@ public sealed class RemoteMcpDiscoveryService(
                     (int)HttpStatusCode.Conflict);
 
             var parsed = ParseDiscovery(() => RemoteMcpMetadataParser.ParseToolsListPage(response.Body));
+            // Check the running total, because each page is within the limit on its own.
             tools.AddRange(parsed.Tools);
             if (tools.Count > RemoteMcpMetadataParser.MaximumTools)
                 throw DiscoveryInvalid("The remote server returned more tools than the limit.");
@@ -231,6 +261,8 @@ public sealed class RemoteMcpDiscoveryService(
             cursor = parsed.NextCursor;
         }
 
+        // BuildCatalog rejects a tool name that appears on more than one page and computes the catalog digest.
+        // The loop ran at least once, so policy is set.
         var catalog = ParseDiscovery(() => RemoteMcpMetadataParser.BuildCatalog(tools));
         return (catalog, policy!);
     }
@@ -241,6 +273,8 @@ public sealed class RemoteMcpDiscoveryService(
         {
             return await read().ConfigureAwait(false);
         }
+        // Map network failures and timeouts to one stable 503 error. A cancellation that the caller
+        // requested still propagates unchanged.
         catch (HttpRequestException)
         {
             throw RegistryUnavailable();
@@ -252,6 +286,7 @@ public sealed class RemoteMcpDiscoveryService(
         }
     }
 
+    // Parser failures mean the upstream returned bad data, so they map to 502 rather than 400.
     private static T ParseRegistry<T>(Func<T> parse)
     {
         try

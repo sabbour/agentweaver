@@ -29,6 +29,8 @@ public sealed record RemoteMcpToolRequirement
         bool delegatedAuthorization)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        // Use the same 128-character, no-control-character limit as discovered tool names, so any
+        // valid requirement can match a discovered tool.
         if (name.Length > 128 || name.Any(char.IsControl))
             throw new ArgumentException("MCP tool names must be bounded and contain no control characters.", nameof(name));
         if (!Enum.IsDefined(effect))
@@ -67,12 +69,16 @@ public sealed record RemoteMcpToolProviderRequirement
         ImmutableArray<RemoteMcpToolRequirement> tools)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toolProvider);
+        // Split on the last '@' so a scoped ID such as "@org/weather@1.0.0" keeps its leading '@'.
+        // Both the ID and the version must be non-empty.
         var separator = toolProvider.LastIndexOf('@');
         if (toolProvider.Length > 256 || toolProvider.Any(char.IsControl) ||
             separator < 1 || separator == toolProvider.Length - 1)
             throw new ArgumentException("Tool providers must use a bounded id@version reference.", nameof(toolProvider));
+        // Remote MCP connections use Streamable HTTP, so a provider with any other transport can't bind.
         if (!string.Equals(transport, StreamableHttpTransport, StringComparison.Ordinal))
             throw new ArgumentException("Remote tool providers must use the streamable-http transport.", nameof(transport));
+        // Duplicate names would make the bound tool list ambiguous, and the count matches the catalog limit.
         if (tools.IsDefault || tools.IsEmpty || tools.Length > 128 ||
             tools.Any(tool => tool is null) ||
             tools.Select(tool => tool.Name).Distinct(StringComparer.Ordinal).Count() != tools.Length)
@@ -109,7 +115,7 @@ public sealed record RemoteMcpBoundTool(string Name, string ToolRevision);
 
 /// <summary>
 /// Result of binding a tool provider requirement to the current connection snapshot. A bound result
-/// pins the configuration, catalog, and tool revisions for reviewed tool snapshots (#1925).
+/// pins the configuration, catalog, and tool revisions that a reviewed tool snapshot stores.
 /// </summary>
 public sealed record RemoteMcpToolProviderBindingResult(
     bool Bound,
@@ -138,6 +144,8 @@ public static class RemoteMcpToolProviderBinding
 
         var configuration = snapshot.Configuration;
         var catalog = snapshot.Catalog;
+        // A denial still reports the current configuration and catalog pins, so the caller can show
+        // what the connection looks like now. It never lists bound tools.
         RemoteMcpToolProviderBindingResult Deny(
             RemoteMcpToolProviderBindingDenial denial,
             ImmutableArray<string>? missing = null) => new(
@@ -151,17 +159,22 @@ public static class RemoteMcpToolProviderBinding
                 missing ?? [],
                 []);
 
+        // Check the package first. Static header secrets would need a secret store outside Identity's
+        // OAuth flow, which connections don't support, so no connection state could make this bind.
         if (requirement.HeaderSecretsDeclared)
             return Deny(RemoteMcpToolProviderBindingDenial.HeaderSecretsUnsupported);
         if (snapshot.Head.State != RemoteMcpConnectionState.Enabled)
             return Deny(RemoteMcpToolProviderBindingDenial.ConnectionNotEnabled);
         if (catalog is null)
             return Deny(RemoteMcpToolProviderBindingDenial.CatalogMissing);
+        // The catalog must belong to the current configuration, and the head must still point at both.
+        // Otherwise the tools were discovered against an endpoint the connection no longer uses.
         if (catalog.ConfigurationRevision != configuration.ConfigurationRevision ||
             snapshot.Head.CurrentConfigurationRevision != configuration.ConfigurationRevision ||
             snapshot.Head.CurrentDiscoveryRevision != catalog.DiscoveryRevision)
             return Deny(RemoteMcpToolProviderBindingDenial.CatalogStale);
 
+        // Report every missing tool at once, sorted, so the caller can fix the package or connection in one pass.
         var discovered = catalog.Tools.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
         var missingTools = requirement.Tools
             .Where(tool => !discovered.ContainsKey(tool.Name))
@@ -170,6 +183,7 @@ public static class RemoteMcpToolProviderBinding
             .ToImmutableArray();
         if (!missingTools.IsEmpty)
             return Deny(RemoteMcpToolProviderBindingDenial.ToolMissing, missingTools);
+        // A tool that acts for the user needs a delegated credential. Only delegated OAuth connections have one.
         if (requirement.Tools.Any(tool => tool.DelegatedAuthorization) &&
             configuration.AuthenticationMode != RemoteMcpAuthenticationMode.DelegatedOAuth)
             return Deny(RemoteMcpToolProviderBindingDenial.DelegatedAuthorizationUnavailable);
@@ -183,6 +197,7 @@ public static class RemoteMcpToolProviderBinding
             catalog.DiscoveryRevision,
             catalog.CatalogSha256,
             [],
+            // Pin each required tool to its exact discovered revision, in the package's order.
             requirement.Tools
                 .Select(tool => new RemoteMcpBoundTool(tool.Name, discovered[tool.Name].ToolRevision))
                 .ToImmutableArray());

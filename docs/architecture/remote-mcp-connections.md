@@ -79,7 +79,7 @@ The tools-list parser accepts at most 128 tools across all pages. Each tool must
 
 `RemoteMcpDiscoveryService` runs discovery for one enabled connection. It requires current `WriteProjects` authority and the expected row revision. It follows `tools/list` cursors until the last page and stops at the parser limits. When the connection has a Registry pin, it reads the exact Registry version again and compares the digest with the pin. A changed digest fails discovery with 409 and keeps the old catalog.
 
-Discovery calls `IRemoteMcpDiscoverySource`. The default `UnavailableRemoteMcpDiscoverySource` returns 503 `remote_mcp_discovery_transport_unavailable` and sends no network request. A trusted transport source from #1929 replaces it. Discovery output is a candidate for review. It does not accept a tool for use.
+Discovery calls `IRemoteMcpDiscoverySource`. The default `UnavailableRemoteMcpDiscoverySource` returns 503 `remote_mcp_discovery_transport_unavailable` and sends no network request. A trusted transport source replaces it when one is registered. Discovery output is a candidate for review. It does not accept a tool for use.
 
 A repeated discovery request with the same idempotency key returns the first result. Discovery reuses the existing `SaveDiscovery` idempotency operation, so it needs no new migration or grant.
 
@@ -89,7 +89,7 @@ Configuration revisions and saved catalog rows are immutable. Disable, removal, 
 
 ## Review references and invocation validity
 
-`Agentweaver.Abstractions` defines the contracts that reviewed tool snapshots (#1925) store and check:
+`Agentweaver.Abstractions` defines the contracts that reviewed tool snapshots store and check:
 
 - `RemoteMcpConnectionReviewReference` pins the project, connection, configuration revision, configuration SHA-256, discovery revision, and catalog SHA-256. Any change to the endpoint, resource, transport, authentication mode, Identity binding, or Registry pin creates a new configuration checksum. A token rotation does not change the reference.
 - `RemoteMcpConnectionReview.Evaluate` compares a reference and one tool revision with the current snapshot. It returns `RemoteMcpInvocationValidity` with a `RemoteMcpInvocationDenial` reason.
@@ -97,7 +97,7 @@ Configuration revisions and saved catalog rows are immutable. Disable, removal, 
 - A delegated OAuth connection returns `credentialValidityRequired: true` and the Identity binding reference. The caller must also get a current Identity credential decision before it sends a request.
 - `RemoteMcpConnectionDirectoryEntry` and `RemoteMcpConnectionDirectoryPage` carry the safe directory fields. They never contain credentials, tokens, or tool schemas.
 
-Environment rejects run-bound callers on these routes. Run-time admission and transport belong to #1929.
+Environment rejects run-bound callers on these routes. These routes don't send requests to the remote server. The trusted transport admits and sends run-time calls.
 
 ## AgentSuite tool providers
 
@@ -105,7 +105,7 @@ An AgentSuite package describes a remote Streamable HTTP provider with a `ToolPr
 
 `RemoteMcpToolProviderRequirement` carries the provider reference, the `streamable-http` transport, whether the provider declares static header secrets, and each tool's name, effect, approval mode, and delegated authorization flag. `RemoteMcpToolProviderBinding.Evaluate` checks the requirement against the current connection snapshot and returns `RemoteMcpToolProviderBindingResult`:
 
-- A bound result pins the configuration revision and SHA-256, the discovery revision, the catalog SHA-256, and the exact revision of each required tool. Reviewed tool snapshots (#1925) store these pins.
+- A bound result pins the configuration revision and SHA-256, the discovery revision, the catalog SHA-256, and the exact revision of each required tool. Reviewed tool snapshots store these pins.
 - A denied result gives one reason: `ConnectionNotEnabled`, `CatalogMissing`, `CatalogStale`, `ToolMissing` (with the missing tool names), `DelegatedAuthorizationUnavailable`, or `HeaderSecretsUnsupported`.
 
 The connection configuration replaces the provider's endpoint references:
@@ -113,7 +113,7 @@ The connection configuration replaces the provider's endpoint references:
 | Provider field | Source of truth |
 | --- | --- |
 | `endpointRef` | Connection endpoint URI and OAuth resource URI |
-| `network[].destinationRef` | Egress derived from the connection endpoint (#1929) |
+| `network[].destinationRef` | Egress derived from the connection endpoint by the trusted transport |
 | `delegatedAuthorization.credential.bindingRef` | Connection Identity binding. Requires delegated OAuth. |
 | `headers[].secretRef` | Not supported. Binding returns `HeaderSecretsUnsupported`. |
 | `timeouts` | Capped by Environment execution limits |
@@ -122,12 +122,12 @@ Binding never reads a credential. Run-time use still requires `RemoteMcpConnecti
 
 ### Import records
 
-The AgentSuite import (#2114) stores each binding as `toolConnections[{ toolProvider, connectionId }]`, where `toolProvider` is `id@version`. Projects & Config checks only the shape: `connectionId` must be a lowercase `D` format GUID and not the empty GUID. It never calls Environment and never resolves an endpoint or secret. Import reports these blockers:
+The AgentSuite import stores each binding as `toolConnections[{ toolProvider, connectionId }]`, where `toolProvider` is `id@version`. Projects & Config checks only the shape: `connectionId` must be a lowercase `D` format GUID and not the empty GUID. It never calls Environment and never resolves an endpoint or secret. Import reports these blockers:
 
 - `tool_connection_unbound`: a remote provider has no connection ID.
 - `tool_connection_header_secrets_unsupported`: the provider declares header `secretRef` values. This matches `HeaderSecretsUnsupported`.
 
-When reviewed tool snapshots (#1925) are built, the caller derives `RemoteMcpToolProviderRequirement` from the import record and calls `RemoteMcpToolProviderBinding.Evaluate` with the bound connection's current snapshot. Import doesn't reference these types.
+When a reviewed tool snapshot is built, the caller derives `RemoteMcpToolProviderRequirement` from the import record and calls `RemoteMcpToolProviderBinding.Evaluate` with the bound connection's current snapshot. Import doesn't call Environment, so a connection can change between import and review. The binding check at review time catches that change.
 
 ## Credential validity
 
