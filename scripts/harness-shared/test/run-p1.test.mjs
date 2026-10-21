@@ -371,24 +371,25 @@ test('P1 CLI stops before setup when the setup token is missing', async () => {
   }
 });
 
-test('P1 CLI fails closed when privileged setup has no verified receipt', async () => {
+test('P1 CLI fails closed when public API setup has no verified response', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
   const inputPath = path.join(directory, 'input.json');
   const outputPath = path.join(directory, 'evidence.jsonl');
   const output = [];
   try {
     await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
-    const setupError = new Error('Controlled privileged setup receipt loss.');
+    const setupError = new Error('Controlled public API setup response loss.');
     setupError.p1SetupState = {
       invocationId: '00000000-0000-4000-8000-000000000323',
       setup: null,
+      projectName: 'p1-00000000-0000-4000-8000-000000000323',
       setupAttempted: true,
-      commandFailures: [{
-        operationKind: 'setup',
-        productErrorCode: 'forbidden',
-        kubectlExitCode: 1,
-        processErrorClass: null,
-        stderrClass: 'product-code',
+      setupIndeterminate: true,
+      requestFailures: [{
+        step: 'create-project',
+        operationId: 'createProject',
+        status: 403,
+        problemCode: 'forbidden',
       }],
     };
     setupError.p1SetupCleanup = async () => ({
@@ -412,14 +413,16 @@ test('P1 CLI fails closed when privileged setup has no verified receipt', async 
     assert.equal(result.surfaceStatus, 'failed');
     assert.equal(result.fullP1Status, 'failed');
     assert.equal(result.observations.fixtureSetup.cleanup.state, 'indeterminate');
-    assert.equal(result.observations.fixtureSetup.commandFailures[0].productErrorCode, 'forbidden');
-    assert.equal(result.observations.fixtureSetup.commandFailures[0].kubectlExitCode, 1);
-    assert.match(result.observations.fixtureSetup.diagnosis.command, /--invocation-id 00000000-0000-4000-8000-000000000323$/);
+    assert.deepEqual(result.observations.fixtureSetup.requestFailures, [{
+      step: 'create-project', operationId: 'createProject', status: 403, problemCode: 'forbidden',
+    }]);
+    assert.equal(result.observations.fixtureSetup.diagnosis.projectName,
+      'p1-00000000-0000-4000-8000-000000000323');
     assert.match(result.failure.message, /reconcile the invocation before retrying/);
     const persisted = (await readFile(outputPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     const receipt = persisted.find(record => record.kind === 'p1-acceptance-result');
-    assert.deepEqual(receipt.observations.fixtureSetup.commandFailures,
-      result.observations.fixtureSetup.commandFailures);
+    assert.deepEqual(receipt.observations.fixtureSetup.requestFailures,
+      result.observations.fixtureSetup.requestFailures);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -466,7 +469,7 @@ test('P1 CLI resumes the same invocation, runs the selected journey, and records
         async createFixture(validated, options) {
           calls.push('fixture');
           assert.equal(options.invocationId, invocationId);
-          assert.equal(options.setupToken, 'controlled-setup-token');
+          assert.equal(Object.hasOwn(options, 'setupToken'), false);
           assert.deepEqual(options.api, { marker: 'setup-api' });
           const identity = await options.acquireRunIdentity({
             projectId: 'runner-owned-project',

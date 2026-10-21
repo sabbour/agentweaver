@@ -97,6 +97,16 @@ public static class GatewayRouteCatalog
             "getProject", "Read a project", ["runId"], forwardTenantSelector: true);
         Add("PATCH", GatewayOwner.Projects, "/projects/{projectId}", "/api/projects/{projectId}",
             "updateProject", "Update a project", body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/role-assignments",
+            "/api/projects/{projectId}/role-assignments",
+            "listProjectRoleAssignments", "List active project role assignments", forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, "/projects/{projectId}/role-assignments",
+            "/api/projects/{projectId}/role-assignments",
+            "assignProjectRole", "Assign a project role", body: true, forwardTenantSelector: true);
+        Add("DELETE", GatewayOwner.Projects, "/projects/{projectId}/role-assignments/{assignmentId}",
+            "/api/projects/{projectId}/role-assignments/{assignmentId}",
+            "revokeProjectRoleAssignment", "Revoke a project role assignment",
+            ["expectedRevision"], forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}/configuration",
             "/api/projects/{projectId}/configuration",
             "getProjectConfiguration", "Read project configuration", ["revision"],

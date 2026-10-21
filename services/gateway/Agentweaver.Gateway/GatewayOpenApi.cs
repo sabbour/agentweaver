@@ -21,6 +21,9 @@ internal static partial class GatewayOpenApi
             ["createProject"] = C("CreateProjectRequest", "ProjectSummary", "201"),
             ["getProject"] = C(null, "ProjectSummary", "200"),
             ["updateProject"] = C("UpdateProjectRequest", "ProjectSummary", "200"),
+            ["listProjectRoleAssignments"] = C(null, "ProjectRoleAssignmentList", "200"),
+            ["assignProjectRole"] = C("AssignProjectRoleRequest", "ProjectRoleAssignment", "201"),
+            ["revokeProjectRoleAssignment"] = C(null, "ProjectRoleAssignment", "200"),
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
             ["updateProjectConfiguration"] = C("UpdateProjectConfigurationRequest", "VersionedProjectConfiguration", "200"),
             ["listMarketplaceSources"] = C(null, "MarketplaceSourceList", "200"),
@@ -287,9 +290,9 @@ internal static partial class GatewayOpenApi
             responses["503"] = ProblemResponse("The marketplace source or skill content store is unavailable.");
             if (route.OperationId == "importMarketplaceSkill")
                 responses["500"] = ProblemResponse("The owner reported a skill content store integrity error.");
-        }
-        else if (route.OperationId is
-            "captureSourceControlWorkspaceOutput" or
+}
+else if (route.OperationId is
+    "captureSourceControlWorkspaceOutput" or
             "listSourceControlOutputCaptures" or
             "readSourceControlOutputCapture" or
             "readSourceControlOutputCaptureDiff" or
@@ -301,11 +304,45 @@ internal static partial class GatewayOpenApi
             responses["409"] = ProblemResponse("The accepted run selection or owner authority changed during the request.");
             responses["503"] = ProblemResponse("The capture store is unavailable or failed an integrity check.");
         }
+        else if (route.OperationId == "listProjectRoleAssignments")
+        {
+            responses["400"] = ProblemResponse("The request included query parameters.");
+            responses["403"] = ProblemResponse(
+                "The caller is not a tenant admin or a project Owner, or the token lacks api.read or is resource-bound.");
+            responses["404"] = ProblemResponse("The owner did not find the project in the caller's tenant.");
+        }
+        else if (route.OperationId is "assignProjectRole" or "revokeProjectRoleAssignment")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected the role, principal ID, or expected revision.");
+            responses["403"] = ProblemResponse(
+                "The caller is not a current tenant admin with api.read and projects.admin.");
+            responses["404"] = ProblemResponse(
+                "The owner did not find the project, the assignment, or an active tenant member with the principal ID.");
+            responses["409"] = ProblemResponse(
+                route.OperationId == "assignProjectRole"
+                    ? "The project is archived or the principal already has this active role."
+                    : "The assignment revision changed, or it is the last Owner of an active project.");
+            responses["503"] = ProblemResponse(
+                "Project role assignment is not enabled because the runtime database grants are not applied.");
+        }
 
         var description =
             $"Owner: {route.Owner}. The Gateway forwards the validated bearer and does not infer identity " +
             "from request bodies or caller-controlled identity headers. Owner authorization and JSON " +
             "contracts remain authoritative.";
+        if (route.OperationId == "listProjectRoleAssignments")
+        {
+            description +=
+                " Returns only active assignments. A current tenant admin or a project Owner can read the list.";
+        }
+        if (route.OperationId is "assignProjectRole" or "revokeProjectRoleAssignment")
+        {
+            description +=
+                " Only a current tenant admin can change project roles. The owner rechecks the caller's exact " +
+                "TenantAdmin assignment in the same serializable transaction as the change and writes an " +
+                "authority audit event. Revocation requires the assignment's current revision.";
+        }
         if (route.OperationId == "listProjectSkillInventory")
         {
             description +=
@@ -437,6 +474,7 @@ internal static partial class GatewayOpenApi
 
     private static bool IsRequiredQueryParameter(string operationId, string name) =>
         operationId == "removeMarketplaceSource" && name == "expectedRevision" ||
+        operationId == "revokeProjectRoleAssignment" && name == "expectedRevision" ||
         operationId == "browseMarketplaceSource" && name == "expectedSourceRevision" ||
         operationId == "readSourceControlOutputCaptureFile" && name == "path";
 
@@ -455,7 +493,7 @@ internal static partial class GatewayOpenApi
         if (operationId == "listProjectSkillInventory" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
 
-        if ((operationId == "removeMarketplaceSource" && name == "expectedRevision") ||
+        if ((operationId is "removeMarketplaceSource" or "revokeProjectRoleAssignment" && name == "expectedRevision") ||
             (operationId == "browseMarketplaceSource" && name == "expectedSourceRevision"))
             return Int();
 
@@ -523,6 +561,22 @@ internal static partial class GatewayOpenApi
         ["CreateProjectRequest"] = Obj(["name"], ("name", Str())),
         ["UpdateProjectRequest"] = Obj(["expectedRevision", "name", "state"],
             ("expectedRevision", Int()), ("name", Str()), ("state", Enum("active", "archived"))),
+        ["AssignProjectRoleRequest"] = StrictObj(["principalId", "role"],
+            ("principalId", Str()), ("role", Enum("owner", "contributor", "viewer", "orchestrator"))),
+        ["ProjectRoleAssignmentList"] = Obj(["projectId", "assignments"],
+            ("projectId", Str()), ("assignments", Arr(Ref("ProjectRoleAssignmentSummary")))),
+        ["ProjectRoleAssignmentSummary"] = Obj(
+            ["assignmentId", "principalId", "role", "revision", "createdBy", "createdAt"],
+            ("assignmentId", Uuid()), ("principalId", Str()),
+            ("role", Enum("owner", "contributor", "viewer", "orchestrator")),
+            ("revision", Int()), ("createdBy", Str()), ("createdAt", Date())),
+        ["ProjectRoleAssignment"] = Obj(
+            ["assignmentId", "projectId", "principalId", "role", "state", "revision", "grantedBy", "grantedAt",
+                "revokedBy", "revokedAt"],
+            ("assignmentId", Uuid()), ("projectId", Str()), ("principalId", Str()),
+            ("role", Enum("owner", "contributor", "viewer", "orchestrator")),
+            ("state", Enum("active", "revoked")), ("revision", Int()), ("grantedBy", Str()),
+            ("grantedAt", Date()), ("revokedBy", NullableStr()), ("revokedAt", Nullable(Date()))),
         ["ProjectAuthorizationContext"] = Obj(
             ["contractVersion", "issuer", "actorId", "tenantId", "membershipRevision", "boundProjectId", "boundRunId", "effectiveAuthority"],
             ("contractVersion", Int()), ("issuer", Str()), ("actorId", Str()), ("tenantId", Str()),
