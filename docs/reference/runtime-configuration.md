@@ -334,10 +334,43 @@ TenantAdmin command. They are not part of the runtime ConfigMap:
 | `ProjectsConfig__Migration__AccessToken` | Optional short-lived PostgreSQL Entra access token. The explicit command supplies it as the connection password. Store it in a short-lived Secret or environment variable. Do not put it in arguments or logs. |
 | `ProjectsConfig__Migration__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Alternative explicit workload identity for migration. Configure these settings or `AccessToken`, not both. |
 
+### Runtime authority writes
+
+The runtime database principal can write project role assignments only
+through the project role-assignment API. The API enforces the boundary, not
+the database grant:
+
+- Only a current tenant admin can assign or revoke a project role. The
+  request needs an unbound token with the `api.read` and `projects.admin`
+  scopes. The service rechecks the caller's exact TenantAdmin assignment and
+  revision in the same serializable transaction as the change.
+- Each change writes one `authority_audit` row in the same transaction.
+- The runtime principal can't delete assignment or audit rows, can't change
+  who, what, or where an assignment applies, and can't write tenant
+  memberships or tenant-level roles.
+
+The runtime principal needs these grants, defined in
+[`infra/bicep/postgres-projectsconfig-runtime-grants.sql`](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/postgres-projectsconfig-runtime-grants.sql):
+
+| Grant | Purpose |
+| --- | --- |
+| `INSERT` on `projects_config.project_role_assignments` | Add a new active assignment. |
+| `UPDATE (state, revision, revoked_by, revoked_at)` on `projects_config.project_role_assignments` | Mark an assignment revoked at its expected revision. |
+| `INSERT` on `projects_config.authority_audit` | Record each assignment and revocation. |
+
+An operator applies these grants separately; deployment doesn't apply them.
+Until they're applied, assign and revoke requests return `503` with the
+`role_assignment_unavailable` problem code, and no authority row changes.
+Listing assignments needs only the existing read grants. At startup, the
+service accepts either no authority write grants or exactly this set. It
+fails closed on a partial set or any other write privilege on authority
+tables, including `DELETE`.
+
+### Privileged project setup
+
 The privileged project-setup command has a separate authority database
 contract. The runtime connection and identity are not substitutes. The
-runtime principal must not write authority tables or read setup-operation
-receipts.
+runtime principal must not read setup-operation receipts.
 
 | Setting | Contract |
 | --- | --- |
@@ -356,16 +389,15 @@ database targets, and password-bearing connections. The authority client
 must be separately approved and federated to the ServiceAccount; validation
 does not establish that its federation or database grants exist.
 
-The current P1 runner executes
-`--privileged-project-setup` in the attested Projects Config pod, so that
-process must receive the approved authority configuration before setup can
-work. Adding it requires a separately reviewed configuration, workload
-identity, and deployment decision. Do not grant authority writes to the
-runtime principal, reuse migration credentials, or change Broker trust as
-a workaround. Missing authority configuration fails before the command
-opens a database connection; it does not establish the historical state
-of an invocation. See [Diagnose an indeterminate P1 project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
-for the read-only reconciliation steps.
+The P1 runner no longer runs `--privileged-project-setup`. It creates the
+fixture project and its Owner and Orchestrator assignments through the
+public API with the signed-in setup token. The command remains available for
+operators. Don't reuse migration credentials or change Broker trust as a
+workaround for a missing authority configuration. Missing authority
+configuration fails before the command opens a database connection; it
+does not establish the historical state of an invocation. See
+[Diagnose an indeterminate P1 project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
+for the reconciliation steps.
 
 The provider catalog is supplied separately with the
 `ProjectsConfig__ProviderCatalog__` prefix. See
