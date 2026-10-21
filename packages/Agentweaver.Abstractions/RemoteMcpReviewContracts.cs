@@ -30,6 +30,8 @@ public sealed record RemoteMcpConnectionDirectoryEntry(
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var configuration = snapshot.Configuration;
+        // Copy fields one by one rather than exposing the snapshot. Anything not listed here, such as
+        // the Identity binding reference and tool schemas, can't leak through the directory.
         return new(
             snapshot.Head.Connection.ConnectionId,
             configuration.DisplayName,
@@ -41,9 +43,11 @@ public sealed record RemoteMcpConnectionDirectoryEntry(
             snapshot.Head.RowRevision,
             configuration.ConfigurationRevision,
             configuration.ConfigurationSha256,
+            // Report only whether a binding exists. The reference itself is an Identity-internal handle.
             configuration.IdentityBindingReference is not null,
             configuration.RegistryServer?.ServerName,
             configuration.RegistryServer?.ExactVersion,
+            // A connection that was never discovered, or whose catalog was cleared, has no catalog fields.
             snapshot.Catalog?.DiscoveryRevision,
             snapshot.Catalog?.CatalogSha256,
             snapshot.Catalog?.Tools.Length ?? 0);
@@ -75,6 +79,8 @@ public sealed record RemoteMcpConnectionReviewReference
         string catalogSha256)
     {
         Connection = connection ?? throw new ArgumentNullException(nameof(connection));
+        // Revisions start at 1. Validate here so a stored reference is always well formed and the
+        // comparison rules never need to handle a zero or negative pin.
         if (configurationRevision < 1)
             throw new ArgumentOutOfRangeException(nameof(configurationRevision));
         if (discoveryRevision < 1)
@@ -99,6 +105,7 @@ public sealed record RemoteMcpConnectionReviewReference
     public static RemoteMcpConnectionReviewReference FromSnapshot(RemoteMcpConnectionSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        // A reference must point at something a call could use: an enabled connection with a pinned catalog.
         if (snapshot.Head.State != RemoteMcpConnectionState.Enabled || snapshot.Catalog is null)
             throw new InvalidOperationException("Only an enabled connection with a pinned catalog can be reviewed.");
         return new(
@@ -157,20 +164,30 @@ public static class RemoteMcpConnectionReview
         ArgumentNullException.ThrowIfNull(reviewed);
         ArgumentException.ThrowIfNullOrWhiteSpace(toolName);
         RemoteMcpDigest.ValidateSha256(toolRevision, nameof(toolRevision));
+        // The checks run from the broadest state to the most specific pin. The first failure wins, so
+        // the caller gets the most useful reason.
+        // A missing snapshot, or one for a different connection, means the reviewed connection is gone.
         if (current is null || current.Head.Connection != reviewed.Connection)
             return Deny(RemoteMcpInvocationDenial.ConnectionNotFound, reviewRequired: false, current);
         if (current.Head.State == RemoteMcpConnectionState.Removed)
             return Deny(RemoteMcpInvocationDenial.ConnectionRemoved, reviewRequired: false, current);
+        // Draft and disabled connections block use. An owner action can re-enable them without a new
+        // review, so these denials don't set reviewRequired.
         if (current.Head.State != RemoteMcpConnectionState.Enabled)
             return Deny(RemoteMcpInvocationDenial.ConnectionNotEnabled, reviewRequired: false, current);
+        // Compare both the revision and the checksum. The checksum covers the endpoint, resource,
+        // transport, authentication mode, Identity binding, and Registry pin, so any of those changing
+        // needs a new review.
         if (current.Configuration.ConfigurationRevision != reviewed.ConfigurationRevision ||
             !string.Equals(
                 current.Configuration.ConfigurationSha256,
                 reviewed.ConfigurationSha256,
                 StringComparison.Ordinal))
             return Deny(RemoteMcpInvocationDenial.ConfigurationChanged, reviewRequired: true, current);
+        // The configuration matches but no catalog is pinned yet. Discovery must run before review.
         if (current.Catalog is null)
             return Deny(RemoteMcpInvocationDenial.CatalogNotPinned, reviewRequired: false, current);
+        // Tool names are case-sensitive in MCP, so use an ordinal match.
         var tool = current.Catalog.Tools.FirstOrDefault(item =>
             string.Equals(item.Name, toolName, StringComparison.Ordinal));
         if (current.Catalog.DiscoveryRevision != reviewed.DiscoveryRevision ||
@@ -182,14 +199,22 @@ public static class RemoteMcpConnectionReview
                 reviewRequired: true,
                 current);
         }
+        // Same catalog as reviewed, but the caller named a tool the catalog never had. This is a caller
+        // error, not a change, so a new review wouldn't help.
         if (tool is null)
             return Deny(RemoteMcpInvocationDenial.ToolNotInCatalog, reviewRequired: false, current);
+        // The tool revision is a digest of its name, description, and schema. A mismatch means the
+        // caller reviewed a different definition.
         if (!string.Equals(tool.ToolRevision, toolRevision, StringComparison.Ordinal))
             return Deny(RemoteMcpInvocationDenial.ToolChanged, reviewRequired: true, current);
 
+        // Delegated OAuth needs an Identity binding to find the credential. Without one, no call can
+        // be authorized. Linking a binding is an owner action, so it doesn't require a new review.
         var oauth = current.Configuration.AuthenticationMode == RemoteMcpAuthenticationMode.DelegatedOAuth;
         if (oauth && current.Configuration.IdentityBindingReference is null)
             return Deny(RemoteMcpInvocationDenial.IdentityBindingMissing, reviewRequired: false, current);
+        // Environment allows the call. For delegated OAuth the caller still needs a current Identity
+        // credential decision, so return the binding reference for that check.
         return new(
             Allowed: true,
             RemoteMcpInvocationDenial.None,
@@ -209,6 +234,8 @@ public static class RemoteMcpConnectionReview
             reviewRequired,
             CredentialValidityRequired: false,
             IdentityBindingReference: null,
+            // Return the current reference when one exists, so the caller can show what a new review
+            // would pin. Never return the binding reference on a denial.
             current is { Head.State: RemoteMcpConnectionState.Enabled, Catalog: not null }
                 ? RemoteMcpConnectionReviewReference.FromSnapshot(current)
                 : null);

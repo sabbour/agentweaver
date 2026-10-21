@@ -1031,6 +1031,8 @@ public sealed class GatewayOwnerClient(
 
     private Uri BuildOwnerUri(GatewayOwner owner, string pathAndQuery)
     {
+        // The Environment owner address is optional configuration. Without it, return a clear 503 to the
+        // client instead of letting GetOwnerBaseAddress throw and surface as a 500.
         if (owner == GatewayOwner.Environment && options.EnvironmentOwnerBaseAddress is null)
             throw new GatewayOwnerFailureException(
                 StatusCodes.Status503ServiceUnavailable,

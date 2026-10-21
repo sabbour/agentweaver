@@ -406,6 +406,7 @@ export class AgentweaverGatewayClient {
     options: { pageSize?: number; after?: string } = {},
     tenantSelector?: string | null,
   ): Promise<RemoteMcpConnectionDirectoryPage> {
+    // Send only the paging options the caller set, so the Gateway applies its own defaults.
     const query = new URLSearchParams();
     if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
     if (options.after !== undefined) query.set('after', options.after);
@@ -417,6 +418,8 @@ export class AgentweaverGatewayClient {
       this.baseUrl,
       tenantSelector,
     );
+    // Check the response shape before use. A malformed owner response is reported as a 502, the same
+    // as other owner failures, rather than reaching the UI as untyped data.
     if (!isRemoteMcpConnectionDirectoryPage(page)) {
       throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The Remote MCP connection list is not valid.');
     }

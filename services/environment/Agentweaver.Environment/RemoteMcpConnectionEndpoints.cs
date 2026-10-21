@@ -98,6 +98,8 @@ public static class RemoteMcpConnectionEndpoints
                 return Results.Unauthorized();
             return await ExecuteAsync(context, async () =>
             {
+                // Resolve any Registry selection into a pinned draft before the store call. A bad
+                // Registry version fails here, before any row or idempotency record is written.
                 var result = await store.CreateAsync(
                     caller!,
                     projectId,
@@ -198,6 +200,7 @@ public static class RemoteMcpConnectionEndpoints
                     projectId,
                     connectionId,
                     request.ExpectedRowRevision,
+                    // Same Registry resolution as create. A changed Registry pin creates a new configuration revision.
                     await discovery.ResolveDraftAsync(
                         caller!,
                         projectId,
@@ -320,6 +323,8 @@ public static class RemoteMcpConnectionEndpoints
                 return Results.Unauthorized();
             return await ExecuteAsync(context, async () =>
             {
+                // Rebuild the review reference from the route and body. The project and connection come
+                // from the route, so a body can't point the check at another connection.
                 var reviewed = new RemoteMcpConnectionReviewReference(
                     new RemoteMcpConnectionReference(projectId, connectionId),
                     request.ConfigurationRevision,
@@ -333,6 +338,8 @@ public static class RemoteMcpConnectionEndpoints
             }).ConfigureAwait(false);
         });
 
+        // Project-level routes that don't address one connection. The Gateway forwards the public
+        // directory route here.
         var project = endpoints.MapGroup("/api/projects/{projectId}/remote-mcp")
             .RequireAuthorization();
 

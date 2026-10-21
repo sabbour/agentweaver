@@ -50,6 +50,8 @@ public sealed record GatewayOptions(
             RequiredHttpsRoot(owners["IdentityBrokerAddress"], "Gateway:Owners:IdentityBrokerAddress"),
             RequiredHttpsRoot(configuration["Gateway:WebOrigin"], "Gateway:WebOrigin"),
             TimeSpan.FromSeconds(timeoutSeconds),
+            // Environment is optional so existing deployments start without it. When it is set, it gets
+            // the same HTTPS root validation as the required owners.
             owners["Environment"] is null
                 ? null
                 : RequiredHttpsRoot(owners["Environment"], "Gateway:Owners:Environment"));

@@ -287,6 +287,8 @@ export function isRemoteMcpConnectionDirectoryEntry(
 ): value is RemoteMcpConnectionDirectoryEntry {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
+  // Connection IDs are GUIDs. Revisions start at 1, checksums are lowercase SHA-256 hex, and the
+  // catalog fields are null until discovery has pinned a catalog.
   return typeof entry.connectionId === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.connectionId) &&
     isNonEmptyString(entry.displayName) &&
@@ -316,6 +318,7 @@ export function isRemoteMcpConnectionDirectoryPage(
 ): value is RemoteMcpConnectionDirectoryPage {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const page = value as Record<string, unknown>;
+  // Reject the whole page if any entry is malformed. A null cursor means this is the last page.
   return Array.isArray(page.connections) &&
     page.connections.every(isRemoteMcpConnectionDirectoryEntry) &&
     isNullableString(page.nextConnectionId);
