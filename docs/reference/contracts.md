@@ -220,9 +220,9 @@ IDs server-side.
 The browser lifecycle, user-level selection APIs, and callbacks are not exposed
 as first-party MCP tools. Run-bound repository operations in the finite OpenAPI
 catalog remain available as ordinary MCP tools and require `tenantSelector`.
-Run-produced-file list/diff/content reads remain unavailable until the durable
-manifest/object-version owner in P2 #1917 is admitted; no raw filesystem Gateway
-proxy is part of this contract.
+Run-produced files are available through the Source Control output-capture
+operations: capture, list, read, diff, and file. They read pinned, immutable
+captures; no raw filesystem Gateway proxy is part of this contract.
 
 ## First-party MCP client
 
@@ -451,7 +451,7 @@ caller cannot submit a resource pin or override the durable binding.
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures` | List admitted captures after current read-authority and accepted-selection checks. `limit` defaults to 50 and is bounded to 100. Continue with both `beforeCapturedAt` and `beforeCaptureId` from the preceding page; the pair must be supplied together. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}` | Return the admitted capture summary and canonical manifest. Pending or unadmitted records are not exposed. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/diff` | Return the verified captured patch for this admitted capture. |
-| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/files?path={relativePath}` | Return one manifest-listed file as `application/octet-stream` and its SHA-256 in `X-Source-Control-Output-Sha256`. The path is a safe relative workspace path, not a host path. |
+| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/files?path={relativePath}` | Return one manifest-listed file as `application/octet-stream` and its SHA-256 in `X-Source-Control-Output-Sha256`. The path is a safe relative workspace path, not a host path. The Gateway serves the same five output-capture routes under `/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}` with a required `X-Agentweaver-Tenant` header, and the MCP host exposes them as `agentweaver_` tools. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents` | Read current PR facts from the pinned provider, persist an immutable merge request, then open typed Approval for that exact intent and accepted Merge step. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}` | Read an owner-bound merge intent without exposing credential values or transferable authority. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}/execute` | Execute only through the current source-specific grant and existing action guard, under a repository-scoped lock and exact-head/check preflight. The expected base is a fresh preflight, not an atomic compare-and-swap. |

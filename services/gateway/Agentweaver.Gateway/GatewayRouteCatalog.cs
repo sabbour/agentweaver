@@ -29,12 +29,23 @@ public sealed record GatewayRoute(
     bool ForwardSetCookie = false,
     bool JsonBodyRequired = true,
     long? MaximumRequestBodyBytes = null,
-    bool ForwardTenantSelector = false);
+    bool ForwardTenantSelector = false,
+    ImmutableArray<string> ExposedResponseHeaders = default,
+    long? MaximumResponseBytes = null);
 
 /// <summary>Defines the public v1 API surface and its owner paths, request bounds, and forwarding flags.</summary>
 public static class GatewayRouteCatalog
 {
     public const string VersionPrefix = "/api/v1";
+
+    /// <summary>Response header that carries the SHA-256 digest of a captured output file.</summary>
+    public const string SourceControlOutputSha256Header = "X-Source-Control-Output-Sha256";
+
+    /// <summary>
+    /// Response limit for produced-output reads. A capture holds up to a 32 MiB manifest,
+    /// an 8 MiB diff, and 16 MiB files, so these reads exceed the default proxy limit.
+    /// </summary>
+    public const long SourceControlOutputMaximumResponseBytes = 64L * 1024 * 1024;
 
     public static ImmutableArray<GatewayRoute> Routes { get; } = BuildRoutes();
 
@@ -57,7 +68,9 @@ public static class GatewayRouteCatalog
             bool requiresTenantSelector = false,
             bool jsonBodyRequired = true,
             long? maximumRequestBodyBytes = null,
-            bool forwardTenantSelector = false) =>
+            bool forwardTenantSelector = false,
+            string[]? exposedResponseHeaders = null,
+            long? maximumResponseBytes = null) =>
             routes.Add(new GatewayRoute(
                 method,
                 VersionPrefix + publicSuffix,
@@ -72,7 +85,9 @@ public static class GatewayRouteCatalog
                 requiresTenantSelector,
                 JsonBodyRequired: jsonBodyRequired,
                 MaximumRequestBodyBytes: maximumRequestBodyBytes,
-                ForwardTenantSelector: forwardTenantSelector || requiresTenantSelector));
+                ForwardTenantSelector: forwardTenantSelector || requiresTenantSelector,
+                ExposedResponseHeaders: (exposedResponseHeaders ?? []).ToImmutableArray(),
+                MaximumResponseBytes: maximumResponseBytes));
 
         Add("GET", GatewayOwner.Projects, "/projects", "/api/projects/",
             "listProjects", "List projects", forwardTenantSelector: true);
@@ -215,7 +230,10 @@ public static class GatewayRouteCatalog
             string summary,
             bool body = false,
             bool acceptsOnly = false,
-            bool jsonBodyRequired = true) =>
+            bool jsonBodyRequired = true,
+            string[]? query = null,
+            string[]? exposedResponseHeaders = null,
+            long? maximumResponseBytes = null) =>
             Add(
                 method,
                 GatewayOwner.Orchestrator,
@@ -223,10 +241,13 @@ public static class GatewayRouteCatalog
                 "/api" + sourceControl + suffix,
                 operationId,
                 summary,
+                query,
                 body: body,
                 acceptsOnly: acceptsOnly,
                 requiresTenantSelector: true,
-                jsonBodyRequired: jsonBodyRequired);
+                jsonBodyRequired: jsonBodyRequired,
+                exposedResponseHeaders: exposedResponseHeaders,
+                maximumResponseBytes: maximumResponseBytes);
 
         SourceControl("POST", "/pin",
             "pinSourceControlRepository", "Pin the selected repository",
@@ -242,6 +263,24 @@ public static class GatewayRouteCatalog
             "prepareSourceControlWorkspace", "Prepare a repository workspace", body: true);
         SourceControl("POST", "/workspaces/{workspaceId}/diff",
             "readSourceControlWorkspaceDiff", "Read a repository workspace diff", body: true);
+        // Produced-output reads come from the admitted capture, not from the live workspace.
+        SourceControl("POST", "/workspaces/{workspaceId}/output-captures",
+            "captureSourceControlWorkspaceOutput", "Capture produced output from a repository workspace",
+            body: true);
+        SourceControl("GET", "/output-captures",
+            "listSourceControlOutputCaptures", "List captured produced output",
+            query: ["limit", "beforeCapturedAt", "beforeCaptureId"]);
+        SourceControl("GET", "/output-captures/{captureId}",
+            "readSourceControlOutputCapture", "Read a produced-output capture and its file list",
+            maximumResponseBytes: SourceControlOutputMaximumResponseBytes);
+        SourceControl("GET", "/output-captures/{captureId}/diff",
+            "readSourceControlOutputCaptureDiff", "Read the diff of a produced-output capture",
+            maximumResponseBytes: SourceControlOutputMaximumResponseBytes);
+        SourceControl("GET", "/output-captures/{captureId}/files",
+            "readSourceControlOutputCaptureFile", "Read one file from a produced-output capture",
+            query: ["path"],
+            exposedResponseHeaders: [SourceControlOutputSha256Header],
+            maximumResponseBytes: SourceControlOutputMaximumResponseBytes);
         SourceControl("POST", "/merge-intents",
             "prepareSourceControlMergeIntent", "Request approval for a pull request merge",
             body: true,
