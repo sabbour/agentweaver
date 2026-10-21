@@ -49,8 +49,10 @@ public static class GatewayWebCors
         return services;
     }
 
-    /// <summary>Lists the Knowledge writes whose retries require an idempotency key header.</summary>
+    /// <summary>Lists owner writes whose retries require an idempotency key header.</summary>
     private static bool RequiresIdempotencyKey(string operationId) => operationId is
+        "createProjectRun" or
+        "cancelProjectRun" or
         "createKnowledgeRecord" or
         "updateKnowledgeRecord" or
         "restoreKnowledgeRecord" or
