@@ -138,3 +138,5 @@ mutation as a new operation or infer success after a broken connection.
   [runtime configuration reference](../reference/runtime-configuration.md), and
   [contracts and endpoints](../reference/contracts.md) provide configuration and
   API details.
+- [Platform components](../guide/platform-components.md) explains the
+  `/api/v1/platform/components` route that Gateway proxies to Projects & Config.

@@ -32,6 +32,8 @@ internal sealed class CoordinatorDecisionOwnerStore
     private readonly string _sourceControlPins;
     private readonly string _sourceControlIntents;
     private readonly string _outbox;
+    private readonly string _promotions;
+    private readonly string _dispatches;
     private readonly TimeProvider _timeProvider;
     private readonly CoordinatorRunSelectionContextStore _runSelectionContexts;
 
@@ -65,6 +67,8 @@ internal sealed class CoordinatorDecisionOwnerStore
         _sourceControlPins = $"{quotedSchema}.source_control_repository_pins";
         _sourceControlIntents = $"{quotedSchema}.source_control_merge_intents";
         _outbox = $"{quotedSchema}.coordinator_decision_outbox";
+        _promotions = $"{quotedSchema}.backlog_plan_promotions";
+        _dispatches = $"{quotedSchema}.maf_execution_dispatches";
         _runSelectionContexts = runSelectionContexts;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -422,13 +426,108 @@ internal sealed class CoordinatorDecisionOwnerStore
         string expectedWorkPlanId,
         CancellationToken cancellationToken)
     {
+        await ReadConfirmedWorkPlanStateInTransactionAsync(
+            connection, transaction, actor, identity, selection, selectionContext,
+            expectedStateVersion, expectedFence, expectedWorkPlanId,
+            "maf_execution_dispatch_stale", cancellationToken).ConfigureAwait(false);
+        // A promoted plan is owned by the backlog, so the run can't also dispatch it through MAF.
+        if (await IsWorkPlanPromotedAsync(
+                connection, transaction, identity, expectedWorkPlanId, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+    }
+
+    /// <summary>
+    /// Reads the current confirmed work plan for promotion into backlog tasks.
+    /// </summary>
+    /// <remarks>
+    /// The owner binding row is locked for update, so promotion and MAF dispatch for the run are serialized.
+    /// Promotion requires that the run has no registered children and no dispatch records.
+    /// </remarks>
+    /// <exception cref="CoordinationException">The plan is no longer current, or the run already started execution.</exception>
+    internal async Task<CoordinatorDecisionState> ReadConfirmedWorkPlanForPromotionInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        WorkPlanRunSelectionContext? selectionContext,
+        long expectedStateVersion,
+        long expectedFence,
+        string expectedWorkPlanId,
+        CancellationToken cancellationToken)
+    {
+        var state = await ReadConfirmedWorkPlanStateInTransactionAsync(
+            connection, transaction, actor, identity, selection, selectionContext,
+            expectedStateVersion, expectedFence, expectedWorkPlanId,
+            "backlog_promotion_stale", cancellationToken).ConfigureAwait(false);
+        // Promotion is allowed only before execution starts: no child sessions and no MAF dispatches.
+        if (await ReadRegisteredChildCountAsync(
+                connection, transaction, identity, cancellationToken).ConfigureAwait(false) != 0 ||
+            await HasDispatchRecordsAsync(connection, transaction, identity, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "backlog_promotion_run_started", StatusCodes.Status409Conflict);
+        return state;
+    }
+
+    // Returns true when the backlog has recorded a promotion of this plan in the run.
+    private async Task<bool> IsWorkPlanPromotedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        string workPlanId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_promotions}
+                WHERE project_id = @project AND run_id = @run AND work_plan_id = @plan)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
+        command.Parameters.AddWithValue("plan", NpgsqlDbType.Varchar, workPlanId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    // Returns true when MAF dispatch has recorded any work for the run.
+    private async Task<bool> HasDispatchRecordsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_dispatches}
+                WHERE project_id = @project AND run_id = @run)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    // Shared by dispatch and promotion. It locks the owner binding row, then checks that the fence,
+    // the decision version, the selection, and the confirmed plan ID still match. Each caller passes
+    // its own error code for a stale request.
+    private async Task<CoordinatorDecisionState> ReadConfirmedWorkPlanStateInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        WorkPlanRunSelectionContext? selectionContext,
+        long expectedStateVersion,
+        long expectedFence,
+        string expectedWorkPlanId,
+        string staleCode,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
         ValidateInput(actor, identity, selection);
         if (expectedStateVersion < 1 || expectedFence < 1 ||
             string.IsNullOrWhiteSpace(expectedWorkPlanId))
-            throw new CoordinationException(
-                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+            throw new CoordinationException(staleCode, StatusCodes.Status409Conflict);
 
         var selectionHash = HashSelection(selection.Selection);
         OwnerBinding binding;
@@ -443,12 +542,12 @@ internal sealed class CoordinatorDecisionOwnerStore
         {
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 throw new CoordinationException(
-                    "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+                    staleCode, StatusCodes.Status409Conflict);
             binding = ReadOwnerBinding(reader, selectionHash, selection.Authorization.TenantId);
         }
         if (binding.RunFence != expectedFence)
             throw new CoordinationException(
-                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+                staleCode, StatusCodes.Status409Conflict);
 
         var latest = await ReadLatestDecisionAsync(
             connection, transaction, identity, cancellationToken, forShare: true).ConfigureAwait(false);
@@ -458,7 +557,7 @@ internal sealed class CoordinatorDecisionOwnerStore
             latest.Envelope.Fence != expectedFence ||
             !string.Equals(latest.Envelope.AcceptedSelectionHash, binding.SelectionHash, StringComparison.Ordinal))
             throw new CoordinationException(
-                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+                staleCode, StatusCodes.Status409Conflict);
 
         var expectedBinding = CoordinatorDecisionBinding.Create(actor, identity, selection, binding.RunFence);
         var restored = await RestoreEnvelopeAsync(
@@ -472,7 +571,8 @@ internal sealed class CoordinatorDecisionOwnerStore
             !state.CanDispatch ||
             state.ConfirmedWorkPlan?.Plan.Id != expectedWorkPlanId)
             throw new CoordinationException(
-                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+                staleCode, StatusCodes.Status409Conflict);
+        return state;
     }
 
     /// <summary>
@@ -713,7 +813,7 @@ internal sealed class CoordinatorDecisionOwnerStore
     }
 
     /// <summary>
-    /// Advances decision state to a new execution fence as part of a run failure or recovery transaction.
+    /// Advances decision state to a new execution fence as part of a run failure, recovery, or cancellation transaction.
     /// </summary>
     /// <remarks>Current grants are superseded and any pinned provider binding is carried forward only to the immediate next fence.</remarks>
     internal async Task AdvanceExecutionFenceAsync(
@@ -730,9 +830,14 @@ internal sealed class CoordinatorDecisionOwnerStore
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
-        ValidateInput(actor, identity, selection);
+        // Cancellation authority belongs to the requester; the decision envelope remains bound to its original actor.
+        var cancelling = actionKind == "execution.cancelled";
+        if (cancelling)
+            CoordinationOwnerStore.RequireProjectRunCancellationAuthority(actor, selection);
+        else
+            ValidateInput(actor, identity, selection);
         if (nextFence != previousFence + 1 || operationId == Guid.Empty ||
-            actionKind is not ("execution.failed" or "execution.indeterminate" or "execution.recovered"))
+            actionKind is not ("execution.failed" or "execution.indeterminate" or "execution.recovered" or "execution.cancelled"))
             throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
 
         var latest = await ReadLatestDecisionAsync(
@@ -740,14 +845,24 @@ internal sealed class CoordinatorDecisionOwnerStore
         if (latest is null)
             return;
 
-        var previousBinding = CoordinatorDecisionBinding.Create(actor, identity, selection, previousFence);
+        var decisionActor = cancelling
+            ? new CoordinationActor(latest.Envelope.Issuer, latest.Envelope.Subject)
+            : actor;
+        var decisionSelection = cancelling
+            ? selection with
+            {
+                Authorization = selection.Authorization with
+                { Issuer = decisionActor.Issuer, ActorId = decisionActor.Subject }
+            }
+            : selection;
+        var previousBinding = CoordinatorDecisionBinding.Create(decisionActor, identity, decisionSelection, previousFence);
         var restored = await RestoreEnvelopeAsync(
             latest.Envelope, previousBinding, selection.Selection, cancellationToken).ConfigureAwait(false);
         if (!restored.IsValid || latest.StateVersion < 1 ||
             restored.State!.Fence != previousFence)
             throw InvalidPersistedState();
         var currentState = restored.State;
-        ValidateStateActor(currentState, actor);
+        ValidateStateActor(currentState, decisionActor);
 
         var selectionContext = await _runSelectionContexts.ReadAsync(
             selection.Selection, previousFence, cancellationToken).ConfigureAwait(false);
@@ -772,7 +887,7 @@ internal sealed class CoordinatorDecisionOwnerStore
         if (!nextStateResult.IsValid || nextStateResult.Value is null)
             throw InvalidPersistedState();
         var nextState = nextStateResult.Value;
-        var nextBinding = CoordinatorDecisionBinding.Create(actor, identity, selection, nextFence);
+        var nextBinding = CoordinatorDecisionBinding.Create(decisionActor, identity, decisionSelection, nextFence);
         var nextEnvelope = CoordinatorDecisionStateEnvelope.Capture(
             nextState,
             nextBinding,

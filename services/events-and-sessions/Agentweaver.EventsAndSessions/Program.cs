@@ -125,6 +125,9 @@ builder.Services.AddOpenIddict().AddValidation(validation =>
     validation.UseAspNetCore();
 });
 builder.Services.AddAuthorization();
+var platformComponentAuthentication =
+    PlatformComponentServiceAuthenticationOptions.ReadOptional(builder.Configuration, audience);
+builder.Services.AddPlatformComponentServiceAuthentication(platformComponentAuthentication);
 
 var projectOverrides = builder.Configuration.GetSection("EventsAndSessions:ProjectOverrides")
     .GetChildren()
@@ -144,6 +147,24 @@ if (costProvider is not null)
     builder.Services.AddSingleton<ICostProvider>(costProvider);
     builder.Services.AddSingleton<ICostProviderBinder, CopilotCostProviderBinder>();
 }
+// Azure BYOK pricing is enabled only by an explicit, versioned rate card; there is no default.
+var azureCostOptions = AzureCostProviderOptions.FromConfiguration(
+    builder.Configuration.GetSection("EventsAndSessions:Cost:Azure"));
+var azureCostProvider = azureCostOptions is null ? null : new AzureCostProvider(azureCostOptions);
+// Without the configuration section, no Azure provider is registered and BYOK token usage stays unpriced.
+if (azureCostProvider is not null)
+{
+    registrations.Add(azureCostProvider.CreateRegistration());
+    builder.Services.AddSingleton(azureCostProvider);
+    builder.Services.AddSingleton<AzureCostProviderBinder>();
+}
+// The catalog maps each meter source to exactly one Cost provider. Copilot usage and Azure BYOK token
+// usage use different meter sources, so both providers can be enabled together.
+var meterSourceSelections = new List<ProviderMeterSourceSelection>();
+if (costProvider is not null)
+    meterSourceSelections.Add(new(CopilotCostProvider.MeterSource, CopilotCostProvider.ProviderId));
+if (azureCostProvider is not null)
+    meterSourceSelections.Add(new(AzureCostProvider.MeterSource, AzureCostProvider.ProviderId));
 var permittedOverrides = projectOverrides.Values.Distinct(StringComparer.Ordinal)
     .Select(providerId => new ProviderOverridePermission(ProviderSeam.Sessions, providerId))
     .ToArray();
@@ -154,8 +175,8 @@ var catalogResult = ProviderCatalog.Create(
         new ProviderSelection(ProviderSeam.Messaging, NativePostgresMessagingProvider.ProviderId)
     ],
     permittedOverrides,
-    meterSourceSelections: costProvider is null ? []
-        : [new(CopilotCostProvider.MeterSource, CopilotCostProvider.ProviderId)]);
+    meterSourceSelections: meterSourceSelections);
+
 if (!catalogResult.IsSuccess)
     throw new InvalidOperationException("The Sessions provider catalog configuration is invalid.");
 var resolver = new ProviderResolver(catalogResult.Value!);
@@ -253,6 +274,34 @@ app.MapGet("/health/ready", async (CancellationToken ct) =>
         return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
     }
 });
+// Reports Sessions, Cost, and Messaging from the frozen catalog. Telemetry and Object Store are
+// built in, so their descriptors come from the in-process implementations.
+var telemetryDescriptor = PlatformComponentCatalogReporter.BuiltInDescriptor(
+    ProviderSeam.Telemetry, "opentelemetry", typeof(TelemetryServiceCollectionExtensions));
+var objectStoreDescriptor = materialContainer is null
+    ? null
+    : PlatformComponentCatalogReporter.BuiltInDescriptor(
+        ProviderSeam.ObjectStore, "azure-blob", typeof(AzureBlobObjectStore));
+app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
+    PlatformComponentCatalogReporter.CreateOwnerReportAsync(
+        PlatformComponentOwners.EventsAndSessions,
+        async token =>
+        {
+            await EventsAndSessionsMigrator.VerifyAsync(dataSource, options.Schema, token);
+            return true;
+        },
+        (readiness, observedAt) =>
+        [
+            PlatformComponentCatalogReporter.DescribeArea(catalogResult.Value!, ProviderSeam.Sessions, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(catalogResult.Value!, ProviderSeam.Cost, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(catalogResult.Value!, ProviderSeam.Messaging, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeSelected(
+                PlatformComponentAreaIds.Telemetry, telemetryDescriptor, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeSelected(
+                PlatformComponentAreaIds.ObjectStore, objectStoreDescriptor, readiness, observedAt),
+        ],
+        services.GetRequiredService<TimeProvider>(),
+        ct));
 app.MapEventsAndSessionsEndpoints();
 // Project usage reads are available even when native usage ingestion is disabled.
 app.MapProjectUsageEndpoints();

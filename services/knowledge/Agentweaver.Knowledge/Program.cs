@@ -130,6 +130,9 @@ builder.Services
         authentication.MapInboundClaims = false;
     });
 builder.Services.AddAuthorization();
+var platformComponentAuthentication =
+    PlatformComponentServiceAuthenticationOptions.ReadOptional(builder.Configuration, runtimeOptions.Audience);
+builder.Services.AddPlatformComponentServiceAuthentication(platformComponentAuthentication);
 builder.Services.ConfigureHttpJsonOptions(json =>
 {
     json.SerializerOptions.UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow;
@@ -177,6 +180,20 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapKnowledgeEndpoints();
+// Reports the Memory implementation selected in the frozen provider catalog.
+app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
+    PlatformComponentCatalogReporter.CreateOwnerReportAsync(
+        PlatformComponentOwners.Knowledge,
+        async token =>
+        {
+            await KnowledgeMigrator.VerifyAsync(
+                dataSource, runtimeOptions.MemoryProvider.Schema, token).ConfigureAwait(false);
+            return true;
+        },
+        (readiness, observedAt) =>
+            [PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.Memory, readiness, observedAt)],
+        services.GetRequiredService<TimeProvider>(),
+        ct));
 app.Run();
 
 // Ensures the catalog metadata exactly matches the native provider built from runtime configuration.

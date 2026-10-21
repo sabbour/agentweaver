@@ -111,7 +111,7 @@ public sealed class GatewayOwnerClient(
                 await context.Response.Body.WriteAsync(projectedBody, timeout.Token).ConfigureAwait(false);
                 return;
             }
-            if (response.Content.Headers.ContentLength is > MaximumProxyResponseBytes)
+            if (response.Content.Headers.ContentLength is { } ownerLength && ownerLength > MaximumResponseBytes(route))
             {
                 await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
                     .ConfigureAwait(false);
@@ -122,6 +122,7 @@ public sealed class GatewayOwnerClient(
             context.Response.Headers.CacheControl = "no-store";
             context.Response.Headers.XContentTypeOptions = "nosniff";
             CopyResponseHeaders(context, response, route.Owner, route.ForwardSetCookie);
+            CopyExposedResponseHeaders(context, response, route);
             if (response.Content.Headers.ContentType is { } contentType)
                 context.Response.ContentType = contentType.ToString();
             if (response.Content.Headers.ContentLength is { } contentLength)
@@ -132,7 +133,7 @@ public sealed class GatewayOwnerClient(
                 await CopyBoundedAsync(
                     await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false),
                     context.Response.Body,
-                    MaximumProxyResponseBytes,
+                    MaximumResponseBytes(route),
                     timeout.Token).ConfigureAwait(false);
         }
         catch (GatewayOwnerFailureException exception)
@@ -1088,6 +1089,22 @@ public sealed class GatewayOwnerClient(
                 ProblemBody("request_header_invalid", StatusCodes.Status400BadRequest));
         if (values.Count == 1 && values[0] is { } value)
             request.Headers.TryAddWithoutValidation(name, value);
+    }
+
+    /// <summary>Returns the route's response size limit, or the default proxy limit.</summary>
+    private static long MaximumResponseBytes(GatewayRoute route) =>
+        route.MaximumResponseBytes ?? MaximumProxyResponseBytes;
+
+    /// <summary>Copies the owner response headers that the route declares as part of its public contract.</summary>
+    private static void CopyExposedResponseHeaders(
+        HttpContext context,
+        HttpResponseMessage response,
+        GatewayRoute route)
+    {
+        if (route.ExposedResponseHeaders.IsDefaultOrEmpty)
+            return;
+        foreach (var name in route.ExposedResponseHeaders)
+            CopyHeader(response.Headers, context.Response.Headers, name);
     }
 
     private void CopyResponseHeaders(
