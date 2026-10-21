@@ -105,11 +105,32 @@ credit-limit totals. These methods do not authorize a model session or caller.
 The standalone Azure Cost adapter uses an explicitly configured, versioned card
 for model-scoped standard input/output token rates in the declared currency. It
 does not fetch rates or quote BYOK work. Missing token counts, unsupported cache
-categories, unknown models, and changed bindings remain `Unpriced`. Events must
-verify trusted Azure provider and deployment facts against the accepted runtime
-model pin before using this adapter for receipts. Until that source contract is
-admitted, BYOK receipt accounting remains `Unpriced`; provisioned-throughput
-usage also remains unpriced without trusted usage-share evidence.
+categories, unknown models, and changed bindings remain `Unpriced`.
+
+`RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok` is the trusted Azure
+BYOK producer contract. It accepts only an owner-issued receipt that passes
+`Validate` and has all of these facts:
+
+- The registration uses BYOK, and its model binding pin has provider type `azure`.
+- The SDK source reports provider type `azure`, the `byok.tokens` meter, and no
+  hosted multiplier.
+- The SDK deployment ID, the usage model ID, and the pinned model ID are equal.
+- The SDK configuration hash equals the pinned configuration hash.
+- The usage carries its dispatch message ID.
+
+The contract returns `TrustedAzureByokUsage`, which records the receipt ID,
+runtime instance, registration revision, dispatch ID, deployment ID, pinned
+configuration revision and hash, and receipt payload hash.
+
+`RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance` applies the same
+source checks without the dispatch message ID. Events applies this check to every
+receipt that claims Azure BYOK and rejects a failed claim with
+`runtime_byok_azure_provenance_invalid`. Usage from an untrusted producer never
+enters the ledger. Native SDK usage that has no dispatch message ID passes this
+check and is recorded as `Unpriced`. Only usage that passes
+`RequireTrustedAzureByok` can be priced. The default catalog does not register an
+Azure Cost provider, so admitted Azure BYOK usage is recorded as `Unpriced`.
+Provisioned-throughput usage remains unpriced without trusted usage-share evidence.
 
 ## Gateway API and server-sent events
 

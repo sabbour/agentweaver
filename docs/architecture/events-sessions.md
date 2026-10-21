@@ -191,8 +191,13 @@ currency. It performs exact decimal arithmetic, does not fetch live prices, and
 does not quote BYOK work. Missing token counts, unsupported cache categories,
 unknown models, and changed bindings remain `Unpriced`. Events must also verify
 trusted Azure provider and deployment facts against the accepted runtime model
-pin before it can price a source receipt. That source contract is not yet admitted,
-so the current receipt consumer keeps BYOK usage `Unpriced`. Provisioned-throughput
+pin before it can price a source receipt. `RequireTrustedAzureByok` performs that
+check. The receipt consumer applies the same source checks, without the dispatch
+message ID, to every receipt that claims Azure BYOK and rejects a failed claim, so
+untrusted usage never enters the ledger. Native SDK usage without a dispatch
+message ID is admitted as `Unpriced`. Events prices usage per dispatch, so it
+records this usage for token totals but doesn't assign it a cost. The default catalog has no Azure
+Cost provider, so admitted Azure BYOK usage stays `Unpriced`. Provisioned-throughput
 usage also remains `Unpriced` until trusted resource and time-window usage share
 is available.
 

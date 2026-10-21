@@ -171,6 +171,13 @@ internal sealed class NativeUsageReceiptConsumer(
         CancellationToken cancellationToken)
     {
         RuntimeUsageSourceReceiptContract.Validate(receipt);
+        // An Azure BYOK claim enters the ledger only when its source facts match the owner's pin.
+        // A failed check throws before the transaction opens, so nothing is written for an untrusted claim.
+        // This check doesn't require a dispatch message ID. Usage without one is admitted and recorded
+        // as Unpriced. It isn't rejected or dropped, so token totals stay complete.
+        // Receipts that don't claim Azure BYOK skip this check and keep their existing handling.
+        if (RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt))
+            RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(receipt);
         var sourceJson = JsonSerializer.Serialize(receipt, JsonOptions);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);

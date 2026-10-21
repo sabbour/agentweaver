@@ -46,8 +46,9 @@ checked-in application catalog:
 - `cosmos.memory` and `redis.memory` are optional Memory implementation
   candidates. The default catalog does not register either one.
 - `azure.byok-usage-cost` has an options contract, but the default catalog
-  selects Copilot cost. Azure BYOK usage is not priced until the runtime has
-  trusted provider, deployment, and usage-share evidence.
+  selects Copilot cost. Events admits Azure BYOK usage only from trusted
+  producers and records it as `Unpriced` until an Azure Cost provider is
+  configured.
 - Foundation Probe registrations such as `azure-blob`, `azure-key-vault`, and
   `azure-monitor` are probe descriptors. They do not make application
   providers selectable.
