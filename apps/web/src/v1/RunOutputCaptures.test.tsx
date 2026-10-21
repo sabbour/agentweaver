@@ -7,6 +7,8 @@ import { RunOutputCapturesPanel } from './RunOutputCaptures';
 const mocks = vi.hoisted(() => ({
   listRunOutputCaptures: vi.fn(),
   readRunOutputCaptureDiff: vi.fn(),
+  readSourceControlOutputCapture: vi.fn(),
+  readSourceControlOutputCaptureFile: vi.fn(),
   bindings: [] as unknown[],
 }));
 
@@ -25,6 +27,8 @@ vi.mock('./api', async (importOriginal) => ({
   gatewayClient: {
     listRunOutputCaptures: mocks.listRunOutputCaptures,
     readRunOutputCaptureDiff: mocks.readRunOutputCaptureDiff,
+    readSourceControlOutputCapture: mocks.readSourceControlOutputCapture,
+    readSourceControlOutputCaptureFile: mocks.readSourceControlOutputCaptureFile,
   },
 }));
 
@@ -51,6 +55,38 @@ beforeEach(() => {
 });
 
 describe('RunOutputCapturesPanel', () => {
+  it('opens captured files by name and clears the browser when the list refreshes', async () => {
+    mocks.listRunOutputCaptures.mockResolvedValue(page([capture('c1', 'branch')]));
+    mocks.readSourceControlOutputCapture.mockResolvedValue({
+      capture: { captureId: 'c1' }, manifest: { files: [{ path: 'README.txt' }] },
+    });
+    mocks.readSourceControlOutputCaptureFile.mockResolvedValue({
+      bytes: new TextEncoder().encode('Saved content'), sha256: null,
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse files' }));
+    expect(await screen.findByText('Saved content')).toBeTruthy();
+    expect(mocks.readSourceControlOutputCaptureFile)
+      .toHaveBeenCalledWith('token', 'p1', 'r1', 's1', 'tenant-1', 'c1', 'README.txt');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.queryByText('Saved content')).toBeNull());
+    expect(await screen.findByRole('button', { name: 'Browse files' })).toBeTruthy();
+  });
+
+  it('identifies every file in a multi-file capture diff', async () => {
+    const first = capture('c1', 'branch');
+    mocks.listRunOutputCaptures.mockResolvedValue(page([first]));
+    mocks.readRunOutputCaptureDiff.mockResolvedValue({
+      capture: first,
+      patch: 'diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -1 +1 @@\n-old\n+new\n'
+        + 'diff --git a/second.txt b/second.txt\n--- a/second.txt\n+++ b/second.txt\n@@ -1 +1 @@\n-old\n+next\n',
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: 'Show changes' }));
+    expect(await screen.findByText('first.txt')).toBeTruthy();
+    expect(screen.getByText('second.txt')).toBeTruthy();
+  });
+
   it('lists the saved file sets for the run session', async () => {
     mocks.listRunOutputCaptures.mockResolvedValue(page([
       capture('c1', 'agentweaver/run-1', { patchByteLength: 512 }),
@@ -93,7 +129,8 @@ describe('RunOutputCapturesPanel', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Show changes' }));
     const patch = await screen.findByLabelText('Changes on agentweaver/run-1');
-    expect(patch.textContent).toContain('+Hello');
+    // The retained diff viewer separates the addition marker, line numbers, and source text.
+    expect(patch.textContent).toContain('Hello');
     expect(mocks.readRunOutputCaptureDiff).toHaveBeenCalledWith('token', 'p1', 'r1', 's1', 'c1', 'tenant-1');
     expect(mocks.bindings.at(-1)).toEqual({ projectId: 'p1', runId: 'r1' });
 

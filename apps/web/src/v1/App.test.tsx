@@ -1642,7 +1642,7 @@ describe('v1 web project scoping', () => {
     expect(await screen.findByText('agent/feature')).toBeTruthy();
     expect(mocks.listRunOutputCaptures).toHaveBeenCalledWith('broker-token', 'p1', 'r1', 's1', { limit: 20 }, 'tenant-1');
     fireEvent.click(screen.getByRole('button', { name: 'Show changes' }));
-    expect(await screen.findByText('+added line')).toBeTruthy();
+    expect(await screen.findByLabelText('Changes on agent/feature')).toHaveProperty('textContent', expect.stringContaining('added line'));
     expect(mocks.readRunOutputCaptureDiff).toHaveBeenCalledWith('broker-token', 'p1', 'r1', 's1', 'cap-1', 'tenant-1');
   });
 

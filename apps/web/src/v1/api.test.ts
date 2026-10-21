@@ -3,6 +3,36 @@ import { AgentweaverGatewayClient } from './api';
 import type { KnowledgeRecordTransferBundle } from './contracts';
 
 describe('Gateway API client', () => {
+  it('reads exact captured file bytes and the digest with the explicit tenant', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(new Uint8Array([0, 255, 65]), {
+      headers: { 'X-Source-Control-Output-Sha256': 'digest' },
+    }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const result = await client.readSourceControlOutputCaptureFile('token', 'p1', 'r1', 's1', 'tenant', 'capture/1', 'folder/a #.bin');
+    expect([...result.bytes]).toEqual([0, 255, 65]);
+    expect(result.sha256).toBe('digest');
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toContain('/output-captures/capture%2F1/files?path=folder%2Fa+%23.bin');
+    expect(new Headers(init?.headers).get('Accept')).toBe('application/octet-stream');
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant');
+  });
+
+  it('keeps capture file errors structured instead of returning success-shaped bytes', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('{"code":"forbidden"}', { status: 403 }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    await expect(client.readSourceControlOutputCaptureFile('token', 'p', 'r', 's', null, 'c', 'a.txt'))
+      .rejects.toMatchObject({ status: 403, code: 'forbidden' });
+  });
+
+  it('rejects a manifest belonging to a different capture', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      capture: { captureId: 'other' }, manifest: { files: [] },
+    })));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    await expect(client.readSourceControlOutputCapture('token', 'p', 'r', 's', null, 'requested'))
+      .rejects.toMatchObject({ status: 502, code: 'invalid_owner_response' });
+  });
+
   it('does not send a request without a Broker access token', async () => {
     const fetcher = vi.fn<typeof fetch>();
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);

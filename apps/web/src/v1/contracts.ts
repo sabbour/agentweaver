@@ -1308,6 +1308,29 @@ export interface SourceControlOutputCaptureDiff {
   capture: SourceControlOutputCaptureSummary;
   patch: string;
 }
+
+/** A capture and its immutable file manifest. */
+export interface SourceControlOutputCaptureDetail {
+  capture: SourceControlOutputCaptureSummary;
+  manifest: {
+    contractVersion: number;
+    workspaceId: string;
+    runId: string;
+    repositoryId: string;
+    resourceGeneration: number;
+    workspaceIncarnationId: string;
+    branchName: string;
+    baseSha: string;
+    outputTreeSha: string;
+    files: { path: string; mode: string; sha256: string; byteLength: number }[];
+  };
+}
+
+/** Captured bytes and the digest returned by the owner. */
+export interface SourceControlOutputFileContent {
+  bytes: Uint8Array;
+  sha256: string | null;
+}
 /** Project configuration paired with the owner revision used for compare-and-swap updates. */
 export interface VersionedProjectConfiguration {
   projectId: string;

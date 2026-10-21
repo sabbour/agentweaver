@@ -6,11 +6,14 @@
 import { Button, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EmptyState } from '../components/ui/States';
+import { DiffViewer } from '../components/DiffViewer';
 import { GatewayError, gatewayClient } from './api';
 import { useAuth } from './AuthContext';
 import type { SourceControlOutputCaptureDiff, SourceControlOutputCaptureSummary } from './contracts';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, Panel } from './pageParts';
+import { ProducedFilesPanel } from './ProducedFilesPanel';
+import { splitCapturePatch } from './producedFiles';
 
 const PAGE_SIZE = 20;
 
@@ -18,17 +21,6 @@ const useStyles = makeStyles({
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, margin: 0, padding: 0, listStyle: 'none' },
   row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   muted: { color: tokens.colorNeutralForeground3 },
-  patch: {
-    margin: 0,
-    maxHeight: '480px',
-    overflow: 'auto',
-    padding: tokens.spacingHorizontalM,
-    backgroundColor: tokens.colorNeutralBackground3,
-    borderRadius: tokens.borderRadiusSmall,
-    fontFamily: tokens.fontFamilyMonospace,
-    fontSize: tokens.fontSizeBase200,
-    whiteSpace: 'pre',
-  },
 });
 
 /**
@@ -61,6 +53,7 @@ export function RunOutputCapturesPanel({ projectId, runId, sessionId }: { projec
   const [diff, setDiff] = useState<SourceControlOutputCaptureDiff | null>(null);
   const [diffLoadingId, setDiffLoadingId] = useState<string | null>(null);
   const [diffError, setDiffError] = useState<unknown>(null);
+  const [browsingCaptureId, setBrowsingCaptureId] = useState<string | null>(null);
   // Counts reads so a late response for an older run or page is ignored.
   const generation = useRef(0);
 
@@ -101,6 +94,7 @@ export function RunOutputCapturesPanel({ projectId, runId, sessionId }: { projec
     const timer = window.setTimeout(() => {
       setDiff(null);
       setDiffError(null);
+      setBrowsingCaptureId(null);
       void loadPage(null);
     }, 0);
     return () => window.clearTimeout(timer);
@@ -144,6 +138,15 @@ export function RunOutputCapturesPanel({ projectId, runId, sessionId }: { projec
               </Text>
               <Button
                 size="small"
+                onClick={() => {
+                  // File content belongs to the chosen immutable capture, not the live workspace.
+                  setBrowsingCaptureId(capture.captureId);
+                }}
+              >
+                Browse files
+              </Button>
+              <Button
+                size="small"
                 disabled={diffLoadingId !== null}
                 onClick={() => { void toggleDiff(capture.captureId); }}
               >
@@ -152,11 +155,19 @@ export function RunOutputCapturesPanel({ projectId, runId, sessionId }: { projec
             </li>
           ))}
         </ul>
+        {browsingCaptureId && (
+          <ProducedFilesPanel projectId={projectId} runId={runId} sessionId={sessionId} captureId={browsingCaptureId} />
+        )}
         {diffError != null && <ErrorNotice code={errorCode(diffError)}>{outputCaptureErrorMessage(diffError)}</ErrorNotice>}
         {diff && (
           diff.patch.length === 0
             ? <Text className={styles.muted}>This file set has no text changes.</Text>
-            : <pre className={styles.patch} aria-label={`Changes on ${diff.capture.branchName}`}>{diff.patch}</pre>
+            : <div aria-label={`Changes on ${diff.capture.branchName}`}>
+              {/* The retained viewer hides raw Git headers, so give each file its own heading. */}
+              {splitCapturePatch(diff.patch).map((section, index) => (
+                <DiffViewer key={index} diff={section.patch} filename={section.filename} />
+              ))}
+            </div>
         )}
         {cursor && (
           <Button disabled={loadingMore} onClick={() => { void loadPage(cursor); }}>
@@ -170,7 +181,12 @@ export function RunOutputCapturesPanel({ projectId, runId, sessionId }: { projec
     <Panel
       title="Produced files"
       description="File sets this run saved from its workspace, newest first."
-      actions={<Button disabled={loading || loadingMore} onClick={() => { setDiff(null); void loadPage(null); }}>Refresh</Button>}
+      actions={<Button disabled={loading || loadingMore} onClick={() => {
+        // A refresh may no longer admit the selected capture, so discard its visible content.
+        setDiff(null);
+        setBrowsingCaptureId(null);
+        void loadPage(null);
+      }}>Refresh</Button>}
     >
       {body}
     </Panel>

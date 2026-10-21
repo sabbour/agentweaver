@@ -615,10 +615,16 @@ The Gateway does not expose journal object-content reads, so the UI displays
 opaque references rather than inventing transcript text.
 
 The run's **Changes** tab lists **Produced files**: the file sets that the run
-saved from its workspace, newest first. **Show changes** shows the text patch
-of one set. The list is hidden while the run is failed or its outcome is
-unknown. The Web client does not read a host file system, and you can't
-browse the live workspace of a run.
+saved from its workspace, newest first. Select **Browse files**, then a file
+name, to view its saved contents. Markdown opens in **Preview**; **Source**
+shows the text. Files with invalid UTF-8 or NUL bytes show as binary.
+**Show changes** shows the text patch with the same diff viewer as the 0.x
+client. **Refresh** reloads the list. **Load older file sets** shows earlier
+saves without changing the selected file set.
+
+The list is hidden while the run is failed or its outcome is unknown. The
+client reads immutable saved files through the Gateway. It does not read a
+host file system or browse the live workspace of a run.
 
 The run's **Run settings** tab shows the model reference and the allowed
 implementations for each platform component, in order. It doesn't show the

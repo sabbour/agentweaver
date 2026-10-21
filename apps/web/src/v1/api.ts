@@ -84,6 +84,8 @@ import type {
   SessionStatusSnapshot,
   SessionTreeSnapshot,
   SourceControlOutputCaptureDiff,
+  SourceControlOutputCaptureDetail,
+  SourceControlOutputFileContent,
   SourceControlOutputCapturePage,
   SourceControlRepositoryPinView,
   UsageRunTotals,
@@ -151,13 +153,15 @@ export class AgentweaverGatewayClient {
     init: RequestInit = {},
     baseUrl = this.baseUrl,
     tenantSelector?: string | null,
+    rawResponse = false,
   ): Promise<T> {
     if (!token) {
       throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
     }
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
-    headers.set('Accept', 'application/json');
+    // Captured files request bytes; JSON remains the default for other routes.
+    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     if (tenantSelector !== undefined && tenantSelector !== null)
       headers.set('X-Agentweaver-Tenant', tenantSelector);
     if (init.body !== undefined) headers.set('Content-Type', 'application/json');
@@ -184,6 +188,8 @@ export class AgentweaverGatewayClient {
       throw new GatewayError(response.status, body, problemMessage(body, response.status));
     }
     if (response.status === 204) return undefined as T;
+    // Return bytes and headers only after the shared HTTP error handling has succeeded.
+    if (rawResponse) return response as T;
     return await response.json() as T;
   }
 
@@ -975,6 +981,54 @@ export class AgentweaverGatewayClient {
       throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The service returned a diff for a different capture.');
     return diff;
   }
+  /** Reads a saved file set and its manifest without accessing the live workspace. */
+  async readSourceControlOutputCapture(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantSelector: string | null,
+    captureId: string,
+  ): Promise<SourceControlOutputCaptureDetail> {
+    const detail = await this.request<SourceControlOutputCaptureDetail>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    // Reject a mismatched capture before offering its manifest as the file navigation.
+    if (detail?.capture?.captureId !== captureId || !Array.isArray(detail.manifest?.files))
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The service returned an invalid file set.');
+    return detail;
+  }
+
+  /** Reads the exact bytes of a path listed in the saved file manifest. */
+  async readSourceControlOutputCaptureFile(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantSelector: string | null,
+    captureId: string,
+    path: string,
+  ): Promise<SourceControlOutputFileContent> {
+    // Encode the path as one query value so slashes cannot change the API route.
+    const response = await this.request<Response>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'files')}?${new URLSearchParams({ path })}`,
+      { headers: { Accept: 'application/octet-stream' } },
+      this.baseUrl,
+      tenantSelector,
+      true,
+    );
+    // Keep bytes unchanged. A null digest means the browser could not read the header.
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      sha256: response.headers.get('X-Source-Control-Output-Sha256'),
+    };
+  }
+
   /** Reads the effective provider and source-control selection for one run. */
   getRunSelection(
     token: string,

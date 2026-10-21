@@ -86,7 +86,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Run page | Two-pane layout with status strip, **Run tree**, and tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. **Stop run** while the run is open. | Terminal diagnostic and retry. |
 | Run Chat | Journal and a composer for the coordinator or the selected session. | Nothing. |
 | Run Approvals | Shared decision view that rereads each gate before acting. | Nothing. |
-| Run Changes | GitHub App repository access for the run, and **Produced files**: the file sets the run saved, newest first, with **Show changes** for the patch and **Load older file sets**. | Nothing. |
+| Run Changes | GitHub App repository access for the run, and **Produced files**: saved file sets, newest first, with **Browse files**, the 0.x file viewer, **Show changes** with the 0.x diff viewer, **Refresh**, and **Load older file sets**. | Nothing. |
 | Run settings | Model, revisions, and implementations for each platform component. | Nothing. |
 | Agents | Metrics row, filter, tiles, drawer with Overview and Charter, **Cast team**, **Add member**, **Sync**, and **Pending team proposals**. | Nothing. |
 | Cast a team | Template or role picks, review with member removal, then confirm or reject. | Casting universes and the AI Formulate and Analyze modes. |
