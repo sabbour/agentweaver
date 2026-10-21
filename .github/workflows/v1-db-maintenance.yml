@@ -1,0 +1,113 @@
+name: v1 database maintenance
+
+# Runs the same command a person runs locally: npm run db:maintenance. It is manual only and
+# never runs on push or pull requests. Without "execute" it only checks preconditions.
+on:
+  workflow_dispatch:
+    inputs:
+      orchestrator_digest:
+        description: Published Orchestrator image digest (sha256:...)
+        required: true
+        type: string
+      events_digest:
+        description: Published EventsAndSessions image digest (sha256:...)
+        required: true
+        type: string
+      broker_digest:
+        description: Published Identity Broker image digest (sha256:...). Leave empty to skip the Broker Job.
+        required: false
+        type: string
+      handover:
+        description: Schema ownership handover (needs the PostgreSQL Entra administrator)
+        required: true
+        default: auto
+        type: choice
+        options: [auto, skip]
+      reconcile_broker_egress:
+        description: Re-apply the repository Broker egress policy if it has drifted
+        required: true
+        default: false
+        type: boolean
+      services:
+        description: >-
+          Running Orchestrator and EventsAndSessions services. block stops when they run other images;
+          deploy-after-migrate rolls them to the same digests after the migrations; apps-only skips all
+          database steps and only rolls them (for a schema that is already migrated).
+        required: true
+        default: block
+        type: choice
+        options: [block, deploy-after-migrate, apps-only]
+      execute:
+        description: Apply changes. Leave off for a read-only preflight.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  db-maintenance:
+    # One run at a time across the repository. The cluster Lease also blocks local overlaps.
+    concurrency:
+      group: v1-db-maintenance-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment: v1-db-maintenance
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Require the v1 branch
+        run: test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Database maintenance runs only from v1"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install tooling dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - uses: azure/setup-kubectl@v4
+      - uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: v0.2.10
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_DB_MAINTENANCE_CLIENT_ID }}
+          tenant-id: 72f988bf-86f1-41af-91ab-2d7cd011db47
+          subscription-id: 90ab3701-83f0-4ba1-a90a-f2e68683adab
+      - name: Run database maintenance
+        env:
+          ORCHESTRATOR_DIGEST: ${{ inputs.orchestrator_digest }}
+          EVENTS_DIGEST: ${{ inputs.events_digest }}
+          BROKER_DIGEST: ${{ inputs.broker_digest }}
+          HANDOVER: ${{ inputs.handover }}
+          RECONCILE: ${{ inputs.reconcile_broker_egress }}
+          SERVICES: ${{ inputs.services }}
+          EXECUTE: ${{ inputs.execute }}
+        run: |
+          args=(--orchestrator-digest "$ORCHESTRATOR_DIGEST" --events-digest "$EVENTS_DIGEST"
+                --receipt-dir "$RUNNER_TEMP/db-maintenance")
+          # apps-only rejects every database option, so they are added only for migration runs.
+          if [ "$SERVICES" = "apps-only" ]; then
+            args+=(--apps-only)
+          else
+            args+=(--handover "$HANDOVER")
+            if [ -n "$BROKER_DIGEST" ]; then args+=(--broker-digest "$BROKER_DIGEST"); fi
+            if [ "$RECONCILE" = "true" ]; then args+=(--reconcile-broker-egress); fi
+            if [ "$SERVICES" = "deploy-after-migrate" ]; then args+=(--deploy-apps); fi
+          fi
+          if [ "$EXECUTE" = "true" ]; then args+=(--execute); fi
+          npm run db:maintenance -- "${args[@]}"
+      - name: Upload receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-maintenance-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/db-maintenance/
+          if-no-files-found: warn
