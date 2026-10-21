@@ -221,16 +221,14 @@ public static class ProjectCastingCatalog
     /// <summary>Formats a role summary, responsibilities, and boundaries as the charter text.</summary>
     internal static string BuildCharter(ProjectCastingRoleDefinition role)
     {
+        // Use "\n" on every host so charters and the packages built from them are the same everywhere.
         var charter = new StringBuilder(role.Summary);
-        charter.AppendLine();
-        charter.AppendLine();
-        charter.AppendLine("Responsibilities:");
+        charter.Append("\n\nResponsibilities:\n");
         foreach (var responsibility in role.Responsibilities)
-            charter.Append("- ").AppendLine(responsibility);
-        charter.AppendLine();
-        charter.AppendLine("Boundaries:");
+            charter.Append("- ").Append(responsibility).Append('\n');
+        charter.Append("\nBoundaries:\n");
         foreach (var boundary in role.Boundaries)
-            charter.Append("- ").AppendLine(boundary);
+            charter.Append("- ").Append(boundary).Append('\n');
         return charter.ToString().TrimEnd();
     }
 
