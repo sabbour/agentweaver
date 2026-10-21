@@ -609,7 +609,11 @@ else if (route.OperationId is
 
         if (operationId == "listProjectSkillInventory" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
-        if (operationId is "listProjectRuns" or "listChiefOfStaffConversations" or "listUserNotifications" && name == "pageSize")
+        if (operationId == "listUserNotifications" && name == "pageSize")
+            return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
+        if (operationId == "listUserNotifications" && name == "includeDismissed")
+            return new { type = "boolean", @default = false };
+        if (operationId is "listProjectRuns" or "listChiefOfStaffConversations" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 100, @default = 25 };
         if (operationId == "listProjectRuns" && name == "state")
             return new
@@ -619,8 +623,6 @@ else if (route.OperationId is
                 pattern = "^(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal)" +
                     "(,(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal))*$",
             };
-        if (operationId == "listUserNotifications" && name == "includeDismissed")
-            return new { type = "boolean", @default = false };
 
         if ((operationId is "removeMarketplaceSource" or "revokeProjectRoleAssignment" && name == "expectedRevision") ||
             (operationId == "removeChiefOfStaffPriorityLink" && name == "expectedRevision") ||

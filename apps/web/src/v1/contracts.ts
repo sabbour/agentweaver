@@ -1127,21 +1127,14 @@ export type CoordinationBlockerKind =
   | 'awaitingApproval'
   | 'awaitingOutcomeConfirmation';
 
-/**
- * Origin of a notification. `pendingGate` items carry the gate request and state version.
- * `backlogPromoted` items report created subtasks for 24 hours; their gate fields are null.
- */
-export type UserNotificationSource = 'pendingGate' | 'backlogPromoted';
-
-/** One caller notification for the bell, the attention list, and the shared Flow view. */
+/** One pending owner gate for the existing bell, attention list, and shared Flow view. */
 export interface UserNotification {
   notificationId: string;
-  source: UserNotificationSource;
   projectId: string;
   runId: string;
   sessionId: string;
-  requestId: string | null;
-  kind: CoordinationBlockerKind | null;
+  requestId: string;
+  kind: CoordinationBlockerKind;
   prompt: string | null;
   createdAt: string;
   gateKind:
@@ -1150,12 +1143,9 @@ export interface UserNotification {
     | 'workPlanConfirmation'
     | 'scopeChangeConfirmation'
     | 'question'
-    | 'approval'
-    | null;
-  stateVersion: number | null;
+    | 'approval';
+  stateVersion: number;
   updatedAt: string;
-  promotionId: string | null;
-  taskCount: number | null;
 }
 
 /** Newest-first notifications and total pending count, after the requested dismissal filter. */

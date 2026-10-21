@@ -6,15 +6,18 @@ delivery queue or resolve a gate when you dismiss its notification.
 
 ## Read pending attention
 
-Call `GET /api/v1/notifications` through the Gateway with your normal browser
+Call `GET /api/v1/notifications` through the Gateway with an unbound browser
 access token and optional `X-Agentweaver-Tenant` selector. You do not need to
 open a run first. The caller needs `api.read` and both the Orchestrator and
-Projects audiences.
+Projects audiences. Unbound tokens are required: a token with a `project_id`
+or `run_id` claim returns `403 caller_binding_mismatch`, and a Projects owner
+response that reports a binding returns `502 projects_authorization_contract_invalid`.
+Token bindings do not narrow this caller-wide endpoint; use `projectId` instead.
 
 The owner checks current Projects authority before and after reading. Project
 `readProjects` or `readRunSelection` permits a project; tenant `readProjects`
-permits projects in that tenant. Use an unbound browser token, not a
-project-bound or run-bound token. Losing access removes those items on the next read.
+permits projects in that tenant. Losing access removes those items on the next
+read.
 
 The response contains:
 
@@ -26,7 +29,7 @@ The response contains:
 
 Use `pageSize` from 1 to 100; the default is 25. Pass `nextCursor` as `cursor`
 to read the next page without changing the query. Cursors bind the caller,
-tenant, membership revision, token binding, filters and page size. When those
+tenant, membership revision, filters and page size. When those
 change, start a new first page. Unknown, empty or repeated query parameters
 return `400 query_invalid`.
 
@@ -82,7 +85,7 @@ division: browser seen and sound state do not become gate state.
 and the tasks they actually created. Those notices need the v1 task-promotion
 owner contract; they must not be synthesized from unrelated task creation.
 The pending-gate endpoint does not claim to implement that source. Follow
-[#2175](https://github.com/sabbour/agentweaver/issues/2175) for the remaining
+[#2187](https://github.com/sabbour/agentweaver/issues/2187) for the remaining
 promotion-source integration and
 [#2176](https://github.com/sabbour/agentweaver/issues/2176) for repository issue
 synchronization. ADR 0001 does not drop these capabilities.

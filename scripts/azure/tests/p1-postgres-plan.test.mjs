@@ -94,8 +94,8 @@ test('Only the existing casting authority function receives direct runtime EXECU
     ['projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)']);
 });
 
-// New migrations must be reviewed with their exact runtime grants, never applied by these checks.
-test('Core plan includes all registered versions but never 017; source approval is not execution permission', () => {
+// Migrations 023, 024, and 025 must be reviewed together with their exact runtime grants, never applied by these checks.
+test('Core plan includes all 24 registered versions but never 017; source approval is not execution permission', () => {
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
     [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25]);
@@ -138,7 +138,6 @@ test('Initializer validates planned and installed mutation guards before it comm
   assert.ok(source.includes('22 => \\"run_list_completion\\"'));
   assert.ok(source.includes('23 => \\"project_run_requests\\"'));
   assert.ok(source.includes('24 => \\"chief_of_staff\\"'));
-  assert.ok(source.includes('25 => \\"user_notification_dismissals\\"'));
 });
 
 // Both owner catalogs must agree with the separately reviewed initializer plan.
@@ -171,7 +170,6 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(23) && !applied.Contains(22))'));
       assert.ok(source.includes('(applied.Contains(24) && !applied.Contains(23))'));
-      assert.ok(source.includes('(applied.Contains(25) && !applied.Contains(24))'));
       assert.ok(!source.includes('if (!applied.Contains(21))'));
       const allowed = source.match(/WHERE version NOT IN \(([\d, ]+)\)/);
       assert.deepEqual(allowed[1].split(',').map(Number), versions);

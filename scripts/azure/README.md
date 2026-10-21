@@ -159,12 +159,13 @@ empty tables. It doesn't alter or scan existing tables. Its runtime grants are
 `SELECT,INSERT` on `chief_of_staff_conversations`, `SELECT,INSERT,UPDATE` on
 `chief_of_staff_priority_lists` and `chief_of_staff_priorities`, and
 `SELECT,INSERT,DELETE` on `chief_of_staff_priority_links`.
+Version 25 adds the empty `user_notification_dismissals` table. Its only
+predecessor is version 2, which creates `coordinator_gates`. It doesn't alter or
+scan existing tables. Its runtime grant is `SELECT,INSERT` on that table.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan lists 102 tables and eight exact row-lock columns. Orchestrator migration
-025 adds the empty `user_notification_dismissals` table. Its runtime role needs
-only `SELECT,INSERT` on that table. The migration does not alter existing tables.
-This source change also changes the plan hash. Applying the migration or grants,
-or running initialization with the new hash, requires separate approval.
+The plan lists 102 tables and eight exact row-lock columns.
+Applying migrations or grants, or running initialization with the new plan hash,
+requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved

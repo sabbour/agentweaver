@@ -89,7 +89,7 @@ public sealed class UserNotificationContractTests
     {
         using var http = new HttpClient(new AuthorityHandler(Authority()));
         var client = Client(http);
-        var result = await client.ReadCallerAuthorityAsync(Context(), CancellationToken.None);
+        var result = await client.ReadNotificationAuthorityAsync(Context(), CancellationToken.None);
         Assert.Equal(Authority().ActorId, result.ActorId);
         Assert.Equal("project-a", Assert.Single(result.EffectiveAuthority).ResourceId);
     }
@@ -100,6 +100,10 @@ public sealed class UserNotificationContractTests
     [InlineData("tenant")]
     [InlineData("membership")]
     [InlineData("binding")]
+    [InlineData("run-binding")]
+    [InlineData("null-entry")]
+    [InlineData("null-permission")]
+    [InlineData("default-permissions")]
     public async Task RejectsMismatchedOwnerAuthority(string change)
     {
         var authority = change switch
@@ -109,11 +113,18 @@ public sealed class UserNotificationContractTests
             "tenant" => Authority() with { TenantId = "other" },
             "membership" => Authority() with { MembershipRevision = 0 },
             "binding" => Authority() with { BoundProjectId = "project-a" },
+            "run-binding" => Authority() with { BoundProjectId = "project-a", BoundRunId = "run-a" },
+            "null-entry" => Authority() with { EffectiveAuthority = [null!] },
+            "null-permission" => Authority() with
+            {
+                EffectiveAuthority = [new("project", "project-a", [null!])]
+            },
+            "default-permissions" => Authority(),
             _ => throw new ArgumentException(change)
         };
-        using var http = new HttpClient(new AuthorityHandler(authority));
+        using var http = new HttpClient(new AuthorityHandler(authority, change == "default-permissions"));
         var error = await Assert.ThrowsAsync<CoordinationException>(() =>
-            Client(http).ReadCallerAuthorityAsync(Context(), CancellationToken.None));
+            Client(http).ReadNotificationAuthorityAsync(Context(), CancellationToken.None));
         Assert.Equal("projects_authorization_contract_invalid", error.Code);
     }
 
@@ -122,6 +133,8 @@ public sealed class UserNotificationContractTests
     [InlineData("scope")]
     [InlineData("duplicate-project")]
     [InlineData("run-without-project")]
+    [InlineData("project-bound")]
+    [InlineData("run-bound")]
     public async Task RejectsInvalidBrowserClaimsBeforeCallingOwner(string change)
     {
         var context = Context();
@@ -131,9 +144,12 @@ public sealed class UserNotificationContractTests
         if (change == "duplicate-project")
             identity.AddClaims([new("project_id", "a"), new("project_id", "b")]);
         if (change == "run-without-project") identity.AddClaim(new("run_id", "run-a"));
-        using var http = new HttpClient(new AuthorityHandler(Authority()));
+        if (change == "project-bound") identity.AddClaim(new("project_id", "project-a"));
+        if (change == "run-bound")
+            identity.AddClaims([new("project_id", "project-a"), new("run_id", "run-a")]);
+        using var http = new HttpClient(new OwnerNotCalledHandler());
         var error = await Assert.ThrowsAsync<CoordinationException>(() =>
-            Client(http).ReadCallerAuthorityAsync(context, CancellationToken.None));
+            Client(http).ReadNotificationAuthorityAsync(context, CancellationToken.None));
         Assert.Equal(403, error.StatusCode);
     }
 
@@ -164,14 +180,25 @@ public sealed class UserNotificationContractTests
             throw new InvalidOperationException("Notifications do not read accepted selection snapshots.");
     }
 
-    private sealed class AuthorityHandler(ProjectsAuthorizationContext authority) : HttpMessageHandler
+    private sealed class OwnerNotCalledHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new InvalidOperationException("Rejected browser claims must not reach the Projects owner.");
+    }
+
+    private sealed class AuthorityHandler(ProjectsAuthorizationContext authority, bool nullPermissions = false)
+        : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Assert.Equal("/api/authorization/context", request.RequestUri!.AbsolutePath);
             Assert.Equal("Bearer notification-test", request.Headers.Authorization!.ToString());
             Assert.Equal("tenant-a", request.Headers.GetValues("X-Agentweaver-Tenant").Single());
-            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(authority) };
+            var body = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(
+                authority, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)))!;
+            if (nullPermissions)
+                body["effectiveAuthority"]![0]!["permissions"] = null;
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(body) };
             response.Headers.CacheControl = new() { NoStore = true };
             return Task.FromResult(response);
         }

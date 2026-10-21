@@ -55,7 +55,7 @@ internal sealed class UserNotificationStore
         return (all, ids);
     }
 
-    /// <summary>Reads one snapshot so badge count and page agree, narrowing bound tokens before paging.</summary>
+    /// <summary>Reads one snapshot so badge count and page agree; defensively narrows any bound authority before paging.</summary>
     internal async Task<UserNotificationPage> ListAsync(
         ProjectsAuthorizationContext authority, int pageSize, string? cursor, CancellationToken ct,
         string? projectId = null, bool includeDismissed = false)

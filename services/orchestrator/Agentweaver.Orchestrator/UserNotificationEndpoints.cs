@@ -20,10 +20,10 @@ public static class UserNotificationEndpoints
         {
             context.Response.Headers.CacheControl = "no-store";
             var (size, cursor, projectId, includeDismissed) = ParseQuery(context.Request.Query);
-            var authority = await projects.ReadCallerAuthorityAsync(context, cancellationToken).ConfigureAwait(false);
+            var authority = await projects.ReadNotificationAuthorityAsync(context, cancellationToken).ConfigureAwait(false);
             var page = await store.ListAsync(
                 authority, size, cursor, cancellationToken, projectId, includeDismissed).ConfigureAwait(false);
-            var current = await projects.ReadCallerAuthorityAsync(context, cancellationToken).ConfigureAwait(false);
+            var current = await projects.ReadNotificationAuthorityAsync(context, cancellationToken).ConfigureAwait(false);
             RequireUnchangedAuthority(authority, current);
             return Results.Ok(page);
         }, cancellationToken);
@@ -37,10 +37,10 @@ public static class UserNotificationEndpoints
             if (context.Request.Query.Count != 0 || context.Request.ContentLength is > 0 ||
                 context.Request.Headers.ContainsKey("Transfer-Encoding"))
                 throw new CoordinationException("query_invalid", 400);
-            var authority = await projects.ReadCallerAuthorityAsync(context, cancellationToken).ConfigureAwait(false);
+            var authority = await projects.ReadNotificationAuthorityAsync(context, cancellationToken).ConfigureAwait(false);
             await store.DismissAsync(authority, notificationId, cancellationToken, async ct =>
             {
-                var current = await projects.ReadCallerAuthorityAsync(context, ct).ConfigureAwait(false);
+                var current = await projects.ReadNotificationAuthorityAsync(context, ct).ConfigureAwait(false);
                 RequireUnchangedAuthority(authority, current);
             }).ConfigureAwait(false);
             return Results.NoContent();
