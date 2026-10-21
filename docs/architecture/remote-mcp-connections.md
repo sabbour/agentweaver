@@ -99,6 +99,27 @@ Configuration revisions and saved catalog rows are immutable. Disable, removal, 
 
 Environment rejects run-bound callers on these routes. Run-time admission and transport belong to #1929.
 
+## AgentSuite tool providers
+
+An AgentSuite package describes a remote Streamable HTTP provider with a `ToolProvider` document listed in its `ToolProviderCatalog`. The package declares the tools that the agent needs. It never contains the endpoint, a secret, or a credential. A project binds each provider (`id@version`) to one of its Remote MCP connections by connection ID. The connection ID is a GUID in `D` format.
+
+`RemoteMcpToolProviderRequirement` carries the provider reference, the `streamable-http` transport, whether the provider declares static header secrets, and each tool's name, effect, approval mode, and delegated authorization flag. `RemoteMcpToolProviderBinding.Evaluate` checks the requirement against the current connection snapshot and returns `RemoteMcpToolProviderBindingResult`:
+
+- A bound result pins the configuration revision and SHA-256, the discovery revision, the catalog SHA-256, and the exact revision of each required tool. Reviewed tool snapshots (#1925) store these pins.
+- A denied result gives one reason: `ConnectionNotEnabled`, `CatalogMissing`, `CatalogStale`, `ToolMissing` (with the missing tool names), `DelegatedAuthorizationUnavailable`, or `HeaderSecretsUnsupported`.
+
+The connection configuration replaces the provider's endpoint references:
+
+| Provider field | Source of truth |
+| --- | --- |
+| `endpointRef` | Connection endpoint URI and OAuth resource URI |
+| `network[].destinationRef` | Egress derived from the connection endpoint (#1929) |
+| `delegatedAuthorization.credential.bindingRef` | Connection Identity binding. Requires delegated OAuth. |
+| `headers[].secretRef` | Not supported. Binding returns `HeaderSecretsUnsupported`. |
+| `timeouts` | Capped by Environment execution limits |
+
+Binding never reads a credential. Run-time use still requires `RemoteMcpConnectionReview.Evaluate` and a current Identity credential decision.
+
 The Cilium Environment provider enforces L3/L4 egress only. Remote MCP needs L7 mediation, so this provider does not authorize or execute MCP requests.
 
 Separate optional TLS profiles register Environment's fixed Identity and
