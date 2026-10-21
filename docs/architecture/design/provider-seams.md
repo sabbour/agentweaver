@@ -797,8 +797,9 @@ Azure Retail Prices card with model-scoped standard input/output token rates and
 declared currency. It does not fetch live prices or quote BYOK work. Missing token
 counts, unsupported cache categories, unknown models, and changed bindings remain
 `unpriced`, not zero-cost. Events verifies trusted Azure provider and deployment
-facts bound to the accepted runtime model pin with `RequireTrustedAzureByok` and
-rejects any Azure BYOK claim that fails the check. Without a configured Azure Cost
+facts bound to the accepted runtime model pin and rejects any Azure BYOK claim
+that fails the check. Only usage that also carries its dispatch message ID passes
+`RequireTrustedAzureByok` and can be priced. Without a configured Azure Cost
 provider, admitted Azure BYOK usage stays `unpriced`. Provisioned
 throughput remains `unpriced` until trusted resource- and time-window-level usage
 share supplies its denominator. Other meter sources provide their own pricing.

@@ -395,12 +395,14 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
                 CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(registration, undispatched)
             }));
         Assert.Equal("runtime_byok_azure_provenance_invalid", untrusted.Code);
-        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => NativeConsumer().AppendAsync(receipt with
+        var uncorrelated = await NativeConsumer().AppendAsync(receipt with
         {
             ReceiptId = Guid.NewGuid(), Usage = undispatched,
             CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(registration, undispatched)
-        }, _ => Task.CompletedTask, default));
-        Assert.Equal(0, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+        }, _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, uncorrelated.Accounting.Disposition);
+        Assert.Null(uncorrelated.Accounting.Amount);
+        Assert.Equal(1, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
 
         var first = await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
         Assert.Equal(CostDisposition.Unpriced, first.Accounting.Disposition);
@@ -413,7 +415,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
         Assert.False(totals.IsFullyPriced);
         Assert.Empty(totals.Amounts);
-        Assert.Equal(17, Assert.Single(totals.Agents).InputTokens);
+        Assert.Equal(34, Assert.Single(totals.Agents).InputTokens);
     }
 
     [Fact]

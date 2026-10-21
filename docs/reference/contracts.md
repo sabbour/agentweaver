@@ -79,12 +79,17 @@ BYOK producer contract. It accepts only an owner-issued receipt that passes
 
 The contract returns `TrustedAzureByokUsage`, which records the receipt ID,
 runtime instance, registration revision, dispatch ID, deployment ID, pinned
-configuration revision and hash, and receipt payload hash. Events applies this
-check to every receipt that claims Azure BYOK and rejects a failed claim with
+configuration revision and hash, and receipt payload hash.
+
+`RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance` applies the same
+source checks without the dispatch message ID. Events applies this check to every
+receipt that claims Azure BYOK and rejects a failed claim with
 `runtime_byok_azure_provenance_invalid`. Usage from an untrusted producer never
-enters the ledger. The default catalog does not register an Azure Cost provider,
-so admitted Azure BYOK usage is recorded as `Unpriced`. Provisioned-throughput
-usage remains unpriced without trusted usage-share evidence.
+enters the ledger. Native SDK usage that has no dispatch message ID passes this
+check and is recorded as `Unpriced`. Only usage that passes
+`RequireTrustedAzureByok` can be priced. The default catalog does not register an
+Azure Cost provider, so admitted Azure BYOK usage is recorded as `Unpriced`.
+Provisioned-throughput usage remains unpriced without trusted usage-share evidence.
 
 ## Gateway API and server-sent events
 
