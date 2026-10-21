@@ -16,6 +16,10 @@ public static class GatewayEndpoints
             .AllowAnonymous();
         endpoints.MapGet("/health/ready", () => Results.Ok(new { status = "ready" }))
             .AllowAnonymous();
+        // Public download of the operator agent definition. Users save it into their
+        // own repository, so it needs no sign-in. It is excluded from the OpenAPI
+        // document because the MCP host turns OpenAPI operations into tools, and a
+        // file download must not become an MCP tool.
         endpoints.MapGet(
                 "/agents/agentweaver.agent.md",
                 () => Results.Text(AgentDefinitionTemplate.Content, "text/markdown; charset=utf-8"))
