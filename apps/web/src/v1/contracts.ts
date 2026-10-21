@@ -1750,6 +1750,8 @@ export interface BrokerTokenResponse {
   expires_in: number;
   refresh_token?: string;
   scope?: string;
+  /** OpenID Connect ID token, returned when the `openid` scope was granted. */
+  id_token?: string;
 }
 
 /** Project role a tenant administrator can assign. */

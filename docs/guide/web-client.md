@@ -150,6 +150,10 @@ settings**. In project settings, use **Connections** for the GitHub Repo App,
 Copilot, and Remote MCP. Existing `/orchestrations/:runId` links keep their
 query parameters when they open the run.
 
+The rail footer shows your name from the sign-in token's `name` claim, or
+`preferred_username` when `name` is absent. If the token has neither claim,
+the footer shows **Account**.
+
 ### Board and Start task
 
 The **Board** shows the project's backlog. It reads the backlog graph and

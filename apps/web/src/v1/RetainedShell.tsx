@@ -17,26 +17,30 @@ import packageInfo from '../../package.json';
 
 /**
  * Keeps the 0.x persona trigger and menu layout without requesting legacy identity APIs.
- * The Broker token carries no display name, so the label stays "Account". The 0.x status
- * dot polls a legacy health route, so the menu footer shows only the version badge.
+ * The label is the display name from the Broker ID token (`name`, else `preferred_username`);
+ * when the token carries neither, it stays "Account". The 0.x status dot polls a legacy
+ * health route, so the menu footer shows only the version badge.
  */
 export function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
-  const { signOut } = useAuth();
+  const { session, signOut } = useAuth();
   const styles = useIdentityMenuStyles();
+  const displayName = session?.displayName ?? null;
+  const label = displayName ?? 'Account';
   return (
     <Popover positioning="above-start">
       <PopoverTrigger disableButtonEnhancement>
         <Button
           appearance="transparent"
           type="button"
-          aria-label="Account"
+          // Keep "Account" in the accessible name so the control is findable either way.
+          aria-label={displayName ? `Account: ${displayName}` : 'Account'}
           className={collapsed ? mergeClasses(styles.trigger, styles.triggerCollapsed) : styles.trigger}
         >
           <span className={collapsed ? mergeClasses(styles.triggerInner, styles.triggerInnerCollapsed) : styles.triggerInner}>
             <span className={styles.fallbackAvatar} aria-hidden="true"><PersonRegular /></span>
             {!collapsed && (
               <>
-                <Text className={styles.label}>Account</Text>
+                <Text className={styles.label}>{label}</Text>
                 <ChevronDownRegular className={styles.chevron} aria-hidden="true" />
               </>
             )}
@@ -46,7 +50,7 @@ export function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
       <PopoverSurface>
         <div className={styles.popover}>
           <div className={styles.section}>
-            <Text weight="semibold">Signed in</Text>
+            <Text weight="semibold">{displayName ? `Signed in as ${displayName}` : 'Signed in'}</Text>
           </div>
           <Divider />
           <div className={styles.footer} data-testid="identity-menu-footer">

@@ -12,6 +12,7 @@ import {
   buildAuthorizeUrl,
   clearAuthorizationTransaction,
   defaultAuthorizationConfig,
+  displayNameFromIdToken,
   exchangeAuthorizationCode,
   isConsentPrompt,
   parseAuthorizationCallbackMessage,
@@ -41,6 +42,8 @@ interface AuthSession {
   refreshToken?: string;
   expiresAt: number;
   binding: RunBinding | null;
+  /** Display name from the ID token, or null when the Broker sent none. Shown in the persona menu. */
+  displayName: string | null;
 }
 
 /** Tenant authorization values confirmed by the Projects owner. */
@@ -187,6 +190,7 @@ function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null
     refreshToken: token.refresh_token,
     expiresAt: Date.now() + token.expires_in * 1000,
     binding,
+    displayName: displayNameFromIdToken(token.id_token),
   };
 }
 
@@ -284,11 +288,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [setActiveSession]);
 
   /** Stores a new session for its binding; `mode` decides whether others are kept and it becomes active. */
-  const storeSession = useCallback((next: AuthSession, mode: SessionMode) => {
+  const storeSession = useCallback((stored: AuthSession, mode: SessionMode) => {
     if (mode === 'replace') {
-      setSession(next);
+      setSession(stored);
       return;
     }
+    // Sessions kept side by side belong to the same signed-in person. A run-bound token
+    // without an ID token keeps the name the active session already shows.
+    const next = !stored.displayName && sessionRef.current?.displayName
+      ? { ...stored, displayName: sessionRef.current.displayName }
+      : stored;
     // A new token for the same binding replaces the old one in the map.
     sessionsRef.current.set(bindingKey(next.binding), next);
     // In `store` mode we still activate when the active session is already bound to this
@@ -716,6 +725,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const next = sessionFromToken(refreshed, current.binding);
         // Keep the old refresh token if the Broker did not rotate it.
         if (!next.refreshToken) next.refreshToken = refreshToken;
+        // A refresh response may omit the ID token; the person has not changed, so keep the name.
+        if (!next.displayName) next.displayName = current.displayName;
         // Sign-out or a new sign-in happened while we waited: do not put the old session back.
         if (sessionsRef.current.get(key) !== current) return sessionsRef.current.get(key) ?? null;
         sessionsRef.current.set(key, next);

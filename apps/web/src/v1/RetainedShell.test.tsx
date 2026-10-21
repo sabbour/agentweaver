@@ -7,9 +7,12 @@ import { BrokerIdentity, RetainedShell } from './RetainedShell';
 import { useSharedRunAttention } from './RunAttentionContext';
 import type { RunAttention } from './runAttention';
 
-const mocks = vi.hoisted(() => ({ apiCall: vi.fn(), useRunAttention: vi.fn(), instances: 0, listProjects: vi.fn(), getAuthorizationContext: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  apiCall: vi.fn(), useRunAttention: vi.fn(), instances: 0, listProjects: vi.fn(), getAuthorizationContext: vi.fn(),
+  session: { accessToken: 'token', displayName: null as string | null },
+}));
 const signOut = vi.fn();
-vi.mock('./AuthContext', () => ({ useAuth: () => ({ signOut, session: { accessToken: 'token' }, apiCall: mocks.apiCall }) }));
+vi.mock('./AuthContext', () => ({ useAuth: () => ({ signOut, session: mocks.session, apiCall: mocks.apiCall }) }));
 vi.mock('./api', async (importOriginal) => ({
   ...await importOriginal<typeof import('./api')>(),
   gatewayClient: { listProjects: mocks.listProjects, getAuthorizationContext: mocks.getAuthorizationContext },
@@ -29,6 +32,7 @@ const attention: RunAttention = {
 
 beforeEach(() => {
   mocks.instances = 0;
+  mocks.session.displayName = null;
   mocks.useRunAttention.mockReset().mockReturnValue(attention);
   // The shell loads the project list for the switcher, and Start task reads the caller's access.
   mocks.apiCall.mockReset().mockImplementation((operation: (token: string, tenant: string) => Promise<unknown>) => operation('token', 'tenant-1'));
@@ -77,6 +81,17 @@ describe('BrokerIdentity', () => {
     const trigger = screen.getByRole('button', { name: 'Account' });
     expect(within(trigger).queryByText('Account')).toBeNull();
     expect(getComputedStyle(trigger).justifyContent).toBe('center');
+  });
+
+  it('shows the display name from the sign-in session instead of "Account"', async () => {
+    mocks.session.displayName = 'Ada Lovelace';
+    render(<BrokerIdentity collapsed={false} />);
+
+    const trigger = screen.getByRole('button', { name: 'Account: Ada Lovelace' });
+    expect(within(trigger).getByText('Ada Lovelace')).toBeDefined();
+    expect(within(trigger).queryByText('Account')).toBeNull();
+    fireEvent.click(trigger);
+    expect(await screen.findByText('Signed in as Ada Lovelace')).toBeDefined();
   });
 });
 
