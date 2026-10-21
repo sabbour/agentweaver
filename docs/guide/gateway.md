@@ -151,6 +151,7 @@ request stores them.
 The following operations require exactly one `Idempotency-Key` header:
 
 - Runs: `createProjectRun` and `cancelProjectRun`.
+- Chief of Staff: `createChiefOfStaffPriority`.
 - Knowledge: `createKnowledgeRecord`, `updateKnowledgeRecord`,
   `restoreKnowledgeRecord`, `approveKnowledgeDecision`,
   `importKnowledgeRecords`, `promoteKnowledgeProposal`, and

@@ -261,6 +261,78 @@ A run-bound token sees only its own run. `pageSize` defaults to 25 and accepts
 Pass `nextCursor` back with the same filter and page size.
 `title` and `goal` are `null` until a run start request stores them.
 
+### Chief of Staff
+
+Native prefix: `/api/chief-of-staff`.
+Gateway prefix: `/api/v1/chief-of-staff`.
+
+These routes store a caller's private Chief of Staff conversations and
+Priorities. They never start, cancel, or change runs, sessions, or gates.
+New chats use the [Runs](#runs) routes, and the conversation entry binds the
+returned run. For guidance, see [Chief of Staff](../guide/chief-of-staff.md).
+
+| Method | Suffix | Query | Purpose | Gateway |
+| --- | --- | --- | --- | --- |
+| GET | `/conversations` | `cursor`, `pageSize` | List my conversations, newest first. | `listChiefOfStaffConversations` |
+| POST | `/conversations` | — | Bind a run that I created to a conversation entry. Returns `200` with the same entry on repeat. | `bindChiefOfStaffConversation` |
+| GET | `/conversations/{conversationId}` | — | Read one of my conversations. | `getChiefOfStaffConversation` |
+| GET | `/priorities` | — | List my Priorities in order, with `orderRevision`. | `listChiefOfStaffPriorities` |
+| POST | `/priorities` | — | Create a Priority at the end of the list. Requires `Idempotency-Key`. Returns `201`, or `200` on replay. | `createChiefOfStaffPriority` |
+| PUT | `/priorities/order` | — | Replace the order at `expectedOrderRevision`. | `reorderChiefOfStaffPriorities` |
+| GET | `/priorities/{priorityId}` | — | Read one Priority. | `getChiefOfStaffPriority` |
+| PATCH | `/priorities/{priorityId}` | — | Change outcome, notes, state, or checklist at `expectedRevision`. | `updateChiefOfStaffPriority` |
+| POST | `/priorities/{priorityId}/links` | — | Add a typed link at `expectedRevision`. | `addChiefOfStaffPriorityLink` |
+| DELETE | `/priorities/{priorityId}/links/{linkId}` | `expectedRevision` (required) | Remove a link. | `removeChiefOfStaffPriorityLink` |
+
+Every route requires the `api.read` scope and a token that isn't bound to a
+project or run. A bound token returns `403`. The Orchestrator reads fresh
+Projects authority on each call and returns only the caller's rows; another
+user's conversation or Priority returns `404`.
+
+Access rules:
+
+- Binding a conversation requires read permission on the project and a run
+  that the caller created through `POST /api/v1/projects/{projectId}/runs`.
+  Another user's run returns `404 conversation_run_not_found`.
+- Adding a link requires read permission on the linked project. A
+  `conversation` link must name one of the caller's conversations in the same
+  project.
+- Removing a link doesn't require project access, so users can remove links
+  to projects they no longer read.
+- When the caller loses read permission on a project, conversations and links
+  in that project return `access: unavailable` with only their identifier,
+  kind, and creation time. Priority outcome, notes, and checklist are the
+  caller's own content and stay visible.
+
+Revisions and conflicts:
+
+- Each Priority has a `revision`. Writes with a stale `expectedRevision`
+  return `409 priority_revision_conflict`. Reread the Priority, then retry.
+- The list has an `orderRevision`. A stale reorder returns
+  `409 priority_order_conflict`. A reorder that doesn't name every Priority
+  exactly once returns `400 priority_order_invalid`.
+- A create replay with the same key and body returns the original Priority. A
+  changed body returns `409 idempotency_conflict`.
+- Limits: 100 Priorities (`409 priority_limit_reached`), 50 links per
+  Priority (`409 priority_link_limit_reached`), and 50 checklist items. A
+  duplicate link returns `409 priority_link_exists`.
+
+Link kinds are `run`, `conversation`, `issue`, `pull_request`, and `artifact`.
+Every link names `projectId`. `run` needs `runId`, `conversation` needs
+`conversationId`, `issue` and `pull_request` need `number`, and `artifact`
+needs `runId` and `artifactId`. Reads resolve each link:
+
+| Kind | `state` |
+| --- | --- |
+| `run` | The current run state from the run list, or `access: missing` when the run doesn't exist. |
+| `conversation` | The run state, or the request state (`awaiting_binding`, `cancelled`) before the run starts. |
+| `issue`, `pull_request`, `artifact` | `unavailable`. The owners have no current-state read for these items. |
+
+Priority `state` is `active`, `achieved`, or `dropped`. It's the user's own
+judgment and doesn't depend on run state, so an outcome survives runs ending.
+An empty `notes` value clears the notes, and `checklist` replaces the whole
+list.
+
 ### Coordination
 
 Native prefix: `/api/projects/{projectId}/runs/{runId}/coordination`.

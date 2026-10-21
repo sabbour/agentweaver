@@ -104,6 +104,16 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
 | `listProjectRuns` | List accepted project runs, newest first. |
+| `listChiefOfStaffConversations` | List my private Chief of Staff conversations. |
+| `bindChiefOfStaffConversation` | Bind a run I created to a Chief of Staff conversation. |
+| `getChiefOfStaffConversation` | Read one of my Chief of Staff conversations. |
+| `listChiefOfStaffPriorities` | List my ordered Priorities with resolved links. |
+| `createChiefOfStaffPriority` | Create a Priority. Requires `Idempotency-Key`. |
+| `reorderChiefOfStaffPriorities` | Reorder my Priorities at an expected order revision. |
+| `getChiefOfStaffPriority` | Read one Priority. |
+| `updateChiefOfStaffPriority` | Change a Priority at an expected revision. Never changes run state. |
+| `addChiefOfStaffPriorityLink` | Link a Priority to a run, conversation, issue, pull request, or artifact. |
+| `removeChiefOfStaffPriorityLink` | Remove a Priority link at an expected revision. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |
