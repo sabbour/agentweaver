@@ -19,12 +19,14 @@ the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`a08792123f628dc89b0064cb28148acb8f6eb44a0f8d1a37a145f76315212ed7`.
+`d7af6c67fca93879fe38db35db3a096aa00008b36c3176c29dd7615809fa2141`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-27. Versions 023 and 024 come from
-v1. Version 027 requires 026 only. Merge order is #2197, then #2186, then
-#2196.
+placeholder. The Core list is 1-16, 18-28. Version 027 requires 026 only.
+Version 028 adds the append-only `guardrails_evaluations` table. It requires
+027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
+plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
+**unapplied code-only migration**.
 
 Orchestrator migration `032_source_control_pull_request_records.sql` adds the
 `source_control_pull_requests` table for the project pull request list. It
@@ -227,7 +229,7 @@ It requires version 21, adds no tables or grants, and blocks writes to
 Events requires versions 1 through 9 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 104 tables and eight exact row-lock columns.
+The plan lists 105 tables and eight exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

@@ -98,9 +98,11 @@ test('Only the existing casting authority function receives direct runtime EXECU
 test('Core plan includes all 26 registered versions but never 017; source approval is not execution permission', () => {
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'user_notification_dismissals').privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
+    .find(table => table.table === 'guardrails_evaluations').privileges, ['SELECT', 'INSERT']);
   assert.equal(plan.executionRequirements.length, 6);
   assert.ok(plan.executionRequirements.some(item => item.includes('separate approval')));
   const replacementGrant = plan.executionRequirements.find(item =>
@@ -167,7 +169,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
       assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(23) && !applied.Contains(22))'));
@@ -177,7 +179,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.deepEqual(allowed[1].split(',').map(Number), [...versions, 32]);
       assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
-      assert.ok(source.includes('Enumerable.Range(57, 30)'));
+      assert.ok(source.includes('Enumerable.Range(57, 33)'));
     } else {
       assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));
       assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));
@@ -200,7 +202,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 104);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 105);
   const orchestrator = plan.services.find(service => service.schema === 'orchestrator');
   assert.deepEqual(orchestrator.tables.find(table => table.table === 'project_run_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
@@ -213,8 +215,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [4, 0, 4, 4, 17]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 29);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [4, 0, 4, 4, 18]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 30);
   const projectSetupGuard = plan.services
     .find(service => service.schema === 'projects_config')
     ?.functions.find(item => item.signature === 'reject_project_setup_operation_mutation()');
