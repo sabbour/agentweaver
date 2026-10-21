@@ -57,6 +57,7 @@ export default defineConfig({
             { text: 'Web client', link: '/guide/web-client' },
             { text: 'Gateway/BFF', link: '/guide/gateway' },
             { text: 'Chief of Staff', link: '/guide/chief-of-staff' },
+            { text: 'Platform components', link: '/guide/platform-components' },
           ],
         },
         {

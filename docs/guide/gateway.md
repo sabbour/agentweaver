@@ -341,10 +341,13 @@ Gateway request bodies are limited to 64 KiB by default. The Knowledge import
 endpoint accepts up to 1 MiB. Inline Skill preview and import each accept up to
 3 MiB. The MCP JSON-RPC envelope adds a separate 64 KiB allowance.
 
-The Gateway does not expose journal object-content reads or run-produced-file
-browsing in v1. The durable run-bound artifact manifest and object-version
-producer has not been admitted, so neither the Gateway nor the retained Web
-client claims host-file access or parity with older monolithic file routes.
+The Gateway does not expose journal object-content reads in v1. It exposes
+run-produced files only through the Source Control output-capture routes:
+capture, list, read, diff, and file. Each capture is a pinned, immutable copy
+of a run's workspace output, so neither the Gateway nor the retained Web client
+reads a host filesystem. The three read routes accept owner responses up to
+64 MiB, and the file route exposes the `X-Source-Control-Output-Sha256` header
+to browser callers.
 
 ## Build and test the host
 

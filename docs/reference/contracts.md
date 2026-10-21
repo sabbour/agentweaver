@@ -220,9 +220,9 @@ IDs server-side.
 The browser lifecycle, user-level selection APIs, and callbacks are not exposed
 as first-party MCP tools. Run-bound repository operations in the finite OpenAPI
 catalog remain available as ordinary MCP tools and require `tenantSelector`.
-Run-produced-file list/diff/content reads remain unavailable until the durable
-manifest/object-version owner in P2 #1917 is admitted; no raw filesystem Gateway
-proxy is part of this contract.
+Run-produced files are available through the Source Control output-capture
+operations: capture, list, read, diff, and file. They read pinned, immutable
+captures; no raw filesystem Gateway proxy is part of this contract.
 
 ## First-party MCP client
 
@@ -452,7 +452,7 @@ caller cannot submit a resource pin or override the durable binding.
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures` | List admitted captures after current read-authority and accepted-selection checks. `limit` defaults to 50 and is bounded to 100. Continue with both `beforeCapturedAt` and `beforeCaptureId` from the preceding page; the pair must be supplied together. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}` | Return the admitted capture summary and canonical manifest. Pending or unadmitted records are not exposed. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/diff` | Return the verified captured patch for this admitted capture. |
-| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/files?path={relativePath}` | Return one manifest-listed file as `application/octet-stream` and its SHA-256 in `X-Source-Control-Output-Sha256`. The path is a safe relative workspace path, not a host path. |
+| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/files?path={relativePath}` | Return one manifest-listed file as `application/octet-stream` and its SHA-256 in `X-Source-Control-Output-Sha256`. The path is a safe relative workspace path, not a host path. The Gateway serves the same five output-capture routes under `/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}` with a required `X-Agentweaver-Tenant` header, and the MCP host exposes them as `agentweaver_` tools. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents` | Read current PR facts from the pinned provider, persist an immutable merge request, then open typed Approval for that exact intent and accepted Merge step. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}` | Read an owner-bound merge intent without exposing credential values or transferable authority. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}/execute` | Execute only through the current source-specific grant and existing action guard, under a repository-scoped lock and exact-head/check preflight. The expected base is a fresh preflight, not an atomic compare-and-swap. |
@@ -1047,6 +1047,29 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
 
+## Platform components report
+
+`PlatformComponentReport` in `Agentweaver.Abstractions` is the shared record for
+`GET /api/v1/platform/components`. Each owner service returns a
+`PlatformComponentOwnerReport` from `GET /internal/platform/components`.
+For behavior and examples, see [Platform components](../guide/platform-components.md).
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /api/platform/components` | Projects & Config requires `api.read`, an unbound non-purpose token, and a current TenantAdmin assignment for the caller's tenant or a current PlatformAdmin assignment. It asks the five owners in parallel with a three-second limit each, then returns all 16 areas in catalog order with `Cache-Control: no-store`. |
+| `GET /internal/platform/components` | Owner-only route, mapped only when `PlatformComponents:ServiceAuthentication` is configured. It accepts only a token for the private audience whose `sub` equals the configured Projects caller subject. Not in the Gateway OpenAPI document. |
+
+The report rules are:
+
+- Every area is present. A missing, failed, slow, or invalid owner answer
+  makes each of its areas `unknown` with reason `ownerUnavailable`.
+- Projects never reports a configured value as active without the owner's answer.
+- Canvas is always `notAvailable` with reason `noBackendOwner`.
+- An area's readiness is the least ready value among its active implementations.
+  An area with nothing selected is `disabled` with reason `notSelected`.
+- The report contains no option values, option revisions, endpoints,
+  credentials, or resource identifiers.
+
 ## Projects & Config host configuration
 
 For complete deployment-setting guidance, see
@@ -1255,6 +1278,12 @@ The consumer validates the native probe receipt against the admitted source SHA,
 
 Projects & Config validates skill markdown and text resources before storage.
 `POST /api/skills/preview` returns a content digest without storing the upload.
+`POST /api/skills/package` accepts exactly one of `files` (relative paths and
+base64 content), `archive` (a base64 ZIP), or `draft` (name, description, and
+instructions). It returns one package for each `SKILL.md` root, with the
+candidate, its preview, a per-skill error, and the binary or oversized paths it
+skipped. The upload is limited to 1,024 files and 2 MiB, and it stores nothing.
+Pass each candidate and digest to the import route.
 `POST /api/projects/{projectId}/skills/import` stores a new immutable revision
 and returns its receipt. The request supplies the expected digest, an idempotency
 key, and optional expected revision and source provenance. A repeated key with

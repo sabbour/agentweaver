@@ -259,6 +259,7 @@ Owner.
 | GET | `/api/catalog/roles` | Bearer | Read built-in roles. | `/api/v1/catalog/roles` |
 | GET | `/api/platform/runtime-defaults/` | `api.read`, `projects.admin`, unbound PlatformAdmin | Read platform runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | PUT | `/api/platform/runtime-defaults/` | Same PlatformAdmin authority | Append runtime defaults. | `/api/v1/platform/runtime-defaults` |
+| GET | `/api/platform/components` | `api.read`, unbound, current TenantAdmin for the caller's tenant or PlatformAdmin | Read active platform components and readiness for every area. See [Platform components](../guide/platform-components.md). | `/api/v1/platform/components` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
 
 ### Casting through the Gateway
@@ -293,11 +294,12 @@ Gateway prefix: `/api/v1/projects/{projectId}/skills`.
 | GET | `/` | Admin; archived projects allowed | Read revision inventory with `cursor` and `pageSize`. | Yes, empty suffix |
 | POST | `/import` | Admin | Import validated content with idempotency and digest checks. | Yes |
 | PUT | `/{skillId}/assignment` | Admin | Save pinned skill assignment at the expected configuration revision. | Yes |
-| POST | `/{skillId}/revisions/{revision:long}/revoke` | Admin | Revoke an imported revision. | No |
+| POST | `/{skillId}/revisions/{revision:long}/revoke` | Admin | Revoke an imported revision. | Yes |
 
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | POST | `/api/skills/preview` | `api.read`; unbound request | Validate local skill files without saving. | `/api/v1/skills/preview` |
+| POST | `/api/skills/package` | `api.read`; unbound request | Group uploaded files, a ZIP archive, or draft fields into skill candidates without saving. | `/api/v1/skills/package` |
 | GET | `/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Selection; exact agent and accepted pins | Read effective run skills. | No |
 
 ### Marketplace sources
@@ -606,6 +608,9 @@ Gateway prefix:
 These routes require Coordination authority and current Source Control
 selection/pins. Gateway routes require an explicit `X-Agentweaver-Tenant`.
 Merge operations also validate the current merge gate and intent.
+Output-capture reads return only admitted captures. The Gateway forwards the
+`X-Source-Control-Output-Sha256` file header and allows up to 64 MiB for capture
+reads, because a capture can hold a 32 MiB manifest and 16 MiB files.
 
 | Method | Suffix | Purpose | Gateway |
 | --- | --- | --- | --- |
@@ -615,11 +620,11 @@ Merge operations also validate the current merge gate and intent.
 | GET | `/pull-requests/{pullRequestNumber:long}/reviews` | Read reviews. | Yes |
 | POST | `/workspaces` | Prepare pinned repository workspace. | Yes |
 | POST | `/workspaces/{workspaceId}/diff` | Read repository diff. | Yes |
-| POST | `/workspaces/{workspaceId}/output-captures` | Capture verified produced output. | No |
-| GET | `/output-captures` | Read capture page. | No |
-| GET | `/output-captures/{captureId}` | Read capture metadata. | No |
-| GET | `/output-captures/{captureId}/diff` | Read captured diff. | No |
-| GET | `/output-captures/{captureId}/files` | Read exact captured file. | No |
+| POST | `/workspaces/{workspaceId}/output-captures` | Capture verified produced output. | Yes |
+| GET | `/output-captures` | Read capture page. | Yes |
+| GET | `/output-captures/{captureId}` | Read capture metadata. | Yes |
+| GET | `/output-captures/{captureId}/diff` | Read captured diff. | Yes |
+| GET | `/output-captures/{captureId}/files` | Read exact captured file. | Yes |
 | POST | `/merge-intents` | Request approval for merge intent. | Yes |
 | GET | `/merge-intents/{intentId}` | Read merge intent. | Yes |
 | POST | `/merge-intents/{intentId}/execute` | Execute approved intent. | Yes |
@@ -1013,6 +1018,17 @@ has separate measured readiness as listed above.
 
 The Web host maps its own health routes and SPA/static paths. See
 [web host reference](./web.md#host-health).
+
+## Platform component owner routes
+
+Events & Sessions, Environment, Knowledge, Orchestrator, and Identity Broker
+each map `GET /internal/platform/components` only when
+`PlatformComponents:ServiceAuthentication` is configured. The route accepts only
+a service token for the private audience whose `sub` claim equals the configured
+Projects caller subject. It returns the owner's areas with `Cache-Control:
+no-store`, and it's not in the Gateway OpenAPI document. Projects calls these
+routes for `GET /api/platform/components`. See
+[Platform components](../guide/platform-components.md).
 
 ## Registration and implementation boundaries
 
