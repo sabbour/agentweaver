@@ -69,7 +69,7 @@ describe('OutputCaptureBrowser', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Source' }));
     expect(screen.getByRole('tab', { name: 'Source' }).getAttribute('aria-selected')).toBe('true');
     expect(gatewayClient.readSourceControlOutputCaptureFile).toHaveBeenCalledWith(
-      'bound-token', 'p1', 'r-1', 'root', 'capture-1', capturedPath, 'tenant-1');
+      'bound-token', 'p1', 'r-1', 'root', 'tenant-1', 'capture-1', capturedPath);
     fireEvent.click(screen.getByRole('button', { name: 'Link capture' }));
     expect(select).toHaveBeenCalledExactlyOnceWith('capture-1');
     // Every read in the flow used the run binding, never the unbound session.

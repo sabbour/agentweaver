@@ -20,6 +20,12 @@ vi.mock('./RunAttentionContext', () => ({
 }));
 
 vi.mock('./AttentionList', () => ({ AttentionList: () => <p>No attention items</p> }));
+// Metrics tests isolate planning hooks; their owner reads are exercised in the planning suites.
+vi.mock('./chiefOfStaff', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./chiefOfStaff')>(),
+  useChiefOfStaffConversations: () => ({ items: [], loading: false, error: null, reload: vi.fn() }),
+  useChiefOfStaffPriorities: () => ({ list: { items: [], orderRevision: 1 }, loading: false, error: null, reload: vi.fn() }),
+}));
 
 vi.mock('./runListData', async (importOriginal) => ({
   ...await importOriginal<typeof import('./runListData')>(),

@@ -7,6 +7,7 @@ import { SessionsPage } from './SessionsPage';
 const mocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
   listProjectRuns: vi.fn(),
+  listChiefOfStaffConversations: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
   // The real auth context returns a stable apiCall, so the mock does too.
   apiCall: <T,>(operation: (token: string, tenant: string | null) => Promise<T>) => operation('token', 'tenant'),
 }));
@@ -16,7 +17,10 @@ vi.mock('./AuthContext', () => ({
 }));
 vi.mock('./api', async (importOriginal) => ({
   ...await importOriginal<typeof import('./api')>(),
-  gatewayClient: { listProjects: mocks.listProjects, listProjectRuns: mocks.listProjectRuns },
+  gatewayClient: {
+    listProjects: mocks.listProjects, listProjectRuns: mocks.listProjectRuns,
+    listChiefOfStaffConversations: mocks.listChiefOfStaffConversations,
+  },
 }));
 vi.mock('./pageParts', async () => {
   const actual = await vi.importActual<typeof import('./pageParts')>('./pageParts');

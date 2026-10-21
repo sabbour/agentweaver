@@ -98,6 +98,7 @@ import { RunOutputCapturesPanel } from './RunOutputCaptures';
 import { OutputCaptureBrowser } from './OutputCaptureBrowser';
 import { TranscriptPanel } from './TranscriptPanel';
 import { useTurnTranscript } from './turnTranscript';
+import { pinnedDecisionFromSearch } from './runAttention';
 import { rememberRun } from './recentRuns';
 import { DecisionList } from './DecisionView';
 import { NewChatComposer } from './NewChatComposer';
@@ -2896,7 +2897,7 @@ function RunPage() {
           )}
           {tab === 'chat' && <ChatView key={`${projectId}/${runId}/${session?.accessToken ?? ''}`} projectId={projectId} runId={runId} nodes={nodes} targetSessionId={chatTarget} journalEvents={journal.events} apiCall={apiCall} snapshotBusy={snapshotBusy} />}
           {tab === 'approvals' && (
-            <DecisionList projectId={projectId} runId={runId} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
+            <DecisionList projectId={projectId} runId={runId} pinned={pinnedDecisionFromSearch(searchParams)} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
           )}
           {tab === 'activity' && (
             <div className="v1-stack">

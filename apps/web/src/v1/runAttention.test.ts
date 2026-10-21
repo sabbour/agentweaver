@@ -7,10 +7,27 @@ import {
   attentionKey,
   attentionPath,
   fromUserNotification,
+  pinnedDecisionFromSearch,
   subtasksCreatedLabel,
   useRunAttention,
 } from './runAttention';
 import type { AttentionItem } from './runAttention';
+
+describe('pinned decision navigation', () => {
+  it.each(['', 'requestId=q1', 'stateVersion=4', 'requestId=q1&stateVersion=abc',
+    'requestId=q1&stateVersion=-1', 'requestId=q1&stateVersion=1.5',
+    'requestId=q1&stateVersion=9007199254740992'])('rejects malformed pin %s', (query) => {
+    expect(pinnedDecisionFromSearch(new URLSearchParams(query))).toBeNull();
+  });
+
+  it('carries the exact request and version from an attention item', () => {
+    const item: AttentionItem = { source: 'pendingGate', notificationId: 'n', projectId: 'p', runId: 'r',
+      sessionId: 's', requestId: 'q1', stateVersion: 3, kind: 'awaitingApproval', prompt: null, createdAt: '' };
+    expect(attentionPath(item)).toBe('/projects/p/runs/r?view=approvals&requestId=q1&stateVersion=3');
+    expect(pinnedDecisionFromSearch(new URLSearchParams('requestId=q1&stateVersion=3')))
+      .toEqual({ requestId: 'q1', stateVersion: 3 });
+  });
+});
 
 const mocks = vi.hoisted(() => {
   const apiCall = vi.fn((operation: (token: string, tenant: string) => Promise<unknown>) => operation('token', 'tenant-1'));
@@ -52,7 +69,7 @@ const gateItem: AttentionItem = {
 
 describe('fromUserNotification', () => {
   it('maps a pending gate and requires its gate fields', () => {
-    expect(fromUserNotification(notification())).toEqual(gateItem);
+    expect(fromUserNotification(notification())).toEqual({ ...gateItem, stateVersion: 3 });
     expect(fromUserNotification(notification({ requestId: null }))).toBeNull();
     expect(fromUserNotification(notification({ kind: null }))).toBeNull();
   });

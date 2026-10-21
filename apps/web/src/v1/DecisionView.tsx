@@ -32,37 +32,56 @@ export interface DecisionKey {
   runId: string;
   sessionId: string;
   requestId: string;
+  /**
+   * Decision-state version the user saw, for example from a notification. When set,
+   * a reread with a different version sends nothing; the next action uses the reread version.
+   */
+  stateVersion?: number;
 }
 
+/** Shown when the reread finds a different decision-state version than the one the user opened. */
+export const STALE_DECISION_NOTICE = 'This request changed since you opened it. Nothing was sent. Review it and try again.';
+
 /** Sends an answer or decision for one exact pending request. */
-export function DecisionView({
-  decisionKey,
-  blocker,
-  decisions,
-  apiCall,
-  refresh,
-  snapshotBusy,
-}: {
+export function DecisionView(props: DecisionViewProps) {
+  const { projectId, runId, sessionId, requestId, stateVersion } = props.decisionKey;
+  // Following another notification for the same request starts a fresh version review.
+  return <ScopedDecisionView key={JSON.stringify([projectId, runId, sessionId, requestId, stateVersion])} {...props} />;
+}
+
+interface DecisionViewProps {
   decisionKey: DecisionKey;
   blocker: SessionStatusBlocker;
   decisions?: CoordinatorDecisionStateView;
   apiCall: ApiCall;
   refresh: () => Promise<void>;
   snapshotBusy: boolean;
-}) {
+}
+
+function ScopedDecisionView({
+  decisionKey,
+  blocker,
+  decisions,
+  apiCall,
+  refresh,
+  snapshotBusy,
+}: DecisionViewProps) {
   const { projectId, runId, sessionId, requestId } = decisionKey;
   const binding = { projectId, runId };
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // The controls are live only when this request is still the session's
-  // pending gate in the last snapshot, and no send or refresh is running.
+  // Version the next send must match. It starts as the version the user opened
+  // (if known). After a stale reread it moves to the reread version, so the
+  // user's next click, after reviewing, can go through.
+  const [expectedVersion, setExpectedVersion] = useState(decisionKey.stateVersion);
+  // Act only when the session's pending gate is this exact request.
   const exactGate = decisions?.pendingGate?.requestId === requestId;
+  // Also block while a send or a snapshot refresh is running.
   const canAct = exactGate && !busy && !snapshotBusy;
 
-  // Sends one response. `approve` is used for approvals; `choiceId` or
-  // `freeformAnswer` is used for questions.
+  // Sends one decision. `approve` is for approvals; `choiceId` or `freeformAnswer` is for questions.
   const submit = async (approve?: boolean, choiceId?: string, freeformAnswer?: string) => {
     if (!exactGate) return;
     setBusy(true);
@@ -80,11 +99,18 @@ export function DecisionView({
         await refresh();
         return;
       }
-      // A new key per click. The service uses it to drop duplicate deliveries
-      // of this one request. The fresh state version makes the service reject
-      // the send if the decision state changed after the read above.
+      // Same request, but its state version differs from the one the user saw.
+      // Send nothing, remember the new version, and let the user review.
+      if (expectedVersion !== undefined && latest.stateVersion !== expectedVersion) {
+        setExpectedVersion(latest.stateVersion);
+        setNotice(STALE_DECISION_NOTICE);
+        await refresh();
+        return;
+      }
+      // A new key per click. The request id and state version sent with it let
+      // the server reject an answer for a request that has since changed.
       const idempotencyKey = crypto.randomUUID();
-      // Questions are answered; approvals, plan approvals, and outcome
+      // Questions are answered; approvals, plan approvals and outcome
       // confirmations are resolved with approve or deny.
       const result = blocker.kind === 'awaitingInput'
         ? await apiCall((token, tenantSelector) => gatewayClient.answerGate(
@@ -177,9 +203,12 @@ export function DecisionList({
   apiCall,
   refresh,
   snapshotBusy,
+  pinned,
 }: {
   projectId: string;
   runId: string;
+  /** Request and state version the user opened, for example from Flow; applies to the matching request only. */
+  pinned?: { requestId: string; stateVersion: number } | null;
   statuses: Record<string, SessionStatusSnapshot>;
   decisions: Record<string, CoordinatorDecisionStateView>;
   apiCall: ApiCall;
@@ -196,7 +225,13 @@ export function DecisionList({
           {pending.map(({ status, blocker }) => (
             <DecisionView
               key={`${status.identity.sessionId}/${blocker.requestId}`}
-              decisionKey={{ projectId, runId, sessionId: status.identity.sessionId, requestId: blocker.requestId }}
+              decisionKey={{
+                projectId,
+                runId,
+                sessionId: status.identity.sessionId,
+                requestId: blocker.requestId,
+                stateVersion: pinned?.requestId === blocker.requestId ? pinned.stateVersion : undefined,
+              }}
               blocker={blocker}
               decisions={decisions[status.identity.sessionId]}
               apiCall={apiCall}

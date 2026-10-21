@@ -37,6 +37,7 @@ import { ErrorNotice, Loading } from './pageParts';
 import { useProjectRunList } from './runListData';
 import { runState } from './runState';
 import { OutputCaptureBrowser } from './OutputCaptureBrowser';
+import { PrioritySourceControl } from './PrioritySourceControl';
 
 /** Shown after a Priority write returns a revision conflict and the panel reread it. */
 export const PRIORITY_CONFLICT_NOTICE = 'This Priority changed. Review the current values and try again.';
@@ -107,9 +108,8 @@ type Notice = { kind: 'conflict' } | { kind: 'error'; error: unknown };
 
 /**
  * Renders Priorities. `projects` feeds the run link picker; `conversations`
- * feeds the conversation link picker. Issue and pull request links
- * are shown when present but not offered, because the web app has no picker
- * source for them.
+ * feeds the conversation link picker. Issue and pull request choices come from
+ * stored owner lists, while artifacts are selected from an authorized run.
  */
 export function PrioritiesPanel({ priorities, projects, conversations }: {
   priorities: PriorityListState;
@@ -420,7 +420,14 @@ function PriorityItem({ priority, index, count, notice, orderBusy, projects, pro
       {priority.links.length === 0 && <Text className={styles.meta}>No links.</Text>}
       {priority.links.map((link) => (
         <div key={link.linkId} className={styles.row}>
-          <LinkSummary link={link} projectNames={projectNames} />
+          {/* Stored repository records supply their own state; do not label a resolved record unavailable. */}
+          {link.access === 'available' && (link.kind === 'issue' || link.kind === 'pull_request')
+            ? <Text>{KIND_LABELS[link.kind]}</Text>
+            : <LinkSummary link={link} projectNames={projectNames} />}
+          {link.access === 'available' && link.projectId && link.number !== undefined &&
+            (link.kind === 'issue' || link.kind === 'pull_request') && (
+            <PrioritySourceControl projectId={link.projectId} kind={link.kind} number={link.number} />
+          )}
           {link.access === 'available' && link.projectId && link.runId && (link.kind === 'run' || link.kind === 'conversation') && (
             <Button size="small" appearance="secondary" onClick={() => navigate(runPath(link.projectId!, link.runId!))}>Open</Button>
           )}
@@ -496,7 +503,7 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
 }) {
   const styles = useStyles();
   const [open, setOpen] = useState(false);
-  const [kind, setKind] = useState<'run' | 'conversation' | 'artifact'>('run');
+  const [kind, setKind] = useState<ChiefOfStaffPriorityLinkKind>('run');
   // Only active projects can be linked.
   const activeProjects = useMemo(() => (projects ?? []).filter((project) => project.state === 'active'), [projects]);
   // The picked ids are stored raw. Each effective value below falls back to the
@@ -506,7 +513,8 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
   const projectId = activeProjects.some((project) => project.projectId === pickedProject) ? pickedProject : activeProjects[0]?.projectId ?? '';
   // Read runs only while the form is open and a run list is needed. An empty
   // project id tells the hook to skip the request.
-  const runs = useProjectRunList(open && kind !== 'conversation' ? projectId : '');
+  const needsRun = kind === 'run' || kind === 'artifact';
+  const runs = useProjectRunList(open && needsRun ? projectId : '');
   const [pickedRun, setPickedRun] = useState('');
   const runId = runs.items.some((item) => item.runId === pickedRun) ? pickedRun : runs.items[0]?.runId ?? '';
   // Only conversations the caller can still read, and that have a project, can be linked.
@@ -527,7 +535,7 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
     event.preventDefault();
     // Artifact links are not submitted by this form. They are added when the
     // user picks a capture in the browser below.
-    if (!ready || kind === 'artifact') return;
+    if (!ready || (kind !== 'run' && kind !== 'conversation')) return;
     // `ready` guarantees `conversation` exists in the conversation branch.
     const body = kind === 'run'
       ? { expectedRevision: priority.revision, kind, projectId, runId }
@@ -541,10 +549,12 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
     <form className={styles.form} aria-label={`Add link to ${label}`} onSubmit={submit}>
       <div className={styles.inline}>
         <Field label="Link type">
-          <Select value={kind} onChange={(_, data) => setKind(data.value as 'run' | 'conversation' | 'artifact')}>
+          <Select value={kind} onChange={(_, data) => setKind(data.value as ChiefOfStaffPriorityLinkKind)}>
             <option value="run">Run</option>
             <option value="conversation">Conversation</option>
             <option value="artifact">Artifact</option>
+            <option value="issue">Issue</option>
+            <option value="pull_request">Pull request</option>
           </Select>
         </Field>
         {kind !== 'conversation' && (
@@ -554,7 +564,7 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
                 {activeProjects.map((project) => <option key={project.projectId} value={project.projectId}>{project.name}</option>)}
               </Select>
             </Field>
-            {runs.items.length > 0 && (
+            {needsRun && runs.items.length > 0 && (
               <Field label="Run">
                 <Select value={runId} onChange={(_, data) => setPickedRun(data.value)}>
                   {runs.items.map((item) => (
@@ -578,11 +588,17 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
         )}
       </div>
       {kind !== 'conversation' && activeProjects.length === 0 && <Text className={styles.meta}>No active projects.</Text>}
-      {kind !== 'conversation' && projectId && runs.loading && <Text className={styles.meta}>Loading runs…</Text>}
-      {kind !== 'conversation' && runs.error != null && <ErrorNotice code={errorCode(runs.error)}>{errorMessage(runs.error)}</ErrorNotice>}
-      {kind !== 'conversation' && projectId && !runs.loading && runs.error == null && runs.items.length === 0 && <Text className={styles.meta}>No runs in this project.</Text>}
-      {kind !== 'conversation' && runs.loadMore && <Button onClick={runs.loadMore}>Load more runs</Button>}
+      {needsRun && projectId && runs.loading && <Text className={styles.meta}>Loading runs…</Text>}
+      {needsRun && runs.error != null && <ErrorNotice code={errorCode(runs.error)}>{errorMessage(runs.error)}</ErrorNotice>}
+      {needsRun && projectId && !runs.loading && runs.error == null && runs.items.length === 0 && <Text className={styles.meta}>No runs in this project.</Text>}
+      {needsRun && runs.hasMore && <Button onClick={runs.loadMore}>Load more runs</Button>}
       {kind === 'conversation' && available.length === 0 && <Text className={styles.meta}>No conversations to link.</Text>}
+      {(kind === 'issue' || kind === 'pull_request') && projectId && <PrioritySourceControl
+        projectId={projectId} kind={kind} busy={busy}
+        onSelect={(number) => void run((token, tenant) => gatewayClient.addChiefOfStaffPriorityLink(
+          token, priority.priorityId, { expectedRevision: priority.revision, kind, projectId, number }, tenant,
+        )).then((saved) => { if (saved) setOpen(false); })}
+      />}
       {kind === 'artifact' && projectId && runId && <OutputCaptureBrowser
         projectId={projectId} runId={runId} busy={busy}
         onSelect={(artifactId) => void run((token, tenant) => gatewayClient.addChiefOfStaffPriorityLink(
@@ -590,7 +606,7 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
         )).then((saved) => { if (saved) setOpen(false); })}
       />}
       <div className={styles.row}>
-        {kind !== 'artifact' && ready && <Button appearance="primary" type="submit" disabled={busy}>Add link</Button>}
+        {(kind === 'run' || kind === 'conversation') && ready && <Button appearance="primary" type="submit" disabled={busy}>Add link</Button>}
         <Button appearance="secondary" onClick={() => setOpen(false)}>Cancel</Button>
       </div>
     </form>

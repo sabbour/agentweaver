@@ -10,6 +10,8 @@ import type {
   ProjectRunState,
   ProjectRunSummary,
   ProjectSummary,
+  ProjectIssueSummary,
+  ProjectPullRequestSummary,
   UserNotification,
 } from '../contracts';
 
@@ -39,6 +41,8 @@ export interface FakeGatewayState {
   priorities: ChiefOfStaffPriority[];
   orderRevision: number;
   notifications: FixtureNotification[];
+  issues: Record<string, ProjectIssueSummary[]>;
+  pullRequests: Record<string, ProjectPullRequestSummary[]>;
 }
 
 /**
@@ -100,6 +104,8 @@ export function createFakeGateway(seed: Partial<FakeGatewayState> = {}) {
   const state: FakeGatewayState = {
     projects: [project('p1', 'Payments')],
     runs: {},
+    issues: {},
+    pullRequests: {},
     conversations: [],
     priorities: [],
     orderRevision: 1,
@@ -132,6 +138,19 @@ export function createFakeGateway(seed: Partial<FakeGatewayState> = {}) {
     const path = url.pathname.replace(/^\/api\/v1/, '');
     const parts = path.split('/').filter(Boolean).map(decodeURIComponent);
     if (method === 'GET' && path === '/projects') return json(200, state.projects);
+    if (method === 'GET' && parts[0] === 'projects' && parts[2] === 'source-control') {
+      // Model the stored read contract only. Fixtures never contact a provider.
+      const records = parts[3] === 'issues' ? state.issues[parts[1]] ?? [] : state.pullRequests[parts[1]] ?? [];
+      const filter = url.searchParams.get('state') ?? 'open';
+      const filtered = records.filter((item) => filter === 'all' || item.state === filter);
+      const start = Number(url.searchParams.get('cursor') ?? 0);
+      const size = Number(url.searchParams.get('pageSize') ?? 25);
+      return json(200, {
+        projectId: parts[1], items: filtered.slice(start, start + size),
+        nextCursor: start + size < filtered.length ? String(start + size) : null,
+        ...(parts[3] === 'pull-requests' ? { coverage: { recordedSince: NOW, includesEarlierPullRequests: false } } : {}),
+      });
+    }
     if (parts[0] === 'projects' && parts[2] === 'runs') {
       const projectId = parts[1];
       if (method === 'GET' && parts.length === 3) {
@@ -255,6 +274,7 @@ export function createFakeGateway(seed: Partial<FakeGatewayState> = {}) {
           runId: body.runId ?? conversation?.runId ?? undefined,
           conversationId: body.conversationId ?? undefined,
           artifactId: body.artifactId ?? undefined,
+          number: body.number ?? undefined,
           state: body.kind === 'artifact' ? 'unavailable' : target?.state ?? conversation?.runState ?? undefined,
           createdAt: NOW,
         };

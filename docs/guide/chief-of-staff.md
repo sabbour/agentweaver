@@ -47,10 +47,10 @@ Each link names one item in a project the user can read:
 | `pull_request` | A pull request number. |
 | `artifact` | An artifact in a run. |
 
-Reads show the current state of run and conversation links. Issue, pull
-request, and artifact links show `unavailable`, because their owners don't
-offer a current-state read. A missing pull request state is never shown as open
-or merged.
+Reads show the current state of run and conversation links. The Priority
+owner does not resolve issue, pull request or artifact lifecycle state. The web
+app separately reads stored issue and pull request records to show their titles
+and recorded states. These are not live provider status checks.
 
 ## Handle conflicts
 
@@ -100,9 +100,8 @@ The web app shows Chief of Staff on **Overview** (`/overview`), on **Sessions**
 
 ### Start a chat
 
-1. On **Overview** or **Sessions**, go to **New chat**. The **New chat** button in the
-   navigation opens `/assistant`, the same panel; `?project=<projectId>`
-   preselects a project.
+1. On **Overview**, go to **New chat**. On **Sessions**, select **New session**
+   to open `/assistant`; `?project=<projectId>` preselects a project there.
 1. Under **Project**, choose an active project. You don't type an ID.
 1. Enter the first message and select **Send**.
 
@@ -150,13 +149,29 @@ you send appears in **Messages** after the agent records it.
   **Dropped**.
 - Add, check, and remove checklist items in place.
 - **Move up** and **Move down** change the order.
-- **Add link** links a run, a conversation, or an artifact. Choose a project
+- **Add link** links a run, a conversation, an issue, a pull request, or an artifact. Choose a project
   and a run, or pick one of your conversations. For an artifact, choose a
   session and a saved capture. Browse its files, then select **Link capture**.
   The link saves the whole capture, not one file. You never need to type an ID.
-- Issue and pull request pickers are not available, because no service route
-  lists a project's issues or pull requests. Existing issue and pull request
-  links show **Unavailable** as their state.
+- For an issue or pull request, choose **Project**, **State**, then a stored
+  record. Select **Load more issues** or **Load more pull requests** to read
+  another page. Select **Link issue** or **Link pull request** to save it.
+  The form never asks for a repository number or navigation ID.
+- Issues come from the project's synced issue records, not a provider search.
+  Pull requests come from records saved by project runs since recording began.
+  The list shows its coverage date; earlier pull requests are not included.
+  A service error is shown as an error, never as an empty list.
+- After reload, saved issue and pull request links read their metadata again.
+  Select **Open issue** or **Open pull request** to open the provider's page.
+  Older targets may require **Load more** before they can be reopened.
+  Changing identity, project or state discards the old choices. A denied read
+  removes titles and navigation links but leaves the user's Priority intact.
+- Issue and pull request links currently save a number, not a repository identity.
+  Before saving, the client checks every stored page and state for that number.
+  If it appears in more than one repository, saving fails rather than selecting
+  the wrong item. Reopening also waits until every page has been loaded and
+  refuses an ambiguous number. Exact links across repositories with the same
+  number require repository identity in the saved-link contract.
 - Run and conversation links show the run state. A link you can't read shows
   **Unavailable** and its kind only. A deleted target shows **Not found**.
 
@@ -196,14 +211,15 @@ Priority link uses the caller's unbound token and does not start work.
 
 Open a project and choose **Flow** (`/projects/:projectId/flow`).
 
+- **Needs attention** shows new task notifications and links to the Board.
 - **Needs input** lists pending gates from your notifications for the project,
   including dismissed ones. Backlog promotion notifications aren't gates and
   don't appear. Select an item to open its decision on the run page.
 - **Open** lists idle runs. **Working** lists active and blocked runs.
 - **Done** lists ended runs. **Done**, **Failed**, **Cancelled**, and **Outcome
   unknown** keep their own labels.
-- Every run shows **Pull request: Unavailable** because no service reports pull
-  request state yet.
+- Run groups show **Pull request: Unavailable**. Stored project records do not
+  establish each run's current provider-side pull request state.
 
 Before it approves, rejects, or answers, the decision view rereads the gate.
 If the gate is gone or its state version changed, it shows **This request
@@ -212,12 +228,12 @@ changed since you opened it. Nothing was sent. Review it and try again.**
 ### Notification bell
 
 The bell in the navigation is your attention inbox across projects. It lists
-the same pending gates as **Overview**, read from your notifications with an
+the same pending gates and new task notifications as **Overview**, read with an
 unbound token, and hides dismissed ones. Select an item to open its decision
 on the run page, where you approve, reject, or answer with a token bound to
 that run. Select **Dismiss** to hide an item from the bell and Overview. Flow
-still lists it while the gate is pending. Backlog promotion notifications don't
-appear in the bell.
+still lists it while the gate is pending. New task notifications open the project
+Board and show the number of subtasks created.
 
 ## Deployment
 

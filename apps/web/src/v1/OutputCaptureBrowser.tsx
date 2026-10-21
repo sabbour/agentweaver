@@ -192,7 +192,7 @@ function CaptureDetail({ projectId, runId, sessionId, captureId, onSelect, busy 
   const { apiCall } = useAuth();
   const read = useCallback(async () => {
     const detail = await apiCall((token, tenant) =>
-      gatewayClient.readSourceControlOutputCapture(token, projectId, runId, sessionId, captureId, tenant ?? ''), { projectId, runId });
+      gatewayClient.readSourceControlOutputCapture(token, projectId, runId, sessionId, tenant, captureId), { projectId, runId });
     // The capture and its manifest must describe the same run, workspace and
     // output tree. If they do not, refuse to show it.
     if (detail.capture.captureId !== captureId || detail.manifest.runId !== runId ||
@@ -208,7 +208,7 @@ function CaptureDetail({ projectId, runId, sessionId, captureId, onSelect, busy 
     const file = result.data?.manifest.files.find((entry) => entry.path === filePath);
     if (!file) throw new Error('This file is no longer in the capture. Choose it again.');
     const { bytes } = await apiCall((token, tenant) => gatewayClient.readSourceControlOutputCaptureFile(
-      token, projectId, runId, sessionId, captureId, filePath, tenant ?? ''), { projectId, runId });
+      token, projectId, runId, sessionId, tenant, captureId, filePath), { projectId, runId });
     // Verify the bytes before showing them: size and SHA-256 must match the manifest.
     const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes));
     // Hex-encode the digest to compare with the manifest's lowercase hex hash.

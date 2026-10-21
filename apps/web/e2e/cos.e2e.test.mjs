@@ -6,12 +6,22 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { startStaticServer, openApp, runRoom } from './harness.mjs';
 import { notification, priority, project, run } from '../src/v1/__fixtures__/cosGateway.ts';
 
 let server;
 before(async () => { server = await startStaticServer(); });
 after(async () => { await server?.close(); });
+
+async function shot(name, locator) {
+  const directory = process.env.AGENTWEAVER_EVIDENCE_DIR;
+  if (!directory) return;
+  // Evidence stays outside the repository and uses only the journey's test data.
+  await mkdir(directory, { recursive: true });
+  await locator.screenshot({ path: join(directory, `${name}.png`) });
+}
 
 /** Returns the recorded Gateway requests with this method whose path matches the pattern. */
 const writes = (app, method, pattern) => app.gateway.requests.filter((request) => request.method === method && pattern.test(request.url.pathname));
@@ -24,6 +34,7 @@ test('new chat: one create for a double send, and the chat survives reload', asy
     await page.goto(`${server.origin}/overview`);
     await page.getByLabel('Project', { exact: true }).selectOption('p2');
     await page.getByLabel('Message', { exact: true }).fill('Fix the flaky search test');
+    await shot('pr-new-chat-gateway-adapter', page.getByLabel('Message', { exact: true }).locator('xpath=ancestor::form'));
     const send = page.getByRole('button', { name: 'Send' });
     // A double click simulates an impatient user. The app must still create one run.
     await send.dblclick();
@@ -81,6 +92,7 @@ test('priorities: create, checklist, link a run, reorder, and a revision conflic
       app.gateway.state.priorities.find((value) => value.outcome === 'Cut latency').links.map(({ kind, projectId, runId }) => ({ kind, projectId, runId })),
       [{ kind: 'run', projectId: 'p1', runId: 'r-2' }],
     );
+    await shot('pr-priority-run-link-new-gateway-adapter', row);
 
     // The new Priority starts last. Moving it up must persist the new order on the server.
     await row.getByRole('button', { name: 'Move up: Cut latency' }).click();
@@ -143,26 +155,28 @@ test('flow: groups by state, keeps dismissed gates, hides promotions, and pins t
     await page.getByText('Which branch?').waitFor();
     assert.equal(await page.getByText('Promoted 3 tasks').count(), 0, 'promotions are not Needs input');
     const region = (name) => page.getByRole('region', { name, exact: true });
-    await region('Open').getByRole('button', { name: 'Open run r-idle' }).waitFor();
+    await region('Open').getByRole('link', { name: 'Open run Draft the plan' }).waitFor();
     // A blocked run is still in progress, so it belongs in Working.
-    await region('Working').getByRole('button', { name: 'Open run r-active' }).waitFor();
-    await region('Working').getByRole('button', { name: 'Open run r-blocked' }).waitFor();
+    await region('Working').getByRole('link', { name: 'Open run Write tests' }).waitFor();
+    await region('Working').getByRole('link', { name: 'Open run Pick a branch' }).waitFor();
     // All finished states share Done, each with its own label.
     const done = region('Done');
     for (const label of ['Done', 'Failed', 'Cancelled', 'Outcome unknown']) await done.getByText(label, { exact: true }).first().waitFor();
     // No pull request data is seeded, so the app must say "Unavailable" and never guess a state.
-    assert.ok((await page.getByText('Pull request: Unavailable').count()) > 0);
+    assert.equal(await page.getByText('Pull request: Unavailable', { exact: true }).count(), 3);
+    // The Flow run groups do not infer pull request state from execution state.
     assert.equal(await page.getByText(/Merged|Pull request: Open/).count(), 0);
     // The bell reads the caller inbox without dismissed items; Flow reads this project with them.
-    await page.getByRole('button', { name: 'Notifications', exact: true }).waitFor();
+    await page.getByRole('button', { name: /^Notifications/ }).waitFor();
     const reads = app.gateway.requests.filter((value) => value.url.pathname === '/api/v1/notifications');
     for (const request of reads) {
       const flow = request.url.searchParams.get('projectId') === 'p1';
-      assert.equal(request.url.searchParams.get('includeDismissed'), flow ? 'true' : 'false');
+      assert.equal(request.url.searchParams.get('includeDismissed') === 'true', flow);
       assert.equal(request.headers.get('authorization'), 'Bearer tok.unbound');
     }
     assert.ok(reads.some((request) => request.url.searchParams.get('projectId') === 'p1'));
     assert.ok(reads.some((request) => request.url.searchParams.get('projectId') === null));
+    await shot('pr-flow-gateway-adapter', page.locator('main'));
 
     // The decision view rereads this pinned version before acting; DecisionView.test.tsx covers the no-POST path.
     // Opening the gate must carry its request id and state version in the URL,
@@ -230,7 +244,7 @@ test('stale gate: the decision view rereads the gate and sends nothing when its 
     const approve = page.getByTestId('approval-gate-approve-btn');
     await approve.waitFor();
     // Wait for the bell too, so the page has finished loading before the gate changes.
-    await page.getByRole('button', { name: 'Notifications, 1 needs your input' }).waitFor();
+    await page.getByRole('button', { name: /^Notifications/ }).waitFor();
 
     // Another actor changes the gate after the page loaded: same request, newer state version.
     room.decisions = { ...room.decisions, stateVersion: 6 };
@@ -266,8 +280,8 @@ test('follow-up: a chat reopens from Sessions with its messages and sends one me
   });
   try {
     const { page } = app;
-    await page.goto(`${server.origin}/sessions`);
-    await page.getByRole('heading', { name: 'Sessions' }).waitFor();
+    await page.goto(`${server.origin}/overview`);
+    await page.getByRole('heading', { name: 'Overview' }).waitFor();
     await page.getByLabel('Project', { exact: true }).selectOption('p2');
     await page.getByLabel('Message', { exact: true }).fill('Fix the flaky search test');
     await page.getByRole('button', { name: 'Send' }).click();
@@ -280,6 +294,7 @@ test('follow-up: a chat reopens from Sessions with its messages and sends one me
     const history = page.getByRole('list', { name: 'Messages' });
     await history.getByText('The retry budget is too low. I raised it to three.').waitFor();
     await history.getByText('Fix the flaky search test').waitFor();
+    await shot('pr-conversation-transcript-gateway-adapter', history);
     // Message text comes from per-turn reads, one per turn, with the run-bound token.
     const turnReads = app.gateway.requests.filter((request) => /\/sessions\/[^/]+\/turns\/[^/]+$/.test(request.url.pathname));
     assert.ok(turnReads.length >= 2);

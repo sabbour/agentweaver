@@ -99,7 +99,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Settings > Danger zone | Archive and restore. | Project delete. |
 | Platform settings | All 16 platform component areas with owner, readiness, and implementations. | BYOK providers, platform-default Copilot status, account AI access. |
 | Board | **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, and title and description edits. | Task state, position, archive, dependencies, send all to Ready, task edit and delete, backlog settings, decompose, and the Human Review and Problems columns. |
-| Flow | **Needs attention** for this project, **Task stages** with counts per Board column, and **Open runs**. | The live agent graph for the project. |
+| Flow | Project task notifications, **Needs input** including dismissed gates, **Task stages**, and **Open**, **Working**, and **Done** run groups. | The live agent graph for the project and current provider-side PR state per run. |
 | Workflows | **Saved workflow references**: the default workflow and the workflow for each blueprint, from project configuration. | Workflow catalog, YAML, edit, run, generate, sync, default, and per-task override. |
 | Workspace | **Repository** from configuration, **Pull requests** that runs opened or reused, and **Issues** synced into the backlog. | Branches, the file tree, and file content. |
 | Observability | Metric tiles, **Activity** chart, run totals, model and agent usage, and **Recent runs**. | Per-run traces and response-duration percentiles. |
@@ -183,6 +183,18 @@ These limits are not missing routes:
   providers. Enter existing model and credential references.
 
 ## Evidence boundary
+
+Personal Priorities and the private conversation list are new Gateway adapters,
+not copies of a 0.x page. The new chat and follow-up forms use the retained
+`NewChatComposer`; Flow groups use `RunList`, and gates use `DecisionView` and
+`AttentionList`. Existing project pages remain available alongside these views.
+
+Priority issue and pull request choices use authorized stored owner lists.
+Saved-capture list, detail and Priority selection are also new Gateway adapters.
+Their file tree and Source/Preview content reuse `FilesTabPanel` and `FileViewer`.
+Compare those components at matching widths, but do not invent a 0.x screenshot
+for the new adapters. See [Chief of Staff](../guide/chief-of-staff.md) for behavior
+and limits.
 
 Local screenshots use fixture data and isolated source snapshots. They compare
 0.x, v1 before the adaptation, and adapted v1 without live sign-in or real

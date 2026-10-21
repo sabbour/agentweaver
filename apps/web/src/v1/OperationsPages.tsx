@@ -22,6 +22,8 @@ import { metricTiles, useProjectMetrics, type MetricsRangeKey } from './projectM
 import { ProjectMetricsSections } from './ProjectMetricsSections';
 import { RunList } from './RunList';
 import { useSharedRunAttention } from './RunAttentionContext';
+import { useRunAttention } from './runAttention';
+import { flowGroup, FLOW_GROUPS, PULL_REQUEST_NOTE } from './flowGroups';
 import { runListErrorMessage, useProjectRunList } from './runListData';
 
 const useStyles = makeStyles({
@@ -152,21 +154,24 @@ function TaskStages({ projectId, board }: { projectId: string; board: ReturnType
 /**
  * Flow: what is moving in the project right now. Shows notifications for this
  * project (questions, approvals, promoted tasks), task counts for each Board
- * column, and the open runs. The 0.x live agent graph needs a read this version
+ * column, and runs grouped by state. The 0.x live agent graph needs a read this version
  * does not have.
  */
 export function FlowPage() {
   const { projectId = '' } = useParams();
   const attention = useSharedRunAttention();
-  const runs = useProjectRunList(projectId, { states: ['open'], pageSize: 25 });
+  // Dismissal hides inbox noise, not unresolved work. This read includes dismissed gates.
+  const gates = useRunAttention({ projectId, includeDismissed: true });
+  const needsInput = { ...gates, items: gates.items.filter((item) => item.projectId === projectId && item.source === 'pendingGate') };
+  const runs = useProjectRunList(projectId, { pageSize: 25 });
   // The shared notification list covers every project. Keep only this project's
   // items and count, so the empty state and the "more" hint are about this project.
   const projectAttention = useMemo(() => {
-    const items = attention.items.filter((item) => item.projectId === projectId);
+    const items = attention.items.filter((item) => item.projectId === projectId && item.source !== 'pendingGate');
     return { ...attention, items, count: items.length };
   }, [attention, projectId]);
   const board = useProjectBoard(projectId);
-  const refresh = () => { attention.reload(); runs.reload(); board.reload(); };
+  const refresh = () => { attention.reload(); gates.reload(); runs.reload(); board.reload(); };
   return (
     <>
       <PageHeading
@@ -175,17 +180,22 @@ export function FlowPage() {
         page="Flow"
         actions={<RefreshButton loading={runs.loading && runs.items.length === 0} onClick={refresh} />}
       />
-      <PageSection title="Needs attention" description="Questions, approvals, and new tasks from runs in this project.">
+      <PageSection title="Needs attention" description="New tasks from runs in this project.">
         <AttentionList attention={projectAttention} />
       </PageSection>
+      <section aria-label="Needs input">
+      <PageSection title="Needs input" description="Pending questions and approvals, including dismissed notifications.">
+        <AttentionList attention={needsInput} />
+      </PageSection>
+      </section>
       <TaskStages projectId={projectId} board={board} />
       {runs.error != null && <ErrorNotice code={errorCode(runs.error)}>{runListErrorMessage(runs.error)}</ErrorNotice>}
-      <RunList
-        title="Open runs"
-        description="Runs that are working, idle, or blocked. Open a run to see its session graph."
-        data={runs}
-        emptyText={runs.loading ? 'Loading runs…' : 'No runs are open.'}
-      />
+      {/* Keep finished work visible without labeling failed or cancelled runs as successful. */}
+      {/* One project-wide cursor serves every group; do not repeat its paging control in each group. */}
+      {FLOW_GROUPS.map(({ key, title }) => <RunList key={key} title={title} description={PULL_REQUEST_NOTE}
+        data={{ ...runs, hasMore: false, items: runs.items.filter((item) => flowGroup(item.executionState) === key) }}
+        emptyText={runs.loading ? 'Loading runs…' : `No ${title.toLowerCase()} runs.`} />)}
+      {runs.hasMore && <Button disabled={runs.loadingMore} onClick={runs.loadMore}>Load more runs</Button>}
       <NotInThisVersion>
         The live agent graph for the whole project is not available. Open a run to see its session graph.
       </NotInThisVersion>

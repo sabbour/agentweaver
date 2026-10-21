@@ -591,7 +591,7 @@ describe('v1 web project scoping', () => {
   });
 
   it.each([
-    ['flow', 'Open runs'],
+    ['flow', 'Open'],
     ['workspace', 'Pull requests'],
     ['workflows', 'Saved workflow references'],
     ['observability/traces', 'Recent runs'],

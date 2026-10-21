@@ -125,7 +125,7 @@ export async function openApp({ seed = {}, extra, origin }) {
     // notifications, project list, run list) refuse a run-bound token. This
     // catches the app sending the wrong token for a request.
     const needsUnbound = path.startsWith('/chief-of-staff/') || path === '/notifications' || path.startsWith('/notifications/')
-      || path === '/projects' || (method === 'GET' && /^\/projects\/[^/]+\/runs$/.test(path));
+      || path === '/projects' || (method === 'GET' && /^\/projects\/[^/]+\/(?:runs|source-control\/(?:issues|pull-requests))$/.test(path));
     if (needsUnbound && binding) return reply(json(403, { error: 'caller_binding_mismatch' }));
     // Starting a run needs a token bound to exactly that project and run.
     const start = path.match(/^\/projects\/([^/]+)\/runs\/([^/]+)\/start$/);

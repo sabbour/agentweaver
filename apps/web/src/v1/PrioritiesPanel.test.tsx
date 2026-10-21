@@ -147,12 +147,12 @@ describe('PrioritiesPanel', () => {
     expect(hoisted.gateway!.requests.filter((request) => request.url.pathname.includes('/runs')).every((request) => request.method === 'GET')).toBe(true);
   });
 
-  it('offers artifacts but not issue or pull request links', async () => {
+  it('offers every link kind backed by an owner read', async () => {
     renderPanel();
     const row = await item('Cut latency');
     fireEvent.click(within(row).getByRole('button', { name: 'Add link to Cut latency' }));
     const options = within(within(row).getByLabelText('Link type')).getAllByRole('option').map((option) => option.textContent);
-    expect(options).toEqual(['Run', 'Conversation', 'Artifact']);
+    expect(options).toEqual(['Run', 'Conversation', 'Artifact', 'Issue', 'Pull request']);
   });
 });
 

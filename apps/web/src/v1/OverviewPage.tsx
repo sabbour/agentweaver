@@ -3,8 +3,8 @@
  * project metrics and usage, Recent runs, and Needs attention. Counts come from
  * the project list, the newest runs of each project, and your notifications. The
  * service reports metrics and usage per project only, so the metrics section
- * shows one chosen project and says so. This page is the planned home for
- * Chief of Staff priorities.
+ * shows one chosen project and says so. Personal Priorities, new chat and private
+ * conversations sit alongside these project-owned views without controlling them.
  */
 import { Button, Select, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';

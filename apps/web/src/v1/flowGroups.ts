@@ -1,10 +1,15 @@
 /** Flow page grouping rules, kept apart from the component for reuse and tests. */
 
-/** Pull request state for runs. No source reports it, so it is never Open or Merged. */
+/** Stored project records do not establish a run's current provider-side PR state. */
 export const PULL_REQUEST_NOTE = 'Pull request: Unavailable';
 
 /** Flow group for one run state. */
 export type FlowGroup = 'open' | 'working' | 'done';
+
+/** Display order for the run groups; each row retains its exact terminal state. */
+export const FLOW_GROUPS: ReadonlyArray<{ key: FlowGroup; title: string }> = [
+  { key: 'open', title: 'Open' }, { key: 'working', title: 'Working' }, { key: 'done', title: 'Done' },
+];
 
 /** Maps a run state to its Flow group, or null for a state this app does not know. */
 export function flowGroup(state: string | null): FlowGroup | null {
