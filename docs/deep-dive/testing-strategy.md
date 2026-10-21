@@ -210,6 +210,9 @@ the measured performance acceptance criteria. Its
 schedule, denominators, and one-time Copilot token setup. Controlled journeys
 are not automatic deployed acceptance.
 
+The `go` job runs `gofmt`, `go vet`, and `go test` for the Go reference tools in
+`tools/agent-primitives`. They produce the AgentSessions fixture that the .NET verifier tests check, so CI compares both implementations on every pull request.
+
 `v1-docs-ci.yml` builds VitePress, checks links and source coverage, and
 validates diagram provenance and readability. On a `v1` push it stages a
 source-bound site artifact.

@@ -16,4 +16,7 @@
     <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.0" />
     <ProjectReference Include="..\..\services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
