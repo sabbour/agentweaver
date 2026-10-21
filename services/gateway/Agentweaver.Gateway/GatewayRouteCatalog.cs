@@ -115,6 +115,34 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/configuration",
             "updateProjectConfiguration", "Update project configuration", body: true,
             forwardTenantSelector: true);
+        // Casting remains owner-authorized; revisions travel in bodies, not idempotency headers.
+        var casting = "/projects/{projectId}/casting";
+        Add("POST", GatewayOwner.Projects, casting + "/proposals", "/api" + casting + "/proposals",
+            "createProjectCastingProposal", "Stage a complete casting draft", body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, casting + "/proposals/scenario", "/api" + casting + "/proposals/scenario",
+            "createScenarioProjectCastingProposal", "Stage casting from a scenario", body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, casting + "/proposals/manual", "/api" + casting + "/proposals/manual",
+            "createManualProjectCastingProposal", "Stage casting from selected roles", body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, casting + "/proposals", "/api" + casting + "/proposals",
+            "listProjectCastingProposals", "List casting proposals", ["limit"], forwardTenantSelector: true);
+        var proposal = casting + "/proposals/{proposalId:guid}";
+        Add("GET", GatewayOwner.Projects, proposal, "/api" + proposal,
+            "getProjectCastingProposal", "Read a casting proposal", forwardTenantSelector: true);
+        Add("PATCH", GatewayOwner.Projects, proposal, "/api" + proposal,
+            "updateProjectCastingProposal", "Revise a pending casting proposal", body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, proposal + "/confirm", "/api" + proposal + "/confirm",
+            "confirmProjectCastingProposal", "Confirm reviewed casting", body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, proposal + "/reject", "/api" + proposal + "/reject",
+            "rejectProjectCastingProposal", "Reject a casting proposal", body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, casting + "/export", "/api" + casting + "/export",
+            "exportProjectCasting", "Export charter and casting configuration", ["revision"], forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, casting + "/import", "/api" + casting + "/import",
+            "importProjectCasting", "Stage a digest-checked casting transfer", body: true,
+            maximumRequestBodyBytes: 1024 * 1024, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/casting/templates", "/api/casting/templates",
+            "listProjectCastingTemplates", "List built-in casting templates", forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/catalog/roles", "/api/catalog/roles",
+            "listProjectCastingRoles", "List built-in casting roles", forwardTenantSelector: true);
         const long skillContentMaximumRequestBytes = 3 * 1024 * 1024;
         var marketplaceSources = "/projects/{projectId}/skill-marketplaces/sources";
         Add("GET", GatewayOwner.Projects, marketplaceSources, "/api" + marketplaceSources,
@@ -162,6 +190,17 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/skills",
             "listProjectSkillInventory", "Read current project skill inventory",
             ["cursor", "pageSize"], forwardTenantSelector: true);
+        // Project-scoped run reads accept an unbound token; a run-bound token is narrowed to its run.
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
+            "/api/projects/{projectId}/runs", "listProjectRuns", "List project runs",
+            ["state", "cursor", "pageSize"], forwardTenantSelector: true);
+        // Each reporting owner aggregates only its own data; the Gateway remains a catalog proxy.
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/metrics",
+            "/api/projects/{projectId}/metrics", "readProjectMetrics", "Read project run metrics",
+            ["from", "to", "bucket"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Events, "/projects/{projectId}/usage",
+            "/api/projects/{projectId}/usage", "readProjectUsage", "Read project usage",
+            ["from", "to"], forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);

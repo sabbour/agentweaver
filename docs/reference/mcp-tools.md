@@ -82,6 +82,26 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `acceptRunSelection` | Accept an immutable run selection. |
 | `getRunSelection` | Read the accepted selection. |
 
+### Casting
+
+Casting tools forward the bearer and optional tenant selector to Projects.
+Revision checks stay inside `body`; no idempotency header is required.
+
+| Operation ID | Purpose |
+| --- | --- |
+| `createProjectCastingProposal` | Stage a complete configuration draft. |
+| `createScenarioProjectCastingProposal` | Stage a built-in scenario. |
+| `createManualProjectCastingProposal` | Stage selected catalog roles. |
+| `listProjectCastingProposals` | List proposals with optional `limit`. |
+| `getProjectCastingProposal` | Read a proposal. |
+| `updateProjectCastingProposal` | Replace a pending draft at its expected revision. |
+| `confirmProjectCastingProposal` | Confirm reviewed casting at current revisions. |
+| `rejectProjectCastingProposal` | Reject without changing configuration. |
+| `exportProjectCasting` | Export charters and casting; requires write authority. |
+| `importProjectCasting` | Stage a digest-checked transfer; request body limit 1 MiB. |
+| `listProjectCastingTemplates` | Read built-in templates. |
+| `listProjectCastingRoles` | Read built-in roles. |
+
 ### Skills and marketplace
 
 | Operation ID | Purpose |
@@ -103,6 +123,8 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | Operation ID | Purpose |
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
+| `listProjectRuns` | List accepted project runs, newest first. |
+| `readProjectMetrics` | Read bounded project run counts and daily UTC activity from Orchestrator. |
 | `proposeOutcome` | Propose an outcome decision. |
 | `readRunStatus` | Read current run owner state. |
 | `recoverRun` | Request owner recovery. |
@@ -138,6 +160,16 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `acknowledgeMessage` | Acknowledge a message. |
 | `readPolicyEvaluation` | Read a policy receipt. |
 | `validatePolicyEvaluationAdmission` | Revalidate receipt admission. |
+
+`readProjectMetrics` accepts optional `from`, `to`, and `bucket=day`.
+`readProjectUsage` accepts optional `from` and `to`, and reads Events &
+Sessions ledger totals grouped by model and agent. Both tools use fresh
+project read authority and a half-open UTC interval of at most 92 days,
+defaulting to the last 30 days. A run-bound caller sees only its own run.
+Cost units and dispositions remain separate, unknown values remain `null`,
+and usage reads do not price or change budgets. Cross-project overview is out
+of scope. See [Project metrics and usage](./api.md#project-metrics-and-usage)
+for metric definitions and differences from the 0.x dashboard.
 
 ### Source Control
 
@@ -181,6 +213,7 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | --- | --- |
 | `replayRunEvents` | Read a finite committed journal page. |
 | `readRunUsage` | Read run usage totals. |
+| `readProjectUsage` | Read persisted project usage grouped by model and agent. |
 
 ## Results and errors
 
@@ -210,7 +243,7 @@ Local error codes include `unknown_tool`, `invalid_arguments`,
   `/api/v1/`.
 - `streamRunEvents` is excluded because it is SSE. Use finite replay tools.
 - Browser connection lifecycle routes and callbacks are outside the catalog.
-- Native-only casting, backlog, runtime, Environment, and private material routes
+- Native-only backlog, runtime, Environment, and private material routes
   are not tools.
 - Catalog downloads are limited to 2 MiB; owner responses are limited to 8 MiB.
   Gateway request deadlines are ten seconds.
