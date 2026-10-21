@@ -1,7 +1,22 @@
 import { gatewayBaseUrl } from './config';
 import { isProjectAuthorizationContextResponse, isRemoteMcpConnectionDirectoryPage } from './contracts';
 import type {
+  CancelProjectRunResponse,
   CopilotAuthorizationCallback,
+  CreateProjectRunRequest,
+  CreateProjectRunResponse,
+  CreateManualProjectCastingProposalRequest,
+  CreateScenarioProjectCastingProposalRequest,
+  PlatformComponentReport,
+  ProjectCastingProposal,
+  ProjectCastingRoleDefinition,
+  ProjectCastingTemplateDefinition,
+  ProjectMetrics,
+  ProjectRunPage,
+  ProjectRunStateFilter,
+  ProjectUsage,
+  StartProjectRunResponse,
+  UserNotificationPage,
   CopilotConnectionBegin,
   CopilotConnectionMutation,
   CopilotConnectionReceipt,
@@ -1125,6 +1140,260 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'usage')}`,
       {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Lists one page of the project's runs, newest first. Send `cursor` back
+   * unchanged with the same `states`; a null `nextCursor` marks the last page.
+   */
+  async listProjectRuns(
+    token: string,
+    projectId: string,
+    options: { states?: ProjectRunStateFilter[]; cursor?: string | null; pageSize?: number } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectRunPage> {
+    // Add only the parameters that are set. The service rejects empty or repeated ones.
+    const query = new URLSearchParams();
+    if (options.states?.length) query.set('state', options.states.join(','));
+    if (options.cursor) query.set('cursor', options.cursor);
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    const suffix = query.toString();
+    const page = await this.request<ProjectRunPage>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs')}${suffix ? `?${suffix}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    // Don't show runs that the service returned for a different project.
+    if (page?.projectId !== projectId || !Array.isArray(page.items))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned runs for a different project.');
+    return page;
+  }
+
+  /**
+   * Creates a new chat run with its saved first message. Needs a token that is
+   * not bound to a run. Reuse the same `idempotencyKey` when retrying the same
+   * message, so the service returns the run it already created.
+   */
+  createProjectRun(
+    token: string,
+    projectId: string,
+    request: CreateProjectRunRequest,
+    idempotencyKey: string,
+    tenantSelector?: string | null,
+  ): Promise<CreateProjectRunResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs')}`,
+      { method: 'POST', body: JSON.stringify(request), headers: { 'Idempotency-Key': idempotencyKey } },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Delivers the saved first message. Needs a token bound to this run. A repeat
+   * call returns the same result and does not send the message again, so a
+   * `504 run_start_timeout` is safe to retry.
+   */
+  startProjectRun(
+    token: string,
+    projectId: string,
+    runId: string,
+    tenantSelector?: string | null,
+  ): Promise<StartProjectRunResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'start')}`,
+      { method: 'POST' },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Stops a run. Needs the project token that is not bound to a run; a
+   * run-bound token gets 403. A run that already ended returns `alreadyTerminal`.
+   */
+  cancelProjectRun(
+    token: string,
+    projectId: string,
+    runId: string,
+    idempotencyKey: string,
+    reason?: string,
+    tenantSelector?: string | null,
+  ): Promise<CancelProjectRunResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'cancel')}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(reason ? { reason } : {}),
+        headers: { 'Idempotency-Key': idempotencyKey },
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Builds the shared `from`/`to` query for metrics and usage. Both ends are optional. */
+  private static rangeQuery(range: { from?: string; to?: string }, extra: Record<string, string> = {}): string {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    for (const [key, value] of Object.entries(extra)) query.set(key, value);
+    const text = query.toString();
+    return text ? `?${text}` : '';
+  }
+
+  /**
+   * Reads run counts and a daily series for a half-open UTC range. The service
+   * uses the last 30 days when the range is omitted and allows at most 92 days.
+   */
+  async getProjectMetrics(
+    token: string,
+    projectId: string,
+    range: { from?: string; to?: string } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectMetrics> {
+    const metrics = await this.request<ProjectMetrics>(
+      token,
+      `/projects/${encodeSegments(projectId, 'metrics')}${AgentweaverGatewayClient.rangeQuery(range, { bucket: 'day' })}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (metrics?.projectId !== projectId || !Array.isArray(metrics.series))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned metrics for a different project.');
+    return metrics;
+  }
+
+  /** Reads token use and cost grouped by model and by agent for the same range rules as metrics. */
+  async getProjectUsage(
+    token: string,
+    projectId: string,
+    range: { from?: string; to?: string } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectUsage> {
+    const usage = await this.request<ProjectUsage>(
+      token,
+      `/projects/${encodeSegments(projectId, 'usage')}${AgentweaverGatewayClient.rangeQuery(range)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (usage?.projectId !== projectId || !Array.isArray(usage.usageByModel) || !Array.isArray(usage.usageByAgent))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned usage for a different project.');
+    return usage;
+  }
+
+  /**
+   * Lists the caller's pending questions and approvals across projects. Needs a
+   * token that is not bound to a project or run; use `projectId` to narrow it.
+   */
+  listNotifications(
+    token: string,
+    options: { projectId?: string; cursor?: string | null; pageSize?: number; includeDismissed?: boolean } = {},
+    tenantSelector?: string | null,
+  ): Promise<UserNotificationPage> {
+    const query = new URLSearchParams();
+    if (options.projectId) query.set('projectId', options.projectId);
+    if (options.cursor) query.set('cursor', options.cursor);
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    if (options.includeDismissed !== undefined) query.set('includeDismissed', String(options.includeDismissed));
+    const suffix = query.toString();
+    return this.request(token, `/notifications${suffix ? `?${suffix}` : ''}`, {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Hides one notification for this caller. The gate stays open. Repeating the call is safe. */
+  dismissNotification(token: string, notificationId: string, tenantSelector?: string | null): Promise<void> {
+    return this.request(
+      token,
+      `/notifications/${encodeSegments(notificationId, 'dismiss')}`,
+      { method: 'POST' },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Reads every platform component area and its readiness. Needs a token that
+   * is not bound to a run and a tenant or platform administrator. An owner that
+   * can't be reached appears as `unknown` with `ownerUnavailable`.
+   */
+  getPlatformComponents(token: string, tenantSelector?: string | null): Promise<PlatformComponentReport> {
+    return this.request(token, '/platform/components', {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Lists the built-in team templates that a casting proposal can start from. */
+  listCastingTemplates(token: string, tenantSelector?: string | null): Promise<ProjectCastingTemplateDefinition[]> {
+    return this.request(token, '/casting/templates', {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Lists the built-in roles that a manual casting proposal can pick from. */
+  listCatalogRoles(token: string, tenantSelector?: string | null): Promise<ProjectCastingRoleDefinition[]> {
+    return this.request(token, '/catalog/roles', {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Lists the project's casting proposals, newest first, up to `limit` (1–100). */
+  listCastingProposals(
+    token: string,
+    projectId: string,
+    limit?: number,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal[]> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals')}${limit !== undefined ? `?limit=${limit}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Creates a casting proposal from a template or from picked roles. The
+   * proposal is a draft; nothing changes until it is confirmed.
+   */
+  createCastingProposal(
+    token: string,
+    projectId: string,
+    request:
+      | ({ mode: 'scenario' } & CreateScenarioProjectCastingProposalRequest)
+      | ({ mode: 'manual' } & CreateManualProjectCastingProposalRequest),
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    // The service rejects unknown fields, so send the body without `mode`.
+    const { mode, ...body } = request;
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', mode)}`,
+      { method: 'POST', body: JSON.stringify(body) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Confirms or rejects a pending proposal. `expectedDraftRevision` must match
+   * the draft that was shown, or the service returns 409.
+   */
+  transitionCastingProposal(
+    token: string,
+    projectId: string,
+    proposalId: string,
+    action: 'confirm' | 'reject',
+    expectedDraftRevision: number,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId, action)}`,
+      { method: 'POST', body: JSON.stringify({ expectedDraftRevision }) },
       this.baseUrl,
       tenantSelector,
     );
