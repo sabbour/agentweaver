@@ -230,6 +230,14 @@ and validate all `.changeset/*.md` records. Run
 an added or modified changeset in that diff for every changed product component.
 Generated `packages.lock.json` updates by themselves do not require a component
 changeset; project and source changes still do.
+After applying component versions or changing dependencies, run
+`dotnet restore tools/P1PostgresInitializer/P1PostgresInitializer.csproj` from
+the repository root with the SDK selected by `global.json`. Review and commit
+the generated lock file with the version or dependency changes. This tool is
+outside the solution, so restoring the solution does not update its lock file.
+The v1 release and P1 contract CI job restores it separately with `--locked-mode`
+and rejects a stale dependency graph. Normal operator restores must leave
+tracked files unchanged so the initializer's clean-tree gate remains satisfied.
 Both CI workflows use `npm run release:validate -- --ci`.
 This form verifies the checkout against `GITHUB_SHA` and the event's source history.
 For a PR, the tested merge must have ordered parents `[event base, authored head]`.
