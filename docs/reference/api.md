@@ -144,7 +144,7 @@ exposes project configuration and run-selection operations.
 | POST | `/{projectId}/casting/proposals` | Admin | Create a reviewed casting proposal. | No |
 | POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | No |
 | POST | `/{projectId}/casting/proposals/manual` | Admin | Create a manual proposal. | No |
-| POST | `/{projectId}/casting/proposals/blueprint` | Admin | Create a proposal from a blueprint. | No |
+| POST | `/{projectId}/casting/proposals/blueprint` | Admin | Create a proposal from a blueprint. Returns the proposal and the skill bindings it couldn't apply. | No |
 | GET | `/{projectId}/casting/proposals` | Read | List proposals. | No |
 | GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | No |
 | PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | No |
@@ -162,8 +162,8 @@ exposes project configuration and run-selection operations.
 | GET | `/api/authorization/context` | Bearer; `api.read`, non-purpose token | Read current authority. | `/api/v1/authorization/context` |
 | GET | `/api/casting/templates` | Bearer | Read built-in casting templates. | No |
 | GET | `/api/catalog/roles` | Bearer | Read built-in roles. | No |
-| GET | `/api/blueprints` | Bearer | List built-in blueprints with their availability. | No |
-| POST | `/api/blueprints/validate` | Bearer | Check a blueprint without changing state. | No |
+| GET | `/api/blueprints` | Bearer; any signed-in caller | List built-in blueprints with their availability. | No |
+| POST | `/api/blueprints/validate` | Bearer; any signed-in caller | Check a blueprint without changing state. | No |
 | GET | `/api/platform/runtime-defaults/` | `api.read`, `projects.admin`, unbound PlatformAdmin | Read platform runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | PUT | `/api/platform/runtime-defaults/` | Same PlatformAdmin authority | Append runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |

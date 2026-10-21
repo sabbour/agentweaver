@@ -90,6 +90,29 @@ public sealed record CreateBlueprintProjectCastingProposalRequest
     public BlueprintDefinition? Blueprint { get; init; }
 }
 
+/// <summary>A blueprint skill binding that doesn't take effect in the draft, with a stable reason code.</summary>
+public sealed record BlueprintUnresolvedSkillBinding(string Role, string SkillId, string Code)
+{
+    /// <summary>The project has no skill with this ID.</summary>
+    public const string SkillNotInstalled = "skill_not_installed";
+
+    /// <summary>The skill has no pinned revision, so it can't be assigned to agents.</summary>
+    public const string SkillNotPinned = "skill_not_pinned";
+
+    /// <summary>The skill is assigned but stays disabled, because the blueprint doesn't change the user's setting.</summary>
+    public const string SkillDisabled = "skill_disabled";
+}
+
+/// <summary>A casting draft produced by a blueprint and the skill bindings it couldn't apply.</summary>
+public sealed record BlueprintApplication(
+    ProjectConfiguration Draft,
+    ImmutableArray<BlueprintUnresolvedSkillBinding> UnresolvedSkillBindings);
+
+/// <summary>A pending blueprint casting proposal and the skill bindings it couldn't apply.</summary>
+public sealed record BlueprintCastingProposalResult(
+    ProjectCastingProposal Proposal,
+    ImmutableArray<BlueprintUnresolvedSkillBinding> UnresolvedSkillBindings);
+
 /// <summary>
 /// Owns the built-in 0.x blueprints, their availability checks, validation, and conversion into reviewed casting drafts.
 /// </summary>
@@ -185,11 +208,22 @@ public static class ProjectBlueprintCatalog
                 codes.Add("workflow_unavailable");
         }
 
+        // Every other Validate rule, so an exportable blueprint is never rejected as invalid_blueprint.
+        if (!Validate(blueprint, requireAvailableWorkflows: false).Valid)
+            codes.Add("blueprint_invalid");
+
         return BlueprintExportability.FromCodes(codes);
     }
 
     /// <summary>Checks a blueprint with the 0.x rules and returns every error without changing state.</summary>
-    public static BlueprintValidationResult Validate(BlueprintDefinition blueprint)
+    public static BlueprintValidationResult Validate(BlueprintDefinition blueprint) =>
+        Validate(blueprint, requireAvailableWorkflows: true);
+
+    /// <summary>
+    /// Checks a blueprint with the 0.x rules. With <paramref name="requireAvailableWorkflows"/> false, workflows only
+    /// need valid, unique IDs; the AgentSuite converter uses this because availability is checked at apply time.
+    /// </summary>
+    internal static BlueprintValidationResult Validate(BlueprintDefinition blueprint, bool requireAvailableWorkflows)
     {
         ArgumentNullException.ThrowIfNull(blueprint);
         var errors = new List<string>();
@@ -225,8 +259,10 @@ public static class ProjectBlueprintCatalog
                 errors.Add($"Duplicate workflow '{workflowId}'.");
                 continue;
             }
-            if (!AvailableWorkflowIds.Contains(workflowId))
+            if (requireAvailableWorkflows && !AvailableWorkflowIds.Contains(workflowId))
                 errors.Add($"Unknown workflow '{workflowId}'.");
+            else if (!requireAvailableWorkflows && !IsSafeId(workflowId))
+                errors.Add($"Workflow id '{workflowId}' must use lowercase letters, digits, and hyphens.");
         }
 
         if (!string.Equals(blueprint.SandboxProfile, DefaultSandboxProfile, StringComparison.Ordinal) &&
@@ -311,10 +347,11 @@ public static class ProjectBlueprintCatalog
     }
 
     /// <summary>
-    /// Resolves exactly one of a built-in ID or an inline blueprint and returns a validated casting draft.
+    /// Resolves exactly one of a built-in ID or an inline blueprint and returns a validated casting draft with the
+    /// skill bindings it couldn't assign.
     /// </summary>
     /// <exception cref="ProjectConfigException">The request is ambiguous, unknown, unavailable, or invalid.</exception>
-    public static ProjectConfiguration CreateDraft(
+    public static BlueprintApplication CreateDraft(
         ProjectConfiguration current,
         string? blueprintId,
         BlueprintDefinition? inline)
@@ -335,64 +372,167 @@ public static class ProjectBlueprintCatalog
         return CreateDraft(current, blueprint);
     }
 
-    /// <summary>
-    /// Builds charters and casting from the roster, references every workflow, makes the first workflow the default,
-    /// assigns bound skills that the project already pins, and applies the sandbox profile.
-    /// </summary>
-    private static ProjectConfiguration CreateDraft(ProjectConfiguration current, BlueprintDefinition blueprint)
+    /// <summary>Builds charters and casting from the roster, then applies the blueprint projection.</summary>
+    private static BlueprintApplication CreateDraft(ProjectConfiguration current, BlueprintDefinition blueprint)
     {
         var charters = ImmutableArray.CreateBuilder<ProjectAgentCharter>(blueprint.Roster.Length);
         var casting = ImmutableArray.CreateBuilder<ProjectAgentCast>(blueprint.Roster.Length);
         for (var index = 0; index < blueprint.Roster.Length; index++)
         {
             var roleId = blueprint.Roster[index];
-            if (FindBespokeRole(blueprint, roleId) is { } bespoke)
-                charters.Add(new ProjectAgentCharter(
-                    roleId,
-                    string.IsNullOrWhiteSpace(bespoke.Title) ? roleId : bespoke.Title,
-                    roleId,
-                    bespoke.Charter));
-            else
-            {
-                var role = FindCatalogRole(roleId)!;
-                charters.Add(new ProjectAgentCharter(
-                    role.Id,
-                    role.Title,
-                    role.Id,
-                    ProjectCastingCatalog.BuildCharter(role)));
-            }
+            var (title, charter) = ResolveRole(blueprint, roleId);
+            charters.Add(new ProjectAgentCharter(roleId, title, roleId, charter));
             casting.Add(new ProjectAgentCast(roleId, roleId, index));
         }
 
-        var boundAgents = (blueprint.SkillBindings.IsDefault ? [] : blueprint.SkillBindings)
-            .SelectMany(binding => binding.Skills.Select(skill => (Skill: skill, Agent: binding.RoleId)))
-            .GroupBy(item => item.Skill, StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Select(item => item.Agent).Distinct(StringComparer.Ordinal).ToImmutableArray(),
-                StringComparer.Ordinal);
-        var cast = blueprint.Roster.ToHashSet(StringComparer.Ordinal);
-        var skills = (current.Skills.IsDefault ? [] : current.Skills)
-            .Select(skill => ApplySkillBinding(skill, boundAgents, cast))
-            .ToImmutableArray();
+        var draft = current with { AgentCharters = charters.ToImmutable(), Casting = casting.ToImmutable() };
+        return ApplyBlueprint(
+            draft,
+            ToAgentSuiteBlueprint(blueprint),
+            blueprint.Roster.ToDictionary(roleId => roleId, roleId => roleId, StringComparer.Ordinal));
+    }
 
-        return current with
+    /// <summary>Returns the title and charter text for a roster role, from a bespoke role or the role catalog.</summary>
+    internal static (string Title, string Charter) ResolveRole(BlueprintDefinition blueprint, string roleId)
+    {
+        if (FindBespokeRole(blueprint, roleId) is { } bespoke)
+            return (string.IsNullOrWhiteSpace(bespoke.Title) ? roleId : bespoke.Title, bespoke.Charter);
+        var role = FindCatalogRole(roleId)
+            ?? throw new ArgumentException($"Role '{roleId}' is not in the role catalog or the blueprint.", nameof(roleId));
+        return (role.Title, ProjectCastingCatalog.BuildCharter(role));
+    }
+
+    /// <summary>
+    /// Converts a 0.x blueprint to the projection that travels with an AgentSuite import. The roster becomes suite
+    /// agents, so it isn't part of the projection.
+    /// </summary>
+    public static ProjectAgentSuiteBlueprint ToAgentSuiteBlueprint(BlueprintDefinition blueprint)
+    {
+        ArgumentNullException.ThrowIfNull(blueprint);
+        return new()
         {
-            AgentCharters = charters.ToImmutable(),
-            Casting = casting.ToImmutable(),
-            BlueprintWorkflowReferences = blueprint.Workflows
-                .Select(workflowId => new BlueprintWorkflowReference(blueprint.Id, workflowId))
+            SourceBlueprintId = blueprint.Id,
+            DisplayName = blueprint.Name,
+            Description = string.IsNullOrWhiteSpace(blueprint.Description) ? null : blueprint.Description,
+            Workflows = blueprint.Workflows.IsDefaultOrEmpty ? ["default"] : blueprint.Workflows,
+            DefaultWorkflow = DefaultWorkflowId(blueprint),
+            ReviewPolicy = blueprint.ReviewPolicy,
+            SandboxProfile = blueprint.SandboxProfile,
+            SkillBindings = (blueprint.SkillBindings.IsDefault ? [] : blueprint.SkillBindings)
+                .Select(binding => new ProjectAgentSuiteSkillBinding(binding.RoleId, binding.Skills))
                 .ToImmutableArray(),
-            DefaultWorkflowId = DefaultWorkflowId(blueprint),
-            Skills = skills,
-            EgressNarrowing = string.Equals(blueprint.SandboxProfile, RestrictedSandboxProfile, StringComparison.Ordinal)
-                ? ImmutableArray<NetworkEgressRule>.Empty
-                : current.EgressNarrowing,
         };
     }
 
     /// <summary>
-    /// Keeps a pinned skill's assignments on agents that stay cast and adds bound roster agents. Unpinned skills are unchanged.
+    /// Checks a blueprint projection against the 0.x rules and the suite's native agent IDs. Returns every error;
+    /// an empty result means the projection is valid.
+    /// </summary>
+    public static ImmutableArray<string> ValidateBlueprint(
+        ProjectAgentSuiteBlueprint blueprint,
+        IReadOnlyCollection<string> nativeAgentIds)
+    {
+        ArgumentNullException.ThrowIfNull(blueprint);
+        ArgumentNullException.ThrowIfNull(nativeAgentIds);
+        var errors = new List<string>();
+        var workflows = blueprint.Workflows.IsDefault ? [] : blueprint.Workflows;
+        if (blueprint.SourceBlueprintId is { } sourceId && !IsSafeId(sourceId))
+            errors.Add($"Blueprint id '{sourceId}' must use lowercase letters, digits, and hyphens (at most 64 characters).");
+        if (workflows.IsEmpty)
+            errors.Add("workflows must list at least one workflow.");
+        var seenWorkflows = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var workflowId in workflows)
+        {
+            if (string.IsNullOrWhiteSpace(workflowId))
+                errors.Add("workflows must not contain empty ids.");
+            else if (!seenWorkflows.Add(workflowId))
+                errors.Add($"Duplicate workflow '{workflowId}'.");
+            else if (!AvailableWorkflowIds.Contains(workflowId))
+                errors.Add($"Unknown workflow '{workflowId}'.");
+        }
+        if (!seenWorkflows.Contains(blueprint.DefaultWorkflow ?? string.Empty))
+            errors.Add($"defaultWorkflow '{blueprint.DefaultWorkflow}' must be one of the workflows.");
+        if (!string.Equals(blueprint.ReviewPolicy, DefaultReviewPolicy, StringComparison.Ordinal))
+            errors.Add($"Unknown review_policy '{blueprint.ReviewPolicy}'. Supported: default.");
+        if (!string.Equals(blueprint.SandboxProfile, DefaultSandboxProfile, StringComparison.Ordinal) &&
+            !string.Equals(blueprint.SandboxProfile, RestrictedSandboxProfile, StringComparison.Ordinal))
+            errors.Add($"Unknown sandbox_profile '{blueprint.SandboxProfile}'. Supported: default, restricted.");
+        foreach (var binding in blueprint.SkillBindings.IsDefault ? [] : blueprint.SkillBindings)
+        {
+            if (binding is null || string.IsNullOrWhiteSpace(binding.Role))
+            {
+                errors.Add("Skill bindings must have a role.");
+                continue;
+            }
+            if (!nativeAgentIds.Contains(binding.Role))
+                errors.Add($"Skill binding role '{binding.Role}' is not a suite agent.");
+            if (binding.Skills.IsDefaultOrEmpty || binding.Skills.Any(string.IsNullOrWhiteSpace))
+                errors.Add($"Skill binding for role '{binding.Role}' must list at least one skill.");
+        }
+        return errors.ToImmutableArray();
+    }
+
+    /// <summary>
+    /// Applies a validated blueprint projection to a casting draft that already has its charters and casting.
+    /// It references every workflow under the source blueprint, sets the default workflow, adds bound agents to
+    /// skills the project already installed, and removes all project egress for the <c>restricted</c> sandbox.
+    /// </summary>
+    /// <param name="draft">The casting draft.</param>
+    /// <param name="blueprint">A projection that passed <see cref="ValidateBlueprint"/>.</param>
+    /// <param name="agentIds">Maps each native agent ID (role) to its cast agent ID.</param>
+    public static BlueprintApplication ApplyBlueprint(
+        ProjectConfiguration draft,
+        ProjectAgentSuiteBlueprint blueprint,
+        IReadOnlyDictionary<string, string> agentIds)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        ArgumentNullException.ThrowIfNull(blueprint);
+        ArgumentNullException.ThrowIfNull(agentIds);
+        var bindings = (blueprint.SkillBindings.IsDefault ? [] : blueprint.SkillBindings)
+            .Where(binding => agentIds.ContainsKey(binding.Role))
+            .SelectMany(binding => binding.Skills.Select(skill => (Role: binding.Role, Skill: skill)))
+            .Distinct()
+            .ToList();
+        var boundAgents = bindings
+            .GroupBy(item => item.Skill, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(item => agentIds[item.Role]).Distinct(StringComparer.Ordinal).ToImmutableArray(),
+                StringComparer.Ordinal);
+        var cast = (draft.Casting.IsDefault ? [] : draft.Casting)
+            .Select(item => item.AgentId)
+            .ToHashSet(StringComparer.Ordinal);
+        var currentSkills = draft.Skills.IsDefault ? [] : draft.Skills;
+        var skills = currentSkills
+            .Select(skill => ApplySkillBinding(skill, boundAgents, cast))
+            .ToImmutableArray();
+        var unresolved = bindings
+            .Select(binding => UnresolvedCode(currentSkills, binding.Skill) is { } code
+                ? new BlueprintUnresolvedSkillBinding(binding.Role, binding.Skill, code)
+                : null)
+            .OfType<BlueprintUnresolvedSkillBinding>()
+            .OrderBy(item => item.Role, StringComparer.Ordinal)
+            .ThenBy(item => item.SkillId, StringComparer.Ordinal)
+            .ToImmutableArray();
+
+        return new(draft with
+        {
+            BlueprintWorkflowReferences = blueprint.SourceBlueprintId is { } sourceId
+                ? blueprint.Workflows
+                    .Select(workflowId => new BlueprintWorkflowReference(sourceId, workflowId))
+                    .ToImmutableArray()
+                : draft.BlueprintWorkflowReferences,
+            DefaultWorkflowId = blueprint.DefaultWorkflow,
+            Skills = skills,
+            EgressNarrowing = string.Equals(blueprint.SandboxProfile, RestrictedSandboxProfile, StringComparison.Ordinal)
+                ? ImmutableArray<NetworkEgressRule>.Empty
+                : draft.EgressNarrowing,
+        }, unresolved);
+    }
+
+    /// <summary>
+    /// Keeps a pinned skill's assignments on agents that stay cast and adds bound roster agents. It never changes
+    /// <see cref="SkillCatalogSetting.Enabled"/>. Unpinned skills are unchanged.
     /// </summary>
     private static SkillCatalogSetting ApplySkillBinding(
         SkillCatalogSetting skill,
@@ -404,11 +544,18 @@ public static class ProjectBlueprintCatalog
         var agents = assigned.Where(cast.Contains).ToList();
         if (boundAgents.TryGetValue(skill.SkillId, out var bound))
             agents.AddRange(bound.Where(agent => !agents.Contains(agent, StringComparer.Ordinal)));
-        return skill with
-        {
-            AgentIds = agents.ToImmutableArray(),
-            Enabled = skill.Enabled && agents.Count > 0 || bound is { IsEmpty: false },
-        };
+        return skill with { AgentIds = agents.ToImmutableArray() };
+    }
+
+    /// <summary>Returns why a bound skill doesn't take effect in the draft, or null when it does.</summary>
+    private static string? UnresolvedCode(ImmutableArray<SkillCatalogSetting> skills, string skillId)
+    {
+        var skill = skills.FirstOrDefault(item => string.Equals(item.SkillId, skillId, StringComparison.Ordinal));
+        if (skill is null)
+            return BlueprintUnresolvedSkillBinding.SkillNotInstalled;
+        if (skill.AgentIds is null)
+            return BlueprintUnresolvedSkillBinding.SkillNotPinned;
+        return skill.Enabled ? null : BlueprintUnresolvedSkillBinding.SkillDisabled;
     }
 
     private static ProjectCastingRoleDefinition? FindCatalogRole(string roleId) =>

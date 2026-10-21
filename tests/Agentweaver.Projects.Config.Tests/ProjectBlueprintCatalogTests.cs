@@ -73,6 +73,7 @@ public sealed class ProjectBlueprintCatalogTests
                 "blueprint_duplicate_id",
                 "blueprint_duplicate_role",
                 "blueprint_duplicate_workflow",
+                "blueprint_invalid",
                 "blueprint_invalid_id",
                 "role_invalid_id",
                 "role_missing",
@@ -83,6 +84,26 @@ public sealed class ProjectBlueprintCatalogTests
         Assert.Equal(
             BlueprintExportability.Exportable,
             ProjectBlueprintCatalog.Exportability(Inline()).Status);
+    }
+
+    [Fact]
+    public void EveryBuiltInPassesEveryValidateRuleExceptWorkflowAvailability()
+    {
+        foreach (var blueprint in ProjectBlueprintCatalog.Blueprints)
+        {
+            var result = ProjectBlueprintCatalog.Validate(blueprint, requireAvailableWorkflows: false);
+            Assert.True(result.Valid, $"{blueprint.Id}: {string.Join(" ", result.Errors)}");
+            Assert.DoesNotContain("blueprint_invalid", ProjectBlueprintCatalog.Exportability(blueprint).Codes);
+        }
+    }
+
+    [Fact]
+    public void ExportabilityReportsAnyValidateFailure()
+    {
+        var exportability = ProjectBlueprintCatalog.Exportability(Inline() with { ReviewPolicy = "strict" });
+
+        Assert.Equal(BlueprintExportability.Unavailable, exportability.Status);
+        Assert.Equal(new[] { "blueprint_invalid" }, exportability.Codes);
     }
 
     [Fact]
@@ -157,7 +178,7 @@ public sealed class ProjectBlueprintCatalogTests
             DefaultWorkflowId = "previous",
             Skills =
             [
-                new SkillCatalogSetting("api-data-safety", false, 0)
+                new SkillCatalogSetting("api-data-safety", true, 0)
                 {
                     Revision = 1, ContentDigest = digest, AgentIds = [],
                 },
@@ -171,8 +192,8 @@ public sealed class ProjectBlueprintCatalogTests
             BespokeRoles = [new BlueprintBespokeRole { Id = "release-captain", Title = "Release Captain", Charter = "Owns releases." }],
         };
 
-        var draft = ProjectConfigurationValidator.Validate(
-            ProjectBlueprintCatalog.CreateDraft(current, null, blueprint));
+        var application = ProjectBlueprintCatalog.CreateDraft(current, null, blueprint);
+        var draft = ProjectConfigurationValidator.Validate(application.Draft);
 
         Assert.Equal(new[] { "backend-engineer", "release-captain" }, draft.Casting.Select(item => item.AgentId));
         Assert.Equal("Owns releases.", draft.AgentCharters[1].Charter);
@@ -182,7 +203,74 @@ public sealed class ProjectBlueprintCatalogTests
         Assert.True(draft.Skills[0].Enabled);
         Assert.Equal(new[] { "backend-engineer" }, draft.Skills[0].AgentIds!.Value);
         Assert.Equal(current.Skills[1], draft.Skills[1]);
+        Assert.Empty(application.UnresolvedSkillBindings);
         Assert.True(draft.EgressNarrowing is { IsEmpty: true });
+    }
+
+    [Fact]
+    public void CreateDraftListsEverySkillBindingItCannotApply()
+    {
+        var digest = new string('a', 64);
+        var current = Empty with
+        {
+            Skills =
+            [
+                new SkillCatalogSetting("unpinned", true, 0),
+                new SkillCatalogSetting("pinned", true, 1) { Revision = 1, ContentDigest = digest, AgentIds = [] },
+            ],
+        };
+        var blueprint = Inline(roster: ["backend-engineer", "qa-engineer"]) with
+        {
+            SkillBindings =
+            [
+                new BlueprintSkillBinding { RoleId = "qa-engineer", Skills = ["missing", "pinned"] },
+                new BlueprintSkillBinding { RoleId = "backend-engineer", Skills = ["unpinned", "missing"] },
+            ],
+        };
+
+        var application = ProjectBlueprintCatalog.CreateDraft(current, null, blueprint);
+
+        Assert.Equal(
+            new[]
+            {
+                new BlueprintUnresolvedSkillBinding("backend-engineer", "missing", BlueprintUnresolvedSkillBinding.SkillNotInstalled),
+                new BlueprintUnresolvedSkillBinding("backend-engineer", "unpinned", BlueprintUnresolvedSkillBinding.SkillNotPinned),
+                new BlueprintUnresolvedSkillBinding("qa-engineer", "missing", BlueprintUnresolvedSkillBinding.SkillNotInstalled),
+            },
+            application.UnresolvedSkillBindings);
+        Assert.Equal(current.Skills[0], application.Draft.Skills[0]);
+        Assert.Equal(new[] { "qa-engineer" }, application.Draft.Skills[1].AgentIds!.Value);
+        Assert.DoesNotContain(application.Draft.Skills, skill => skill.SkillId == "missing");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CreateDraftKeepsTheUserEnabledSetting(bool enabled)
+    {
+        var current = Empty with
+        {
+            Skills =
+            [
+                new SkillCatalogSetting("bound", enabled, 0) { Revision = 1, ContentDigest = new string('a', 64), AgentIds = [] },
+                new SkillCatalogSetting("orphaned", enabled, 1) { Revision = 1, ContentDigest = new string('b', 64), AgentIds = ["old-agent"] },
+            ],
+        };
+        var blueprint = Inline(roster: ["backend-engineer"]) with
+        {
+            SkillBindings = [new BlueprintSkillBinding { RoleId = "backend-engineer", Skills = ["bound"] }],
+        };
+
+        var application = ProjectBlueprintCatalog.CreateDraft(current, null, blueprint);
+
+        Assert.All(application.Draft.Skills, skill => Assert.Equal(enabled, skill.Enabled));
+        Assert.Equal(new[] { "backend-engineer" }, application.Draft.Skills[0].AgentIds!.Value);
+        Assert.Empty(application.Draft.Skills[1].AgentIds!.Value);
+        Assert.Equal(
+            enabled
+                ? []
+                : new[] { new BlueprintUnresolvedSkillBinding("backend-engineer", "bound", BlueprintUnresolvedSkillBinding.SkillDisabled) },
+            application.UnresolvedSkillBindings);
     }
 
     [Fact]

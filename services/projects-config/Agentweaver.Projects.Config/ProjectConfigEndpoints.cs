@@ -327,7 +327,7 @@ public static class ProjectConfigEndpoints
             try
             {
                 context.Response.Headers.CacheControl = "no-store";
-                var proposal = await service.CreateBlueprintCastingProposalAsync(
+                var result = await service.CreateBlueprintCastingProposalAsync(
                     await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
                     projectId,
                     request.ExpectedConfigurationRevision,
@@ -335,8 +335,8 @@ public static class ProjectConfigEndpoints
                     request.Blueprint,
                     cancellationToken).ConfigureAwait(false);
                 return Results.Created(
-                    $"/api/projects/{projectId}/casting/proposals/{proposal.ProposalId}",
-                    proposal);
+                    $"/api/projects/{projectId}/casting/proposals/{result.Proposal.ProposalId}",
+                    result);
             }
             catch (ProjectConfigException exception)
             {

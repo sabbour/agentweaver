@@ -82,9 +82,10 @@ public sealed partial class ProjectsConfigService
 
     /// <summary>
     /// Creates a pending proposal from a built-in or inline blueprint: team, workflows, default workflow, bound skills,
-    /// and sandbox profile. Nothing changes until the proposal is confirmed.
+    /// and sandbox profile. Nothing changes until the proposal is confirmed. The result lists the skill bindings the
+    /// proposal couldn't apply.
     /// </summary>
-    public Task<ProjectCastingProposal> CreateBlueprintCastingProposalAsync(
+    public async Task<BlueprintCastingProposalResult> CreateBlueprintCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,
         long expectedConfigurationRevision,
@@ -93,12 +94,19 @@ public sealed partial class ProjectsConfigService
         CancellationToken cancellationToken)
     {
         RequireCastingWrite(caller, projectId);
-        return CreateCastingProposalFromCurrentConfigurationAsync(
+        var unresolved = ImmutableArray<BlueprintUnresolvedSkillBinding>.Empty;
+        var proposal = await CreateCastingProposalFromCurrentConfigurationAsync(
             caller,
             projectId,
             expectedConfigurationRevision,
-            current => ProjectBlueprintCatalog.CreateDraft(current, blueprintId, blueprint),
-            cancellationToken);
+            current =>
+            {
+                var application = ProjectBlueprintCatalog.CreateDraft(current, blueprintId, blueprint);
+                unresolved = application.UnresolvedSkillBindings;
+                return application.Draft;
+            },
+            cancellationToken).ConfigureAwait(false);
+        return new(proposal, unresolved);
     }
 
     private Task<ProjectCastingProposal> CreateCastingProposalAsync(

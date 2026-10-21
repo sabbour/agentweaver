@@ -163,8 +163,19 @@ A blueprint is a team recipe carried over from 0.x: a roster of roles, one or mo
 - `GET /api/blueprints` lists each blueprint with its default workflow (the first workflow) and an `exportability` result. The status is `exportable` or `unavailable`, with sorted reason codes such as `role_missing` or `workflow_unavailable`. A blueprint stays in the list when it is unavailable, so callers can show why.
 - `POST /api/blueprints/validate` checks a blueprint and returns `{ valid, errors }`. It never changes state. The rules match 0.x: id and name are required, the review policy must be `default`, workflows must be known and unique, the sandbox profile must be `default` or `restricted`, roster roles must be catalog or bespoke roles and not reserved, skill bindings must name roster roles, and bespoke roles need a charter of at most 8,192 characters.
 - `POST /api/projects/{projectId}/casting/proposals/blueprint` takes `expectedConfigurationRevision` and either `blueprintId` or an inline `blueprint`. It creates a pending proposal; nothing changes until the proposal is confirmed. The draft casts the roster, adds a `blueprintWorkflowReferences` entry for each workflow, sets `defaultWorkflowId` to the first workflow, assigns bound skills that the project already pins to the matching agents, and, for `restricted`, sets an empty `egressNarrowing` so the project has no network egress. A built-in blueprint can be applied only when it is exportable.
+- The proposal route returns `{ proposal, unresolvedSkillBindings }`. Applying a blueprint never changes a skill's `enabled` setting. Each skill binding that doesn't take effect is listed with its `role`, `skillId`, and a `code`: `skill_not_installed` (the project has no such skill), `skill_not_pinned` (the skill has no pinned agent list), or `skill_disabled` (the agents are assigned, but the skill stays disabled). The list is sorted by role and then skill.
 
 Workflow availability comes from the workflows the v1 Orchestrator registers. Today that is only `default`, so the built-in blueprints report `workflow_unavailable` until the workflow library (#1914) adds their workflows.
+
+#### Blueprints as AgentSuite packages
+
+Blueprints ship as native AgentSuite packages, and the AgentSuite import (#2114) is their only runtime loader. Projects & Config provides the parts that convert and apply them:
+
+- `AgentSuiteBlueprintConverter.Convert` turns a 0.x blueprint into a deterministic AgentSuite content archive at build time. Each roster role becomes an agent whose instructions are the exact 0.x charter text. The caller supplies the build profile, its digest-pinned runtime base and harness images, and the agent model. `ConvertPackage` does the same for a 0.x `blueprint-package-v1` package. It checks the package with the 0.x validator, ported without behavior changes to `Agentweaver.Projects.Config.BlueprintPackages`, and refuses workflow and skill definitions.
+- `ProjectBlueprintCatalog.ToAgentSuiteBlueprint` returns the `ProjectAgentSuiteBlueprint` projection: workflows, default workflow, review policy, sandbox profile, and skill bindings.
+- `ProjectBlueprintCatalog.ValidateBlueprint` checks a projection against the suite's agent IDs with the 0.x rules. `ApplyBlueprint` applies it to a casting draft with the same effects as the blueprint proposal route, using the effective agent IDs from the import.
+
+The packaged built-in blueprints wait for #1919, which publishes the AgentHost image their build profiles pin. For the decisions and how each 0.x criterion maps to v1, see [Blueprints on AgentSuite](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-application-bundles.md#blueprints-on-agentsuite).
 
 Authorized project readers can list and read proposals. Project writers can
 amend a draft with its expected draft revision and explicitly confirm or reject

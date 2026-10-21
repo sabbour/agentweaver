@@ -19,6 +19,7 @@ the exact inputs for that run. Later edits do not rewrite the snapshot.
 | `ProjectsConfigService.cs` | Project lifecycle, revision writes, and run selection |
 | `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
 | `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
+| `ProjectBlueprintCatalog.cs`, `AgentSuiteBlueprintConverter.cs`, and `BlueprintPackages/` | 0.x blueprints, their AgentSuite conversion, and the ported 0.x package validator |
 | `ProjectSkillContentService.cs` and `ProjectMarketplaceSourceService.cs` | Imported skill content and source ownership |
 | `ProjectsConfigMigrator.cs` | Explicit migration and runtime permission checks |
 
@@ -90,9 +91,14 @@ For supported setting names and project setup, see the
 ## Review team and skill changes
 
 Casting proposals stage a complete configuration draft for review. Scenario
-templates and manual role selections produce version-bound proposals.
+templates, blueprints, and manual role selections produce version-bound proposals.
 Confirmation appends a configuration revision only while the proposal and
 configuration remain current. Rejection leaves configuration unchanged.
+
+A blueprint proposal lists each skill binding it can't apply, with a stable
+code, and never changes whether a skill is enabled. Blueprints are delivered
+as AgentSuite packages; see
+[Blueprints on AgentSuite](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-application-bundles.md#blueprints-on-agentsuite).
 
 Skills use imported content revisions and digests, with assignments to project
 agents. Configuration validation checks these pins. An accepted run reads its

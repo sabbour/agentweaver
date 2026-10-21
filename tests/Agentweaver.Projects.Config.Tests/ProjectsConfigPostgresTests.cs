@@ -2015,7 +2015,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 CancellationToken.None));
         Assert.Equal("blueprint_unavailable", unavailable.Code);
 
-        var proposal = await service.CreateBlueprintCastingProposalAsync(
+        var proposal = (await service.CreateBlueprintCastingProposalAsync(
             owner,
             project.ProjectId,
             current.Revision,
@@ -2029,7 +2029,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 ReviewPolicy = "default",
                 SandboxProfile = "default",
             },
-            CancellationToken.None);
+            CancellationToken.None)).Proposal;
 
         Assert.Equal(ProjectCastingProposalState.Pending, proposal.State);
         Assert.Equal(new[] { "backend-engineer", "qa-engineer" }, proposal.Draft.Casting.Select(item => item.AgentId));
