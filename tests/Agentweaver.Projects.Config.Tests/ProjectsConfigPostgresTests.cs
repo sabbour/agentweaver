@@ -701,6 +701,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             CancellationToken.None);
 
         const string commitSha = "0123456789abcdef0123456789abcdef01234567";
+        // The fake repository has two skills. The second one lets the test reuse an idempotency key
+        // with different content.
         var markdown = Encoding.UTF8.GetBytes(
             "---\nname: runtime-skill\ndescription: A marketplace skill for runtime delivery.\n---\nUse the marketplace instructions.");
         var otherMarkdown = Encoding.UTF8.GetBytes(
@@ -708,6 +710,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var resource = Encoding.UTF8.GetBytes("Marketplace reference bytes.");
         using var httpClient = new HttpClient(new MarketplaceTestHandler(request =>
         {
+            // Serve the pinned tree and raw files from memory. Any other request fails the test, so the
+            // flow can't read an unpinned ref or an unexpected path.
             var uri = request.RequestUri!;
             if (uri.Host == "api.github.com" && uri.AbsolutePath.EndsWith($"/git/trees/{commitSha}", StringComparison.Ordinal))
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -735,6 +739,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             TimeProvider.System);
         var marketplace = new ProjectMarketplaceSkillContentService(
             sources, new SkillMarketplaceBrowseService(httpClient, new MarketplaceSourceStore(db)), content);
+        // The endpoints pass these callbacks to recheck read or write authority and the source revision
+        // just before content is read. The test passes the same checks directly.
         async Task VerifyReadAsync(CancellationToken cancellationToken) =>
             _ = await sources.GetForBrowseAsync(
                 owner, project.ProjectId, source.SourceId, source.Revision, cancellationToken);
@@ -767,6 +773,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             owner, project.ProjectId, source.SourceId, import, VerifyWriteAsync, CancellationToken.None);
 
         var otherPreview = await PreviewAsync("skills/other");
+        // Reuse the idempotency key with a different skill. The import must fail with a conflict and
+        // must not store a second revision.
         var reusedKey = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
             marketplace.ImportAsync(
                 owner,
@@ -792,6 +800,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             CancellationToken.None);
         var membership = await SeedMembershipAsync(
             authorityStore, "marketplace-runtime-orchestrator-" + suffix, tenantId);
+        // Accept a run as the Orchestrator. The run pins the assignment revision that now includes
+        // the imported skill.
         await authorityStore.AssignRoleAsync(
             membership,
             ProjectAuthorityResourceType.Project,
@@ -818,6 +828,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             RunRequest(assigned.Revision, defaults.Revision),
             CancellationToken.None);
 
+        // Remove the source. New preview and import calls must fail, but the accepted run must still
+        // receive the bytes that were imported before the removal.
         await sources.RemoveAsync(
             owner, project.ProjectId, source.SourceId, source.Revision, CancellationToken.None);
         var removedPreview = await Assert.ThrowsAsync<MarketplaceSourceException>(() =>

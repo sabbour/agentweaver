@@ -406,6 +406,7 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
         Assert.All(definitions, item => Assert.Equal(JsonValueKind.Null, item.GetProperty("sourceId").ValueKind));
         var awesome = definitions[1];
 
+        // Add the suggested marketplace with the values the definition returned, as the UI does.
         using var created = await SendAsync(owner, HttpMethod.Post, sourcesPath, new
         {
             name = awesome.GetProperty("name").GetString(),
@@ -425,6 +426,8 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
         using var removed = await SendAsync(owner, HttpMethod.Delete, sourcePath + "?expectedRevision=1");
         Assert.Equal(HttpStatusCode.OK, removed.StatusCode);
 
+        // After removal, each content route must return 404 before it calls GitHub. The empty request
+        // log below proves that no upstream call was made.
         using var browse = await SendAsync(owner, HttpMethod.Get, sourcePath + "/browse?expectedSourceRevision=1");
         await SkillMarketplaceEndpointHost.AssertProblemAsync(
             browse, HttpStatusCode.NotFound, "marketplace_source_not_found");
@@ -449,6 +452,7 @@ public sealed class SkillMarketplaceEndpointPostgresTests(ProjectsConfigPostgres
             item => Assert.Equal(JsonValueKind.Null, item.GetProperty("sourceId").ValueKind));
         Assert.Empty(_gitHubRequests);
 
+        // A caller with no project authority can't read the suggested list for that project.
         var outsider = owner with { Subject = "outsider-" + Guid.NewGuid().ToString("N") };
         using var denied = await SendAsync(outsider, HttpMethod.Get, definitionsPath);
         await SkillMarketplaceEndpointHost.AssertProblemAsync(denied, HttpStatusCode.Forbidden, "forbidden");

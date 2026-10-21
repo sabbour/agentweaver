@@ -35,7 +35,7 @@ public sealed class SkillMarketplaceCatalog
     /// <summary>The configuration section that replaces the built-in definitions when present.</summary>
     public const string SectionName = "ProjectsConfig:SkillMarketplaces:Definitions";
 
-    /// <summary>The public marketplaces that 0.x offered by default.</summary>
+    /// <summary>The public marketplaces that Agentweaver 0.x offered by default.</summary>
     public static readonly IReadOnlyList<SkillMarketplaceDefinitionSettings> DefaultDefinitions =
     [
         new()
@@ -62,27 +62,39 @@ public sealed class SkillMarketplaceCatalog
     {
         ArgumentNullException.ThrowIfNull(definitions);
         var normalized = new List<(ProjectMarketplaceSourceDefinition Definition, string? LayoutNote)>();
+        // Skip disabled and null entries before validation. An administrator can then turn off a
+        // definition, or turn off all of them, without deleting its other values.
         foreach (var settings in definitions.Where(definition => definition is { Enabled: true }))
         {
+            // The source rules would derive a name from the repository. A definition requires an explicit
+            // name because the UI shows it and the duplicate check below compares it.
             if (string.IsNullOrWhiteSpace(settings.Name))
                 throw new InvalidOperationException("Each skill marketplace definition requires a name.");
             ProjectMarketplaceSourceDefinition definition;
             try
             {
+                // Use the same normalization as the source create route. A suggestion then has the
+                // repository, ref, and subpath that the route stores when a user adds it, and the
+                // match in Describe works.
                 definition = MarketplaceSourceDefinition.Normalize(
                     settings.Name, settings.Repository, settings.RequestedRef, settings.Subpath);
             }
             catch (MarketplaceSourceException exception)
             {
+                // A request error becomes a startup error. A bad definition then stops the service
+                // instead of returning a suggestion that the create route rejects.
                 throw new InvalidOperationException(
                     $"Skill marketplace definition '{settings.Name}' is invalid: {exception.Message}", exception);
             }
+            // Names are unique without case, the same as active source names in a project.
             if (normalized.Any(existing => string.Equals(
                     existing.Definition.Name, definition.Name, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException(
                     $"Skill marketplace definition '{definition.Name}' is configured more than once.");
+            // A blank layout note is stored as null so clients can show the note only when it has text.
             normalized.Add((definition, string.IsNullOrWhiteSpace(settings.LayoutNote) ? null : settings.LayoutNote.Trim()));
         }
+        // Sort once at startup so every response lists definitions in the same order.
         Definitions = normalized
             .OrderBy(item => item.Definition.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -96,6 +108,8 @@ public sealed class SkillMarketplaceCatalog
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var section = configuration.GetSection(SectionName);
+        // A present section replaces the defaults instead of adding to them. An administrator then has
+        // full control of the list. A section with only disabled items yields an empty list.
         return section.Exists()
             ? new SkillMarketplaceCatalog(section.Get<SkillMarketplaceDefinitionSettings[]>() ?? [])
             : new SkillMarketplaceCatalog(DefaultDefinitions);
@@ -104,10 +118,15 @@ public sealed class SkillMarketplaceCatalog
     /// <summary>Pairs each definition with the matching active project source, if the project added it.</summary>
     public IReadOnlyList<SkillMarketplaceDefinitionView> Describe(IEnumerable<ProjectMarketplaceSourceRecord> sources)
     {
+        // Removed sources are tombstones. Ignore them so a definition shows as not added again after
+        // the project removes its source.
         var active = sources.Where(source => source.State == ProjectMarketplaceSourceState.Active).ToArray();
         return Definitions
             .Select(item =>
             {
+                // Match by location, not by name, because a user can rename a source after adding it.
+                // GitHub repository names are case-insensitive. Git refs and paths are case-sensitive,
+                // so a source on a different ref or subpath is a different source.
                 var match = active.FirstOrDefault(source =>
                     string.Equals(source.Repository, item.Definition.Repository, StringComparison.OrdinalIgnoreCase) &&
                     string.Equals(source.RequestedRef, item.Definition.RequestedRef, StringComparison.Ordinal) &&

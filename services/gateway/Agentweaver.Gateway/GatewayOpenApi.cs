@@ -24,7 +24,7 @@ internal static partial class GatewayOpenApi
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
             ["updateProjectConfiguration"] = C("UpdateProjectConfigurationRequest", "VersionedProjectConfiguration", "200"),
             ["listMarketplaceDefinitions"] = C(null, "SkillMarketplaceDefinitionList", "200"),
-        ["listMarketplaceSources"] = C(null, "MarketplaceSourceList", "200"),
+            ["listMarketplaceSources"] = C(null, "MarketplaceSourceList", "200"),
             ["createMarketplaceSource"] = C("CreateMarketplaceSourceRequest", "MarketplaceSource", "201"),
             ["updateMarketplaceSource"] = C("UpdateMarketplaceSourceRequest", "MarketplaceSource", "200"),
             ["removeMarketplaceSource"] = C(null, "MarketplaceSource", "200"),

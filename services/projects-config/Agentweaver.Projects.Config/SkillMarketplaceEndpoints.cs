@@ -51,13 +51,18 @@ public static class SkillMarketplaceEndpoints
             SkillMarketplaceCatalog catalog,
             CancellationToken cancellationToken) =>
         {
+            // The sourceId marker depends on the project's current sources, so a cached response can be stale.
             context.Response.Headers.CacheControl = "no-store";
             try
             {
+                // Reject unknown query parameters, as the other marketplace routes do, so a client can't
+                // assume a filter that the route ignores.
                 if (context.Request.Query.Count != 0)
                     throw MarketplaceSourceException.InvalidRequest("Marketplace definitions accept no query parameters.");
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
+                // The source list call checks current project read authority. A caller who can't read the
+                // project's sources can't see the suggested list for that project either.
                 var sources = await service.ListAsync(caller, projectId, includeRemoved: false, cancellationToken)
                     .ConfigureAwait(false);
                 return Results.Ok(catalog.Describe(sources));

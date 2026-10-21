@@ -136,7 +136,7 @@ Projects & Config reads definitions from the
 `ProjectsConfig:SkillMarketplaces:Definitions` configuration section. Each item
 accepts `Name`, `Repository`, `RequestedRef` (default `main`), `Subpath`,
 `LayoutNote`, and `Enabled` (default `true`). When the section is absent, the
-service offers the two 0.x defaults:
+service offers the two defaults from Agentweaver 0.x:
 
 | Name | Repository | Subpath |
 | --- | --- | --- |
