@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Projects.Config;
@@ -606,6 +607,95 @@ public static class ProjectConfigEndpoints
             }
         }).WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
 
+        projects.MapPost("/{projectId}/agentsuite-imports", async (
+            string projectId,
+            ImportProjectAgentSuiteRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                var result = await service.ImportAgentSuiteAsync(
+                    caller, projectId, request, store, cancellationToken).ConfigureAwait(false);
+                return result.Proposal is null
+                    ? Results.Ok(result)
+                    : Results.Created(
+                        $"/api/projects/{projectId}/casting/proposals/{result.Proposal.ProposalId}",
+                        result);
+            }
+            catch (AgentSuiteImportRejectedException exception)
+            {
+                return Results.Problem(
+                    title: "agentsuite_invalid",
+                    detail: exception.Message,
+                    statusCode: StatusCodes.Status422UnprocessableEntity,
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["code"] = exception.Code,
+                        ["errors"] = exception.Errors,
+                    });
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapGet("/{projectId}/agentsuite-imports/{sourceIdentity}", async (
+            string projectId,
+            string sourceIdentity,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                return Results.Ok(await service.GetAgentSuiteImportAsync(
+                    caller, projectId, sourceIdentity, store, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapGet("/{projectId}/agentsuite-agents/{effectiveAgentId}/policy", async (
+            string projectId,
+            string effectiveAgentId,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                return Results.Ok(await service.GetAgentSuiteAgentPolicyAsync(
+                    caller, projectId, effectiveAgentId, store, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
         projects.MapPut("/{projectId}/runs/{runId}/selection", async (
             string projectId,
             string runId,
@@ -735,6 +825,12 @@ public static class ProjectConfigEndpoints
             detail: exception.Message,
             statusCode: exception.StatusCode,
             extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+
+    // Retained AgentSuite blobs need the optional object store (ProjectsConfig:SkillContent:ContainerUri).
+    private static ProjectConfigException AgentSuiteStoreUnavailable() =>
+        new("agentsuite_store_unavailable",
+            "AgentSuite import needs object storage. Configure ProjectsConfig:SkillContent:ContainerUri.",
+            StatusCodes.Status503ServiceUnavailable);
 
     /// <summary>Resolves the bearer principal and optional tenant selector through the Projects authority owner.</summary>
     private static Task<ProjectAuthorizationContext> ResolveCallerAsync(

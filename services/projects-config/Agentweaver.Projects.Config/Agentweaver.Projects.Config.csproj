@@ -26,4 +26,9 @@
     <ProjectReference Include="..\..\..\packages\Agentweaver.ObjectStore.AzureBlob\Agentweaver.ObjectStore.AzureBlob.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
   </ItemGroup>
+  <!-- Pinned upstream AgentSuite schema bundle; digests are verified by AgentSuiteSchemaBundle. -->
+  <ItemGroup>
+    <Content Remove="AgentSuite\Schemas\**" />
+    <EmbeddedResource Include="AgentSuite\Schemas\*.schema.json" LogicalName="AgentSuite.Schemas.%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

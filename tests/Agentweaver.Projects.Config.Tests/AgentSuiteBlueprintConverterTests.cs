@@ -19,7 +19,7 @@ public sealed class AgentSuiteBlueprintConverterTests
     /// Test-only build inputs. The registry host is reserved (<c>.invalid</c>) and the digests hash fixed labels, so
     /// these images can't be pulled. Shipped packages need real AgentHost images (#1919).
     /// </summary>
-    private static AgentSuiteBuildInputs TestOnlyInputs => new()
+    internal static AgentSuiteBuildInputs TestOnlyInputs => new()
     {
         BuildProfileId = "test-only",
         SourceEpoch = 1,
@@ -122,6 +122,25 @@ public sealed class AgentSuiteBlueprintConverterTests
 
         // Compression bytes can differ between zlib builds, so compare the tar stream.
         Assert.Equal(Decompress(System.IO.File.ReadAllBytes(fixture)), Decompress(package.ContentArchive.ToArray()));
+    }
+
+    /// <summary>Every converted built-in passes the #2114 import validator, which is the only AgentSuite loader.</summary>
+    [Theory]
+    [MemberData(nameof(BuiltInIds))]
+    public void BuiltInArchivePassesTheAgentSuiteImportValidator(string blueprintId)
+    {
+        var blueprint = ProjectBlueprintCatalog.Blueprints.Single(item => item.Id == blueprintId);
+        var package = AgentSuiteBlueprintConverter.Convert(blueprint, TestOnlyInputs);
+
+        var result = Agentweaver.Projects.Config.AgentSuite.AgentSuiteValidator.Validate(
+            Agentweaver.Projects.Config.AgentSuite.AgentSuiteArchiveFormat.ContentTarGzip,
+            package.ContentArchive.ToArray());
+
+        Assert.True(
+            result.Accepted,
+            string.Join('\n', result.NativeErrors.Concat(result.ProfileErrors.Select(item => $"{item.Code}: {item.Message}"))));
+        Assert.Equal(blueprint.Roster, result.Graph!.Agents.Select(agent => agent.Id));
+        Assert.DoesNotContain(blueprint.Roster, ProjectConfigurationValidator.IsReservedOrchestrationRole);
     }
 
     [Fact]

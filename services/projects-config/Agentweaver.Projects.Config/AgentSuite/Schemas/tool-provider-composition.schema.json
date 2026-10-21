@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/tool-provider-composition.schema.json",
+  "title": "AgentSuite ToolProvider composition manifest",
+  "description": "The closed, digest-pinned build input for one standalone ToolProvider Sandbox Image.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "mediaType",
+    "id",
+    "version",
+    "manifestDigest",
+    "platform",
+    "variantDigest",
+    "buildProfile"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "AgentSuite specification version used by this manifest.",
+      "const": "1.0.0-draft"
+    },
+    "mediaType": {
+      "description": "Media type identifying a ToolProvider composition manifest.",
+      "const": "application/vnd.agentsuite.tool.provider.composition.v1+json"
+    },
+    "id": {
+      "description": "Exact ToolProvider identifier selected from the suite catalog.",
+      "$ref": "#/$defs/id"
+    },
+    "version": {
+      "description": "Exact ToolProvider semantic version selected from the suite catalog.",
+      "$ref": "#/$defs/version"
+    },
+    "manifestDigest": {
+      "description": "JCS SHA-256 digest of the selected ToolProvider manifest.",
+      "$ref": "#/$defs/digest"
+    },
+    "platform": {
+      "description": "Exact platform of the selected bundled ToolProvider variant.",
+      "$ref": "#/$defs/platform"
+    },
+    "variantDigest": {
+      "description": "Canonical digest selecting one same-platform ToolProvider variant.",
+      "$ref": "#/$defs/digest"
+    },
+    "buildProfile": {
+      "description": "Suite-local build-profile identifier supplying the runtime base.",
+      "$ref": "#/$defs/id"
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"},
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture"],
+      "properties": {
+        "os": {"const": "linux"},
+        "architecture": {"enum": ["amd64", "arm64"]}
+      }
+    }
+  }
+}

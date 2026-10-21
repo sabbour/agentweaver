@@ -35,10 +35,9 @@ public sealed record ProjectAgentSuiteToolConnection(string ToolProvider, string
 public sealed record ProjectAgentSuiteSkillBinding(string Role, ImmutableArray<string> Skills);
 
 /// <summary>
-/// Blueprint data that travels with the import instead of in suite extensions. The record keeps all of it.
-/// Only <see cref="SourceBlueprintId"/> with <see cref="DefaultWorkflow"/> is staged on the casting proposal, as a
-/// blueprint workflow reference. Project configuration has no review policy, sandbox profile or display fields,
-/// and skill assignment needs installed skill revisions through the skill owner.
+/// Blueprint data that travels with the import instead of in suite extensions. Import validates its shape and
+/// keeps all of it on the record. It does not change project configuration; the blueprint catalog owner (#2184)
+/// applies workflows, sandbox profile and skill bindings to the casting proposal.
 /// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectAgentSuiteBlueprint
@@ -138,8 +137,9 @@ public sealed record ProjectAgentSuiteTool(
     ProjectAgentSuiteDelegatedAuthorization? DelegatedAuthorization);
 
 /// <summary>
-/// A validated tool provider. <see cref="Support"/> is <c>remote-mcp</c> when it declares a remote endpoint that an
-/// Environment connection can bind, or <c>unsupported</c> when it has only bundled variants. Nothing is contacted.
+/// A validated tool provider. <see cref="Support"/> is <c>remote-mcp</c> when it declares a remote endpoint without
+/// header secrets, which an Environment connection can bind. Otherwise it is <c>unsupported</c>: bundled-only
+/// providers do not run, and Remote MCP connections do not support header secrets. Nothing is contacted.
 /// </summary>
 public sealed record ProjectAgentSuiteToolProvider(
     string Id,
@@ -184,9 +184,13 @@ public sealed record ProjectAgentSuiteAgentPolicy(
 
 /// <summary>
 /// Import outcome. <see cref="Proposal"/> is null when every mapped agent already exists unchanged in the
-/// current configuration, so there is nothing to review.
+/// current configuration and the blueprint changes nothing, so there is nothing to review.
 /// </summary>
-public sealed record ProjectAgentSuiteImportResult(ProjectAgentSuiteImport Import, ProjectCastingProposal? Proposal);
+public sealed record ProjectAgentSuiteImportResult(ProjectAgentSuiteImport Import, ProjectCastingProposal? Proposal)
+{
+    /// <summary>Blueprint skill bindings that don't take effect in the proposal, each with a stable reason code.</summary>
+    public ImmutableArray<BlueprintUnresolvedSkillBinding> UnresolvedSkillBindings { get; init; } = [];
+}
 
 /// <summary>Thrown when the archive fails native or Agentweaver validation. Carries every error line.</summary>
 public sealed class AgentSuiteImportRejectedException(

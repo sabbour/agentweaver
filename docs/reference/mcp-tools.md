@@ -118,6 +118,16 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `updateProjectSkillAssignment` | Update project assignments at an expected configuration revision. |
 | `listProjectSkillInventory` | Read paginated revision metadata. |
 
+### AgentSuite imports
+
+| Operation ID | Purpose |
+| --- | --- |
+| `getProjectAgentSuiteImport` | Read a retained AgentSuite import record by source identity. |
+| `getProjectAgentSuiteAgentPolicy` | Read the policy bound to an imported agent. The policy is not enforced. |
+
+Importing a suite stages a casting proposal, so it is a native Projects route and not an MCP tool.
+See [AgentSuite import](./agentsuite-import.md).
+
 ### Coordination
 
 | Operation ID | Purpose |
