@@ -1441,6 +1441,12 @@ public sealed class RuntimeUsageSourceReceiptTests
             RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt with { CanonicalPayloadHash = new string('c', 64) }));
         Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(
             Reseal(receipt with { Usage = receipt.Usage with { A2AMessageId = Guid.Empty } })));
+        var uncorrelated = Reseal(receipt with { Usage = receipt.Usage with { A2AMessageId = null } });
+        RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(uncorrelated);
+        Assert.Equal("runtime_byok_azure_provenance_invalid", Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(uncorrelated)).Code);
+        Assert.Equal("runtime_byok_azure_provenance_invalid", Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(openAi)).Code);
         var source = receipt.Usage.SdkSource!;
         foreach (var tampered in new[]
         {
@@ -1448,8 +1454,12 @@ public sealed class RuntimeUsageSourceReceiptTests
             source with { ByokProvider = source.ByokProvider! with { ConfigurationHash = new string('b', 64) } },
             source with { ByokProvider = source.ByokProvider! with { Type = "openai" } }
         })
+        {
             Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(
                 Reseal(receipt with { Usage = receipt.Usage with { SdkSource = tampered } })));
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance(
+                Reseal(uncorrelated with { Usage = uncorrelated.Usage with { SdkSource = tampered } })));
+        }
     }
 
     private static string LegacyHash(RuntimeRegistration registration, UsageSubmission usage)

@@ -192,14 +192,17 @@ does not quote BYOK work. Missing token counts, unsupported cache categories,
 unknown models, and changed bindings remain `Unpriced`. Events must also verify
 trusted Azure provider and deployment facts against the accepted runtime model
 pin before it can price a source receipt. `RequireTrustedAzureByok` performs that
-check. The receipt consumer rejects any receipt that claims Azure BYOK and fails
-it, so untrusted usage never enters the ledger.
+check. The receipt consumer applies the same source checks, without the dispatch
+message ID, to every receipt that claims Azure BYOK and rejects a failed claim, so
+untrusted usage never enters the ledger. Native SDK usage without a dispatch
+message ID is admitted as `Unpriced`.
 
 Azure BYOK pricing is off by default. To turn it on, configure the
 `EventsAndSessions:Cost:Azure` section with `AzureCostProviderOptions` fields and
 an explicit `RateCard`. Events then registers the Azure Cost provider for the
-`byok.tokens` meter source, pins the binding per run, and prices only trusted Azure
-BYOK receipts. Other BYOK providers stay `Unpriced` with `byok-provider-unpriced`.
+`byok.tokens` meter source, pins the binding per run, and prices only Azure BYOK
+receipts that pass `RequireTrustedAzureByok`. Uncorrelated native usage stays
+`Unpriced`. Other BYOK providers stay `Unpriced` with `byok-provider-unpriced`.
 A changed rate card never reprices earlier rows. New usage in a run that pinned an
 earlier card stays `Unpriced` with `pinned-cost-binding-unavailable`.
 

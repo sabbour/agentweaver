@@ -757,6 +757,27 @@ public static class RuntimeUsageSourceReceiptContract
     /// <exception cref="RuntimeAuthorizationException">Thrown with <c>runtime_byok_azure_provenance_invalid</c> when any fact does not match.</exception>
     public static TrustedAzureByokUsage RequireTrustedAzureByok(RuntimeUsageSourceReceipt receipt)
     {
+        var (pin, provider) = RequireAzureByokSource(receipt);
+        if (receipt.Usage.A2AMessageId is not { } dispatchId || dispatchId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
+        return new(receipt.ReceiptId, receipt.Registration.RuntimeInstanceId, receipt.Registration.Revision,
+            dispatchId, provider.DeploymentId, pin.ConfigurationRevision, pin.ConfigurationHash,
+            receipt.CanonicalPayloadHash);
+    }
+
+    /// <summary>Proves that an owner-issued receipt has consistent Azure BYOK source facts.</summary>
+    /// <remarks>
+    /// This check applies the same registration, provider, deployment, configuration, and meter rules as
+    /// <see cref="RequireTrustedAzureByok"/>, but it doesn't require a dispatch message ID. Native SDK usage
+    /// that isn't correlated to one dispatch passes this check. Events records that usage as Unpriced.
+    /// </remarks>
+    /// <exception cref="RuntimeAuthorizationException">Thrown with <c>runtime_byok_azure_provenance_invalid</c> when any fact does not match.</exception>
+    public static void RequireAzureByokProvenance(RuntimeUsageSourceReceipt receipt) =>
+        RequireAzureByokSource(receipt);
+
+    private static (RuntimeModelBindingPin Pin, SdkByokProviderFacts Provider) RequireAzureByokSource(
+        RuntimeUsageSourceReceipt receipt)
+    {
         Validate(receipt);
         var binding = receipt.Registration.Binding;
         var usage = receipt.Usage;
@@ -766,12 +787,9 @@ public static class RuntimeUsageSourceReceiptContract
             source.MeterSource != SdkMeterSources.ByokTokens || source.ModelMultiplier is not null ||
             usage.ModelBinding.MeterSource != SdkMeterSources.ByokTokens ||
             provider.DeploymentId != pin.ModelId || usage.ModelBinding.ModelId != pin.ModelId ||
-            provider.ConfigurationHash != pin.ConfigurationHash ||
-            usage.A2AMessageId is not { } dispatchId || dispatchId == Guid.Empty)
+            provider.ConfigurationHash != pin.ConfigurationHash)
             throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
-        return new(receipt.ReceiptId, receipt.Registration.RuntimeInstanceId, receipt.Registration.Revision,
-            dispatchId, provider.DeploymentId, pin.ConfigurationRevision, pin.ConfigurationHash,
-            receipt.CanonicalPayloadHash);
+        return (pin, provider);
     }
 
     private static bool MatchesSourceMode(ModelSourceMode? mode, SdkSessionFacts source) => mode switch

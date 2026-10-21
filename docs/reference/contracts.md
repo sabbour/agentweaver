@@ -79,10 +79,15 @@ BYOK producer contract. It accepts only an owner-issued receipt that passes
 
 The contract returns `TrustedAzureByokUsage`, which records the receipt ID,
 runtime instance, registration revision, dispatch ID, deployment ID, pinned
-configuration revision and hash, and receipt payload hash. Events applies this
-check to every receipt that claims Azure BYOK and rejects a failed claim with
+configuration revision and hash, and receipt payload hash.
+
+`RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance` applies the same
+source checks without the dispatch message ID. Events applies this check to every
+receipt that claims Azure BYOK and rejects a failed claim with
 `runtime_byok_azure_provenance_invalid`. Usage from an untrusted producer never
-enters the ledger. Azure pricing is off until `EventsAndSessions:Cost:Azure`
+enters the ledger. Native SDK usage that has no dispatch message ID passes this
+check and is recorded as `Unpriced`. Only usage that passes
+`RequireTrustedAzureByok` can be priced. Azure pricing is off until `EventsAndSessions:Cost:Azure`
 supplies an explicit rate card; until then admitted Azure BYOK usage is recorded
 as `Unpriced`. Non-Azure BYOK usage is `Unpriced` with `byok-provider-unpriced`.
 Provisioned-throughput usage stays `Unpriced` per event.
@@ -1050,8 +1055,18 @@ approved identity settings and the separate migration connection. It creates
 the active tenant membership, TenantAdmin assignment, and authority audit rows
 in one transaction. It exits without changes when that identity already has
 the active grant. It refuses when another active TenantAdmin exists. Normal
-host startup never runs this command. Runtime database grants remain
-SELECT-only on authority tables.
+host startup never runs this command.
+
+The runtime database principal is read-only on authority tables, with one
+exception. The project role-assignment API can insert project role
+assignments, mark them revoked, and insert matching `authority_audit` rows.
+The API, not the database grant, enforces who can make these changes: only a
+caller with the current TenantAdmin role, checked in the same serializable
+transaction as the change. The runtime principal can't delete authority rows
+or write tenant memberships and tenant-level roles. See
+[Runtime authority writes](runtime-configuration.md#runtime-authority-writes)
+for the exact grants and [Project role assignments](api.md#project-role-assignments)
+for the routes.
 
 ## Knowledge and Memory
 
