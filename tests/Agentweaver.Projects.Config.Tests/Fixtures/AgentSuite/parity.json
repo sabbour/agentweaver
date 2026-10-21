@@ -1,0 +1,118 @@
+[
+  {
+    "name": "valid",
+    "accepted": true,
+    "manifestDigest": "sha256:499d25ae869a1dbfb9dc30b32bbb95e46bafffe32d4ba0ce5499eb8f8adb6967"
+  },
+  {
+    "name": "valid-retagged",
+    "accepted": true,
+    "manifestDigest": "sha256:499d25ae869a1dbfb9dc30b32bbb95e46bafffe32d4ba0ce5499eb8f8adb6967"
+  },
+  {
+    "name": "config-not-empty",
+    "accepted": false,
+    "error": "AgentSuite config blob must be the exact bytes {}",
+    "manifestDigest": "sha256:bda0962f1a0198fa7ab4543db53bdb75a3e00a05288366200947b7b4e4f052c4"
+  },
+  {
+    "name": "wrong-artifact-type",
+    "accepted": false,
+    "error": "index.json must contain exactly one AgentSuite manifest descriptor, found 0",
+    "manifestDigest": "sha256:00ff1b72876e8b980726e7f6132d4809d9c8475980e39ef45451591bba5dfdfc"
+  },
+  {
+    "name": "wrong-layer-type",
+    "accepted": false,
+    "error": "AgentSuite manifest must contain exactly one application/vnd.agentsuite.content.v1.tar+gzip layer",
+    "manifestDigest": "sha256:b63a6daf5dba9a2c86c121abcdefbe2303596e313d5d931421d28d26c2eba63f"
+  },
+  {
+    "name": "two-layers",
+    "accepted": false,
+    "error": "AgentSuite manifest must contain exactly one application/vnd.agentsuite.content.v1.tar+gzip layer",
+    "manifestDigest": "sha256:44aee9cec7b407ee95accc70a663244c4398a3249b6a178a9f5201d78fe384d3"
+  },
+  {
+    "name": "layer-digest-mismatch",
+    "accepted": false,
+    "error": "open AgentSuite content: blob digest does not match descriptor",
+    "manifestDigest": "sha256:499d25ae869a1dbfb9dc30b32bbb95e46bafffe32d4ba0ce5499eb8f8adb6967"
+  },
+  {
+    "name": "layer-size-mismatch",
+    "accepted": false,
+    "error": "open AgentSuite content: blob is not a regular file of the descriptor size",
+    "manifestDigest": "sha256:d9b2ca946e1fb8e1da553cbbd3ef8cf170ed8cc63db6c9e0c55fcfeefb853313"
+  },
+  {
+    "name": "noncanonical-agent",
+    "accepted": false,
+    "error": "agent writer manifest digest mismatch\ncomposition writer@linux/amd64 references unknown agent writer\neval path evals/writer is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/greeting.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/pattern.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/tooling.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/index.json is orphaned, unreferenced, or not a regular evaluation file",
+    "manifestDigest": "sha256:1375b9a8e72369a5b7761e13bcc58ff70515a3e9fc9250aea3e2280e5ead0772"
+  },
+  {
+    "name": "agent-duplicate-key",
+    "accepted": false,
+    "error": "agent writer manifest digest mismatch\ncomposition writer@linux/amd64 references unknown agent writer\neval path evals/writer is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/greeting.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/pattern.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/tooling.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/index.json is orphaned, unreferenced, or not a regular evaluation file",
+    "manifestDigest": "sha256:4b046e1dd864b797eaa884157f273c85c4d96806c307679c2134dbd51a34d2cf"
+  },
+  {
+    "name": "missing-agent-file",
+    "accepted": false,
+    "error": "agent writer: required file agents/writer.json is missing\ncomposition writer@linux/amd64 references unknown agent writer\neval path evals/writer is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/greeting.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/pattern.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/tooling.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/index.json is orphaned, unreferenced, or not a regular evaluation file",
+    "manifestDigest": "sha256:6f956bb9cc96c3d87932f04febed943dd50187183f440f405da822443804a20b"
+  },
+  {
+    "name": "instructions-mismatch",
+    "accepted": false,
+    "error": "agent writer instructions do not match instructions/writer.md\ncomposition writer@linux/amd64 references unknown agent writer\neval path evals/writer is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/greeting.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/pattern.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/cases/tooling.json is orphaned, unreferenced, or not a regular evaluation file\neval path evals/writer/index.json is orphaned, unreferenced, or not a regular evaluation file",
+    "manifestDigest": "sha256:a9235638c69b39026a7ad0f925d69051690e5d053e4da81c3ff292bed7b591f1"
+  },
+  {
+    "name": "composition-missing-agent",
+    "accepted": false,
+    "error": "agent writer has no platform composition\ncomposition reviewer@linux/amd64 identity does not match its reference",
+    "manifestDigest": "sha256:6ee97b497ab4814681367169fa94853c573a7f964abb841a4a062fa845f40eee"
+  },
+  {
+    "name": "missing-build-profile",
+    "accepted": false,
+    "error": "agent writer has no platform composition\nbuild profile reference other points to default\ncomposition writer@linux/amd64 build profile \"default\" does not support linux/amd64",
+    "manifestDigest": "sha256:1ff12e4f16ccf1d49d326737284731ce20c06a2625170705a53cfd61d9b7b47e"
+  },
+  {
+    "name": "unsafe-path",
+    "accepted": false,
+    "error": "content path is not normalized below the root: \"../escape.txt\"",
+    "manifestDigest": "sha256:2d224b5f40d834a6248a01047bbc1d986ac2ad8d64bcf5cba4995bb27c488547"
+  },
+  {
+    "name": "case-collision",
+    "accepted": false,
+    "error": "case-folding path collision between agents/writer.json and Agents/Writer.json",
+    "manifestDigest": "sha256:384d5642a009029119d0c761aa5a2ab3bc9163c3e62ddfa7cc4fda0de570dbba"
+  },
+  {
+    "name": "symlink-escape",
+    "accepted": false,
+    "error": "agents/link link target escapes the content root",
+    "manifestDigest": "sha256:da810963d95db4c41eaddc6f1f742247d6640c1cd0c486f94ff61445d871200f"
+  },
+  {
+    "name": "world-writable",
+    "accepted": false,
+    "error": "notes.txt is group or world writable",
+    "manifestDigest": "sha256:ccc2bb31fc453acaa71737867e2614512b11b45a8d1f72627aa12b026165b11a"
+  },
+  {
+    "name": "team",
+    "accepted": true,
+    "manifestDigest": "sha256:680a8797d5e729696b45f294e830cddeeb6c960d7863ef59e36a603a59c1b2c2"
+  },
+  {
+    "name": "team-model-secret-refs",
+    "accepted": true,
+    "manifestDigest": "sha256:ae08a00995272503f483f3c2c1a36a737d5744ad1b75c3693c490a725ef69050"
+  }
+]
