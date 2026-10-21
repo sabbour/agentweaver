@@ -142,11 +142,11 @@ export function RetainedShell({ children }: { children: ReactNode }) {
     // state and one poll. A dismiss in either place shows in both.
     <RunAttentionProvider>
       <div className="aw-app-shell">
-        {/* The rail shows only the pages that v1 implements, plus the 0.x
-            Sessions group with its New session button. */}
+        {/* The rail shows the 0.x pages, plus the Sessions group with its New
+            session button. Operations pages show what current reads support. */}
         <LeftNavView
           visibleGlobalKeys={['overview', 'projects', 'sessions']}
-          visibleProjectKeys={['dashboard', 'board', 'orchestrations', 'agents', 'skills', 'memories']}
+          visibleProjectKeys={['dashboard', 'board', 'flow', 'orchestrations', 'workspace', 'agents', 'skills', 'memories', 'workflows', 'observability', 'diagnostics', 'heartbeat', 'cluster']}
           showNewSession
           projectId={projectId}
           pathname={location.pathname}

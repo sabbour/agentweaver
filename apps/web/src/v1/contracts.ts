@@ -620,6 +620,20 @@ export interface MarketplaceSource {
   state: 'active' | 'removed';
 }
 
+/**
+ * One suggested marketplace from `GET /projects/{projectId}/skill-marketplaces/definitions`.
+ * `sourceId` is set when the project already has an active source at the same
+ * repository, ref, and subpath. It is null when the suggestion is not added yet.
+ */
+export interface SkillMarketplaceDefinition {
+  name: string;
+  repository: string;
+  requestedRef: string;
+  subpath: string | null;
+  layoutNote: string | null;
+  sourceId: string | null;
+}
+
 /** Fields used to add a Git-backed skill marketplace source. */
 export interface MarketplaceSourceInput {
   name?: string;
@@ -695,6 +709,46 @@ export interface SkillContentPreview {
   contentDigest: string;
   resourceCount: number;
   totalBytes: number;
+}
+
+/** One uploaded file for `POST /skills/package`. `content` is base64 of the raw bytes. */
+export interface SkillPackageFileRequest {
+  relativePath: string;
+  content: string;
+}
+
+/** Form fields for a new skill written in the client. The service writes SKILL.md from them. */
+export interface SkillPackageDraftRequest {
+  name: string;
+  description?: string;
+  instructions: string;
+}
+
+/**
+ * Body of `POST /skills/package`. Send exactly one of `files`, `archive`
+ * (base64 of one ZIP file), or `draft`. The service rejects unknown fields.
+ */
+export type SkillPackageRequest =
+  | { files: SkillPackageFileRequest[] }
+  | { archive: string }
+  | { draft: SkillPackageDraftRequest };
+
+/**
+ * One skill found in an upload. A valid package has `candidate` and `preview`;
+ * pass the candidate unchanged to preview and import. An invalid package has
+ * `error` and no candidate. `skippedPaths` lists files the service left out.
+ */
+export interface SkillContentPackage {
+  location: string;
+  candidate: SkillContentCandidateRequest | null;
+  preview: SkillContentPreview | null;
+  error: string | null;
+  skippedPaths: string[];
+}
+
+/** Response of `POST /skills/package`, ordered by location. Nothing is saved. */
+export interface SkillContentPackageResult {
+  skills: SkillContentPackage[];
 }
 
 /** Project import request pinned to a content digest and optional source revision. */
@@ -1222,6 +1276,38 @@ export interface SourceControlRepositoryPinView {
   pinnedAt: string;
 }
 
+/**
+ * One admitted capture of the files a run session produced. Digests and byte
+ * lengths describe the stored manifest, patch, and package.
+ */
+export interface SourceControlOutputCaptureSummary {
+  captureId: string;
+  eventId: string;
+  eventPosition: number;
+  capturedAt: string;
+  workspaceId: string;
+  branchName: string;
+  baseSha: string;
+  outputTreeSha: string;
+  manifestSha256: string;
+  manifestByteLength: number;
+  patchSha256: string;
+  patchByteLength: number;
+  packageByteLength: number;
+}
+
+/** Newest-first page of admitted captures. Both cursor fields are null on the last page. */
+export interface SourceControlOutputCapturePage {
+  captures: SourceControlOutputCaptureSummary[];
+  nextBeforeCapturedAt: string | null;
+  nextBeforeCaptureId: string | null;
+}
+
+/** One admitted capture with its text patch against the base commit. */
+export interface SourceControlOutputCaptureDiff {
+  capture: SourceControlOutputCaptureSummary;
+  patch: string;
+}
 /** Project configuration paired with the owner revision used for compare-and-swap updates. */
 export interface VersionedProjectConfiguration {
   projectId: string;
@@ -1681,6 +1767,23 @@ export interface ProjectRoleAssignment {
   createdBy: string;
   /** ISO 8601 time the assignment was made. */
   createdAt: string;
+}
+
+/**
+ * One assignment as returned by assign (`201`) and revoke (`200`). Revoke
+ * returns `state: 'revoked'` with the revision increased by one.
+ */
+export interface ProjectRoleAssignmentView {
+  assignmentId: string;
+  projectId: string;
+  principalId: string;
+  role: ProjectRole;
+  state: 'active' | 'revoked';
+  revision: number;
+  grantedBy: string;
+  grantedAt: string;
+  revokedBy: string | null;
+  revokedAt: string | null;
 }
 
 /** Response of `GET /projects/{projectId}/role-assignments`. */

@@ -94,12 +94,14 @@ import type { RunBinding } from './authProtocol';
 import { useRunJournal } from './useRunJournal';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading, Panel } from './pageParts';
+import { RunOutputCapturesPanel } from './RunOutputCaptures';
 import { rememberRun } from './recentRuns';
 import { DecisionList } from './DecisionView';
 import { NewChatComposer } from './NewChatComposer';
 import { PlatformComponentsTable } from './PlatformComponentsTable';
 import { isRunFinished, runState } from './runState';
 import { DashboardPage } from './DashboardPage';
+import { ClusterPage, DiagnosticsPage, FlowPage, HeartbeatPage, ProjectObservabilityPage, WorkflowsPage, WorkspacePage } from './OperationsPages';
 import { OverviewPage } from './OverviewPage';
 import { OrchestrationsPage } from './OrchestrationsPage';
 import { BoardPage } from './BoardPage';
@@ -753,6 +755,16 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       (token, tenantSelector) => gatewayClient.listMarketplaceSources(token, scope, tenantSelector),
       null,
     ),
+    listDefinitions: (scope: string) => apiCall(
+      (token, tenantSelector) => gatewayClient.listMarketplaceDefinitions(token, scope, tenantSelector),
+      null,
+    ),
+    packageSkillContent: (request: Parameters<typeof gatewayClient.packageSkillContent>[1]) =>
+      apiCall((token, tenantSelector) =>
+        gatewayClient.packageSkillContent(token, request, tenantSelector), null),
+    revokeSkillRevision: (scope: string, skillId: string, revision: number, reason: string) =>
+      apiCall((token, tenantSelector) =>
+        gatewayClient.revokeProjectSkillRevision(token, scope, skillId, revision, reason, tenantSelector), null),
     createSource: (scope: string, request: Parameters<typeof gatewayClient.createMarketplaceSource>[2]) =>
       apiCall((token, tenantSelector) =>
         gatewayClient.createMarketplaceSource(token, scope, request, tenantSelector), null),
@@ -2868,6 +2880,10 @@ function RunPage() {
               ) : (
                 <EmptyState title="No repository changes" description="This run does not use a GitHub App repository connection, so it has no branch or pull request to show." />
               )}
+              {/* Produced files are read from the root session, which every started run has. */}
+              {currentRunStatus.rootSessionId && (
+                <RunOutputCapturesPanel projectId={projectId} runId={runId} sessionId={currentRunStatus.rootSessionId} />
+              )}
             </div>
           )}
           {tab === 'usage' && (
@@ -3238,11 +3254,16 @@ function AuthenticatedRoutes() {
       <Route path="/projects/:projectId/sessions" element={<Navigate to="/sessions" replace />} />
       <Route path="/projects/:projectId/runs/:runId" element={<Shell><RunPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunRedirect />} />
-      {/* Older project pages with no v1 service still open, with an explanation. */}
-      {unavailableProjectPages.map(({ segment, title, description }) => (
-        <Route key={segment} path={`/projects/:projectId/${segment}`} element={<Shell><UnavailablePage title={title} description={description} /></Shell>} />
-      ))}
-      <Route path="/observability/*" element={<Shell><UnavailablePage title="Observability" description="Project trace and agent summaries are not available in this version. Open an existing run for its Activity and Usage views." /></Shell>} />
+      {/* 0.x operations pages. Each shows the parts current reads support and names what is missing. */}
+      <Route path="/projects/:projectId/flow" element={<Shell><FlowPage /></Shell>} />
+      <Route path="/projects/:projectId/workflows" element={<Shell><WorkflowsPage /></Shell>} />
+      <Route path="/projects/:projectId/workspace" element={<Shell><WorkspacePage /></Shell>} />
+      <Route path="/projects/:projectId/observability/*" element={<Shell><ProjectObservabilityPage /></Shell>} />
+      <Route path="/projects/:projectId/diagnostics" element={<Shell><DiagnosticsPage /></Shell>} />
+      <Route path="/projects/:projectId/heartbeat" element={<Shell><HeartbeatPage /></Shell>} />
+      <Route path="/projects/:projectId/cluster" element={<Shell><ClusterPage /></Shell>} />
+      {/* The cross-project summary has no read yet; each project has its own Observability page. */}
+      <Route path="/observability/*" element={<Shell><UnavailablePage title="Observability" description="A summary across all projects is not available in this version. Open a project and choose Observability for its runs and usage." /></Shell>} />
       {/* Unknown addresses show "Page not found" inside the app shell, so navigation stays available. */}
       <Route path="*" element={<Shell><UnavailablePage title="Page not found" description="This address does not match an Agentweaver page. Use the navigation to choose a destination." /></Shell>} />
     </Routes>
@@ -3256,20 +3277,6 @@ function CoordinatorRunRedirect() {
   // Keep the query and hash (for example ?view=approvals) so old links open the same tab.
   return <Navigate to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}${location.search}${location.hash}`} replace />;
 }
-
-/**
- * Older project pages that have no v1 service yet. Their addresses still open a
- * page that explains this, instead of calling the old monolith APIs or showing "not found".
- */
-const unavailableProjectPages = [
-  { segment: 'flow', title: 'Flow', description: 'Project-wide agent activity is not available in this version. Open Orchestrations, then a run, to view its session topology.' },
-  { segment: 'workspace', title: 'Workspace', description: 'Project file browsing is not available in this version. A run shows its changes in the Changes tab.' },
-  { segment: 'workflows', title: 'Workflows', description: 'The workflow editor is not available in this version. Workflow references remain in Project settings.' },
-  { segment: 'observability/*', title: 'Observability', description: 'Project trace and agent summaries are not available in this version. Open a run for Activity and Usage.' },
-  { segment: 'diagnostics', title: 'Diagnostics', description: 'Project diagnostics are not available in this version. Run Activity shows the status reported for each session.' },
-  { segment: 'heartbeat', title: 'Heartbeat', description: 'Project heartbeat monitoring is not available in this version.' },
-  { segment: 'cluster', title: 'Cluster', description: 'Cluster management is not available in this web client.' },
-];
 
 /** Explains that a page is not available in this version, using the standard empty state. */
 function UnavailablePage({ title, description }: { title: string; description: string }) {

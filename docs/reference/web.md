@@ -27,7 +27,9 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/useRunJournal.ts` | Replay, live reconnect, event deduplication, and scope checks. |
 | `src/v1/repoApp.ts` | Direct cookie-authenticated Broker Repo App client and callback messages. |
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |
-| `src/v1/SkillsMarketplacePanel.tsx` | Marketplace sources, local upload, inventory, import, and assignment. |
+| `src/v1/SkillsMarketplacePanel.tsx` | Suggested marketplaces, marketplace sources, **Add skill**, folder, file, and ZIP upload through the package route, preview, import, inventory with **Remove skill** (revision revoke), and assignment. |
+| `src/v1/OperationsPages.tsx` | Flow, Workflows, Workspace, Observability, Diagnostics, Heartbeat, and Cluster pages built from project reads, each with a note for the missing parts. |
+| `src/v1/RunOutputCaptures.tsx` | **Produced files** on the run Changes tab: saved file sets and their patches. |
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
 | `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP saved connection list, connection status, sign-in, refresh, and disconnect in project settings. |
 | `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. |
@@ -91,7 +93,8 @@ data hooks are not mounted.
 | `/auth/remote-mcp/oauth/callback` | Remote MCP OAuth popup callback, handled before the main route tree. |
 | `/console` | Redirect to `/assistant`. |
 | `/projects/:projectId/sessions` | Redirect to `/sessions`. |
-| `/observability/*` and the project `flow`, `workspace`, `workflows`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` paths | `UnavailablePage` explains that the destination is not available in this version and links back. Navigation hides these destinations. |
+| `/projects/:projectId/flow`, `workflows`, `workspace`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` | `FlowPage`, `WorkflowsPage`, `WorkspacePage`, `ProjectObservabilityPage`, `DiagnosticsPage`, `HeartbeatPage`, and `ClusterPage` in `OperationsPages.tsx`. |
+| `/observability/*` | `UnavailablePage` explains that a summary across projects is not available in this version and links back. |
 | Other paths | `UnavailablePage` with **Page not found**. |
 
 The production host serves `index.html` for client routes. Missing `/assets`

@@ -51,15 +51,20 @@ import type {
   ProjectAuthorizationContextResponse,
   ProjectConfiguration,
   ProjectRole,
-  ProjectRoleAssignment,
   ProjectRoleAssignmentList,
+  ProjectRoleAssignmentView,
+  ProjectPullRequestPage,
+  ProjectPullRequestStateFilter,
   SkillAssignmentRequest,
   SkillContentCandidateRequest,
   SkillContentInventoryPage,
   SkillContentInventoryQuery,
   SkillContentImportReceipt,
   SkillContentImportRequest,
+  SkillContentPackageResult,
   SkillContentPreview,
+  SkillMarketplaceDefinition,
+  SkillPackageRequest,
   ProjectSummary,
   RemoteMcpConnectionDirectoryPage,
   RemoteMcpOAuthCallbackRequest,
@@ -78,6 +83,8 @@ import type {
   SessionEventPage,
   SessionStatusSnapshot,
   SessionTreeSnapshot,
+  SourceControlOutputCaptureDiff,
+  SourceControlOutputCapturePage,
   SourceControlRepositoryPinView,
   UsageRunTotals,
   VersionedProjectConfiguration,
@@ -243,30 +250,40 @@ export class AgentweaverGatewayClient {
     return result;
   }
 
-  /** Assigns a role to a member. TenantAdmin only; 409 `role_assignment_exists` for duplicates. */
+  /**
+   * Assigns a role to a tenant member. TenantAdmin only. The body is exactly
+   * `{ principalId, role }`. The service answers `201` with the new assignment,
+   * `409 role_assignment_exists` for a duplicate, and `404 principal_not_found`
+   * when the person has no active membership in the tenant.
+   */
   assignProjectRole(
     token: string,
     projectId: string,
     request: { principalId: string; role: ProjectRole },
     tenantSelector?: string | null,
-  ): Promise<ProjectRoleAssignment> {
+  ): Promise<ProjectRoleAssignmentView> {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId)}/role-assignments`,
-      { method: 'POST', body: JSON.stringify(request) },
+      { method: 'POST', body: JSON.stringify({ principalId: request.principalId, role: request.role }) },
       this.baseUrl,
       tenantSelector,
     );
   }
 
-  /** Revokes one assignment at its current revision. TenantAdmin only. */
+  /**
+   * Revokes one assignment at its current revision. TenantAdmin only. Returns
+   * the assignment with `state: 'revoked'`. A stale revision returns
+   * `409 revision_conflict`; the last owner of an active project returns
+   * `409 last_project_owner`.
+   */
   revokeProjectRoleAssignment(
     token: string,
     projectId: string,
     assignmentId: string,
     expectedRevision: number,
     tenantSelector?: string | null,
-  ): Promise<unknown> {
+  ): Promise<ProjectRoleAssignmentView> {
     // The revision guards against revoking an assignment that changed since it was shown.
     return this.request(
       token,
@@ -325,6 +342,35 @@ export class AgentweaverGatewayClient {
       method: 'PUT',
       body: JSON.stringify({ expectedRevision, configuration }),
     }, this.baseUrl, tenantSelector);
+  }
+
+  /**
+   * Lists the suggested skill marketplaces for a project. Each entry carries
+   * `sourceId` when the project already has an active source at the same
+   * location. The route takes no query parameters and needs project read access.
+   */
+  async listMarketplaceDefinitions(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<SkillMarketplaceDefinition[]> {
+    const definitions = await this.request<unknown>(
+      token,
+      `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'definitions')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    // The panel renders these directly, so reject a response that is not a list
+    // of named repository locations instead of showing broken rows.
+    if (!Array.isArray(definitions) || definitions.some((item) =>
+      !item || typeof item !== 'object' ||
+      typeof (item as SkillMarketplaceDefinition).name !== 'string' ||
+      typeof (item as SkillMarketplaceDefinition).repository !== 'string' ||
+      typeof (item as SkillMarketplaceDefinition).requestedRef !== 'string')) {
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The suggested marketplace list is not valid.');
+    }
+    return definitions as SkillMarketplaceDefinition[];
   }
 
   /** Lists configured skill marketplace sources for a project. */
@@ -460,6 +506,49 @@ export class AgentweaverGatewayClient {
       token,
       '/skills/preview',
       { method: 'POST', body: JSON.stringify({ candidate }) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Turns uploaded files, one ZIP archive, or draft form fields into skill
+   * candidates without saving anything. The request must hold exactly one of
+   * `files`, `archive`, or `draft`. The route limits the JSON body to 3 MiB and
+   * needs an unbound token with read scope; it is not scoped to a project.
+   */
+  packageSkillContent(
+    token: string,
+    request: SkillPackageRequest,
+    tenantSelector?: string | null,
+  ): Promise<SkillContentPackageResult> {
+    return this.request(
+      token,
+      '/skills/package',
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /**
+   * Revokes one imported skill revision. The service keeps the record but marks
+   * it revoked, and a repeat call for the same revision succeeds without change.
+   * `reason` is required (1 to 2000 characters). Needs project admin authority.
+   * The route returns `204` with no body.
+   */
+  async revokeProjectSkillRevision(
+    token: string,
+    projectId: string,
+    skillId: string,
+    revision: number,
+    reason: string,
+    tenantSelector?: string | null,
+  ): Promise<void> {
+    await this.request<void>(
+      token,
+      `/projects/${encodeSegments(projectId, 'skills', skillId, 'revisions', String(revision), 'revoke')}`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
       this.baseUrl,
       tenantSelector,
     );
@@ -833,6 +922,59 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /**
+   * Lists admitted captures of the files one run session produced, newest first.
+   * The route needs a token bound to this run and an explicit tenant. Pass both
+   * cursor values from the previous page to read the next one.
+   */
+  async listRunOutputCaptures(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    options: { limit?: number; beforeCapturedAt?: string | null; beforeCaptureId?: string | null },
+    tenantSelector: string | null,
+  ): Promise<SourceControlOutputCapturePage> {
+    const query = new URLSearchParams();
+    if (options.limit !== undefined) query.set('limit', String(options.limit));
+    // The service pages by the last capture's time and ID together, so send both or neither.
+    if (options.beforeCapturedAt && options.beforeCaptureId) {
+      query.set('beforeCapturedAt', options.beforeCapturedAt);
+      query.set('beforeCaptureId', options.beforeCaptureId);
+    }
+    const encoded = query.toString();
+    const page = await this.request<SourceControlOutputCapturePage>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures')}${encoded ? `?${encoded}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (!page || !Array.isArray(page.captures))
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The service returned an invalid capture list.');
+    return page;
+  }
+
+  /** Reads the text patch of one admitted capture. The token must be bound to this run. */
+  async readRunOutputCaptureDiff(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    captureId: string,
+    tenantSelector: string | null,
+  ): Promise<SourceControlOutputCaptureDiff> {
+    const diff = await this.request<SourceControlOutputCaptureDiff>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'diff')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (!diff || typeof diff.patch !== 'string' || diff.capture?.captureId !== captureId)
+      throw new GatewayError(502, { code: 'invalid_owner_response' }, 'The service returned a diff for a different capture.');
+    return diff;
+  }
   /** Reads the effective provider and source-control selection for one run. */
   getRunSelection(
     token: string,
@@ -1378,6 +1520,36 @@ export class AgentweaverGatewayClient {
     );
     if (page?.projectId !== projectId || !Array.isArray(page.items))
       throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned issues for a different project.');
+    return page;
+  }
+
+  /**
+   * Lists pull requests that project runs created or reused, newest recorded
+   * first. The read makes no provider call, so `state` is the recorded state.
+   * Only the set options are sent, so the service applies its defaults
+   * (`open`, default page size).
+   */
+  async listProjectPullRequests(
+    token: string,
+    projectId: string,
+    options: { state?: ProjectPullRequestStateFilter; cursor?: string | null; pageSize?: number } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectPullRequestPage> {
+    const query = new URLSearchParams();
+    if (options.state) query.set('state', options.state);
+    if (options.cursor) query.set('cursor', options.cursor);
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    const encoded = query.toString();
+    const page = await this.request<ProjectPullRequestPage>(
+      token,
+      `/projects/${encodeSegments(projectId, 'source-control', 'pull-requests')}${encoded ? `?${encoded}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    // Show nothing rather than another project's pull requests.
+    if (page?.projectId !== projectId || !Array.isArray(page.items))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned pull requests for a different project.');
     return page;
   }
 

@@ -7,7 +7,7 @@
  */
 import { Badge, Button, Text } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
 import { GatewayError, gatewayClient } from './api';
@@ -134,25 +134,42 @@ function AreaTable({ areas }: { areas: PlatformComponentAreaReport[] }) {
   );
 }
 
-/** Route page for `/platform-settings`. */
-export function PlatformSettingsPage() {
+/** Load state for the platform component report, shared by every page that shows it. */
+export interface PlatformComponentReportState {
+  report: PlatformComponentReport | null;
+  loading: boolean;
+  /** Plain message for the last failure, or null. */
+  error: string | null;
+  /** True when the last failure was a 403, so pages can explain who may read it. */
+  forbidden: boolean;
+  load: () => Promise<void>;
+}
+
+/**
+ * Reads the platform component report with an unbound token. The service checks
+ * the admin role, so a 403 is expected for other users and is reported as
+ * `forbidden` instead of a generic error.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function usePlatformComponentReport(): PlatformComponentReportState {
   const { apiCall } = useAuth();
   const [report, setReport] = useState<PlatformComponentReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [forbidden, setForbidden] = useState(false);
 
-  /** Reads the report with an unbound token; the Gateway checks the admin role. */
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setForbidden(false);
     try {
       setReport(await apiCall((token, tenant) => gatewayClient.getPlatformComponents(token, tenant), null));
     } catch (reason) {
-      // A 403 means the caller is not a tenant or platform administrator.
+      // Drop the old report so the page shows the failure, not stale statuses.
       setReport(null);
-      setError(reason instanceof GatewayError && reason.status === 403
-        ? 'Only tenant or platform administrators can view platform components.'
-        : errorMessage(reason));
+      const denied = reason instanceof GatewayError && reason.status === 403;
+      setForbidden(denied);
+      setError(denied ? 'Only tenant or platform administrators can view platform components.' : errorMessage(reason));
     } finally {
       setLoading(false);
     }
@@ -164,25 +181,54 @@ export function PlatformSettingsPage() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  return { report, loading, error, forbidden, load };
+}
+
+/**
+ * Platform component areas with their states. Shows the spinner only for the
+ * first load, then the error, then the report. `filter` limits the rows, for
+ * example to areas that are not ready.
+ */
+export function PlatformComponentsSection({
+  state,
+  title = 'Platform components',
+  description = 'Each area, the service that owns it, and the implementations it runs or can run.',
+  filter,
+  emptyText = 'No platform component areas were reported.',
+  actions,
+}: {
+  state: PlatformComponentReportState;
+  title?: string;
+  description?: string;
+  filter?: (area: PlatformComponentAreaReport) => boolean;
+  emptyText?: string;
+  actions?: ReactNode;
+}) {
+  const areas = state.report ? (filter ? state.report.areas.filter(filter) : state.report.areas) : [];
+  return (
+    <PageSection title={title} description={description} actions={actions}>
+      {state.loading && !state.report ? <Loading label="Loading platform components" /> : state.error ? <ErrorNotice>{state.error}</ErrorNotice> : state.report && (
+        <>
+          <Text className="v1-muted">Reported {new Date(state.report.observedAt).toLocaleString()}</Text>
+          {areas.length === 0 ? <Text>{emptyText}</Text> : <AreaTable areas={areas} />}
+        </>
+      )}
+    </PageSection>
+  );
+}
+
+/** Route page for `/platform-settings`. */
+export function PlatformSettingsPage() {
+  const state = usePlatformComponentReport();
   return (
     <>
       <PageHeading
         title="Platform settings"
         description="Platform components for this deployment and their status."
         breadcrumb={false}
-        actions={<Button icon={<ArrowSyncRegular />} disabled={loading} onClick={() => void load()}>Refresh</Button>}
+        actions={<Button icon={<ArrowSyncRegular />} disabled={state.loading} onClick={() => void state.load()}>Refresh</Button>}
       />
-      <PageSection
-        title="Platform components"
-        description="Each area, the service that owns it, and the implementations it runs or can run."
-      >
-        {loading && !report ? <Loading label="Loading platform components" /> : error ? <ErrorNotice>{error}</ErrorNotice> : report && (
-          <>
-            <Text className="v1-muted">Reported {new Date(report.observedAt).toLocaleString()}</Text>
-            <AreaTable areas={report.areas} />
-          </>
-        )}
-      </PageSection>
+      <PlatformComponentsSection state={state} />
     </>
   );
 }

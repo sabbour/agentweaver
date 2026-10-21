@@ -82,6 +82,13 @@ The client uses these routes:
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
 | `/projects/:projectId/skills` | Manage Skill sources, imported revisions, and agent assignments. |
 | `/projects/:projectId/memories` | Search and manage Knowledge records and transfer bundles for a run and an agent. `/knowledge` opens the same page. |
+| `/projects/:projectId/flow` | Read the project's attention items, task counts for each Board column, and open runs. |
+| `/projects/:projectId/workflows` | Read the saved default workflow and the workflow for each blueprint. |
+| `/projects/:projectId/workspace` | Read the configured repository, pull requests that runs opened, and synced issues. |
+| `/projects/:projectId/observability` | Read project metrics, usage, and recent runs. |
+| `/projects/:projectId/diagnostics` | Read platform areas that are not ready and failed runs. |
+| `/projects/:projectId/heartbeat` | Read seven-day metric tiles and the runs that are working or blocked. |
+| `/projects/:projectId/cluster` | Read the platform component report. |
 | `/projects/:projectId/runs/:runId` | Use the **Chat**, **Topology**, **Approvals**, **Activity**, **Changes**, **Usage**, and **Run settings** tabs. The `view` query selects a tab, such as `?view=approvals`. |
 | `/settings` | Sign out and manage the GitHub Repo App account. |
 | `/platform-settings` | Read the platform component report. Only tenant and platform administrators can read it. |
@@ -259,12 +266,32 @@ page shows each status exactly as the owner reported it. If an owner didn't
 report, the area reads **Status not reported**. Other users get a permission
 message.
 
-### Unavailable destinations
+### Operations pages
 
-Flow, Workspace, Workflows, Observability, Diagnostics, Heartbeat, and
-Cluster are not navigation choices. Their old links show one **Not available
-in this version** page with a reason and a link back. Unknown addresses show
-**Page not found**. Neither page invents data or calls the old monolith.
+Each project lists Flow, Workflows, Workspace, Observability, Diagnostics,
+Heartbeat, and Cluster in its navigation. Each page shows the parts that
+project reads can drive, and one **Not available in this version** note that
+names what is still missing:
+
+- **Flow:** **Needs attention** for the project, **Task stages** with the
+  task count in each Board column, and **Open runs**.
+- **Workflows:** the default workflow and the workflow for each blueprint,
+  from the project configuration.
+- **Workspace:** the configured repository, pull requests that runs opened or
+  reused, and issues synced into the backlog.
+- **Observability:** metric tiles, the **Activity** chart, model and agent
+  usage, and recent runs.
+- **Diagnostics:** platform areas that are not ready, with the reported
+  reason, and failed runs.
+- **Heartbeat:** seven-day metric tiles and the runs that are working or
+  blocked.
+- **Cluster:** the platform component report.
+
+Diagnostics and Cluster read the platform component report, which needs
+tenant or platform administrator access. Other users see a permission message
+in that section. `/observability` without a project shows **Not available in
+this version**, because there is no summary across projects. Unknown
+addresses show **Page not found**.
 
 See the [UI parity inventory](../reference/web-ui-parity.md) for the retained
 patterns, v1 adaptations, and remaining limits.
@@ -338,13 +365,12 @@ has the 0.x section icon, and **Danger zone** has a **Risk** badge.
 
 - **General** renames the project.
 - **Access** shows your permissions in this project and a **Members** panel.
-  The panel lists members when the service offers the member list. A tenant
-  administrator or a project owner can read it. Only a tenant administrator
-  sees **Add member** (member ID and role: **Owner**, **Contributor**,
-  **Viewer**, or **Orchestrator**) and **Remove**. If the service isn't ready
-  for role changes, the panel shows **Role changes aren't available yet.** If
-  this version of the service doesn't offer the list, the panel says so, and
-  **Access** shows only your permissions.
+  A tenant administrator or a project owner can read the member list. Only a
+  tenant administrator sees **Add member** (member ID and role: **Owner**,
+  **Contributor**, **Viewer**, or **Orchestrator**) and **Remove**. Remove
+  sends the member's current revision, so a stale list is rejected and you
+  reload it. The service keeps at least one owner. Other users see a
+  permission message in the panel.
 - **Repository** sets the repository owner, name, and sign-in method.
 - **Models** sets model defaults and model overrides by task.
 - **Platform components** changes the implementations the project chose for
@@ -386,11 +412,24 @@ browse pinned source revisions, preview and import Skills, and assign imported
 revisions to agents in the current project cast.
 
 The page keeps the 0.x layout. A stat strip shows **Assigned**, **Enabled**,
-**Marketplace sources**, and **Agents**. The toolbar has **Import skill** and
-**Browse marketplaces**; each opens a dialog. The **Catalog** tab lists the
-imported skill inventory. The **Assignments** tab lists project assignments
-and assigns a skill to agents. After an import, the page opens
-**Assignments**.
+**Marketplace sources**, and **Agents**. The toolbar has **Add skill**,
+**Import skill**, and **Browse marketplaces**; each opens a dialog. The
+**Catalog** tab lists the imported skill inventory. The **Assignments** tab
+lists project assignments and assigns a skill to agents. After an import, the
+page opens **Assignments**.
+
+- **Suggested marketplaces:** **Browse marketplaces** lists the marketplaces
+  that the service suggests. **Add** saves one as a marketplace source. You
+  don't type its repository.
+- **Add skill:** enter a name, description, and instructions. The client
+  turns the fields into a skill, previews it, and imports it.
+- **Upload:** **Import skill** accepts a skill folder, its files, or one ZIP
+  file. Each folder with a `SKILL.md` becomes one skill. The upload limit is
+  2 MB of files and 1,024 files, so the encoded request stays under the 3 MB
+  request limit. Choose one found skill, check its preview, then import it.
+- **Remove skill:** on **Catalog**, **Remove skill** opens a confirmation.
+  Confirming revokes the current revision of that skill and reloads the
+  inventory. Agents stop receiving the revoked revision.
 
 Project settings links to Skills. Skill assignment uses the current
 configuration revision, and the owner rejects stale updates. Skills does not
@@ -399,9 +438,10 @@ mount a second configuration editor.
 For a marketplace Skill, the client sends source revision, resolved commit,
 selected path, and (for import) the preview digest and idempotency key. The
 owner reads and validates the selected files; the browser does not upload
-those files through the Gateway. For a local Skill, the browser submits the
-selected `SKILL.md` and text resources for owner preview, then imports only
-after the owner returns a matching digest.
+those files through the Gateway. For an uploaded or new Skill, the browser
+sends the files, ZIP, or fields to be packaged into skill candidates. It then
+submits the chosen candidate for preview, and imports only after the owner
+returns a matching digest.
 
 Assignment uses the imported revision and digest, the current configuration
 revision, and selected agents from the current cast. The client checks the
@@ -570,10 +610,11 @@ can message existing sessions and request supported detach/archive actions.
 The Gateway does not expose journal object-content reads, so the UI displays
 opaque references rather than inventing transcript text.
 
-You can't browse the files that a run produced. The service has no run-bound
-artifact manifest, diff, or object-version API for files that change in the
-workspace. The Web client does not read a host file system, and it does not
-offer the older 0.x file endpoints.
+The run's **Changes** tab lists **Produced files**: the file sets that the run
+saved from its workspace, newest first. **Show changes** shows the text patch
+of one set. The list is hidden while the run is failed or its outcome is
+unknown. The Web client does not read a host file system, and you can't
+browse the live workspace of a run.
 
 The run's **Run settings** tab shows the model reference and the allowed
 implementations for each platform component, in order. It doesn't show the
@@ -590,11 +631,15 @@ These 0.x features are not in this version:
   dependencies. The Board says "Moving tasks between columns is not available
   yet." and cards can't be dragged.
 - The **Human Review** and **Problems** columns on the **Board**.
-- The suggested skill marketplaces panel on **Skills**.
 - The **AI Formulate** and **Analyze** casting modes and the **Universe**
   picker on **Cast a team**.
 - The count strip on **Memories**.
 - Metrics totaled across projects. **Overview** shows one project at a time.
+- Deleting, archiving, and retrying runs.
+- BYOK providers, the platform Copilot connection, and runs without a project.
+
+The [UI parity inventory](../reference/web-ui-parity.md#endpoint-gaps) lists
+each missing endpoint.
 
 ## Expected result
 

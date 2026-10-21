@@ -67,11 +67,15 @@ The run page's `view` query parameter accepts `chat`, `topology`,
 **Chat** opens by default and for an unknown `view` value. The older
 `/projects/:projectId/orchestrations/:runId` route redirects to the run route.
 
-Navigation hides 0.x destinations that have no v1 API: Flow,
-Workspace, Workflows, Observability, Diagnostics, Heartbeat, and Cluster.
-Their old addresses open one **Not available in this version** page that
-explains why and links back. The old project sessions address opens
-**Sessions**. Unknown addresses show **Page not found**.
+Each project also lists Flow, Workflows, Workspace, Observability,
+Diagnostics, Heartbeat, and Cluster. Each page shows the parts that project
+reads can drive, such as runs, attention items, task counts, metrics, usage,
+pull requests, issues, and platform components. A **Not available in this
+version** note on each page names what is still missing. `/observability`
+without a project shows **Not available in this version**. The old project
+sessions address opens **Sessions**. Unknown addresses show **Page not found**.
+See [Web UI parity](../reference/web-ui-parity.md#endpoint-gaps) for each
+missing endpoint.
 
 The shell has a notification bell. It lists your notifications across all
 projects:
