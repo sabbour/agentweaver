@@ -12,7 +12,8 @@ backlog contract's 026, and Identity Broker
 `20261021000100_AddIssueSyncGrants`. They are **unapplied code-only migrations**.
 Orchestrator requires exactly `SELECT, INSERT, UPDATE` on `issue_sync_projects`
 and `issue_sync_receipts`; Identity requires exactly `SELECT, INSERT, UPDATE`
-on `identity_broker.issue_sync_grants`. No new DELETE, default privilege,
+on `identity_broker.issue_sync_grants`, and `SELECT, INSERT` only on
+`identity_broker.issue_sync_mint_audit`. No new DELETE, default privilege,
 schema CREATE or authority function EXECUTE is granted. These database grants,
 the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
