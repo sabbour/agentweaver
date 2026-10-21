@@ -86,9 +86,12 @@ public sealed class GatewayUserNotificationTests
         var item = schemas.GetProperty("UserNotification");
         Assert.False(item.GetProperty("additionalProperties").GetBoolean());
         Assert.Equal(
-            ["createdAt", "gateKind", "kind", "notificationId", "projectId", "prompt", "requestId",
-                "runId", "sessionId", "stateVersion", "updatedAt"],
+            ["createdAt", "gateKind", "kind", "notificationId", "projectId", "promotionId", "prompt", "requestId",
+                "runId", "sessionId", "source", "stateVersion", "taskCount", "updatedAt"],
             item.GetProperty("required").EnumerateArray().Select(value => value.GetString()!).Order());
+        var properties = item.GetProperty("properties");
+        Assert.Equal(["backlogPromoted", "pendingGate"],
+            properties.GetProperty("source").GetProperty("enum").EnumerateArray().Select(value => value.GetString()!).Order());
         var page = schemas.GetProperty("UserNotificationPage");
         Assert.False(page.GetProperty("additionalProperties").GetBoolean());
     }

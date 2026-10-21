@@ -44,5 +44,6 @@
     <EmbeddedResource Include="Migrations\025_user_notification_dismissals.sql" />
     <EmbeddedResource Include="Migrations\026_backlog_task_content.sql" />
     <EmbeddedResource Include="Migrations\030_backlog_task_origin.sql" />
+    <EmbeddedResource Include="Migrations\031_user_notification_promotion_dismissals.sql" />
   </ItemGroup>
 </Project>

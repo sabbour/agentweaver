@@ -743,14 +743,21 @@ export type CoordinationBlockerKind =
   | 'awaitingApproval'
   | 'awaitingOutcomeConfirmation';
 
-/** One pending owner gate for the existing bell, attention list, and shared Flow view. */
+/** Source that produced a notification. */
+export type UserNotificationSource = 'pendingGate' | 'backlogPromoted';
+
+/**
+ * One notification for the existing bell, attention list, and shared Flow view.
+ * Gate fields are set only for `pendingGate`; `promotionId` and `taskCount` only for `backlogPromoted`.
+ */
 export interface UserNotification {
   notificationId: string;
+  source: UserNotificationSource;
   projectId: string;
   runId: string;
   sessionId: string;
-  requestId: string;
-  kind: CoordinationBlockerKind;
+  requestId: string | null;
+  kind: CoordinationBlockerKind | null;
   prompt: string | null;
   createdAt: string;
   gateKind:
@@ -759,9 +766,12 @@ export interface UserNotification {
     | 'workPlanConfirmation'
     | 'scopeChangeConfirmation'
     | 'question'
-    | 'approval';
-  stateVersion: number;
+    | 'approval'
+    | null;
+  stateVersion: number | null;
   updatedAt: string;
+  promotionId: string | null;
+  taskCount: number | null;
 }
 
 /** Newest-first notifications and total pending count, after the requested dismissal filter. */

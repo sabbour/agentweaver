@@ -9,19 +9,39 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>A persisted pending gate projected for the existing attention list.</summary>
+/// <summary>
+/// A caller notification from a pending gate or a recent backlog promotion.
+/// Gate fields are null for <c>backlogPromoted</c> items; promotion fields are null for <c>pendingGate</c> items.
+/// </summary>
 public sealed record UserNotification(
-    string NotificationId, string ProjectId, string RunId, string SessionId,
-    string RequestId, CoordinationBlockerKind Kind, string? Prompt, DateTimeOffset CreatedAt,
-    Agentweaver.Orchestrator.Core.CoordinatorGateKind GateKind, long StateVersion, DateTimeOffset UpdatedAt);
+    string NotificationId, string Source, string ProjectId, string RunId, string SessionId,
+    string? RequestId, CoordinationBlockerKind? Kind, string? Prompt, DateTimeOffset CreatedAt,
+    Agentweaver.Orchestrator.Core.CoordinatorGateKind? GateKind, long? StateVersion, DateTimeOffset UpdatedAt,
+    Guid? PromotionId, int? TaskCount);
+
+/// <summary>Notification source names returned in <see cref="UserNotification.Source"/>.</summary>
+public static class UserNotificationSources
+{
+    /// <summary>A pending coordinator gate that needs the caller's answer.</summary>
+    public const string PendingGate = "pendingGate";
+
+    /// <summary>A confirmed work plan that was promoted into backlog tasks in the last 24 hours.</summary>
+    public const string BacklogPromoted = "backlogPromoted";
+}
 
 /// <summary>A newest-first attention page and the total pending count after caller dismissals.</summary>
 public sealed record UserNotificationPage(
     ImmutableArray<UserNotification> Items, long Count, string? NextCursor);
 
-/// <summary>Reads authoritative pending gates and stores caller-specific dismissals without resolving gates.</summary>
+/// <summary>
+/// Reads authoritative pending gates and recent backlog promotions, and stores caller-specific dismissals
+/// without resolving gates or changing backlog tasks.
+/// </summary>
 internal sealed class UserNotificationStore
 {
+    /// <summary>How long a backlog promotion stays in the feed, matching the 0.x notice window.</summary>
+    internal static readonly TimeSpan BacklogPromotedWindow = TimeSpan.FromHours(24);
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
@@ -69,55 +89,69 @@ internal sealed class UserNotificationStore
         await using var connection = await _dataSource.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(
             System.Data.IsolationLevel.RepeatableRead, ct).ConfigureAwait(false);
-        var where = PendingWhere(!includeDismissed) +
-            " AND (@filterProject::varchar IS NULL OR g.project_id = @filterProject)";
+        var sources = SourcesSql(!includeDismissed);
         long count;
         await using (var countCommand = new NpgsqlCommand(
-            $"SELECT count(*) {where}", connection, transaction))
+            $"{sources} SELECT count(*) FROM sources", connection, transaction))
         {
             BindAuthority(countCommand, authority, all, projectIds);
-            countCommand.Parameters.AddWithValue("filterProject", NpgsqlDbType.Varchar, (object?)projectId ?? DBNull.Value);
+            BindFilter(countCommand, projectId);
             count = (long)(await countCommand.ExecuteScalarAsync(ct).ConfigureAwait(false))!;
         }
         await using var command = new NpgsqlCommand($"""
-            SELECT g.project_id, g.run_id, g.session_id, g.request_id, g.gate, g.created_at,
-                g.state_version, g.updated_at, g.execution_fence
-            {where}
-            AND (@afterAt::timestamptz IS NULL OR
-                (g.created_at, g.project_id, g.run_id, g.request_id) <
-                (@afterAt, @afterProject::varchar, @afterRun::varchar, @afterRequest::varchar))
-            ORDER BY g.created_at DESC, g.project_id DESC, g.run_id DESC, g.request_id DESC
+            {sources}
+            SELECT source, project_id, run_id, session_id, source_key, gate, created_at,
+                state_version, updated_at, execution_fence, task_count
+            FROM sources
+            WHERE @afterAt::timestamptz IS NULL OR
+                (created_at, project_id, run_id, source, source_key) <
+                (@afterAt, @afterProject::varchar, @afterRun::varchar, @afterSource::text, @afterKey::text)
+            ORDER BY created_at DESC, project_id DESC, run_id DESC, source DESC, source_key DESC
             LIMIT @limit
             """, connection, transaction);
         BindAuthority(command, authority, all, projectIds);
-        command.Parameters.AddWithValue("filterProject", NpgsqlDbType.Varchar, (object?)projectId ?? DBNull.Value);
+        BindFilter(command, projectId);
         command.Parameters.AddWithValue("afterAt", NpgsqlDbType.TimestampTz, (object?)after?.CreatedAt ?? DBNull.Value);
         command.Parameters.AddWithValue("afterProject", NpgsqlDbType.Varchar, (object?)after?.ProjectId ?? DBNull.Value);
         command.Parameters.AddWithValue("afterRun", NpgsqlDbType.Varchar, (object?)after?.RunId ?? DBNull.Value);
-        command.Parameters.AddWithValue("afterRequest", NpgsqlDbType.Varchar, (object?)after?.RequestId ?? DBNull.Value);
+        command.Parameters.AddWithValue("afterSource", NpgsqlDbType.Text, (object?)after?.Source ?? DBNull.Value);
+        command.Parameters.AddWithValue("afterKey", NpgsqlDbType.Text, (object?)after?.SourceKey ?? DBNull.Value);
         command.Parameters.AddWithValue("limit", pageSize + 1);
         var items = ImmutableArray.CreateBuilder<UserNotification>();
+        var keys = new List<string>();
         await using (var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
         {
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
-                var project = reader.GetString(0);
-                var run = reader.GetString(1);
-                var session = reader.GetString(2);
-                var request = reader.GetString(3);
-                var gate = ReadGate(reader.GetString(4), request, reader.GetInt64(8));
+                var source = reader.GetString(0);
+                var project = reader.GetString(1);
+                var run = reader.GetString(2);
+                var session = reader.GetString(3);
+                var key = reader.GetString(4);
+                var createdAt = reader.GetFieldValue<DateTimeOffset>(6);
+                var updatedAt = reader.GetFieldValue<DateTimeOffset>(8);
+                keys.Add(key);
+                if (source == UserNotificationSources.BacklogPromoted)
+                {
+                    var promotionId = Guid.Parse(key);
+                    items.Add(new UserNotification(PromotionNotificationId(project, run, promotionId),
+                        source, project, run, session, null, null, null, createdAt, null, null, updatedAt,
+                        promotionId, reader.GetInt32(10)));
+                    continue;
+                }
+                var gate = ReadGate(reader.GetString(5), key, reader.GetInt64(9));
                 var blocker = CoordinationEndpoints.ToStatusBlocker(gate);
-                items.Add(new UserNotification(NotificationId(project, run, request),
-                    project, run, session, request, blocker.Kind, blocker.Prompt,
-                    reader.GetFieldValue<DateTimeOffset>(5), gate.Kind, reader.GetInt64(6),
-                    reader.GetFieldValue<DateTimeOffset>(7)));
+                items.Add(new UserNotification(NotificationId(project, run, key),
+                    source, project, run, session, key, blocker.Kind, blocker.Prompt,
+                    createdAt, gate.Kind, reader.GetInt64(7), updatedAt, null, null));
             }
         }
         var more = items.Count > pageSize;
         if (more) items.RemoveAt(items.Count - 1);
         var last = more ? items[^1] : null;
         var next = last is null ? null : Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(
-            new Cursor(1, binding, last.CreatedAt, last.ProjectId, last.RunId, last.RequestId), JsonOptions));
+            new Cursor(2, binding, last.CreatedAt, last.ProjectId, last.RunId, last.Source, keys[items.Count - 1]),
+            JsonOptions));
         await transaction.CommitAsync(ct).ConfigureAwait(false);
         return new UserNotificationPage(items.ToImmutable(), count, next);
     }
@@ -144,6 +178,19 @@ internal sealed class UserNotificationStore
         BindAuthority(command, authority, all, projectIds);
         command.Parameters.AddWithValue("id", notificationId.ToUpperInvariant());
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await using var promotionCommand = new NpgsqlCommand($"""
+            INSERT INTO {_schema}.user_notification_promotion_dismissals
+                (tenant_id, actor_issuer, actor_subject, promotion_id)
+            SELECT DISTINCT @tenant, @issuer, @subject, p.promotion_id
+            {PromotionWhere(includeDismissals: false)}
+            AND upper(encode(sha256(convert_to(
+                'backlogPromoted' || chr(31) || p.project_id || chr(31) || p.run_id || chr(31) ||
+                p.promotion_id::text, 'UTF8')), 'hex')) = @id
+            ON CONFLICT DO NOTHING
+            """, connection, transaction);
+        BindAuthority(promotionCommand, authority, all, projectIds);
+        promotionCommand.Parameters.AddWithValue("id", notificationId.ToUpperInvariant());
+        await promotionCommand.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         if (revalidateAuthority is not null)
             await revalidateAuthority(ct).ConfigureAwait(false);
         await transaction.CommitAsync(ct).ConfigureAwait(false);
@@ -171,6 +218,49 @@ internal sealed class UserNotificationStore
                     AND d.project_id = g.project_id AND d.run_id = g.run_id AND d.request_id = g.request_id)
         """ : "");
 
+    /// <summary>Unions both notification sources with a shared row shape and an optional project filter.</summary>
+    private string SourcesSql(bool includeDismissals) => $"""
+        WITH sources AS (
+            SELECT 'pendingGate'::text AS source, g.project_id, g.run_id, g.session_id,
+                g.request_id::text AS source_key, g.gate::text AS gate, g.created_at, g.state_version,
+                g.updated_at, g.execution_fence, NULL::integer AS task_count
+            {PendingWhere(includeDismissals)}
+                AND (@filterProject::varchar IS NULL OR g.project_id = @filterProject)
+            UNION ALL
+            SELECT 'backlogPromoted'::text, p.project_id, p.run_id, p.root_session_id,
+                p.promotion_id::text, NULL::text, p.created_at, NULL::bigint,
+                p.created_at, NULL::bigint, count(*)::integer
+            {PromotionWhere(includeDismissals)}
+                AND (@filterProject::varchar IS NULL OR p.project_id = @filterProject)
+            GROUP BY p.promotion_id, p.project_id, p.run_id, p.root_session_id, p.created_at
+        )
+        """;
+
+    /// <summary>
+    /// Selects recent promotions whose tasks are still on the board, as the 0.x
+    /// "N subtasks created" notice did; promotions with no unarchived task are skipped.
+    /// </summary>
+    private string PromotionWhere(bool includeDismissals = true) => $"""
+        FROM {_schema}.backlog_plan_promotions p
+        JOIN {_schema}.accepted_runs r ON r.project_id = p.project_id AND r.run_id = p.run_id
+        JOIN {_schema}.backlog_task_origins o ON o.promotion_id = p.promotion_id
+        JOIN {_schema}.backlog_tasks t ON t.project_id = o.project_id AND t.task_id = o.task_id
+        WHERE r.tenant_id = @tenant AND NOT t.is_archived
+            AND p.created_at >= now() - interval '{(int)BacklogPromotedWindow.TotalHours} hours'
+            AND (@all OR p.project_id = ANY(@projects))
+            AND (@project::varchar IS NULL OR p.project_id = @project)
+            AND (@run::varchar IS NULL OR p.run_id = @run)
+        """ + (includeDismissals ? $"""
+
+            AND NOT EXISTS (
+                SELECT 1 FROM {_schema}.user_notification_promotion_dismissals d
+                WHERE d.tenant_id = @tenant AND d.actor_issuer = @issuer AND d.actor_subject = @subject
+                    AND d.promotion_id = p.promotion_id)
+        """ : "");
+
+    private static void BindFilter(NpgsqlCommand command, string? projectId) =>
+        command.Parameters.AddWithValue("filterProject", NpgsqlDbType.Varchar, (object?)projectId ?? DBNull.Value);
+
     private static void BindAuthority(
         NpgsqlCommand command, ProjectsAuthorizationContext authority, bool all, string[] projectIds)
     {
@@ -185,6 +275,11 @@ internal sealed class UserNotificationStore
 
     internal static string NotificationId(string project, string run, string request) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{project}\u001f{run}\u001f{request}")));
+
+    /// <summary>Returns a promotion notice ID; its four parts never match a three-part gate ID.</summary>
+    internal static string PromotionNotificationId(string project, string run, Guid promotionId) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"backlogPromoted\u001f{project}\u001f{run}\u001f{promotionId:D}")));
 
     internal static Agentweaver.Orchestrator.Core.CoordinatorGateRequest ReadGate(
         string json, string requestId, long executionFence)
@@ -222,9 +317,10 @@ internal sealed class UserNotificationStore
         try
         {
             var cursor = JsonSerializer.Deserialize<Cursor>(Convert.FromBase64String(value), JsonOptions);
-            if (cursor is null || cursor.Version != 1 || cursor.Binding != binding ||
+            if (cursor is null || cursor.Version != 2 || cursor.Binding != binding ||
                 string.IsNullOrEmpty(cursor.ProjectId) || string.IsNullOrEmpty(cursor.RunId) ||
-                string.IsNullOrEmpty(cursor.RequestId))
+                cursor.Source is not (UserNotificationSources.PendingGate or UserNotificationSources.BacklogPromoted) ||
+                string.IsNullOrEmpty(cursor.SourceKey))
                 throw new CoordinationException("query_invalid", 400);
             return cursor;
         }
@@ -235,5 +331,6 @@ internal sealed class UserNotificationStore
     }
 
     private sealed record Cursor(
-        int Version, string Binding, DateTimeOffset CreatedAt, string ProjectId, string RunId, string RequestId);
+        int Version, string Binding, DateTimeOffset CreatedAt, string ProjectId, string RunId,
+        string Source, string SourceKey);
 }

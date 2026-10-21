@@ -168,16 +168,23 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16, 18 through 21, 25, 26,
-and 30. These are 23 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16, 18 through 21, 25,
+26, 30, and 31. These are 24 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan lists 98 tables and eight exact row-lock columns. Orchestrator migration
+The plan lists 99 tables and eight exact row-lock columns. Orchestrator migration
 025 adds the empty `user_notification_dismissals` table. Its runtime role needs
 only `SELECT,INSERT` on that table. The migration does not alter existing tables.
 Orchestrator migration 030 adds `backlog_plan_promotions` and
 `backlog_task_origins`, each with `SELECT,INSERT` only.
 This source change also changes the plan hash. Applying the migration or grants,
 or running initialization with the new hash, requires separate approval.
+Orchestrator migration 031 adds the empty
+`user_notification_promotion_dismissals` table. It stores caller dismissals of
+backlog promotion notices and has a foreign key to `backlog_plan_promotions`,
+so it requires migrations 025 and 030. The foreign key takes a
+`SHARE ROW EXCLUSIVE` lock on `backlog_plan_promotions` until commit. Its
+runtime role needs only `SELECT,INSERT` on the new table. Applying migration
+031, its grants, or the new plan hash requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved

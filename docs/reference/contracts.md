@@ -13,11 +13,14 @@ For runtime settings and deployment configuration, see
 ## Caller attention
 
 The Orchestrator's `UserNotification` projects persisted pending coordinator
-gates for the existing bell and attention list. `UserNotificationPage` contains
-`items`, the total matching pending `count`, and nullable `nextCursor`.
-Each item carries `notificationId`, `projectId`, `runId`, `sessionId`,
-`requestId`, `kind`, `prompt`, `gateKind`, `stateVersion`, `createdAt`, and
-`updatedAt`. The session-status `CoordinationBlockerKind` mapping is reused.
+gates and recent backlog plan promotions for the existing bell and attention
+list. `UserNotificationPage` contains `items`, the total matching pending
+`count`, and nullable `nextCursor`. Each item carries `notificationId`, `source`,
+`projectId`, `runId`, `sessionId`, `createdAt`, and `updatedAt`. A
+`pendingGate` item also carries `requestId`, `kind`, `prompt`, `gateKind`, and
+`stateVersion`. A `backlogPromoted` item carries `promotionId` and `taskCount`,
+and its gate fields are `null`. The session-status `CoordinationBlockerKind`
+mapping is reused.
 
 `GET /api/v1/notifications` checks fresh project read authority on both sides
 of the read. `projectId` only narrows that authority. `includeDismissed=true`

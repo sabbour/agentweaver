@@ -1,8 +1,14 @@
 # Read notifications across runs
 
-Notifications show persisted requests that need human input. The Orchestrator
-derives them from pending decision gates. It does not copy gates into another
-delivery queue or resolve a gate when you dismiss its notification.
+Notifications show persisted work that needs your attention. The Orchestrator
+derives them from two sources:
+
+- `pendingGate`: a pending decision gate that needs human input.
+- `backlogPromoted`: a confirmed work plan that was promoted into backlog tasks
+  in the last 24 hours.
+
+The Orchestrator does not copy these items into another delivery queue. Dismissing
+a notification never resolves a gate or changes a task.
 
 ## Read pending attention
 
@@ -21,9 +27,10 @@ read.
 
 The response contains:
 
-- `items`: newest-first notifications, each with `notificationId`, `projectId`,
-  `runId`, `sessionId`, `requestId`, `kind`, `prompt`, `gateKind`, `stateVersion`,
-  `createdAt`, and `updatedAt`.
+- `items`: newest-first notifications, each with `notificationId`, `source`,
+  `projectId`, `runId`, `sessionId`, `createdAt`, and `updatedAt`. Gate items also
+  have `requestId`, `kind`, `prompt`, `gateKind`, and `stateVersion`. Promotion items
+  have `promotionId` and `taskCount` instead, and their gate fields are `null`.
 - `count`: the total matching pending items, not just the current page.
 - `nextCursor`: an opaque cursor, or `null` when no more items remain.
 
@@ -81,11 +88,26 @@ toasts expire after 12 seconds. A transient poll failure retries next cycle
 without losing state. Dismissals are durable per caller. The v1 backend preserves that
 division: browser seen and sound state do not become gate state.
 
-0.x also derives recent delegated-work promotion notices from persisted plans
-and the tasks they actually created. Those notices need the v1 task-promotion
-owner contract; they must not be synthesized from unrelated task creation.
-The pending-gate endpoint does not claim to implement that source. Follow
-[#2187](https://github.com/sabbour/agentweaver/issues/2187) for the remaining
-promotion-source integration and
-[#2176](https://github.com/sabbour/agentweaver/issues/2176) for repository issue
+## Backlog promotion notices
+
+When a run promotes its confirmed work plan into backlog tasks, the feed shows one
+`backlogPromoted` item for that promotion. `taskCount` is the number of promoted
+tasks that are not archived. Show it as "1 subtask created" or "{n} subtasks
+created", and link to the project board. `sessionId` is the run's root session.
+
+The item disappears when:
+
+- 24 hours pass since the promotion.
+- All of its promoted tasks are archived.
+- The caller loses access to the project.
+- The caller dismisses it.
+
+Tasks captured directly, without a promotion, never create this notice. Dismissal
+uses the same route as gates and is stored per caller.
+
+This matches the 0.x promotion source with one difference: v1 shows one notice per
+promotion instead of one per run. A v1 run promotes each work plan at most once.
+
+See [#2175](https://github.com/sabbour/agentweaver/issues/2175) for notifications
+and [#2176](https://github.com/sabbour/agentweaver/issues/2176) for repository issue
 synchronization. ADR 0001 does not drop these capabilities.
