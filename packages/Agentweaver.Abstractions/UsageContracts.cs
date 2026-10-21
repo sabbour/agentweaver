@@ -355,7 +355,13 @@ public sealed record UsageSpendEvidenceRequest(
     string MeterSource,
     string Unit,
     UsageSpendPeriod? ProjectPeriod,
-    ImmutableArray<string> DispatchIds);
+    ImmutableArray<string> DispatchIds)
+{
+    /// <summary>Optional agent whose run total the evidence also reports.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? AgentId { get; init; }
+}
 
 /// <summary>Priced amount and event counts for one spend bucket. Unpriced events never add to the amount.</summary>
 public sealed record UsageSpendTotal(decimal PricedAmount, long PricedEvents, long UnpricedEvents);
@@ -364,7 +370,8 @@ public sealed record UsageSpendTotal(decimal PricedAmount, long PricedEvents, lo
 /// Events-owned represented-spend evidence. Every total and dispatch witness comes from one ledger
 /// snapshot. <see cref="AccountingCursor"/> counts the append-only ledger events for the project and
 /// meter source in that snapshot, so a later read always has an equal or higher cursor and represents
-/// every charge an earlier read represented.
+/// every charge an earlier read represented. Dispatch witnesses match any run in the project, because
+/// project budgets hold exposure for dispatches from other runs.
 /// </summary>
 public sealed record UsageSpendEvidence(
     int ContractVersion,
@@ -377,7 +384,13 @@ public sealed record UsageSpendEvidence(
     UsageSpendTotal Run,
     UsageSpendTotal? ProjectPeriod,
     string? ProjectPeriodId,
-    ImmutableArray<UsageDispatchAccountingWitness> Dispatches);
+    ImmutableArray<UsageDispatchAccountingWitness> Dispatches)
+{
+    /// <summary>Run total for the requested agent. Present only when the request names an agent.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public UsageSpendTotal? Agent { get; init; }
+}
 
 /// <summary>Validates represented-spend requests and the evidence returned for them.</summary>
 public static class UsageSpendEvidenceContract
@@ -387,7 +400,10 @@ public static class UsageSpendEvidenceContract
     /// <summary>Maximum number of dispatch witnesses returned by one read.</summary>
     public const int MaximumDispatches = 64;
 
-    /// <summary>Requires an explicit bucket, a well-formed optional period, and unique canonical dispatch IDs.</summary>
+    /// <summary>
+    /// Checks a spend evidence request: it names a meter source and unit, any agent ID or period is well formed,
+    /// and the dispatch IDs are unique GUIDs in canonical form.
+    /// </summary>
     /// <exception cref="ArgumentException">The request is invalid.</exception>
     public static void ValidateRequest(UsageSpendEvidenceRequest request)
     {
@@ -399,6 +415,7 @@ public static class UsageSpendEvidenceContract
             string.IsNullOrWhiteSpace(request.MeterSource) || request.MeterSource.Length > 256 ||
             string.IsNullOrWhiteSpace(request.Unit) || request.Unit.Length > 64 ||
             request.DispatchIds.IsDefault || request.DispatchIds.Length > MaximumDispatches ||
+            request.AgentId is { } agentId && (string.IsNullOrWhiteSpace(agentId) || agentId.Length > 256) ||
             request.ProjectPeriod is { } period &&
                 (string.IsNullOrWhiteSpace(period.PeriodId) || period.PeriodId.Length > 128 ||
                  period.EndsAt <= period.StartsAt))
@@ -412,7 +429,10 @@ public static class UsageSpendEvidenceContract
                 throw new ArgumentException("The spend evidence dispatch set is invalid.");
     }
 
-    /// <summary>Requires evidence that answers exactly the requested scope with consistent witnesses.</summary>
+    /// <summary>
+    /// Checks that the evidence answers exactly this request for this tenant, project, and run, and that
+    /// every dispatch witness is consistent. The caller rejects forged or mismatched evidence this way.
+    /// </summary>
     /// <exception cref="ArgumentException">The evidence does not answer the request.</exception>
     public static void ValidateEvidence(
         UsageSpendEvidence evidence, UsageSpendEvidenceRequest request,
@@ -421,7 +441,8 @@ public static class UsageSpendEvidenceContract
         ArgumentNullException.ThrowIfNull(evidence);
         ValidateRequest(request);
         // The evidence must answer exactly this tenant, project, run, and bucket. A project period total
-        // is present only when the request asked for a period, and there is one witness per dispatch.
+        // is present only when the request asked for a period, an agent total is present only when the
+        // request named an agent, and there is one witness per dispatch.
         if (evidence.ContractVersion != CurrentVersion || evidence.TenantId != tenantId ||
             evidence.ProjectId != projectId || evidence.RunId != runId ||
             evidence.MeterSource != request.MeterSource || evidence.Unit != request.Unit ||
@@ -429,8 +450,10 @@ public static class UsageSpendEvidenceContract
             (request.ProjectPeriod is null
                 ? evidence.ProjectPeriod is not null || evidence.ProjectPeriodId is not null
                 : !IsValid(evidence.ProjectPeriod) || evidence.ProjectPeriodId != request.ProjectPeriod.PeriodId) ||
+            (request.AgentId is null ? evidence.Agent is not null : !IsValid(evidence.Agent)) ||
             evidence.Dispatches.IsDefault || evidence.Dispatches.Length != request.DispatchIds.Length)
             throw new ArgumentException("The spend evidence does not match its request.");
+        // Every witness must carry this exact accounting scope.
         var scope = new UsageDispatchAccountingScope(
             tenantId, projectId, runId, request.MeterSource, request.Unit, request.ProjectPeriod?.PeriodId);
         for (var index = 0; index < request.DispatchIds.Length; index++)
@@ -455,6 +478,7 @@ public static class UsageSpendEvidenceContract
         }
     }
 
+    // A total is valid when it is present and no amount or count is negative.
     private static bool IsValid(UsageSpendTotal? total) =>
         total is { PricedAmount: >= 0, PricedEvents: >= 0, UnpricedEvents: >= 0 };
 }

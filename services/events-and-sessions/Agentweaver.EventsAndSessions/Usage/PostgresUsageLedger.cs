@@ -146,8 +146,10 @@ public sealed class PostgresUsageLedger : IUsageLedger
         "coalesce(l.payload->'usage'->>'a2AMessageId', l.payload->'usage'->'attribution'->>'dispatchId')";
 
     /// <summary>
-    /// Reads represented spend for one bucket from one repeatable-read snapshot. Unpriced events in the
-    /// meter source count against every unit of that meter, so missing prices stay explicit.
+    /// Reads committed spend for one bucket (meter source and unit). It returns the run total, the optional
+    /// project period total, the optional agent total, one accounting witness for each requested dispatch, and
+    /// an accounting cursor. All values come from one repeatable-read snapshot, so they agree with each other.
+    /// Unpriced events in the meter source count against every unit of that meter, so missing prices stay visible.
     /// </summary>
     public async Task<UsageSpendEvidence> ReadSpendEvidenceAsync(
         string tenantId, string projectId, string runId, UsageSpendEvidenceRequest request,
@@ -158,6 +160,8 @@ public sealed class PostgresUsageLedger : IUsageLedger
         // Both queries below run in one repeatable-read transaction, so the totals, the cursor, and the
         // dispatch witnesses all describe the same ledger state even while new usage is being appended.
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        // Repeatable read gives both queries below the same snapshot. Without it, a charge appended between
+        // the totals query and the dispatch query could appear in one result and not the other.
         await using var transaction = await connection.BeginTransactionAsync(
             System.Data.IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
         var period = request.ProjectPeriod;
@@ -167,7 +171,18 @@ public sealed class PostgresUsageLedger : IUsageLedger
             (l.price_disposition <> 'Unpriced' AND l.price_unit = @unit
              OR l.price_disposition = 'Unpriced' AND (l.price_unit IS NULL OR l.price_unit = @unit))
             """;
+        // SQL filter for rows inside the project period. The start is inclusive and the end is exclusive.
+        // When the request has no period, the filter matches no rows.
         const string InPeriod = "(@period_start IS NOT NULL AND l.occurred_at >= @period_start AND l.occurred_at < @period_end)";
+        // SQL filter for rows of the requested agent in this run. When the request has no agent, it matches no rows.
+        const string InAgent = "(@agent IS NOT NULL AND l.run_id = @run AND l.agent_id = @agent)";
+        // One aggregate query over all project rows for this meter source computes every total at once:
+        // - column 0: count of all rows, used as the accounting cursor. The ledger is append-only, so this
+        //   count never goes down, and a later read always covers every charge an earlier read covered;
+        // - columns 1-3: run total (priced amount, priced count, unpriced count);
+        // - columns 4-6: project period total;
+        // - columns 7-9: agent total within this run.
+        // Only priced rows in the requested unit add to an amount, so different units are never mixed.
         await using var totals = new NpgsqlCommand($"""
             SELECT count(*),
                 coalesce(sum(l.price_amount) FILTER (WHERE l.run_id = @run AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit), 0),
@@ -175,7 +190,10 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 count(*) FILTER (WHERE l.run_id = @run AND l.price_disposition = 'Unpriced' AND {Bucket}),
                 coalesce(sum(l.price_amount) FILTER (WHERE {InPeriod} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit), 0),
                 count(*) FILTER (WHERE {InPeriod} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit),
-                count(*) FILTER (WHERE {InPeriod} AND l.price_disposition = 'Unpriced' AND {Bucket})
+                count(*) FILTER (WHERE {InPeriod} AND l.price_disposition = 'Unpriced' AND {Bucket}),
+                coalesce(sum(l.price_amount) FILTER (WHERE {InAgent} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit), 0),
+                count(*) FILTER (WHERE {InAgent} AND l.price_disposition <> 'Unpriced' AND l.price_unit = @unit),
+                count(*) FILTER (WHERE {InAgent} AND l.price_disposition = 'Unpriced' AND {Bucket})
             FROM {_quotedSchema}.usage_ledger l
             WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id AND l.meter_source = @meter_source
             """, connection, transaction);
@@ -185,6 +203,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
         long cursor;
         UsageSpendTotal run;
         UsageSpendTotal? projectPeriod;
+        UsageSpendTotal? agent;
         try
         {
             await using var reader = await totals.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -192,7 +211,9 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 throw new InvalidOperationException("The spend aggregate returned no row.");
             cursor = reader.GetInt64(0);
             run = new(reader.GetDecimal(1), reader.GetInt64(2), reader.GetInt64(3));
+            // Report the period and agent totals only when the request asked for them.
             projectPeriod = period is null ? null : new(reader.GetDecimal(4), reader.GetInt64(5), reader.GetInt64(6));
+            agent = request.AgentId is null ? null : new(reader.GetDecimal(7), reader.GetInt64(8), reader.GetInt64(9));
         }
         catch (OverflowException exception)
         {
@@ -201,6 +222,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 "Spend totals exceed the exact numeric range supported by the usage contract.", exception);
         }
 
+        // Every witness carries the same scope, so the caller can check that it answers this exact request.
         var scope = new UsageDispatchAccountingScope(
             tenantId, projectId, runId, request.MeterSource, request.Unit, period?.PeriodId);
         // Start with an empty receipt list for every requested dispatch, so a dispatch with no ledger rows
@@ -210,12 +232,15 @@ public sealed class PostgresUsageLedger : IUsageLedger
             StringComparer.Ordinal);
         if (!request.DispatchIds.IsEmpty)
         {
+            // Load the receipts of the requested dispatches. The query doesn't filter by run, because a
+            // project budget holds exposure for dispatches from other runs in the same project.
+            // Ordering by source receipt ID keeps the receipt order stable, so the digest is repeatable.
             await using var dispatches = new NpgsqlCommand($"""
                 SELECT {DispatchIdSql}, s.source_receipt_id, l.event_id, s.source_payload_hash,
                        l.price_disposition, l.price_amount
                 FROM {_quotedSchema}.usage_ledger l
                 JOIN {_quotedSchema}.usage_source_receipts s ON s.event_id = l.event_id
-                WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id AND l.run_id = @run
+                WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id
                     AND l.meter_source = @meter_source AND {Bucket}
                     AND (@period_start IS NULL OR {InPeriod})
                     AND {DispatchIdSql} = ANY(@dispatches)
@@ -251,9 +276,14 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 null, null, null);
         }).ToImmutableArray();
         return new UsageSpendEvidence(UsageSpendEvidenceContract.CurrentVersion, tenantId, projectId, runId,
-            request.MeterSource, request.Unit, cursor, run, projectPeriod, period?.PeriodId, witnesses);
+            request.MeterSource, request.Unit, cursor, run, projectPeriod, period?.PeriodId, witnesses)
+        {
+            Agent = agent
+        };
     }
 
+    // Adds the parameters shared by the totals query and the dispatch query. A missing period or agent
+    // is sent as SQL NULL, and the SQL filters check for NULL to know that the request has no period or agent.
     private static void AddSpendParameters(
         NpgsqlCommand command, string tenantId, string projectId, string runId, UsageSpendEvidenceRequest request)
     {
@@ -268,6 +298,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
             request.ProjectPeriod is { } start ? start.StartsAt : DBNull.Value);
         command.Parameters.AddWithValue("period_end", NpgsqlDbType.TimestampTz,
             request.ProjectPeriod is { } end ? end.EndsAt : DBNull.Value);
+        command.Parameters.AddWithValue("agent", NpgsqlDbType.Varchar, (object?)request.AgentId ?? DBNull.Value);
     }
 
     /// <summary>Aggregates measurements without substituting zero for missing values.</summary>

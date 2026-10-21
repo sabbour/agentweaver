@@ -18,7 +18,7 @@ public static class CoordinationOwnerMigrator
     /// </summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28])];
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -66,7 +66,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Optional 032 is a known version here, so a database where 032 was applied separately is
         // accepted, but 032 is not in the default list below and is never applied by this method.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 32)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 32)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -94,6 +94,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(27) && !applied.Contains(26)) ||
             // The Guardrails evidence table builds on the latest schema that ships before it.
             (applied.Contains(28) && !applied.Contains(27)) ||
+            // Spend budget exposure follows the same rule and is ordered directly after 028.
+            (applied.Contains(29) && !applied.Contains(28)) ||
             // 032 records reference repository pins, which migration 012 adds.
             (applied.Contains(32) && !applied.Contains(12)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
@@ -101,6 +103,8 @@ public static class CoordinationOwnerMigrator
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
         foreach (var version in SupportedVersions.Where(version => !applied.Contains(version)))
         {
+            // Map each version to its migration name. The embedded file name is built from it below;
+            // version 10 is the only file without a numeric prefix.
             var migrationName = version switch
             {
                 1 => "coordination_owner",
@@ -130,6 +134,7 @@ public static class CoordinationOwnerMigrator
                 26 => "backlog_task_content",
                 27 => "periodic_issue_sync",
                 28 => "guardrails_evaluations",
+                29 => "spend_budget_exposure",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -220,6 +225,10 @@ public static class CoordinationOwnerMigrator
         ValidateSchema(schema);
         var quotedSchema = Quote(schema);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        // Read every check as one row of columns. Migration counts come first; then the existence of
+        // tables, columns, constraints, and triggers. Three columns cover version 029: its migration
+        // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
+        // They sit just before the optional-032 check, which stays the last column.
         await using var command = new NpgsqlCommand($"""
             SELECT
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),
@@ -238,7 +247,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 32)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 32)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -343,6 +352,10 @@ public static class CoordinationOwnerMigrator
                         AND tgname = 'guardrails_evaluations_immutable'
                         AND tgfoid = to_regprocedure(@guardrailsMutationFunction)
                         AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal),
+                -- Version 029 checks: the migration is recorded once and both spend budget tables exist.
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 29) = 1,
+                to_regclass(@spendBudgetReservations) IS NOT NULL,
+                to_regclass(@spendBudgetCursors) IS NOT NULL,
                 -- 032 is optional at startup: the PR list reports it as not available until it is applied.
                 -- Accept "not applied" (no ledger row, no table) or "fully applied" (row, table, and
                 -- index). Anything in between is a partial apply and fails verification.
@@ -427,6 +440,11 @@ public static class CoordinationOwnerMigrator
             "reviewedRemoteToolSnapshots", NpgsqlDbType.Text, $"{schema}.reviewed_remote_tool_snapshots");
         command.Parameters.AddWithValue(
             "snapshotMutationFunction", NpgsqlDbType.Text, $"{schema}.reject_reviewed_remote_tool_snapshot_mutation()");
+        // Table names for the version 029 existence checks.
+        command.Parameters.AddWithValue(
+            "spendBudgetReservations", NpgsqlDbType.Text, $"{schema}.spend_budget_reservations");
+        command.Parameters.AddWithValue(
+            "spendBudgetCursors", NpgsqlDbType.Text, $"{schema}.spend_budget_accounting_cursors");
         // Version 028 checks: the migration is recorded once, the evidence table exists, and its immutability
         // trigger is installed, enabled, and calls the reject function. Trigger type 27 means
         // BEFORE UPDATE OR DELETE, FOR EACH ROW, so no evidence row can be changed or removed.
@@ -435,6 +453,8 @@ public static class CoordinationOwnerMigrator
         command.Parameters.AddWithValue(
             "guardrailsMutationFunction", NpgsqlDbType.Text, $"{schema}.reject_guardrails_evaluation_mutation()");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        // Each required version must be recorded exactly once, no unknown versions may exist, and every
+        // existence check must be true. Adding a check to the query also requires extending the final range.
         if (!await reader.ReadAsync(cancellationToken) ||
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
             reader.GetInt64(3) != 1 || reader.GetInt64(4) != 1 || reader.GetInt64(5) != 1 ||
@@ -451,9 +471,9 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
-            // Columns 57 onward are boolean checks. The three version 028 checks come just before the
-            // optional-032 check, which stays the last column.
-            Enumerable.Range(57, 33).Any(column => !reader.GetBoolean(column)))
+            // Columns 57 onward are boolean checks. The three version 028 checks and then the three
+            // version 029 checks come just before the optional-032 check, which stays the last column.
+            Enumerable.Range(57, 36).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

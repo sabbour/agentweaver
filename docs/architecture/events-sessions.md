@@ -225,8 +225,11 @@ dispatch IDs. One repeatable-read snapshot supplies:
 - Priced amount, priced event count, and unpriced event count for the run and the
   project period. Unpriced events without a unit count in every unit bucket of
   their meter source.
+- An agent total for the run when the request names an `AgentId`.
 - One `UsageDispatchAccountingWitness` per requested dispatch, with the source
-  receipt identities, receipt digest, and known priced subtotal.
+  receipt identities, receipt digest, and known priced subtotal. A witness
+  matches the dispatch in any run of the project, because a project budget holds
+  exposure for dispatches from other runs.
 - `AccountingCursor`, the number of ledger events for the project and meter
   source in that snapshot.
 

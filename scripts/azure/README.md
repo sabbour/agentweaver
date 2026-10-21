@@ -19,14 +19,18 @@ the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`d7af6c67fca93879fe38db35db3a096aa00008b36c3176c29dd7615809fa2141`.
+`52aecfbe48673b90dc11cdf0dc90dba8326eafb02647d2bbd1c31d51ca510c02`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-28. Version 027 requires 026 only.
+placeholder. The Core list is 1-16, 18-29. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
 027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
 plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
 **unapplied code-only migration**.
+Version 029 adds the `spend_budget_reservations` and
+`spend_budget_accounting_cursors` tables for spend budget enforcement. It
+requires 028 and needs exactly `SELECT, INSERT, UPDATE` on both tables, with no
+DELETE. It is an **unapplied code-only migration**.
 
 Orchestrator migration `032_source_control_pull_request_records.sql` adds the
 `source_control_pull_requests` table for the project pull request list. It
