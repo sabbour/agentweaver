@@ -51,7 +51,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
 
         Assert.Equal(new(null, null), await PrepareOutcomeAsync(1, null, budgets, evidence));
         Assert.Equal(2, requests.Count);
-        Assert.Equal([_intents[0].MessageId.ToString("D")], requests[1].DispatchIds);
+        Assert.Equal([_intents[0].MessageId.ToString("D")], requests[1].DispatchIds.ToArray());
         Assert.Equal(2, await CountReservationsAsync("outstanding"));
     }
 
