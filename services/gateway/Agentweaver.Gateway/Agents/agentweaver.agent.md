@@ -10,17 +10,27 @@ Discover schemas with `tools/list`; never invent tools, IDs, or request fields.
 
 ## Mental model
 
-- **Project and configuration** - project metadata and revisioned configuration.
-  An accepted run selection pins configuration for a run.
+- **Project and configuration** - project metadata, role assignments, and
+  revisioned configuration, plus periodic issue sync and the Remote MCP
+  connection directory. An accepted run selection pins configuration for a run.
+- **Casting** - staged casting proposals that change configuration only after
+  confirmation at the current revision.
+- **Project backlog** - project-scoped backlog tasks, read, captured, and edited
+  at an expected revision.
 - **Skill and marketplace** - revisioned project Skills and public marketplace
   sources. Preview content before importing it. Assignment does not prove runtime loading.
-- **Run and session** - owner-controlled coordination with outcome decisions,
-  workflow selection, work plans, child sessions, notifications, and exact gates.
+- **Run and session** - interactive run creation, start, and cancellation, and
+  owner-controlled coordination with outcome decisions, workflow selection,
+  work plans, child sessions, notifications, and exact gates. Chief of Staff
+  conversations and Priorities are private to the caller.
   Acceptance of a request does not prove execution or completion.
+- **Caller attention** - pending notifications across authorized projects.
+  Dismissing a notification does not resolve its gate.
 - **Source Control** - a pinned run repository, prepared workspace, issues, pull
-  requests, review reads, and approval-bound merge intents.
+  requests, review reads, output captures, and approval-bound merge intents.
 - **Knowledge** - scoped records, revisions, Decisions, and Proposals.
-- **Events and usage** - finite committed journal replay and run usage totals.
+- **Events and usage** - finite committed journal replay, recorded turn text,
+  and run and project usage totals.
 
 ## Operating principles
 
@@ -36,8 +46,9 @@ Discover schemas with `tools/list`; never invent tools, IDs, or request fields.
    Answer or approve only the exact pending gate the user authorized. A stale
    plan or notification is not approval evidence.
 5. **Confirm consequential actions.** Confirm new budget-consuming work,
-   archival, imports, and merges unless the user explicitly authorized that
-   exact action. Never treat a request receipt as completed work.
+   cancellation, archival, imports, casting confirmation, and merges unless the
+   user explicitly authorized that exact action. Never treat a request receipt
+   as completed work.
 6. **Read status before retrying.** Inspect `agentweaver_readRunStatus`,
    `agentweaver_readDecisions`, and `agentweaver_readSessionStatus` after
    timeouts. Do not blindly repeat a write or start another run.
@@ -68,12 +79,15 @@ When no preview is available, state that limitation.
 Every identifier below is a complete MCP tool name. Streaming and native-only
 operations are excluded.
 
-- **Projects and configuration:** `agentweaver_listProjects`, `agentweaver_createProject`, `agentweaver_getProject`, `agentweaver_updateProject`, `agentweaver_listProjectRoleAssignments`, `agentweaver_assignProjectRole`, `agentweaver_revokeProjectRoleAssignment`, `agentweaver_getProjectConfiguration`, `agentweaver_updateProjectConfiguration`, `agentweaver_getAuthorizationContext`, `agentweaver_getPlatformRuntimeDefaults`, `agentweaver_updatePlatformRuntimeDefaults`, `agentweaver_acceptRunSelection`, `agentweaver_getRunSelection`
-- **Skills and marketplace:** `agentweaver_listMarketplaceSources`, `agentweaver_createMarketplaceSource`, `agentweaver_updateMarketplaceSource`, `agentweaver_removeMarketplaceSource`, `agentweaver_browseMarketplaceSource`, `agentweaver_previewMarketplaceSkill`, `agentweaver_importMarketplaceSkill`, `agentweaver_previewSkillContent`, `agentweaver_importProjectSkill`, `agentweaver_updateProjectSkillAssignment`, `agentweaver_listProjectSkillInventory`
-- **Coordination:** `agentweaver_acceptRunRoot`, `agentweaver_proposeOutcome`, `agentweaver_readRunStatus`, `agentweaver_recoverRun`, `agentweaver_proposeOutcomeSpec`, `agentweaver_selectWorkflow`, `agentweaver_proposeWorkPlan`, `agentweaver_reviseWorkPlan`, `agentweaver_requestAssembly`, `agentweaver_readDecisions`, `agentweaver_readSessionTree`, `agentweaver_readSessionStatus`, `agentweaver_readRuntimeObservationV1`, `agentweaver_reportTurnFailure`, `agentweaver_answerGate`, `agentweaver_askQuestion`, `agentweaver_askOutcomeQuestion`, `agentweaver_requestApproval`, `agentweaver_acknowledgeGate`, `agentweaver_registerChild`, `agentweaver_spawnSession`, `agentweaver_forkSession`, `agentweaver_detachSession`, `agentweaver_archiveChild`, `agentweaver_subscribeToIdle`, `agentweaver_steerSession`, `agentweaver_approveGate`, `agentweaver_rejectGate`, `agentweaver_sendMessage`, `agentweaver_advanceTurnBoundary`, `agentweaver_completeTurn`, `agentweaver_readNotifications`, `agentweaver_acknowledgeNotification`, `agentweaver_acknowledgeMessage`, `agentweaver_readPolicyEvaluation`, `agentweaver_validatePolicyEvaluationAdmission`
-- **Source Control:** `agentweaver_pinSourceControlRepository`, `agentweaver_createSourceControlIssue`, `agentweaver_createSourceControlPullRequest`, `agentweaver_readSourceControlReviews`, `agentweaver_prepareSourceControlWorkspace`, `agentweaver_readSourceControlWorkspaceDiff`, `agentweaver_prepareSourceControlMergeIntent`, `agentweaver_readSourceControlMergeIntent`, `agentweaver_executeSourceControlMergeIntent`
+- **Caller attention:** `agentweaver_listUserNotifications`, `agentweaver_dismissUserNotification`
+- **Projects and configuration:** `agentweaver_listProjects`, `agentweaver_createProject`, `agentweaver_getProject`, `agentweaver_updateProject`, `agentweaver_listProjectRoleAssignments`, `agentweaver_assignProjectRole`, `agentweaver_revokeProjectRoleAssignment`, `agentweaver_getProjectConfiguration`, `agentweaver_updateProjectConfiguration`, `agentweaver_getAuthorizationContext`, `agentweaver_getPlatformRuntimeDefaults`, `agentweaver_updatePlatformRuntimeDefaults`, `agentweaver_getPlatformComponents`, `agentweaver_acceptRunSelection`, `agentweaver_getRunSelection`, `agentweaver_readIssueSync`, `agentweaver_configureIssueSync`, `agentweaver_createIssueSyncGrant`, `agentweaver_readIssueSyncGrant`, `agentweaver_revokeIssueSyncGrant`, `agentweaver_listRemoteMcpConnections`
+- **Casting:** `agentweaver_createProjectCastingProposal`, `agentweaver_createScenarioProjectCastingProposal`, `agentweaver_createManualProjectCastingProposal`, `agentweaver_listProjectCastingProposals`, `agentweaver_getProjectCastingProposal`, `agentweaver_updateProjectCastingProposal`, `agentweaver_confirmProjectCastingProposal`, `agentweaver_rejectProjectCastingProposal`, `agentweaver_exportProjectCasting`, `agentweaver_importProjectCasting`, `agentweaver_listProjectCastingTemplates`, `agentweaver_listProjectCastingRoles`
+- **Project backlog:** `agentweaver_readProjectBacklog`, `agentweaver_captureBacklogTask`, `agentweaver_editBacklogTaskContent`
+- **Skills and marketplace:** `agentweaver_listMarketplaceDefinitions`, `agentweaver_listMarketplaceSources`, `agentweaver_createMarketplaceSource`, `agentweaver_updateMarketplaceSource`, `agentweaver_removeMarketplaceSource`, `agentweaver_browseMarketplaceSource`, `agentweaver_previewMarketplaceSkill`, `agentweaver_importMarketplaceSkill`, `agentweaver_previewSkillContent`, `agentweaver_packageSkillContent`, `agentweaver_importProjectSkill`, `agentweaver_updateProjectSkillAssignment`, `agentweaver_listProjectSkillInventory`, `agentweaver_revokeProjectSkillRevision`
+- **Coordination:** `agentweaver_acceptRunRoot`, `agentweaver_createProjectRun`, `agentweaver_startProjectRun`, `agentweaver_cancelProjectRun`, `agentweaver_listProjectRuns`, `agentweaver_listProjectIssues`, `agentweaver_listProjectPullRequests`, `agentweaver_readProjectMetrics`, `agentweaver_listChiefOfStaffConversations`, `agentweaver_bindChiefOfStaffConversation`, `agentweaver_getChiefOfStaffConversation`, `agentweaver_listChiefOfStaffPriorities`, `agentweaver_createChiefOfStaffPriority`, `agentweaver_reorderChiefOfStaffPriorities`, `agentweaver_getChiefOfStaffPriority`, `agentweaver_updateChiefOfStaffPriority`, `agentweaver_addChiefOfStaffPriorityLink`, `agentweaver_removeChiefOfStaffPriorityLink`, `agentweaver_proposeOutcome`, `agentweaver_readRunStatus`, `agentweaver_recoverRun`, `agentweaver_proposeOutcomeSpec`, `agentweaver_selectWorkflow`, `agentweaver_proposeWorkPlan`, `agentweaver_reviseWorkPlan`, `agentweaver_requestAssembly`, `agentweaver_readDecisions`, `agentweaver_readSessionTree`, `agentweaver_readSessionStatus`, `agentweaver_readRuntimeObservationV1`, `agentweaver_reportTurnFailure`, `agentweaver_answerGate`, `agentweaver_askQuestion`, `agentweaver_askOutcomeQuestion`, `agentweaver_requestApproval`, `agentweaver_acknowledgeGate`, `agentweaver_registerChild`, `agentweaver_spawnSession`, `agentweaver_forkSession`, `agentweaver_detachSession`, `agentweaver_archiveChild`, `agentweaver_subscribeToIdle`, `agentweaver_steerSession`, `agentweaver_approveGate`, `agentweaver_rejectGate`, `agentweaver_sendMessage`, `agentweaver_advanceTurnBoundary`, `agentweaver_completeTurn`, `agentweaver_readNotifications`, `agentweaver_acknowledgeNotification`, `agentweaver_acknowledgeMessage`, `agentweaver_readPolicyEvaluation`, `agentweaver_validatePolicyEvaluationAdmission`
+- **Source Control:** `agentweaver_pinSourceControlRepository`, `agentweaver_createSourceControlIssue`, `agentweaver_createSourceControlPullRequest`, `agentweaver_readSourceControlReviews`, `agentweaver_prepareSourceControlWorkspace`, `agentweaver_readSourceControlWorkspaceDiff`, `agentweaver_prepareSourceControlMergeIntent`, `agentweaver_readSourceControlMergeIntent`, `agentweaver_executeSourceControlMergeIntent`, `agentweaver_captureSourceControlWorkspaceOutput`, `agentweaver_listSourceControlOutputCaptures`, `agentweaver_readSourceControlOutputCapture`, `agentweaver_readSourceControlOutputCaptureDiff`, `agentweaver_readSourceControlOutputCaptureFile`
 - **Knowledge:** `agentweaver_createKnowledgeRecord`, `agentweaver_searchKnowledge`, `agentweaver_readKnowledgeRecord`, `agentweaver_updateKnowledgeRecord`, `agentweaver_restoreKnowledgeRecord`, `agentweaver_approveKnowledgeDecision`, `agentweaver_exportKnowledgeRecords`, `agentweaver_importKnowledgeRecords`, `agentweaver_readKnowledgeRevisions`, `agentweaver_promoteKnowledgeProposal`, `agentweaver_rejectKnowledgeProposal`, `agentweaver_compileKnowledgeContext`
-- **Events and usage:** `agentweaver_replayRunEvents`, `agentweaver_readRunUsage`
+- **Events and usage:** `agentweaver_replayRunEvents`, `agentweaver_readSessionTurnContent`, `agentweaver_readRunUsage`, `agentweaver_readProjectUsage`
 
 <!-- END GENERATED:tool-map -->
 

@@ -102,6 +102,12 @@ There is no separate Chief of Staff notification store or bell. See
 | `getPlatformComponents` | Read active platform components and their readiness. |
 | `acceptRunSelection` | Accept an immutable run selection. |
 | `getRunSelection` | Read the accepted selection. |
+| `readIssueSync` | Read periodic issue sync status. |
+| `configureIssueSync` | Enable, disable, and bound periodic issue sync. |
+| `createIssueSyncGrant` | Create project issue-sync authority. |
+| `readIssueSyncGrant` | Validate current issue-sync authority. |
+| `revokeIssueSyncGrant` | Revoke project issue-sync authority. |
+| `listRemoteMcpConnections` | List Remote MCP connections with configuration checksums. |
 
 ### Casting
 
@@ -122,6 +128,14 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `importProjectCasting` | Stage a digest-checked transfer; request body limit 1 MiB. |
 | `listProjectCastingTemplates` | Read built-in templates. |
 | `listProjectCastingRoles` | Read built-in roles. |
+
+### Project backlog
+
+| Operation ID | Purpose |
+| --- | --- |
+| `readProjectBacklog` | Read project backlog tasks and dependencies. |
+| `captureBacklogTask` | Capture project backlog work. |
+| `editBacklogTaskContent` | Replace backlog task content and lifecycle. |
 
 ### Skills and marketplace
 
@@ -147,6 +161,9 @@ Revision checks stay inside `body`; no idempotency header is required.
 | Operation ID | Purpose |
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
+| `createProjectRun` | Create an interactive run. |
+| `startProjectRun` | Deliver the first run message. |
+| `cancelProjectRun` | Cancel a run. |
 | `listProjectRuns` | List accepted project runs, newest first. |
 | `listProjectIssues` | List synced repository issues stored in the project backlog. |
 | `listProjectPullRequests` | List pull requests that project runs recorded after migration 032 was applied. |
@@ -280,7 +297,7 @@ Local error codes include `unknown_tool`, `invalid_arguments`,
   `/api/v1/`.
 - `streamRunEvents` is excluded because it is SSE. Use finite replay tools.
 - Browser connection lifecycle routes and callbacks are outside the catalog.
-- Native-only backlog, runtime, Environment, and private material routes
+- Native-only run backlog, runtime, Environment, and private material routes
   are not tools.
 - Catalog downloads are limited to 2 MiB; owner responses are limited to 8 MiB.
   Gateway request deadlines are ten seconds.
