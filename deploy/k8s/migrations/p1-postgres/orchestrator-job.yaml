@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: orchestrator-migration
+  namespace: agentweaver
+  labels:
+    agentweaver.io/service: p1-postgres-migration
+    agentweaver.io/migration: orchestrator
+spec:
+  activeDeadlineSeconds: 900
+  backoffLimit: 0
+  completions: 1
+  parallelism: 1
+  # Backstop only. db-maintenance deletes its Job as soon as it has read the logs.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        agentweaver.io/workload: p1-postgres-migration
+        agentweaver.io/migration: orchestrator
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: p1-postgres-migration
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migration
+          # db-maintenance replaces this with the published image digest.
+          image: registry.invalid/agentweaver-orchestrator@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          command:
+            - dotnet
+            - Agentweaver.Orchestrator.dll
+            - --migrate
+          # The migration role owns the schema. With RuntimeRole and PlanSha256 set, the service
+          # applies only the reviewed plan grants and prints a verified marker with its ledger.
+          env:
+            - name: ConnectionStrings__OrchestratorMigration
+              value: "Host=CHANGEME-POSTGRES-HOST;Database=agentweaver;Username=agentweaver-id-p1-postgres-migration;Port=5432"
+            - name: Orchestrator__Migration__WorkloadIdentity__TenantId
+              value: "72f988bf-86f1-41af-91ab-2d7cd011db47"
+            - name: Orchestrator__Migration__WorkloadIdentity__ClientId
+              value: "00000000-0000-0000-0000-000000000000"
+            - name: Orchestrator__Migration__WorkloadIdentity__TokenFilePath
+              value: "/var/run/secrets/azure/tokens/azure-identity-token"
+            - name: Orchestrator__Migration__RuntimeRole
+              value: "agentweaver-id-orchestrator"
+            - name: Orchestrator__Migration__PlanSha256
+              value: "899871e2030bf1b887a337868561ee3754b723e57169565b0981930ddd979fd1"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

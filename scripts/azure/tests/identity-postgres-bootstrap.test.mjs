@@ -549,3 +549,65 @@ test('port-forward binds only the local loopback interface and exact PostgreSQL 
   await process.stop();
   assert.equal(child.exitCode, 0);
 });
+
+/** The ownership handover runs on the same owned tunnel after a read-only Identity check. */
+test('P1 ownership handover verifies Identity read-only, runs on the tunnel, and records the readback', async () => {
+  const fakes = dependencies();
+  const handoverPrincipal = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const base = fakes.deps.execDotnet;
+  let handoverCall;
+  const execDotnet = (args, settings) => {
+    if (!args.some(arg => String(arg).endsWith('p1-postgres-ownership-handover.cs'))) return base(args, settings);
+    assert.equal(fakes.portForwardStopped, false);
+    handoverCall = { args, settings };
+    return ok('P1_POSTGRES_OWNERSHIP_HANDOVER_VERIFIED role=agentweaver-id-p1-postgres-migration schemas=orchestrator,events_sessions changed=3\n');
+  };
+  const receipt = await bootstrapIdentityPostgres({
+    ...options, verifyOnly: true, p1OwnershipHandover: { migrationPrincipalObjectId: handoverPrincipal },
+  }, { ...fakes.deps, execDotnet });
+  assert.ok(fakes.dotnetInvocations[0].args.includes('--verify-identity-postgres-bootstrap'));
+  assert.deepEqual(handoverCall.args.slice(-2), ['--', '--execute']);
+  assert.equal(handoverCall.settings.env.P1Handover__MigrationRole, 'agentweaver-id-p1-postgres-migration');
+  assert.equal(handoverCall.settings.env.P1Handover__MigrationPrincipalObjectId, handoverPrincipal);
+  assert.equal(handoverCall.settings.env.P1Handover__LocalPort, '15432');
+  assert.match(receipt.p1OwnershipHandover.readback, /changed=3$/);
+  assert.equal(receipt.cleanup.podRemoved, true);
+  assert.deepEqual(fakes.resources, new Map());
+});
+
+test('P1 ownership handover fails closed without its marker and still removes the relay', async () => {
+  const fakes = dependencies();
+  const base = fakes.deps.execDotnet;
+  const execDotnet = (args, settings) => args.some(arg => String(arg).endsWith('p1-postgres-ownership-handover.cs'))
+    ? { status: 1, stdout: '', stderr: 'permission denied to grant role' } : base(args, settings);
+  await assert.rejects(bootstrapIdentityPostgres({
+    ...options, verifyOnly: true,
+    p1OwnershipHandover: { migrationPrincipalObjectId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+  }, { ...fakes.deps, execDotnet }), /P1 ownership handover failed: permission denied/);
+  assert.deepEqual(fakes.resources, new Map());
+  assert.equal(fakes.portForwardStopped, true);
+});
+
+test('P1 ownership handover rejects a write bootstrap, a combined initializer, or a reused principal', async () => {
+  const handover = { migrationPrincipalObjectId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' };
+  for (const invalid of [
+    { p1OwnershipHandover: handover },
+    { verifyOnly: true, p1OwnershipHandover: { migrationPrincipalObjectId: options.migrationPrincipalObjectId } },
+    { verifyOnly: true, p1OwnershipHandover: { migrationPrincipalObjectId: 'not-a-guid' } },
+    { verifyOnly: true, p1OwnershipHandover: handover, p1Initializer: { mode: 'inspect' } },
+  ]) {
+    const fakes = dependencies();
+    await assert.rejects(bootstrapIdentityPostgres({ ...options, ...invalid }, fakes.deps),
+      /P1 ownership handover requires Identity verification only/);
+    assert.equal(fakes.calls.length, 0);
+  }
+});
+
+test('P1 ownership handover program is transactional, idempotent, and reads back before commit', () => {
+  const source = readFileSync('scripts/azure/lib/p1-postgres-ownership-handover.cs', 'utf8');
+  assert.match(source, /ExpectedRole = "agentweaver-id-p1-postgres-migration"/);
+  assert.match(source, /pgaadauth_create_principal_with_oid\(@role, @principal, 'service', false, false\)/);
+  assert.match(source, /BeginTransactionAsync[\s\S]*GRANT \{quotedRole\} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE[\s\S]*REVOKE SET OPTION FOR \{quotedRole\} FROM CURRENT_USER[\s\S]*CommitAsync/);
+  assert.match(source, /never creates or initializes them/);
+  assert.doesNotMatch(source, /\b(DROP|TRUNCATE|DELETE FROM)\b/);
+});
