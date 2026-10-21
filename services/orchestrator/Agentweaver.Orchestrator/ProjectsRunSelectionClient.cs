@@ -24,6 +24,36 @@ internal sealed class ProjectsRunSelectionClient(
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
     };
 
+    /// <summary>Reads fresh caller authority for cross-run attention without requiring a run binding.</summary>
+    internal async Task<ProjectsAuthorizationContext> ReadNotificationAuthorityAsync(
+        HttpContext context, CancellationToken cancellationToken)
+    {
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        var scopes = context.User.FindAll("scope").Concat(context.User.FindAll("scp"))
+            .SelectMany(claim => claim.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var projects = context.User.FindAll("project_id").Take(2).ToArray();
+        var runs = context.User.FindAll("run_id").Take(2).ToArray();
+        if (!scopes.Contains("api.read", StringComparer.Ordinal) ||
+            !HasAudience(context.User, options.Audience) ||
+            !HasAudience(context.User, options.ProjectsAudience) ||
+            projects.Length > 1 || runs.Length > 1 || (runs.Length == 1 && projects.Length == 0))
+            throw new CoordinationException("caller_binding_mismatch", StatusCodes.Status403Forbidden);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        var authority = await ReadAuthorizationAsync(
+            RequireOwnerUri(options.ProjectsOwnerBaseAddress), CoordinationIdentity.RequireBearer(context),
+            tenant, cancellationToken).ConfigureAwait(false);
+        if (authority.ContractVersion != 1 || authority.Issuer != options.Issuer ||
+            authority.ActorId != caller.Subject || string.IsNullOrWhiteSpace(authority.TenantId) ||
+            (tenant is not null && tenant != authority.TenantId) || authority.MembershipRevision < 1 ||
+            authority.BoundProjectId != (projects.Length == 1 ? projects[0].Value : null) ||
+            authority.BoundRunId != (runs.Length == 1 ? runs[0].Value : null) ||
+            authority.EffectiveAuthority.IsDefault ||
+            authority.EffectiveAuthority.Any(item => item is null || item.Permissions.IsDefault ||
+                item.Permissions.Any(permission => permission is null)))
+            throw new CoordinationException("projects_authorization_contract_invalid", StatusCodes.Status502BadGateway);
+        return authority;
+    }
+
     /// <summary>
     /// Reads the run selection after requiring the caller's project-level accept-selection permission.
     /// </summary>

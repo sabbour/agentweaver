@@ -41,5 +41,6 @@
     <EmbeddedResource Include="Migrations\019_session_suspend_resume.sql" />
     <EmbeddedResource Include="Migrations\020_maf_buildtest_workspace_seed.sql" />
     <EmbeddedResource Include="Migrations\021_row_lock_record_updates.sql" />
+    <EmbeddedResource Include="Migrations\025_user_notification_dismissals.sql" />
   </ItemGroup>
 </Project>

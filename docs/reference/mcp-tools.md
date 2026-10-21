@@ -62,9 +62,20 @@ the configured Gateway.
 
 ## Tool index
 
-Every name below has the `agentweaver_` prefix. For example, the first entry is
+Every name below has the `agentweaver_` prefix. For example, `listProjects` is
 `agentweaver_listProjects`. These are the operation IDs in the checked-in
 `GatewayRouteCatalog`.
+
+### Caller attention
+
+| Operation ID | Purpose |
+| --- | --- |
+| `listUserNotifications` | Read pending attention across authorized projects and runs; supports cursor, page size, project filter and dismissed-item inclusion. |
+| `dismissUserNotification` | Dismiss a notification for the caller without resolving its gate. |
+
+These operations come from the same Gateway catalog as the existing tools.
+There is no separate Chief of Staff notification store or bell. See
+[Notifications](../guide/notifications.md).
 
 ### Projects and configuration
 

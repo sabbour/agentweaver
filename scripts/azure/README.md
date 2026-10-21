@@ -146,7 +146,11 @@ exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
 The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan retains 95 tables and eight exact row-lock columns.
+The plan lists 96 tables and eight exact row-lock columns. Orchestrator migration
+025 adds the empty `user_notification_dismissals` table. Its runtime role needs
+only `SELECT,INSERT` on that table. The migration does not alter existing tables.
+This source change also changes the plan hash. Applying the migration or grants,
+or running initialization with the new hash, requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved

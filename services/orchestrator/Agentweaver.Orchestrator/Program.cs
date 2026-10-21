@@ -104,6 +104,9 @@ builder.Services.AddSingleton(services => new CoordinatorDecisionOwnerStore(
 builder.Services.AddSingleton(services => new BacklogOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema));
+builder.Services.AddSingleton(services => new UserNotificationStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
 builder.Services.AddSingleton(services => new SourceControlOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
@@ -252,6 +255,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
 });
 app.MapCoordinationEndpoints();
 app.MapBacklogEndpoints();
+app.MapUserNotificationEndpoints();
 app.MapSuspendResumeEndpoints();
 app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)

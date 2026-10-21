@@ -299,6 +299,21 @@ See [Projects & Config](../architecture/projects-config.md) and
 
 ## Orchestrator
 
+### Caller notifications
+
+Native owner prefix: `/api/notifications`. Gateway prefix:
+`/api/v1/notifications`. These routes use current Projects read authority,
+not a required run binding. See [Notifications](../guide/notifications.md).
+
+| Method | Suffix | Purpose | Gateway |
+| --- | --- | --- | --- |
+| GET | `?cursor=&pageSize=&projectId=&includeDismissed=` | Read newest-first pending gates, a total count and an opaque cursor. | Yes |
+| POST | `/{notificationId}/dismiss` | Dismiss for the caller without resolving the gate. Bodyless and idempotent. | Yes |
+
+Responses are `no-store`. A token binding narrows the result. The default
+excludes caller dismissals; shared Flow reads use `includeDismissed=true`.
+Unknown or repeated query parameters return `400 query_invalid`.
+
 Source: `services/orchestrator/Agentweaver.Orchestrator/`.
 
 ### Coordination
