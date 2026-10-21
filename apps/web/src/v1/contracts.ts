@@ -170,6 +170,24 @@ export interface ModelSelectionSettings {
   reference: string;
   credentialReference?: { id: string; version: string } | null;
   connectionId?: string;
+  /** Where the model runs: the hosted Copilot service, or the project's own key (`byok`). */
+  sourceMode?: 'hostedCopilot' | 'byok' | null;
+  /** How much reasoning the model should do. Null or missing uses the model default. */
+  reasoningEffort?: ReasoningEffort | null;
+}
+
+/** Reasoning levels accepted by the Projects configuration validator. */
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+/** Task categories serialized by the owner with stable camel-case names. */
+export type ModelTaskKind = 'planning' | 'review' | 'design' | 'security'
+  | 'creativeWriting' | 'complex' | 'codeWriting' | 'straightforward';
+
+/** A project task override inherits any omitted model or reasoning value. */
+export interface ModelTaskOverride {
+  taskKind: ModelTaskKind;
+  /** Values for this task kind. A missing or null field uses the project default. */
+  selection: { reference?: string | null; reasoningEffort?: ReasoningEffort | null };
 }
 
 /** Owner scope of a user-managed Copilot connection. */
@@ -283,6 +301,81 @@ export interface RemoteMcpOAuthConsentRequest {
   expectedCredentialRevision: number;
   expectedConfigurationRevision: number;
   expectedConfigurationSha256: string;
+}
+
+/** One project Remote MCP connection as listed by the Gateway directory route. */
+export interface RemoteMcpConnectionDirectoryEntry {
+  connectionId: string;
+  displayName: string;
+  endpointUri: string;
+  resourceUri: string | null;
+  authenticationMode: 'none' | 'delegatedOAuth';
+  transportProfile: 'streamableHttp20250618';
+  state: 'draft' | 'enabled' | 'disabled' | 'removed';
+  rowRevision: number;
+  configurationRevision: number;
+  configurationSha256: string;
+  identityBound: boolean;
+  registryServerName: string | null;
+  registryExactVersion: string | null;
+  discoveryRevision: number | null;
+  catalogSha256: string | null;
+  toolCount: number;
+}
+
+/** One page of project Remote MCP connections. */
+export interface RemoteMcpConnectionDirectoryPage {
+  connections: RemoteMcpConnectionDirectoryEntry[];
+  nextConnectionId: string | null;
+}
+
+const sha256Pattern = /^[0-9a-f]{64}$/;
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === 'string';
+}
+
+/** Validates one directory entry, including revisions and configuration checksums. */
+export function isRemoteMcpConnectionDirectoryEntry(
+  value: unknown,
+): value is RemoteMcpConnectionDirectoryEntry {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  // Connection IDs are GUIDs. Revisions start at 1, checksums are lowercase SHA-256 hex, and the
+  // catalog fields are null until discovery has pinned a catalog.
+  return typeof entry.connectionId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry.connectionId) &&
+    isNonEmptyString(entry.displayName) &&
+    isNonEmptyString(entry.endpointUri) &&
+    isNullableString(entry.resourceUri) &&
+    ['none', 'delegatedOAuth'].includes(String(entry.authenticationMode)) &&
+    entry.transportProfile === 'streamableHttp20250618' &&
+    ['draft', 'enabled', 'disabled', 'removed'].includes(String(entry.state)) &&
+    Number.isSafeInteger(entry.rowRevision) && (entry.rowRevision as number) > 0 &&
+    Number.isSafeInteger(entry.configurationRevision) &&
+    (entry.configurationRevision as number) > 0 &&
+    typeof entry.configurationSha256 === 'string' &&
+    sha256Pattern.test(entry.configurationSha256) &&
+    typeof entry.identityBound === 'boolean' &&
+    isNullableString(entry.registryServerName) &&
+    isNullableString(entry.registryExactVersion) &&
+    (entry.discoveryRevision === null ||
+      (Number.isSafeInteger(entry.discoveryRevision) && (entry.discoveryRevision as number) > 0)) &&
+    (entry.catalogSha256 === null ||
+      (typeof entry.catalogSha256 === 'string' && sha256Pattern.test(entry.catalogSha256))) &&
+    Number.isSafeInteger(entry.toolCount) && (entry.toolCount as number) >= 0;
+}
+
+/** Validates a directory page and every entry in it. */
+export function isRemoteMcpConnectionDirectoryPage(
+  value: unknown,
+): value is RemoteMcpConnectionDirectoryPage {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const page = value as Record<string, unknown>;
+  // Reject the whole page if any entry is malformed. A null cursor means this is the last page.
+  return Array.isArray(page.connections) &&
+    page.connections.every(isRemoteMcpConnectionDirectoryEntry) &&
+    isNullableString(page.nextConnectionId);
 }
 
 /** Validates exact fields, identifiers, revisions, and states in the owner response. */
@@ -402,6 +495,8 @@ export function isCopilotConnectionBegin(value: unknown): value is CopilotConnec
 /** Mutable owner configuration, including model, skills, source control, and run limits. */
 export interface ProjectConfiguration {
   modelSelection?: ModelSelectionSettings | null;
+  /** Per-task model choices that replace parts of `modelSelection` for that kind of task. */
+  modelTaskOverrides?: ModelTaskOverride[];
   providerOverrides: Array<{ seam: string; providerId: string }>;
   orderedProviderOverrides: Array<{ seam: string; providerIds: string[] }>;
   agentCharters: Array<{ agentId: string; name: string; role: string; charter: string }>;
@@ -525,6 +620,20 @@ export interface MarketplaceSource {
   state: 'active' | 'removed';
 }
 
+/**
+ * One suggested marketplace from `GET /projects/{projectId}/skill-marketplaces/definitions`.
+ * `sourceId` is set when the project already has an active source at the same
+ * repository, ref, and subpath. It is null when the suggestion is not added yet.
+ */
+export interface SkillMarketplaceDefinition {
+  name: string;
+  repository: string;
+  requestedRef: string;
+  subpath: string | null;
+  layoutNote: string | null;
+  sourceId: string | null;
+}
+
 /** Fields used to add a Git-backed skill marketplace source. */
 export interface MarketplaceSourceInput {
   name?: string;
@@ -600,6 +709,46 @@ export interface SkillContentPreview {
   contentDigest: string;
   resourceCount: number;
   totalBytes: number;
+}
+
+/** One uploaded file for `POST /skills/package`. `content` is base64 of the raw bytes. */
+export interface SkillPackageFileRequest {
+  relativePath: string;
+  content: string;
+}
+
+/** Form fields for a new skill written in the client. The service writes SKILL.md from them. */
+export interface SkillPackageDraftRequest {
+  name: string;
+  description?: string;
+  instructions: string;
+}
+
+/**
+ * Body of `POST /skills/package`. Send exactly one of `files`, `archive`
+ * (base64 of one ZIP file), or `draft`. The service rejects unknown fields.
+ */
+export type SkillPackageRequest =
+  | { files: SkillPackageFileRequest[] }
+  | { archive: string }
+  | { draft: SkillPackageDraftRequest };
+
+/**
+ * One skill found in an upload. A valid package has `candidate` and `preview`;
+ * pass the candidate unchanged to preview and import. An invalid package has
+ * `error` and no candidate. `skippedPaths` lists files the service left out.
+ */
+export interface SkillContentPackage {
+  location: string;
+  candidate: SkillContentCandidateRequest | null;
+  preview: SkillContentPreview | null;
+  error: string | null;
+  skippedPaths: string[];
+}
+
+/** Response of `POST /skills/package`, ordered by location. Nothing is saved. */
+export interface SkillContentPackageResult {
+  skills: SkillContentPackage[];
 }
 
 /** Project import request pinned to a content digest and optional source revision. */
@@ -711,6 +860,172 @@ export interface ProjectRunSummary {
 export interface ProjectRunPage {
   projectId: string;
   items: ProjectRunSummary[];
+  nextCursor: string | null;
+}
+
+/** Repository owner and name as Agentweaver stored them. */
+export interface ProjectSourceControlRepository {
+  owner: string;
+  name: string;
+}
+
+/** Stored issue state filter for `listProjectIssues`. The default is `open`. */
+export type ProjectIssueStateFilter = 'open' | 'closed' | 'all';
+
+/**
+ * One synced issue from the project backlog. The read makes no provider call,
+ * and the stored issue has no URL or author.
+ */
+export interface ProjectIssueSummary {
+  taskId: string;
+  taskState: 'backlog' | 'ready' | 'claimed';
+  providerId: string;
+  repository: ProjectSourceControlRepository;
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One page of synced issues, highest number first. Pass `nextCursor` back with the same filter and page size. */
+export interface ProjectIssuePage {
+  projectId: string;
+  items: ProjectIssueSummary[];
+  nextCursor: string | null;
+}
+
+/** Queue state of one backlog task. `claimed` means a run has taken the task. */
+export type BacklogTaskState = 'backlog' | 'ready' | 'claimed';
+
+/** Whether the task's work is still open. Issue sync closes a task when its issue closes. */
+export type BacklogTaskLifecycle = 'open' | 'closed';
+
+/** Identifies one task inside one project's backlog. */
+export interface BacklogTaskReference {
+  projectId: string;
+  taskId: string;
+}
+
+/** The repository issue that a backlog task tracks. One issue links to at most one task per project. */
+export interface BacklogRepositoryIssueLink {
+  providerId: string;
+  repository: ProjectSourceControlRepository;
+  issueNumber: number;
+}
+
+/**
+ * Editable task content. The title is 1 to 512 characters without control
+ * characters, and the description is at most 65536 characters.
+ */
+export interface BacklogTaskContent {
+  title: string;
+  description?: string | null;
+  lifecycle?: BacklogTaskLifecycle;
+  repositoryIssue?: BacklogRepositoryIssueLink | null;
+}
+
+/** One task in the backlog graph. `revision` changes on every write to the task. */
+export interface BacklogTaskSnapshot {
+  reference: BacklogTaskReference;
+  revision: number;
+  state: BacklogTaskState;
+  isArchived: boolean;
+  /** True while an automation invocation for the task is pending. The task can't be edited then. */
+  isAutomationInvocationPending: boolean;
+  title: string;
+  description?: string | null;
+  lifecycle: BacklogTaskLifecycle;
+  repositoryIssue?: BacklogRepositoryIssueLink | null;
+}
+
+/** `task` can start only after `prerequisite` is done. */
+export interface BacklogDependencyEdge {
+  task: BacklogTaskReference;
+  prerequisite: BacklogTaskReference;
+}
+
+/** A project's backlog tasks and their dependencies. `revision` changes on every write to the graph. */
+export interface BacklogGraph {
+  projectId: string;
+  revision: number;
+  tasks: BacklogTaskSnapshot[];
+  dependencies: BacklogDependencyEdge[];
+}
+
+/**
+ * Adds one task to the project backlog. The caller picks `taskId` and keeps it
+ * for retries, so a repeated request can't add the task twice.
+ */
+export interface CaptureBacklogTaskRequest {
+  taskId: string;
+  content: BacklogTaskContent;
+  expectedGraphRevision: number;
+}
+
+/** Replaces one task's content when both revisions still match. */
+export interface EditBacklogTaskContentRequest {
+  content: BacklogTaskContent;
+  expectedGraphRevision: number;
+  expectedTaskRevision: number;
+}
+
+/** One reason a backlog write was rejected. `code` is a camelCase issue name such as `staleGraphRevision`. */
+export interface BacklogIssue {
+  code: string;
+  path: string;
+  message: string;
+}
+
+/** Error body of a rejected backlog write (400, 404, or 409). */
+export interface BacklogIssues {
+  issues: BacklogIssue[];
+}
+
+/** Recorded pull request state filter for `listProjectPullRequests`. The default is `open`. */
+export type ProjectPullRequestStateFilter = 'open' | 'closed' | 'merged' | 'all';
+
+/**
+ * One pull request that a project run created or reused, as the run recorded it.
+ * The read makes no provider call, so `state` and `title` can be out of date.
+ */
+export interface ProjectPullRequestSummary {
+  providerId: string;
+  repository: ProjectSourceControlRepository;
+  number: number;
+  title: string | null;
+  htmlUrl: string;
+  state: 'open' | 'closed' | 'merged';
+  headBranch: string;
+  headSha: string;
+  baseBranch: string;
+  baseSha: string;
+  /** The run that created or reused the pull request. */
+  runId: string;
+  disposition: 'created' | 'reused';
+  /** When the run first recorded the pull request. */
+  recordedAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Which pull requests the record can contain. Recording starts when Orchestrator migration 032
+ * is applied; earlier pull requests aren't recorded, so the list isn't a complete history.
+ */
+export interface ProjectPullRequestCoverage {
+  recordedSince: string;
+  includesEarlierPullRequests: false;
+}
+
+/**
+ * One page of recorded pull requests, most recently recorded first. Pass `nextCursor` back with the
+ * same filter and page size. Before migration 032 is applied, the route returns 503
+ * `pull_request_records_unavailable` instead of a page.
+ */
+export interface ProjectPullRequestPage {
+  projectId: string;
+  coverage: ProjectPullRequestCoverage;
+  items: ProjectPullRequestSummary[];
   nextCursor: string | null;
 }
 
@@ -961,6 +1276,61 @@ export interface SourceControlRepositoryPinView {
   pinnedAt: string;
 }
 
+/**
+ * One admitted capture of the files a run session produced. Digests and byte
+ * lengths describe the stored manifest, patch, and package.
+ */
+export interface SourceControlOutputCaptureSummary {
+  captureId: string;
+  eventId: string;
+  eventPosition: number;
+  capturedAt: string;
+  workspaceId: string;
+  branchName: string;
+  baseSha: string;
+  outputTreeSha: string;
+  manifestSha256: string;
+  manifestByteLength: number;
+  patchSha256: string;
+  patchByteLength: number;
+  packageByteLength: number;
+}
+
+/** Newest-first page of admitted captures. Both cursor fields are null on the last page. */
+export interface SourceControlOutputCapturePage {
+  captures: SourceControlOutputCaptureSummary[];
+  nextBeforeCapturedAt: string | null;
+  nextBeforeCaptureId: string | null;
+}
+
+/** One admitted capture with its text patch against the base commit. */
+export interface SourceControlOutputCaptureDiff {
+  capture: SourceControlOutputCaptureSummary;
+  patch: string;
+}
+
+/** A capture and its immutable file manifest. */
+export interface SourceControlOutputCaptureDetail {
+  capture: SourceControlOutputCaptureSummary;
+  manifest: {
+    contractVersion: number;
+    workspaceId: string;
+    runId: string;
+    repositoryId: string;
+    resourceGeneration: number;
+    workspaceIncarnationId: string;
+    branchName: string;
+    baseSha: string;
+    outputTreeSha: string;
+    files: { path: string; mode: string; sha256: string; byteLength: number }[];
+  };
+}
+
+/** Captured bytes and the digest returned by the owner. */
+export interface SourceControlOutputFileContent {
+  bytes: Uint8Array;
+  sha256: string | null;
+}
 /** Project configuration paired with the owner revision used for compare-and-swap updates. */
 export interface VersionedProjectConfiguration {
   projectId: string;
@@ -1068,8 +1438,9 @@ export type CoordinationBlockerKind =
 export type UserNotificationSource = 'pendingGate' | 'backlogPromoted';
 
 /**
- * One notification for the existing bell, attention list, and shared Flow view.
- * Gate fields are set only for `pendingGate`; `promotionId` and `taskCount` only for `backlogPromoted`.
+ * One caller notification for the bell and attention list. Gate fields are null
+ * on `backlogPromoted` items; `promotionId` and `taskCount` are null on
+ * `pendingGate` items.
  */
 export interface UserNotification {
   notificationId: string;
@@ -1402,6 +1773,48 @@ export interface BrokerTokenResponse {
   expires_in: number;
   refresh_token?: string;
   scope?: string;
+  /** OpenID Connect ID token, returned when the `openid` scope was granted. */
+  id_token?: string;
+}
+
+/** Project role a tenant administrator can assign. */
+export type ProjectRole = 'owner' | 'contributor' | 'viewer' | 'orchestrator';
+
+/** One active project role assignment (`listProjectRoleAssignments`). */
+export interface ProjectRoleAssignment {
+  assignmentId: string;
+  /** Member subject under the caller's issuer. */
+  principalId: string;
+  role: ProjectRole;
+  /** Increases on every change. Revoke sends it as `expectedRevision` so a stale revoke fails. */
+  revision: number;
+  /** Subject of the member who made the assignment. */
+  createdBy: string;
+  /** ISO 8601 time the assignment was made. */
+  createdAt: string;
+}
+
+/**
+ * One assignment as returned by assign (`201`) and revoke (`200`). Revoke
+ * returns `state: 'revoked'` with the revision increased by one.
+ */
+export interface ProjectRoleAssignmentView {
+  assignmentId: string;
+  projectId: string;
+  principalId: string;
+  role: ProjectRole;
+  state: 'active' | 'revoked';
+  revision: number;
+  grantedBy: string;
+  grantedAt: string;
+  revokedBy: string | null;
+  revokedAt: string | null;
+}
+
+/** Response of `GET /projects/{projectId}/role-assignments`. */
+export interface ProjectRoleAssignmentList {
+  projectId: string;
+  assignments: ProjectRoleAssignment[];
 }
 
 /** Stable platform component area identifiers. */

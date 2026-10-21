@@ -39,13 +39,20 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(24)]
     [InlineData(25)]
     [InlineData(26)]
+    [InlineData(27)]
+    [InlineData(28)]
+    // Version 29 adds the spend budget reservation and accounting cursor tables.
+    [InlineData(29)]
+    // Version 30 adds the plan promotion and task origin tables.
     [InlineData(30)]
+    // Version 31 adds the caller dismissal table for promotion notices.
     [InlineData(31)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
         await ApplyMigrationsThroughAsync(version);
         var historyBefore = await ReadMigrationHistoryAsync(version);
+        // Any schema older than the newest migration, 31, fails verification until it is migrated.
         if (version < 31)
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
@@ -146,6 +153,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData("backlog_dependencies")]
     [InlineData("reviewed_remote_tool_snapshots")]
     [InlineData("user_notification_dismissals")]
+    [InlineData("guardrails_evaluations")]
     [InlineData("backlog_plan_promotions")]
     [InlineData("backlog_task_origins")]
     [InlineData("user_notification_promotion_dismissals")]
@@ -221,6 +229,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (24, "024_chief_of_staff.sql"),
             (25, "025_user_notification_dismissals.sql"),
             (26, "026_backlog_task_content.sql"),
+            (27, "027_periodic_issue_sync.sql"),
+            (28, "028_guardrails_evaluations.sql"),
+            // The spend budget migration follows 028.
+            (29, "029_spend_budget_exposure.sql"),
             (30, "030_backlog_task_origin.sql"),
             (31, "031_user_notification_promotion_dismissals.sql")
         ];
@@ -304,7 +316,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                  WHERE conrelid = to_regclass(@runs) AND conname = 'accepted_runs_execution_state_check'),
                 to_regclass(@cosConversations) IS NOT NULL,
                 to_regclass(@cosPriorities) IS NOT NULL,
-                to_regclass(@cosLinks) IS NOT NULL
+                to_regclass(@cosLinks) IS NOT NULL,
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid IN (to_regclass(@reservations), to_regclass(@cursors))
+                   AND tgname IN ('spend_budget_reservations_guard', 'spend_budget_reservations_no_truncate',
+                       'spend_budget_accounting_cursors_guard', 'spend_budget_accounting_cursors_no_truncate')
+                   AND tgenabled = 'O' AND NOT tgisinternal)
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
         command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
@@ -322,6 +339,9 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         command.Parameters.AddWithValue("backlogTasks", $"{_schema}.backlog_tasks");
         command.Parameters.AddWithValue("backlogDependencies", $"{_schema}.backlog_dependencies");
         command.Parameters.AddWithValue("snapshots", $"{_schema}.reviewed_remote_tool_snapshots");
+        // The two spend budget tables whose guard triggers the last column counts.
+        command.Parameters.AddWithValue("reservations", $"{_schema}.spend_budget_reservations");
+        command.Parameters.AddWithValue("cursors", $"{_schema}.spend_budget_accounting_cursors");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -343,8 +363,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        // Assert the exact history so a silently omitted migration cannot pass catalog checks.
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 30, 31]), reader.GetFieldValue<int[]>(9));
+        // The migration history ends with 31 after the upgrade, so no catalog version was skipped.
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));
@@ -360,6 +380,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(reader.GetBoolean(22));
         Assert.True(reader.GetBoolean(23));
         Assert.True(reader.GetBoolean(24));
+        // Both spend budget tables have an enabled guard trigger and no-truncate trigger: 2 tables x 2 = 4.
+        Assert.Equal(4L, reader.GetInt64(25));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

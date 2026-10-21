@@ -1,6 +1,7 @@
 namespace Agentweaver.Gateway;
 
 /// <summary>Contains the fixed HTTPS owner addresses, token validation identity, and proxy timeout.</summary>
+/// <remarks>The Environment owner is optional. Environment routes return 503 <c>owner_not_configured</c> when it is absent.</remarks>
 public sealed record GatewayOptions(
     Uri IdentityIssuer,
     string IdentityAudience,
@@ -10,7 +11,8 @@ public sealed record GatewayOptions(
     Uri EventsOwnerBaseAddress,
     Uri IdentityBrokerAddress,
     Uri WebOrigin,
-    TimeSpan OwnerRequestTimeout)
+    TimeSpan OwnerRequestTimeout,
+    Uri? EnvironmentOwnerBaseAddress = null)
 {
     public const int EventPollIntervalMilliseconds = 1000;
 
@@ -22,6 +24,8 @@ public sealed record GatewayOptions(
         GatewayOwner.Knowledge => KnowledgeOwnerBaseAddress,
         GatewayOwner.Events => EventsOwnerBaseAddress,
         GatewayOwner.IdentityBroker => IdentityBrokerAddress,
+        GatewayOwner.Environment => EnvironmentOwnerBaseAddress
+            ?? throw new InvalidOperationException("Gateway:Owners:Environment is not configured."),
         _ => throw new ArgumentOutOfRangeException(nameof(owner)),
     };
 
@@ -45,7 +49,12 @@ public sealed record GatewayOptions(
             RequiredHttpsRoot(owners["Events"], "Gateway:Owners:Events"),
             RequiredHttpsRoot(owners["IdentityBrokerAddress"], "Gateway:Owners:IdentityBrokerAddress"),
             RequiredHttpsRoot(configuration["Gateway:WebOrigin"], "Gateway:WebOrigin"),
-            TimeSpan.FromSeconds(timeoutSeconds));
+            TimeSpan.FromSeconds(timeoutSeconds),
+            // Environment is optional so existing deployments start without it. When it is set, it gets
+            // the same HTTPS root validation as the required owners.
+            owners["Environment"] is null
+                ? null
+                : RequiredHttpsRoot(owners["Environment"], "Gateway:Owners:Environment"));
     }
 
     /// <summary>Requires an HTTPS audience without credentials, query, or fragment.</summary>

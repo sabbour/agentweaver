@@ -107,6 +107,7 @@ builder.Services.AddScoped<MarketplaceSourceStore>();
 builder.Services.AddScoped<IProjectMarketplaceSourceStore>(
     provider => provider.GetRequiredService<MarketplaceSourceStore>());
 builder.Services.AddScoped<ProjectMarketplaceSourceService>();
+builder.Services.AddSingleton(SkillMarketplaceCatalog.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectMarketplaceSkillContentService>();
 builder.Services.AddHttpClient<SkillMarketplaceBrowseService>();
 var skillContentContainer = builder.Configuration["ProjectsConfig:SkillContent:ContainerUri"];
@@ -173,6 +174,8 @@ if (brokerRunBindingAudience is not null)
     brokerRunBindingAudienceUri = parsedBrokerAudience;
 }
 BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is not null);
+var issueSyncIdentity = Agentweaver.Identity.IssueSyncServiceTransport.AddChannel(builder,
+    IssueSyncAuthorityEndpoints.Channel, "ProjectsConfig:IssueSync:IdentityTls", "Projects", "IdentityBroker", true);
 
 builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(authorityUri.AbsoluteUri));
 builder.Services.AddScoped<ProjectAuthorizationOwner>();
@@ -241,6 +244,7 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapProjectConfigEndpoints(enableBrokerRunBinding: brokerRunBindingAudienceUri is not null);
+app.MapIssueSyncAuthority(issueSyncIdentity);
 app.MapSkillMarketplaceEndpoints();
 app.MapSkillContentEndpoints();
 app.Run();

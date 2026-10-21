@@ -48,7 +48,9 @@ work that still needs input. Both views use the same source.
 
 All responses use `Cache-Control: no-store`. Polling is supported. Clients
 should keep one poller for the existing bell and attention list rather than
-create another notification surface.
+create another notification surface. The v1 web client polls every 30 seconds
+while the browser tab is visible, reads up to 50 items, and shows `count` on
+the bell badge. Each item has **Dismiss**.
 
 ## Dismiss a notification
 
@@ -77,7 +79,7 @@ Items sort newest first. Dismissals are stored per user, not globally.
 The only delivery channels are the in-app bell, toast and optional sound;
 there is no email, Teams, operating-system push or webhook delivery.
 
-The browser implementation polls every 20 seconds. The first successful read sets
+The 0.x browser implementation polls every 20 seconds. The first successful read sets
 the badge without showing a toast for every existing item. Newly observed IDs
 produce a toast and optional sound. Opening the bell marks items seen in
 browser memory. The sound preference uses browser storage, not server
@@ -93,6 +95,10 @@ When a run promotes its confirmed work plan into backlog tasks, the feed shows o
 `backlogPromoted` item for that promotion. `taskCount` is the number of promoted
 tasks that are not archived. Show it as "1 subtask created" or "{n} subtasks
 created", and link to the project board. `sessionId` is the run's root session.
+
+The v1 web client shows these items in the notification bell and **Needs
+attention** with that text and a link to the project Board. It skips an item
+that has no `promotionId` or a `taskCount` below 1.
 
 The item disappears when:
 

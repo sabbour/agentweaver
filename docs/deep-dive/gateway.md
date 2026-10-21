@@ -37,6 +37,14 @@ instead of an arbitrary proxy.
 it to build its tool catalog. Health and OpenAPI discovery are anonymous;
 product operations require authentication.
 
+`GET /agents/agentweaver.agent.md` is also anonymous. It returns the operator
+agent definition that is embedded in the Gateway assembly, so it needs no owner
+call. The route is excluded from the OpenAPI document; otherwise the MCP service
+would turn a file download into a tool. A test compares the embedded copy with
+`.github/agents/agentweaver.agent.md` and compares the definition's tool map
+with the MCP-admissible OpenAPI operations, so both copies must change together
+when tools are added or removed.
+
 OpenIddict validates the configured Identity Broker issuer and audience. Before
 forwarding, the proxy requires one current validated bearer and forwards it
 unchanged. `X-Agentweaver-Tenant` selects a tenant for owner validation; it is

@@ -200,8 +200,8 @@ function errorCode(value: unknown): string | undefined {
 function errorMessage(value: unknown, status: number): string {
   const code = errorCode(value);
   return code
-    ? `Identity Broker Repo App request failed with HTTP ${status} (${code}).`
-    : `Identity Broker Repo App request failed with HTTP ${status}.`;
+    ? `The GitHub app request failed with HTTP ${status} (${code}).`
+    : `The GitHub app request failed with HTTP ${status}.`;
 }
 
 /** Narrows a message to the exact Repo App callback notification shape. */
@@ -281,7 +281,7 @@ export class IdentityBrokerRepoAppClient {
     } catch (reason) {
       throw reason instanceof Error
         ? reason
-        : new Error('Identity Broker Repo App request failed before receiving a response.');
+        : new Error('The GitHub app request failed before receiving a response.');
     }
 
     if (!response.ok) {
@@ -297,14 +297,14 @@ export class IdentityBrokerRepoAppClient {
       throw new RepoAppBrokerError(
         502,
         'broker_contract_invalid',
-        'Identity Broker returned an invalid Repo App JSON response.',
+        'The server returned an invalid GitHub app JSON response.',
       );
     }
     if (!isResponse(payload)) {
       throw new RepoAppBrokerError(
         502,
         'broker_contract_invalid',
-        'Identity Broker returned an invalid Repo App contract.',
+        'The server returned an invalid GitHub app contract.',
       );
     }
     return payload;
