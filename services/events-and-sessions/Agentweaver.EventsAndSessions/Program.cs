@@ -104,8 +104,11 @@ builder.Services.AddSingleton(new ProjectsAuthorizationContextOptions(
     projectsAuthorization["OwnerBaseAddress"],
     projectsAuthorization["Audience"],
     issuerUri.AbsoluteUri));
+// Preserve the established named transport for both exact-run and project-read clients.
 builder.Services.AddHttpClient<IProjectsAuthorizationContextClient, ProjectsAuthorizationContextClient>()
-    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler)
+    .AddTypedClient<ProjectsAuthorizationContextClient>();
+builder.Services.AddSingleton<ProjectUsageReadStore>();
 var coordinationOwner = builder.Configuration.GetSection("EventsAndSessions:OrchestratorOwner");
 builder.Services.AddSingleton(new CoordinationOwnerClientOptions(
     coordinationOwner["OwnerBaseAddress"],
@@ -122,6 +125,9 @@ builder.Services.AddOpenIddict().AddValidation(validation =>
     validation.UseAspNetCore();
 });
 builder.Services.AddAuthorization();
+var platformComponentAuthentication =
+    PlatformComponentServiceAuthenticationOptions.ReadOptional(builder.Configuration, audience);
+builder.Services.AddPlatformComponentServiceAuthentication(platformComponentAuthentication);
 
 var projectOverrides = builder.Configuration.GetSection("EventsAndSessions:ProjectOverrides")
     .GetChildren()
@@ -250,7 +256,37 @@ app.MapGet("/health/ready", async (CancellationToken ct) =>
         return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
     }
 });
+// Reports Sessions, Cost, and Messaging from the frozen catalog. Telemetry and Object Store are
+// built in, so their descriptors come from the in-process implementations.
+var telemetryDescriptor = PlatformComponentCatalogReporter.BuiltInDescriptor(
+    ProviderSeam.Telemetry, "opentelemetry", typeof(TelemetryServiceCollectionExtensions));
+var objectStoreDescriptor = materialContainer is null
+    ? null
+    : PlatformComponentCatalogReporter.BuiltInDescriptor(
+        ProviderSeam.ObjectStore, "azure-blob", typeof(AzureBlobObjectStore));
+app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
+    PlatformComponentCatalogReporter.CreateOwnerReportAsync(
+        PlatformComponentOwners.EventsAndSessions,
+        async token =>
+        {
+            await EventsAndSessionsMigrator.VerifyAsync(dataSource, options.Schema, token);
+            return true;
+        },
+        (readiness, observedAt) =>
+        [
+            PlatformComponentCatalogReporter.DescribeArea(catalogResult.Value!, ProviderSeam.Sessions, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(catalogResult.Value!, ProviderSeam.Cost, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(catalogResult.Value!, ProviderSeam.Messaging, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeSelected(
+                PlatformComponentAreaIds.Telemetry, telemetryDescriptor, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeSelected(
+                PlatformComponentAreaIds.ObjectStore, objectStoreDescriptor, readiness, observedAt),
+        ],
+        services.GetRequiredService<TimeProvider>(),
+        ct));
 app.MapEventsAndSessionsEndpoints();
+// Project usage reads are available even when native usage ingestion is disabled.
+app.MapProjectUsageEndpoints();
 app.MapAcceptedEffectEndpoints();
 app.MapAddressedMessageEndpoints();
 if (nativeUsageEnabled)

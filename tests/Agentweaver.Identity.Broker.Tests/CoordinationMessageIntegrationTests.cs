@@ -1170,6 +1170,65 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "X-Source-Control-Output-Sha256")));
         }
 
+        using (var gatewayCapturePage = await SendAsync(
+                   gateway.Client,
+                   HttpMethod.Get,
+                   sourceControlGatewayBasePath + "/output-captures?limit=20",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, gatewayCapturePage.StatusCode);
+            using var page = JsonDocument.Parse(await gatewayCapturePage.Content.ReadAsStringAsync());
+            Assert.Contains(
+                page.RootElement.GetProperty("captures").EnumerateArray(),
+                capture => capture.GetProperty("captureId").GetString() == originalCapture.CaptureId);
+        }
+        using (var gatewayCaptureDetail = await SendAsync(
+                   gateway.Client,
+                   HttpMethod.Get,
+                   sourceControlGatewayBasePath + "/output-captures/" + originalCapture.CaptureId,
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, gatewayCaptureDetail.StatusCode);
+            using var detail = JsonDocument.Parse(await gatewayCaptureDetail.Content.ReadAsStringAsync());
+            Assert.Contains(
+                detail.RootElement.GetProperty("manifest").GetProperty("files").EnumerateArray(),
+                file => file.GetProperty("path").GetString() == "README.md");
+        }
+        using (var gatewayCaptureDiff = await SendAsync(
+                   gateway.Client,
+                   HttpMethod.Get,
+                   sourceControlGatewayBasePath + "/output-captures/" + originalCapture.CaptureId + "/diff",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, gatewayCaptureDiff.StatusCode);
+            using var diff = JsonDocument.Parse(await gatewayCaptureDiff.Content.ReadAsStringAsync());
+            Assert.Contains(
+                "updated through the authorized owner route",
+                diff.RootElement.GetProperty("patch").GetString(),
+                StringComparison.Ordinal);
+        }
+        using (var gatewayCapturedFile = await SendAsync(
+                   gateway.Client,
+                   HttpMethod.Get,
+                   sourceControlGatewayBasePath + "/output-captures/" + originalCapture.CaptureId +
+                       "/files?path=README.md",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, gatewayCapturedFile.StatusCode);
+            Assert.Equal(
+                "application/octet-stream",
+                gatewayCapturedFile.Content.Headers.ContentType?.MediaType);
+            var fileBytes = await gatewayCapturedFile.Content.ReadAsByteArrayAsync();
+            Assert.Equal("updated through the authorized owner route\n", Encoding.UTF8.GetString(fileBytes));
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(fileBytes)).ToLowerInvariant(),
+                Assert.Single(gatewayCapturedFile.Headers.GetValues("X-Source-Control-Output-Sha256")));
+        }
+
         await File.WriteAllTextAsync(
             Path.Combine(sourceControlWorkspacePath, "README.md"),
             "changed during membership race\n");

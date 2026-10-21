@@ -56,7 +56,7 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 25 or 26 or 27 or 32)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 32)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -77,12 +77,14 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(20) && !applied.Contains(19)) ||
             (applied.Contains(21) && !applied.Contains(20)) ||
             (applied.Contains(22) && !applied.Contains(21)) ||
+            (applied.Contains(23) && !applied.Contains(22)) ||
+            (applied.Contains(24) && !applied.Contains(23)) ||
             (applied.Contains(25) && !applied.Contains(2)) ||
             (applied.Contains(26) && !applied.Contains(21)) ||
             (applied.Contains(27) && !applied.Contains(26)) ||
             (applied.Contains(32) && !applied.Contains(12)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
-        foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 25, 26, 27])
+        foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27])
             .Where(version => !applied.Contains(version)))
         {
             var migrationName = version switch
@@ -108,6 +110,8 @@ public static class CoordinationOwnerMigrator
                 20 => "maf_buildtest_workspace_seed",
                 21 => "row_lock_record_updates",
                 22 => "run_list_completion",
+                23 => "project_run_requests",
+                24 => "chief_of_staff",
                 25 => "user_notification_dismissals",
                 26 => "backlog_task_content",
                 27 => "periodic_issue_sync",
@@ -213,7 +217,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 25, 26, 27, 32)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 32)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -291,6 +295,15 @@ public static class CoordinationOwnerMigrator
                 EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(@runs)
                     AND attname = 'completed_at' AND attnum > 0 AND NOT attisdropped),
                 to_regclass(@runListIndex) IS NOT NULL,
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 23) = 1,
+                to_regclass(@projectRunRequests) IS NOT NULL,
+                to_regclass(@projectRunCancellations) IS NOT NULL,
+                EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(@runs)
+                    AND attname = 'cancelled_at' AND attnum > 0 AND NOT attisdropped),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 24) = 1,
+                to_regclass(@chiefOfStaffConversations) IS NOT NULL,
+                to_regclass(@chiefOfStaffPriorities) IS NOT NULL,
+                to_regclass(@chiefOfStaffPriorityLinks) IS NOT NULL,
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 25) = 1,
                 to_regclass(@userDismissals) IS NOT NULL,
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 26) = 1,
@@ -311,6 +324,15 @@ public static class CoordinationOwnerMigrator
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");
+        command.Parameters.AddWithValue(
+            "chiefOfStaffConversations", NpgsqlDbType.Text, $"{schema}.chief_of_staff_conversations");
+        command.Parameters.AddWithValue(
+            "chiefOfStaffPriorities", NpgsqlDbType.Text, $"{schema}.chief_of_staff_priorities");
+        command.Parameters.AddWithValue(
+            "chiefOfStaffPriorityLinks", NpgsqlDbType.Text, $"{schema}.chief_of_staff_priority_links");
+        command.Parameters.AddWithValue("projectRunRequests", NpgsqlDbType.Text, $"{schema}.project_run_requests");
+        command.Parameters.AddWithValue(
+            "projectRunCancellations", NpgsqlDbType.Text, $"{schema}.project_run_cancellations");
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("userDismissals", NpgsqlDbType.Text, $"{schema}.user_notification_dismissals");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
@@ -392,7 +414,7 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
-            Enumerable.Range(57, 22).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(57, 30).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

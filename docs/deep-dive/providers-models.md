@@ -121,5 +121,6 @@ pin in place. A backend failure does not authorize fallback.
 - [Provider and model contracts](../architecture/providers-models.md)
 - [Provider seam design](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/provider-seams.md)
 - [Contracts and configuration](../reference/contracts.md)
+- [Platform components](../guide/platform-components.md)
 - [Projects and configuration](./projects-config.md)
 - [Agent runtime](./agent-runtime.md)

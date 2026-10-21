@@ -113,6 +113,9 @@ builder.Services.AddSingleton(services => new CoordinatorDecisionOwnerStore(
     options.Schema,
     services.GetRequiredService<CoordinatorRunSelectionContextStore>(),
     services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(services => new ChiefOfStaffStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
 builder.Services.AddSingleton(services => new ProjectRunReadStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema));
@@ -245,6 +248,9 @@ builder.Services.AddOpenIddict().AddValidation(validation =>
     validation.UseAspNetCore();
 });
 builder.Services.AddAuthorization();
+var platformComponentAuthentication =
+    PlatformComponentServiceAuthenticationOptions.ReadOptional(builder.Configuration, audience);
+builder.Services.AddPlatformComponentServiceAuthentication(platformComponentAuthentication);
 builder.Services.ConfigureHttpJsonOptions(json =>
 {
     json.SerializerOptions.UnmappedMemberHandling =
@@ -279,6 +285,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
 app.MapCoordinationEndpoints();
 app.MapProjectRunEndpoints();
 app.MapProjectSourceControlEndpoints();
+app.MapChiefOfStaffEndpoints();
 app.MapBacklogEndpoints();
 app.MapIssueSync();
 app.MapUserNotificationEndpoints();
@@ -293,6 +300,23 @@ if (runtimeRegistrationEnabled)
 }
 if (runtimeUsageEnabled)
     app.MapRuntimeUsageSourceEndpoints();
+// Reports Policy, Guardrails, and Source Control from the frozen provider catalog.
+app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
+    PlatformComponentCatalogReporter.CreateOwnerReportAsync(
+        PlatformComponentOwners.Orchestrator,
+        async token =>
+        {
+            await CoordinationOwnerMigrator.VerifyAsync(dataSource, schema, token);
+            return true;
+        },
+        (readiness, observedAt) =>
+        [
+            PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.Policy, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.Guardrails, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(providerCatalog, ProviderSeam.SourceControl, readiness, observedAt),
+        ],
+        services.GetRequiredService<TimeProvider>(),
+        ct));
 app.Run();
 
 // Reads a required non-blank configuration value or fails application startup.

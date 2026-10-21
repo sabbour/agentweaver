@@ -60,6 +60,7 @@ const projectReferences = new Map([
   ]],
   ['Agentweaver.Projects.Config', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    // Private platform component collection uses Identity's trusted owner transport.
     '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
     '..\\..\\..\\packages\\Agentweaver.ObjectStore.AzureBlob\\Agentweaver.ObjectStore.AzureBlob.csproj',
@@ -126,6 +127,20 @@ const nextPatchVersion = (version) => {
 
 test('the checked-in draft composition has a valid shape and references', () => {
   assert.equal(check(fixture).stage, 'draft');
+});
+
+/** Verifies that the fixture preserves the private owner transport dependency and its release pin. */
+test('Projects platform component collection requires the Identity project reference', () => {
+  const owner = fixture.components.find(component => component.id === 'Agentweaver.Projects.Config');
+  const project = projects.get(owner.project);
+  const withoutIdentity = project.replace(
+    /<ProjectReference Include="[^"]*Agentweaver\.Identity\.csproj" \/>/, '');
+  assert.notEqual(withoutIdentity, project);
+  assert.equal(check(fixture).stage, 'draft');
+  assert.throws(() => check(fixture, {
+    readProject: file => path.relative(root, file).replaceAll('\\', '/') === owner.project
+      ? withoutIdentity : readProject(file),
+  }), /Agentweaver\.Projects\.Config.*Agentweaver\.Identity.*has no ProjectReference/);
 });
 
 test('a library component may be checked in under services', () => {

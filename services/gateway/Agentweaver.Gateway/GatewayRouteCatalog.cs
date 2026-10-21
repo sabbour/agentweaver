@@ -29,12 +29,23 @@ public sealed record GatewayRoute(
     bool ForwardSetCookie = false,
     bool JsonBodyRequired = true,
     long? MaximumRequestBodyBytes = null,
-    bool ForwardTenantSelector = false);
+    bool ForwardTenantSelector = false,
+    ImmutableArray<string> ExposedResponseHeaders = default,
+    long? MaximumResponseBytes = null);
 
 /// <summary>Defines the public v1 API surface and its owner paths, request bounds, and forwarding flags.</summary>
 public static class GatewayRouteCatalog
 {
     public const string VersionPrefix = "/api/v1";
+
+    /// <summary>Response header that carries the SHA-256 digest of a captured output file.</summary>
+    public const string SourceControlOutputSha256Header = "X-Source-Control-Output-Sha256";
+
+    /// <summary>
+    /// Response limit for produced-output reads. A capture holds up to a 32 MiB manifest,
+    /// an 8 MiB diff, and 16 MiB files, so these reads exceed the default proxy limit.
+    /// </summary>
+    public const long SourceControlOutputMaximumResponseBytes = 64L * 1024 * 1024;
 
     public static ImmutableArray<GatewayRoute> Routes { get; } = BuildRoutes();
 
@@ -57,7 +68,9 @@ public static class GatewayRouteCatalog
             bool requiresTenantSelector = false,
             bool jsonBodyRequired = true,
             long? maximumRequestBodyBytes = null,
-            bool forwardTenantSelector = false) =>
+            bool forwardTenantSelector = false,
+            string[]? exposedResponseHeaders = null,
+            long? maximumResponseBytes = null) =>
             routes.Add(new GatewayRoute(
                 method,
                 VersionPrefix + publicSuffix,
@@ -72,7 +85,9 @@ public static class GatewayRouteCatalog
                 requiresTenantSelector,
                 JsonBodyRequired: jsonBodyRequired,
                 MaximumRequestBodyBytes: maximumRequestBodyBytes,
-                ForwardTenantSelector: forwardTenantSelector || requiresTenantSelector));
+                ForwardTenantSelector: forwardTenantSelector || requiresTenantSelector,
+                ExposedResponseHeaders: (exposedResponseHeaders ?? []).ToImmutableArray(),
+                MaximumResponseBytes: maximumResponseBytes));
 
         Add("GET", GatewayOwner.Projects, "/projects", "/api/projects/",
             "listProjects", "List projects", forwardTenantSelector: true);
@@ -185,6 +200,14 @@ public static class GatewayRouteCatalog
             "previewSkillContent", "Validate skill content without importing it",
             body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
             forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, "/skills/package", "/api/skills/package",
+            "packageSkillContent", "Turn uploaded files, a ZIP archive, or draft fields into skill candidates",
+            body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, "/projects/{projectId}/skills/{skillId}/revisions/{revision}/revoke",
+            "/api/projects/{projectId}/skills/{skillId}/revisions/{revision}/revoke",
+            "revokeProjectSkillRevision", "Revoke one project skill revision",
+            body: true, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, "/projects/{projectId}/skills/import",
             "/api/projects/{projectId}/skills/import",
             "importProjectSkill", "Import validated skill content to a project",
@@ -212,6 +235,46 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/source-control/pull-requests", "listProjectPullRequests",
             "List pull requests recorded by project runs",
             ["state", "cursor", "pageSize"], forwardTenantSelector: true);
+        // Each reporting owner aggregates only its own data; the Gateway remains a catalog proxy.
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/metrics",
+            "/api/projects/{projectId}/metrics", "readProjectMetrics", "Read project run metrics",
+            ["from", "to", "bucket"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Events, "/projects/{projectId}/usage",
+            "/api/projects/{projectId}/usage", "readProjectUsage", "Read project usage",
+            ["from", "to"], forwardTenantSelector: true);
+        // Chief of Staff routes are caller-private and require an unbound token.
+        var chiefOfStaff = "/chief-of-staff";
+        Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/conversations", "/api" + chiefOfStaff + "/conversations",
+            "listChiefOfStaffConversations", "List my Chief of Staff conversations",
+            ["cursor", "pageSize"], forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, chiefOfStaff + "/conversations", "/api" + chiefOfStaff + "/conversations",
+            "bindChiefOfStaffConversation", "Add a run I started to my Chief of Staff conversations",
+            body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/conversations/{conversationId}",
+            "/api" + chiefOfStaff + "/conversations/{conversationId}",
+            "getChiefOfStaffConversation", "Read one of my Chief of Staff conversations",
+            forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities", "/api" + chiefOfStaff + "/priorities",
+            "listChiefOfStaffPriorities", "List my Priorities", forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities", "/api" + chiefOfStaff + "/priorities",
+            "createChiefOfStaffPriority", "Create a Priority", body: true, forwardTenantSelector: true);
+        Add("PUT", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/order",
+            "/api" + chiefOfStaff + "/priorities/order",
+            "reorderChiefOfStaffPriorities", "Reorder my Priorities", body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/{priorityId}",
+            "/api" + chiefOfStaff + "/priorities/{priorityId}",
+            "getChiefOfStaffPriority", "Read a Priority", forwardTenantSelector: true);
+        Add("PATCH", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/{priorityId}",
+            "/api" + chiefOfStaff + "/priorities/{priorityId}",
+            "updateChiefOfStaffPriority", "Update a Priority", body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/{priorityId}/links",
+            "/api" + chiefOfStaff + "/priorities/{priorityId}/links",
+            "addChiefOfStaffPriorityLink", "Link a Priority to a run, conversation, issue, pull request, or artifact",
+            body: true, forwardTenantSelector: true);
+        Add("DELETE", GatewayOwner.Orchestrator, chiefOfStaff + "/priorities/{priorityId}/links/{linkId}",
+            "/api" + chiefOfStaff + "/priorities/{priorityId}/links/{linkId}",
+            "removeChiefOfStaffPriorityLink", "Remove a Priority link",
+            ["expectedRevision"], forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);
@@ -229,6 +292,9 @@ public static class GatewayRouteCatalog
             "/api/platform/runtime-defaults/",
             "updatePlatformRuntimeDefaults", "Update platform runtime defaults", body: true,
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/platform/components", "/api/platform/components",
+            "getPlatformComponents", "Read active platform components",
+            forwardTenantSelector: true);
 
         var sourceControl = "/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}";
         void SourceControl(
@@ -238,7 +304,10 @@ public static class GatewayRouteCatalog
             string summary,
             bool body = false,
             bool acceptsOnly = false,
-            bool jsonBodyRequired = true) =>
+            bool jsonBodyRequired = true,
+            string[]? query = null,
+            string[]? exposedResponseHeaders = null,
+            long? maximumResponseBytes = null) =>
             Add(
                 method,
                 GatewayOwner.Orchestrator,
@@ -246,10 +315,13 @@ public static class GatewayRouteCatalog
                 "/api" + sourceControl + suffix,
                 operationId,
                 summary,
+                query,
                 body: body,
                 acceptsOnly: acceptsOnly,
                 requiresTenantSelector: true,
-                jsonBodyRequired: jsonBodyRequired);
+                jsonBodyRequired: jsonBodyRequired,
+                exposedResponseHeaders: exposedResponseHeaders,
+                maximumResponseBytes: maximumResponseBytes);
 
         SourceControl("POST", "/pin",
             "pinSourceControlRepository", "Pin the selected repository",
@@ -265,6 +337,24 @@ public static class GatewayRouteCatalog
             "prepareSourceControlWorkspace", "Prepare a repository workspace", body: true);
         SourceControl("POST", "/workspaces/{workspaceId}/diff",
             "readSourceControlWorkspaceDiff", "Read a repository workspace diff", body: true);
+        // Produced-output reads come from the admitted capture, not from the live workspace.
+        SourceControl("POST", "/workspaces/{workspaceId}/output-captures",
+            "captureSourceControlWorkspaceOutput", "Capture produced output from a repository workspace",
+            body: true);
+        SourceControl("GET", "/output-captures",
+            "listSourceControlOutputCaptures", "List captured produced output",
+            query: ["limit", "beforeCapturedAt", "beforeCaptureId"]);
+        SourceControl("GET", "/output-captures/{captureId}",
+            "readSourceControlOutputCapture", "Read a produced-output capture and its file list",
+            maximumResponseBytes: SourceControlOutputMaximumResponseBytes);
+        SourceControl("GET", "/output-captures/{captureId}/diff",
+            "readSourceControlOutputCaptureDiff", "Read the diff of a produced-output capture",
+            maximumResponseBytes: SourceControlOutputMaximumResponseBytes);
+        SourceControl("GET", "/output-captures/{captureId}/files",
+            "readSourceControlOutputCaptureFile", "Read one file from a produced-output capture",
+            query: ["path"],
+            exposedResponseHeaders: [SourceControlOutputSha256Header],
+            maximumResponseBytes: SourceControlOutputMaximumResponseBytes);
         SourceControl("POST", "/merge-intents",
             "prepareSourceControlMergeIntent", "Request approval for a pull request merge",
             body: true,
@@ -273,6 +363,17 @@ public static class GatewayRouteCatalog
             "readSourceControlMergeIntent", "Read a pull request merge intent");
         SourceControl("POST", "/merge-intents/{intentId}/execute",
             "executeSourceControlMergeIntent", "Execute an approved pull request merge");
+
+        // Interactive creation precedes the existing run-bound coordination routes.
+        Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
+            "/api/projects/{projectId}/runs", "createProjectRun", "Create an interactive run",
+            body: true, maximumRequestBodyBytes: 256 * 1024, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs/{runId}/start",
+            "/api/projects/{projectId}/runs/{runId}/start", "startProjectRun", "Deliver the first run message",
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs/{runId}/cancel",
+            "/api/projects/{projectId}/runs/{runId}/cancel", "cancelProjectRun", "Cancel a run",
+            body: true, forwardTenantSelector: true);
 
         var coordination = "/projects/{projectId}/runs/{runId}/coordination";
         void Coordination(
@@ -425,6 +526,9 @@ public static class GatewayRouteCatalog
             "streamRunEvents", "Stream committed run events using SSE", ["cursor"],
             eventStream: true,
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Events, run + "/sessions/{sessionId}/turns/{eventId:guid}",
+            "/internal/sessions/{sessionId}/turns/{eventId:guid}",
+            "readSessionTurnContent", "Read authorized session turn text", forwardTenantSelector: true);
         Add("GET", GatewayOwner.Events, run + "/usage",
             "/internal" + run + "/usage",
             "readRunUsage", "Read run usage totals", forwardTenantSelector: true);

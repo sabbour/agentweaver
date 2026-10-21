@@ -170,6 +170,14 @@ public sealed class ProjectAuthorizationContext
                 !string.Equals(grant.ResourceId, BoundProjectId, StringComparison.Ordinal))
                 continue;
 
+            // Cancellation is project access, not permission to accept an Orchestrator selection.
+            if (BoundRunId is null && orchestratorScope &&
+                (grant.ResourceType == ProjectAuthorityResourceType.Project &&
+                    grant.Role is ProjectAuthorityRole.Owner or ProjectAuthorityRole.Contributor ||
+                 grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                    grant.Role == ProjectAuthorityRole.TenantAdmin))
+                Add(grant, ProjectAuthorizationPermission.CancelRun);
+
             switch (grant.ResourceType, grant.Role)
             {
                 case (ProjectAuthorityResourceType.Platform, ProjectAuthorityRole.PlatformAdmin)
