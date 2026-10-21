@@ -885,6 +885,13 @@ export interface AgentSuiteImport {
   blobs: Array<{ digest: string; mediaType: string; size: number }>;
 }
 
+/** A blueprint skill binding that doesn't take effect in the proposal. */
+export interface BlueprintUnresolvedSkillBinding {
+  role: string;
+  skillId: string;
+  code: 'skill_not_installed' | 'skill_not_pinned' | 'skill_disabled';
+}
+
 /** Import outcome. `proposal` is null when there is nothing to review. */
 export interface AgentSuiteImportResult {
   import: AgentSuiteImport;
@@ -896,6 +903,8 @@ export interface AgentSuiteImportResult {
     state: string | number;
     draft: ProjectConfiguration;
   } | null;
+  /** Blueprint skill bindings that don't take effect; empty when no blueprint was supplied. */
+  unresolvedSkillBindings: BlueprintUnresolvedSkillBinding[];
 }
 
 /** The policy bound to one imported agent, or null when none is bound. */

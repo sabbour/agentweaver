@@ -80,6 +80,39 @@ public sealed partial class ProjectsConfigService
             cancellationToken);
     }
 
+    /// <summary>
+    /// Creates a pending proposal from a built-in or inline blueprint: team, workflows, default workflow, bound skills,
+    /// and sandbox profile. Nothing changes until the proposal is confirmed. The result lists the skill bindings the
+    /// proposal couldn't apply.
+    /// </summary>
+    public async Task<BlueprintCastingProposalResult> CreateBlueprintCastingProposalAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        long expectedConfigurationRevision,
+        string? blueprintId,
+        BlueprintDefinition? blueprint,
+        CancellationToken cancellationToken)
+    {
+        // Fail fast on missing write permission before opening a transaction.
+        RequireCastingWrite(caller, projectId);
+        var unresolved = ImmutableArray<BlueprintUnresolvedSkillBinding>.Empty;
+        // The shared helper locks the project, checks the expected revision, and passes in the current
+        // configuration, so the draft is always built from the revision the caller saw.
+        var proposal = await CreateCastingProposalFromCurrentConfigurationAsync(
+            caller,
+            projectId,
+            expectedConfigurationRevision,
+            current =>
+            {
+                var application = ProjectBlueprintCatalog.CreateDraft(current, blueprintId, blueprint);
+                // Capture the unresolved bindings as a side output; if the transaction retries, the last run wins.
+                unresolved = application.UnresolvedSkillBindings;
+                return application.Draft;
+            },
+            cancellationToken).ConfigureAwait(false);
+        return new(proposal, unresolved);
+    }
+
     private Task<ProjectCastingProposal> CreateCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,

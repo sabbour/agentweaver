@@ -173,6 +173,8 @@ public sealed partial class ProjectsConfigPostgresTests
         var owner = await SeedCallerAsync(
             db, authorityStore, "agentsuite-team-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        // The blueprint below uses the restricted sandbox, which needs platform runtime defaults to exist.
+        await ConfigurePlatformDefaultsAsync(db, authorityStore, service, suffix, tenantId);
         var project = await service.CreateProjectAsync(owner, "Team target", CancellationToken.None);
         var revision = project.ConfigurationRevision;
         const string connectionId = "6f1c2d4e-8a9b-4c3d-9e2f-1a2b3c4d5e6f";
@@ -201,6 +203,14 @@ public sealed partial class ProjectsConfigPostgresTests
             Blueprint = new ProjectAgentSuiteBlueprint { SkillBindings = [new("planner", ["docs"])] },
         });
         Assert.Equal("invalid_agentsuite_blueprint", badBlueprint.Code);
+
+        // Blueprint workflow validation must finish before the archive or proposal is stored.
+        var unavailableWorkflow = await InvalidAsync(AgentSuiteRequest(revision, "team") with
+        {
+            Blueprint = new ProjectAgentSuiteBlueprint { Workflows = ["default", "feature-development"] },
+        });
+        Assert.Equal("invalid_blueprint", unavailableWorkflow.Code);
+        Assert.Contains("Unknown workflow 'feature-development'.", unavailableWorkflow.Message, StringComparison.Ordinal);
 
         // Profile refusals: model secret references, and the upstream "coordinator-workers" suite
         // whose coordinator agent uses a reserved orchestration role.
@@ -266,11 +276,17 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal("writer", Assert.Single(record.Blueprint.SkillBindings).Role);
 
         var proposal = Assert.IsType<ProjectCastingProposal>(imported.Proposal);
-        // One charter per agent, using the agent's display name; no workflows are added.
+        // One charter per agent, using the agent's display name.
         Assert.Equal(3, proposal.Draft.AgentCharters.Length);
         Assert.Equal("Team lead",
             proposal.Draft.AgentCharters.Single(item => item.AgentId == lead.EffectiveAgentId).Name);
-        Assert.Empty(proposal.Draft.BlueprintWorkflowReferences);
+        // The blueprint uses the inline apply path for workflows, sandbox and unresolved skill bindings.
+        Assert.Equal([new BlueprintWorkflowReference("web-team", "default")], proposal.Draft.BlueprintWorkflowReferences.ToArray());
+        Assert.Equal("default", proposal.Draft.DefaultWorkflowId);
+        Assert.True(proposal.Draft.EgressNarrowing is { IsEmpty: true });
+        Assert.Equal(
+            [new BlueprintUnresolvedSkillBinding("writer", "docs", BlueprintUnresolvedSkillBinding.SkillNotInstalled)],
+            imported.UnresolvedSkillBindings.ToArray());
 
         // Policies are read back from the stored blobs by effective agent ID.
         // lead has a v2 policy with an egress allow rule and a required capability.
@@ -301,6 +317,7 @@ public sealed partial class ProjectsConfigPostgresTests
         // Replaying the identical request returns the same proposal.
         var replay = await service.ImportAgentSuiteAsync(owner, project.ProjectId, request, store, CancellationToken.None);
         Assert.Equal(proposal.ProposalId, replay.Proposal?.ProposalId);
+        Assert.Equal(imported.UnresolvedSkillBindings.ToArray(), replay.UnresolvedSkillBindings.ToArray());
         // Importing the same suite without the tool connection and blueprint conflicts with
         // the stored record (409), and the stored record stays unchanged.
         var rebound = await InvalidAsync(AgentSuiteRequest(revision, "team"));
@@ -308,6 +325,81 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(StatusCodes.Status409Conflict, rebound.StatusCode);
         AssertSameAgentSuiteRecord(record, await service.GetAgentSuiteImportAsync(
             owner, project.ProjectId, record.SourceIdentity, store, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Importing a converted built-in archive with its projection gives the same proposal as inline 0.x apply.
+    /// Effective agent IDs are mapped back to native IDs. A repeat import after confirmation changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task AgentSuiteImportOfConvertedBuiltInsMatchesInlineBlueprintApply()
+    {
+        // Arrange: a tenant admin, and platform defaults so built-ins with the restricted sandbox can apply.
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var store = new SkillTestObjectStore();
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "agentsuite-blueprint-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, "agentsuite-blueprint-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        await ConfigurePlatformDefaultsAsync(db, authorityStore, service, suffix, tenantId);
+
+        foreach (var builtIn in ProjectBlueprintCatalog.Blueprints)
+        {
+            // Each built-in gets a fresh project so earlier imports can't affect it.
+            var project = await service.CreateProjectAsync(owner, builtIn.Name, CancellationToken.None);
+            var current = await service.GetProjectConfigurationAsync(owner, project.ProjectId, null, CancellationToken.None);
+            // Only the default workflow is registered today, so both paths use it.
+            var blueprint = builtIn with { Workflows = ["default"] };
+            // Convert the built-in to an archive and send it with its projection, as a client would.
+            var package = AgentSuiteBlueprintConverter.Convert(blueprint, AgentSuiteBlueprintConverterTests.TestOnlyInputs);
+            var request = new ImportProjectAgentSuiteRequest
+            {
+                ExpectedConfigurationRevision = current.Revision,
+                Format = ImportProjectAgentSuiteRequest.ContentTarGzipFormat,
+                Archive = Convert.ToBase64String(package.ContentArchive.AsSpan()),
+                Blueprint = package.Blueprint,
+            };
+
+            // Act: import the archive through the service, and build the inline 0.x draft from the same starting
+            // configuration for comparison.
+            var imported = await service.ImportAgentSuiteAsync(
+                owner, project.ProjectId, request, store, CancellationToken.None);
+            var inline = ProjectBlueprintCatalog.CreateDraft(current.Configuration, null, blueprint);
+
+            // Import creates a proposal. Map its effective agent IDs back to native IDs so the drafts compare directly.
+            var proposal = Assert.IsType<ProjectCastingProposal>(imported.Proposal);
+            var native = imported.Import.Agents.ToDictionary(
+                agent => agent.EffectiveAgentId, agent => agent.NativeId, StringComparer.Ordinal);
+            string Native(string agentId) => native.GetValueOrDefault(agentId, agentId);
+            // Assert: charters, casting, workflows, egress and unresolved bindings match the inline apply.
+            Assert.Equal(
+                inline.Draft.AgentCharters.Select(item => (item.AgentId, item.Name, item.Role, item.Charter)),
+                proposal.Draft.AgentCharters.Select(item => (Native(item.AgentId), item.Name, item.Role, item.Charter)));
+            Assert.Equal(
+                inline.Draft.Casting.Select(item => (item.AgentId, item.Role, item.Order)),
+                proposal.Draft.Casting.Select(item => (Native(item.AgentId), item.Role, item.Order)));
+            Assert.Equal(
+                inline.Draft.BlueprintWorkflowReferences.ToArray(), proposal.Draft.BlueprintWorkflowReferences.ToArray());
+            Assert.Equal(inline.Draft.DefaultWorkflowId, proposal.Draft.DefaultWorkflowId);
+            Assert.Equal(inline.Draft.EgressNarrowing?.ToArray(), proposal.Draft.EgressNarrowing?.ToArray());
+            Assert.Equal(inline.UnresolvedSkillBindings.ToArray(), imported.UnresolvedSkillBindings.ToArray());
+
+            // Confirm the proposal, then import the same archive again at the new revision. Nothing changes, so
+            // no new proposal is created, but the unresolved bindings are still reported.
+            var confirmed = await service.ConfirmCastingProposalAsync(
+                owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+            var repeat = await service.ImportAgentSuiteAsync(
+                owner,
+                project.ProjectId,
+                request with { ExpectedConfigurationRevision = confirmed.ConfirmedConfigurationRevision!.Value },
+                store,
+                CancellationToken.None);
+            Assert.Null(repeat.Proposal);
+            Assert.Equal(inline.UnresolvedSkillBindings.ToArray(), repeat.UnresolvedSkillBindings.ToArray());
+        }
     }
 
     private static void AssertSameAgentSuiteRecord(ProjectAgentSuiteImport expected, ProjectAgentSuiteImport actual) =>
@@ -344,5 +436,21 @@ public sealed partial class ProjectsConfigPostgresTests
             }
         }
         return output.ToArray();
+    }
+
+    /// <summary>Configures platform runtime defaults, which a restricted sandbox's egress narrowing requires.</summary>
+    private static async Task ConfigurePlatformDefaultsAsync(
+        ProjectsConfigDbContext db, ProjectsConfigPrivilegedAuthorityStore authorityStore, ProjectsConfigService service,
+        string suffix, string tenantId)
+    {
+        // Changing platform defaults needs a platform admin, so seed one for this test run.
+        var admin = await SeedCallerAsync(
+            db, authorityStore, "agentsuite-platform-admin-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        // Platform defaults are shared by all tests, so only write them if no test has done so yet (revision 0).
+        var head = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+        if (head.Revision == 0)
+            await service.UpdatePlatformRuntimeDefaultsAsync(admin, head.Revision, PlatformDefaults(), CancellationToken.None);
     }
 }
