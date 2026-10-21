@@ -1,5 +1,6 @@
 ---
 "Agentweaver.Orchestrator": minor
+"Agentweaver.Orchestrator.Core": patch
 "Agentweaver.Gateway": minor
 "Agentweaver.Web": minor
 ---
