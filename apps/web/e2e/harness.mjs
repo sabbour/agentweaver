@@ -115,8 +115,12 @@ export async function openApp({ seed = {}, extra, origin }) {
       const project = gateway.state.projects.find((item) => item.projectId === decodeURIComponent(projectRead[1]));
       return reply(project ? json(200, project) : json(404, { error: 'project_not_found' }));
     }
-    const custom = extra?.(method, path, url, binding, gateway);
-    if (custom) return reply(await custom);
+    const custom = extra?.(method, path, Object.assign(url, { body: request.postData() ?? null }), binding, gateway);
+    if (custom) {
+      const raw = request.postData();
+      gateway.requests.push({ method, url: new URL(request.url()), headers: new Headers(request.headers()), body: raw ? JSON.parse(raw) : undefined });
+      return reply(await custom);
+    }
     const response = await gateway.fetch(url.toString(), {
       method,
       headers: request.headers(),
@@ -133,4 +137,77 @@ export async function openApp({ seed = {}, extra, origin }) {
     unhandled,
     async close() { await browser.close(); },
   };
+}
+
+/**
+ * Fakes the bound run endpoints the run page reads, in the shapes from
+ * `src/v1/contracts.ts`: owner status, a coordinator root with one child work session,
+ * session status with the pending gate as a blocker, decision state, an empty journal,
+ * gate actions, and addressed messages. Every route needs a token bound to this run.
+ * Mutate `room.decisions` to change or replace the gate. Writes land in `room.writes`.
+ */
+export function runRoom({ projectId, runId, gate = null }) {
+  const rootSessionId = `${runId}-root`;
+  const childSessionId = `${runId}-work`;
+  const createdAt = '2026-10-20T12:00:00.000Z';
+  const identity = (sessionId) => ({ projectId, runId, sessionId });
+  const node = (sessionId, kind, parentSessionId) => ({
+    identity: identity(sessionId), parentSessionId, rootSessionId, kind, detached: false,
+    lifecycle: 'active', executionFence: 1, logicalTurnOrdinal: 1, stateVersion: 1, createdAt, archivedAt: null,
+  });
+  const room = {
+    rootSessionId,
+    childSessionId,
+    writes: [],
+    decisions: {
+      stateVersion: gate?.stateVersion ?? 1, executionFence: 1, outcomeConfirmed: true, workflowConfirmed: true,
+      canDecompose: false, canDispatch: false,
+      pendingGate: gate ? {
+        requestId: gate.requestId, kind: 'approval', subjectId: 'deploy', authorizedActorId: 'me', fence: 1,
+        allowedChoices: [], allowsFreeform: false, prompt: gate.prompt,
+      } : null,
+    },
+  };
+  const status = (sessionId, kind, parentSessionId) => {
+    const pending = sessionId === rootSessionId ? room.decisions.pendingGate : null;
+    return {
+      ...node(sessionId, kind, parentSessionId), activity: pending ? 'idle' : 'busy', activityUnavailableCode: null,
+      blockers: pending ? [{ kind: 'awaitingApproval', requestId: pending.requestId, choices: [], allowsFreeform: false, prompt: pending.prompt }] : [],
+      runtimeEffectsState: 'none', runtimeEffectsUnavailableCode: '',
+      interruptionIntent: { state: 'none' },
+      runExecution: { state: pending ? 'blocked' : 'active', stateVersion: room.decisions.stateVersion },
+    };
+  };
+  const json = (code, body) => new Response(JSON.stringify(body), { status: code, headers: { 'content-type': 'application/json' } });
+  const prefix = `/projects/${projectId}/runs/${runId}`;
+  room.handle = (method, path, url, binding) => {
+    if (!path.startsWith(`${prefix}/`)) return undefined;
+    if (binding?.projectId !== projectId || binding?.runId !== runId) return json(403, { error: 'caller_binding_mismatch' });
+    const rest = path.slice(prefix.length);
+    if (method === 'GET' && rest === '/events') return json(200, { events: [], nextCursor: null, hasMore: false });
+    if (method === 'GET' && rest === '/events/live') return new Response('', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    if (method === 'GET' && rest === '/coordination/status') return json(200, {
+      projectId, runId, rootSessionId, executionFence: 1, logicalTurnOrdinal: 1,
+      executionState: room.decisions.pendingGate ? 'blocked' : 'active', stateVersion: room.decisions.stateVersion,
+    });
+    if (method === 'GET' && rest === `/coordination/sessions/${rootSessionId}/tree`) return json(200, {
+      rootSessionId, nodes: [node(rootSessionId, 'coordinator', null), node(childSessionId, 'childWork', rootSessionId)],
+    });
+    if (method === 'GET' && rest === `/coordination/sessions/${rootSessionId}/status`) return json(200, status(rootSessionId, 'coordinator', null));
+    if (method === 'GET' && rest === `/coordination/sessions/${childSessionId}/status`) return json(200, status(childSessionId, 'childWork', rootSessionId));
+    if (method === 'GET' && /^\/coordination\/sessions\/[^/]+\/decisions$/.test(rest)) return json(200, room.decisions);
+    if (method === 'POST') {
+      room.writes.push({ method, path: rest, body: url.body });
+      const gateAction = rest.match(/\/decisions\/gates\/([^/]+)\/(approve|reject|answer)$/);
+      if (gateAction) {
+        room.decisions = { ...room.decisions, stateVersion: room.decisions.stateVersion + 1, pendingGate: null };
+        return json(200, { decisionId: 'decision-1', stateVersion: room.decisions.stateVersion, accepted: true, executionFence: 1, issues: [] });
+      }
+      if (/\/coordination\/sessions\/[^/]+\/messages$/.test(rest)) {
+        return json(200, { ownerMessageId: `message-${room.writes.length}`, recipientSessionId: rootSessionId, status: 'accepted' });
+      }
+    }
+    return undefined;
+  };
+  return room;
 }

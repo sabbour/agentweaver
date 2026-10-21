@@ -4,7 +4,7 @@
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startStaticServer, openApp } from './harness.mjs';
+import { startStaticServer, openApp, runRoom } from './harness.mjs';
 import { notification, priority, project, run } from '../src/v1/__fixtures__/cosGateway.ts';
 
 let server;
@@ -131,10 +131,16 @@ test('flow: groups by state, keeps dismissed gates, hides promotions, and pins t
     for (const label of ['Done', 'Failed', 'Cancelled', 'Outcome unknown']) await done.getByText(label, { exact: true }).first().waitFor();
     assert.ok((await page.getByText('Pull request: Unavailable').count()) > 0);
     assert.equal(await page.getByText(/Merged|Pull request: Open/).count(), 0);
-    for (const request of app.gateway.requests.filter((value) => value.url.pathname === '/api/v1/notifications')) {
-      assert.equal(request.url.searchParams.get('includeDismissed'), 'true');
+    // The bell reads the caller inbox without dismissed items; Flow reads this project with them.
+    await page.getByRole('button', { name: 'Notifications', exact: true }).waitFor();
+    const reads = app.gateway.requests.filter((value) => value.url.pathname === '/api/v1/notifications');
+    for (const request of reads) {
+      const flow = request.url.searchParams.get('projectId') === 'p1';
+      assert.equal(request.url.searchParams.get('includeDismissed'), flow ? 'true' : 'false');
       assert.equal(request.headers.get('authorization'), 'Bearer tok.unbound');
     }
+    assert.ok(reads.some((request) => request.url.searchParams.get('projectId') === 'p1'));
+    assert.ok(reads.some((request) => request.url.searchParams.get('projectId') === null));
 
     // The decision view rereads this pinned version before acting; DecisionView.test.tsx covers the no-POST path.
     await page.getByRole('listitem').filter({ hasText: 'Which branch?' }).first().click();
@@ -170,6 +176,80 @@ test('permission loss: unavailable conversations and links show no project conte
     const row = page.getByRole('listitem', { name: 'Priority 1: Cut latency' });
     await row.getByText('Unavailable').first().waitFor();
     assert.equal(await row.getByText(/p1|Payments/).count(), 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('stale gate: the decision view rereads the gate and sends nothing when its version changed', async () => {
+  const room = runRoom({ projectId: 'p1', runId: 'r-blocked', gate: { requestId: 'req-n1', stateVersion: 4, prompt: 'Deploy to staging?' } });
+  const app = await openApp({
+    origin: server.origin,
+    seed: {
+      runs: { p1: [run('r-blocked', 'blocked', 'Deploy')] },
+      notifications: [notification('n1', {
+        sessionId: room.rootSessionId, kind: 'awaitingApproval', gateKind: 'approval', prompt: 'Deploy to staging?', stateVersion: 4,
+      })],
+    },
+    extra: (method, path, url, binding) => room.handle(method, path, url, binding),
+  });
+  try {
+    const { page } = app;
+    await page.goto(`${server.origin}/projects/p1/flow`);
+    const needsInput = page.getByRole('region', { name: 'Needs input', exact: true });
+    await needsInput.getByText('Deploy to staging?').click();
+    await page.waitForURL(/\/projects\/p1\/runs\/r-blocked\?view=approvals&requestId=req-n1&stateVersion=4$/);
+    const approve = page.getByTestId('approval-gate-approve-btn');
+    await approve.waitFor();
+    await page.getByRole('button', { name: 'Notifications, 1 needs your input' }).waitFor();
+
+    // Another actor changes the gate after the page loaded: same request, newer state version.
+    room.decisions = { ...room.decisions, stateVersion: 6 };
+    const readsBefore = app.gateway.requests.filter((request) => /\/decisions$/.test(request.url.pathname)).length;
+    await approve.click();
+    await page.getByText('This request changed since you opened it. Nothing was sent. Review it and try again.').waitFor();
+    const rereads = app.gateway.requests.filter((request) => /\/decisions$/.test(request.url.pathname)).slice(readsBefore);
+    assert.ok(rereads.length >= 1, 'the decision view reread the gate');
+    for (const request of rereads) assert.equal(request.headers.get('authorization'), 'Bearer tok.p1.r-blocked');
+    assert.deepEqual(room.writes, [], 'no decision was sent');
+    assert.equal(writes(app, 'POST', /\/decisions\/gates\//).length, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test('follow-up: a chat reopens from Sessions and sends one message per draft with the run-bound token', async () => {
+  const room = runRoom({ projectId: 'p2', runId: 'run-1' });
+  const app = await openApp({
+    origin: server.origin,
+    seed: { projects: [project('p1', 'Payments'), project('p2', 'Search')] },
+    extra: (method, path, url, binding) => room.handle(method, path, url, binding),
+  });
+  try {
+    const { page } = app;
+    await page.goto(`${server.origin}/sessions`);
+    await page.getByRole('heading', { name: 'Sessions' }).waitFor();
+    await page.getByLabel('Project', { exact: true }).selectOption('p2');
+    await page.getByLabel('Message', { exact: true }).fill('Fix the flaky search test');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await page.waitForURL(/\/projects\/p2\/runs\/run-1$/);
+
+    await page.goto(`${server.origin}/sessions`);
+    await page.getByRole('button', { name: 'Open Fix the flaky search test' }).click();
+    await page.waitForURL(/\/projects\/p2\/runs\/run-1$/);
+    await page.getByLabel('Message', { exact: true }).fill('Also check the retry budget');
+    await page.getByRole('button', { name: 'Send' }).dblclick();
+    await page.getByText('Message sent. It shows in the activity list when the agent receives it.').waitFor();
+
+    const messages = writes(app, 'POST', /\/projects\/p2\/runs\/run-1\/coordination\/sessions\/[^/]+\/messages$/);
+    assert.equal(messages.length, 1, 'one message for one draft');
+    assert.equal(messages[0].headers.get('authorization'), 'Bearer tok.p2.run-1');
+    const { body } = messages[0];
+    assert.equal(body.recipientSessionId, room.rootSessionId);
+    assert.equal(body.payload.text, 'Also check the retry budget');
+    assert.ok(body.idempotencyKey);
+    assert.equal(writes(app, 'POST', /^\/api\/v1\/projects\/p2\/runs$/).length, 1, 'follow-up creates no new run');
+    assert.equal(app.gateway.state.conversations.length, 1);
   } finally {
     await app.close();
   }
