@@ -284,6 +284,91 @@ internal sealed class RemoteMcpOAuthManagementService(
     }
 
     /// <summary>
+    /// Reports whether the caller's delegated credential is valid now for the expected
+    /// Environment configuration revision and checksum. Project read authority is checked
+    /// before and after the Environment read, and the connection row is read again after
+    /// those waits; any revision or state change returns <c>CredentialChanged</c>. The answer
+    /// never includes token values or secret references, and this read never refreshes or
+    /// recovers a credential.
+    /// </summary>
+    public async Task<RemoteMcpCredentialValidity> EvaluateCredentialValidityAsync(
+        RuntimeActorAuthorization actor,
+        string issuer,
+        string actorId,
+        Guid connectionId,
+        RemoteMcpCredentialValidityRequest input,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        if (connectionId == Guid.Empty || input.ExpectedConfigurationRevision < 1 ||
+            !IsLowerHexHash(input.ExpectedConfigurationSha256))
+            throw new RemoteMcpOAuthManagementException(
+                "remote_mcp_request_invalid", StatusCodes.Status400BadRequest);
+
+        var row = await FindOwnedConnectionAsync(issuer, actorId, connectionId, cancellationToken)
+            .ConfigureAwait(false);
+        await RequireReadProjectsAsync(actor, issuer, actorId, row, cancellationToken).ConfigureAwait(false);
+        var currentConfiguration = await ReadCurrentConfigurationAsync(
+            actor, row, cancellationToken).ConfigureAwait(false);
+        await RequireReadProjectsAsync(actor, issuer, actorId, row, cancellationToken).ConfigureAwait(false);
+        var latest = await FindOwnedConnectionAsync(issuer, actorId, connectionId, cancellationToken)
+            .ConfigureAwait(false);
+        return EvaluateCredentialValidity(row, latest, currentConfiguration, input, time.GetUtcNow());
+    }
+
+    /// <summary>
+    /// Pure credential validity rules. The row read before the owner checks must equal the row
+    /// read after them, the stored binding must match the expected and current configuration,
+    /// and only an authorized credential with an unexpired access token is valid.
+    /// </summary>
+    internal static RemoteMcpCredentialValidity EvaluateCredentialValidity(
+        RemoteMcpOAuthConnectionRecord row,
+        RemoteMcpOAuthConnectionRecord latest,
+        CurrentConfiguration? configuration,
+        RemoteMcpCredentialValidityRequest input,
+        DateTimeOffset now)
+    {
+        RemoteMcpCredentialValidity Result(RemoteMcpCredentialDenial denial) =>
+            new(denial == RemoteMcpCredentialDenial.None, denial,
+                latest.ConnectionRevision, latest.CredentialRevision,
+                latest.ConfigurationRevision, latest.EnvironmentConfigurationHash,
+                denial == RemoteMcpCredentialDenial.None ? latest.AccessTokenExpiresAt : null);
+
+        if (latest.ConnectionRevision != row.ConnectionRevision ||
+            latest.CredentialRevision != row.CredentialRevision ||
+            latest.State != row.State ||
+            latest.ConfigurationRevision != row.ConfigurationRevision ||
+            latest.AccessTokenSecretVersion != row.AccessTokenSecretVersion)
+            return Result(RemoteMcpCredentialDenial.CredentialChanged);
+        if (configuration is null ||
+            configuration.ConnectionState.Equals("removed", StringComparison.Ordinal))
+            return Result(RemoteMcpCredentialDenial.ConnectionRemoved);
+        if (input.ExpectedConfigurationRevision != latest.ConfigurationRevision ||
+            !string.Equals(input.ExpectedConfigurationSha256, latest.EnvironmentConfigurationHash,
+                StringComparison.Ordinal) ||
+            !IsCurrentConfiguration(latest, configuration))
+            return Result(RemoteMcpCredentialDenial.ConfigurationChanged);
+        return latest.State switch
+        {
+            RemoteMcpOAuthConnectionState.NotConnected => Result(RemoteMcpCredentialDenial.NotConnected),
+            RemoteMcpOAuthConnectionState.PendingConsent => Result(RemoteMcpCredentialDenial.ConsentPending),
+            RemoteMcpOAuthConnectionState.RefreshInProgress => Result(RemoteMcpCredentialDenial.RefreshPending),
+            RemoteMcpOAuthConnectionState.RefreshIndeterminate =>
+                Result(RemoteMcpCredentialDenial.RefreshIndeterminate),
+            RemoteMcpOAuthConnectionState.Disconnected => Result(RemoteMcpCredentialDenial.Disconnected),
+            RemoteMcpOAuthConnectionState.Revoked => Result(RemoteMcpCredentialDenial.Revoked),
+            RemoteMcpOAuthConnectionState.Authorized when
+                latest.AccessTokenSecretId is null || latest.AccessTokenSecretVersion is null =>
+                Result(RemoteMcpCredentialDenial.NotConnected),
+            RemoteMcpOAuthConnectionState.Authorized when
+                latest.AccessTokenExpiresAt is not { } expiresAt || expiresAt <= now =>
+                Result(RemoteMcpCredentialDenial.Expired),
+            RemoteMcpOAuthConnectionState.Authorized => Result(RemoteMcpCredentialDenial.None),
+            _ => Result(RemoteMcpCredentialDenial.NotConnected)
+        };
+    }
+
+    /// <summary>
     /// Disconnects only at the expected connection, credential and Environment configuration
     /// revisions. The idempotency key is hashed and paired with a request hash so an exact
     /// replay returns the prior result while a changed request conflicts.

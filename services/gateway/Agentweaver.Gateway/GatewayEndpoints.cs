@@ -220,6 +220,17 @@ public static class GatewayEndpoints
                     cookieErrorCode: "remote_mcp_callback_cookie_invalid",
                     cancellationToken: cancellationToken));
         remoteMcpConnections.MapPost(
+            "/{connectionId:guid}/validity",
+            (Guid connectionId, HttpContext context, GatewayOwnerClient owner,
+                CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", $"/internal/connections/remote-mcp/{connectionId:D}/validity",
+                    hasJsonBody: true,
+                    forwardTenantSelector: true,
+                    forwardCookieName: null,
+                    cookieErrorCode: "remote_mcp_callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        remoteMcpConnections.MapPost(
             "/callback",
             (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
                 owner.ProxyIdentityBrokerApiAsync(

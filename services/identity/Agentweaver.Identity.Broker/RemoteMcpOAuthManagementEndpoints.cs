@@ -31,6 +31,11 @@ public static class RemoteMcpOAuthManagementEndpoints
         routes.MapGet("/{connectionId:guid}", (HttpContext context, Guid connectionId) =>
             ExecuteAsync(context, (service, actor, issuer, actorId) =>
                 service.ReadStatusAsync(actor, issuer, actorId, connectionId, context.RequestAborted)));
+        routes.MapPost("/{connectionId:guid}/validity",
+            (HttpContext context, Guid connectionId, RemoteMcpCredentialValidityRequest input) =>
+                ExecuteAsync(context, (service, actor, issuer, actorId) =>
+                    service.EvaluateCredentialValidityAsync(actor, issuer, actorId, connectionId, input,
+                        context.RequestAborted)));
         routes.MapPost("/{connectionId:guid}/disconnect",
             (HttpContext context, Guid connectionId, RemoteMcpOAuthDisconnectRequest input) =>
                 ExecuteAsync(context, (service, actor, issuer, actorId) =>

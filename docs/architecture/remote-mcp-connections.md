@@ -129,6 +129,19 @@ The AgentSuite import (#2114) stores each binding as `toolConnections[{ toolProv
 
 When reviewed tool snapshots (#1925) are built, the caller derives `RemoteMcpToolProviderRequirement` from the import record and calls `RemoteMcpToolProviderBinding.Evaluate` with the bound connection's current snapshot. Import doesn't reference these types.
 
+## Credential validity
+
+Identity owns delegated OAuth credentials. `POST /internal/connections/remote-mcp/{connectionId}/validity` (Gateway: `POST /api/connections/remote-mcp/v1/{connectionId}/validity`) answers whether the caller's credential is valid now for an expected configuration revision and checksum. It returns `RemoteMcpCredentialValidity`:
+
+- `valid` and a `RemoteMcpCredentialDenial` reason: `NotConnected`, `ConsentPending`, `RefreshPending`, `RefreshIndeterminate`, `Disconnected`, `Revoked`, `Expired`, `ConfigurationChanged`, `ConnectionRemoved`, or `CredentialChanged`.
+- The connection, credential, and configuration revisions, the configuration SHA-256, and the access token expiry for a valid credential.
+
+The response never contains token values, secret identifiers, or secret versions. Identity checks project read authority before and after the Environment read, then reads the connection row again. A refresh, rotation, or disconnect during those waits returns `CredentialChanged`. The route never refreshes or recovers a credential.
+
+`RemoteMcpRemoteUse.Admit` combines Environment invocation validity with Identity credential validity. It allows a call only when Environment allows the reviewed connection and, for delegated OAuth, Identity reports a valid credential at the same configuration revision and checksum. A disconnected or revoked credential blocks use even when the Environment connection stays enabled. Reviewed tool snapshots (#1925) and trusted transport (#1929) call `Admit` immediately before each send.
+
+Disconnect clears Identity's local token references. It does not call a provider revocation endpoint.
+
 The Cilium Environment provider enforces L3/L4 egress only. Remote MCP needs L7 mediation, so this provider does not authorize or execute MCP requests.
 
 Separate optional TLS profiles register Environment's fixed Identity and
