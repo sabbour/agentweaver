@@ -105,6 +105,21 @@ The endpoint and store files are under
 `services/orchestrator/Agentweaver.Orchestrator/`. Domain contracts and
 validation rules are under `services/orchestrator/Agentweaver.Orchestrator.Core/`.
 
+## List stored project issues and pull requests
+
+The Orchestrator serves two project lists from stored data, without a provider
+call. `ProjectIssueReadStore` reads backlog tasks that issue sync linked to a
+repository issue. `ProjectPullRequestReadStore` reads the pull requests that
+the project's runs created or reused. `ProjectSourceControlEndpoints` checks
+Projects read authority before and after each read, so a caller that loses
+permission during the read gets `403` and no items.
+
+Pull request records come from optional, code-only migration 032. Startup and
+the default migrator don't require or apply it. Until a separately approved
+step applies it, the pull request list returns
+`503 pull_request_records_unavailable`. After that, it lists only pull requests
+recorded from that time on. See the [API reference](../reference/api.md#project-issue-and-pull-request-lists).
+
 ## Understand workflows, plans, and gates
 
 A workflow is a versioned catalog of steps. Its step mode defines who creates
