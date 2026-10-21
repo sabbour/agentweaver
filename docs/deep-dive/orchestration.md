@@ -19,6 +19,14 @@ own resource pin, or mark a platform gate complete.
 
 ## Find the implementation
 
+Project backlog records carry task content, an open/closed lifecycle, a typed
+repository issue link, and optimistic task and graph revisions. Content
+writes use the existing Orchestrator backlog project lock and do not require
+or reserve a run. Atomic execution claims continue to use accepted run
+selection and prerequisite evidence. See
+[Project backlog content](../reference/api.md#project-backlog-content) for
+the authorized routes, bounds, and lifecycle rules.
+
 | Source | Responsibility |
 | --- | --- |
 | `CoordinationEndpoints.cs` and `CoordinationOwnerStore.cs` | Session, decision, gate, message, turn, roots, fences, and outbox |

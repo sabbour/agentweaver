@@ -16,6 +16,11 @@ public static partial class CoordinationEndpoints
     /// </summary>
     public static IEndpointRouteBuilder MapBacklogEndpoints(this IEndpointRouteBuilder app)
     {
+        var projectBacklog = app.MapGroup("/api/projects/{projectId}/backlog")
+            .RequireAuthorization();
+        projectBacklog.MapGet("/", ReadProjectBacklogAsync);
+        projectBacklog.MapPost("/tasks", CaptureProjectBacklogTaskAsync);
+        projectBacklog.MapPut("/tasks/{taskId}/content", EditProjectBacklogTaskAsync);
         var backlog = app.MapGroup("/api/projects/{projectId}/runs/{runId}/backlog")
             .RequireAuthorization();
         backlog.MapGet("/", ReadBacklogAsync);
@@ -30,6 +35,72 @@ public static partial class CoordinationEndpoints
             RemoveBacklogDependencyAsync);
         backlog.MapPost("/tasks/{taskId}/claim", ClaimBacklogTaskAsync);
         return app;
+    }
+
+    /// <summary>Reads a project backlog without an accepted run.</summary>
+    private static Task<IResult> ReadProjectBacklogAsync(
+        string projectId, HttpContext context, ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: false,
+            async (_, ct) => BacklogResult(await backlog.ReadGraphAsync(projectId, ct).ConfigureAwait(false)));
+
+    /// <summary>Captures project work using current owner authority and an optimistic graph revision.</summary>
+    private static Task<IResult> CaptureProjectBacklogTaskAsync(
+        string projectId, CaptureBacklogTaskRequest request, HttpContext context,
+        ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
+            async (revalidate, ct) => BacklogResult(await backlog.AddTaskAsync(
+                new BacklogTaskReference(projectId, request.TaskId), request.Content,
+                request.ExpectedGraphRevision, ct, revalidate).ConfigureAwait(false)));
+
+    /// <summary>Replaces task content without creating or changing an execution reservation.</summary>
+    private static Task<IResult> EditProjectBacklogTaskAsync(
+        string projectId, string taskId, EditBacklogTaskContentRequest request, HttpContext context,
+        ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
+            async (revalidate, ct) => BacklogResult(await backlog.SetTaskContentAsync(
+                new BacklogTaskReference(projectId, taskId), request.Content,
+                request.ExpectedGraphRevision, request.ExpectedTaskRevision, ct, revalidate).ConfigureAwait(false)));
+
+    /// <summary>Rechecks actor, membership, bindings and role revisions after waits and before commit.</summary>
+    private static Task<IResult> ExecuteProjectBacklogOperationAsync(
+        string projectId, HttpContext context, ProjectsRunSelectionClient projects, bool write,
+        Func<Func<CancellationToken, Task>, CancellationToken, Task<IResult>> operation) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var authority = await projects.ReadBacklogProjectAuthorityAsync(
+                context, projectId, write, context.RequestAborted).ConfigureAwait(false);
+            async Task Revalidate(CancellationToken ct)
+            {
+                var current = await projects.ReadBacklogProjectAuthorityAsync(context, projectId, write, ct)
+                    .ConfigureAwait(false);
+                if (!BacklogProjectAuthorityIsUnchanged(authority, current, projectId, write))
+                    throw new CoordinationException("backlog_project_authority_changed", StatusCodes.Status409Conflict);
+            }
+            var result = await operation(Revalidate, context.RequestAborted).ConfigureAwait(false);
+            if (!write)
+                await Revalidate(context.RequestAborted).ConfigureAwait(false);
+            return result;
+        }, context.RequestAborted);
+
+    /// <summary>Compares only authority that governs this operation, independent of unrelated grant order.</summary>
+    internal static bool BacklogProjectAuthorityIsUnchanged(
+        ProjectsAuthorizationContext before, ProjectsAuthorizationContext after, string projectId, bool write)
+    {
+        static IEnumerable<(string, string, long)> Grants(
+            ProjectsAuthorizationContext authority, string project, string permission) =>
+            authority.EffectiveAuthority.Where(item =>
+                    item.ResourceType == "project" && item.ResourceId == project ||
+                    item.ResourceType == "tenant" && item.ResourceId == authority.TenantId)
+                .SelectMany(item => item.Permissions.Where(grant => grant.Permission == permission)
+                    .Select(grant => (item.ResourceType, item.ResourceId, grant.RoleRevision)))
+                .Distinct().Order();
+        var permission = write ? "writeProjects" : "readProjects";
+        return before.ContractVersion == after.ContractVersion && before.Issuer == after.Issuer &&
+            before.ActorId == after.ActorId && before.TenantId == after.TenantId &&
+            before.MembershipRevision == after.MembershipRevision && before.BoundProjectId == after.BoundProjectId &&
+            before.BoundRunId == after.BoundRunId &&
+            Grants(before, projectId, permission).SequenceEqual(Grants(after, projectId, permission));
     }
 
     /// <summary>
@@ -256,6 +327,7 @@ public static partial class CoordinationEndpoints
                 BacklogIssueCode.InvalidGraphRevision or
                 BacklogIssueCode.InvalidTaskRevision or
                 BacklogIssueCode.InvalidTaskState or
+                BacklogIssueCode.InvalidTaskContent or
                 BacklogIssueCode.InvalidTaskCollection or
                 BacklogIssueCode.InvalidDependencyCollection or
                 BacklogIssueCode.CrossProjectDependency or
@@ -281,6 +353,13 @@ public static partial class CoordinationEndpoints
 /// Request body for adding a task at a specific backlog graph revision.
 /// </summary>
 public sealed record AddBacklogTaskRequest(string TaskId, long ExpectedGraphRevision);
+
+/// <summary>Project capture request with bounded task content and graph revision.</summary>
+public sealed record CaptureBacklogTaskRequest(string TaskId, BacklogTaskContent Content, long ExpectedGraphRevision);
+
+/// <summary>Full content replacement guarded by both project graph and task revisions.</summary>
+public sealed record EditBacklogTaskContentRequest(
+    BacklogTaskContent Content, long ExpectedGraphRevision, long ExpectedTaskRevision);
 
 /// <summary>
 /// Request body for changing a task state with graph and task revision guards.

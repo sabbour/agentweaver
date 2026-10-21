@@ -192,8 +192,9 @@ export function buildP1PostgresPlan() {
     target: { ...P1_POSTGRES_TARGET },
     services,
     // 022 adds completed_at; 023 adds interactive requests and cancellation with the exact grants above.
-    // 024 adds private Chief of Staff conversations and Priorities; 025 adds caller dismissal receipts.
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25],
+    // 024 adds private Chief of Staff conversations and Priorities; 025 adds caller dismissal receipts;
+    // 026 adds backlog task content columns and needs no new grants.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26],
     // Bind the separately approved Events reporting migration into the reviewed plan hash.
     eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),
     executionRequirements: [

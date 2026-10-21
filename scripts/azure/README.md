@@ -7,6 +7,19 @@ describes source receipts, target guards, and the separate #1784 runtime gate.
 
 ## Offline validation
 
+Orchestrator migration `026_backlog_task_content.sql` adds task content,
+open/closed lifecycle and a unique repository issue identity. It requires
+migration 021 and has no schema dependency on migration 025, which requires
+only migration 002. The migrator applies missing registered versions in
+ascending order. It takes an
+`ACCESS EXCLUSIVE` lock on `backlog_tasks` and blocks writes until commit.
+It adds no tables or runtime privileges: existing `SELECT, INSERT, UPDATE`
+grants on `backlog_tasks` and `backlog_projects` remain sufficient.
+The Core version list changes the PostgreSQL plan hash. Applying migration
+026, reconciling existing grants, and accepting the new exact plan hash are
+separate, unapplied operator steps that require approval. Source checks do
+not authorize or perform them.
+
 Run these commands from the repository root:
 
 ```powershell
@@ -143,8 +156,8 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 25.
-These are 24 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16 and 18 through 26.
+These are 25 registered versions; version 17 remains excluded.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,
@@ -162,6 +175,9 @@ empty tables. It doesn't alter or scan existing tables. Its runtime grants are
 Version 25 adds the empty `user_notification_dismissals` table. Its only
 predecessor is version 2, which creates `coordinator_gates`. It doesn't alter or
 scan existing tables. Its runtime grant is `SELECT,INSERT` on that table.
+Version 26 adds backlog task content columns and a unique repository issue index.
+It requires version 21, adds no tables or grants, and blocks writes to
+`backlog_tasks` until commit.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
 The plan lists 102 tables and eight exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,

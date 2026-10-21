@@ -82,10 +82,29 @@ internal sealed class BacklogOwnerStore
     /// Adds a task if the project graph still has the caller's expected revision.
     /// </summary>
     /// <remarks>The graph row is locked while the graph and task are written atomically.</remarks>
-    public async Task<BacklogCoreResult<BacklogDependencyGraph>> AddTaskAsync(
+    public Task<BacklogCoreResult<BacklogDependencyGraph>> AddTaskAsync(
         BacklogTaskReference task,
         long expectedGraphRevision,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        AddTaskCoreAsync(task, null, expectedGraphRevision, cancellationToken, null);
+
+    /// <summary>Captures project task content without requiring an accepted run.</summary>
+    public Task<BacklogCoreResult<BacklogDependencyGraph>> AddTaskAsync(
+        BacklogTaskReference task,
+        BacklogTaskContent content,
+        long expectedGraphRevision,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null) =>
+        AddTaskCoreAsync(task, content ?? throw new ArgumentNullException(nameof(content)),
+            expectedGraphRevision, cancellationToken, revalidateCurrentAuthority);
+
+    /// <summary>Serializes capture with claims and other graph writers.</summary>
+    private async Task<BacklogCoreResult<BacklogDependencyGraph>> AddTaskCoreAsync(
+        BacklogTaskReference task,
+        BacklogTaskContent? content,
+        long expectedGraphRevision,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority)
     {
         var taskValidation = ValidateTaskReference(task);
         if (!taskValidation.IsSuccess)
@@ -98,7 +117,11 @@ internal sealed class BacklogOwnerStore
         if (!graph.IsSuccess)
             return RollbackFailure<BacklogDependencyGraph>(transaction, graph.Issues);
 
-        var edit = graph.Value!.AddTask(task, expectedGraphRevision);
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        var edit = content is null
+            ? graph.Value!.AddTask(task, expectedGraphRevision)
+            : graph.Value!.AddTask(task, content, expectedGraphRevision);
         if (!edit.IsSuccess)
             return await RollbackFailureAsync<BacklogDependencyGraph>(
                 transaction, edit.Issues).ConfigureAwait(false);
@@ -110,6 +133,44 @@ internal sealed class BacklogOwnerStore
                 edit.Value.Graph.Tasks.Single(item => item.Reference.TaskId == task.TaskId), cancellationToken)
                 .ConfigureAwait(false);
         }
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
+    }
+
+    /// <summary>Replaces content and lifecycle under the same project lock used by execution claims.</summary>
+    public async Task<BacklogCoreResult<BacklogDependencyGraph>> SetTaskContentAsync(
+        BacklogTaskReference task,
+        BacklogTaskContent content,
+        long expectedGraphRevision,
+        long expectedTaskRevision,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
+    {
+        var validation = ValidateTaskReference(task);
+        if (!validation.IsSuccess)
+            return validation;
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var graph = await ReadGraphInTransactionAsync(
+            connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
+        if (!graph.IsSuccess)
+            return await RollbackFailureAsync<BacklogDependencyGraph>(transaction, graph.Issues).ConfigureAwait(false);
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        var edit = graph.Value!.SetTaskContent(task, content, expectedGraphRevision, expectedTaskRevision);
+        if (!edit.IsSuccess)
+            return await RollbackFailureAsync<BacklogDependencyGraph>(transaction, edit.Issues).ConfigureAwait(false);
+        if (edit.Value!.Changed)
+        {
+            await UpdateGraphRevisionAsync(connection, transaction, edit.Value.Graph, cancellationToken)
+                .ConfigureAwait(false);
+            await UpdateTaskAsync(connection, transaction, edit.Value.Graph, task.TaskId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
     }
@@ -555,7 +616,9 @@ internal sealed class BacklogOwnerStore
 
         var tasks = ImmutableArray.CreateBuilder<BacklogTaskSnapshot>();
         await using (var readTasks = new NpgsqlCommand($"""
-            SELECT task_id, task_revision, task_state, is_archived, automation_invocation_pending
+            SELECT task_id, task_revision, task_state, is_archived, automation_invocation_pending,
+                   title, description, lifecycle, issue_provider_id, issue_repository_owner,
+                   issue_repository_name, issue_number
             FROM {_tasks}
             WHERE project_id = @project
             ORDER BY task_id
@@ -568,12 +631,21 @@ internal sealed class BacklogOwnerStore
             {
                 if (!Enum.TryParse<BacklogTaskState>(reader.GetString(2), ignoreCase: true, out var state))
                     return InvalidPersistedGraph("tasks.task_state");
+                if (!Enum.TryParse<BacklogTaskLifecycle>(reader.GetString(7), ignoreCase: true, out var lifecycle))
+                    return InvalidPersistedGraph("tasks.lifecycle");
                 tasks.Add(new BacklogTaskSnapshot(
                     new BacklogTaskReference(projectId, reader.GetString(0)),
                     reader.GetInt64(1),
                     state,
                     reader.GetBoolean(3),
-                    reader.GetBoolean(4)));
+                    reader.GetBoolean(4),
+                    reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    lifecycle,
+                    reader.IsDBNull(8) ? null : new BacklogRepositoryIssueLink(
+                        reader.GetString(8),
+                        new SourceControlRepositoryIdentity(reader.GetString(9), reader.GetString(10)),
+                        reader.GetInt64(11))));
             }
         }
 
@@ -668,6 +740,7 @@ internal sealed class BacklogOwnerStore
             WHERE project_id = @project AND task_id = @task
               AND task_revision = @expected_task_revision
               AND claim_id IS NULL AND is_archived = false
+              AND lifecycle = 'open'
               AND automation_invocation_pending = false
               AND task_state IN ('backlog', 'ready')
             """, connection, transaction);
@@ -738,8 +811,11 @@ internal sealed class BacklogOwnerStore
     {
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {_tasks}
-                (project_id, task_id, task_revision, task_state, is_archived, automation_invocation_pending)
-            VALUES (@project, @task, @revision, @state, @archived, @pending)
+                (project_id, task_id, task_revision, task_state, is_archived, automation_invocation_pending,
+                 title, description, lifecycle, issue_provider_id, issue_repository_owner,
+                 issue_repository_name, issue_number)
+            VALUES (@project, @task, @revision, @state, @archived, @pending,
+                    @title, @description, @lifecycle, @issue_provider, @issue_owner, @issue_repository, @issue_number)
             """, connection, transaction);
         AddTaskParameters(insert, task);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -760,7 +836,10 @@ internal sealed class BacklogOwnerStore
         await using var update = new NpgsqlCommand($"""
             UPDATE {_tasks}
             SET task_revision = @revision, task_state = @state, is_archived = @archived,
-                automation_invocation_pending = @pending, updated_at = clock_timestamp()
+                automation_invocation_pending = @pending, title = @title, description = @description,
+                lifecycle = @lifecycle, issue_provider_id = @issue_provider,
+                issue_repository_owner = @issue_owner, issue_repository_name = @issue_repository,
+                issue_number = @issue_number, updated_at = clock_timestamp()
             WHERE project_id = @project AND task_id = @task
             """, connection, transaction);
         AddTaskParameters(update, task);
@@ -808,6 +887,17 @@ internal sealed class BacklogOwnerStore
         command.Parameters.AddWithValue("archived", NpgsqlDbType.Boolean, task.IsArchived);
         command.Parameters.AddWithValue(
             "pending", NpgsqlDbType.Boolean, task.IsAutomationInvocationPending);
+        command.Parameters.AddWithValue("title", NpgsqlDbType.Text, task.Title);
+        command.Parameters.AddWithValue("description", NpgsqlDbType.Text, (object?)task.Description ?? DBNull.Value);
+        command.Parameters.AddWithValue("lifecycle", NpgsqlDbType.Varchar, task.Lifecycle.ToString().ToLowerInvariant());
+        command.Parameters.AddWithValue("issue_provider", NpgsqlDbType.Varchar,
+            (object?)task.RepositoryIssue?.ProviderId ?? DBNull.Value);
+        command.Parameters.AddWithValue("issue_owner", NpgsqlDbType.Varchar,
+            (object?)task.RepositoryIssue?.Repository.Owner ?? DBNull.Value);
+        command.Parameters.AddWithValue("issue_repository", NpgsqlDbType.Varchar,
+            (object?)task.RepositoryIssue?.Repository.Name ?? DBNull.Value);
+        command.Parameters.AddWithValue("issue_number", NpgsqlDbType.Bigint,
+            (object?)task.RepositoryIssue?.IssueNumber ?? DBNull.Value);
     }
 
     /// <summary>
