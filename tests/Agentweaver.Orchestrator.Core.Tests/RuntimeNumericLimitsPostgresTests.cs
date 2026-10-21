@@ -24,7 +24,7 @@ using Xunit;
 namespace Agentweaver.Orchestrator.Core.Tests;
 
 [Collection("Coordination PostgreSQL")]
-public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
+public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
 {
     private static readonly JsonSerializerOptions OwnerJson = new(JsonSerializerDefaults.Web)
     {
@@ -822,7 +822,11 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         Assert.Equal(1, await NativeDispatchCountAsync("completed"));
     }
 
-    private async Task<RuntimeNativeTurnAdmissionReceipt[]> PrepareNativeAccountingPairAsync()
+    // Prepares two dispatches in one run and begins both. Optional spend budgets and an Events reader
+    // let budget tests start from two admitted dispatches that each hold a reservation.
+    private async Task<RuntimeNativeTurnAdmissionReceipt[]> PrepareNativeAccountingPairAsync(
+        SpendBudgetAdmissionContext? spendBudgets = null,
+        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
     {
         await RegisterSourceAsync(0, _registrations[0].Binding with { MaxModelTurns = 2 });
         _registrations[1] = _registrations[0];
@@ -838,8 +842,9 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             Revision = _checkpoint.State.Revision + 1,
             PendingDispatches = _intents.ToImmutableDictionary(intent => intent.AssociationId)
         });
-        Assert.Null(await PrepareAsync(0));
-        Assert.Null(await PrepareAsync(1));
+        // Both preparations must succeed: no credit denial and no spend budget denial.
+        Assert.Equal(new(null, null), await PrepareOutcomeAsync(0, null, spendBudgets, readSpendEvidence));
+        Assert.Equal(new(null, null), await PrepareOutcomeAsync(1, null, spendBudgets, readSpendEvidence));
         return [Assert.IsType<RuntimeNativeTurnAdmissionReceipt>((await BeginAsync(0)).Admission),
             Assert.IsType<RuntimeNativeTurnAdmissionReceipt>((await BeginAsync(1)).Admission)];
     }
@@ -1122,9 +1127,19 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         };
     }
 
-    private Task<RuntimeNativeCreditDenialReceipt?> PrepareAsync(
+    // Returns only the credit denial, for tests that don't use spend budgets.
+    private async Task<RuntimeNativeCreditDenialReceipt?> PrepareAsync(
         int index,
-        Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>>? readCostSnapshot = null)
+        Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>>? readCostSnapshot = null) =>
+        (await PrepareOutcomeAsync(index, readCostSnapshot)).CreditDenial;
+
+    // Prepares one dispatch in its own committed transaction and returns both the credit denial and the
+    // spend budget denial code. Without spend budgets, admission skips the budget check.
+    private Task<RuntimeNativePreparationOutcome> PrepareOutcomeAsync(
+        int index,
+        Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>>? readCostSnapshot = null,
+        SpendBudgetAdmissionContext? spendBudgets = null,
+        Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
     {
         var store = SourceStore();
         var snapshot = readCostSnapshot ?? NoCreditSnapshot;
@@ -1133,7 +1148,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             {
                 var prepared = await store.PrepareNativeTurnWithinTransactionAsync(
                     connection, transaction, _root, _checkpoint, _intents[index], _registrations[index],
-                    _messages[index], snapshot, token);
+                    _messages[index], snapshot, token, spendBudgets, readSpendEvidence);
                 await transaction.CommitAsync(token);
                 return prepared;
             }, default);

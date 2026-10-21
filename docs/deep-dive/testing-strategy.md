@@ -45,6 +45,15 @@ migration/grant path, repair a missing grant on a no-pending-migrations rerun,
 and reject history writes. They also confirm that read-only verification
 does not repair missing grants. These cases do not change live permissions.
 
+The Orchestrator store suites also prove that optional migration 032 stays
+optional. The default migration set leaves it unapplied, verification accepts
+a schema with or without it but rejects a partial apply, and the explicit
+apply step is idempotent. The full owner journey in
+`CoordinationMessageIntegrationTests` starts the Orchestrator without 032,
+serves the existing routes, and gets `503 pull_request_records_unavailable`
+from the pull request list. It then applies 032 and checks that only new
+create or reuse results are recorded.
+
 Harnesses preserve HTTP errors, owner denials, and `202 Accepted` responses as
 distinct from completed work. They record correlation and revision/fence
 evidence. Redaction runs before durable JSON Lines output; transient raw

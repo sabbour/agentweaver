@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
   submitBrokerConsent: vi.fn(),
 }));
 
-vi.mock('./authProtocol', () => ({
+vi.mock('./authProtocol', async (importOriginal) => ({
+  // The real decoder, so a session gets the name from the ID token the Broker returns.
+  displayNameFromIdToken: (await importOriginal<typeof import('./authProtocol')>()).displayNameFromIdToken,
   buildAuthorizeUrl: mocks.buildAuthorizeUrl,
   clearAuthorizationTransaction: vi.fn(),
   defaultAuthorizationConfig: () => ({
@@ -118,6 +120,8 @@ async function completeSilentSignIn(
 function Harness() {
   const auth = useAuth();
   const [observedTenant, setObservedTenant] = useState<string | null>(null);
+  const [ensured, setEnsured] = useState('not-ensured');
+  const [unboundToken, setUnboundToken] = useState('none');
   const runConcurrentCalls = async () => {
     const operation = async (accessToken: string) => {
       if (accessToken === 'access-1')
@@ -152,7 +156,25 @@ function Harness() {
         Resolve tenant two
       </button>
       <button type="button" onClick={auth.signOut}>Sign out</button>
+      <button
+        type="button"
+        onClick={() => {
+          void auth.ensureSession({ projectId: 'project-1', runId: 'run-1' })
+            .then((ok) => setEnsured(ok ? 'ensured' : 'needs-user'));
+        }}
+      >
+        Ensure run session
+      </button>
+      <button
+        type="button"
+        onClick={() => { void auth.apiCall(async (accessToken) => { setUnboundToken(accessToken); }, null); }}
+      >
+        Use unbound session
+      </button>
+      <output>ensure:{ensured}</output>
+      <output>unbound:{unboundToken}</output>
       <output>{auth.session?.accessToken ?? 'signed-out'}</output>
+      <output>name:{auth.session?.displayName ?? 'none'}</output>
       <output>{auth.restoringSession ? 'restoring' : 'not-restoring'}</output>
       <output>{auth.error ?? 'no-auth-error'}</output>
       <output>context:{auth.authorizationContext?.tenantId ?? 'none'}</output>
@@ -276,6 +298,61 @@ describe('Broker refresh coordination', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('gets a run session silently and keeps the unbound session usable', async () => {
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('access-run', 'refresh-run'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ensure run session' }));
+    await waitFor(() => expect(mocks.buildAuthorizeUrl).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ binding: { projectId: 'project-1', runId: 'run-1' } }),
+      'challenge',
+      'none',
+    ));
+    await completeSilentSignIn({ code: 'run-code' });
+
+    await screen.findByText('ensure:ensured');
+    await screen.findByText('access-run');
+    fireEvent.click(screen.getByRole('button', { name: 'Use unbound session' }));
+    await screen.findByText('unbound:access-1');
+    expect(window.open).toHaveBeenCalledOnce();
+  });
+
+  it('takes the display name from the ID token and keeps it for run sessions and refreshes', async () => {
+    const claims = btoa(JSON.stringify({ sub: 'user-1', name: 'Ada Lovelace' })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce({ ...token('access-1', 'refresh-1'), id_token: `e30.${claims}.sig` });
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+    expect(screen.getByText('name:Ada Lovelace')).toBeTruthy();
+
+    // A run-bound token without an ID token belongs to the same person, so the name stays.
+    mocks.exchangeAuthorizationCode.mockResolvedValueOnce(token('access-run', 'refresh-run'));
+    fireEvent.click(screen.getByRole('button', { name: 'Ensure run session' }));
+    await completeSilentSignIn({ code: 'run-code' });
+    await screen.findByText('access-run');
+    expect(screen.getByText('name:Ada Lovelace')).toBeTruthy();
+  });
+
+  it('keeps the current session when the silent run sign-in needs the user', async () => {    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ensure run session' }));
+    await completeSilentSignIn({ error: 'consent_required' });
+
+    await screen.findByText('ensure:needs-user');
+    expect(screen.getByText('access-1')).toBeTruthy();
+    expect(screen.getByText('no-auth-error')).toBeTruthy();
+    expect(window.sessionStorage.getItem(SIGNED_IN_BEFORE_STORAGE_KEY)).toBe('1');
+    expect(window.open).toHaveBeenCalledOnce();
   });
 
   it('redeems a rotating refresh token once for concurrent unauthorized calls', async () => {
@@ -483,7 +560,7 @@ describe('Broker refresh coordination', () => {
       await authorizationResponse.promise;
     });
 
-    await screen.findByText('Identity Broker sign-in was closed before it completed.');
+    await screen.findByText('The sign-in window closed before sign-in finished.');
     expect(mocks.exchangeAuthorizationCode).not.toHaveBeenCalled();
   });
 

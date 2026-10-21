@@ -39,6 +39,8 @@ const initialState: Omit<JournalState, 'scopeId'> = {
  * Replays a run's persisted owner events, then follows its live event stream.
  * Replay is cursor-bounded, live events are deduplicated by ID, and any event
  * outside the exact project/run scope stops the stream instead of being shown.
+ * A cleanly closed stream reconnects quietly with backoff; `error` reports only
+ * fatal responses or three transient failures in a row.
  */
 export function useRunJournal(
   token: string | undefined,
@@ -75,7 +77,7 @@ export function useRunJournal(
       if (!incoming.length) return;
       if (incoming.some((event) =>
         event.identity?.projectId !== projectId || event.identity?.runId !== runId)) {
-        throw new JournalScopeError('The Gateway returned a journal event outside the exact project and run scope.');
+        throw new JournalScopeError('The server returned a journal event outside the exact project and run scope.');
       }
       updateState((current) => ({
         ...current,
@@ -84,11 +86,15 @@ export function useRunJournal(
     };
 
     const connect = async () => {
+      // The cursor is the last event we have; replay and reconnects resume from it.
       let cursor: string | null = null;
       let replayed = false;
       let reconnectDelay = 500;
+      // Counts failed connections in a row. Any received event resets it.
+      let transientFailures = 0;
       try {
         while (!signal.aborted) {
+          // Step 1, once: page through stored history up to now, before going live.
           if (!replayed) {
             let pageCount = 0;
             while (!signal.aborted) {
@@ -97,18 +103,20 @@ export function useRunJournal(
               );
               if (!isActive()) return;
               addEvents(page.events);
+              // A page that says "more" but does not move the cursor would loop forever.
               if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor))
-                throw new Error('The Gateway replay returned hasMore without advancing its journal cursor.');
+                throw new Error('The server returned hasMore without advancing its journal cursor.');
               if (page.nextCursor) cursor = page.nextCursor;
               updateState((current) => ({ ...current, cursor }));
               if (!page.hasMore) break;
               if (++pageCount > 1000)
-                throw new Error('The Gateway replay exceeded the bounded initial history limit.');
+                throw new Error('The server exceeded the bounded initial history limit.');
             }
             replayed = true;
             updateState((current) => ({ ...current, loading: false }));
           }
 
+          // Step 2: follow the live stream from the cursor until it ends or fails.
           try {
             updateState((current) => ({ ...current, connected: true, error: null }));
             for await (const frame of gatewayClient.streamEvents(
@@ -119,23 +127,34 @@ export function useRunJournal(
               cursor = frame.cursor;
               updateState((current) => ({ ...current, cursor }));
               reconnectDelay = 500;
+              transientFailures = 0;
             }
-            if (!signal.aborted) throw new Error('The Gateway SSE stream ended.');
+            if (signal.aborted) return;
+            // A stream that closes cleanly (for example, a proxy idle timeout) is routine:
+            // reconnect from the cursor with backoff and keep the status strip as the only signal.
+            transientFailures = 0;
+            updateState((current) => ({ ...current, connected: false }));
+            await new Promise((resolve) => window.setTimeout(resolve, reconnectDelay));
+            reconnectDelay = Math.min(reconnectDelay * 2, 10_000);
           } catch (error) {
             if (signal.aborted) return;
             updateState((current) => ({ ...current, connected: false }));
+            // Client errors (except timeout and rate limit) will not fix themselves: stop.
             if (error instanceof GatewayError && error.status >= 400 &&
                 error.status < 500 && error.status !== 408 && error.status !== 429) {
               updateState((current) => ({ ...current, error }));
               return;
             }
+            // An event from another project or run is a safety stop, never retried.
             if (error instanceof JournalScopeError) {
               updateState((current) => ({ ...current, error }));
               return;
             }
             updateState((current) => ({
               ...current,
-              error: error instanceof Error ? error : new Error('The run event stream disconnected.'),
+              // One dropped connection is routine; report only a run of failures in a row.
+              error: ++transientFailures < 3 ? current.error
+                : error instanceof Error ? error : new Error('The run event stream disconnected.'),
             }));
             await new Promise((resolve) => window.setTimeout(resolve, reconnectDelay));
             reconnectDelay = Math.min(reconnectDelay * 2, 10_000);

@@ -192,9 +192,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         WaitUntil = WaitUntilState.Commit,
                         Timeout = 15_000,
                     });
+                // Exact match: other buttons on later pages also start with "Sign in".
                 await page.GetByRole(
                     AriaRole.Button,
-                    new() { Name = "Continue with Identity Broker" }).ClickAsync();
+                    new() { Name = "Sign in", Exact = true }).ClickAsync();
                 await page.GetByRole(
                     AriaRole.Heading,
                     new() { Name = "Review access" }).WaitForAsync();
@@ -203,25 +204,46 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
                 var configurationPath =
                     $"/api/v1/projects/{Uri.EscapeDataString(project.ProjectId)}/configuration";
-                await page.GetByRole(
-                    AriaRole.Link,
-                    new() { Name = projectName, Exact = true }).ClickAsync();
+                // Open the project from the projects list, then wait for the URL and
+                // the Dashboard heading so the next click happens on the loaded page.
+                await page.GetByText(projectName, new() { Exact = true }).ClickAsync();
+                await page.WaitForURLAsync(
+                    $"**/projects/{Uri.EscapeDataString(project.ProjectId)}");
                 await page.GetByRole(
                     AriaRole.Heading,
-                    new() { Name = projectName, Exact = true }).WaitForAsync();
+                    new() { Name = "Dashboard", Exact = true }).WaitForAsync();
+                // Start listening for the configuration GET before the clicks that
+                // trigger it, so a fast response is not missed.
                 var configurationResponseTask = page.WaitForResponseAsync(response =>
                     response.Request.Method == "GET" &&
                     new Uri(response.Url).AbsolutePath.Equals(
                         configurationPath, StringComparison.Ordinal));
+                // Project settings sits in the rail's Settings menu, as in 0.x.
                 await page.GetByRole(
-                    AriaRole.Link,
-                    new() { Name = "Configuration" }).First.ClickAsync();
+                    AriaRole.Button,
+                    new() { Name = "Settings", Exact = true }).ClickAsync();
+                await page.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Project settings", Exact = true }).ClickAsync();
                 var configurationResponse = await configurationResponseTask;
                 Assert.Equal((int)HttpStatusCode.OK, configurationResponse.Status);
                 await page.GetByRole(
                     AriaRole.Heading,
-                    new() { Name = "Project configuration" }).WaitForAsync();
-                await page.GetByLabel("Typed ProjectConfiguration JSON").WaitForAsync();
+                    new() { Name = "Project settings", Exact = true }).WaitForAsync();
+                // Section links are looked up inside the settings section rail so
+                // they do not match links with the same name elsewhere on the page.
+                var settingsSections = page.GetByRole(
+                    AriaRole.Navigation,
+                    new() { Name = "Settings sections" });
+                // Advanced holds the raw configuration JSON; seeing its field proves
+                // the configuration loaded. Then switch to Connections for the Repo App.
+                await settingsSections.GetByRole(
+                    AriaRole.Link,
+                    new() { Name = "Advanced", Exact = true }).ClickAsync();
+                await page.GetByLabel("Configuration JSON", new() { Exact = true }).WaitForAsync();
+                await settingsSections.GetByRole(
+                    AriaRole.Link,
+                    new() { Name = "Connections", Exact = true }).ClickAsync();
                 await page.GetByText(
                     "No GitHub Repo App connection is available for this identity.")
                     .WaitForAsync();
@@ -232,7 +254,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         AriaRole.Button,
                         new() { Name = "Connect GitHub Repo App" }).ClickAsync());
                 await page.GetByText(
-                    "GitHub returned to Agentweaver. Checking the connection status with the Identity Broker.")
+                    "GitHub returned to Agentweaver. Checking the connection status.")
                     .WaitForAsync();
                 await page.GetByText("Connected as connected-user").WaitForAsync();
 

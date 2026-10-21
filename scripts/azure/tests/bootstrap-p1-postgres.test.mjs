@@ -3,6 +3,7 @@ import test from 'node:test';
 import { basename, dirname, resolve } from 'node:path';
 import {
   bootstrapP1Postgres,
+  p1PostgresMode,
 } from '../bootstrap-p1-postgres.mjs';
 import {
   buildP1PostgresPlan,
@@ -111,6 +112,7 @@ test('P1 PostgreSQL execution verifies the target and uses only required bootstr
   assert.equal(result.executed, true);
   assert.equal(initializerInput.runtimePrincipalObjectId, metadata().identityBrokerRuntimeIdentity.principalObjectId);
   assert.equal(initializerInput.migrationPrincipalObjectId, metadata().identityBrokerMigrationIdentity.principalObjectId);
+  assert.equal(initializerInput.verifyOnly, false);
   const { receiptPath, ...p1Initializer } = initializerInput.p1Initializer;
   assert.deepEqual(p1Initializer, {
     sourceSha: source.sha,
@@ -120,4 +122,72 @@ test('P1 PostgreSQL execution verifies the target and uses only required bootstr
   assert.equal(dirname(receiptPath), resolve(repoRoot, 'Temp'));
   assert.match(basename(receiptPath), /^p1-postgres-[0-9a-f]{32}\.jsonl$/);
   assert.equal(result.receipt.database, 'agentweaver');
+});
+
+function executionDependencies(onInitialize) {
+  return {
+    sourceResolver,
+    execAz() { assert.fail('Target guard must provide the subscription-bound Azure client.'); },
+    targetGuard() {
+      return {
+        group: { tags: { 'agentweaver:owner': source.owner, 'agentweaver:cost-center': source.costCenter } },
+        execAz() { assert.fail('Bootstrap values are supplied by the fake reader.'); },
+      };
+    },
+    readPostgresValues: () => metadata(),
+    async initializePostgres(input) {
+      onInitialize(input);
+      return { database: 'agentweaver' };
+    },
+  };
+}
+
+/** Inspection of an initialized database verifies Identity read-only and passes no merge SHA or receipt. */
+test('P1 PostgreSQL inspection is read-only and never re-bootstraps Identity', async () => {
+  let input;
+  const result = await bootstrapP1Postgres({ repoRoot, execute: true, mode: 'inspect' },
+    executionDependencies(value => { input = value; }));
+  assert.equal(result.mode, 'inspect');
+  assert.equal(input.verifyOnly, true);
+  assert.deepEqual(input.p1Initializer, {
+    mode: 'inspect', sourceSha: source.sha, planSha256: p1PostgresPlanHash(),
+  });
+});
+
+/** Pending continuation carries explicit maxima; only the applying mode writes a receipt. */
+test('P1 PostgreSQL pending continuation requires explicit maxima and receipts only when applying', async () => {
+  for (const mode of ['apply-pending-dry-run', 'apply-pending']) {
+    let input;
+    const result = await bootstrapP1Postgres({
+      repoRoot, coreMergeSha, execute: true, mode, maxCoreVersion: 23, maxEventsVersion: 9,
+    }, executionDependencies(value => { input = value; }));
+    assert.equal(result.maxCoreVersion, 23);
+    assert.equal(result.maxEventsVersion, 9);
+    assert.equal(input.verifyOnly, true);
+    const { receiptPath, ...p1Initializer } = input.p1Initializer;
+    assert.deepEqual(p1Initializer, {
+      mode, sourceSha: source.sha, coreMergeSha, planSha256: p1PostgresPlanHash(),
+      maxCoreVersion: 23, maxEventsVersion: 9,
+    });
+    assert.equal(receiptPath === undefined, mode === 'apply-pending-dry-run');
+  }
+});
+
+/** Partial or contradictory mode inputs fail before any source or Azure lookup. */
+test('P1 PostgreSQL modes reject missing maxima, stray maxima, and inspection merge SHAs', async () => {
+  const fail = { sourceResolver() { assert.fail('Invalid input must fail first.'); } };
+  await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, mode: 'apply-pending', maxCoreVersion: 23 }, fail),
+    /explicit maximum Core and Events versions/);
+  await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, maxCoreVersion: 23, maxEventsVersion: 9 }, fail),
+    /explicit maximum Core and Events versions/);
+  await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, mode: 'inspect' }, fail),
+    /inspection takes none/);
+  await assert.rejects(bootstrapP1Postgres({ repoRoot, coreMergeSha, mode: 'reset' }, fail),
+    /supported mode/);
+  assert.equal(p1PostgresMode({ inspect: true }), 'inspect');
+  assert.equal(p1PostgresMode({ 'apply-pending-migrations': true, 'dry-run': true }), 'apply-pending-dry-run');
+  assert.equal(p1PostgresMode({ 'apply-pending-migrations': true }), 'apply-pending');
+  assert.equal(p1PostgresMode({}), 'initialize');
+  assert.throws(() => p1PostgresMode({ 'dry-run': true }), /--dry-run applies only/);
+  assert.throws(() => p1PostgresMode({ inspect: true, 'apply-pending-migrations': true }), /either/);
 });

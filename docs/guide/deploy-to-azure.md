@@ -246,6 +246,16 @@ existing tables. The reviewed plan grants `SELECT, INSERT` on
 `chief_of_staff_conversations`, `SELECT, INSERT, UPDATE` on
 `chief_of_staff_priority_lists` and `chief_of_staff_priorities`, and
 `SELECT, INSERT, DELETE` on `chief_of_staff_priority_links`.
+Orchestrator migration 025 adds caller-specific notification dismissals. It
+creates one new, empty table, `user_notification_dismissals`, and doesn't alter
+or scan existing tables. The reviewed plan grants `SELECT, INSERT` on that
+table.
+Orchestrator migration 031 adds caller-specific promotion dismissals in the
+new `user_notification_promotion_dismissals` table. It requires migrations
+025 and 030. Its foreign key to `backlog_plan_promotions` takes a
+`SHARE ROW EXCLUSIVE` lock on that table until commit. The reviewed plan
+grants only `SELECT, INSERT` on the new table. Migration 031 and its grants
+are source changes only; applying them requires separate approval.
 
 Then review and run the source-bound PostgreSQL initializer:
 
@@ -271,6 +281,14 @@ verify the database and roles with read-only catalog queries before installing
 the product bundle. The Broker runtime identity does not own the schema. If
 the identity or database setup is not approved or complete, stop before
 applying product workloads.
+
+If the database is already initialized, don't rerun initialization. Read its
+state with `--inspect`, then add later approved migrations with
+`--apply-pending-migrations` and explicit maximum versions. Run that command with
+`--dry-run` first. The
+[Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#applying-later-approved-migrations)
+describes both modes. Services verify their schema version at startup, so
+apply migrations before you install workloads that expect them.
 
 For each database workload, verify that:
 

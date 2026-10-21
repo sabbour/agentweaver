@@ -186,6 +186,11 @@ public static partial class CoordinationEndpoints
                 CoordinatorWorkflowCatalog.ReadMaxWallTimeSeconds(selection.Selection.Snapshot);
             _ =
                 CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(selection.Selection.Snapshot);
+            // Run and agent spend budgets are pinned in the accepted selection and do not change for
+            // the life of the run. Project budgets are dropped here because they can change at any
+            // time; they are read from Projects again before each dispatch.
+            var pinnedSpendBudgets = CoordinatorWorkflowCatalog.ReadSpendBudgets(selection.Selection.Snapshot)
+                .Where(budget => budget.Scope != SpendBudgetScopes.Project).ToImmutableArray();
             var sessions = await store.ReadSessionTreeAsync(actor, identity, cancellationToken)
                 .ConfigureAwait(false);
             var rootSession = sessions.Nodes.SingleOrDefault(
@@ -299,19 +304,26 @@ public static partial class CoordinationEndpoints
             async Task<string?> DeliverIntentAsync(
                 MafExecutionDispatchIntent intent, string prompt, CancellationToken token)
             {
+                // Stop sending new work after the run's wall-time limit.
                 if (IsWallTimeLimitReached())
                     return null;
+                // The prompt must be exactly the prompt recorded in the dispatch intent.
                 if (RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)) != intent.PromptHash)
                     throw new CoordinationException(
                         "maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
+                // If the intent already has a stored result, return it instead of sending again.
                 var pending = await ReadCurrentDispatchIntentAsync(intent, token).ConfigureAwait(false);
                 if (!pending.ShouldSend)
                     return pending.Snapshot.State.Results[intent.AssociationId];
+                // A null registration means the child runtime is not registered or not ready yet.
+                // The dispatch is not sent now and is retried later.
                 var registration = await ReadDispatchRegistrationAsync(intent, token).ConfigureAwait(false);
                 if (registration is null)
                     return null;
                 var readinessEndpoint = RuntimeHostEndpoint(
                     registration.Binding.ConfigureEndpoint, "/runtime/v1/readiness");
+                // Recheck the decision state and registration before calling the host, because both
+                // can change between awaits.
                 await RevalidateDispatchAsync(token).ConfigureAwait(false);
                 var current = await ReadDispatchRegistrationAsync(intent, token).ConfigureAwait(false);
                 if (current is null)
@@ -320,6 +332,8 @@ public static partial class CoordinationEndpoints
                     throw new CoordinationException(
                         "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
                 RuntimeHostReadinessReceipt? readiness;
+                // Ask the runtime host whether it is ready. The short-lived actor token is
+                // invalidated right after the call.
                 var readinessActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
                 try
                 {
@@ -335,6 +349,7 @@ public static partial class CoordinationEndpoints
                     return null;
                 ValidateHostReadiness(readiness, registration, timeProvider);
 
+                // The host call can take time, so check the registration and decision state again.
                 current = await ReadDispatchRegistrationAsync(intent, token).ConfigureAwait(false);
                 if (current is null)
                     return null;
@@ -342,6 +357,8 @@ public static partial class CoordinationEndpoints
                 if (current != registration)
                     throw new CoordinationException(
                         "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
+                // Build the message for the host. Its message ID is the dispatch ID used for the
+                // dispatch row and for any spend budget reservation.
                 var proof = new RuntimeHostSessionProof(
                     1,
                     registration,
@@ -363,19 +380,34 @@ public static partial class CoordinationEndpoints
                 {
                     if (IsWallTimeLimitReached())
                         return null;
+                    // Read the intent again just before preparation; another request may have
+                    // completed it in the meantime.
                     var currentIntent = await ReadCurrentDispatchIntentAsync(intent, token).ConfigureAwait(false);
                     if (!currentIntent.ShouldSend)
                         return currentIntent.Snapshot.State.Results[intent.AssociationId];
+                    // Native dispatches require the usage source owner to record admission and cost.
                     if (runtimeSourceOwner is null)
                         throw new CoordinationException(
                             "maf_execution_native_source_unavailable", StatusCodes.Status503ServiceUnavailable);
+                    // Read the current project budgets for each dispatch, so a lowered project budget
+                    // applies to the next dispatch without restarting the run.
+                    var projectSpendBudgets = await projects.ReadCurrentProjectSpendBudgetsAsync(
+                        context, projectId, runId, token).ConfigureAwait(false);
+                    // Prepare the native turn in one transaction: owner authority, fence, native
+                    // limits, credit snapshot, and spend budget admission, then the dispatch row. The
+                    // owner check delegate runs before and after that work. Any denial or failure
+                    // throws here, so the message below is never sent. An empty project budget list
+                    // is passed as null, which means the project has no project budgets.
                     await runtimeSourceOwner.PrepareNativeTurnAsync(
                         context, registration, identity, currentIntent.Snapshot, intent, message,
                         (connection, transaction, currentToken) =>
                             decisions.RequireCurrentDispatchStateInTransactionAsync(
                                 connection, transaction, actor, identity, selection, selectionContext,
-                                decision.StateVersion, decision.State.Fence, plan.Plan.Id, currentToken), token)
+                                decision.StateVersion, decision.State.Fence, plan.Plan.Id, currentToken), token,
+                        new SpendBudgetAdmissionContext(pinnedSpendBudgets,
+                            projectSpendBudgets.Budgets.IsDefaultOrEmpty ? null : projectSpendBudgets))
                         .ConfigureAwait(false);
+                    // Preparation committed, so the dispatch is admitted. Send it to the runtime host.
                     response = await SendRuntimeHostMessageAsync(
                         hostClient,
                         registration,
@@ -391,6 +423,8 @@ public static partial class CoordinationEndpoints
                 }
 
                 var expectedContext = RuntimeContractValidation.NativeSessionId(registration.Binding);
+                // Accept only a single non-empty agent text reply for this native session, within the
+                // size limit and without control characters other than line breaks and tabs.
                 if (response.Kind != "message" || response.MessageId == Guid.Empty ||
                     response.ContextId != expectedContext || response.Role != "agent" ||
                     response.Parts is not [{ Kind: "text", Text: { Length: > 0 } answer }] ||
@@ -399,6 +433,7 @@ public static partial class CoordinationEndpoints
                         character is not ('\r' or '\n' or '\t')))
                     throw new CoordinationException(
                         "maf_execution_host_response_invalid", StatusCodes.Status503ServiceUnavailable);
+                // The answer is returned only after the native turn's usage is accounted.
                 await runtimeSourceOwner!.RequireNativeTurnAccountedAsync(
                     context, registration, message, answer,
                     (connection, transaction, currentToken) =>

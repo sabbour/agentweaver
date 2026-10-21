@@ -157,6 +157,50 @@ describe('run journal event merging', () => {
     unmount();
   });
 
+  it('reconnects quietly from the cursor when the live stream closes cleanly', async () => {
+    vi.spyOn(gatewayClient, 'replayEvents').mockResolvedValue({ events: [], nextCursor: 'cursor-0', hasMore: false });
+    const cursors: Array<string | null> = [];
+    vi.spyOn(gatewayClient, 'streamEvents').mockImplementation(
+      async function* (_token, _projectId, _runId, cursor, signal) {
+        cursors.push(cursor);
+        if (cursors.length === 1) {
+          yield { cursor: 'cursor-1', event: event('event-1', 1) };
+          return;
+        }
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      },
+    );
+    const { result, unmount } = renderHook(() => useRunJournal('broker-token', 'p1', 'r1'));
+
+    await waitFor(() => expect(cursors).toEqual(['cursor-0', 'cursor-1']));
+    expect(result.current.error).toBeNull();
+    expect(result.current.events.map((item) => item.eventId)).toEqual(['event-1']);
+    unmount();
+  });
+
+  it('reports a transient stream failure only after three in a row', async () => {
+    vi.spyOn(gatewayClient, 'replayEvents').mockResolvedValue({ events: [], nextCursor: null, hasMore: false });
+    let attempts = 0;
+    const errors: Array<string | null> = [];
+    vi.spyOn(gatewayClient, 'streamEvents').mockImplementation(
+      // eslint-disable-next-line require-yield
+      async function* () {
+        attempts += 1;
+        throw new Error('network down');
+      },
+    );
+    const { result, unmount } = renderHook(() => {
+      const journal = useRunJournal('broker-token', 'p1', 'r1');
+      errors.push(journal.error?.message ?? null);
+      return journal;
+    });
+
+    await waitFor(() => expect(result.current.error?.message).toBe('network down'), { timeout: 5000 });
+    expect(attempts).toBe(3);
+    expect(errors.slice(0, errors.indexOf('network down')).every((message) => message === null)).toBe(true);
+    unmount();
+  });
+
   it('rejects live events outside the exact project and run scope without reconnecting', async () => {
     vi.spyOn(gatewayClient, 'replayEvents').mockResolvedValue({
       events: [],

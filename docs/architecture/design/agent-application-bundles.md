@@ -99,6 +99,22 @@ All installation records, routes, component loaders, and lifecycle behavior in t
 | [Object Store](../../../packages/Agentweaver.Abstractions/ObjectStore.cs) | Create-only writes, streamed reads, and exact-key deletes. It is not a workspace, registry, extractor, permission store, or reference-counted garbage collector. |
 | [Services and release](services-and-release.md) | Existing coarse owners, owned schemas, fenced commands, outboxes, AgentHost, gateway, and surface boundaries |
 
+### Reviewed owner delegation for background work
+
+[ADR 0002](../decisions/0002-project-issue-sync-delegation.md) documents the
+separately reviewed existing-owner delegation path implemented for #2176.
+Identity owns a revocable, project/repository-scoped `issue-sync` grant; Projects
+revalidates the creator's current exact Owner role and selected repository.
+Dedicated mTLS service peers obtain only short-lived repository-specific
+credentials, with durable mint auditing and no saved user bearer.
+Only the creator or a current tenant administrator can revoke the grant.
+
+This is not bundle self-authorization, an installation grant, or a replacement
+for run-bound authority. Future #1914 schedules may reuse the management/proof/
+issuance/audit pattern with a separately reviewed purpose and minimum scope,
+not replay issue-write authority as permission to start a run. The bundle
+installer and scheduler remain unimplemented by this source change.
+
 ### 0.x prior art and incompatibilities
 
 The original references below use 0.x commit `d984e8bba4e6932eef4de69e93bc5be94868b16b`.

@@ -12,6 +12,65 @@ For runtime settings, see [Runtime configuration](./runtime-configuration.md).
 The Gateway's `GET /openapi/v1.json` returns the versioned public schemas, which
 the [MCP tools](./mcp-tools.md) reference uses.
 
+## Periodic issue sync
+
+These routes do not require a run. They require an authenticated project Owner
+with `api.read` and `projects.admin`; run-bound and purpose-bound tokens are
+rejected. Gateway exposes them under `/api/v1`. Generated MCP tools prefix the
+operation IDs with `agentweaver_`.
+
+| Gateway route | Native owner | Operation ID |
+| --- | --- | --- |
+| `GET /api/v1/projects/{projectId}/issue-sync` | Orchestrator `GET /api/projects/{projectId}/issue-sync/` | `readIssueSync` |
+| `PUT /api/v1/projects/{projectId}/issue-sync` | Orchestrator `PUT /api/projects/{projectId}/issue-sync/` | `configureIssueSync` |
+| `POST /api/v1/projects/{projectId}/issue-sync/grants` | Identity same path without `/v1`, with trailing slash | `createIssueSyncGrant` |
+| `GET /api/v1/projects/{projectId}/issue-sync/grants/{grantId}` | Identity same path without `/v1` | `readIssueSyncGrant` |
+| `POST /api/v1/projects/{projectId}/issue-sync/grants/{grantId}/revoke` | Identity same path without `/v1` | `revokeIssueSyncGrant` |
+
+Create a grant with `{ "selectionCode": "<fresh Identity repository selection code>" }`
+after selecting the project's connected GitHub App repository. Identity consumes
+the owner-bound selection once and returns
+`{ grantId, project: { projectId, tenantId, creatorId, connectionId, repository: { owner, name } }, active }`.
+No credential appears in public responses. Secret-authenticated repositories
+cannot borrow run-token redemption for background sync.
+
+Configure with `{ expectedRevision, settings: { enabled, grantId,
+intervalSeconds, maxItems, maxCycleSeconds } }`. `expectedRevision` is zero on
+creation and the returned revision on edits. `intervalSeconds` is 30-86400,
+`maxItems` 1-100, and `maxCycleSeconds` 5-120 and no larger than the interval.
+A cycle reads one page of at most `maxItems` issues and reconciles at most
+`maxItems` tasks, within its deadline. Configuration and status return
+`projectId`, `tenantId`, `revision`, `settings`, safe `grantProof`, `nextCycleAt`,
+nullable `lastCycleAt`, `status`, nullable `errorCode`, `importPage`, and
+`taskCursor`. An unconfigured project returns 404, not fabricated status.
+Concurrent configuration/cycles return 409.
+
+Owners may disable sync even after its grant is revoked or the repository is
+unselected. Revocation returns `{ "revoked": true }` and prevents the next
+cycle; in-flight cycles also revalidate before effects. Only the creator or
+a current tenant administrator can revoke a grant. Grant reads validate the original
+creator's current authority. A changed repository does not reuse old mappings.
+
+Status is `configured`, `disabled`, `running`, `succeeded`, or `failed`.
+Failure codes include `issue_sync_grant_revoked`,
+`issue_sync_creator_not_owner`, `issue_sync_repository_not_selected`,
+`issue_sync_cycle_timeout`, provider-specific `issue_sync_provider_*`,
+and `issue_sync_create_outcome_pending`. Failures preserve confirmed progress
+and retry next cycle; uncertain external writes are not reported as success.
+See [reconciliation and recovery](../deep-dive/orchestration.md#periodic-repository-issue-sync).
+
+Private routes are not Gateway/MCP tools. Identity
+`POST /internal/issue-sync/grants/{grantId}/token` and
+`POST /internal/issue-sync/grants/{grantId}/validate` accept only the configured
+Orchestrator mTLS peer. Projects `POST /internal/issue-sync/project-authority`
+accepts only the Identity mTLS peer and `{ projectId, tenantId, creatorId }`.
+Projects' authenticated `GET /api/projects/{projectId}/issue-sync-owner`
+and `issue-sync-authority` provide live owner and selected-repository proofs.
+The native `GET /api/projects/{projectId}/issue-sync-grant-revocation` supplies
+current creator/admin revocation evidence without granting worker authority.
+These routes never create run or secret grants. Webhooks and conflict prompts
+are out of scope.
+
 ## How to read this reference
 
 Some tables list a route prefix and its suffixes. Append a suffix to the prefix
@@ -49,12 +108,59 @@ clients cannot use it to grant membership or change identity.
 
 ## Gateway
 
+### Project backlog content
+
+The Orchestrator owns project backlog tasks independently of runs. The Gateway
+forwards the tenant selector and exposes these versioned operations:
+
+| Method | Gateway path | Authority |
+| --- | --- | --- |
+| GET | `/api/v1/projects/{projectId}/backlog` | Current `ReadProjects` |
+| POST | `/api/v1/projects/{projectId}/backlog/tasks` | Current `WriteProjects` |
+| PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/content` | Current `WriteProjects` |
+
+The native paths replace `/api/v1` with `/api`. Reads require `api.read`.
+Writes also require `projects.admin` and project Owner or tenant administrator
+authority. Run-bound and purpose-bound tokens cannot use these routes. An
+optional project binding must match the route. The bearer must include the
+Orchestrator and Projects audiences. The owner rechecks membership and role
+revisions after acquiring the graph lock and before committing a write.
+
+Capture accepts `taskId`, `expectedGraphRevision`, and `content`. Content
+contains `title`, optional `description`, `lifecycle` (`open` or `closed`,
+default `open`), and optional `repositoryIssue`. A title has 1-512 characters
+and no control characters. A description has at most 65,536 characters and no
+NUL character. The owner trims the title. Content replacement also requires
+`expectedTaskRevision`. Both operations return the current project graph;
+stale revisions and duplicate repository issues return `409` with typed
+backlog issues. An unchanged replacement preserves both revisions.
+
+`repositoryIssue` contains a provider catalog ID (`providerId`), a typed
+`repository` with `owner` and `name`, and a positive `issueNumber`. Repository
+names are normalized to lowercase. A project can link an issue to only one
+task, including archived tasks. Issue-sync clients read the graph to reuse
+that identity on repeated import; a conflicting insert does not create a
+second task. These routes do not call the repository provider or synchronize
+issues.
+
+Closing a ready task moves it back to backlog. A closed task cannot become
+ready or receive a new claim. Closing a claimed task retains its existing
+claim and run ownership; it does not cancel execution. Reopening does not
+schedule work. Archive remains separate from open/closed lifecycle.
+Historical ID-only tasks retain an empty title until edited.
+
+These source mappings require migration `026_backlog_task_content.sql`.
+Migration application, existing grant reconciliation, and the changed
+PostgreSQL plan hash require separate operator approval and remain unapplied.
+This content contract does not add MCP tools or a retained UI.
+
 Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 `GatewayRouteCatalog.cs`.
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | GET | `/openapi/v1.json` | Public | OpenAPI 3.1 route and schema catalog. |
+| GET | `/agents/agentweaver.agent.md` | Public | Operator agent definition as `text/markdown`; excluded from OpenAPI and the MCP catalog. |
 | GET | `/api/v1/authorization/context` | Bearer; `api.read`, non-purpose token | Fresh Projects actor, tenant, binding, and effective authority. |
 | GET | `/health/live` | Public | Process liveness. |
 | GET | `/health/ready` | Public | Gateway host readiness. |
@@ -323,10 +429,31 @@ use Admin authority. Upstream content reads recheck current authority.
 | POST | `/{sourceId}/preview` | Validate selected content at a resolved commit. | Yes |
 | POST | `/{sourceId}/import` | Import selected content with digest and idempotency checks. | Yes |
 
+`GET /api/projects/{projectId}/skill-marketplaces/definitions` uses Read
+authority and lists the suggested marketplaces. The Gateway path is
+`/api/v1/projects/{projectId}/skill-marketplaces/definitions`.
+
 See [Projects & Config](../architecture/projects-config.md) and
 [Skill marketplace sources](../architecture/skill-marketplace.md).
 
 ## Orchestrator
+
+### Caller notifications
+
+Native owner prefix: `/api/notifications`. Gateway prefix:
+`/api/v1/notifications`. These routes require an unbound token with current
+Projects read authority; tokens with `project_id` or `run_id` claims return
+`403 caller_binding_mismatch`. See [Notifications](../guide/notifications.md).
+
+| Method | Suffix | Purpose | Gateway |
+| --- | --- | --- | --- |
+| GET | `?cursor=&pageSize=&projectId=&includeDismissed=` | Read newest-first pending gates, a total count and an opaque cursor. | Yes |
+| POST | `/{notificationId}/dismiss` | Dismiss for the caller without resolving the gate. Bodyless and idempotent. | Yes |
+
+Responses are `no-store`. Token bindings do not narrow this caller-wide
+endpoint; use `projectId`. The default
+excludes caller dismissals; shared Flow reads use `includeDismissed=true`.
+Unknown or repeated query parameters return `400 query_invalid`.
 
 Source: `services/orchestrator/Agentweaver.Orchestrator/`.
 
@@ -381,6 +508,59 @@ A run-bound token sees only its own run. `pageSize` defaults to 25 and accepts
 `400 run_state_filter_invalid`, `cursor_invalid`, or `page_size_invalid`.
 Pass `nextCursor` back with the same filter and page size.
 `title` and `goal` are `null` until a run start request stores them.
+
+### Project issue and pull request lists
+
+These reads return Agentweaver's stored data. They make no source control
+provider call at read time, so they don't need a provider credential.
+
+| Path | Query | Gateway |
+| --- | --- | --- |
+| `GET /api/projects/{projectId}/source-control/issues` | `state`, `cursor`, `pageSize` | Yes, `listProjectIssues` |
+| `GET /api/projects/{projectId}/source-control/pull-requests` | `state`, `cursor`, `pageSize` | Yes, `listProjectPullRequests` |
+
+The Gateway path adds `/v1` after `/api`. Both routes need the `api.read`
+scope, return `Cache-Control: no-store`, and recheck Projects read permission
+after the read. If permission is lost during the read, the route returns
+`403` with no items. `pageSize` defaults to 25 and accepts 1–100. Unknown or
+repeated query parameters return `400 query_invalid`. A bad cursor or page
+size returns `400 cursor_invalid` or `page_size_invalid`. Pass `nextCursor`
+back with the same filter and page size.
+
+**Issue list.** Returns repository issues that
+[periodic issue sync](#periodic-issue-sync) linked to backlog tasks, ordered by
+issue number, newest first. The caller needs current project or tenant
+`readProjects` permission. Run-bound tokens are rejected. `state` is `open`
+(default), `closed`, or `all`; another value returns
+`400 issue_state_filter_invalid`. Archived tasks and tasks without an issue
+link aren't listed, and a project without an issue sync configuration returns
+an empty page. Each item has the task ID and backlog state, provider,
+repository, issue number, stored title, stored state, and task timestamps.
+The backlog doesn't store an issue URL or author, so items don't include them.
+
+**Pull request list.** Returns pull requests that the project's runs created
+or reused, as Source Control recorded them, ordered by `recordedAt`, newest
+first. The caller needs the same permission as the run list. A run-bound token
+sees only its own run's records. `state` is `open` (default), `closed`,
+`merged`, or `all`; another value returns
+`400 pull_request_state_filter_invalid`. Each item has the provider,
+repository, number, title, URL, state, head and base branch and commit, and
+its provenance: `runId`, `disposition` (`created` or `reused`), `recordedAt`,
+and `updatedAt`. Title and state are the values from the last time a run
+recorded the pull request, not live provider values.
+
+The pull request list isn't a complete pull request history. Recording starts
+when Orchestrator migration `032_source_control_pull_request_records.sql` is
+applied. `coverage.recordedSince` reports that time, and
+`coverage.includesEarlierPullRequests` is always `false`. Older pull requests
+aren't recorded. Until migration 032 is applied, the route returns
+`503 pull_request_records_unavailable`, not an empty list. An empty list would
+wrongly tell a client that the project has no pull requests; the 503 says the
+records don't exist yet. Migration 032 is
+code-only: startup, the default migrator, and the P1 initializer don't apply it.
+
+These routes are the data source for issue and pull request pickers. The web
+picker doesn't use them yet.
 
 ### Project metrics and usage
 
@@ -600,6 +780,58 @@ All routes use Coordination authority and current owner task/graph revisions.
 | PUT | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Add dependency. |
 | DELETE | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Remove dependency. |
 | POST | `/tasks/{taskId}/claim` | Atomically claim with current prerequisite evidence. |
+| POST | `/promotions` | Promote the run's confirmed work plan into backlog tasks. |
+
+#### Plan promotion and task origin
+
+`POST /promotions` turns the current confirmed work plan of a coordinator run
+into backlog tasks. The body contains `rootSessionId`, `workPlanId`,
+`expectedDecisionStateVersion`, `expectedExecutionFence`,
+`expectedGraphRevision`, and `idempotencyKey` (1-128 characters). The owner
+checks that the plan is still the confirmed, dispatchable plan of the root
+session, that the fence and decision version match, and that the run has no
+registered children and no MAF dispatch records.
+
+Each plan item becomes one open task. The task title is the item title and the
+description is the item task text. The task ID is `plan-` followed by 32
+lowercase hexadecimal characters of a SHA-256 hash of the length-prefixed project,
+run, plan, and item IDs. Each item dependency becomes a task dependency. The tasks, edges,
+promotion record, and one origin record per task commit in one transaction.
+The decision state does not change. After promotion, MAF dispatch rejects the
+promoted plan with `maf_execution_dispatch_stale`.
+
+A retry with the same key and values returns the stored promotion. The
+response is a `BacklogPlanPromotion` with `promotionId`, `projectId`, `runId`,
+`rootSessionId`, `workPlanId`, `workflowId`, `workflowRevision`,
+`decisionStateVersion`, `executionFence`, `graphRevision`, `promotedAt`, and
+`tasks` (`taskId` and `workItemId`, ordered by `workItemId`).
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `backlog_promotion_invalid` | 400 | A required value is missing or out of range. |
+| `backlog_promotion_stale` | 409 | The plan, decision version, or fence is no longer current. |
+| `backlog_promotion_run_started` | 409 | The run has children or dispatch records. |
+| `backlog_promotion_conflict` | 409 | The plan was already promoted with another key. |
+| `backlog_promotion_idempotency_conflict` | 409 | The key was used with different values. |
+| `backlog_promotion_selection_unavailable` | 409 | The pinned selection context is missing. |
+
+A stale graph revision returns `409` with typed backlog issues.
+
+Two native project routes read the recorded data with current `ReadProjects`
+authority:
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET | `/api/projects/{projectId}/backlog/promotions` | `{ promotions }`, oldest first. |
+| GET | `/api/projects/{projectId}/backlog/origins` | `{ origins }`, ordered by task ID. |
+
+A `BacklogTaskOrigin` contains `task` (`projectId` and `taskId`),
+`promotionId`, `runId`, `rootSessionId`, `workPlanId`, and `workItemId`.
+Tasks added by ordinary capture or the run `POST /tasks` route have no origin
+record. Migration `030_backlog_task_origin.sql` must be applied before these
+routes work. Applying the migration, granting access to the new tables, and
+accepting the changed PostgreSQL plan hash each require separate operator
+approval.
 
 ### Source Control
 
@@ -663,7 +895,8 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | --- | --- | --- |
 | GET | `/registrations/{runtimeInstanceId:guid}` | Read current registration. |
 | GET | `/registrations/{runtimeInstanceId:guid}/skills` | Read accepted runtime skill material. |
-| POST | `/actions/authorize` | Authorize action and commit guarded admission. |
+| POST | `/actions/authorize` | Authorize action and commit guarded admission. Returns HTTP 428 with `runtime_guardrails_content_required` when ordered Guardrails checks apply to a model turn. |
+| POST | `/actions/authorize-content` | Authorize a model turn with its exact UTF-8 text so the ordered Guardrails checks can run. The text is never stored. |
 | POST | `/actions/verify` | Revalidate action proof. |
 | POST | `/actions/credit-denials/read` | Read action credit denial. |
 | POST | `/remote-tool-results/verify` | Verify reviewed remote result proof. |

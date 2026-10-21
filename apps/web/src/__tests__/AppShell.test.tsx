@@ -30,7 +30,6 @@ vi.mock('../api/apiClient', () => ({
     getProject: vi.fn(),
     checkHealth: vi.fn(),
     getAuthSession: vi.fn(),
-    getProjectAccessOverview: vi.fn(),
     getUserAiAccess: vi.fn(),
     getNotifications: vi.fn(),
     beginProjectCopilotAuthorization: vi.fn(),
@@ -131,15 +130,6 @@ beforeEach(() => {
     entra_object_id: 'entra-1',
     platform_roles: ['PlatformAdmin'],
     ai_configured: true,
-  } as never);
-  vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
-    auth_mode: 'entra',
-    platform_roles: ['PlatformAdmin'],
-    current_user_project_role: 'Owner',
-    can_manage_role_assignments: true,
-    can_manage_project_github_identity: true,
-    project_role_assignments: [],
-    effective_github_login: 'octocat',
   } as never);
   vi.mocked(apiClient.getProjectCopilotConnection).mockResolvedValue({
     status: 'not_connected',

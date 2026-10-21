@@ -191,10 +191,54 @@ currency. It performs exact decimal arithmetic, does not fetch live prices, and
 does not quote BYOK work. Missing token counts, unsupported cache categories,
 unknown models, and changed bindings remain `Unpriced`. Events must also verify
 trusted Azure provider and deployment facts against the accepted runtime model
-pin before it can price a source receipt. That source contract is not yet admitted,
-so the current receipt consumer keeps BYOK usage `Unpriced`. Provisioned-throughput
-usage also remains `Unpriced` until trusted resource and time-window usage share
-is available.
+pin before it can price a source receipt. `RequireTrustedAzureByok` performs that
+check. The receipt consumer applies the same source checks, without the dispatch
+message ID, to every receipt that claims Azure BYOK and rejects a failed claim, so
+untrusted usage never enters the ledger. Native SDK usage without a dispatch
+message ID is admitted as `Unpriced`. Events keeps these token totals but does not
+assign a cost because it cannot attribute the usage to a dispatch.
+
+Azure BYOK pricing is off by default. To turn it on, configure the
+`EventsAndSessions:Cost:Azure` section with `AzureCostProviderOptions` fields and
+an explicit `RateCard`. Events then registers the Azure Cost provider for the
+`byok.tokens` meter source, pins the binding per run, and prices only Azure BYOK
+receipts that pass `RequireTrustedAzureByok`. Uncorrelated native usage stays
+`Unpriced`. Other BYOK providers stay `Unpriced` with `byok-provider-unpriced`.
+A changed rate card never reprices earlier rows. New usage in a run that pinned an
+earlier card stays `Unpriced` with `pinned-cost-binding-unavailable`.
+
+Provisioned-throughput (PTU) usage stays `Unpriced` per event.
+`AzureProvisionedThroughputAllocator` builds a report that splits one fixed PTU
+period charge across ledger events by input plus output token share. It uses exact
+integer minor units, assigns leftover units by largest remainder, breaks ties by
+event ID, and records the rounding method. The shares always add up to the charge.
+The report never changes ledger rows.
+
+### Represented spend evidence
+
+`POST /internal/projects/{projectId}/runs/{runId}/usage/spend-evidence` returns
+`UsageSpendEvidence` for one (meter source, unit) bucket. The caller needs the same
+read authority as the usage totals route. The request names the bucket, an
+optional project period with an inclusive start and exclusive end, and at most 64
+dispatch IDs. One repeatable-read snapshot supplies:
+
+- Priced amount, priced event count, and unpriced event count for the run and the
+  project period. Unpriced events without a unit count in every unit bucket of
+  their meter source.
+- An agent total for the run when the request names an `AgentId`.
+- One `UsageDispatchAccountingWitness` per requested dispatch, with the source
+  receipt identities, receipt digest, and known priced subtotal. A witness
+  matches the dispatch in any run of the project, because a project budget holds
+  exposure for dispatches from other runs.
+- `AccountingCursor`, the number of ledger events for the project and meter
+  source in that snapshot.
+
+The ledger is append-only, so a later read has an equal or higher cursor and
+includes every event an earlier read included. Events never reports
+`SourceComplete`. A witness is `Partial` when it has receipts and `Unknown` when it
+has none. Orchestrator compares the witness receipts with its own dispatch
+completion manifest to decide whether every charge is represented. The route
+reads the existing ledger and needs no new migration.
 
 When `EventsAndSessions:RuntimeUsage:Enabled` is true, Events requires the same
 server-owned `AgentHost:ModelBindings` map and `AgentHost:ModelBindingsRevision` as AgentHost.

@@ -119,6 +119,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators; omit `cursor` for the first page. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
+| `GET /api/projects/{projectId}/skill-marketplaces/definitions` | List suggested marketplaces and the matching active source, if any. |
 | `GET, POST /api/projects/{projectId}/skill-marketplaces/sources` | List or add revisioned project skill sources. |
 | `PUT, DELETE /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}` | Update or tombstone a source with its expected revision. |
 | `GET /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/browse` | Resolve a source ref to a commit and return a bounded, filtered, paged manifest index. |
@@ -278,6 +279,7 @@ does not produce a receipt.
   tokens transiently.
 - Project provider overrides only select provider IDs permitted by the platform catalog. Exclusive, ordered-composite, platform-singleton, layered and meter-keyed Cost seams use the existing `ProviderResolver`; Application Hosting remains unsupported. Cost requirements name a source explicitly, and multiple distinct meter sources can appear in one selection. The snapshot preserves source keys, adapter/options versions and advertised/required capabilities.
 - The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits can only reduce configured platform limits. A prompt-token limit is optional in new platform defaults and run selections. A project inherits the configured platform cap, can narrow it, or can add a cap when the platform has none. Omission stays absent in new selections. Existing configured values and accepted snapshots remain unchanged.
+- `runLimits.spendBudgets` follows the same rule. A project inherits each platform spend budget, can narrow one by reusing its `budgetId`, and can add its own budgets. The run selection snapshot pins run and agent budgets. `GET /api/projects/{projectId}/runs/{runId}/spend-budgets` returns the current project-scope budgets to Orchestrator for each dispatch, so a changed project budget applies to running work. When this route returns `404 Not Found`, Orchestrator treats the project as having no project-scope budgets and enforces only the pinned run and agent budgets. This keeps Orchestrator compatible with a Projects deployment that doesn't serve the route yet.
 - The immutable run-selection snapshot carries the typed platform egress
   baseline, optional project narrowing, admitted run needs, and the effective
   allow list. It also carries each layered Network Policy provider's layer,
