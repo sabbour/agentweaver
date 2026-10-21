@@ -9,15 +9,18 @@ const items: AttentionItem[] = [
   { projectId: 'p1', runId: 'r1', sessionId: 's2', requestId: 'a1', kind: 'awaitingPlanApproval', prompt: null },
 ];
 
+/** Builds a RunAttention value bound to run r1, with no items unless overridden. */
 function attention(overrides: Partial<RunAttention> = {}): RunAttention {
   return { binding: { projectId: 'p1', runId: 'r1' }, items: [], loading: false, error: null, reload: vi.fn(), ...overrides };
 }
 
+/** Prints the current route so tests can check where a click navigated. */
 function LocationProbe() {
   const location = useLocation();
   return <p data-testid="location">{`${location.pathname}${location.search}`}</p>;
 }
 
+/** Renders the element inside a router, next to the location probe. */
 function renderWithRouter(element: React.ReactElement) {
   return render(
     <MemoryRouter initialEntries={['/start']}>
@@ -33,6 +36,7 @@ describe('AttentionList', () => {
   });
 
   it('shows an error before the loading state', () => {
+    // A background re-poll can be loading while the last read failed; the error must stay visible.
     renderWithRouter(<AttentionList attention={attention({ error: new Error('Boom'), loading: true })} />);
     expect(screen.getByRole('alert').textContent).toBe('Could not check the open run. Boom');
   });
@@ -96,6 +100,7 @@ describe('AttentionList with notifications', () => {
   it('opens the decision pinned to the notified request and state version', () => {
     renderWithRouter(<AttentionList attention={attention({ binding: null, source: 'notifications', items: notified })} />);
     fireEvent.click(screen.getByText('Which branch?'));
+    // The link carries the request and version so the decision view can reject a gate that changed.
     expect(screen.getByTestId('location').textContent)
       .toBe('/projects/p1/runs/r2?view=approvals&requestId=q1&stateVersion=7');
   });
@@ -131,6 +136,7 @@ describe('AttentionBell as the caller inbox', () => {
     expect(bell.getAttribute('aria-label')).toBe('Notifications, 2 need your input');
     fireEvent.click(bell);
     await screen.findByText('Deploy?');
+    // The inbox spans runs, so there is no single run to open.
     expect(screen.queryByRole('button', { name: 'Open run' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss Question in run r2' }));
     expect(dismiss).toHaveBeenCalledWith(notified[0]);

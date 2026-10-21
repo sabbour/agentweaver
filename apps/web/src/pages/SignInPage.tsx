@@ -100,6 +100,8 @@ export interface SignInPageProps {
 export function SignInPage({ sessionError = null }: SignInPageProps) {
 
   const params = new URLSearchParams(window.location.search);
+  // The server redirects back here with ?auth=error&reason=... when sign-in fails.
+  // Map each known reason to plain guidance. Unknown reasons get a generic message.
   const authError = params.get('auth') === 'error' ? (() => {
     switch (params.get('reason')) {
       case 'access_denied':
@@ -123,7 +125,11 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
   );
 }
 
-/** Retains the sign-in presentation while each product line owns authorization. */
+/**
+ * Shared sign-in layout. Each caller passes its own heading and sign-in button, so the
+ * 0.x Entra page and the v1 sign-in page look the same but start different auth flows.
+ * `error` is shown as an alert under the button; `note` is optional extra text.
+ */
 export function SignInView({ heading, sessionError, action, error, note }: {
   heading: string;
   sessionError?: string | null;

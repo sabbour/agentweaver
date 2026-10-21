@@ -27,12 +27,17 @@ const ROLE_LABELS: Record<ProjectRole, string> = {
 
 /** Plain text for role-assignment failures the user can act on. */
 function changeError(reason: unknown): string {
+  // Only gateway errors carry a status and error code. Map the known ones to a
+  // next step. Anything else falls through to the generic message.
   if (reason instanceof GatewayError) {
+    // 503 means the role-assignment backend is not configured on this deployment.
     if (reason.status === 503) return 'Role changes aren\'t available yet. An operator must finish setting up the service.';
     if (reason.code === 'role_assignment_exists') return 'This member already has that role.';
     if (reason.code === 'last_project_owner') return 'A project needs at least one owner. Add another owner first.';
     if (reason.code === 'revision_conflict') return 'Someone else changed this member. Reload and try again.';
     if (reason.code === 'project_archived') return 'Restore the project before you change its members.';
+    // Check the specific codes above first. A plain 403 means the caller lacks
+    // the tenant administrator role that member changes need.
     if (reason.status === 403) return 'Only a tenant administrator can change project members.';
   }
   return errorMessage(reason);
@@ -48,14 +53,18 @@ export function ProjectMembersPanel({ projectId, canManage }: { projectId: strin
   const [role, setRole] = useState<ProjectRole>('contributor');
   const [busy, setBusy] = useState(false);
   const [changeMessage, setChangeMessage] = useState<string | null>(null);
+  // The assignment waiting for confirmation in the remove dialog. Null closes the dialog.
   const [removing, setRemoving] = useState<ProjectRoleAssignment | null>(null);
 
+  /** Reads the member list. Used on first render and after every change. */
   const load = useCallback(async () => {
     setLoading(true);
     try {
       setList(await apiCall((token, tenant) => gatewayClient.listProjectRoleAssignments(token, projectId, tenant), null));
       setLoadError(null);
     } catch (reason) {
+      // Drop the old list so the panel shows the error (for example "not
+      // allowed" or "not available") instead of members that may be stale.
       setList(null);
       setLoadError(reason);
     } finally {
@@ -64,19 +73,27 @@ export function ProjectMembersPanel({ projectId, canManage }: { projectId: strin
   }, [apiCall, projectId]);
 
   useEffect(() => {
+    // Start the load in a timer instead of directly in the effect, so state is
+    // not set synchronously during the effect. Clearing the timer on cleanup
+    // skips the load if the panel unmounts or the project changes first.
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  /** Assigns the chosen role to the typed member ID, then reloads the list. */
   const add = async (event: FormEvent) => {
     event.preventDefault();
     const subject = principalId.trim();
+    // Enter can submit even when the button is disabled, so check again here.
     if (!subject) return;
     setBusy(true);
     setChangeMessage(null);
     try {
       await apiCall((token, tenant) => gatewayClient.assignProjectRole(token, projectId, { principalId: subject, role }, tenant), null);
+      // Clear the input only on success, so a failed add keeps the typed ID.
       setPrincipalId('');
+      // Reload from the server instead of adding the row locally, so the table
+      // shows the server's assignment ID, revision, and created time.
       await load();
     } catch (reason) {
       setChangeMessage(changeError(reason));
@@ -85,16 +102,20 @@ export function ProjectMembersPanel({ projectId, canManage }: { projectId: strin
     }
   };
 
+  /** Revokes one role assignment after the user confirms, then reloads the list. */
   const remove = async (assignment: ProjectRoleAssignment) => {
     setBusy(true);
     setChangeMessage(null);
     try {
+      // Send the revision the user saw. The server rejects the revoke if the
+      // assignment changed since then.
       await apiCall((token, tenant) => gatewayClient.revokeProjectRoleAssignment(
         token, projectId, assignment.assignmentId, assignment.revision, tenant,
       ), null);
       setRemoving(null);
       await load();
     } catch (reason) {
+      // Close the dialog on failure too, so the error message above the list is visible.
       setRemoving(null);
       setChangeMessage(changeError(reason));
     } finally {
@@ -102,6 +123,13 @@ export function ProjectMembersPanel({ projectId, canManage }: { projectId: strin
     }
   };
 
+  // Pick one panel body. The order matters:
+  // 1. Show the spinner only on the first load. Reloads after a change keep the
+  //    current table on screen so it does not flicker.
+  // 2. 403: the caller may not read members. Explain who can, not a raw error.
+  // 3. 404, 405, or 501: the service does not offer this API yet. Say so plainly.
+  // 4. Any other error: show the error notice with its code.
+  // 5. Otherwise show the table and, for administrators, the add form.
   let body;
   if (loading && !list) body = <Loading label="Loading members" />;
   else if (loadError instanceof GatewayError && loadError.status === 403)
@@ -163,6 +191,7 @@ export function ProjectMembersPanel({ projectId, canManage }: { projectId: strin
       {body}
       <AppDialog
         open={removing !== null}
+        // Closing the dialog (Escape, outside click, or Cancel) forgets the pending removal.
         onOpenChange={(open) => { if (!open) setRemoving(null); }}
         title="Remove member"
         primaryAction={removing ? { label: 'Remove', onClick: () => void remove(removing), disabled: busy, loading: busy } : undefined}

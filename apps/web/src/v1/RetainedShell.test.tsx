@@ -12,8 +12,10 @@ describe('BrokerIdentity', () => {
 
     const trigger = screen.getByRole('button', { name: 'Account' });
     expect(within(trigger).getByText('Account')).toBeDefined();
+    // Expanded rail: avatar and label sit at the left, like the older persona row.
     expect(getComputedStyle(trigger).justifyContent).toBe('flex-start');
 
+    // The menu footer shows the app version and a working Sign out button.
     fireEvent.click(trigger);
     const footer = await screen.findByTestId('identity-menu-footer');
     expect(within(footer).getByText(`v${packageInfo.version}`)).toBeDefined();
@@ -25,6 +27,7 @@ describe('BrokerIdentity', () => {
     render(<BrokerIdentity collapsed />);
 
     const trigger = screen.getByRole('button', { name: 'Account' });
+    // The label is hidden and the avatar is centered in the narrow rail.
     expect(within(trigger).queryByText('Account')).toBeNull();
     expect(getComputedStyle(trigger).justifyContent).toBe('center');
   });

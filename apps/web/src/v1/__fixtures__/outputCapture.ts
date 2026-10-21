@@ -3,6 +3,10 @@ import type { SourceControlOutputCaptureDetail } from '../contracts';
 /** Saved owner output shared by component and browser tests, never product data. */
 export const capturedText = '# Release notes\n\nThe build is ready.\n';
 export const capturedPath = 'docs/release notes.md';
+/**
+ * A capture whose manifest matches `capturedText`: the sha256 and byteLength
+ * are the real values for that text, so the browser's file check passes.
+ */
 export const captureDetail = (runId = 'r-1', captureId = 'capture-1'): SourceControlOutputCaptureDetail => ({
   capture: {
     captureId, eventId: '49dc5764-321d-49ec-96c2-d66b87476aa2', eventPosition: 1,

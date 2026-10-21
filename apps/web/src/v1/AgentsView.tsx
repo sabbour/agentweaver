@@ -3,7 +3,8 @@
  * detail drawer with Overview and Charter tabs. Agents come from the project
  * configuration's `agentCharters`; "In the team" means the agent has a casting
  * entry. Charter edits save a new configuration revision. Casting, adding, and
- * removing agents need casting through the Gateway (gap G4) and are not shown.
+ * removing agents need casting support in the Gateway, which does not exist yet,
+ * so they are not shown.
  */
 import {
   Badge, Button, DrawerBody, DrawerHeader, DrawerHeaderTitle, Field, Input, OverlayDrawer,
@@ -40,22 +41,31 @@ function AgentDetail({ projectId, agent, configuration, readOnly, onClose, onSav
   onSave: (next: ProjectConfiguration) => Promise<boolean>;
 }) {
   const styles = useStyles();
+  // Form fields start from the agent's saved values. The parent remounts this
+  // component (by key) when another agent is opened, so values never carry over.
   const [tab, setTab] = useState<'overview' | 'charter'>('overview');
   const [role, setRole] = useState(agent.role);
   const [charter, setCharter] = useState(agent.charter);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // An agent is "in the team" only when it has a casting entry.
   const casting = configuration.casting.find((item) => item.agentId === agent.agentId);
+  // A skill applies if it is enabled and either lists no agents (all agents) or lists this one.
   const skills = configuration.skills.filter((skill) => skill.enabled && (!skill.agentIds?.length || skill.agentIds.includes(agent.agentId)));
+  // Save is enabled only after a real change.
   const dirty = role !== agent.role || charter !== agent.charter;
+  /** Saves a full configuration where only this agent's role and charter differ. */
   const save = async () => {
     setSaving(true);
     setSaved(false);
+    // The configuration is saved as a whole revision, so copy it and replace just
+    // this one charter entry. The role is trimmed; the charter text is kept as typed.
     const ok = await onSave({
       ...configuration,
       agentCharters: configuration.agentCharters.map((item) => item.agentId === agent.agentId ? { ...item, role: role.trim(), charter } : item),
     });
     setSaving(false);
+    // Show "Charter saved." only when onSave reports success.
     setSaved(ok);
   };
   return (
@@ -127,10 +137,15 @@ export function AgentsView({ projectId, configuration, readOnly, onSave }: {
 }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Agent ids that have a casting entry, i.e. are in the team.
   const cast = new Set(configuration.casting.map((item) => item.agentId));
   const agents = configuration.agentCharters;
   const teamCount = agents.filter((agent) => cast.has(agent.agentId)).length;
+  // 'all' shows everyone. Otherwise keep agents whose team membership matches the
+  // tab: 'team' wants members, 'other' wants non-members.
   const visible = agents.filter((agent) => filter === 'all' || (filter === 'team') === cast.has(agent.agentId));
+  // Look the agent up by id on each render, so the drawer closes on its own if
+  // the agent disappears from a newer configuration.
   const selected = agents.find((agent) => agent.agentId === selectedId) ?? null;
 
   if (agents.length === 0) {

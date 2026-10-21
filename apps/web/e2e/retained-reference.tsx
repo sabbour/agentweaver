@@ -1,4 +1,7 @@
-/** Test-only rendering of the actual 0.x components with the same output fixture as the PR journey. */
+/**
+ * Test-only page that renders the real retained 0.x file components with the
+ * same output fixture as the artifact journey, for side-by-side screenshots.
+ */
 import { FluentProvider } from '@fluentui/react-components';
 import { createRoot } from 'react-dom/client';
 import { useState } from 'react';
@@ -7,8 +10,11 @@ import { FileViewer } from '../src/components/FileViewer';
 import { agentweaverLightTheme } from '../src/theme';
 import { capturedPath, capturedText } from '../src/v1/__fixtures__/outputCapture';
 
+/** Returns the fixture file for any path, since the reference shows one file only. */
 const getContent = async () => ({ path: capturedPath, content: capturedText, is_binary: false, language: null });
+/** Two-column file tree and viewer, sized like the file browser in the new app. */
 export default function Reference() {
+  // No file is open at first, like the new app; the test clicks the file.
   const [path, setPath] = useState<string | null>(null);
   return <FluentProvider theme={agentweaverLightTheme}>
     <style>{`

@@ -133,6 +133,8 @@ describe('Skills and marketplace panel', () => {
     expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
   });
 
+  // The stat strip must count real props and loaded sources, the Catalog tab must open first,
+  // and marketplace sources must live in the dialog, not on the page.
   it('shows the 0.x stat strip, toolbar, and Catalog/Assignments tabs from loaded data', async () => {
     render(
       <SkillsMarketplacePanel
@@ -147,6 +149,7 @@ describe('Skills and marketplace panel', () => {
       />,
     );
 
+    // Reads the number shown next to a stat label in the strip.
     const metricValue = (label: string) =>
       screen.getByText(label).parentElement?.nextElementSibling?.textContent;
     expect(metricValue('Assigned')).toBe('2');
@@ -619,6 +622,8 @@ describe('Skills and marketplace panel', () => {
     ));
     const importRequest = vi.mocked(actions.importSkillContent).mock.calls[0][1];
     expect(importRequest.idempotencyKey).toBeTruthy();
+    // After an import the dialog tells the user where to assign the skill, and closing it
+    // must switch to the Assignments tab.
     expect(screen.getByText(/Close this dialog to assign it on the Assignments tab/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));

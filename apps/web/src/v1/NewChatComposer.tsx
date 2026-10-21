@@ -36,7 +36,9 @@ export function NewChatComposer({
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Idempotency key for the current draft. null means "make a new one on the next send".
   const key = useRef<string | null>(null);
+  // The draft scope the current key was made for.
   const keyScope = useRef(draftScope);
   // State updates are async; this ref blocks a second submit fired before the re-render.
   const sending = useRef(false);
@@ -45,19 +47,24 @@ export function NewChatComposer({
     event.preventDefault();
     const value = text.trim();
     if (!value || sending.current || blocked) return;
+    // The target changed (for example another project was picked). The old key
+    // belongs to a different request, so drop it and make a new one.
     if (keyScope.current !== draftScope) {
       key.current = null;
       keyScope.current = draftScope;
     }
+    // Reuse the key on a retry of the same draft; make one on the first send.
     key.current ??= crypto.randomUUID();
     sending.current = true;
     setBusy(true);
     setError(null);
     try {
       await onSubmit(value, key.current);
+      // Sent: clear the draft and its key.
       key.current = null;
       setText('');
     } catch (reason) {
+      // Keep the text and the key, so pressing Send again retries the same request.
       setError(reason);
     } finally {
       sending.current = false;
@@ -77,6 +84,7 @@ export function NewChatComposer({
           resize="vertical"
           onChange={(_, data) => { setText(data.value); key.current = null; }}
           onKeyDown={(event) => {
+            // Ctrl+Enter (Cmd+Enter on Mac) sends. requestSubmit runs the normal form submit path.
             if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();

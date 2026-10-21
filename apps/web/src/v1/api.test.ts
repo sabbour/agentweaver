@@ -3,6 +3,9 @@ import { AgentweaverGatewayClient } from './api';
 import type { KnowledgeRecordTransferBundle } from './contracts';
 
 describe('Gateway API client', () => {
+  // Output capture reads must encode ids (a '/' must not change the route), send both
+  // paging cursor fields together, return file bytes unparsed, never send cookies,
+  // never use the browser cache, and keep the server's error code on failure.
   it('encodes capture routes, forwards paired cursors, and reads raw file bytes without ambient credentials', async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ captures: [] })))
@@ -148,6 +151,7 @@ describe('Gateway API client', () => {
     expect(init?.method).toBe('POST');
   });
 
+  // The revision the user saw is sent so the server can reject an edit based on stale data.
   it('renames or archives a project with the displayed project revision', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),
@@ -162,6 +166,8 @@ describe('Gateway API client', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 4, name: 'Launch', state: 'archived' });
   });
 
+  // Revoke must send the assignment revision as `expectedRevision` so a changed
+  // assignment is not revoked by mistake.
   it('lists, assigns and revokes project roles on the role-assignment contract', async () => {
     const assignment = {
       assignmentId: '7f8c1a2e-0000-4000-8000-000000000001', principalId: 'user-2', role: 'viewer',
@@ -186,6 +192,7 @@ describe('Gateway API client', () => {
     expect(fetcher.mock.calls[2][1]?.method).toBe('DELETE');
   });
 
+  // A response for another project must be treated as a broken server answer, not shown.
   it('rejects a role-assignment list for a different project', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ projectId: 'other', assignments: [] }), { status: 200 }),

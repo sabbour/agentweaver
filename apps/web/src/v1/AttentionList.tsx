@@ -60,6 +60,9 @@ export function AttentionList({ attention, onNavigate }: { attention: RunAttenti
   const styles = useStyles();
   const [dismissError, setDismissError] = useState<unknown>(null);
   const notifications = attention.source === 'notifications';
+  // Show exactly one state line, checked in order: no run bound, read error,
+  // still loading, nothing pending. Only then render the list.
+  // Run attention needs a bound run. Notification attention works without one.
   if (!notifications && !attention.binding) return <Caption1 className={styles.empty}>Open a run to see what needs your input.</Caption1>;
   if (attention.error) return (
     <Caption1 className={styles.empty} role="alert">
@@ -68,6 +71,7 @@ export function AttentionList({ attention, onNavigate }: { attention: RunAttenti
   );
   if (attention.loading) return <Caption1 className={styles.empty}>{notifications ? 'Checking notifications…' : 'Checking the open run…'}</Caption1>;
   if (attention.items.length === 0) return <Caption1 className={styles.empty}>{notifications ? 'Nothing needs your input.' : 'Nothing needs your input in the open run.'}</Caption1>;
+  // Copy to a local const so TypeScript keeps it narrowed inside the click handler.
   const dismiss = attention.dismiss;
   return (
     <div className={styles.list} role="list" aria-label="Needs your input">
@@ -80,7 +84,9 @@ export function AttentionList({ attention, onNavigate }: { attention: RunAttenti
             <Caption1>Run {item.runId}</Caption1>
           </>
         );
+        // Session id plus request id is unique across runs.
         const key = `${item.sessionId}/${item.requestId}`;
+        // Without a dismiss action (or for a non-notification item), the whole row is one link.
         if (!dismiss || !item.notificationId) return (
           <Link key={key} role="listitem" className={styles.item} to={attentionPath(item)} onClick={onNavigate}>
             {content}
@@ -94,6 +100,8 @@ export function AttentionList({ attention, onNavigate }: { attention: RunAttenti
               size="small"
               aria-label={`Dismiss ${DECISION_TITLES[item.kind]} in run ${item.runId}`}
               onClick={() => {
+                // Clear any old error first, then show a new one only if this dismiss fails.
+                // On success the list reloads and the item disappears.
                 setDismissError(null);
                 void dismiss(item).catch((reason: unknown) => setDismissError(reason));
               }}
@@ -137,6 +145,7 @@ export function AttentionBell({ attention }: { attention: RunAttention }) {
           </div>
           {attention.binding && (
             <Button appearance="subtle" onClick={() => {
+              // Close the popover first so it does not stay open over the run page.
               setOpen(false);
               navigate(`/projects/${encodeURIComponent(attention.binding!.projectId)}/runs/${encodeURIComponent(attention.binding!.runId)}`);
             }}>

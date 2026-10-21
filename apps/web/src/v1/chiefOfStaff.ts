@@ -25,7 +25,9 @@ export interface PendingChat {
 /** sessionStorage key for created chats that still need start after a reload or sign-in redirect. */
 export const PENDING_CHAT_STORAGE_KEY = 'agentweaver.cos.pending-chats';
 
+/** Type guard for one stored pending chat. Storage is user-editable, so every field is checked. */
 function isPendingChat(value: unknown): value is PendingChat {
+  // Reject null, numbers, strings and other non-object entries first.
   if (!value || typeof value !== 'object') return false;
   const entry = value as Record<string, unknown>;
   return typeof entry.projectId === 'string' && typeof entry.runId === 'string' && typeof entry.rootSessionId === 'string';
@@ -34,13 +36,17 @@ function isPendingChat(value: unknown): value is PendingChat {
 /** Reads pending chats. Malformed storage reads as empty. */
 export function readPendingChats(): PendingChat[] {
   try {
+    // A missing key reads as an empty list.
     const parsed: unknown = JSON.parse(window.sessionStorage.getItem(PENDING_CHAT_STORAGE_KEY) ?? '[]');
+    // Keep only well-formed entries; drop anything else instead of failing.
     return Array.isArray(parsed) ? parsed.filter(isPendingChat) : [];
   } catch {
+    // Invalid JSON or blocked storage: behave as if nothing is pending.
     return [];
   }
 }
 
+/** Writes the pending chat list. An empty list removes the key so no stale entry stays behind. */
 function writePendingChats(entries: PendingChat[]) {
   try {
     if (entries.length === 0) window.sessionStorage.removeItem(PENDING_CHAT_STORAGE_KEY);
@@ -57,6 +63,7 @@ export function savePendingChat(created: CreateProjectRunResponse) {
     runId: created.runId,
     rootSessionId: created.rootSessionId,
   };
+  // Replace any older entry for the same run so a retry never stores duplicates.
   writePendingChats([...readPendingChats().filter((item) => item.runId !== entry.runId), entry]);
 }
 
@@ -82,9 +89,16 @@ export function useStartChat() {
   const { apiCall, ensureSession } = useAuth();
   return useCallback(async (chat: PendingChat): Promise<StartChatResult> => {
     const binding = { projectId: chat.projectId, runId: chat.runId };
+    // Step 1: link the run to the caller's conversation list. This uses the
+    // unbound session (null binding) because no run token exists yet.
     await apiCall((token, tenant) => gatewayClient.bindChiefOfStaffConversation(token, binding, tenant), null);
+    // Step 2: get a token bound to this run without a popup (interactive = false).
+    // If that needs sign-in, stop here; the pending entry stays so start resumes later.
     if (!await ensureSession(binding, false)) return 'sign_in_required';
+    // Step 3: start the run with the run-bound token. This sends the first message.
     await apiCall((token, tenant) => gatewayClient.startProjectRun(token, chat.projectId, chat.runId, tenant), binding);
+    // Only forget the pending entry after start succeeded. Any thrown error above
+    // leaves it in storage so the user can retry.
     clearPendingChat(chat.runId);
     return 'started';
   }, [apiCall, ensureSession]);
@@ -109,18 +123,25 @@ export function useChiefOfStaffConversations(): ConversationListState {
   const [state, setState] = useState<{ items: ChiefOfStaffConversation[]; nextCursor: string | null; error: unknown; loaded: boolean }>(
     { items: [], nextCursor: null, error: null, loaded: false },
   );
+  // `generation` goes up on every reload. The first-page effect reruns when it changes.
+  // The ref mirrors it so an in-flight "load more" can tell that a reload happened.
   const [generation, setGeneration] = useState(0);
   const generationRef = useRef(generation);
   useEffect(() => { generationRef.current = generation; }, [generation]);
 
+  // Reads one page. A null cursor means the first (newest) page.
   const readPage = useCallback((cursor: string | null): Promise<ChiefOfStaffConversationPage> => apiCall(
     (token, tenant) => gatewayClient.listChiefOfStaffConversations(token, { cursor, pageSize: CONVERSATION_PAGE_SIZE }, tenant),
     null,
   ), [apiCall]);
 
+  // Load the first page on mount and after each reload.
   useEffect(() => {
+    // `active` turns false on cleanup, so a late response from an old read is ignored.
     let active = true;
+    // Defer the read by one tick so state is not set synchronously inside the effect.
     const timer = window.setTimeout(() => {
+      // A first-page read replaces the whole list. On failure the list is cleared and the error kept.
       void readPage(null).then(
         (page) => { if (active) setState({ items: page.items, nextCursor: page.nextCursor, error: null, loaded: true }); },
         (reason: unknown) => { if (active) setState({ items: [], nextCursor: null, error: reason, loaded: true }); },
@@ -134,19 +155,28 @@ export function useChiefOfStaffConversations(): ConversationListState {
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
   const nextCursor = state.nextCursor;
+  // Appends the next page to the current list.
   const loadMore = useCallback(() => {
+    // No cursor means the last page is already loaded.
     if (!nextCursor) return;
+    // Remember which reload this request belongs to.
     const started = generationRef.current;
     void readPage(nextCursor).then((page) => {
+      // A reload happened while this page was loading; its result is stale.
       if (generationRef.current !== started) return;
+      // If the cursor already moved (another load more finished first), keep the newer state.
+      // Otherwise append, skipping conversations that are already listed so a list
+      // that shifted between pages never shows the same item twice.
       setState((previous) => previous.nextCursor !== nextCursor ? previous : {
         ...previous,
         items: [...previous.items, ...page.items.filter((item) => !previous.items.some((known) => known.conversationId === item.conversationId))],
         nextCursor: page.nextCursor,
       });
+    // A failed "load more" keeps the items already shown and only records the error.
     }, (reason: unknown) => setState((previous) => ({ ...previous, error: reason })));
   }, [nextCursor, readPage]);
 
+  // Expose loadMore only when another page exists, so the UI can hide the button.
   return { items: state.items, loading: !state.loaded, error: state.error, reload, loadMore: nextCursor ? loadMore : undefined };
 }
 
@@ -165,26 +195,35 @@ export function useChiefOfStaffPriorities(): PriorityListState {
   const [list, setList] = useState<ChiefOfStaffPriorityList | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loaded, setLoaded] = useState(false);
+  // Tracks whether the hook is still mounted, so late responses do not set state.
   const mounted = useRef(true);
 
+  // Reads the list again. It also returns the list (or null on failure) so callers
+  // can act on fresh data, for example after a write conflict.
   const reload = useCallback(async () => {
     try {
       const next = await apiCall((token, tenant) => gatewayClient.listChiefOfStaffPriorities(token, tenant), null);
       if (mounted.current) {
+        // A successful read clears any earlier error.
         setList(next);
         setError(null);
       }
       return next;
     } catch (reason) {
+      // Keep the last good list on screen and record the error. The caller gets null.
       if (mounted.current) setError(reason);
       return null;
     } finally {
+      // Loading ends after the first attempt, whether it worked or not.
       if (mounted.current) setLoaded(true);
     }
   }, [apiCall]);
 
+  // Initial read. Set `mounted` again here because React may run cleanup and
+  // then this effect again (for example in Strict Mode).
   useEffect(() => {
     mounted.current = true;
+    // Defer by one tick so state is not set synchronously inside the effect.
     const timer = window.setTimeout(() => { void reload(); }, 0);
     return () => {
       mounted.current = false;
@@ -200,8 +239,12 @@ export function useProjectChoices(): { projects: ProjectSummary[] | null; error:
   const { apiCall } = useAuth();
   const [state, setState] = useState<{ projects: ProjectSummary[] | null; error: unknown }>({ projects: null, error: null });
   useEffect(() => {
+    // Ignore the response if the component unmounted while it was loading.
     let active = true;
+    // Defer by one tick so state is not set synchronously inside the effect.
     const timer = window.setTimeout(() => {
+      // On failure use an empty list (not null) so pickers stop showing "loading"
+      // and can show the error instead.
       void apiCall((token, tenant) => gatewayClient.listProjects(token, tenant), null).then(
         (projects) => { if (active) setState({ projects, error: null }); },
         (reason: unknown) => { if (active) setState({ projects: [], error: reason }); },

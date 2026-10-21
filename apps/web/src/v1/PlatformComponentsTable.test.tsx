@@ -17,6 +17,7 @@ function candidate(providerId: string, overrides: Partial<ProviderCandidate> = {
   };
 }
 
+/** Covers an ordered list, an empty single choice with a meter source, and an unknown cardinality. */
 const components: EffectiveProviderSelection[] = [
   {
     seam: 'sandboxRuntime',
@@ -57,6 +58,7 @@ describe('PlatformComponentsTable', () => {
     expect(within(rows[0]).getByText('Ordered list')).toBeTruthy();
     expect(within(rows[1]).getByText('One')).toBeTruthy();
     expect(within(rows[1]).getByText('None')).toBeTruthy();
+    // An unknown cardinality is shown as sent rather than hidden or guessed.
     expect(within(rows[2]).getByText('custom-mode')).toBeTruthy();
   });
 

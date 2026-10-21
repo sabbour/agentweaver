@@ -1589,6 +1589,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                     if (await WaitForConsentPromptOrTokenAsync(page, reverseProxy))
                         await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
                     // Memories first asks for the run sign-in silently; the button shows only when that fails.
+                    // So wait for whichever comes first: the button, or the seeded memory after a silent success.
                     await runSignIn.Or(originalMemory).First.WaitForAsync();
                 }
                 catch (Exception exception)
@@ -1610,6 +1611,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 Assert.Equal(
                     browserOwnerSubject,
                     SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(browserToken).Claims, "sub"));
+                // Click only when the silent run sign-in failed and the button is showing.
                 if (await runSignIn.IsVisibleAsync())
                     await runSignIn.ClickAsync();
                 try
@@ -1642,6 +1644,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                 await page.GetByLabel("Rationale").FillAsync("Integrated UI proof");
                 await page.GetByLabel("Tags (comma-separated)").FillAsync("browser,integrated");
                 await page.GetByRole(AriaRole.Button, new() { Name = "Create record" }).ClickAsync();
+                // Each Knowledge action shows a short confirmation with the owner's result code.
+                // The test then checks the list and the stored record, not just the message.
                 await page.GetByText(
                     "Record created (Created). The list shows its saved state.")
                     .WaitForAsync();

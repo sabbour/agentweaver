@@ -10,6 +10,7 @@ function type(value: string) {
   fireEvent.change(textbox(), { target: { value } });
 }
 
+/** Clicks Send and waits for the async submit to settle. */
 async function send() {
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send' })); });
 }
@@ -42,9 +43,11 @@ describe('NewChatComposer', () => {
     type('hello');
     await send();
     expect(await screen.findByText('Timed out')).toBeTruthy();
+    // The draft is kept after a failure so the user can retry.
     expect(textbox().value).toBe('hello');
     await send();
     expect(onSubmit).toHaveBeenCalledTimes(2);
+    // Same key on retry, so the server can drop a duplicate if the first send did arrive.
     expect(onSubmit.mock.calls[1][1]).toBe(onSubmit.mock.calls[0][1]);
     await waitFor(() => expect(screen.queryByText('Timed out')).toBeNull());
   });
@@ -56,6 +59,7 @@ describe('NewChatComposer', () => {
     await send();
     type('first');
     await send();
+    // Same text sent twice on purpose is two messages, so the keys must differ.
     expect(onSubmit).toHaveBeenCalledTimes(2);
     expect(onSubmit.mock.calls[1][1]).not.toBe(onSubmit.mock.calls[0][1]);
   });
@@ -95,6 +99,7 @@ describe('NewChatComposer', () => {
   });
 
   it('shows Sending… and disables Send while a send is in flight', async () => {
+    // Keep the send pending until the test resolves it.
     let resolve!: () => void;
     const onSubmit = vi.fn(() => new Promise<void>((done) => { resolve = done; }));
     render(<NewChatComposer onSubmit={onSubmit} />);

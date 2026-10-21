@@ -86,6 +86,8 @@ const useStyles = makeStyles({
 function isRevisionConflict(error: unknown): boolean {
   if (!(error instanceof GatewayError) || error.status !== 409) return false;
   const code = errorCode(error);
+  // Some 409s are not stale-revision errors: a duplicate link or a reached limit.
+  // Rereading would not fix those, so they are shown as normal errors instead.
   return code !== 'priority_link_exists' && !code?.endsWith('_limit_reached');
 }
 
@@ -94,11 +96,13 @@ function writeErrorText(error: unknown): string {
   const code = errorCode(error);
   if (code === 'priority_link_exists') return 'This link is already on the Priority.';
   if (code === 'priority_limit_reached') return 'You reached the Priority limit. Drop or remove one first.';
+  // Any other limit code is a per-Priority limit, such as too many links or checklist items.
   if (code?.endsWith('_limit_reached')) return 'This Priority reached its limit for that item.';
   if (code === 'project_read_permission_denied') return 'You can no longer read that project.';
   return errorMessage(error);
 }
 
+/** Message shown under a Priority or the list: a stale-data conflict, or any other write error. */
 type Notice = { kind: 'conflict' } | { kind: 'error'; error: unknown };
 
 /**
@@ -114,9 +118,12 @@ export function PrioritiesPanel({ priorities, projects, conversations }: {
 }) {
   const styles = useStyles();
   const { apiCall } = useAuth();
+  // One notice slot per Priority, keyed by priorityId, so an error shows next to the item it belongs to.
   const [notices, setNotices] = useState<Record<string, Notice | undefined>>({});
+  // Reorder affects the whole list, so it has its own notice and busy flag.
   const [orderNotice, setOrderNotice] = useState<Notice | null>(null);
   const [orderBusy, setOrderBusy] = useState(false);
+  // projectId -> project name, used to label links.
   const projectNames = useMemo(() => new Map((projects ?? []).map((project) => [project.projectId, project.name])), [projects]);
   const list = priorities.list;
 
@@ -126,38 +133,55 @@ export function PrioritiesPanel({ priorities, projects, conversations }: {
     operation: (token: string, tenant: string | null) => Promise<ChiefOfStaffPriority>,
   ): Promise<boolean> => {
     try {
+      // Priority routes use the unbound session (null binding); they are not tied to a run.
       const updated = await apiCall(operation, null);
+      // The server returns the whole updated Priority. Swap it into the list in place
+      // instead of rereading everything. Order and other items stay as they are.
       priorities.replace((current) => current && {
         ...current,
         items: current.items.map((item) => item.priorityId === updated.priorityId ? updated : item),
       });
+      // Success clears any old notice for this Priority.
       setNotices((current) => ({ ...current, [priorityId]: undefined }));
       return true;
     } catch (reason) {
+      // A stale revision or a Priority that no longer exists means our copy is out of date.
+      // Reread the list and show the conflict notice. We return false so the caller keeps
+      // its draft (form text, new item text) and the user can try again.
       if (isRevisionConflict(reason) || (reason instanceof GatewayError && reason.status === 404)) {
         await priorities.reload();
         setNotices((current) => ({ ...current, [priorityId]: { kind: 'conflict' } }));
       } else {
+        // Other failures (limits, duplicate link, permission, network) keep the current data.
         setNotices((current) => ({ ...current, [priorityId]: { kind: 'error', error: reason } }));
       }
       return false;
     }
   };
 
+  /** Moves one Priority up (-1) or down (+1) by swapping it with its neighbor. */
   const move = async (index: number, offset: -1 | 1) => {
     if (!list) return;
     const ids = list.items.map((item) => item.priorityId);
     const target = index + offset;
+    // Ignore moves past either end of the list.
     if (target < 0 || target >= ids.length) return;
     [ids[index], ids[target]] = [ids[target], ids[index]];
+    // Disable all move buttons while the reorder is in flight, so two swaps
+    // cannot be sent against the same order revision.
     setOrderBusy(true);
     setOrderNotice(null);
     try {
+      // Send the full new order plus the order revision we saw. The server
+      // rejects it if someone else changed the order in the meantime.
       const next = await apiCall((token, tenant) => gatewayClient.reorderChiefOfStaffPriorities(
         token, { expectedOrderRevision: list.orderRevision, priorityIds: ids }, tenant,
       ), null);
+      // The server returns the whole list in its new order.
       priorities.replace(next);
     } catch (reason) {
+      // Treat any 409, or an id set that no longer matches the server
+      // (a Priority was added or removed elsewhere), as stale order: reread and say so.
       const stale = (reason instanceof GatewayError && reason.status === 409) || errorCode(reason) === 'priority_order_invalid';
       if (stale) await priorities.reload();
       setOrderNotice(stale ? { kind: 'conflict' } : { kind: 'error', error: reason });
@@ -207,7 +231,11 @@ function CreatePriorityForm({ priorities }: { priorities: PriorityListState }) {
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // Idempotency key for the current draft. A retry of the same draft reuses it,
+  // so a timed-out create that actually succeeded is not created twice.
   const key = useRef<string | null>(null);
+  // Ref guard against double submit (for example a fast double Enter). State
+  // updates are async, so `busy` alone is not enough.
   const sending = useRef(false);
 
   const submit = async (event: FormEvent) => {
@@ -215,6 +243,7 @@ function CreatePriorityForm({ priorities }: { priorities: PriorityListState }) {
     const value = outcome.trim();
     if (!value || sending.current) return;
     sending.current = true;
+    // Create a key only if this draft does not have one yet.
     key.current ??= crypto.randomUUID();
     const idempotencyKey = key.current;
     setBusy(true);
@@ -223,11 +252,14 @@ function CreatePriorityForm({ priorities }: { priorities: PriorityListState }) {
       await apiCall((token, tenant) => gatewayClient.createChiefOfStaffPriority(
         token, { outcome: value, notes: notes.trim() || null }, idempotencyKey, tenant,
       ), null);
+      // The draft is saved: clear the key so the next draft gets a new one.
       key.current = null;
       setOutcome('');
       setNotes('');
+      // Reread so the new Priority appears in its server-assigned position.
       await priorities.reload();
     } catch (reason) {
+      // Keep the draft text and key so the user can retry the same create.
       setError(reason);
     } finally {
       sending.current = false;
@@ -252,6 +284,7 @@ function CreatePriorityForm({ priorities }: { priorities: PriorityListState }) {
   );
 }
 
+/** Signature of the panel's shared write helper. Resolves true when the write succeeded. */
 type WriteFn = (
   priorityId: string,
   operation: (token: string, tenant: string | null) => Promise<ChiefOfStaffPriority>,
@@ -272,12 +305,15 @@ function PriorityItem({ priority, index, count, notice, orderBusy, projects, pro
 }) {
   const styles = useStyles();
   const navigate = useNavigate();
+  // Edit form draft. null means the form is closed. It is local state, so a
+  // conflict reread of the list does not overwrite what the user typed.
   const [editing, setEditing] = useState<{ outcome: string; notes: string; state: ChiefOfStaffPriorityState } | null>(null);
   const [newItem, setNewItem] = useState('');
   const [busy, setBusy] = useState(false);
   const id = priority.priorityId;
   const label = priority.outcome;
 
+  // Runs one write for this Priority and disables its controls while it is in flight.
   const run = async (operation: Parameters<WriteFn>[1]) => {
     setBusy(true);
     try {
@@ -287,9 +323,13 @@ function PriorityItem({ priority, index, count, notice, orderBusy, projects, pro
     }
   };
 
+  // The API replaces the whole checklist on each update. Every checklist change
+  // (tick, remove, add) sends the full new list with the revision we saw.
   const saveChecklist = (checklist: ChiefOfStaffChecklistItem[], expectedRevision: number) => run((token, tenant) =>
     gatewayClient.updateChiefOfStaffPriority(token, id, { expectedRevision, checklist }, tenant));
 
+  // The current checklist in write shape (only the fields the API accepts).
+  // Existing items keep their itemId so the server can match them.
   const current = priority.checklist.map((item) => ({ itemId: item.itemId, text: item.text, done: item.done }));
 
   return (
@@ -316,7 +356,9 @@ function PriorityItem({ priority, index, count, notice, orderBusy, projects, pro
       {editing && (
         <form className={styles.form} aria-label={`Edit Priority: ${label}`} onSubmit={(event) => {
           event.preventDefault();
+          // Capture the draft now; the callback below must not read later edits.
           const draft = editing;
+          // Close the form only when the save worked. On conflict it stays open with the draft.
           void run((token, tenant) => gatewayClient.updateChiefOfStaffPriority(token, id, {
             expectedRevision: priority.revision,
             outcome: draft.outcome.trim(),
@@ -366,6 +408,7 @@ function PriorityItem({ priority, index, count, notice, orderBusy, projects, pro
         event.preventDefault();
         const text = newItem.trim();
         if (!text) return;
+        // New items have no itemId; the server assigns one. Clear the input only on success.
         void saveChecklist([...current, { text, done: false }], priority.revision).then((saved) => { if (saved) setNewItem(''); });
       }}>
         <Field label="New checklist item">
@@ -411,17 +454,23 @@ function PriorityItem({ priority, index, count, notice, orderBusy, projects, pro
 export function LinkSummary({ link, projectNames }: { link: ChiefOfStaffPriorityLink; projectNames: ReadonlyMap<string, string> }) {
   const styles = useStyles();
   const kind = KIND_LABELS[link.kind];
+  // The caller can no longer read the target. Show only the link kind so no
+  // run id, project or number leaks.
   if (link.access === 'unavailable') return (
     <>
       <Badge appearance="tint" color="subtle">Unavailable</Badge>
       <Text>{kind}</Text>
     </>
   );
+  // Short text that names the target for each link kind.
   const target = link.kind === 'run' ? `Run ${link.runId ?? ''}`
     : link.kind === 'conversation' ? `Conversation${link.runId ? ` · Run ${link.runId}` : ''}`
       : link.kind === 'artifact' ? `${kind} ${link.artifactId ?? ''}`
         : `${kind} #${link.number ?? ''}`;
+  // Prefer the project name; fall back to the id when the project list does not include it.
   const project = link.projectId ? projectNames.get(link.projectId) ?? link.projectId : '';
+  // Badge: deleted target -> Not found; run or conversation -> live run state;
+  // other kinds -> Unavailable, because the web app cannot read their state.
   const badge = link.access === 'missing'
     ? { label: 'Not found', color: 'subtle' as const }
     : link.kind === 'run' || link.kind === 'conversation'
@@ -448,12 +497,19 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
   const styles = useStyles();
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<'run' | 'conversation' | 'artifact'>('run');
+  // Only active projects can be linked.
   const activeProjects = useMemo(() => (projects ?? []).filter((project) => project.state === 'active'), [projects]);
+  // The picked ids are stored raw. Each effective value below falls back to the
+  // first option when the pick is empty or no longer in the list, so the
+  // selects never point at a missing option.
   const [pickedProject, setPickedProject] = useState('');
   const projectId = activeProjects.some((project) => project.projectId === pickedProject) ? pickedProject : activeProjects[0]?.projectId ?? '';
+  // Read runs only while the form is open and a run list is needed. An empty
+  // project id tells the hook to skip the request.
   const runs = useGatewayRunList(open && kind !== 'conversation' ? projectId : '');
   const [pickedRun, setPickedRun] = useState('');
   const runId = runs.items.some((item) => item.runId === pickedRun) ? pickedRun : runs.items[0]?.runId ?? '';
+  // Only conversations the caller can still read, and that have a project, can be linked.
   const available = conversations.items.filter((item) => item.access === 'available' && item.projectId);
   const [pickedConversation, setPickedConversation] = useState('');
   const conversation = available.find((item) => item.conversationId === pickedConversation) ?? available[0];
@@ -465,13 +521,18 @@ function AddLinkForm({ priority, busy, projects, projectNames, conversations, ru
     </div>
   );
 
+  // True when the selected kind has everything it needs to submit.
   const ready = kind === 'run' ? Boolean(projectId && runId) : Boolean(conversation);
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    // Artifact links are not submitted by this form. They are added when the
+    // user picks a capture in the browser below.
     if (!ready || kind === 'artifact') return;
+    // `ready` guarantees `conversation` exists in the conversation branch.
     const body = kind === 'run'
       ? { expectedRevision: priority.revision, kind, projectId, runId }
       : { expectedRevision: priority.revision, kind, projectId: conversation!.projectId!, conversationId: conversation!.conversationId };
+    // Close the form only on success; on failure the picks stay for a retry.
     void run((token, tenant) => gatewayClient.addChiefOfStaffPriorityLink(token, priority.priorityId, body, tenant))
       .then((saved) => { if (saved) setOpen(false); });
   };

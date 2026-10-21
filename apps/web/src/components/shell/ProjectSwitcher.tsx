@@ -95,13 +95,18 @@ export function ProjectSwitcher({
   ...props
 }: ProjectSwitcherProps) {
   const state = useProjectList();
+  // Load projects with the 0.x hook here, and let the view do all the drawing.
+  // The v1 shell renders the same view with projects from the v1 API.
   return <ProjectSwitcherView {...props} {...state} />;
 }
 
-/** Only project identity and display names are needed by the retained switcher. */
+/** The switcher only needs each project's ID and name. */
 type SwitcherProject = Pick<Project, 'project_id' | 'name'>;
 
-/** Displays service-supplied projects without making legacy project API calls. */
+/**
+ * Draws the project selector from projects the caller supplies. It makes no
+ * API calls itself, so both the 0.x and v1 shells can use it.
+ */
 export function ProjectSwitcherView({
   projectId,
   pathname,

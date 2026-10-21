@@ -2,10 +2,8 @@
 
 The v1 Web client reuses the 0.x visual language and supported interactions.
 It does not restore the old monolith's API or infer missing service data.
-This inventory supports [#1859](https://github.com/sabbour/agentweaver/issues/1859),
-[#2120](https://github.com/sabbour/agentweaver/issues/2120) check 10, and the
-authorized page provider tracked in
-[#2130](https://github.com/sabbour/agentweaver/issues/2130).
+This page lists each 0.x surface, what v1 shows today, and which service API
+is still missing.
 
 The visual baseline is `dev` commit
 `108d1a067f1b58da870ca98db1c65a0e9b37a35f`.
@@ -59,52 +57,49 @@ Dashed lines need a service API that does not exist yet.
 
 ## Surfaces
 
-The **P2 or Chief of Staff** column names the planned work that extends each
-surface. It does not approve that work.
-
-| 0.x surface | v1 today | Missing API | P2 or Chief of Staff |
-| --- | --- | --- | --- |
-| Sign-in | Broker sign-in in the 0.x card. The 0.x explanatory checklist and the tab note are removed. | None | — |
-| Consent | Permission explanations in the sign-in card. | None | — |
-| Shell and breadcrumbs | 0.x rail, project switcher, persona menu, and `Projects / project / page` breadcrumbs. | None | — |
-| Notification bell | Items that need input in the run you have open. | G6 | Chief of Staff A1 attention inbox; V read-aloud |
-| Overview | Projects, recent runs in this browser, and items that need input in the run you have open. | G2, G3 | Chief of Staff A2 Priorities |
-| Sessions and **Sessions +** | Hidden. The **+** is not shown disabled. Old links explain the gap. | G1, G2 | Chief of Staff A1 retained text thread |
-| Start task | Not shown. | G1 | Chief of Staff A1 |
-| Projects gallery | 0.x tiles with state and your access: **Can edit**, **Can view**, or **No access**. | None | — |
-| Create blank project | Dialog with a project name. | None | — |
-| Create from GitHub | Dialog creates the project, then saves `sourceControl.repository` with GitHub App sign-in. Without access to the new project, the repository is not saved and a note says so. | Owner grant on create | — |
-| Dashboard status card | Readiness from the saved configuration: repository, model, credential, and team. | Health endpoint for a live status | — |
-| Dashboard metrics and Activity charts | Not shown. No invented numbers. | G3 | #1924, #1926 usage and spend |
-| Dashboard quick actions | Links to Orchestrations, Agents, Skills, Memories, and Settings. | None | — |
-| Orchestrations | Runs opened in this browser, with a state summary and **Refresh**. Empty state: "Runs you open appear here." | G2 | — |
-| Run page | 0.x **Orchestration** two-pane layout: status strip (state, sessions, elapsed time, live update state), **Run tree**, and a session panel with tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. The run token is requested silently; **Sign in for this project and run** appears only when that fails. | G1 for cancel | #1930 suspend and resume; #2113, #2115 export and fork; #2116 evaluations |
-| Run Chat | Journal and a composer that messages the coordinator by default, or the session selected in the run tree. No From/To form. Retries reuse one idempotency key. | Direct user-to-coordinator messages | — |
-| Run Approvals | Shared decision view. It rereads each gate before acting. | None | #1911 decision revise and supersede |
-| Run Changes | GitHub App repository access for the run. | None | #1917 produced files |
-| Run settings | Model, revisions, and allowed implementations per platform component. | None | — |
-| Agents | 0.x metrics row, filter, tiles, and a drawer with Overview and Charter. Charter edits save a configuration revision. | G4 | #1913 reviewed casting |
-| Cast a team | Old link explains the gap. | G4 | #1913 |
-| Skills | 0.x stat strip, **Import skill** and **Browse marketplaces** dialogs, and **Catalog** and **Assignments** tabs. Marketplace sources, browse, preview, import, inventory, and assignment. | G9 | #1916, #1912 |
-| Memories | Run and agent pickers, kind tabs (All, Memories, Decisions, Proposals, Session context), search, revisions, and transfer. The 0.x count strip is not shown: counts for each kind need project knowledge. | G10 | #1911 |
-| Settings rail | 0.x section icons and the **Risk** badge on **Danger zone**. | None | — |
-| Settings > General | Rename with the project revision. | None | — |
-| Settings > Access | Your permissions. **Members** lists role assignments for a tenant administrator or project owner. Only a tenant administrator sees **Add member** and **Remove**. | Role-assignment API, [#2156](https://github.com/sabbour/agentweaver/pull/2156) | — |
-| Settings > Repository | Repository owner, name, and sign-in method. | None | — |
-| Settings > Models | Default model, reasoning effort, credential, and per-task models. Changing the model clears the credential until you choose one that matches. | Model catalog, [#2132](https://github.com/sabbour/agentweaver/issues/2132) | — |
-| Settings > Platform components | Implementation choice and order for each platform component. | G5 for the active implementation | — |
-| Settings > Run limits | Saved run limit fields. | None | #1928, #1929 sandbox policy |
-| Settings > Connections | GitHub Repo App, Copilot, and remote MCP OAuth. | [#2135](https://github.com/sabbour/agentweaver/issues/2135) | #1923, #1925, #1927 |
-| Settings > History | Read-only earlier configuration revisions. | None | — |
-| Settings > Danger zone | Archive and restore. | Project delete | — |
-| Settings > Advanced | Full configuration JSON. Fallback only. | None | — |
-| Board | Hidden. | G8 | #1915 |
-| Flow | Hidden. | G2 | Chief of Staff A1 grouped view |
-| Workspace | Hidden. Run Changes covers the run's repository. | — | #1917 |
-| Workflows | Hidden. | G8 | #1914 |
-| Apps and Canvas | Hidden. | — | #1878, #1900, #1904 |
-| Observability, Diagnostics, Heartbeat, Cluster | Hidden. Run Activity and Usage cover one run. | G7 | — |
-| Platform settings | Hidden. | G5, G7 | — |
+| 0.x surface | v1 today | Missing API |
+| --- | --- | --- |
+| Sign-in | Broker sign-in in the 0.x card. The 0.x explanatory checklist and the tab note are removed. | None |
+| Consent | Permission explanations in the sign-in card. | None |
+| Shell and breadcrumbs | 0.x rail, project switcher, persona menu, and `Projects / project / page` breadcrumbs. | None |
+| Notification bell | Items that need input in the run you have open. | G6 |
+| Overview | Projects, recent runs in this browser, and items that need input in the run you have open. | G2, G3 |
+| Sessions and **Sessions +** | Hidden. The **+** is not shown disabled. Old links explain the gap. | G1, G2 |
+| Start task | Not shown. | G1 |
+| Projects gallery | 0.x tiles with state and your access: **Can edit**, **Can view**, or **No access**. | None |
+| Create blank project | Dialog with a project name. | None |
+| Create from GitHub | Dialog creates the project, then saves `sourceControl.repository` with GitHub App sign-in. Without access to the new project, the repository is not saved and a note says so. | Owner grant on create |
+| Dashboard status card | Readiness from the saved configuration: repository, model, credential, and team. | Health endpoint for a live status |
+| Dashboard metrics and Activity charts | Not shown. No invented numbers. | G3 |
+| Dashboard quick actions | Links to Orchestrations, Agents, Skills, Memories, and Settings. | None |
+| Orchestrations | Runs opened in this browser, with a state summary and **Refresh**. Empty state: "Runs you open appear here." | G2 |
+| Run page | 0.x **Orchestration** two-pane layout: status strip (state, sessions, elapsed time, live update state), **Run tree**, and a session panel with tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. The run token is requested silently; **Sign in for this project and run** appears only when that fails. | G1 for cancel |
+| Run Chat | Journal and a composer that messages the coordinator by default, or the session selected in the run tree. No From/To form. Retries reuse one idempotency key. | Direct user-to-coordinator messages |
+| Run Approvals | Shared decision view. It rereads each gate before acting. | None |
+| Run Changes | GitHub App repository access for the run. | None |
+| Run settings | Model, revisions, and allowed implementations per platform component. | None |
+| Agents | 0.x metrics row, filter, tiles, and a drawer with Overview and Charter. Charter edits save a configuration revision. | G4 |
+| Cast a team | Old link explains the gap. | G4 |
+| Skills | 0.x stat strip, **Import skill** and **Browse marketplaces** dialogs, and **Catalog** and **Assignments** tabs. Marketplace sources, browse, preview, import, inventory, and assignment. | G9 |
+| Memories | Run and agent pickers, kind tabs (All, Memories, Decisions, Proposals, Session context), search, revisions, and transfer. The 0.x count strip is not shown: counts for each kind need project knowledge. | G10 |
+| Settings rail | 0.x section icons and the **Risk** badge on **Danger zone**. | None |
+| Settings > General | Rename with the project revision. | None |
+| Settings > Access | Your permissions. **Members** lists role assignments for a tenant administrator or project owner. Only a tenant administrator sees **Add member** and **Remove**. | Role-assignment API |
+| Settings > Repository | Repository owner, name, and sign-in method. | None |
+| Settings > Models | Default model, reasoning effort, credential, and per-task models. Changing the model clears the credential until you choose one that matches. | Model catalog |
+| Settings > Platform components | Implementation choice and order for each platform component. | G5 for the active implementation |
+| Settings > Run limits | Saved run limit fields. | None |
+| Settings > Connections | GitHub Repo App, Copilot, and remote MCP OAuth. | Remote MCP connection directory |
+| Settings > History | Read-only earlier configuration revisions. | None |
+| Settings > Danger zone | Archive and restore. | Project delete |
+| Settings > Advanced | Full configuration JSON. Fallback only. | None |
+| Board | Hidden. | G8 |
+| Flow | Hidden. | G2 |
+| Workspace | Hidden. Run Changes covers the run's repository. | — |
+| Workflows | Hidden. | G8 |
+| Apps and Canvas | Hidden. | — |
+| Observability, Diagnostics, Heartbeat, Cluster | Hidden. Run Activity and Usage cover one run. | G7 |
+| Platform settings | Hidden. | G5, G7 |
 
 ## Unavailable destinations
 
@@ -137,9 +132,8 @@ Each needs its own approval.
 Other gaps:
 
 - **Role-assignment list, add, and remove:**
-  `GET`, `POST`, and `DELETE /api/v1/projects/{projectId}/role-assignments`
-  from [#2156](https://github.com/sabbour/agentweaver/pull/2156). The web
-  client calls these routes. Until the service serves them, Access shows only
+  `GET`, `POST`, and `DELETE /api/v1/projects/{projectId}/role-assignments`.
+  The web client calls these routes. Until the service serves them, Access shows only
   your permissions. A `503 role_assignment_unavailable` shows "Role changes
   aren't available yet."
 - **Project delete:** no endpoint. Danger zone offers archive and restore.
@@ -147,17 +141,17 @@ Other gaps:
   readiness from saved configuration.
 - **Owner grant on create:** creating a project does not grant the creator
   access, so create-from-GitHub can't always save the repository.
-- [Effective role names](https://github.com/sabbour/agentweaver/issues/2131):
-  the authorization context lists permissions, not role names. Tiles show
-  access from permissions.
-- [Selectable models](https://github.com/sabbour/agentweaver/issues/2132) and
-  [remote MCP discovery](https://github.com/sabbour/agentweaver/issues/2135).
+- **Effective role names:** the authorization context lists permissions, not
+  role names. Tiles show access from permissions.
+- **Selectable models:** no service returns the models a project can use, so
+  **Models** asks for existing model references instead of offering a list.
+- **Remote MCP discovery:** no service returns a project's remote MCP
+  connections or their setup checksum, so **Connections** asks for the saved
+  connection ID and checksum.
 
 ## Evidence boundary
 
 Local screenshots use fixture data and isolated source snapshots. They compare
 0.x, pre-adaptation v1, and adapted v1 without live sign-in or real credentials.
-They do not prove deployed identity, authorization, live providers, or complete
-P1 acceptance. This source change is part of #1859, not closure of its broader
-live acceptance criteria. Follow [Use the v1 web client](../guide/web-client.md)
+They do not prove deployed identity, authorization, or live providers. Follow [Use the v1 web client](../guide/web-client.md)
 for actual routes, settings, and current limits.

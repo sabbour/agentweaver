@@ -7,6 +7,7 @@ import { turnEventsOf, useTurnTranscript } from './turnTranscript';
 
 afterEach(() => vi.restoreAllMocks());
 
+/** Builds a turn event for run r1. The payload holds only an opaque reference; text is read separately. */
 function turn(eventId: string, position: number, role: string, overrides: Partial<SessionEventEnvelope> = {}): SessionEventEnvelope {
   return {
     schemaVersion: 1, eventVersion: 1, eventId, identity: { projectId: 'p1', runId: 'r1', sessionId: 's1' }, position,
@@ -19,6 +20,7 @@ function content(eventId: string, text: string, sessionId = 's1'): SessionTurnCo
   return { eventId, identity: { projectId: 'p1', runId: 'r1', sessionId }, text };
 }
 
+// Fake apiCall that records each run binding so tests can check reads were run-bound.
 const bindings: unknown[] = [];
 const apiCall = (async (operation: (token: string, tenant?: string) => Promise<unknown>, binding: unknown) => {
   bindings.push(binding);
@@ -27,6 +29,7 @@ const apiCall = (async (operation: (token: string, tenant?: string) => Promise<u
 
 describe('turnEventsOf', () => {
   it('keeps user and assistant turns for exactly this run', () => {
+    // Drops: a system turn, a turn from another run, and a non-turn event.
     const events = [
       turn('e1', 1, 'user'),
       turn('e2', 2, 'assistant'),
@@ -58,6 +61,7 @@ describe('useTurnTranscript', () => {
     expect(read).toHaveBeenCalledTimes(3);
     first.unmount();
 
+    // A fresh mount reads the text again; nothing is cached across mounts.
     const reloaded = renderHook(() => useTurnTranscript(events, 'p1', 'r1', apiCall));
     await waitFor(() => expect(reloaded.result.current.turns[0].text).toBe('Fix the flaky test'));
   });
@@ -69,6 +73,7 @@ describe('useTurnTranscript', () => {
       .mockResolvedValueOnce(content('e2', 'Recovered'));
     const { result } = renderHook(() => useTurnTranscript([turn('e1', 1, 'user'), turn('e2', 2, 'assistant')], 'p1', 'r1', apiCall));
     await waitFor(() => expect(result.current.turns.map((item) => item.state)).toEqual(['notFound', 'failed']));
+    // Retry rereads only the failed turn; Not found is final.
     act(() => result.current.retry());
     await waitFor(() => expect(result.current.turns[1].text).toBe('Recovered'));
     expect(read).toHaveBeenCalledTimes(3);
@@ -92,7 +97,9 @@ describe('useTurnTranscript', () => {
     await waitFor(() => expect(result.current.turns[0].text).toBe('Secret plan'));
     rerender({ list: [turn('e1', 1, 'user'), turn('e2', 2, 'assistant')] });
     await waitFor(() => expect(result.current.accessLost).toBe(true));
+    // Text read before the 403 must be removed, not just hidden.
     expect(result.current.turns).toEqual([]);
+    // A new event after access loss must not start another read.
     rerender({ list: [turn('e1', 1, 'user'), turn('e2', 2, 'assistant'), turn('e3', 3, 'user')] });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(read).toHaveBeenCalledTimes(2);

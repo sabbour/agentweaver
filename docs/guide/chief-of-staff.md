@@ -154,9 +154,9 @@ you send appears in **Messages** after the agent records it.
   and a run, or pick one of your conversations. For an artifact, choose a
   session and a saved capture. Browse its files, then select **Link capture**.
   The link saves the whole capture, not one file. You never need to type an ID.
-- Issue and pull request pickers are not available. Their list routes and
-  browser journeys remain pending, so A2 is still partial. Existing issue and
-  pull request links show **Unavailable** as their state.
+- Issue and pull request pickers are not available, because no service route
+  lists a project's issues or pull requests. Existing issue and pull request
+  links show **Unavailable** as their state.
 - Run and conversation links show the run state. A link you can't read shows
   **Unavailable** and its kind only. A deleted target shows **Not found**.
 
@@ -187,7 +187,8 @@ access on each request. Artifact links still have no lifecycle state, so their
 state badge is **Unavailable** even when the saved files can be opened.
 
 The file tree and Source/Preview viewer reuse the 0.x components. The saved
-capture list and Priority picker are new Gateway adapters, not 0.x parity.
+capture list and Priority picker are new screens built on the Gateway capture
+routes; 0.x had no equivalent.
 All capture and file reads use a token bound to the selected run. Saving a
 Priority link uses the caller's unbound token and does not start work.
 

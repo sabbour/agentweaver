@@ -4,6 +4,7 @@ import type { SessionStatusBlocker, UserNotification } from './contracts';
 import { attentionPath, notificationAttentionItems, toAttentionItems, useRunAttention } from './runAttention';
 
 const mocks = vi.hoisted(() => {
+  // apiCall runs the operation with a fixed token and tenant, so tests can check the exact calls.
   const apiCall = vi.fn((operation: (token: string, tenant: string) => Promise<unknown>) => operation('token', 'tenant-1'));
   return {
     session: null as null | { accessToken: string; binding: { projectId: string; runId: string } | null },
@@ -74,6 +75,7 @@ describe('useRunAttention', () => {
       rootSessionId: 'root',
       nodes: [{ identity: { sessionId: 'root' } }, { identity: { sessionId: 'child' } }, { identity: { sessionId: 'other' } }],
     });
+    // The 'other' session reports a different run. Its blocker must be dropped.
     mocks.getSessionStatus.mockImplementation((_token: string, _p: string, _r: string, sessionId: string) => Promise.resolve({
       identity: { projectId: 'p1', runId: sessionId === 'other' ? 'r2' : 'r1', sessionId },
       blockers: sessionId === 'root' ? [] : [question],
@@ -90,6 +92,7 @@ describe('useRunAttention', () => {
     ]);
     expect(mocks.getRunStatus).toHaveBeenCalledWith('token', 'p1', 'r1', 'tenant-1');
     expect(mocks.getSessionTree).toHaveBeenCalledWith('token', 'p1', 'r1', 'root', 'tenant-1');
+    // Run reads must ask for a token bound to this exact run.
     expect(mocks.apiCall).toHaveBeenCalledWith(expect.any(Function), { projectId: 'p1', runId: 'r1' });
   });
 
@@ -101,6 +104,7 @@ describe('useRunAttention', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect((result.current.error as Error).message).toBe('The service returned a different run.');
     expect(result.current.items).toEqual([]);
+    // The read stops at the mismatch, so nothing from the wrong run is fetched.
     expect(mocks.getSessionTree).not.toHaveBeenCalled();
   });
 });
@@ -113,6 +117,7 @@ describe('notificationAttentionItems', () => {
   };
 
   it('keeps pending gates and drops backlog promotion notices', () => {
+    // A notification from another source must not appear as a pending gate.
     const promoted = {
       ...base, notificationId: 'n2', source: 'backlogPromoted',
       promotionId: 'pr1', taskCount: 2,

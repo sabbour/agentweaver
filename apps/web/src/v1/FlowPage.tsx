@@ -2,7 +2,7 @@
  * Project Flow: the project's work grouped by state. Needs input lists the
  * caller's notifications for the project, including dismissed ones, because a
  * dismissed notification only hides it from the bell while its gate is pending.
- * Open, Working, and Done come from the Gateway run list (G2):
+ * Open, Working, and Done come from the Gateway run list:
  * Open = idle, Working = active or blocked, Done = completed, failed, cancelled,
  * or indeterminate, each with its own label. Pull request state has no source
  * yet, so every run shows it as Unavailable.
@@ -38,6 +38,8 @@ const useStyles = makeStyles({
 export function FlowPage() {
   const styles = useStyles();
   const { projectId = '' } = useParams();
+  // Include dismissed notifications: dismissing only hides a bell item, and the
+  // gate still needs input until someone answers it.
   const attention = useNotificationAttention({ projectId, includeDismissed: true });
   const runs = useGatewayRunList(projectId);
 
@@ -45,14 +47,19 @@ export function FlowPage() {
     const result: Record<FlowGroup, RunListItem[]> = { open: [], working: [], done: [] };
     for (const item of runs.items) {
       const group = flowGroup(item.executionState);
+      // Runs with a state this app does not know are left out rather than put in a wrong group.
+      // Every row gets the "Pull request: Unavailable" note because no source reports it yet.
       if (group) result[group].push({ ...item, notes: [PULL_REQUEST_NOTE] });
     }
     return result;
   }, [runs.items]);
 
+  // Each group is shown with the shared RunList, so wrap its rows in the RunListData shape.
+  // Paging and errors are handled once for the page, not per group.
   const view = (items: RunListItem[]): RunListData => ({
     items, reload: runs.reload, stateSource: 'service', loading: runs.loading,
   });
+  // Refresh both sources so the run groups and Needs input stay in step.
   const refresh = () => { runs.reload(); attention.reload(); };
 
   return (

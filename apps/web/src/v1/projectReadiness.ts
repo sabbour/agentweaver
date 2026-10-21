@@ -1,7 +1,8 @@
 /**
  * Builds the Dashboard status card from the project's saved configuration.
  * Every check reads a real configuration field; nothing is estimated. Run
- * counts and success rates need the metrics contract (gap G3) and are not shown.
+ * counts and success rates need a metrics API that does not exist yet, so they
+ * are not shown.
  */
 import type { ProjectConfiguration } from './contracts';
 
@@ -28,7 +29,10 @@ export interface ProjectReadiness {
 /** Evaluates setup checks in the order a new project usually completes them. */
 export function projectReadiness(configuration: ProjectConfiguration, archived = false): ProjectReadiness {
   const repository = configuration.sourceControl?.repository;
+  // A disabled skill is not given to agents, so only enabled skills count.
   const enabledSkills = configuration.skills.filter((skill) => skill.enabled).length;
+  // The array order is the setup order. The first unfinished blocking check
+  // becomes the primary action below.
   const checks: ReadinessCheck[] = [
     {
       key: 'model',
@@ -63,6 +67,8 @@ export function projectReadiness(configuration: ProjectConfiguration, archived =
       action: 'Assign skills',
     },
   ];
+  // Archived wins over everything else: runs cannot start, so setup progress
+  // does not matter. Still return the checks so the card can list them.
   if (archived) {
     return {
       ready: false,
@@ -77,6 +83,7 @@ export function projectReadiness(configuration: ProjectConfiguration, archived =
   // Skills are optional for a run, so only model, repository, and team block readiness.
   const blocking = missing.filter((check) => check.key !== 'skills');
   if (blocking.length === 0) {
+    // Ready. The body mentions skills only when they are still missing.
     return {
       ready: true,
       badge: { label: 'Ready', color: 'success' },
@@ -88,6 +95,7 @@ export function projectReadiness(configuration: ProjectConfiguration, archived =
       primaryAction: { label: 'Open Orchestrations', path: 'orchestrations' },
     };
   }
+  // Not ready. List every blocking step, and send the main button to the first one.
   return {
     ready: false,
     badge: { label: 'Setup needed', color: 'warning' },

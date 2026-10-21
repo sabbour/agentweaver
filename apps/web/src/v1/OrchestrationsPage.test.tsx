@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./runListData', () => ({
+  // Record the project id the page asks for, then return the test's runs.
   useBrowserRunList: (projectId?: string) => {
     mocks.useBrowserRunList(projectId);
     return mocks.runs;
@@ -61,6 +62,7 @@ describe('OrchestrationsPage', () => {
     expect(within(finished).getAllByRole('button', { name: /^Open run/ }).map((button) => button.getAttribute('aria-label')))
       .toEqual(['Open run r3', 'Open run r4']);
     const summary = screen.getByLabelText('Run status summary');
+    // Pills list each state once with its count, in first-seen order.
     expect(summary.textContent).toBe('2Needs input1Working1Done1Failed');
   });
 

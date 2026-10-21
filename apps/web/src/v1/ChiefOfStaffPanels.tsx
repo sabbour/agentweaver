@@ -69,9 +69,13 @@ export function NewChatPanel({ projects, initialProjectId, onChanged }: {
   const navigate = useNavigate();
   const { apiCall, authorize } = useAuth();
   const startChat = useStartChat();
+  // Only active projects can take a new chat.
   const choices = useMemo(() => (projects ?? []).filter((project) => project.state === 'active'), [projects]);
+  // Use the user's pick (or the preselected project) only while it is still an
+  // active choice; otherwise fall back to the first one.
   const [picked, setPicked] = useState(initialProjectId ?? '');
   const projectId = choices.some((project) => project.projectId === picked) ? picked : choices[0]?.projectId ?? '';
+  // A created chat that is waiting for sign-in or a retry of start.
   const [pending, setPending] = useState<PendingChat | null>(null);
   const [pendingError, setPendingError] = useState<unknown>(null);
   const [starting, setStarting] = useState(false);
@@ -79,6 +83,9 @@ export function NewChatPanel({ projects, initialProjectId, onChanged }: {
   const drafts = useRef(new Map<string, { projectId: string; body: CreateProjectRunRequest }>());
   const inFlight = useRef(new Map<string, Promise<CreateProjectRunResponse>>());
 
+  // Starts a created chat. On success it opens the run page. If the run token
+  // needs interactive sign-in, it keeps the chat as pending so the user can
+  // press "Sign in and start". Errors are thrown to the caller.
   const runStart = useCallback(async (chat: PendingChat): Promise<void> => {
     const result = await startChat(chat);
     if (result === 'sign_in_required') {
@@ -94,16 +101,21 @@ export function NewChatPanel({ projects, initialProjectId, onChanged }: {
   const resumed = useRef(false);
   useEffect(() => {
     if (resumed.current) return undefined;
+    // Resume only the first saved chat; others stay saved and appear with Start in My conversations.
     const [resume] = readPendingChats();
     if (!resume) return undefined;
     resumed.current = true;
+    // `active` is false after cleanup, so a late result does not set state on an unmounted panel.
     let active = true;
+    // `started` records whether the deferred start actually ran.
     let started = false;
+    // Defer by one tick so state is not set synchronously inside the effect.
     const timer = window.setTimeout(() => {
       started = true;
       setStarting(true);
       void runStart(resume).catch((reason: unknown) => {
         if (!active) return;
+        // Show the chat as pending with the error so the user can press Retry start.
         setPending(resume);
         setPendingError(reason);
       }).finally(() => { if (active) setStarting(false); });
@@ -111,26 +123,39 @@ export function NewChatPanel({ projects, initialProjectId, onChanged }: {
     return () => {
       active = false;
       window.clearTimeout(timer);
+      // If cleanup ran before the timer fired (for example Strict Mode's extra
+      // mount/unmount), nothing was started. Allow the next mount to resume.
       if (!started) resumed.current = false;
     };
   }, [runStart]);
 
+  // Called by the composer with the message text and the draft's idempotency key.
+  // Throws on create failure so the composer keeps the draft and shows the error.
   const submit = async (text: string, key: string) => {
+    // Freeze the request body on first send. A retry with the same key must send
+    // the same project and body, even if the user changed the picker meanwhile.
     let draft = drafts.current.get(key);
     if (!draft) {
       const project = choices.find((item) => item.projectId === projectId);
       if (!project) throw new Error('Pick a project.');
+      // The config revision lets the server reject the create if the project
+      // settings changed since the page loaded.
       draft = { projectId, body: { firstMessage: text, expectedProjectConfigRevision: project.configurationRevision } };
       drafts.current.set(key, draft);
     }
     const target = draft;
+    // Share one create request per key. A double click awaits the same promise
+    // instead of sending a second request.
     let create = inFlight.current.get(key);
     if (!create) {
       create = apiCall((token, tenant) => gatewayClient.createProjectRun(token, target.projectId, target.body, key, tenant), null);
       inFlight.current.set(key, create);
+      // On failure forget the promise so the next attempt sends a new request
+      // (with the same key, so the server still dedupes).
       void create.catch(() => inFlight.current.delete(key));
     }
     const created = await create;
+    // Save the run before start, so a reload or sign-in redirect can resume it.
     savePendingChat(created);
     setPendingError(null);
     try {
@@ -143,6 +168,9 @@ export function NewChatPanel({ projects, initialProjectId, onChanged }: {
     }
   };
 
+  // Continues the pending chat. `interactive` is true when the earlier attempt
+  // stopped for sign-in: open the sign-in flow for this run first, then start.
+  // When it is false (an error happened), just retry start.
   const continuePending = async (interactive: boolean) => {
     if (!pending) return;
     setStarting(true);
@@ -202,18 +230,24 @@ export function ConversationList({ conversations, projectNames }: {
   const startChat = useStartChat();
   const { authorize } = useAuth();
   const [actionError, setActionError] = useState<unknown>(null);
+  // runId of the chat being started; all Start buttons are disabled while one runs.
   const [busy, setBusy] = useState<string | null>(null);
 
+  // Starts a chat that was created but never started.
   const start = async (chat: PendingChat) => {
     setBusy(chat.runId);
     setActionError(null);
     try {
+      // First try without a popup. If the run token needs sign-in, run the
+      // interactive sign-in once and try again. If it still needs sign-in
+      // (for example the user closed the popup), stop quietly.
       if (await startChat(chat) === 'sign_in_required') {
         await authorize({ projectId: chat.projectId, runId: chat.runId });
         if (await startChat(chat) === 'sign_in_required') return;
       }
       navigate(runPath(chat.projectId, chat.runId));
     } catch (reason) {
+      // Show the error and reread, because the chat's state may have changed on the server.
       setActionError(reason);
       conversations.reload();
     } finally {
@@ -232,6 +266,8 @@ export function ConversationList({ conversations, projectNames }: {
         <div className={styles.list} role="list" aria-label="My conversations">
           {conversations.items.map((conversation) => {
             const created = new Date(conversation.createdAt).toLocaleString();
+            // The caller lost access, or the server sent no run identity.
+            // Show a placeholder row with no title, project or run link.
             if (conversation.access === 'unavailable' || !conversation.projectId || !conversation.runId) return (
               <div key={conversation.conversationId} role="listitem" className={styles.row}>
                 <Badge appearance="tint" color="subtle">Unavailable</Badge>
@@ -244,7 +280,10 @@ export function ConversationList({ conversations, projectNames }: {
             );
             const projectId = conversation.projectId;
             const runId = conversation.runId;
+            // `awaiting_binding` means the run was created but never started.
             const awaiting = conversation.requestState === 'awaiting_binding';
+            // A cancelled request wins over the run state. A chat that was never
+            // started has no run state yet and shows "Not started" instead.
             const state = awaiting ? null : runState(conversation.requestState === 'cancelled' ? 'cancelled' : conversation.runState);
             const title = conversation.title || `Run ${runId}`;
             return (
@@ -290,6 +329,7 @@ export function NewChatPage({
   const [params] = useSearchParams();
   const { projects, error } = useProjectChoices();
   const conversations = useChiefOfStaffConversations();
+  // projectId -> project name, used to label conversation rows.
   const projectNames = useMemo(() => new Map((projects ?? []).map((project) => [project.projectId, project.name])), [projects]);
   return (
     <div className={styles.page}>

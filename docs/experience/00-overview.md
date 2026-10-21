@@ -39,9 +39,8 @@ and the authorization checks behind Agentweaver scopes.
 
 You don't type a run ID. A run appears in **Recent runs in this browser** after
 you open it once in this browser, for example from a link or a notification.
-The browser can't start a new chat or run yet. That needs a service API that
-doesn't exist yet (gap G1). A full run list also needs a future service API
-(gap G2).
+To start a new chat, use **New chat** on **Overview** and pick a project. A
+project's **Flow** page lists all of its runs.
 
 ## Browser routes
 

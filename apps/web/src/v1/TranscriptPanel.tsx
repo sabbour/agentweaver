@@ -2,6 +2,7 @@ import { Badge, Button, MessageBar, MessageBarBody } from '@fluentui/react-compo
 import { Panel } from './pageParts';
 import type { TranscriptTurn, TurnTranscript } from './turnTranscript';
 
+/** Text shown in place of a message that is not loaded. */
 const STATE_TEXT: Record<Exclude<TranscriptTurn['state'], 'loaded'>, string> = {
   loading: 'Loading…',
   notFound: 'Not found',
@@ -18,6 +19,8 @@ export const TRANSCRIPT_ACCESS_LOST = 'You can no longer read this run. Messages
  */
 export function TranscriptPanel({ transcript }: { transcript: TurnTranscript }) {
   const { turns, accessLost, retry } = transcript;
+  // Offer Retry when access was lost or at least one turn failed to load.
+  // Not-found and unavailable turns are final states, so they do not need it.
   const failed = turns.some((turn) => turn.state === 'failed');
   return (
     <Panel

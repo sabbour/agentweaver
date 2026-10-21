@@ -1,8 +1,9 @@
 /**
  * Project Orchestrations in the 0.x layout: header with Refresh, status pills,
  * then In progress and Finished run sections. Runs come from this browser's run
- * history because the service has no run list yet (gap G2). Starting, stopping,
- * and deleting runs need gap G1 and are not shown.
+ * history because this page does not read the service run list. Starting,
+ * stopping, and deleting runs are not supported by the service yet, so they are
+ * not shown.
  */
 import { Button, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
@@ -33,8 +34,11 @@ export function OrchestrationsPage() {
   const styles = useStyles();
   const { projectId = '' } = useParams();
   const runs = useBrowserRunList(projectId);
+  // Split by the last state seen. A run with no known state counts as in progress,
+  // because it has not been seen to finish.
   const inProgress = runs.items.filter((item) => !isRunFinished(item.executionState));
   const finished = runs.items.filter((item) => isRunFinished(item.executionState));
+  // Count runs per state label for the summary pills. Map keeps first-seen order.
   const counts = new Map<string, number>();
   for (const item of runs.items) {
     const label = runState(item.executionState).label;

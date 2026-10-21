@@ -12,6 +12,7 @@ function data(items: RunListItem[], remove?: RunListData['remove']): RunListData
   return { items, remove, reload: vi.fn() };
 }
 
+/** Prints the current path so tests can check where Open navigated. */
 function LocationProbe() {
   const location = useLocation();
   return <p data-testid="location">{location.pathname}</p>;
@@ -42,6 +43,7 @@ describe('RunList', () => {
     expect(screen.getByText('Run r1')).toBeTruthy();
     expect(screen.getByText('Needs input')).toBeTruthy();
     expect(screen.getByText('State when last opened')).toBeTruthy();
+    // A run with no stored state shows Unavailable and says it was never read.
     expect(screen.getByText('Unavailable')).toBeTruthy();
     expect(screen.getByText('State not read yet')).toBeTruthy();
   });
@@ -74,6 +76,7 @@ describe('RunList', () => {
 
   it('adds the project name when given project names', () => {
     renderList({ data: data([item('r1', 'idle', 'p1'), item('r2', 'idle', 'p2')]), projectNames: new Map([['p1', 'Alpha']]) });
+    // An unknown project falls back to its id.
     expect(screen.getByText(/^Alpha · Last opened/)).toBeTruthy();
     expect(screen.getByText(/^p2 · Last opened/)).toBeTruthy();
   });

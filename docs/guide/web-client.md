@@ -137,9 +137,9 @@ open appear here.** Signing out clears the list. The list is stored in this
 browser and holds only IDs and the last state read.
 
 **Flow** reads the project's full run list from the Gateway. **New chat** on
-**Overview** starts a run in a project you pick. Dashboard metrics
-need a metrics API (gap G3). Agents has no cast, add, or sync controls (gap
-G4).
+**Overview** starts a run in a project you pick. Dashboard metrics aren't
+shown, because the service has no metrics API yet. Agents has no cast, add, or
+sync controls, because the Gateway doesn't expose the casting routes.
 
 ### Unavailable destinations
 
@@ -256,8 +256,8 @@ a matching credential.
 
 Available model and provider choices are not returned through the current
 Gateway catalog. Enter existing references; the client does not substitute a
-hardcoded catalog. This API gap is tracked in
-[#2132](https://github.com/sabbour/agentweaver/issues/2132).
+hardcoded catalog, because a fixed list could offer models that the project
+cannot use.
 
 Saving adds a configuration revision. Runs that already started keep their
 settings. In **History**, enter a revision number and select **View revision**
@@ -377,9 +377,9 @@ service. It rejects responses for another project or connection.
 
 Use **Connection setup** for registration and authorization metadata. Enter
 the checksum from the saved project connection setup. The current API does
-not return a connection directory or that checksum. This gap is tracked in
-[#2135](https://github.com/sabbour/agentweaver/issues/2135). The browser does not
-calculate a replacement checksum from its JSON formatting.
+not return a connection directory or that checksum. The browser does not
+calculate a replacement checksum from its JSON formatting, because a different
+key order or spacing would produce a different value.
 
 Authorize opens the service-provided HTTPS address in a tracked popup. After
 sign-in returns, select **Load connection** to read the current result.
@@ -454,8 +454,8 @@ resource metadata paths to MCP on port 8443. These source manifests describe
 the intended route mapping; they do not establish a running portal or backend.
 
 The client opens runs you already opened in this browser, from a link, or from
-a notification. You don't type a run ID. The client can't start a new chat or
-run (gap G1) or list every run (gap G2). It does not expose run-root acceptance,
+a notification, and **Flow** lists a project's runs. You don't type a run ID.
+**New chat** starts a chat; the client can't cancel a run. It does not expose run-root acceptance,
 typed outcome/workflow/work-plan proposals, or child-session
 registration/spawn/fork controls, even where owner routes exist. The client
 can message existing sessions and request supported detach/archive actions.
@@ -468,12 +468,14 @@ reuse the 0.x components; capture selection is a new Gateway adapter. Files
 come from the saved manifest, not the current workspace or a host filesystem,
 and their size and SHA-256 are checked before display. The same browser lets
 you link a capture to a Priority. See [saved artifacts](./chief-of-staff.md#browse-saved-artifacts)
-for access, pagination, and error behavior. Issue and pull request pickers are
-still pending; this is not complete A2 acceptance.
+for access, pagination, and error behavior. Priorities can't link issues or pull
+requests from a picker yet, because no service route lists a project's issues or
+pull requests.
 
 The run's **Run settings** tab shows the model reference and the allowed
 implementations for each platform component, in order. It doesn't show the
-implementation that is running or a runtime SDK model ID (gap G5). Usage
+implementation that is running or a runtime SDK model ID, because no service
+reports them. Usage
 reports run totals without per-event model-binding details. The UI does not
 infer those identities from configuration or usage, and it does not replace
 missing measurements with zero.

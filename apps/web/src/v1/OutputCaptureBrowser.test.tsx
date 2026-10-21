@@ -6,10 +6,12 @@ import { OutputCaptureBrowser } from './OutputCaptureBrowser';
 import type { SessionTreeSnapshot } from './contracts';
 
 const auth = vi.hoisted(() => ({
+  // session and authorizationContext feed the browser's remount key; tests change them to simulate an authority change.
   session: { accessToken: 'current-token' },
   authorizationContext: { tenantId: 'tenant-1', membershipRevision: 1 },
   ensureSession: vi.fn().mockResolvedValue(true),
   authorize: vi.fn().mockResolvedValue(undefined),
+  // Every capture read must pass a run binding; an unbound call fails the test.
   apiCall: vi.fn((operation: (token: string, tenant: string) => Promise<unknown>, binding?: unknown) => {
     if (!binding) throw new Error('Capture reads require a run binding.');
     return operation('bound-token', 'tenant-1');
@@ -18,6 +20,7 @@ const auth = vi.hoisted(() => ({
 vi.mock('./AuthContext', () => ({ useAuth: () => auth }));
 
 const detail = captureDetail();
+// A run with a main session and one child session, both in project p1 run r-1.
 const tree: SessionTreeSnapshot = {
   rootSessionId: 'root',
   nodes: ['root', 'child'].map((sessionId) => ({
@@ -38,9 +41,11 @@ beforeEach(() => {
   vi.spyOn(gatewayClient, 'getSessionTree').mockResolvedValue(tree);
   vi.spyOn(gatewayClient, 'listSourceControlOutputCaptures').mockResolvedValue({ captures: [detail.capture] });
   vi.spyOn(gatewayClient, 'readSourceControlOutputCapture').mockResolvedValue(detail);
+  // By default the file bytes match the manifest hash and length.
   vi.spyOn(gatewayClient, 'readSourceControlOutputCaptureFile').mockResolvedValue(new TextEncoder().encode(capturedText).buffer);
 });
 
+/** Picks capture-1 and waits for its details to load. */
 async function selectCapture() {
   const picker = await screen.findByLabelText('Saved capture');
   fireEvent.change(picker, { target: { value: 'capture-1' } });
@@ -63,6 +68,7 @@ describe('OutputCaptureBrowser', () => {
       'bound-token', 'p1', 'r-1', 'root', 'capture-1', capturedPath, 'tenant-1');
     fireEvent.click(screen.getByRole('button', { name: 'Link capture' }));
     expect(select).toHaveBeenCalledExactlyOnceWith('capture-1');
+    // Every read in the flow used the run binding, never the unbound session.
     expect(auth.apiCall.mock.calls.every((call) => JSON.stringify(call[1]) === JSON.stringify({ projectId: 'p1', runId: 'r-1' }))).toBe(true);
   });
 
@@ -79,6 +85,7 @@ describe('OutputCaptureBrowser', () => {
   });
 
   it('shows empty and failed lists explicitly and retries a denied list without stale choices', async () => {
+    // First list read is denied; the retry returns an empty list.
     vi.mocked(gatewayClient.listSourceControlOutputCaptures)
       .mockRejectedValueOnce(new GatewayError(403, { error: 'project_read_permission_denied' }, 'You can no longer read this project.'))
       .mockResolvedValueOnce({ captures: [] });
@@ -90,6 +97,7 @@ describe('OutputCaptureBrowser', () => {
   });
 
   it('does not display bytes whose hash or length differs from the manifest', async () => {
+    // The server returns different bytes than the manifest describes.
     vi.mocked(gatewayClient.readSourceControlOutputCaptureFile).mockResolvedValue(new TextEncoder().encode('tampered bytes').buffer);
     render(<OutputCaptureBrowser projectId="p1" runId="r-1" />);
     await selectCapture();
@@ -107,17 +115,21 @@ describe('OutputCaptureBrowser', () => {
   });
 
   it('discards a late detail when switching sessions and removes content on authority change', async () => {
+    // Hold the first detail read open so it can finish after the user has moved on.
     let finish!: (value: typeof detail) => void;
     vi.mocked(gatewayClient.readSourceControlOutputCapture).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const view = render(<OutputCaptureBrowser projectId="p1" runId="r-1" />);
     fireEvent.change(await screen.findByLabelText('Saved capture'), { target: { value: 'capture-1' } });
     await waitFor(() => expect(finish).toBeDefined());
+    // Switch session, then let the old read finish: its result must not appear.
     fireEvent.change(screen.getByLabelText('Session'), { target: { value: 'child' } });
     await act(async () => finish(detail));
     expect(screen.queryByRole('region', { name: 'Captured files' })).toBeNull();
     await selectCapture();
     await openFile();
     await screen.findByRole('heading', { name: 'Release notes' });
+    // Membership changes and access is now denied. The shown file must disappear
+    // immediately on rerender, before the failing reread finishes.
     vi.mocked(gatewayClient.getRunStatus).mockRejectedValue(new GatewayError(403, {}, 'Read access was removed.'));
     auth.authorizationContext.membershipRevision++;
     view.rerender(<OutputCaptureBrowser projectId="p1" runId="r-1" />);

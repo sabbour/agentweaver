@@ -123,6 +123,7 @@ export async function sendGatewayRequest<T>(
   readBody?: (response: Response) => Promise<T>,
 ): Promise<T> {
   if (!token) {
+    // Fail before the network call. A request with no token would only return 401 anyway.
     throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in to continue.');
   }
   const headers = new Headers(init.headers);
@@ -132,6 +133,9 @@ export async function sendGatewayRequest<T>(
     headers.set('X-Agentweaver-Tenant', tenantSelector);
   if (init.body !== undefined) headers.set('Content-Type', 'application/json');
 
+  // Call fetch on globalThis: browsers throw "Illegal invocation" for window.fetch on
+  // another receiver. Cookies are omitted because auth is the bearer token only, and
+  // no-store keeps private responses out of the browser's HTTP cache.
   const response = await fetcher.call(globalThis, url, {
     ...init,
     headers,
@@ -140,6 +144,8 @@ export async function sendGatewayRequest<T>(
   });
   if (!response.ok) {
     let body: Record<string, unknown> = {};
+    // Read the error body as text first. JSON objects become the problem details;
+    // plain text or other JSON is kept as `detail` so the message is not lost.
     const raw = await response.text();
     if (raw) {
       try {
@@ -153,6 +159,7 @@ export async function sendGatewayRequest<T>(
     }
     throw new GatewayError(response.status, body, problemMessage(body, response.status));
   }
+  // 204 has no body to parse. `readBody` lets a caller read non-JSON bodies such as file bytes.
   if (response.status === 204) return undefined as T;
   if (readBody) return readBody(response);
   return await response.json() as T;
@@ -187,6 +194,7 @@ export class AgentweaverGatewayClient {
     baseUrl = this.baseUrl,
     tenantSelector?: string | null,
   ): Promise<T> {
+    // Thin wrapper so every client method shares the same auth, cache, and error handling.
     return sendGatewayRequest<T>(this.fetcher, token, `${baseUrl}${path}`, init, tenantSelector);
   }
 
@@ -247,6 +255,8 @@ export class AgentweaverGatewayClient {
     const result = await this.request<ProjectRoleAssignmentList>(
       token, `/projects/${encodeSegments(projectId)}/role-assignments`, {}, this.baseUrl, tenantSelector,
     );
+    // Never show roles for a project other than the one asked for. A mismatch means the
+    // server answer is broken, so report it as a 502 contract error.
     if (result?.projectId !== projectId || !Array.isArray(result.assignments))
       throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned role assignments for a different project.');
     return result;
@@ -313,6 +323,7 @@ export class AgentweaverGatewayClient {
   ): Promise<VersionedProjectConfiguration> {
     return this.request(
       token,
+      // Without `revision` the server returns the latest configuration; with it, that exact saved version.
       `/projects/${encodeSegments(projectId)}/configuration${revision === undefined ? '' : `?revision=${revision}`}`,
       {},
       this.baseUrl,
@@ -819,6 +830,8 @@ export class AgentweaverGatewayClient {
     cursor: { capturedAt: string; captureId: string } | null = null,
     tenantSelector?: string | null,
   ): Promise<SourceControlOutputCapturePage> {
+    // Paging uses two cursor fields because several captures can share one timestamp;
+    // the id breaks the tie. They are always sent together.
     const query = new URLSearchParams({ limit: '50' });
     if (cursor) {
       query.set('beforeCapturedAt', cursor.capturedAt);
@@ -845,6 +858,8 @@ export class AgentweaverGatewayClient {
     tenantSelector?: string | null,
   ): Promise<ArrayBuffer> {
     const query = new URLSearchParams({ path });
+    // Call sendGatewayRequest directly so the body is read as raw bytes, not parsed as JSON.
+    // The file path goes in the query string, encoded, so it cannot change the route.
     return sendGatewayRequest(this.fetcher, token,
       `${this.baseUrl}/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'output-captures', captureId, 'files')}?${query}`,
       {}, tenantSelector, (response) => response.arrayBuffer());
@@ -916,7 +931,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads pending decisions and gate state for one coordination session. */
   /** Reads the text of one committed turn event with the run-bound token. */
   readSessionTurnContent(
     token: string,
@@ -934,6 +948,7 @@ export class AgentweaverGatewayClient {
       tenantSelector,
     );
   }
+  /** Reads pending decisions and gate state for one coordination session. */
   getDecisions(
     token: string,
     projectId: string,
@@ -1138,7 +1153,7 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads one newest-first page of accepted project runs (G2). */
+  /** Reads one newest-first page of accepted project runs. */
   listProjectRuns(
     token: string,
     projectId: string,
@@ -1146,6 +1161,7 @@ export class AgentweaverGatewayClient {
     tenantSelector?: string | null,
   ): Promise<ProjectRunPage> {
     const query = new URLSearchParams();
+    // Send only filters the caller set; several states are joined into one comma list.
     if (options.state?.length) query.set('state', options.state.join(','));
     if (options.cursor) query.set('cursor', options.cursor);
     if (options.pageSize) query.set('pageSize', String(options.pageSize));

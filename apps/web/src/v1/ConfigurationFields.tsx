@@ -13,6 +13,7 @@ const TASKS: ReadonlyArray<{ value: ModelTaskKind; label: string }> = [
 
 /** Narrows a select value to the reasoning levels accepted by the owner. */
 function reasoning(value: string): ReasoningEffort | null {
+  // Any other value, including the empty "use default" option, means no override.
   return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' ? value : null;
 }
 
@@ -29,16 +30,29 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
   savedSelection?: ModelSelectionSettings | null;
   part?: 'models' | 'components';
 }) {
+  /** Changes the default model and decides what happens to its credential pin. */
   const setModelReference = (reference: string) => {
+    // Typing into an empty field and clearing it again should not create an
+    // empty model selection that would then be saved.
     if (!reference && !configuration.modelSelection) return;
     const current = configuration.modelSelection;
+    // A credential pin belongs to one model. When the saved selection has a pin:
+    // - back on the saved model: restore the saved pin;
+    // - on any other model: clear it, so the user must choose a credential.
+    // When nothing was pinned, keep whatever the draft already has.
     const credentialReference = savedSelection?.credentialReference
       ? reference === savedSelection.reference ? savedSelection.credentialReference : null
       : current?.credentialReference;
+    // Spread the current selection so reasoning effort and other fields survive.
     onChange({ ...configuration, modelSelection: { ...current, reference, credentialReference } });
   };
+  /** Edits the credential ID or version and keeps the other part. */
   const setCredential = (part: 'id' | 'version', value: string) => {
+    // A credential only makes sense with a model selection. The fields are
+    // shown only in that case, so this is a safety guard.
     if (!configuration.modelSelection) return;
+    // Start from empty strings when no pin exists yet, so the first edit
+    // creates a complete object.
     const previous = configuration.modelSelection.credentialReference ?? { id: '', version: '' };
     onChange({
       ...configuration,
@@ -46,11 +60,17 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
     });
   };
   const missingCredential = needsModelCredential(configuration, savedSelection);
+  // Show the credential fields when a pin exists now or existed when saved.
+  // The second case keeps the fields visible after a model change clears the pin.
   const showCredential = Boolean(savedSelection?.credentialReference || configuration.modelSelection?.credentialReference);
+  /** Sets or clears the model override for one task kind. */
   const setTask = (taskKind: ModelTaskKind, reference: string | null, effort: ReasoningEffort | null) => {
     const overrides = configuration.modelTaskOverrides ?? [];
     const previous = overrides.find((item) => item.taskKind === taskKind);
+    // Keep any other fields from the previous override for this task.
     const selection = { ...previous?.selection, reference, reasoningEffort: effort };
+    // Remove the old entry and add the new one at the end. When both model and
+    // effort are empty, leave the entry out so the task uses the default.
     const next = overrides.filter((item) => item.taskKind !== taskKind);
     if (reference || effort) next.push({ taskKind, selection });
     onChange({ ...configuration, modelTaskOverrides: next });
@@ -66,6 +86,8 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
           </Field>
           <Field label="Default reasoning effort">
             <Select value={configuration.modelSelection?.reasoningEffort ?? ''} disabled={readOnly || !configuration.modelSelection}
+              // Reasoning effort is stored on the model selection, so it can only
+              // change after a default model exists.
               onChange={(_, data) => {
                 if (configuration.modelSelection) onChange({
                   ...configuration,
@@ -125,6 +147,8 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
         {configuration.orderedProviderOverrides.map((provider, index) => (
           <Field key={`${provider.seam}-${index}`} label={`${provider.seam} implementation order`} hint="Separate implementation IDs with commas, in priority order.">
             <Input value={provider.providerIds.join(', ')} readOnly={readOnly}
+              // Split on commas and trim each ID, keeping the order. Empty
+              // entries are not removed here.
               onChange={(_, data) => onChange({
                 ...configuration,
                 orderedProviderOverrides: configuration.orderedProviderOverrides.map((item, i) => i === index

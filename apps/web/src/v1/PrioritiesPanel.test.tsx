@@ -7,11 +7,13 @@ import type { ChiefOfStaffPriorityLink } from './contracts';
 
 const hoisted = vi.hoisted(() => ({ gateway: null as FakeGateway | null }));
 
+// Route the real gateway client through the in-memory fake, so tests check the actual HTTP requests.
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');
   return { ...actual, gatewayClient: new actual.AgentweaverGatewayClient('https://gw.test/api/v1', (i, init) => hoisted.gateway!.fetch(i, init)) };
 });
 
+// The token tells which session a call used: 'bound' for a run binding, 'unbound' otherwise.
 vi.mock('./AuthContext', () => {
   const auth = { apiCall: (op: (token: string, tenant: null) => Promise<unknown>, binding: unknown) => op(binding ? 'bound' : 'unbound', null) };
   return { useAuth: () => auth };
@@ -20,6 +22,7 @@ vi.mock('./AuthContext', () => {
 import { useChiefOfStaffConversations, useChiefOfStaffPriorities, useProjectChoices } from './chiefOfStaff';
 import { LinkSummary, PRIORITY_CONFLICT_NOTICE, PRIORITY_ORDER_CONFLICT_NOTICE, PrioritiesPanel } from './PrioritiesPanel';
 
+/** Wires the panel to the real data hooks, as the Overview page does. */
 function Harness() {
   const priorities = useChiefOfStaffPriorities();
   const conversations = useChiefOfStaffConversations();
@@ -31,6 +34,7 @@ function renderPanel() {
   return render(<MemoryRouter><Harness /></MemoryRouter>);
 }
 
+/** Finds a Priority row by its outcome, whatever its position. */
 const item = (outcome: string) => screen.findByRole('listitem', { name: new RegExp(`^Priority \\d+: ${outcome}$`) });
 
 /** Paths the panel wrote to. Every one must be a Chief of Staff Priority route. */
@@ -49,10 +53,12 @@ beforeEach(() => {
 
 describe('PrioritiesPanel', () => {
   it('creates once per draft and reuses the Idempotency-Key on retry', async () => {
+    // The server saves the first create but the response is lost, as after a timeout.
     hoisted.gateway!.failNext('POST', '/api/v1/chief-of-staff/priorities', 'lost');
     renderPanel();
     const form = await screen.findByRole('form', { name: 'Add a Priority' });
     fireEvent.change(within(form).getByLabelText('Outcome'), { target: { value: 'Launch v2' } });
+    // Two submits in the same tick: the second must be blocked by the in-flight guard.
     act(() => {
       fireEvent.submit(form);
       fireEvent.submit(form);
@@ -60,6 +66,7 @@ describe('PrioritiesPanel', () => {
     await within(form).findByRole('alert');
     fireEvent.submit(form);
     await item('Launch v2');
+    // One lost create plus one retry, both with the same key, and only one Priority stored.
     const creates = hoisted.gateway!.writes('/api/v1/chief-of-staff/priorities');
     expect(creates).toHaveLength(2);
     expect(creates[1].headers.get('Idempotency-Key')).toBe(creates[0].headers.get('Idempotency-Key'));
@@ -72,12 +79,15 @@ describe('PrioritiesPanel', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'Edit: Cut latency' }));
     const form = within(row).getByRole('form', { name: 'Edit Priority: Cut latency' });
     fireEvent.change(within(form).getByLabelText('Notes'), { target: { value: 'p95 under 150ms' } });
+    // Simulate another tab saving the Priority, so the panel's revision is now stale.
     hoisted.gateway!.state.priorities[0] = { ...hoisted.gateway!.state.priorities[0], notes: 'Changed elsewhere', revision: 2 };
     fireEvent.submit(form);
+    // The conflict notice shows and the user's typed notes survive the reread.
     expect((await within(row).findByRole('alert')).textContent).toBe(PRIORITY_CONFLICT_NOTICE);
     expect((within(row).getByLabelText('Notes') as HTMLTextAreaElement).value).toBe('p95 under 150ms');
     const reads = hoisted.gateway!.requests.filter((request) => request.method === 'GET' && request.url.pathname === '/api/v1/chief-of-staff/priorities');
     expect(reads.length).toBeGreaterThanOrEqual(2);
+    // Saving again now uses the reread revision and succeeds.
     fireEvent.submit(within(row).getByRole('form', { name: 'Edit Priority: Cut latency' }));
     await waitFor(() => expect(hoisted.gateway!.state.priorities[0].notes).toBe('p95 under 150ms'));
     expect(hoisted.gateway!.state.priorities[0].revision).toBe(3);
@@ -93,6 +103,7 @@ describe('PrioritiesPanel', () => {
     await item('Hire two engineers');
     expect(screen.getAllByRole('listitem', { name: /^Priority 1: / })[0].getAttribute('aria-label')).toBe('Priority 1: Hire two engineers');
 
+    // Another client changed the order; the next move must fail and leave the order unchanged.
     hoisted.gateway!.state.orderRevision = 20;
     fireEvent.click(screen.getByRole('button', { name: 'Move down: Hire two engineers' }));
     expect((await screen.findByText(PRIORITY_ORDER_CONFLICT_NOTICE)).getAttribute('role')).toBe('alert');
@@ -127,8 +138,10 @@ describe('PrioritiesPanel', () => {
     await waitFor(() => expect(hoisted.gateway!.state.priorities[0].links).toHaveLength(0));
 
     const writes = writePaths();
+    // Add item, tick, add link, remove item, remove link: five Priority writes and nothing else.
     expect(writes.length).toBe(5);
     expect(writes.every((path) => /^(PATCH|POST|DELETE) \/api\/v1\/chief-of-staff\/priorities\/pri-a(\/links(\/[^/]+)?)?$/.test(path))).toBe(true);
+    // Priorities must never act on a run: no start, cancel or gate calls, and run routes are read-only.
     const urls = hoisted.gateway!.requests.map((request) => request.url.pathname);
     expect(urls.some((url) => /\/start$|\/cancel$|\/decisions|\/gates|\/answers|\/coordination/.test(url))).toBe(false);
     expect(hoisted.gateway!.requests.filter((request) => request.url.pathname.includes('/runs')).every((request) => request.method === 'GET')).toBe(true);
@@ -156,6 +169,7 @@ describe('LinkSummary', () => {
   });
 
   it('shows only the kind for an unavailable link', () => {
+    // Exact text match: nothing but the badge and the kind may render, so no target details leak.
     const { container } = render(<LinkSummary link={link({ access: 'unavailable', projectId: undefined, runId: undefined, state: undefined })} projectNames={names} />);
     expect(container.textContent).toBe('UnavailableRun');
   });

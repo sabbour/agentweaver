@@ -26,6 +26,7 @@ export class NotificationsClient {
   private readonly fetcher: typeof fetch;
 
   constructor(baseUrl = gatewayBaseUrl, fetcher: typeof fetch = (...args) => fetch(...args)) {
+    // Drop trailing slashes so joined paths never contain '//'.
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.fetcher = fetcher;
   }
@@ -33,10 +34,13 @@ export class NotificationsClient {
   /** Reads one newest-first page of pending-gate notifications. */
   list(token: string, query: NotificationQuery = {}, tenantSelector?: string | null): Promise<UserNotificationPage> {
     const params = new URLSearchParams();
+    // Only send filters the caller set. The server applies its defaults to the rest.
     if (query.projectId) params.set('projectId', query.projectId);
+    // Check for undefined, not falsy, so an explicit `false` is still sent.
     if (query.includeDismissed !== undefined) params.set('includeDismissed', String(query.includeDismissed));
     if (query.cursor) params.set('cursor', query.cursor);
     if (query.pageSize) params.set('pageSize', String(query.pageSize));
+    // Omit the '?' entirely when there are no filters, so the URL stays canonical.
     const suffix = params.size > 0 ? `?${params.toString()}` : '';
     return sendGatewayRequest(this.fetcher, token, `${this.baseUrl}/notifications${suffix}`, {}, tenantSelector);
   }
@@ -46,6 +50,7 @@ export class NotificationsClient {
     return sendGatewayRequest(
       this.fetcher,
       token,
+      // Encode the id so a '/' in it cannot change which route is called.
       `${this.baseUrl}/notifications/${encodeSegments(notificationId, 'dismiss')}`,
       { method: 'POST' },
       tenantSelector,

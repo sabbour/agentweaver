@@ -5666,6 +5666,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var outcomeDecision = page.GetByRole(AriaRole.Article, new() { Name = "Confirm the outcome", Exact = true });
                 var runSignIn = page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" });
                 // The run page first asks for the run sign-in silently; the button shows only when that fails.
+                // So wait for whichever comes first: the button, or the outcome gate after a silent success.
                 await runSignIn.Or(outcomeDecision).First.WaitForAsync();
                 var browserToken = reverseProxy.BrokerAccessToken
                     ?? throw new InvalidOperationException("The browser did not redeem a Broker access token.");
@@ -5681,6 +5682,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 }
                 if (await runSignIn.IsVisibleAsync())
                     await runSignIn.ClickAsync();
+                // Either way, the outcome gate must now show with the exact request id from the seeded run.
                 await outcomeDecision.GetByText("Confirm the outcome this run should deliver.").WaitForAsync();
                 await outcomeDecision.GetByText($"request {outcomeGateRequestId}").WaitForAsync();
             }

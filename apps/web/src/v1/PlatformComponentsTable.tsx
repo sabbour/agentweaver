@@ -2,8 +2,8 @@
  * Table of the platform components a run may use and the implementations it
  * was allowed to choose from, read from the run's accepted selection. It shows
  * allowed choices, not which implementation is running: the service does not
- * report active implementations yet (gap G5). When G5 lands, the platform
- * settings page reuses this table with an "Active" column.
+ * report active implementations yet. When it does, the platform settings page
+ * can reuse this table with an "Active" column.
  */
 import { Badge } from '@fluentui/react-components';
 import type { EffectiveProviderSelection } from './contracts';
@@ -21,7 +21,10 @@ const CARDINALITY_LABELS: Record<string, string> = {
 
 /** Readable name for a platform component key such as `sandboxRuntime`. */
 function componentLabel(key: string): string {
+  // Split camelCase into words ("sandboxRuntime" -> "sandbox Runtime"), then turn
+  // dashes, underscores, and dots into spaces.
   const words = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[-_.]+/g, ' ').trim();
+  // Sentence case: capital first letter, rest lower. Fall back to the raw key if nothing is left.
   return words ? words[0].toUpperCase() + words.slice(1).toLowerCase() : key;
 }
 
@@ -31,6 +34,8 @@ export function PlatformComponentsTable({ components, caption = 'Allowed impleme
   caption?: string;
 }) {
   if (components.length === 0) return <p className="v1-muted">This run lists no platform components.</p>;
+  // Rows are keyed by component, meter source, and index. The index keeps keys
+  // unique if the same component appears more than once.
   return (
     <div className="v1-table-wrap">
       <table className="v1-table">

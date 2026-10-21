@@ -6,6 +6,8 @@ import type { FakeGateway } from './__fixtures__/cosGateway';
 
 const hoisted = vi.hoisted(() => ({ gateway: null as FakeGateway | null, bindings: [] as unknown[] }));
 
+// Route the real Gateway and notifications clients through an in-memory fake Gateway,
+// so the test covers real request building and response parsing.
 vi.mock('./api', async () => {
   const actual = await vi.importActual<typeof import('./api')>('./api');
   return { ...actual, gatewayClient: new actual.AgentweaverGatewayClient('https://gw.test/api/v1', (i, init) => hoisted.gateway!.fetch(i, init)) };
@@ -17,6 +19,7 @@ vi.mock('./notificationsClient', async () => {
 });
 
 vi.mock('./AuthContext', () => {
+  // Record the binding of every call, so a test can prove Flow never asks for a run-bound token.
   const auth = {
     session: { accessToken: 'unbound' },
     apiCall: (op: (token: string, tenant: null) => Promise<unknown>, binding: unknown) => {
@@ -42,6 +45,7 @@ beforeEach(() => {
   hoisted.bindings = [];
   hoisted.gateway = createFakeGateway({
     projects: [project('p1', 'Payments')],
+    // One run for every known state, so each Flow group is exercised.
     runs: {
       p1: [
         run('r-idle', 'idle', 'Draft the plan'),
@@ -53,6 +57,7 @@ beforeEach(() => {
         run('r-unknown', 'indeterminate', 'Lost track'),
       ],
     },
+    // A pending gate, a dismissed gate, a gate in another project, and a non-gate notice.
     notifications: [
       notification('n-open', { prompt: 'Which branch?' }),
       notification('n-dismissed', { prompt: 'Approve the plan?', requestId: 'req-2', dismissed: true }),
@@ -84,6 +89,7 @@ describe('FlowPage', () => {
     expect(within(working).getByText('Write the code')).toBeTruthy();
     expect(within(working).getByText('Pick a branch')).toBeTruthy();
     const done = screen.getByRole('region', { name: 'Done' });
+    // Walk up from each Open button to its row, to read the row's full text.
     const rows = within(done).getAllByRole('button', { name: /^Open run / }).map((button) => button.parentElement?.parentElement?.textContent ?? '');
     expect(rows).toHaveLength(4);
     for (const [title, label] of [['Ship it', 'Done'], ['Broken build', 'Failed'], ['Stopped early', 'Cancelled'], ['Lost track', 'Outcome unknown']]) {
@@ -95,6 +101,7 @@ describe('FlowPage', () => {
   it('shows pull request state as Unavailable and never as Open or Merged', async () => {
     renderFlow();
     await screen.findByText('Draft the plan');
+    // One note per run (seven runs).
     expect(screen.getAllByText(new RegExp(PULL_REQUEST_NOTE))).toHaveLength(7);
     expect(screen.queryByText(/Merged/)).toBeNull();
   });
@@ -106,6 +113,7 @@ describe('FlowPage', () => {
     expect(within(needs).getByText(/Approve the plan\?/)).toBeTruthy();
     expect(within(needs).queryByText(/Other project/)).toBeNull();
     expect(within(needs).queryByText(/Backlog promoted/)).toBeNull();
+    // Flow includes dismissed items, so it offers no Dismiss action.
     expect(within(needs).queryByRole('button', { name: /Dismiss/ })).toBeNull();
   });
 
@@ -116,6 +124,7 @@ describe('FlowPage', () => {
     const notifications = reads.find((request) => request.url.pathname === '/api/v1/notifications')!;
     expect(notifications.url.searchParams.get('projectId')).toBe('p1');
     expect(notifications.url.searchParams.get('includeDismissed')).toBe('true');
+    // Every request used the unbound token, and Flow is read-only.
     expect(reads.every((request) => request.headers.get('Authorization') === 'Bearer unbound')).toBe(true);
     expect(hoisted.bindings.every((binding) => binding === null)).toBe(true);
     expect(hoisted.gateway!.writes()).toHaveLength(0);

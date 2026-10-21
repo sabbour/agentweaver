@@ -30,10 +30,12 @@ vi.mock('./pageParts', async () => {
   };
 });
 
+/** Builds a fake load result in the same shape the project data hooks return. */
 function loaded<T>(data: T | null, overrides: Partial<LoadedStub<T>> = {}): LoadedStub<T> {
   return { data, loading: false, error: null, loadedAt: null, reload: vi.fn(), replace: vi.fn(), ...overrides };
 }
 
+/** A fully set-up configuration: model, repository, one cast agent, one enabled skill. */
 function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfiguration {
   return {
     modelSelection: { reference: 'gpt-test' } as ProjectConfiguration['modelSelection'],
@@ -82,6 +84,7 @@ describe('DashboardPage', () => {
   });
 
   it('shows a ready project with its checks, summary, and team', () => {
+    // One run of each kind, so each summary count is exactly one.
     mocks.runs = [run('r1', 'blocked'), run('r2', 'active'), run('r3', 'completed')];
     renderPage();
     expect(screen.getByText('Ready')).toBeTruthy();
@@ -90,6 +93,7 @@ describe('DashboardPage', () => {
     expect(checks).toEqual(['Default model: gpt-test', 'Repository: octo/repo', '1 agent in the team', '1 skill assigned']);
     const actions = screen.getByLabelText('Project actions');
     expect(within(actions).getByRole('link', { name: 'Open Orchestrations' }).getAttribute('href')).toBe('/projects/p1/orchestrations');
+    // When the primary action already points at Orchestrations, the extra link is not repeated.
     expect(within(actions).getAllByRole('link', { name: 'Open Orchestrations' })).toHaveLength(1);
     const summary = screen.getByLabelText('Project summary');
     expect(summary.textContent).toContain('Recent runs3');

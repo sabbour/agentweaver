@@ -1,6 +1,11 @@
 import { makeStyles, tokens } from '@fluentui/react-components';
 
-/** 0.x persona trigger and menu styles, shared by the 0.x GitHub identity badge and the v1 Broker identity menu. */
+/**
+ * Styles for the account button in the side bar and the menu it opens.
+ * Shared by the 0.x GitHub identity badge and the v1 identity menu so both look the same.
+ * The trigger and label rules use `minWidth: 0` and ellipsis so long names do not
+ * widen a collapsed side bar.
+ */
 export const useIdentityMenuStyles = makeStyles({
   trigger: {
     cursor: 'pointer',

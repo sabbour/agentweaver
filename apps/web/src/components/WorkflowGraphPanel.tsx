@@ -118,7 +118,7 @@ export interface ExecutorState {
 export interface WorkflowNodeData extends Record<string, unknown> {
   def: ExecutorDef;
   state: ExecutorState;
-  /** Owner-reported status when a service does not use legacy workflow step states. */
+  /** Service-reported status text. When set, it replaces the label derived from the older workflow step states. */
   statusLabelOverride?: string;
   /** node_type drives card width and shape. */
   nodeType?: GraphNodeType;
@@ -1046,6 +1046,9 @@ export function WorkflowNode({ data, selected }: NodeProps) {
   const subText    = degradedReason ?? ((key === 'agent' && effectiveStatus === 'started' && intent) ? intent : (message ?? rawSubText));
   const roleText   = agentRoleTitle ?? def.roleDescription;
   const coordinatorClickable = key === 'coordinator' && !isPlanned && Boolean(openSession);
+  // A service that reports its own status text (for example the v1 run graph)
+  // passes it as an override. That text wins over the label derived from the
+  // older workflow step states. The same text feeds the popover and aria-label.
   const statusText = statusLabelOverride ?? (isPlanned ? 'Planned' : isHumanWaiting ? 'Awaiting' : statusLabel(effectiveStatus));
   const handleTestId = (suffix: string) => handleTestIdPrefix ? `${handleTestIdPrefix}-${suffix}` : undefined;
 
@@ -1086,6 +1089,7 @@ export function WorkflowNode({ data, selected }: NodeProps) {
           View session
         </Button>
       )}
+      {/* "View execution" needs a modal handler. Graphs without one (such as the v1 run graph) hide the button instead of showing a dead control. */}
       {key === 'agent' && !isPlanned && openModal && (
         <Button appearance="outline" size="small" onClick={() => openModal?.(executionId as string)}>View execution</Button>
       )}

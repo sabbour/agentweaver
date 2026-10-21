@@ -20,6 +20,7 @@ import { useIdentityMenuStyles } from './identityMenuStyles';
 import type { AuthSessionResponse, ProjectCopilotConnection } from '../api/types';
 import type { ReactNode } from 'react';
 
+// Styles live in a shared module so the v1 identity menu can reuse the same look.
 const useStyles = useIdentityMenuStyles;
 
 function identityLabel(session: AuthSessionResponse | null): string {
@@ -97,8 +98,12 @@ export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHub
 
   useEffect(() => {
     let active = true;
+    // Load the project connection only while the menu is open and a project is selected.
+    // `active` turns false on close, project change, or unmount, so a late response is ignored.
     if (!open || !projectId) return () => { active = false; };
 
+    // Defer the state updates out of the effect body so React does not see a synchronous
+    // setState during the effect.
     queueMicrotask(() => {
       if (!active) return;
       setConnectionLoading(true);
@@ -110,6 +115,7 @@ export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHub
         })
         .catch((err: unknown) => {
           if (!active) return;
+          // Clear the old value so a stale connection is never shown next to the new error.
           setConnection(null);
           setCopilotConnectionError(formatProjectCopilotStatusError(err));
         })

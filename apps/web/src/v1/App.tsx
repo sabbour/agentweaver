@@ -114,7 +114,11 @@ import { useBrowserRunList } from './runListData';
 import { CONFIGURATION_SECTIONS, SETTINGS_SECTIONS, settingsSection } from './settingsSections';
 import type { SettingsSection } from './settingsSections';
 
-/** 0.x settings rail icons; v1-only sections use icons from the same Fluent set. */
+/**
+ * Icons for the settings side rail. Sections that existed in the 0.x app keep
+ * their old icons so the rail looks familiar. New sections use icons from the
+ * same Fluent icon set.
+ */
 const SETTINGS_SECTION_ICONS: Record<SettingsSection, ReactElement> = {
   general: <Settings24Regular />,
   access: <People24Regular />,
@@ -137,7 +141,10 @@ function isSameBinding(
   return actual?.projectId === expected?.projectId && actual?.runId === expected?.runId;
 }
 
-/** Run page tabs in display order. Chat is first, matching the 0.x run page. */
+/**
+ * Run page tabs in display order. Chat is first, matching the 0.x run page.
+ * Chat is also the default tab when the URL has no valid `view` value.
+ */
 const RUN_TAB_VALUES = ['chat', 'topology', 'approvals', 'activity', 'changes', 'usage', 'selection'] as const;
 /** URL-backed views available on the run page. */
 type RunTab = typeof RUN_TAB_VALUES[number];
@@ -154,6 +161,9 @@ function isRunTab(value: string | null): value is RunTab {
 /** Starts Broker authorization and explains how the Web session is restored. */
 function SignInScreen() {
   const { busy, error, configurationError, authorize } = useAuth();
+  // The button stays disabled while a sign-in is running, and also when the
+  // app has a configuration error, because sign-in cannot succeed then.
+  // `authorize(null)` asks for a session that is not bound to any run.
   return (
     <SignInView
       heading="Sign in"
@@ -172,6 +182,9 @@ function SignInScreen() {
 
 /** Splits `owner/name` or a github.com URL into repository parts, or returns null. */
 function parseRepository(value: string): { owner: string; name: string } | null {
+  // Strip an optional `https://github.com/` prefix and `.git` suffix, so a
+  // pasted clone URL works. Then require exactly two path parts (owner and
+  // name) with an optional trailing slash. Anything else is not a repository.
   const match = value.trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').match(/^([\w.-]+)\/([\w.-]+)\/?$/);
   return match ? { owner: match[1], name: match[2] } : null;
 }
@@ -194,6 +207,8 @@ function ProjectsPage() {
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  // The caller's role grants. Each tile uses them to show a short access
+  // summary for that project. Tiles show without it while it loads.
   const authorization = useAuthorizationContext();
 
   const load = useCallback(async () => {
@@ -216,11 +231,16 @@ function ProjectsPage() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  // The repository is only used when "GitHub repository" is selected. When it
+  // is selected, the form cannot submit until the input parses as owner/name.
   const repository = startFrom === 'github' ? parseRepository(repositoryInput) : null;
   const createDisabled = busy || !projectName.trim() || (startFrom === 'github' && !repository);
 
+  /** Creates the project, then optionally saves the chosen repository into its configuration. */
   const create = async (event: FormEvent) => {
     event.preventDefault();
+    // Enter in a field can submit the form even when the button is disabled,
+    // so repeat the same check here.
     if (createDisabled) return;
     setBusy(true);
     setError(null);
@@ -231,9 +251,16 @@ function ProjectsPage() {
       );
       let message = `Project ${created.name} was created.`;
       if (repository) {
+        // Second step: save the repository. The project already exists at
+        // this point, so a failure here must not be reported as a failed
+        // create. It only changes the success message.
         try {
           await apiCall(async (token, tenantSelector) => {
+            // Read the current configuration first, so the update keeps every
+            // other field and is checked against the current revision.
             const current = await gatewayClient.getProjectConfiguration(token, created.projectId, tenantSelector);
+            // Keep any existing source-control fields and switch the auth
+            // mode to the GitHub App.
             const sourceControl = { ...(current.configuration.sourceControl ?? {}), repository, authMode: 'githubApp' as const };
             return gatewayClient.updateProjectConfiguration(
               token, created.projectId, current.revision, { ...current.configuration, sourceControl }, tenantSelector,
@@ -241,9 +268,12 @@ function ProjectsPage() {
           }, null);
           message += ` It uses ${repository.owner}/${repository.name}.`;
         } catch {
+          // Most often the creator has no grant on the new project yet.
+          // Keep the project and tell the user how to add the repository later.
           message += ` The repository was not saved. Add it in Settings > Repository after you have access.`;
         }
       }
+      // Reset the form, close the dialog, and reload so the new tile appears.
       setProjectName('');
       setRepositoryInput('');
       setStartFrom('blank');
@@ -577,14 +607,30 @@ function ProjectRepoAppConnectionPanel() {
   );
 }
 
-/** Edits project configuration and reports rejected or stale updates. */
+/**
+ * Edits project configuration and reports rejected or stale updates.
+ * One component serves three routes, chosen by `view`:
+ * - 'settings': the sectioned settings page (side rail plus one section).
+ * - 'skills': the skills marketplace and skill assignments.
+ * - 'agents': the project's agent cast.
+ * All three share the same loaded configuration, save logic, and stale-response checks.
+ */
 function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | 'skills' | 'agents' }) {
   const { projectId = '' } = useParams();
   const { session, apiCall } = useAuth();
   const [searchParams] = useSearchParams();
+  // The selected settings section lives in the URL (`?section=`), so links and
+  // reloads open the same section. Unknown values fall back to a default.
   const section = settingsSection(searchParams.get('section'));
+  // Only the settings view needs the project summary (General and Danger zone
+  // sections). An empty ID tells the hook to skip the request on other views.
   const project = useProjectSummary(view === 'settings' ? projectId : '');
   const [versioned, setVersioned] = useState<VersionedProjectConfiguration | null>(null);
+  // Two views of the same unsaved edit:
+  // - `editor` is the raw JSON text in the Advanced section.
+  // - `configurationDraft` is the parsed object that the form sections edit.
+  // Form edits update both. Raw JSON edits update only `editor`, so the two
+  // can drift apart until the user saves or reloads.
   const [editor, setEditor] = useState('');
   const [configurationDraft, setConfigurationDraft] = useState<ProjectConfiguration | null>(null);
   const [loading, setLoading] = useState(true);
@@ -618,6 +664,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
         throw new Error('The server returned configuration for a different project.');
       setVersioned(result);
       setEditor(JSON.stringify(result.configuration, null, 2));
+      // Start the form draft from the loaded document, so it matches the JSON text.
       setConfigurationDraft(result.configuration);
       setLoadedScope(scope);
     } catch (reason) {
@@ -642,10 +689,20 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     };
   }, [load, requestScope]);
 
-  /** Saves a full configuration document against the loaded revision. Resolves true on success. */
+  /**
+   * Saves a full configuration document against the loaded revision. Resolves true on success.
+   * The settings form, the raw JSON editor, and the Agents view all save through here.
+   */
   const persist = async (configuration: ProjectConfiguration): Promise<boolean> => {
+    // Remember which user and project this save belongs to. If either changes
+    // while the request runs, the late response is ignored below.
     const scope = requestScope;
+    // Refuse to save when:
+    // - the configuration is not loaded for this exact scope (we need its revision), or
+    // - a skill assignment is updating the same document right now.
     if (!versioned || loadedScope !== scope || versioned.projectId !== projectId || skillAssignmentPending) return false;
+    // A new model choice may need a credential that is not set yet. The form
+    // shows that problem itself; the save just stops here.
     if (needsModelCredential(configuration, versioned.configuration.modelSelection)) return false;
     setSavingScope(scope);
     setError(null);
@@ -653,15 +710,20 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     setNotice(null);
     setNoticeScope(null);
     try {
+      // The server rejects the update if `versioned.revision` is no longer the
+      // latest revision. That stops one user from silently overwriting another.
       const updated = await apiCall(
         (token, tenantSelector) => gatewayClient.updateProjectConfiguration(
           token, projectId, versioned.revision, configuration, tenantSelector,
         ),
         null,
       );
+      // The user switched project or account while saving. Do not show this result.
       if (activeScope.current !== scope) return false;
       if (updated.projectId !== projectId)
         throw new Error('The server returned an update for a different project.');
+      // Replace the saved copy, the JSON text, and the form draft together so
+      // all three show the new revision.
       setVersioned(updated);
       setEditor(JSON.stringify(updated.configuration, null, 2));
       setConfigurationDraft(updated.configuration);
@@ -679,9 +741,14 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     }
   };
 
+  /**
+   * Form submit handler. It always saves the raw JSON text, because form
+   * edits are copied into that text and raw edits exist only there.
+   */
   const save = async (event: FormEvent) => {
     event.preventDefault();
     let configuration: ProjectConfiguration;
+    // Parse locally first so invalid JSON shows a clear error and is never sent.
     try {
       const parsed: unknown = JSON.parse(editor);
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
@@ -772,17 +839,29 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
         ? 'Save or reload the edited project configuration before assigning a skill.'
         : null;
 
+  // A save or a skill assignment is running. Both write the same document,
+  // so the page blocks other edits until it finishes.
   const busy = savingScope === requestScope || skillAssignmentPending;
+  // True when the JSON text still matches the form draft. False means the
+  // user edited raw JSON; then the form sections become read-only so the
+  // two edits cannot overwrite each other.
   const draftInSync = Boolean(configurationDraft && editor === JSON.stringify(configurationDraft, null, 2));
+  // Shared props for every form section. A form change updates the draft
+  // and rewrites the JSON text, so the two stay in step.
   const fieldProps = configurationDraft ? {
     configuration: configurationDraft,
     readOnly: busy || !draftInSync,
     onChange: (next: ProjectConfiguration) => { setConfigurationDraft(next); setEditor(JSON.stringify(next, null, 2)); },
   } : null;
+  // Disable Save when:
+  // - the page is busy or the JSON text is empty,
+  // - nothing changed from the saved revision, or
+  // - the form draft picks a model that still needs a credential.
   const saveDisabled = busy || !editor.trim()
     || Boolean(currentConfiguration && editor === JSON.stringify(currentConfiguration.configuration, null, 2))
     || Boolean(configurationDraft && draftInSync && currentConfiguration
       && needsModelCredential(configurationDraft, currentConfiguration.configuration.modelSelection));
+  // Error and success banners, shown at the top of every view of this page.
   const statusMessages = (
     <>
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
@@ -790,6 +869,8 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     </>
   );
 
+  // Agents view. It saves through `persist`, so it gets the same revision and
+  // stale-response checks as the settings form.
   if (view === 'agents') return (
     <>
       <PageHeading title="Agents" description="The cast working on this project." page="Agents" />
@@ -800,6 +881,8 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     </>
   );
 
+  // Skills view. Skill assignments are saved by the marketplace panel itself.
+  // It reports the new configuration back through `onConfigurationChanged`.
   if (view === 'skills') return (
     <>
       <PageHeading title="Skills" description="Reusable instructions your agents can use. Browse a marketplace, preview a skill, then import and assign it." page="Skills" />
@@ -814,7 +897,10 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
           assignmentDisabledReason={assignmentDisabledReason}
           onAssignmentPendingChange={setSkillAssignmentPending}
           onConfigurationChanged={(updated) => {
+            // Ignore updates that arrive after the user moved to another
+            // project or account, and updates for a different project.
             if (activeScope.current !== requestScope || updated.projectId !== projectId) return;
+            // Keep the saved copy, JSON text, and form draft on the same revision.
             setVersioned(updated);
             setEditor(JSON.stringify(updated.configuration, null, 2));
             setConfigurationDraft(updated.configuration);
@@ -826,6 +912,10 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     </>
   );
 
+  // Settings view: a side rail of section links plus the selected section.
+  // Some sections own their own data and saving (General, Access, Danger zone,
+  // Connections, History). The sections in CONFIGURATION_SECTIONS edit the
+  // shared configuration document and use the shared form and Save button.
   const base = `/projects/${encodeURIComponent(projectId)}/settings`;
   return (
     <>
@@ -844,6 +934,8 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
         </nav>
         <div className="v1-stack v1-settings-pane">
           {statusMessages}
+          {/* General and Danger zone edit the project record, not the configuration document.
+              Keying General by revision resets its fields after every saved change. */}
           {section === 'general' && (project.data
             ? <GeneralSection key={project.data.revision} project={project.data} onUpdated={project.replace} />
             : project.error != null ? <ErrorNotice code={errorCode(project.error)}>{errorMessage(project.error)}</ErrorNotice> : <Loading />)}
@@ -856,9 +948,11 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
               <PageSection title="Connections" description="Connect the accounts and tools this project needs." />
               <ProjectRepoAppConnectionPanel />
               <CopilotUserConnectionPanel projectId={projectId} />
+              {/* Keyed by user and project, so its state resets when either changes. */}
               <RemoteMcpConnectionPanel key={requestScope} projectId={projectId} configurationRevision={currentConfiguration?.revision ?? null} />
             </>
           )}
+          {/* Keyed by revision, so the history list reloads after each save. */}
           {section === 'history' && (currentLoading ? <Loading /> : currentConfiguration && (
             <ConfigurationHistory key={`${requestScope}/${currentConfiguration.revision}`}
               projectId={projectId} currentRevision={currentConfiguration.revision} />
@@ -1011,12 +1105,16 @@ function KnowledgePage() {
     () => runId.trim() ? { projectId, runId: runId.trim() } : null,
     [projectId, runId],
   );
+  // The run picker uses the runs this browser has opened recently, so it
+  // needs no extra request. The agent picker uses the project's agents.
   const recentRuns = useBrowserRunList(projectId);
   const knowledgeConfiguration = useProjectConfiguration(projectId);
   /** Recent runs in this browser, plus the run from the URL so a deep link keeps its choice. */
   const runOptions = useMemo(() => {
     const options = recentRuns.items.map((item) => ({ value: item.runId, label: `${item.runId} · ${runState(item.executionState).label}` }));
     const current = searchParams.get('runId');
+    // A run from a shared link may not be in this browser's list. Add it at
+    // the top so the select can still show it as chosen.
     if (current && !options.some((option) => option.value === current)) options.unshift({ value: current, label: current });
     return options;
   }, [recentRuns.items, searchParams]);
@@ -1025,9 +1123,14 @@ function KnowledgePage() {
     const options = (knowledgeConfiguration.data?.configuration.agentCharters ?? [])
       .map((agent) => ({ value: agent.agentId, label: `${agent.name} · ${agent.role}` }));
     const current = searchParams.get('agentId');
+    // Same idea as runs: keep an agent ID from the URL even if the project
+    // configuration does not list it (for example, a session ID).
     if (current && !options.some((option) => option.value === current)) options.unshift({ value: current, label: current });
     return options;
   }, [knowledgeConfiguration.data, searchParams]);
+  // Knowledge requests need a session bound to this exact project and run.
+  // If the current session is bound elsewhere, try to switch silently first;
+  // `silentBind` becomes 'failed' only when the user must sign in again.
   const correctlyScoped = isSameBinding(session?.binding, binding);
   const silentBind = useSilentRunSession(binding, correctlyScoped, ensureSession);
   const requestScope = JSON.stringify([
@@ -1533,6 +1636,8 @@ function KnowledgePage() {
             <Button appearance="primary" type="submit" disabled={!runId.trim() || !agentId.trim()}>Show memories</Button>
           </form>
         )}
+        {/* The session is bound to another run. Show a spinner while the silent switch
+            runs, and a sign-in button only if it failed. */}
         {binding && !correctlyScoped && (silentBind === 'failed' ? (
           <div className="v1-scope-action">
             <p className="v1-muted">Each run needs its own sign-in. Sign in again to read this run's memories.</p>
@@ -1542,6 +1647,7 @@ function KnowledgePage() {
       </Panel>
       {binding && correctlyScoped && agentId.trim() && (
         <>
+          {/* Changing the kind filter goes back to page 1, because the old page may not exist. */}
           <TabList selectedValue={kind} onTabSelect={(_, data) => { setPage(1); setKind(String(data.value)); }} aria-label="Memory kind">
             <Tab value="">All</Tab>
             <Tab value="memory">Memories</Tab>
@@ -1834,14 +1940,20 @@ function createTopology(
       : 'Status unavailable';
     return {
       id: node.identity.sessionId,
+      // Use the shared workflow node card, so the run topology looks like the
+      // project Flow page.
       type: 'workflow',
       position: { x: depth * 300, y: index * 150 },
       data: {
         def: { key: node.kind, label: node.kind, roleDescription: node.kind, Icon: iconForRole(node.kind) },
         state: {
+          // Map session state to the card's three states: a busy session is
+          // 'started', a completed one is 'completed', and anything else
+          // (idle, unknown, cancelled, archived) shows as 'pending'.
           status: status?.activity === 'busy' ? 'started' : node.lifecycle === 'completed' ? 'completed' : 'pending',
           message: description,
         },
+        // Show the real activity and lifecycle words instead of the card's generic label.
         statusLabelOverride: status ? `${status.activity} · ${status.lifecycle}` : 'Status unavailable',
         agentName: node.identity.sessionId,
         dir: 'LR',
@@ -1865,6 +1977,8 @@ function eventSummary(event: SessionEventEnvelope): string {
   const payload = event.payload;
   if (event.kind === 'turn') {
     const role = typeof payload.role === 'string' ? payload.role : 'turn';
+    // The journal event holds only a reference to the message text. The Chat
+    // tab loads and shows the text, so the activity list just points there.
     if (role === 'user') return 'User message. The text shows in Chat.';
     if (role === 'assistant') return 'Assistant message. The text shows in Chat.';
     return `${role} turn.`;
@@ -1970,7 +2084,8 @@ interface PendingMessage {
  * Renders run chat. Messages go to `targetSessionId`: the coordinator unless the user
  * selected another active session in the run tree. The v1 message API delivers between
  * sessions in a run, so the page sends through another active session (the coordinator
- * when it is not the recipient). Pending messages show until the journal reports them.
+ * when it is not the recipient). Messages sent from this page also show in a local
+ * list until the page reloads; the transcript above shows the saved history.
  */
 function ChatView({
   projectId,
@@ -1989,21 +2104,35 @@ function ChatView({
   apiCall: AuthReturn['apiCall'];
   snapshotBusy: boolean;
 }) {
+  // Only active sessions can send or receive messages.
   const activeNodes = useMemo(() => nodes.filter((node) => node.lifecycle === 'active'), [nodes]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  // The recipient. It is undefined when the chosen session is no longer active.
   const target = activeNodes.find((node) => node.identity.sessionId === targetSessionId);
+  // The API needs a "from" session that differs from the recipient. Prefer the
+  // coordinator; if the coordinator is the recipient, use any other active session.
   const sender = activeNodes.find((node) => node.kind === 'coordinator' && node !== target) ??
     activeNodes.find((node) => node !== target);
   const targetName = target ? sessionName(target) : 'Coordinator';
+  // Saved user and assistant turns for this run, rebuilt from journal events.
   const transcript = useTurnTranscript(journalEvents, projectId, runId, apiCall);
 
+  /**
+   * Sends one message. The composer supplies the idempotency key and reuses it
+   * when the user retries the same text, so a retry cannot send a duplicate.
+   * Errors are not caught here; the composer shows them and keeps the text.
+   */
   const send = async (text: string, idempotencyKey: string) => {
+    // The form is hidden in this case, but guard anyway.
     if (!target || !sender) return;
     setNotice(null);
+    // The API call is bound to this exact project and run.
     const result = await apiCall((token, tenantSelector) => gatewayClient.sendMessage(
       token, projectId, runId, sender.identity.sessionId, target.identity.sessionId, text, idempotencyKey, 'immediate', tenantSelector,
     ), { projectId, runId });
+    // Accepted is not the same as delivered. Show the message in a local list
+    // with the server's status. This list lives only in page memory.
     setPending((items) => [...items, { id: result.ownerMessageId, from: sender.identity.sessionId, to: targetName, text, status: result.status }]);
     setNotice('Message sent. It shows in the activity list when the agent receives it.');
   };
@@ -2352,9 +2481,10 @@ function RunGitHubAppPanel({
 }
 
 /**
- * Coordinates the owner snapshots for one project/run, then renders topology, chat,
- * approvals, activity, selection, and usage. Responses are accepted only for the
- * current run binding and generation; mutations wait for refreshed owner state.
+ * Coordinates the owner snapshots for one project/run, then renders the run tree
+ * and the chat, topology, approvals, activity, changes, usage, and run-settings tabs.
+ * Responses are accepted only for the current run binding and generation;
+ * mutations wait for refreshed owner state.
  */
 function RunPage() {
   const { projectId = '', runId = '' } = useParams();
@@ -2362,10 +2492,15 @@ function RunPage() {
   const { session, apiCall, authorize, ensureSession, authorizationContext } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('view');
+  // The tab lives in the URL (`?view=`). Chat is the default.
   const tab: RunTab = isRunTab(requestedTab) ? requestedTab : 'chat';
+  // A link from an attention list can name one decision to highlight in Approvals.
   const pinnedDecision = useMemo(() => pinnedDecisionFromSearch(searchParams), [searchParams]);
+  // The run APIs need a session bound to this exact project and run. When the
+  // current session is bound elsewhere, try to switch without a prompt first.
   const authorized = isSameBinding(session?.binding, binding);
   const silentBind = useSilentRunSession(binding, authorized, ensureSession);
+  // Drives the "elapsed" counter. It only ticks while the run page is usable.
   const now = useTickingNow(authorized);
   const snapshotScope = useMemo(() => ({
     projectId,
@@ -2373,6 +2508,9 @@ function RunPage() {
     accessToken: session?.accessToken ?? '',
   }), [projectId, runId, session?.accessToken]);
   const activeSnapshotScope = useRef(snapshotScope);
+  // The tenant is used for two things: as the selector for run requests (only
+  // when the session is bound to this run) and as the key for the browser's
+  // recent-run list.
   const tenantId = authorizationContext?.tenantId;
   const runTenantSelector = authorized ? tenantId : undefined;
   const journal = useRunJournal(
@@ -2396,6 +2534,8 @@ function RunPage() {
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
 
   useEffect(() => {
+    // Replace an unknown `view` value with the default tab. `replace` keeps the
+    // bad URL out of the browser history.
     if (requestedTab === null || isRunTab(requestedTab)) return;
     const normalizedParams = new URLSearchParams(searchParams);
     normalizedParams.set('view', 'chat');
@@ -2469,6 +2609,7 @@ function RunPage() {
     }
     setRunStatus(currentRun);
     // Only a confirmed snapshot for this exact run goes into the browser's recent-run list.
+    // The list is stored per tenant, so skip it until the tenant is known.
     if (tenantId)
       rememberRun(tenantId, { projectId, runId, executionState: currentRun.executionState });
     if (selectionResult.status === 'fulfilled' &&
@@ -2577,6 +2718,8 @@ function RunPage() {
   }, [authorized, projectId, runId, session?.accessToken]);
 
   if (!authorized) {
+    // While the silent switch runs, show a spinner. Show the sign-in button
+    // only after it failed, so the user is not asked to sign in for nothing.
     return (
       <>
         <PageHeading title="Orchestration" description={`Run ${runId}`} page="Orchestrations" />
@@ -2595,6 +2738,8 @@ function RunPage() {
   const currentTree = snapshotIsCurrent ? tree : null;
   const currentStatuses = snapshotIsCurrent ? statuses : {};
   const currentDecisions = snapshotIsCurrent ? decisions : {};
+  // Every blocker (question, approval, plan, outcome) in every session counts
+  // as one decision that waits for the user.
   const pendingDecisionCount = Object.values(currentStatuses).reduce((total, status) => total + (status?.blockers.length ?? 0), 0);
   const currentSelection = snapshotIsCurrent ? selection : null;
   const currentUsage = snapshotIsCurrent ? usage : null;
@@ -2635,10 +2780,16 @@ function RunPage() {
     }
   };
 
+  // The run start time is the root session's creation time. It is NaN when
+  // the tree has not loaded, and the header and elapsed chip then hide it.
   const rootNode = currentTree?.nodes.find((node) => node.identity.sessionId === currentTree.rootSessionId);
   const startedAt = rootNode ? Date.parse(rootNode.createdAt) : Number.NaN;
+  // A finished run has no running "elapsed" counter.
   const finished = isRunFinished(currentRunStatus?.executionState);
+  // Live-update state of the journal stream, shown as a chip.
   const streamLabel = journal.connected ? 'Live' : journal.loading ? 'Connecting' : 'Reconnecting';
+  // Chat goes to the session selected in the run tree when it is active.
+  // Otherwise it falls back to the root (coordinator) session.
   const chatTarget = nodeById.get(selectedSession)?.lifecycle === 'active'
     ? selectedSession
     : currentTree?.rootSessionId ?? '';
@@ -2673,6 +2824,7 @@ function RunPage() {
             </details>
           </div>
           <div className="v1-run-body">
+            {/* Left: the run tree. Selecting a session there also picks the chat recipient. */}
             <RunTree
               tree={currentTree}
               statuses={currentStatuses}
@@ -2729,6 +2881,7 @@ function RunPage() {
               )}
             </div>
           )}
+          {/* Keyed by run and token, so the chat's local message list resets when either changes. */}
           {tab === 'chat' && <ChatView key={`${projectId}/${runId}/${session?.accessToken ?? ''}`} projectId={projectId} runId={runId} nodes={nodes} targetSessionId={chatTarget} journalEvents={journal.events} apiCall={apiCall} snapshotBusy={snapshotBusy} />}
           {tab === 'approvals' && (
             <DecisionList projectId={projectId} runId={runId} pinned={pinnedDecision} statuses={currentStatuses} decisions={currentDecisions} apiCall={apiCall} refresh={() => refreshRef.current()} snapshotBusy={snapshotBusy} />
@@ -2753,6 +2906,7 @@ function RunPage() {
           )}
           {tab === 'changes' && (
             <div className="v1-stack">
+              {/* `captureId` in the URL opens one output capture directly, for example from a link. */}
               <OutputCaptureBrowser projectId={projectId} runId={runId} initialCaptureId={searchParams.get('captureId') ?? undefined} />
               {currentSelection?.projectConfiguration.sourceControl?.authMode === 'githubApp' ? (
                 <RunGitHubAppPanel
@@ -2791,14 +2945,18 @@ const SESSION_KIND_LABELS: Record<SessionTreeNode['kind'], string> = {
 
 /** Short display name for one session. */
 function sessionName(node: SessionTreeNode): string {
+  // Fall back to the raw kind if the server sends a kind this client does not know.
   return SESSION_KIND_LABELS[node.kind] ?? node.kind;
 }
 
 /** Formats a duration in the 0.x elapsed style, for example "1h 4m" or "42s". */
 function formatElapsed(milliseconds: number): string {
+  // Clamp at zero: a client clock that runs behind the server can make the
+  // difference negative for a moment.
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
+  // Show only the two largest units, so the text stays short.
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
   return `${seconds}s`;
@@ -2808,8 +2966,10 @@ function formatElapsed(milliseconds: number): string {
 function useTickingNow(enabled: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    // No timer while disabled, so a hidden or unauthorized page does not re-render every second.
     if (!enabled) return undefined;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    // Stop the timer when disabled or unmounted.
     return () => window.clearInterval(timer);
   }, [enabled]);
   return now;
@@ -2824,17 +2984,24 @@ function useSilentRunSession(
   authorized: boolean,
   ensureSession: AuthReturn['ensureSession'],
 ): 'pending' | 'failed' {
+  // One string per project/run pair. A failure is remembered per pair, so
+  // moving to another run tries again, but the same run never loops.
   const key = binding ? `${binding.projectId}/${binding.runId}` : '';
   const [failedKey, setFailedKey] = useState<string | null>(null);
   useEffect(() => {
+    // Nothing to do when there is no run, the session is already bound to
+    // this run, or the silent attempt for this run already failed.
     // A held session activates at once; a new one is requested once, and concurrent calls share it.
     if (!binding || authorized || failedKey === key) return;
     void ensureSession(binding).then((ok) => {
+      // `ok` is false when the Broker needs the user (for example, to sign in
+      // or consent). Record it so the page shows the sign-in button.
       if (!ok) setFailedKey(key);
     });
   }, [authorized, binding, ensureSession, failedKey, key]);
   // Leaving the run makes the unbound session active again for project pages.
   useEffect(() => () => { void ensureSession(null); }, [ensureSession]);
+  // 'pending' also covers "already authorized"; callers check `authorized` first.
   return failedKey === key ? 'failed' : 'pending';
 }
 
@@ -2847,11 +3014,14 @@ function RunTree({ tree, statuses, selectedSession, onSelect }: {
 }) {
   const ordered = useMemo(() => {
     if (!tree) return [];
+    // Group sessions by parent ID. Sessions with no parent use the '' key.
     const children = new Map<string, SessionTreeNode[]>();
     for (const node of tree.nodes) {
       const parent = node.parentSessionId ?? '';
       children.set(parent, [...(children.get(parent) ?? []), node]);
     }
+    // Depth-first walk from the root: each parent comes right before its
+    // children, and the depth sets the indent.
     const rows: { node: SessionTreeNode; depth: number }[] = [];
     const visit = (node: SessionTreeNode, depth: number) => {
       rows.push({ node, depth });
@@ -2864,10 +3034,14 @@ function RunTree({ tree, statuses, selectedSession, onSelect }: {
       if (!rows.some((row) => row.node === node)) rows.push({ node, depth: 0 });
     return rows;
   }, [tree]);
+  /** One short state word per session, in priority order. */
   const stateText = (node: SessionTreeNode) => {
     const status = statuses[node.identity.sessionId];
+    // A session waiting for the user matters most, so it wins over every other state.
     if (status && status.blockers.length > 0) return 'Needs input';
+    // A session that is no longer active shows its final lifecycle.
     if (node.lifecycle !== 'active') return node.lifecycle === 'completed' ? 'Done' : node.lifecycle === 'cancelled' ? 'Cancelled' : 'Archived';
+    // An active session shows its activity. Its status may be missing if that read failed.
     return status?.activity === 'busy' ? 'Working' : status?.activity === 'idle' ? 'Idle' : 'Status unknown';
   };
   return (
@@ -3094,6 +3268,7 @@ function AuthenticatedRoutes() {
   if (!session) return <SignInScreen />;
   return (
     <Routes>
+      {/* Account-level pages. The home page is now the cross-project overview. */}
       <Route path="/" element={<Navigate to="/overview" replace />} />
       <Route path="/overview" element={<Shell><OverviewPage /></Shell>} />
       <Route path="/sessions" element={<Shell><NewChatPage title="Sessions" description="Your chats across projects. Open one to see its run and send follow-up messages." /></Shell>} />
@@ -3105,10 +3280,12 @@ function AuthenticatedRoutes() {
       <Route path="/projects" element={<Shell><ProjectsPage /></Shell>} />
       <Route path="/projects/:projectId" element={<Shell><DashboardPage /></Shell>} />
       <Route path="/projects/:projectId/settings" element={<Shell><ProjectConfigurationPage /></Shell>} />
+      {/* Skills and Agents (team) are other views of the same configuration page. */}
       <Route path="/projects/:projectId/skills" element={<Shell><ProjectConfigurationPage view="skills" /></Shell>} />
       <Route path="/projects/:projectId/team" element={<Shell><ProjectConfigurationPage view="agents" /></Shell>} />
       <Route path="/projects/:projectId/team/cast" element={<Shell><UnavailablePage title="Cast a team" description="Interactive team casting is not available in this version. Review the current team in Agents and edit its configuration in Project settings." /></Shell>} />
       <Route path="/projects/:projectId/team/:agentName/memory" element={<AgentMemoryRedirect />} />
+      {/* `knowledge` is the older address of the Memories page; both stay valid. */}
       <Route path="/projects/:projectId/knowledge" element={<Shell><KnowledgePage /></Shell>} />
       <Route path="/projects/:projectId/memories" element={<Shell><KnowledgePage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations" element={<Shell><OrchestrationsPage /></Shell>} />
@@ -3116,10 +3293,13 @@ function AuthenticatedRoutes() {
       <Route path="/projects/:projectId/sessions" element={<Navigate to="/sessions" replace />} />
       <Route path="/projects/:projectId/runs/:runId" element={<Shell><RunPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunRedirect />} />
+      {/* Older project pages keep their addresses but show a "not available" page
+          instead of a blank screen or a silent redirect. */}
       {unavailableProjectPages.map(({ segment, title, description }) => (
         <Route key={segment} path={`/projects/:projectId/${segment}`} element={<Shell><UnavailablePage title={title} description={description} /></Shell>} />
       ))}
       <Route path="/observability/*" element={<Shell><UnavailablePage title="Observability" description="Project trace and agent summaries are not available in this version. Open an existing run for its Activity and Usage views." /></Shell>} />
+      {/* Unknown addresses keep the app shell and navigation, instead of jumping to another page. */}
       <Route path="*" element={<Shell><UnavailablePage title="Page not found" description="This address does not match an Agentweaver page. Use the navigation to choose a destination." /></Shell>} />
     </Routes>
   );
@@ -3129,10 +3309,15 @@ function AuthenticatedRoutes() {
 function CoordinatorRunRedirect() {
   const { projectId = '', runId = '' } = useParams();
   const location = useLocation();
+  // Keep the query and hash, so options such as the tab (`?view=`) survive the redirect.
   return <Navigate to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}${location.search}${location.hash}`} replace />;
 }
 
-/** Legacy destinations stay addressable without falling back to monolith APIs. */
+/**
+ * Older project pages that this client does not support yet. Their addresses
+ * still work and show a short "not available" note that points to the closest
+ * supported page. They never call older server APIs.
+ */
 const unavailableProjectPages = [
   { segment: 'board', title: 'Board', description: 'The project board is not available in this version. Open Orchestrations to review runs and approvals.' },
   { segment: 'workspace', title: 'Workspace', description: 'Project file browsing is not available in this version. A run shows its changes in the Changes tab.' },
@@ -3143,8 +3328,9 @@ const unavailableProjectPages = [
   { segment: 'cluster', title: 'Cluster', description: 'Cluster management is not available in this web client.' },
 ];
 
-/** Uses the incumbent empty-state pattern for a capability with no admitted API. */
+/** Shows a standard empty state for a page or feature this client does not support. */
 function UnavailablePage({ title, description }: { title: string; description: string }) {
+  // Inside a project, link back to that project's dashboard; otherwise link to the project list.
   const { projectId } = useParams();
   return <>
     <PageHeading title={title} />
@@ -3153,7 +3339,11 @@ function UnavailablePage({ title, description }: { title: string; description: s
   </>;
 }
 
-/** Account connections use their existing owner checks, not a new identity store. */
+/**
+ * Account settings: sign-out and the GitHub App connection. These panels use
+ * the same server checks as elsewhere; this page stores no identity data.
+ * Copilot connections are per project, so they live in Project settings.
+ */
 function AccountSettingsPage() {
   const { signOut } = useAuth();
   return <>
@@ -3164,11 +3354,16 @@ function AccountSettingsPage() {
   </>;
 }
 
-/** A legacy display name is a search input, never an authorization claim. */
+/**
+ * Redirects an older per-agent memory link to the Memories page.
+ * The agent name from the old URL only pre-fills the agent picker. It grants
+ * nothing; the server still checks access for every memory request.
+ */
 function AgentMemoryRedirect() {
   const { projectId = '', agentName = '' } = useParams();
   const location = useLocation();
   const search = new URLSearchParams(location.search);
+  // An explicit `agentId` in the query wins over the name from the path.
   if (!search.has('agentId')) search.set('agentId', agentName);
   return <Navigate to={`/projects/${encodeURIComponent(projectId)}/memories?${search}`} replace />;
 }

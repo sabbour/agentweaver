@@ -1,7 +1,7 @@
 /**
  * Data adapters for the shared run list. `useBrowserRunList` reads runs the user
  * opened in this browser. `useGatewayRunList` reads the project run list
- * (`GET /api/v1/projects/{projectId}/runs`, gap G2) and returns the same
+ * (`GET /api/v1/projects/{projectId}/runs`) and returns the same
  * `RunListData` shape, so callers keep the same layout.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -47,14 +47,19 @@ export interface RunListData {
 export function useBrowserRunList(projectId?: string): RunListData {
   const { authorizationContext } = useAuth();
   const tenantId = authorizationContext?.tenantId;
+  // localStorage does not notify React of changes, so a generation counter
+  // forces the list to be read again after remove or reload.
   const [generation, setGeneration] = useState(0);
   const remove = useCallback((item: RunListItem) => {
+    // Without a tenant there is no storage key, so there is nothing to remove.
     if (!tenantId) return;
     forgetRun(tenantId, item.projectId, item.runId);
     setGeneration((value) => value + 1);
   }, [tenantId]);
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
   const items = useMemo(() => {
+    // `generation < 0` is never true. Reading `generation` here makes it a real
+    // dependency, so the memo re-reads storage when it changes.
     if (!tenantId || generation < 0) return [];
     return readRecentRuns(tenantId, projectId).map((run) => ({
       projectId: run.projectId,
@@ -73,6 +78,7 @@ export function gatewayRunListItem(projectId: string, run: ProjectRunSummary): R
     runId: run.runId,
     executionState: run.state,
     title: run.title,
+    // A finished run shows when it ended. A run still going shows its last update.
     time: run.completedAt
       ? { label: 'Ended', value: run.completedAt }
       : { label: 'Updated', value: run.updatedAt },
@@ -89,29 +95,40 @@ export const GATEWAY_RUN_PAGE_SIZE = 100;
  */
 export function useGatewayRunList(projectId: string, state?: ProjectRunStateFilter[]): RunListData {
   const { session, apiCall } = useAuth();
+  // Join the state filter into a string so it is a stable dependency even if the
+  // caller passes a new array each render.
   const stateKey = state?.join(',') ?? '';
+  // Only "signed in or not" is part of the scope, not the token itself. A token
+  // refresh then keeps the loaded pages instead of resetting the list.
   const scope = JSON.stringify([session?.accessToken ? 'signed-in' : null, projectId, stateKey]);
   const [result, setResult] = useState<{
     scope: string; items: RunListItem[]; nextCursor: string | null; error: unknown; loaded: boolean;
   }>({ scope: '', items: [], nextCursor: null, error: null, loaded: false });
+  // Bumping the generation reloads the first page.
   const [generation, setGeneration] = useState(0);
+  // Latest scope, read by async callbacks to detect stale responses.
   const scopeRef = useRef(scope);
   useEffect(() => { scopeRef.current = scope; }, [scope]);
 
+  /** Reads one page. A null cursor reads the first page. */
   const readPage = useCallback(async (cursor: string | null): Promise<ProjectRunPage> => apiCall(
     (token, tenant) => gatewayClient.listProjectRuns(token, projectId, {
+      // Turn the joined key back into the filter list; an empty key means no filter.
       state: stateKey ? stateKey.split(',') as ProjectRunStateFilter[] : undefined,
       cursor,
       pageSize: GATEWAY_RUN_PAGE_SIZE,
     }, tenant),
+    // `null` binding: the project run list uses the unbound session token.
     null,
   ), [apiCall, projectId, stateKey]);
 
   useEffect(() => {
     if (!projectId) return undefined;
+    // `active` turns false on cleanup so a late first page is ignored.
     let active = true;
     const timer = window.setTimeout(() => {
       void readPage(null).then((page) => {
+        // The first page replaces the whole list, dropping any pages loaded before.
         if (active && scopeRef.current === scope) setResult({
           scope, items: page.items.map((run) => gatewayRunListItem(projectId, run)), nextCursor: page.nextCursor, error: null, loaded: true,
         });
@@ -129,10 +146,14 @@ export function useGatewayRunList(projectId: string, state?: ProjectRunStateFilt
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
   const current = result.scope === scope;
   const nextCursor = current ? result.nextCursor : null;
+  /** Appends the next page to the list. */
   const loadMore = useCallback(() => {
     if (!nextCursor) return;
     void readPage(nextCursor).then((page) => {
+      // Ignore the page if the project, filter, or sign-in changed meanwhile.
       if (scopeRef.current !== scope) return;
+      // Append only if the list is still at the same cursor. If a reload or another
+      // loadMore already moved it, appending would add duplicate or out-of-order rows.
       setResult((previous) => previous.scope !== scope || previous.nextCursor !== nextCursor ? previous : {
         ...previous,
         items: [...previous.items, ...page.items.map((run) => gatewayRunListItem(projectId, run))],
@@ -140,6 +161,7 @@ export function useGatewayRunList(projectId: string, state?: ProjectRunStateFilt
         error: null,
       });
     }, (reason: unknown) => {
+      // A failed next page keeps the rows already shown and only records the error.
       if (scopeRef.current === scope) setResult((previous) => ({ ...previous, error: reason }));
     });
   }, [nextCursor, projectId, readPage, scope]);
@@ -150,6 +172,7 @@ export function useGatewayRunList(projectId: string, state?: ProjectRunStateFilt
     stateSource: 'service',
     loading: Boolean(projectId) && !(current && result.loaded),
     error: current ? result.error : null,
+    // Only offer "load more" while the Gateway reports another page.
     loadMore: nextCursor ? loadMore : undefined,
   };
 }

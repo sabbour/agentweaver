@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProjectConfiguration } from './contracts';
 import { projectReadiness } from './projectReadiness';
 
+/** Builds a configuration with nothing set up. Tests override only what they need. */
 function configuration(overrides: Partial<ProjectConfiguration> = {}): ProjectConfiguration {
   return {
     modelSelection: null,
@@ -20,6 +21,7 @@ function configuration(overrides: Partial<ProjectConfiguration> = {}): ProjectCo
 const agent = (agentId: string) => ({ agentId, name: agentId, role: 'Builder', charter: '' });
 const skill = (skillId: string, enabled: boolean) => ({ skillId, enabled, order: 0 });
 
+/** Builds a configuration where every check passes: model, repository, one agent, one enabled skill. */
 function complete(overrides: Partial<ProjectConfiguration> = {}): ProjectConfiguration {
   return configuration({
     modelSelection: { reference: 'gpt-test' } as ProjectConfiguration['modelSelection'],
@@ -66,6 +68,7 @@ describe('projectReadiness', () => {
 
   it('treats skills as optional and counts only enabled skills', () => {
     const result = projectReadiness(complete({ skills: [skill('s1', false)] }));
+    // A disabled skill does not count, but missing skills must not block readiness.
     expect(result.ready).toBe(true);
     expect(result.body).toContain('Assign skills');
     expect(result.checks.find((check) => check.key === 'skills')).toMatchObject({ done: false, label: 'No skills assigned' });
@@ -83,6 +86,7 @@ describe('projectReadiness', () => {
     expect(result.badge).toEqual({ label: 'Archived', color: 'subtle' });
     expect(result.title).toBe('This project is archived');
     expect(result.primaryAction).toEqual({ label: 'Open Project settings', path: 'settings?section=danger' });
+    // The checks are still reported even though the archived state overrides them.
     expect(result.checks.every((check) => check.done)).toBe(true);
   });
 });

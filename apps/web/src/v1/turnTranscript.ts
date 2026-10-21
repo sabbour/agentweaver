@@ -34,6 +34,7 @@ export interface TurnTranscript {
 }
 
 type ApiCall = ReturnType<typeof useAuth>['apiCall'];
+/** Load result for one turn, keyed by eventId in the store. */
 type Entry = { state: TranscriptTurnState; text: string | null };
 
 /** Reads at most this many turns at once, so a long replay doesn't flood the Gateway. */
@@ -60,13 +61,18 @@ export function useTurnTranscript(
   runId: string,
   apiCall: ApiCall,
 ): TurnTranscript {
+  // `scope` names the run the data belongs to. Loaded text is stored together
+  // with its scope, so text from one run is never shown for another.
   const scope = `${projectId}/${runId}`;
   const turnEvents = useMemo(() => turnEventsOf(events, projectId, runId), [events, projectId, runId]);
   const [store, setStore] = useState<{ scope: string; entries: Record<string, Entry>; accessLost: boolean }>(
     { scope, entries: {}, accessLost: false },
   );
+  // Bumped by retry(). Reads started for an older generation are ignored.
   const [generation, setGeneration] = useState(0);
+  // Event ids already requested in this scope and generation, so each turn is read only once.
   const requested = useRef<{ scope: string; generation: number; ids: Set<string> }>({ scope, generation, ids: new Set() });
+  // If the stored data belongs to another run, treat it as empty right away (before any effect runs).
   const current = store.scope === scope ? store : { scope, entries: {}, accessLost: false };
 
   // Reads outlive effect re-runs (new live events re-run it); results are dropped only
@@ -78,25 +84,35 @@ export function useTurnTranscript(
   }, [scope, generation]);
 
   useEffect(() => {
+    // A new run or a retry starts a fresh "already requested" set.
     if (requested.current.scope !== scope || requested.current.generation !== generation) {
       requested.current = { scope, generation, ids: new Set() };
     }
     const claimed = requested.current;
+    // Read only turns that are not requested and not loaded yet. After access
+    // is lost, read nothing until retry.
     const queue = current.accessLost ? [] : turnEvents.filter((event) =>
       !claimed.ids.has(event.eventId) && !current.entries[event.eventId]);
     if (queue.length === 0) return;
+    // Claim the ids now, so the next effect run (from a new live event) does not read them again.
     queue.forEach((event) => claimed.ids.add(event.eventId));
+    // True while this batch's results still apply: mounted, same run, same generation.
     const valid = () => live.current.mounted && live.current.scope === scope && live.current.generation === generation;
+    // Stores one turn's result. Uses the functional form so parallel reads do not overwrite each other.
     const update = (eventId: string, entry: Entry) => setStore((value) => {
       const base = value.scope === scope ? value : { scope, entries: {}, accessLost: false };
+      // After a 403 no text may come back into memory, even from reads still in flight.
       if (base.accessLost) return base;
       return { ...base, entries: { ...base.entries, [eventId]: entry } };
     });
+    // Reads one turn's text with the run-bound token and records the outcome.
     const read = async (event: SessionEventEnvelope) => {
       try {
         const content = await apiCall((token, tenant) => gatewayClient.readSessionTurnContent(
           token, projectId, runId, event.identity.sessionId, event.eventId, tenant,
         ), { projectId, runId });
+        // The response must be for exactly the event, project, run and session asked for.
+        // Anything else is shown as unavailable, never as text.
         const exact = content.eventId === event.eventId
           && content.identity.projectId === projectId
           && content.identity.runId === runId
@@ -105,14 +121,19 @@ export function useTurnTranscript(
       } catch (reason) {
         if (!valid()) return;
         if (reason instanceof GatewayError && reason.status === 403) {
+          // Access lost: drop all text for this run at once and stop further reads.
           setStore({ scope, entries: {}, accessLost: true });
         } else if (reason instanceof GatewayError && reason.status === 404) {
+          // The owner has no content for this event. This is final; retry does not reread it.
           update(event.eventId, { state: 'notFound', text: null });
         } else {
+          // Network or server error. Retry will read it again.
           update(event.eventId, { state: 'failed', text: null });
         }
       }
     };
+    // A small worker pool: each worker takes the next turn from the shared queue
+    // until it is empty or the batch is no longer valid.
     const pending = [...queue];
     const worker = async () => {
       while (valid() && pending.length > 0) await read(pending.shift()!);
@@ -121,6 +142,9 @@ export function useTurnTranscript(
     // `current` is derived from `store`; reading it here must not re-run the reads.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiCall, generation, projectId, runId, scope, turnEvents, current.accessLost]);
+  // Retry: after access loss, clear everything and read all turns again.
+  // Otherwise keep loaded, not-found and unavailable turns, and drop only
+  // failed ones so they are read again. The new generation resets the claimed ids.
   const retry = useCallback(() => {
     setStore((value) => value.accessLost
       ? { scope: value.scope, entries: {}, accessLost: false }
@@ -128,6 +152,8 @@ export function useTurnTranscript(
     setGeneration((value) => value + 1);
   }, []);
 
+  // Build the visible list in journal order. Turns with no result yet show as loading.
+  // Text is passed through only for loaded turns.
   const turns = current.accessLost ? [] : turnEvents.map((event): TranscriptTurn => {
     const entry = current.entries[event.eventId] ?? { state: 'loading' as const, text: null };
     return {

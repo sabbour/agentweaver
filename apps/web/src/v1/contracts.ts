@@ -170,7 +170,9 @@ export interface ModelSelectionSettings {
   reference: string;
   credentialReference?: { id: string; version: string } | null;
   connectionId?: string;
+  /** Where model calls go: hosted GitHub Copilot, or the project's own key (bring your own key). */
   sourceMode?: 'hostedCopilot' | 'byok' | null;
+  /** How hard the model should reason. Omitted or null uses the model default. */
   reasoningEffort?: ReasoningEffort | null;
 }
 
@@ -417,6 +419,7 @@ export function isCopilotConnectionBegin(value: unknown): value is CopilotConnec
 /** Mutable owner configuration, including model, skills, source control, and run limits. */
 export interface ProjectConfiguration {
   modelSelection?: ModelSelectionSettings | null;
+  /** Per-task model choices. A task without an override uses `modelSelection`. */
   modelTaskOverrides?: ModelTaskOverride[];
   providerOverrides: Array<{ seam: string; providerId: string }>;
   orderedProviderOverrides: Array<{ seam: string; providerIds: string[] }>;
@@ -1052,15 +1055,22 @@ export interface SessionIdentity {
   sessionId: string;
 }
 
-/** Immutable produced-output metadata returned by the Source Control owner. */
+/**
+ * Metadata for one saved snapshot of the files a run session produced.
+ * Returned by the Source Control service and never changed after it is saved.
+ * The SHA and byte-length fields let a reader check the manifest, patch, and
+ * package it downloads.
+ */
 export interface SourceControlOutputCaptureSummary {
   captureId: string;
   eventId: string;
+  /** Position of the capture event in the session event log; orders captures. */
   eventPosition: number;
   capturedAt: string;
   workspaceId: string;
   branchName: string;
   baseSha: string;
+  /** Git tree id of the produced files. `baseSha` is the commit the work started from. */
   outputTreeSha: string;
   manifestSha256: string;
   manifestByteLength: number;
@@ -1069,13 +1079,17 @@ export interface SourceControlOutputCaptureSummary {
   packageByteLength: number;
 }
 
-/** Both cursor fields must be sent together on the next list read. */
+/**
+ * One page of captures, newest first. To read the next page, send both cursor
+ * fields together; they are null on the last page.
+ */
 export interface SourceControlOutputCapturePage {
   captures: SourceControlOutputCaptureSummary[];
   nextBeforeCapturedAt?: string | null;
   nextBeforeCaptureId?: string | null;
 }
 
+/** One file in a capture manifest. `mode` is the Git file mode, such as `100644`. */
 export interface SourceControlOutputFile {
   path: string;
   mode: string;
@@ -1083,6 +1097,7 @@ export interface SourceControlOutputFile {
   byteLength: number;
 }
 
+/** A capture with its full manifest: the run, workspace, and every captured file. */
 export interface SourceControlOutputCaptureDetail {
   capture: SourceControlOutputCaptureSummary;
   manifest: {
@@ -1090,7 +1105,9 @@ export interface SourceControlOutputCaptureDetail {
     workspaceId: string;
     runId: string;
     repositoryId: string;
+    /** Version of the workspace resource when captured, so later rebuilds are not confused with it. */
     resourceGeneration: number;
+    /** Identifies this exact copy of the workspace; a recreated workspace gets a new id. */
     workspaceIncarnationId: string;
     branchName: string;
     baseSha: string;
@@ -1471,7 +1488,7 @@ export interface BrokerTokenResponse {
 /** Project role a tenant administrator can assign. */
 export type ProjectRole = 'owner' | 'contributor' | 'viewer' | 'orchestrator';
 
-/** One active project role assignment (`listProjectRoleAssignments`). */
+/** One active role assignment on a project, as returned by `listProjectRoleAssignments`. */
 export interface ProjectRoleAssignment {
   assignmentId: string;
   /** Member subject under the caller's issuer. */

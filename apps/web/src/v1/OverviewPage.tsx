@@ -2,8 +2,8 @@
  * Cross-project Overview and Chief of Staff home: New chat, My conversations,
  * Priorities, and Needs attention (the caller's notifications), then the 0.x
  * Operations card, Recent projects, and Recent runs in this browser. The 0.x
- * usage charts and activity feed need the metrics contract (gap G3) and are not
- * shown.
+ * usage charts and activity feed need a metrics contract the service does not
+ * offer yet, so they are not shown.
  */
 import { Button, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
@@ -122,13 +122,16 @@ export function OverviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
 
+  /** Reads the caller's project list. */
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // `null` binding: listing projects uses the unbound session token.
       setProjects(await apiCall((token, tenant) => gatewayClient.listProjects(token, tenant), null));
       setLoadedAt(new Date());
       setError(null);
     } catch (reason) {
+      // Keep the last project list on failure so the page stays usable; only show the error.
       setError(reason);
     } finally {
       setLoading(false);
@@ -136,16 +139,21 @@ export function OverviewPage() {
   }, [apiCall]);
 
   useEffect(() => {
+    // Start the first load on the next tick instead of inside the effect body.
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  // Project id to name, so run rows from many projects can show a readable name.
   const projectNames = useMemo(
     () => new Map((projects ?? []).map((project) => [project.projectId, project.name])),
     [projects],
   );
   const active = (projects ?? []).filter((project) => project.state === 'active');
+  // Newest first. ISO timestamps sort correctly as strings. Copy before sorting
+  // so the `active` list is not changed.
   const recent = [...active].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT_PROJECT_LIMIT);
+  // Refresh every source on the page at once.
   const refresh = () => { void load(); attention.reload(); conversations.reload(); void priorities.reload(); };
 
   return (

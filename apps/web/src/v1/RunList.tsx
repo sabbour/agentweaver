@@ -59,6 +59,7 @@ const useStyles = makeStyles({
 /** Formats an ISO time for list rows. */
 function formatTime(value: string): string {
   const parsed = new Date(value);
+  // If the value is not a valid date, show the raw text rather than "Invalid Date".
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
@@ -77,6 +78,8 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
 }) {
   const navigate = useNavigate();
   const styles = useStyles();
+  // `limit` shows a short preview. The count badge below still uses the full list size,
+  // and "Load more" is hidden in preview mode because the full list lives on another page.
   const items = limit ? data.items.slice(0, limit) : data.items;
   return (
     <section className={styles.section} aria-label={title}>
@@ -92,6 +95,8 @@ export function RunList({ title, description, data, emptyText, projectNames, lim
         {items.length === 0 ? <Text className={styles.empty}>{data.loading ? 'Loading runs…' : emptyText}</Text> : items.map((item) => {
           const state = runState(item.executionState);
           const path = `/projects/${encodeURIComponent(item.projectId)}/runs/${encodeURIComponent(item.runId)}`;
+          // Say where the state came from. Browser rows may be out of date, so the
+          // note makes clear it is the state seen when the run was last opened.
           const stateNote = data.stateSource === 'service'
             ? 'Current state'
             : item.executionState ? 'State when last opened' : 'State not read yet';

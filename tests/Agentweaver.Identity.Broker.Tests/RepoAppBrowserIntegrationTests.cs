@@ -203,6 +203,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
                 var configurationPath =
                     $"/api/v1/projects/{Uri.EscapeDataString(project.ProjectId)}/configuration";
+                // Project tiles open the project Dashboard. Wait for the URL and heading
+                // so the next steps run on the loaded project page.
                 await page.GetByText(projectName, new() { Exact = true }).ClickAsync();
                 await page.WaitForURLAsync(
                     $"**/projects/{Uri.EscapeDataString(project.ProjectId)}");
@@ -213,6 +215,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     response.Request.Method == "GET" &&
                     new Uri(response.Url).AbsolutePath.Equals(
                         configurationPath, StringComparison.Ordinal));
+                // Project settings are reached through the Settings menu.
+                // Opening them must read the configuration through the Gateway.
                 await page.GetByRole(
                     AriaRole.Button,
                     new() { Name = "Settings", Exact = true }).ClickAsync();
@@ -224,6 +228,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 await page.GetByRole(
                     AriaRole.Heading,
                     new() { Name = "Project settings", Exact = true }).WaitForAsync();
+                // Settings are split into sections. Advanced holds the raw JSON editor;
+                // Connections holds the GitHub Repo App status checked next.
                 var settingsSections = page.GetByRole(
                     AriaRole.Navigation,
                     new() { Name = "Settings sections" });

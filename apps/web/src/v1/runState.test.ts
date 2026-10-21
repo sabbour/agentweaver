@@ -13,6 +13,7 @@ describe('runState', () => {
   });
 
   it('shows missing or unknown states as Unavailable, never as Done', () => {
+    // Matching is exact and case-sensitive, so upper-case values are unknown too.
     for (const value of [null, undefined, '', 'CANCELLED', 'COMPLETED'])
       expect(runState(value)).toEqual({ label: 'Unavailable', color: 'subtle' });
   });

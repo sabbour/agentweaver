@@ -13,10 +13,17 @@ export function ConfigurationHistory({ projectId, currentRevision }: { projectId
   const [snapshot, setSnapshot] = useState<VersionedProjectConfiguration | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Request counter. A response is applied only if no newer request started and
+  // the panel did not unmount or switch project or revision in the meantime.
   const generation = useRef(0);
+  // Cleanup runs on unmount and when the project or current revision changes.
+  // Bumping the counter there makes any in-flight response stale.
   useEffect(() => () => { generation.current += 1; }, [projectId, currentRevision]);
 
+  /** Loads the revision typed by the user and shows it read-only. */
   const load = async () => {
+    // Check the range locally first. Revisions start at 1 and cannot be newer
+    // than the current one, so other values would only produce a server error.
     const selected = Number(revision);
     if (!Number.isSafeInteger(selected) || selected < 1 || selected > currentRevision) {
       setError(`Enter a revision from 1 to ${currentRevision}.`);
@@ -24,16 +31,19 @@ export function ConfigurationHistory({ projectId, currentRevision }: { projectId
     }
     const request = ++generation.current;
     setBusy(true);
+    // Hide the previous snapshot so it is never shown under a new revision number.
     setSnapshot(null);
     setError(null);
     try {
       const result = await apiCall((token, tenant) => gatewayClient.getProjectConfiguration(token, projectId, tenant, selected), null);
       if (request !== generation.current) return;
+      // Show only the exact project and revision that was asked for.
       if (result.projectId !== projectId || result.revision !== selected) throw new Error('The service returned a different project or revision.');
       setSnapshot(result);
     } catch (reason) {
       if (request === generation.current) setError(reason instanceof Error ? reason.message : 'This revision could not load.');
     } finally {
+      // Only the latest request may clear the busy flag.
       if (request === generation.current) setBusy(false);
     }
   };
@@ -47,6 +57,7 @@ export function ConfigurationHistory({ projectId, currentRevision }: { projectId
       </div>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {snapshot && <PageSection title={`Configuration revision ${snapshot.revision}`}>
+        {/* Reuse the editor fields in read-only mode. The empty onChange ignores edits, so history never changes the current draft. */}
         <ConfigurationFields configuration={snapshot.configuration} onChange={() => {}} readOnly />
         <dl className="v1-detail-list">
           <div><dt>Agents</dt><dd>{snapshot.configuration.agentCharters.map((agent) => agent.name).join(', ') || 'None'}</dd></div>

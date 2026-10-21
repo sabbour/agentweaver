@@ -114,11 +114,11 @@ coordinator need a service API that doesn't exist yet.
 message under the composer. The list is local to the page; reloading clears
 it. The receipt does not prove delivery or completion. If a send fails and you
 retry the same text, the app reuses the same request, so the message isn't
-sent twice. The journal contains typed events and opaque object references;
-the page has no message-content reader.
+sent twice. The **Messages** panel shows the message text after the run
+records it.
 
-You can't start a new chat or run from the browser yet. That needs a service
-API that doesn't exist yet (gap G1).
+To start a new chat, use **New chat** on **Overview**. See
+[Start a chat](../guide/chief-of-staff.md#start-a-chat).
 
 ## Answer a gate
 

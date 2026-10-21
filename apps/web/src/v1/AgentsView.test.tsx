@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentsView } from './AgentsView';
 import type { ProjectConfiguration } from './contracts';
 
+/** Two agents (only Ada is cast) and three skills: shared, Bo-only, and disabled. */
 function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfiguration {
   return {
     providerOverrides: [],
@@ -24,6 +25,7 @@ function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfigura
   };
 }
 
+/** Renders the view with a save handler that succeeds, and returns that handler. */
 function renderView(props: Partial<Parameters<typeof AgentsView>[0]> = {}) {
   const onSave = vi.fn().mockResolvedValue(true);
   render(
@@ -60,6 +62,7 @@ describe('AgentsView', () => {
     expect(within(drawer).getByText('a2')).toBeTruthy();
     expect(within(drawer).getByText('shared')).toBeTruthy();
     expect(within(drawer).getByText('for-bo')).toBeTruthy();
+    // Disabled skills are not listed, even when they apply to every agent.
     expect(within(drawer).queryByText('off')).toBeNull();
     expect(within(drawer).getByRole('link', { name: 'View memories' }).getAttribute('href')).toBe('/projects/p1/memories?agentId=a2');
   });
@@ -69,9 +72,11 @@ describe('AgentsView', () => {
     fireEvent.click(screen.getByText('Ada'));
     fireEvent.click(await screen.findByRole('tab', { name: 'Charter' }));
     const save = screen.getByRole('button', { name: 'Save charter' }) as HTMLButtonElement;
+    // Save stays disabled until something changes.
     expect(save.disabled).toBe(true);
     fireEvent.change(screen.getByRole('textbox', { name: /Charter content/ }), { target: { value: 'New charter.' } });
     await act(async () => { fireEvent.click(save); });
+    // The saved configuration changes Ada's charter and leaves Bo untouched.
     const saved = onSave.mock.calls[0][0] as ProjectConfiguration;
     expect(saved.agentCharters).toEqual([
       { agentId: 'a1', name: 'Ada', role: 'Lead', charter: 'New charter.' },

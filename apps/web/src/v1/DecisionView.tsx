@@ -64,31 +64,46 @@ export function DecisionView({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Version the next send must match. It starts as the version the user opened
+  // (if known). After a stale reread it moves to the reread version, so the
+  // user's next click, after reviewing, can go through.
   const [expectedVersion, setExpectedVersion] = useState(decisionKey.stateVersion);
+  // Act only when the session's pending gate is this exact request.
   const exactGate = decisions?.pendingGate?.requestId === requestId;
+  // Also block while a send or a snapshot refresh is running.
   const canAct = exactGate && !busy && !snapshotBusy;
 
+  // Sends one decision. `approve` is for approvals; `choiceId` or `freeformAnswer` is for questions.
   const submit = async (approve?: boolean, choiceId?: string, freeformAnswer?: string) => {
     if (!exactGate) return;
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
+      // Read the decision state again right before sending. The snapshot on
+      // screen may be old.
       const latest = await apiCall((token, tenantSelector) => gatewayClient.getDecisions(
         token, projectId, runId, sessionId, tenantSelector,
       ), binding);
+      // Another request is pending now (or none). Send nothing and refresh.
       if (latest.pendingGate?.requestId !== requestId) {
         setNotice('This request was already answered or replaced. The view was refreshed and nothing was sent.');
         await refresh();
         return;
       }
+      // Same request, but its state version differs from the one the user saw.
+      // Send nothing, remember the new version, and let the user review.
       if (expectedVersion !== undefined && latest.stateVersion !== expectedVersion) {
         setExpectedVersion(latest.stateVersion);
         setNotice(STALE_DECISION_NOTICE);
         await refresh();
         return;
       }
+      // A new key per click. The request id and state version sent with it let
+      // the server reject an answer for a request that has since changed.
       const idempotencyKey = crypto.randomUUID();
+      // Questions are answered; approvals, plan approvals and outcome
+      // confirmations are resolved with approve or deny.
       const result = blocker.kind === 'awaitingInput'
         ? await apiCall((token, tenantSelector) => gatewayClient.answerGate(
           token, projectId, runId, sessionId, requestId, latest.stateVersion,
@@ -99,14 +114,18 @@ export function DecisionView({
           idempotencyKey, tenantSelector,
         ), binding);
       if (!result.accepted) {
+        // The server answered but rejected the content (for example an invalid
+        // answer). List its validation issues so the user can fix them.
         const details = result.issues.map((issue) => `${issue.message} (${issue.path})`).join(' ');
         setNotice(`The service did not accept this response.${details ? ` ${details}` : ''}`);
       } else {
         setNotice('Response sent. The run updates when the service reports the next state.');
       }
+      // Refresh either way so the view shows the run's next state.
       await refresh();
     } catch (reason) {
       setError(reason);
+      // A 409 means the request changed between our reread and the send. Refresh so the view is current.
       if (reason instanceof GatewayError && reason.status === 409) {
         setNotice('This request changed while you were viewing it. The view was refreshed.');
         await refresh();
@@ -116,6 +135,8 @@ export function DecisionView({
     }
   };
 
+  // The answer box text is free-form unless it exactly matches one of the
+  // offered choices; then it is sent as a choice id instead.
   const freeformChosen = !blocker.choices.includes(answer);
   return (
     <article className="v1-record" aria-label={DECISION_TITLES[blocker.kind]}>
@@ -186,6 +207,7 @@ export function DecisionList({
   refresh: () => Promise<void>;
   snapshotBusy: boolean;
 }) {
+  // Flatten to one entry per blocker across all sessions of the run.
   const pending = Object.values(statuses).flatMap((status) =>
     status.blockers.map((blocker) => ({ status, blocker })));
   return (

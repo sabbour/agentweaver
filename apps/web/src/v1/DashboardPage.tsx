@@ -2,8 +2,8 @@
  * Project Dashboard in the 0.x layout: breadcrumb header with update time and
  * Refresh, a status card with quick actions and summary tiles, recent runs, and
  * the team. Values come from the project summary, the saved configuration, and
- * the browser's recent runs. Run metrics and activity charts wait for the
- * metrics contract (gap G3).
+ * the browser's recent runs. Run metrics and activity charts wait for a
+ * metrics contract the service does not offer yet.
  */
 import { Badge, Button, Text, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular } from '@fluentui/react-icons';
@@ -122,11 +122,17 @@ export function DashboardPage() {
   const configuration = useProjectConfiguration(projectId);
   const runs = useBrowserRunList(projectId);
   const base = `/projects/${encodeURIComponent(projectId)}`;
+  // Recent runs come from browser storage, which has nothing to re-read here,
+  // so Refresh only reloads the two service reads.
   const refresh = () => { project.reload(); configuration.reload(); };
   const loading = project.loading || configuration.loading;
+  // Show the first error found; the summary error wins over the configuration error.
   const error = project.error ?? configuration.error;
   const config = configuration.data?.configuration;
+  // Readiness needs the configuration. Until it loads, the status card is not shown.
   const readiness = config ? projectReadiness(config, project.data?.state === 'archived') : null;
+  // These counts use the state seen when each run was last opened in this browser,
+  // so they can be out of date. The tile text says so.
   const needsInput = runs.items.filter((run) => run.executionState === 'blocked').length;
   const working = runs.items.filter((run) => run.executionState === 'active').length;
   const enabledSkills = config?.skills.filter((skill) => skill.enabled).length ?? 0;

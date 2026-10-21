@@ -330,6 +330,8 @@ export function SkillsMarketplacePanel({
   const folderInputRef = useCallback((input: HTMLInputElement | null) => {
     input?.setAttribute('webkitdirectory', '');
   }, []);
+  // Which tab is shown, and whether the marketplace or import dialog is open.
+  // The dialogs hold the browse, preview, and upload flows so the page stays short.
   const [tab, setTab] = useState<'catalog' | 'assignments'>('catalog');
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -745,6 +747,8 @@ export function SkillsMarketplacePanel({
       validateSkillImportReceipt(result, selectedPreview);
       setImportReceipt(result);
       setImportReceiptKind('marketplace');
+      // The next step after an import is assigning the skill, so switch to that tab.
+      // It is visible once the user closes the dialog.
       setTab('assignments');
       setMarketplaceImportComplete(true);
       setMarketplaceNotice(`The Skills owner imported ${result.name} at revision ${result.revision}.`);
@@ -811,6 +815,7 @@ export function SkillsMarketplacePanel({
       validateSkillImportReceipt(result, preview);
       setImportReceipt(result);
       setImportReceiptKind('local');
+      // Same as the marketplace import: the next step is assignment.
       setTab('assignments');
       setSkillNotice(`The Skills owner imported ${result.name} at revision ${result.revision}.`);
     } catch (reason) {
@@ -890,7 +895,10 @@ export function SkillsMarketplacePanel({
     }
   };
 
+  // Counts for the stat strip come from the props already loaded, so no extra request is made.
   const enabledAssignmentCount = currentAssignments.filter((assignment) => assignment.enabled).length;
+  // Local skill errors and notices. They render inside the import dialog while it is open
+  // and on the page otherwise, so each message appears in exactly one place.
   const skillMessages = (
     <>
       {skillError && <MessageBar intent="error" role="alert"><MessageBarBody>{skillError}</MessageBarBody></MessageBar>}
@@ -898,7 +906,8 @@ export function SkillsMarketplacePanel({
     </>
   );
 
-  // 0.x Skills layout: stat strip, toolbar dialogs, and Catalog/Assignments tabs.
+  // Layout: stat strip, a toolbar that opens the import and marketplace dialogs,
+  // then Catalog and Assignments tabs. Buttons stay disabled when no actions are given.
   return (
     <div className="v1-stack">
       {!actions && (
