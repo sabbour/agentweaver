@@ -13,6 +13,16 @@ const mocks = vi.hoisted(() => ({
   runs: [] as unknown[],
   useProjectRunList: vi.fn(),
   reloadRuns: vi.fn(),
+  useProjectMetrics: vi.fn(),
+  metricsData: null as unknown,
+}));
+
+vi.mock('./projectMetrics', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./projectMetrics')>(),
+  useProjectMetrics: (projectId: string | null, range: string) => {
+    mocks.useProjectMetrics(projectId, range);
+    return mocks.metricsData;
+  },
 }));
 
 vi.mock('./projectData', () => ({
@@ -59,6 +69,18 @@ function run(runId: string, executionState: string): RunListItem {
   return { projectId: 'p1', runId, label: `Task ${runId}`, executionState, time: { label: 'Started', value: '2026-01-01T00:00:00Z' } };
 }
 
+function metricsData() {
+  return {
+    metrics: { projectId: 'p1', from: 'a', to: 'b', activeRuns: 2, blockedRuns: 1, runsInRange: 10, runsTotal: 40, completedRuns: 8, succeededRuns: 6, series: [] },
+    usage: { projectId: 'p1', from: 'a', to: 'b', usageByModel: [], usageByAgent: [{ id: 'a1', requestCount: 1, inputTokens: null, outputTokens: null, cachedTokens: null, cacheWriteTokens: null, reasoningTokens: null, avgDurationMs: null, runs: 1, unpricedRequestCount: null, cost: [] }] },
+    metricsError: null,
+    usageError: null,
+    loading: false,
+    loadedAt: null,
+    reload: vi.fn(),
+  };
+}
+
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/projects/p1']}>
@@ -74,6 +96,8 @@ describe('DashboardPage', () => {
     mocks.runs = [];
     mocks.useProjectRunList.mockClear();
     mocks.reloadRuns.mockClear();
+    mocks.useProjectMetrics.mockClear();
+    mocks.metricsData = metricsData();
   });
 
   it('shows loading until the configuration arrives', () => {
@@ -93,7 +117,7 @@ describe('DashboardPage', () => {
     mocks.runs = [run('r1', 'blocked'), run('r2', 'active'), run('r3', 'idle')];
     renderPage();
     expect(mocks.useProjectRunList).toHaveBeenCalledWith('p1', { pageSize: 5 });
-    expect(mocks.useProjectRunList).toHaveBeenCalledWith('p1', { states: ['open'], pageSize: 100 });
+    expect(mocks.useProjectMetrics).toHaveBeenCalledWith('p1', '30d');
     expect(screen.getByRole('link', { name: 'Open run Task r1' }).getAttribute('href')).toBe('/projects/p1/runs/r1');
     expect(screen.getByText('Ready')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Project is set up for runs' })).toBeTruthy();
@@ -103,12 +127,14 @@ describe('DashboardPage', () => {
     expect(within(actions).getByRole('link', { name: 'Open Orchestrations' }).getAttribute('href')).toBe('/projects/p1/orchestrations');
     expect(within(actions).getAllByRole('link', { name: 'Open Orchestrations' })).toHaveLength(1);
     const summary = screen.getByLabelText('Project summary');
-    expect(summary.textContent).toContain('Active runs3');
+    expect(summary.textContent).toContain('Active runs2');
     expect(summary.textContent).toContain('Needs input1');
-    expect(summary.textContent).toContain('1 working now');
-    expect(summary.textContent).toContain('Enabled in this project');
+    expect(summary.textContent).toContain('Runs in range10In the last 30 days · 40 total');
+    expect(summary.textContent).toContain('Success75%6 of 8 completed runs succeeded');
+    expect(screen.getByRole('table', { name: 'Usage by agent' }).textContent).toContain('Ada');
     expect(summary.textContent).not.toContain('Configuration revision');
-    expect(screen.getByText('Ada')).toBeTruthy();
+    // Ada appears in the Team panel and in the agent usage table.
+    expect(screen.getAllByText('Ada')).toHaveLength(2);
   });
 
   it('points setup at the first missing step', () => {
@@ -133,6 +159,7 @@ describe('DashboardPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect((mocks.project as LoadedStub<unknown>).reload).toHaveBeenCalled();
     expect((mocks.configuration as LoadedStub<unknown>).reload).toHaveBeenCalled();
-    expect(mocks.reloadRuns).toHaveBeenCalledTimes(2);
+    expect(mocks.reloadRuns).toHaveBeenCalledTimes(1);
+    expect((mocks.metricsData as { reload: () => void }).reload).toHaveBeenCalled();
   });
 });

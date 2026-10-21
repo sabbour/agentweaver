@@ -1,12 +1,12 @@
 /**
  * Cross-project Overview in the 0.x layout: Operations card, Recent projects,
- * Recent runs, and Needs attention. Counts come from the project list, the
- * newest runs of each project, and the open run. The 0.x usage charts and
- * activity feed need a service metrics API that does not exist yet, so they are
- * not shown. This page
- * is the planned home for Chief of Staff priorities.
+ * project metrics and usage, Recent runs, and Needs attention. Counts come from
+ * the project list, the newest runs of each project, and the open run. The
+ * service reports metrics and usage per project only, so the metrics section
+ * shows one chosen project and says so. This page is the planned home for
+ * Chief of Staff priorities.
  */
-import { Button, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, Select, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -16,6 +16,8 @@ import { gatewayClient } from './api';
 import type { ProjectSummary } from './contracts';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
+import { metricTiles, useProjectMetrics, type MetricsRangeKey } from './projectMetrics';
+import { ProjectMetricsSections } from './ProjectMetricsSections';
 import { useRunAttention } from './runAttention';
 import { RunList } from './RunList';
 import { runListErrorMessage, useCrossProjectRunList } from './runListData';
@@ -117,6 +119,9 @@ export function OverviewPage() {
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
+  // Project chosen for the metrics section, or null for the default project.
+  const [metricsProjectId, setMetricsProjectId] = useState<string | null>(null);
+  const [range, setRange] = useState<MetricsRangeKey>('30d');
 
   // Loads the project list. The project list is not bound to a project or run,
   // so the binding argument is null. On failure we keep the last good list on
@@ -147,15 +152,21 @@ export function OverviewPage() {
   // so newest first is a reverse string compare.
   const active = (projects ?? []).filter((project) => project.state === 'active');
   const recent = [...active].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT_PROJECT_LIMIT);
-  // Refresh re-reads the project list, which also re-reads the runs, and the
-  // open run's pending items.
-  const refresh = () => { void load(); attention.reload(); };
+  // Metrics show one active project. The default is the most recently updated
+  // one. A chosen project that is no longer active falls back to the default.
+  const chosen = active.some((project) => project.projectId === metricsProjectId) ? metricsProjectId : null;
+  const shownProjectId = chosen ?? recent[0]?.projectId ?? null;
+  const metrics = useProjectMetrics(shownProjectId, range);
+  const tiles = metricTiles(metrics.metrics, range, metrics.loading);
+  // Refresh re-reads the project list, which also re-reads the runs, the
+  // open run's pending items, and the shown project's metrics.
+  const refresh = () => { void load(); attention.reload(); metrics.reload(); };
 
   return (
     <div className={styles.root}>
       <PageHeading
         title="Overview"
-        description="Your projects, their newest runs, and what needs your input."
+        description="Your projects, project metrics and usage, the newest runs, and what needs your input."
         breadcrumb={false}
         actions={(
           <div className={styles.headerActions}>
@@ -212,6 +223,44 @@ export function OverviewPage() {
                   </Link>
                 ))}
               </div>
+            )}
+          </section>
+          <section className={styles.card} aria-labelledby="overview-metrics">
+            <div className={styles.sectionHead}>
+              <Text as="h2" id="overview-metrics" className={styles.sectionTitle}>Project metrics</Text>
+              {shownProjectId && <Link className={styles.link} to={`/projects/${encodeURIComponent(shownProjectId)}`}>Open project dashboard</Link>}
+            </div>
+            <Text className={styles.muted}>Metrics are per project. The service does not total them across projects, so this section shows one project at a time.</Text>
+            {!shownProjectId ? <Text className={styles.muted}>Metrics appear when you have an active project.</Text> : (
+              <>
+                <div className={styles.glanceGrid} aria-label="Project metric summary">
+                  {tiles.map((tile) => (
+                    <div key={tile.key} className={styles.glance}>
+                      <Text className={styles.glanceLabel}>{tile.label}</Text>
+                      <Text className={styles.glanceValue}>{tile.value}</Text>
+                      <Text className={styles.glanceLabel}>{tile.meta}</Text>
+                    </div>
+                  ))}
+                </div>
+                <ProjectMetricsSections
+                  data={metrics}
+                  range={range}
+                  onRangeChange={setRange}
+                  controls={(
+                    <div className={styles.headerActions}>
+                      <Text>Project</Text>
+                      <Select
+                        value={shownProjectId}
+                        onChange={(_event, data) => setMetricsProjectId(data.value)}
+                        aria-label="Metrics project"
+                        size="small"
+                      >
+                        {active.map((project) => <option key={project.projectId} value={project.projectId}>{project.name}</option>)}
+                      </Select>
+                    </div>
+                  )}
+                />
+              </>
             )}
           </section>
           <div className={styles.mainGrid}>

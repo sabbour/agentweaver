@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   completeRemoteMcpOAuthCallback: vi.fn(),
   listProjects: vi.fn(),
   listProjectRuns: vi.fn(),
+  getProjectMetrics: vi.fn(),
+  getProjectUsage: vi.fn(),
   getProject: vi.fn(),
   getProjectConfiguration: vi.fn(),
   updateProjectConfiguration: vi.fn(),
@@ -63,6 +65,8 @@ vi.mock('./api', () => ({
     completeRemoteMcpOAuthCallback: mocks.completeRemoteMcpOAuthCallback,
     listProjects: mocks.listProjects,
     listProjectRuns: mocks.listProjectRuns,
+    getProjectMetrics: mocks.getProjectMetrics,
+    getProjectUsage: mocks.getProjectUsage,
     getProject: mocks.getProject,
     getProjectConfiguration: mocks.getProjectConfiguration,
     updateProjectConfiguration: mocks.updateProjectConfiguration,
@@ -393,6 +397,9 @@ describe('v1 web project scoping', () => {
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
     mocks.listProjects.mockReset().mockResolvedValue([]);
     mocks.listProjectRuns.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, items: [], nextCursor: null }));
+    // Metrics and usage start empty so the dashboard and overview render without data.
+    mocks.getProjectMetrics.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, from: '2026-01-01T00:00:00Z', to: '2026-01-31T00:00:00Z', activeRuns: 0, blockedRuns: 0, runsInRange: 0, runsTotal: 0, completedRuns: 0, succeededRuns: 0, series: [] }));
+    mocks.getProjectUsage.mockReset().mockImplementation(async (_token: string, projectId: string) => ({ projectId, from: '2026-01-01T00:00:00Z', to: '2026-01-31T00:00:00Z', usageByModel: [], usageByAgent: [] }));
     mocks.createProject.mockReset();
     mocks.getProject.mockReset().mockImplementation(async (_token: string, projectId: string) => projectSummary(projectId, 'Fixture project'));
     mocks.getProjectConfiguration.mockReset().mockImplementation(async (_token: string, projectId: string) => projectConfiguration(projectId, 1));
