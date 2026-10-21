@@ -262,6 +262,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.False(authorizationContext.GetProperty("parameters").EnumerateArray()
                 .Single(parameter => parameter.GetProperty("name").GetString() == "X-Agentweaver-Tenant")
                 .GetProperty("required").GetBoolean());
+            var platformComponents = paths.GetProperty("/api/v1/platform/components").GetProperty("get");
+            Assert.Equal("getPlatformComponents", platformComponents.GetProperty("operationId").GetString());
+            Assert.Equal("Projects", platformComponents.GetProperty("x-agentweaver-owner").GetString());
+            Assert.Equal(
+                "#/components/schemas/PlatformComponentReport",
+                platformComponents.GetProperty("responses").GetProperty("200").GetProperty("content")
+                    .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+            Assert.False(paths.TryGetProperty("/api/v1/internal/platform/components", out _));
             Assert.False(paths.TryGetProperty("/api/connections/copilot-user/v1/begin", out _));
             Assert.False(paths.TryGetProperty("/api/auth/github/repo-app/authorizations", out _));
             Assert.False(paths.TryGetProperty("/api/github/repository-selections", out _));

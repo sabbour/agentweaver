@@ -11,6 +11,7 @@ using Azure.Security.KeyVault.Secrets;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Identity.Broker;
+using Agentweaver.Providers;
 using Agentweaver.SourceControl;
 using Agentweaver.Secrets.AzureKeyVault;
 using Microsoft.AspNetCore.Authentication;
@@ -458,6 +459,9 @@ builder.Services.AddOpenIddict()
     });
 
 builder.Services.AddAuthorization();
+var platformComponentAuthentication = PlatformComponentServiceAuthenticationOptions.ReadOptional(
+    builder.Configuration, identityOptions.SecretRedemption.Audience, identityOptions.RunBinding?.ProjectsAudience);
+builder.Services.AddPlatformComponentServiceAuthentication(platformComponentAuthentication);
 builder.Services.AddCors(options => options.AddPolicy(
     IdentityBrokerOptions.WebCorsPolicyName,
     policy =>
@@ -499,6 +503,22 @@ if (identityOptions.GitHubRepoApp is not null)
 }
 if (runtimeBootstrapOptions is not null)
     app.MapIdentityRuntimeCredentialEndpoints();
+// Secrets always resolve through the configured Azure Key Vault redemption implementation.
+var secretsDescriptor = PlatformComponentCatalogReporter.BuiltInDescriptor(
+    ProviderSeam.Secrets, "azure-key-vault", typeof(AzureKeyVaultSecretRedemption));
+app.MapPlatformComponentOwner(platformComponentAuthentication, async (services, ct) =>
+{
+    await using var scope = services.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+    return await PlatformComponentCatalogReporter.CreateOwnerReportAsync(
+        PlatformComponentOwners.IdentityBroker,
+        token => db.Database.CanConnectAsync(token),
+        (readiness, observedAt) =>
+            [PlatformComponentCatalogReporter.DescribeSelected(
+                PlatformComponentAreaIds.Secrets, secretsDescriptor, readiness, observedAt)],
+        services.GetRequiredService<TimeProvider>(),
+        ct);
+});
 
 app.Run();
 

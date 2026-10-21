@@ -79,6 +79,7 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `getAuthorizationContext` | Read current tenant and effective authority. |
 | `getPlatformRuntimeDefaults` | Read platform defaults. |
 | `updatePlatformRuntimeDefaults` | Append platform defaults. |
+| `getPlatformComponents` | Read active platform components and their readiness. |
 | `acceptRunSelection` | Accept an immutable run selection. |
 | `getRunSelection` | Read the accepted selection. |
 

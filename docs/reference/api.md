@@ -259,6 +259,7 @@ Owner.
 | GET | `/api/catalog/roles` | Bearer | Read built-in roles. | `/api/v1/catalog/roles` |
 | GET | `/api/platform/runtime-defaults/` | `api.read`, `projects.admin`, unbound PlatformAdmin | Read platform runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | PUT | `/api/platform/runtime-defaults/` | Same PlatformAdmin authority | Append runtime defaults. | `/api/v1/platform/runtime-defaults` |
+| GET | `/api/platform/components` | `api.read`, unbound, current TenantAdmin for the caller's tenant or PlatformAdmin | Read active platform components and readiness for every area. See [Platform components](../guide/platform-components.md). | `/api/v1/platform/components` |
 | POST | `/internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Trusted Broker TLS and current Projects proof checks | Validate a Broker run-binding request. Registered only when enabled. | No |
 
 ### Casting through the Gateway
@@ -928,6 +929,17 @@ has separate measured readiness as listed above.
 
 The Web host maps its own health routes and SPA/static paths. See
 [web host reference](./web.md#host-health).
+
+## Platform component owner routes
+
+Events & Sessions, Environment, Knowledge, Orchestrator, and Identity Broker
+each map `GET /internal/platform/components` only when
+`PlatformComponents:ServiceAuthentication` is configured. The route accepts only
+a service token for the private audience whose `sub` claim equals the configured
+Projects caller subject. It returns the owner's areas with `Cache-Control:
+no-store`, and it's not in the Gateway OpenAPI document. Projects calls these
+routes for `GET /api/platform/components`. See
+[Platform components](../guide/platform-components.md).
 
 ## Registration and implementation boundaries
 
