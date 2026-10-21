@@ -14,6 +14,13 @@ public static class CoordinationOwnerMigrator
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
 
     /// <summary>
+    /// Every version <see cref="MigrateAsync"/> can apply, in order; 017 is intentionally absent.
+    /// </summary>
+    /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
+    public static IReadOnlyList<int> SupportedVersions { get; } =
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23])];
+
+    /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
     /// </summary>
     /// <remarks>The caller explicitly invokes this method; ordinary service startup uses <see cref="VerifyAsync"/> instead.</remarks>
@@ -79,8 +86,7 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(22) && !applied.Contains(21)) ||
             (applied.Contains(23) && !applied.Contains(22)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
-        foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23])
-            .Where(version => !applied.Contains(version)))
+        foreach (var version in SupportedVersions.Where(version => !applied.Contains(version)))
         {
             var migrationName = version switch
             {

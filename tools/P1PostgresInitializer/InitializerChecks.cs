@@ -205,6 +205,144 @@ internal static class InitializerChecks
             throw new InvalidOperationException($"The {service} migration history does not match the exact source migration set.");
     }
 
+    /// <summary>
+    /// Requires the reviewed plan to equal the migrator's compiled catalog and, when supplied, to end exactly at the
+    /// operator's explicit maximum version.
+    /// </summary>
+    /// <remarks>
+    /// Migrators apply every missing catalog version, so this equality is what prevents a newer source from
+    /// silently applying versions beyond the approved cutoff.
+    /// </remarks>
+    internal static void AssertMigrationCatalog(int[]? planned, IReadOnlyList<int> supported, int? maximum, string service)
+    {
+        if (planned is null || planned.Length == 0 || !planned.SequenceEqual(supported) ||
+            planned.Distinct().Count() != planned.Length || !planned.Zip(planned.Skip(1)).All(pair => pair.First < pair.Second))
+            throw new InvalidOperationException($"The reviewed {service} migration plan differs from the source migrator catalog.");
+        if (maximum is { } value && planned[^1] != value)
+            throw new InvalidOperationException(
+                $"The {service} source catalog ends at {planned[^1]}, not the approved maximum {value}. Refusing to apply unapproved versions.");
+    }
+
+    /// <summary>Reads one schema's owner and explicit ACL; returns no row when the schema is absent.</summary>
+    internal const string SchemaAclQuery = """
+        SELECT pg_catalog.json_build_object(
+            'ownerOid', n.nspowner::bigint,
+            'grants', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
+                'grantor', a.grantor::bigint, 'grantee', a.grantee::bigint,
+                'privilege', a.privilege_type, 'grantable', a.is_grantable))
+                FROM pg_catalog.aclexplode(n.nspacl) a), '[]'::json))::text
+        FROM pg_catalog.pg_namespace n WHERE n.nspname = @schema
+        """;
+
+    /// <summary>Reads one schema's relations, owners, and the runtime role's effective privileges when the role exists.</summary>
+    internal const string RelationStateQuery = """
+        SELECT COALESCE(pg_catalog.json_agg(pg_catalog.json_build_object(
+            'name', c.relname,
+            'kind', c.relkind::text,
+            'owner', pg_catalog.pg_get_userbyid(c.relowner),
+            'runtimePrivileges', CASE WHEN NOT @has_role THEN NULL
+                WHEN c.relkind = 'S' THEN ARRAY(SELECT p FROM unnest(ARRAY['USAGE','SELECT','UPDATE']) p
+                    WHERE pg_catalog.has_sequence_privilege(@role, c.oid, p))
+                ELSE ARRAY(SELECT p FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p
+                    WHERE pg_catalog.has_table_privilege(@role, c.oid, p)) END)
+            ORDER BY c.relname), '[]'::json)::text
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = @schema AND c.relkind IN ('r', 'p', 'f', 'S', 'v', 'm')
+        """;
+
+    /// <summary>Reads schema owner and ACL by name for the read-only inspection report.</summary>
+    internal const string SchemaStateQuery = """
+        SELECT pg_catalog.json_build_object(
+            'owner', pg_catalog.pg_get_userbyid(n.nspowner),
+            'grants', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
+                'grantor', pg_catalog.pg_get_userbyid(a.grantor),
+                'grantee', CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(a.grantee) END,
+                'privilege', a.privilege_type, 'grantable', a.is_grantable))
+                FROM pg_catalog.aclexplode(n.nspacl) a), '[]'::json))::text
+        FROM pg_catalog.pg_namespace n WHERE n.nspname = @schema
+        """;
+
+    /// <summary>Reads the current database ACL by role name for the read-only inspection report.</summary>
+    internal const string DatabaseGrantsQuery = """
+        SELECT pg_catalog.json_build_object(
+            'owner', pg_catalog.pg_get_userbyid(d.datdba),
+            'grants', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
+                'grantor', pg_catalog.pg_get_userbyid(a.grantor),
+                'grantee', CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(a.grantee) END,
+                'privilege', a.privilege_type, 'grantable', a.is_grantable))
+                FROM pg_catalog.aclexplode(d.datacl) a), '[]'::json))::text
+        FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database()
+        """;
+
+    /// <summary>Lists every Entra service principal role so inspection can expose naming drift from the plan.</summary>
+    internal const string ServicePrincipalsQuery = """
+        SELECT COALESCE(pg_catalog.json_agg(pg_catalog.json_build_object(
+            'role', p.role_name::text, 'objectId', p.object_id, 'type', p.principal_type)
+            ORDER BY p.role_name::text), '[]'::json)::text
+        FROM pg_catalog.pgaadauth_list_principals(false)
+          AS p(role_name, principal_type, object_id, tenant_id, is_mfa, is_admin)
+        WHERE p.principal_type = 'service'
+        """;
+
+    /// <summary>Requires a service schema to be operator-owned with only owner CREATE/USAGE and runtime USAGE.</summary>
+    internal static void AssertServiceSchemaAcl(ServicePlan service, SchemaAclState? state, uint operatorOid, uint runtimeOid)
+    {
+        AclGrant[] expected =
+        [
+            new(operatorOid, operatorOid, "CREATE", false),
+            new(operatorOid, operatorOid, "USAGE", false),
+            new(operatorOid, runtimeOid, "USAGE", false),
+        ];
+        if (state is null || operatorOid == 0 || runtimeOid == 0 || state.OwnerOid != operatorOid ||
+            !SameGrants(expected, state.Grants))
+            throw new InvalidOperationException(
+                $"The {service.Schema} schema is missing or has unexpected ownership or privileges. Refusing incremental continuation.");
+    }
+
+    /// <summary>Returns the planned versions missing from live history after proving that history is an exact plan prefix.</summary>
+    internal static int[] PendingMigrationVersions(int[] planned, int[] applied, string service)
+    {
+        var ordered = applied.Order().ToArray();
+        if (ordered.Distinct().Count() != ordered.Length || ordered.Length > planned.Length ||
+            !planned.Take(ordered.Length).SequenceEqual(ordered))
+            throw new InvalidOperationException(
+                $"The live {service} migration history is not an exact prefix of the reviewed plan. Refusing to continue.");
+        return planned.Skip(ordered.Length).ToArray();
+    }
+
+    /// <summary>Requires each runtime role to already hold exactly one non-grantable database CONNECT from the expected grantor.</summary>
+    internal static void AssertRuntimeDatabaseConnect(ExistingBoundary boundary, uint[] runtimeOids)
+    {
+        if (runtimeOids.Length != 5 || runtimeOids.Any(oid => oid == 0) ||
+            runtimeOids.Distinct().Count() != runtimeOids.Length ||
+            runtimeOids.Any(oid => !boundary.Grants.Where(grant => grant.Grantee == oid)
+                .SequenceEqual([new AclGrant(boundary.ConnectGrantorOid, oid, "CONNECT", false)])))
+            throw new InvalidOperationException(
+                "The runtime roles do not hold exactly their initialized database CONNECT grants. Refusing incremental continuation.");
+    }
+
+    /// <summary>Requires every existing service relation to be planned, operator-owned, and within planned runtime authority.</summary>
+    /// <remarks>Planned relations may be absent only because their migration is still pending.</remarks>
+    internal static void AssertRelationsWithinPlan(ServicePlan service, RelationState[] relations, string owner)
+    {
+        foreach (var relation in relations)
+        {
+            var table = service.Tables.SingleOrDefault(item => item.Table == relation.Name);
+            string[]? allowed = relation.Kind switch
+            {
+                "r" or "p" or "f" when table is not null => table.Privileges,
+                "r" or "p" or "f" when service.OwnerOnlyTables.Contains(relation.Name) => [],
+                "S" when service.OwnerOnlySequences.Contains(relation.Name) => [],
+                _ => null,
+            };
+            if (allowed is null || relation.Owner != owner || relation.RuntimePrivileges is null ||
+                relation.RuntimePrivileges.Except(allowed, StringComparer.Ordinal).Any())
+                throw new InvalidOperationException(
+                    $"The {service.Service} relation {service.Schema}.{relation.Name} is unplanned, foreign-owned, or exceeds planned runtime authority.");
+        }
+    }
+
     /// <summary>Accepts only a receipt proving the failed Projects-only prefix and binding it to exact source hashes.</summary>
     internal static void AssertContinuationReceipt(ContinuationReceiptEntry[] entries,
         string sourceSha, string coreMergeSha, string planHash)
@@ -516,6 +654,11 @@ internal sealed record MutationGuardState(string Table, string? TriggerName, str
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint? FunctionOwnerOid,
     bool? RuntimeCanExecute,
     string? FunctionSource);
+/// <summary>One live relation in a service schema with its owner and effective runtime privileges.</summary>
+internal sealed record RelationState(string Name, string Kind, string Owner, string[]? RuntimePrivileges);
+/// <summary>Observed owner and explicit ACL for one service schema.</summary>
+internal sealed record SchemaAclState(
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint OwnerOid, AclGrant[] Grants);
 /// <summary>Function signature and whether its execute privilege is granted to the runtime principal.</summary>
 internal sealed record FunctionPlan(string Signature, bool Execute);
 /// <summary>Durable stage marker bound to a source SHA, Core merge SHA, and source-plan hash.</summary>

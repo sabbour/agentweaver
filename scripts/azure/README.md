@@ -97,8 +97,21 @@ This command is an operator procedure, not a command run by local source checks
 or by merging a pull request. The template requires the storage account and
 identity to exist before deployment.
 
-### P1 PostgreSQL initializer source proposal
+### P1 PostgreSQL initializer status
 
+The operator record shows that the approved database was initialized on
+2026-10-15 through `--continue-after-projects-config`. Continuation run
+`5745606c2d09` used source `c24d0000fe5fc6163e4f38594c39dff782d3a46d`, Core
+merge `b9ff7debcb00417d64e00200a5e583d0e141583d`, and plan hash
+`a056bf074940b858b7eb05c78c7e96e2e6663d5b7ea291d99997eaccbbf073c8`. Its final
+stage was `continuation_all_runtime_grants_committed`. That plan predates later
+catalog additions, so treat this record as a starting state only. It does not
+prove that any later migration ran. Use `--inspect` to read the live versions,
+and `--apply-pending-migrations` to add later approved versions; see
+[Applying later approved migrations](#applying-later-approved-migrations).
+Never rerun `--initialize` against this database.
+
+The attempts below preceded that run and are kept as history.
 Earlier initializer attempts did not complete successfully against the approved database.
 An earlier attempt from source `8476c16337fa015031124196d57979159eca1958`
 stopped during live preflight after recording `fresh_target_checked`, before
@@ -154,7 +167,9 @@ Version 23 adds durable interactive requests, cancellation receipts,
 `accepted_runs`. Its `ACCESS EXCLUSIVE` lock blocks reads and writes to `accepted_runs`
 until the migration transaction commits. It doesn't alter `sessions` or build indexes on
 existing tables. Review the table size and plan a write pause.
-Events requires versions 1 through 8 and preserves the earlier version-2 layout.
+Events requires versions 1 through 9 and preserves the earlier version-2 layout.
+The initializer compares each plan catalog with the migrator's compiled
+`SupportedVersions` list instead of matching migrator source text.
 The plan retains 97 tables and eight exact row-lock columns.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
@@ -200,6 +215,56 @@ Run the continuation checks against a disposable PostgreSQL container:
 ```powershell
 dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresContinuationPostgresTests
 ```
+
+### Applying later approved migrations
+
+Use these modes for a database that is already initialized. Neither needs a
+prior receipt, recreates roles or schemas, resets data, or reruns the Identity
+Broker bootstrap. Both still require a clean checkout whose `HEAD` and fetched
+`origin/v1` match `--source-sha`, and the exact plan hash.
+
+`--inspect` is read-only. Both database sessions run with
+`default_transaction_read_only=on`, and the tool checks that setting before it
+reads. It reports the plan principals, Entra service principals, database
+grants, and Identity Broker history. For each service it reports schema owner
+and ACL, migration history, planned, pending, and unplanned versions, relations
+with runtime privileges, and missing planned relations. It writes no receipt and
+ends with `P1_POSTGRES_INSPECTION_FINISHED writes=false`. It takes no Core
+merge SHA.
+
+```powershell
+node scripts\azure\bootstrap-p1-postgres.mjs --inspect --execute
+```
+
+`--apply-pending-migrations` requires `--max-core-version` and
+`--max-events-version`. Each maximum must equal the highest version in the plan,
+and the plan must equal the migrator's compiled catalog. A source with a later
+migration therefore fails closed instead of applying it, because the migrators
+apply every missing catalog version. Before any write, the mode checks:
+
+- the five runtime roles, object-ID mappings, and operator memberships;
+- each runtime role's exact database `CONNECT`;
+- each service schema's owner and ACL;
+- that every existing relation is planned, operator-owned, and within its
+  planned runtime privileges;
+- that Core and Events histories are exact prefixes of the plan, with no gaps
+  or unplanned versions. Other services must already match the plan exactly.
+
+Add `--dry-run` to stop after these checks; it prints the pending versions and
+`P1_POSTGRES_PENDING_MIGRATIONS_DRY_RUN writes=false`. Without `--dry-run`, the
+mode applies only the pending versions and verifies each migrated history and
+object inventory. It then applies the exact plan grants in one transaction,
+reads back every ACL before commit, and writes a new receipt under `Temp`. It
+ends with `P1_POSTGRES_PENDING_MIGRATIONS_APPLIED`. That marker does not prove
+runtime identity or deployment.
+
+```powershell
+node scripts\azure\bootstrap-p1-postgres.mjs --apply-pending-migrations --dry-run --max-core-version 23 --max-events-version 9 --core-merge-sha <sha> --execute
+node scripts\azure\bootstrap-p1-postgres.mjs --apply-pending-migrations --max-core-version 23 --max-events-version 9 --core-merge-sha <sha> --execute
+```
+
+Run `--inspect` again after applying, and prove each new version from the live
+history.
 
 The source preflight rejects incompatible PUBLIC privileges before the first write.
 It also rejects default grants to unrelated principals and an inherited-only
