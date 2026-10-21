@@ -20,6 +20,18 @@ The Core version list changes the PostgreSQL plan hash. Applying migration
 separate, unapplied operator steps that require approval. Source checks do
 not authorize or perform them.
 
+Orchestrator migration `030_backlog_task_origin.sql` adds the
+`backlog_plan_promotions` and `backlog_task_origins` tables. They record
+each promotion of a confirmed work plan into backlog tasks and the origin of
+each promoted task. The migration does not alter `backlog_tasks`. Its foreign
+keys take `SHARE ROW EXCLUSIVE` locks on `backlog_projects`,
+`backlog_tasks`, and `coordination_sessions`, which block writes to those
+tables until commit. The plan grants the orchestrator role exactly
+`SELECT, INSERT` on both new tables, with no `UPDATE`, `DELETE`, or default
+privileges. Applying migration 030, granting those privileges, and accepting
+the new exact plan hash are separate, unapplied operator steps that require
+approval.
+
 Run these commands from the repository root:
 
 ```powershell
@@ -156,12 +168,14 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 21.
-These are 20 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16, 18 through 21, 25, 26,
+and 30. These are 23 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan lists 96 tables and eight exact row-lock columns. Orchestrator migration
+The plan lists 98 tables and eight exact row-lock columns. Orchestrator migration
 025 adds the empty `user_notification_dismissals` table. Its runtime role needs
 only `SELECT,INSERT` on that table. The migration does not alter existing tables.
+Orchestrator migration 030 adds `backlog_plan_promotions` and
+`backlog_task_origins`, each with `SELECT,INSERT` only.
 This source change also changes the plan hash. Applying the migration or grants,
 or running initialization with the new hash, requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

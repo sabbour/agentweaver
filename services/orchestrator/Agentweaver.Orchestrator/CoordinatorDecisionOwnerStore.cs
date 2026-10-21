@@ -32,6 +32,8 @@ internal sealed class CoordinatorDecisionOwnerStore
     private readonly string _sourceControlPins;
     private readonly string _sourceControlIntents;
     private readonly string _outbox;
+    private readonly string _promotions;
+    private readonly string _dispatches;
     private readonly TimeProvider _timeProvider;
     private readonly CoordinatorRunSelectionContextStore _runSelectionContexts;
 
@@ -65,6 +67,8 @@ internal sealed class CoordinatorDecisionOwnerStore
         _sourceControlPins = $"{quotedSchema}.source_control_repository_pins";
         _sourceControlIntents = $"{quotedSchema}.source_control_merge_intents";
         _outbox = $"{quotedSchema}.coordinator_decision_outbox";
+        _promotions = $"{quotedSchema}.backlog_plan_promotions";
+        _dispatches = $"{quotedSchema}.maf_execution_dispatches";
         _runSelectionContexts = runSelectionContexts;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -422,13 +426,101 @@ internal sealed class CoordinatorDecisionOwnerStore
         string expectedWorkPlanId,
         CancellationToken cancellationToken)
     {
+        await ReadConfirmedWorkPlanStateInTransactionAsync(
+            connection, transaction, actor, identity, selection, selectionContext,
+            expectedStateVersion, expectedFence, expectedWorkPlanId,
+            "maf_execution_dispatch_stale", cancellationToken).ConfigureAwait(false);
+        if (await IsWorkPlanPromotedAsync(
+                connection, transaction, identity, expectedWorkPlanId, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+    }
+
+    /// <summary>
+    /// Reads the current confirmed work plan for promotion into backlog tasks.
+    /// </summary>
+    /// <remarks>
+    /// The owner binding row is locked for update, so promotion and MAF dispatch for the run are serialized.
+    /// Promotion requires that the run has no registered children and no dispatch records.
+    /// </remarks>
+    /// <exception cref="CoordinationException">The plan is no longer current, or the run already started execution.</exception>
+    internal async Task<CoordinatorDecisionState> ReadConfirmedWorkPlanForPromotionInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        WorkPlanRunSelectionContext? selectionContext,
+        long expectedStateVersion,
+        long expectedFence,
+        string expectedWorkPlanId,
+        CancellationToken cancellationToken)
+    {
+        var state = await ReadConfirmedWorkPlanStateInTransactionAsync(
+            connection, transaction, actor, identity, selection, selectionContext,
+            expectedStateVersion, expectedFence, expectedWorkPlanId,
+            "backlog_promotion_stale", cancellationToken).ConfigureAwait(false);
+        if (await ReadRegisteredChildCountAsync(
+                connection, transaction, identity, cancellationToken).ConfigureAwait(false) != 0 ||
+            await HasDispatchRecordsAsync(connection, transaction, identity, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "backlog_promotion_run_started", StatusCodes.Status409Conflict);
+        return state;
+    }
+
+    private async Task<bool> IsWorkPlanPromotedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        string workPlanId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_promotions}
+                WHERE project_id = @project AND run_id = @run AND work_plan_id = @plan)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
+        command.Parameters.AddWithValue("plan", NpgsqlDbType.Varchar, workPlanId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    private async Task<bool> HasDispatchRecordsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_dispatches}
+                WHERE project_id = @project AND run_id = @run)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
+    private async Task<CoordinatorDecisionState> ReadConfirmedWorkPlanStateInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        WorkPlanRunSelectionContext? selectionContext,
+        long expectedStateVersion,
+        long expectedFence,
+        string expectedWorkPlanId,
+        string staleCode,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
         ValidateInput(actor, identity, selection);
         if (expectedStateVersion < 1 || expectedFence < 1 ||
             string.IsNullOrWhiteSpace(expectedWorkPlanId))
-            throw new CoordinationException(
-                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+            throw new CoordinationException(staleCode, StatusCodes.Status409Conflict);
 
         var selectionHash = HashSelection(selection.Selection);
         OwnerBinding binding;
@@ -443,12 +535,12 @@ internal sealed class CoordinatorDecisionOwnerStore
         {
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 throw new CoordinationException(
-                    "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+                    staleCode, StatusCodes.Status409Conflict);
             binding = ReadOwnerBinding(reader, selectionHash, selection.Authorization.TenantId);
         }
         if (binding.RunFence != expectedFence)
             throw new CoordinationException(
-                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+                staleCode, StatusCodes.Status409Conflict);
 
         var latest = await ReadLatestDecisionAsync(
             connection, transaction, identity, cancellationToken, forShare: true).ConfigureAwait(false);
@@ -458,7 +550,7 @@ internal sealed class CoordinatorDecisionOwnerStore
             latest.Envelope.Fence != expectedFence ||
             !string.Equals(latest.Envelope.AcceptedSelectionHash, binding.SelectionHash, StringComparison.Ordinal))
             throw new CoordinationException(
-                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+                staleCode, StatusCodes.Status409Conflict);
 
         var expectedBinding = CoordinatorDecisionBinding.Create(actor, identity, selection, binding.RunFence);
         var restored = await RestoreEnvelopeAsync(
@@ -472,7 +564,8 @@ internal sealed class CoordinatorDecisionOwnerStore
             !state.CanDispatch ||
             state.ConfirmedWorkPlan?.Plan.Id != expectedWorkPlanId)
             throw new CoordinationException(
-                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+                staleCode, StatusCodes.Status409Conflict);
+        return state;
     }
 
     /// <summary>
