@@ -1064,6 +1064,34 @@ export type CoordinationBlockerKind =
   | 'awaitingApproval'
   | 'awaitingOutcomeConfirmation';
 
+/** One pending owner gate for the existing bell, attention list, and shared Flow view. */
+export interface UserNotification {
+  notificationId: string;
+  projectId: string;
+  runId: string;
+  sessionId: string;
+  requestId: string;
+  kind: CoordinationBlockerKind;
+  prompt: string | null;
+  createdAt: string;
+  gateKind:
+    | 'outcomeConfirmation'
+    | 'generatedWorkflowConfirmation'
+    | 'workPlanConfirmation'
+    | 'scopeChangeConfirmation'
+    | 'question'
+    | 'approval';
+  stateVersion: number;
+  updatedAt: string;
+}
+
+/** Newest-first notifications and total pending count, after the requested dismissal filter. */
+export interface UserNotificationPage {
+  items: UserNotification[];
+  count: number;
+  nextCursor: string | null;
+}
+
 /** Pending request and allowed response forms associated with a blocked session. */
 export interface SessionStatusBlocker {
   kind: CoordinationBlockerKind;

@@ -246,6 +246,10 @@ existing tables. The reviewed plan grants `SELECT, INSERT` on
 `chief_of_staff_conversations`, `SELECT, INSERT, UPDATE` on
 `chief_of_staff_priority_lists` and `chief_of_staff_priorities`, and
 `SELECT, INSERT, DELETE` on `chief_of_staff_priority_links`.
+Orchestrator migration 025 adds caller-specific notification dismissals. It
+creates one new, empty table, `user_notification_dismissals`, and doesn't alter
+or scan existing tables. The reviewed plan grants `SELECT, INSERT` on that
+table.
 
 Then review and run the source-bound PostgreSQL initializer:
 
