@@ -1,7 +1,7 @@
 import { Badge, Button, Divider, MessageBar, MessageBarBody, Popover, PopoverSurface, PopoverTrigger, Text, mergeClasses } from '@fluentui/react-components';
 import { ChevronDownRegular, PersonRegular, SignOutRegular } from '@fluentui/react-icons';
 import { useIdentityMenuStyles } from '../components/identityMenuStyles';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLocation, useMatch } from 'react-router-dom';
 import { LeftNavView } from '../components/shell/LeftNav';
 import { ProjectSwitcherView } from '../components/shell/ProjectSwitcher';
@@ -107,6 +107,11 @@ export function RetainedShell({ children }: { children: ReactNode }) {
   // Use the list only if it was loaded with the current token. Otherwise treat
   // it as still loading.
   const current = directory?.scope === scope ? directory : null;
+  // Project names for the bell items. Unknown projects show their ID.
+  const projectNames = useMemo(
+    () => new Map((current?.projects ?? []).map((project) => [project.projectId, project.name])),
+    [current],
+  );
   return (
     <div className="aw-app-shell">
       {/* The rail shows only the pages that v1 implements, plus the 0.x
@@ -137,7 +142,7 @@ export function RetainedShell({ children }: { children: ReactNode }) {
           />
         )}
         identity={(collapsed) => <BrokerIdentity collapsed={collapsed} />}
-        notifications={<AttentionBell attention={attention} />}
+        notifications={<AttentionBell attention={attention} projectNames={projectNames} />}
       />
       <div className="aw-shell-canvas">
         <main className="aw-shell-content" aria-label="Main content">

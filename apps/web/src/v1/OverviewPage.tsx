@@ -1,7 +1,7 @@
 /**
  * Cross-project Overview in the 0.x layout: Operations card, Recent projects,
  * project metrics and usage, Recent runs, and Needs attention. Counts come from
- * the project list, the newest runs of each project, and the open run. The
+ * the project list, the newest runs of each project, and your notifications. The
  * service reports metrics and usage per project only, so the metrics section
  * shows one chosen project and says so. This page is the planned home for
  * Chief of Staff priorities.
@@ -158,8 +158,10 @@ export function OverviewPage() {
   const shownProjectId = chosen ?? recent[0]?.projectId ?? null;
   const metrics = useProjectMetrics(shownProjectId, range);
   const tiles = metricTiles(metrics.metrics, range, metrics.loading);
+  // Project names for the attention list. Unknown projects show their ID.
+  const projectNames = new Map((projects ?? []).map((project) => [project.projectId, project.name]));
   // Refresh re-reads the project list, which also re-reads the runs, the
-  // open run's pending items, and the shown project's metrics.
+  // notifications, and the shown project's metrics.
   const refresh = () => { void load(); attention.reload(); metrics.reload(); };
 
   return (
@@ -200,7 +202,7 @@ export function OverviewPage() {
               </div>
               <div className={styles.glance}>
                 <Text className={styles.glanceLabel}>Needs your input</Text>
-                <Text className={styles.glanceValue}>{attention.items.length}</Text>
+                <Text className={styles.glanceValue}>{attention.error ? '–' : attention.count}</Text>
               </div>
             </div>
           </section>
@@ -278,7 +280,7 @@ export function OverviewPage() {
             </div>
             <section className={styles.card} aria-labelledby="overview-attention">
               <Text as="h2" id="overview-attention" className={styles.sectionTitle}>Needs attention</Text>
-              <AttentionList attention={attention} />
+              <AttentionList attention={attention} projectNames={projectNames} />
             </section>
           </div>
         </>
