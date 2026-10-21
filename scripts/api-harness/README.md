@@ -169,21 +169,24 @@ cursor chain, event IDs, and project, run, and session identities. MCP replay
 does not count as API evidence. Gate-answer, approval, rejection, and addressed
 message journeys use the matching discovered API operation.
 
-The shared CLI creates a new invocation-owned project through the privileged
-Projects Config setup command. It reads back the current Owner and Orchestrator
-grants, then accepts the selected run configuration. It creates and reads back
+The shared CLI creates a new invocation-owned project named
+`p1-<invocation-uuid>` through the public `createProject` operation, using the
+signed-in setup token. It then calls `assignProjectRole` to grant that actor
+the Owner and Orchestrator roles, checks each receipt, and accepts the
+selected run configuration. It creates and reads back
 the root session. A message journey also creates and reads back a child session.
 Caller-supplied
 `ownerFences` or `fixtureScope` are rejected; only receipts produced and checked
-during this invocation can authorize a write. Cleanup revokes the setup grants
-and archives the project only if no run selection was accepted. An accepted
-selection is retained as `retainedPending` with its grants still active.
+during this invocation can authorize a write. Cleanup revokes the
+Orchestrator assignment, archives the project, and then revokes the Owner
+assignment. The project is archived first because the last Owner of an active
+project can't be revoked.
 
-An indeterminate privileged command is not retried automatically. Its
-allowlisted product code, kubectl exit code, and fixed stderr/process
-classes are retained in `observations.fixtureSetup.commandFailures`;
-raw command output is not retained. Use the invocation-bound read-only
-query described in [Troubleshoot Agentweaver](../../docs/guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
+A failure after a mutating setup or cleanup request is sent is indeterminate.
+The runner doesn't retry it or run cleanup. It keeps only the `step`,
+`operationId`, HTTP `status`, and `problemCode` in
+`observations.fixtureSetup.requestFailures`; response bodies aren't kept.
+Use the steps described in [Troubleshoot Agentweaver](../../docs/guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
 before retrying setup or cleanup. The same shared behavior applies to MCP.
 
 Supply an `executionIntent: "execute"` JSON manifest with the direct Environment
