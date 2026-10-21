@@ -635,6 +635,32 @@ public static class ProjectConfigEndpoints
                 }
             });
 
+        // Returns the current project-scope spend budgets for one accepted run. Orchestrator calls this before
+        // each new dispatch.
+        projects.MapGet("/{projectId}/runs/{runId}/spend-budgets", async (
+            string projectId,
+            string runId,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                // Budgets can change at any time, so no cache may keep an older answer.
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.GetCurrentProjectSpendBudgetsAsync(
+                    caller, projectId, runId, cancellationToken).ConfigureAwait(false));
+            }
+            // Map known configuration errors, such as 403, 404, and 409, to problem responses.
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
         var platform = app.MapGroup("/api/platform/runtime-defaults").RequireAuthorization();
         platform.MapGet("/", async (
             HttpContext context,

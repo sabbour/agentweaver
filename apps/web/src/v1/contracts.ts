@@ -714,6 +714,85 @@ export interface ProjectRunPage {
   nextCursor: string | null;
 }
 
+/** Repository owner and name as Agentweaver stored them. */
+export interface ProjectSourceControlRepository {
+  owner: string;
+  name: string;
+}
+
+/** Stored issue state filter for `listProjectIssues`. The default is `open`. */
+export type ProjectIssueStateFilter = 'open' | 'closed' | 'all';
+
+/**
+ * One synced issue from the project backlog. The read makes no provider call,
+ * and the stored issue has no URL or author.
+ */
+export interface ProjectIssueSummary {
+  taskId: string;
+  taskState: 'backlog' | 'ready' | 'claimed';
+  providerId: string;
+  repository: ProjectSourceControlRepository;
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One page of synced issues, highest number first. Pass `nextCursor` back with the same filter and page size. */
+export interface ProjectIssuePage {
+  projectId: string;
+  items: ProjectIssueSummary[];
+  nextCursor: string | null;
+}
+
+/** Recorded pull request state filter for `listProjectPullRequests`. The default is `open`. */
+export type ProjectPullRequestStateFilter = 'open' | 'closed' | 'merged' | 'all';
+
+/**
+ * One pull request that a project run created or reused, as the run recorded it.
+ * The read makes no provider call, so `state` and `title` can be out of date.
+ */
+export interface ProjectPullRequestSummary {
+  providerId: string;
+  repository: ProjectSourceControlRepository;
+  number: number;
+  title: string | null;
+  htmlUrl: string;
+  state: 'open' | 'closed' | 'merged';
+  headBranch: string;
+  headSha: string;
+  baseBranch: string;
+  baseSha: string;
+  /** The run that created or reused the pull request. */
+  runId: string;
+  disposition: 'created' | 'reused';
+  /** When the run first recorded the pull request. */
+  recordedAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Which pull requests the record can contain. Recording starts when Orchestrator migration 032
+ * is applied; earlier pull requests aren't recorded, so the list isn't a complete history.
+ */
+export interface ProjectPullRequestCoverage {
+  recordedSince: string;
+  includesEarlierPullRequests: false;
+}
+
+/**
+ * One page of recorded pull requests, most recently recorded first. Pass `nextCursor` back with the
+ * same filter and page size. Before migration 032 is applied, the route returns 503
+ * `pull_request_records_unavailable` instead of a page.
+ */
+export interface ProjectPullRequestPage {
+  projectId: string;
+  coverage: ProjectPullRequestCoverage;
+  items: ProjectPullRequestSummary[];
+  nextCursor: string | null;
+}
+
 /** Created and terminal-completed run counts on one UTC calendar day. */
 export interface ProjectMetricsDay {
   date: string;

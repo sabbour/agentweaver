@@ -5,6 +5,38 @@ This reference describes the non-secret ConfigMap keys in
 them. It covers the v1 source contract; it does not turn a source candidate
 into a deployed or selectable provider.
 
+## Optional periodic issue-sync service channels
+
+Issue sync is disabled as a host capability unless its explicit TLS profiles
+are configured. No checked-in runtime snapshot enables it. Orchestrator uses
+`Orchestrator:IssueSync:IdentityTls` (`LocalServiceName=Orchestrator`,
+`PeerServiceName=IdentityBroker`). Identity requires both
+`IdentityBroker:IssueSync:WorkerTls` (`IdentityBroker` to `Orchestrator`) and
+`IdentityBroker:IssueSync:ProjectsTls` (`IdentityBroker` to `Projects`), plus
+the existing `IdentityBroker:GitHubRepoApp` configuration. Projects uses
+`ProjectsConfig:IssueSync:IdentityTls` (`Projects` to `IdentityBroker`).
+
+Each profile uses the existing `RuntimeServiceTlsOptions` fields:
+`LocalServiceName`, `LocalServicePrincipalId`, `LocalCertificatePemPath`,
+`LocalPrivateKeyPemPath`, `LocalCertificateSha256`, `ListenerPort`,
+`PeerServiceName`, `PeerServicePrincipalId`, `PeerOwnerAddress`, and
+`PeerCertificateSha256Pins`. Certificate/key paths are absolute; principal
+IDs and peer certificates must be distinct, addresses HTTPS owner origins,
+and certificate digests SHA-256. Service clients trust the mounted
+`/var/run/service-backend-ca/ca.crt`, validate peer names and certificate
+pins, and never follow redirects.
+
+Identity's dedicated listener is `Kestrel:Endpoints:IssueSyncWorker:Url`;
+Projects' is `Kestrel:Endpoints:IssueSyncIdentity:Url`. Each must be HTTPS
+on the profile's own `ListenerPort`, not a public or another private listener.
+Client-only profiles do not create listeners. There is no bearer-token
+fallback or shared run-authority path.
+
+These are source configuration contracts, not permission to create
+certificates, grants or infrastructure. Per-project enable/disable, intervals
+and cycle limits are persisted through the
+[issue-sync API](api.md#periodic-issue-sync), not environment defaults.
+
 ## Configuration rules
 
 - The runtime ConfigMaps use environment-variable names with `__` between
@@ -451,6 +483,58 @@ The `orchestrator-runtime-config.json` map contains:
 The policy document is YAML for the `agt.dotnet-yaml` adapter. The provider is
 platform-singleton; project configuration cannot replace it. A policy
 evaluation is not itself an action grant.
+
+## Guardrails settings
+
+The Orchestrator registers the Azure AI Content Safety Prompt Shields check
+only when the `Guardrails__PromptShields` section exists. Prompt Shields is the
+only supported Guardrails check in P2. It runs on model-turn user input.
+
+| Setting | Contract |
+| --- | --- |
+| `Guardrails__PromptShields__Endpoint` | Required HTTPS Content Safety resource endpoint, for example `https://<resource>.cognitiveservices.azure.com/`. |
+| `Guardrails__PromptShields__OptionsRevision` | Required revision matching the catalog registration. |
+| `Guardrails__PromptShields__ResourceId` | Required stable identifier for the Content Safety resource. |
+| `Guardrails__PromptShields__ResourceGeneration` | Required positive resource generation. Increase only after replacing the resource. |
+| `Guardrails__PromptShields__ProviderId` | Catalog provider ID. Defaults to `azure-prompt-shields`. |
+| `Guardrails__PromptShields__ApiVersion` | Content Safety API version. Defaults to `2024-09-01`. |
+| `Guardrails__PromptShields__RequestTimeoutSeconds` | Classifier request timeout from 1 to 60 seconds. Defaults to `10`. |
+
+The classifier authenticates with the Orchestrator workload identity and the
+`https://cognitiveservices.azure.com/.default` scope. It never reads an API
+key. Grant the Orchestrator managed identity the **Cognitive Services User**
+role on the Content Safety resource.
+
+The checks run only for runs whose accepted Projects snapshot has an ordered
+Guardrails selection. Add a Guardrails `azure-prompt-shields` registration with
+adapter version `1.0.0`, options schema version `1`, and the
+advertised capabilities `guardrails.prompt-injection.detect` and
+`guardrails.stage.user-input.content.text` to the Projects & Config provider
+catalog. Then add it to the catalog's ordered Guardrails selection. When a run
+selects Guardrails and the Orchestrator has no matching registration, model
+turns fail closed with `runtime_guardrails_unavailable`.
+
+Findings narrow the AGT decision; the classifier doesn't withhold content by
+itself. Add a rule under `rules:` in the platform policy document that denies
+`model.turn` when a finding exists. Give it a higher priority than the rule
+that allows `model.turn`:
+
+```yaml
+- name: deny-guardrails-findings
+  condition: "guardrails_finding_count > 0"
+  action: deny
+  priority: 200
+```
+
+The gate also provides the `guardrails_stage`, `guardrails_content_class`, and
+`guardrails_findings` context keys. `guardrails_findings` lists each finding as
+`code:Severity`, separated by semicolons. A detected attack has the code
+`prompt_shields.user_prompt_attack`.
+
+Apply Orchestrator migration 028 (`guardrails_evaluations`) with the explicit
+`--migrate` command before you enable the checks. The table stores one
+immutable evidence row per admitted operation. It holds digests, provider IDs,
+versions, finding codes, and the AGT outcome, and never the content.
 
 ## Events & Sessions settings
 

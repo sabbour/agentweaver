@@ -1464,6 +1464,72 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(SourceControlPullRequestDisposition.Reused, pullRequest.Disposition);
         }
 
+        // The owner started on the default migration set, without optional migration 032, and
+        // served every route above. The pull request list stays reachable and reports that its
+        // record isn't available, instead of an empty list; reusing a PR didn't apply 032.
+        var projectPullRequestsPath = $"/api/v1/projects/{project.ProjectId}/source-control/pull-requests";
+        using (var unavailablePullRequests = await SendAsync(
+                   gateway.Client, HttpMethod.Get, projectPullRequestsPath, runToken, [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailablePullRequests.StatusCode);
+            Assert.True(unavailablePullRequests.Headers.CacheControl?.NoStore);
+            Assert.Contains(
+                "pull_request_records_unavailable",
+                await unavailablePullRequests.Content.ReadAsStringAsync(),
+                StringComparison.Ordinal);
+        }
+        using (var nativeUnavailablePullRequests = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   $"/api/projects/{project.ProjectId}/source-control/pull-requests",
+                   runToken,
+                   [TenantId]))
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, nativeUnavailablePullRequests.StatusCode);
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        {
+            await using (var tableQuery = database.CreateCommand(
+                             $"SELECT to_regclass('\"{ownerSchema}\".source_control_pull_requests') IS NULL"))
+                Assert.True((bool)(await tableQuery.ExecuteScalarAsync())!);
+
+            // Only the explicit, separately approved step applies 032. The running owner then
+            // records new create or reuse results; earlier pull requests aren't backfilled.
+            await CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync(database, ownerSchema);
+        }
+        using (var emptyRecord = await SendAsync(
+                   gateway.Client, HttpMethod.Get, projectPullRequestsPath, runToken, [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, emptyRecord.StatusCode);
+            using var page = JsonDocument.Parse(await emptyRecord.Content.ReadAsStringAsync());
+            Assert.Equal(0, page.RootElement.GetProperty("items").GetArrayLength());
+            Assert.False(page.RootElement.GetProperty("coverage")
+                .GetProperty("includesEarlierPullRequests").GetBoolean());
+        }
+        using (var recordedReuse = await SendJsonAsync(
+                   gateway.Client,
+                   HttpMethod.Post,
+                   sourceControlGatewayBasePath + "/pull-requests",
+                   runToken,
+                   new SourceControlPullRequestRequest(
+                       "Integration change",
+                       "Created through the authorized owner route.",
+                       "feature/source-control",
+                       sourceHeadSha,
+                       "main",
+                       sourceBaseSha,
+                       Draft: false)))
+            Assert.Equal(HttpStatusCode.OK, recordedReuse.StatusCode);
+        using (var recordedPullRequests = await SendAsync(
+                   gateway.Client, HttpMethod.Get, projectPullRequestsPath, runToken, [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, recordedPullRequests.StatusCode);
+            using var page = JsonDocument.Parse(await recordedPullRequests.Content.ReadAsStringAsync());
+            var item = Assert.Single(page.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal(17, item.GetProperty("number").GetInt64());
+            Assert.Equal(RunId, item.GetProperty("runId").GetString());
+            Assert.Equal("reused", item.GetProperty("disposition").GetString());
+            Assert.Equal(sourceHeadSha, item.GetProperty("headSha").GetString());
+        }
+
         using (var reviewsResponse = await SendAsync(
                    gateway.Client,
                    HttpMethod.Get,

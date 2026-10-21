@@ -276,6 +276,14 @@ the product bundle. The Broker runtime identity does not own the schema. If
 the identity or database setup is not approved or complete, stop before
 applying product workloads.
 
+If the database is already initialized, don't rerun initialization. Read its
+state with `--inspect`, then add later approved migrations with
+`--apply-pending-migrations` and explicit maximum versions. Run that command with
+`--dry-run` first. The
+[Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#applying-later-approved-migrations)
+describes both modes. Services verify their schema version at startup, so
+apply migrations before you install workloads that expect them.
+
 For each database workload, verify that:
 
 - Its user-assigned identity is federated to the exact Kubernetes

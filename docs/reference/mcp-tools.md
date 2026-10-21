@@ -138,6 +138,8 @@ Revision checks stay inside `body`; no idempotency header is required.
 | --- | --- |
 | `acceptRunRoot` | Accept root owner state. |
 | `listProjectRuns` | List accepted project runs, newest first. |
+| `listProjectIssues` | List synced repository issues stored in the project backlog. |
+| `listProjectPullRequests` | List pull requests that project runs recorded after migration 032 was applied. |
 | `readProjectMetrics` | Read bounded project run counts and daily UTC activity from Orchestrator. |
 | `listChiefOfStaffConversations` | List my private Chief of Staff conversations. |
 | `bindChiefOfStaffConversation` | Bind a run I created to a Chief of Staff conversation. |

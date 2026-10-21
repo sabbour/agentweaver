@@ -105,11 +105,58 @@ credit-limit totals. These methods do not authorize a model session or caller.
 The standalone Azure Cost adapter uses an explicitly configured, versioned card
 for model-scoped standard input/output token rates in the declared currency. It
 does not fetch rates or quote BYOK work. Missing token counts, unsupported cache
-categories, unknown models, and changed bindings remain `Unpriced`. Events must
-verify trusted Azure provider and deployment facts against the accepted runtime
-model pin before using this adapter for receipts. Until that source contract is
-admitted, BYOK receipt accounting remains `Unpriced`; provisioned-throughput
-usage also remains unpriced without trusted usage-share evidence.
+categories, unknown models, and changed bindings remain `Unpriced`.
+
+`RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok` is the trusted Azure
+BYOK producer contract. It accepts only an owner-issued receipt that passes
+`Validate` and has all of these facts:
+
+- The registration uses BYOK, and its model binding pin has provider type `azure`.
+- The SDK source reports provider type `azure`, the `byok.tokens` meter, and no
+  hosted multiplier.
+- The SDK deployment ID, the usage model ID, and the pinned model ID are equal.
+- The SDK configuration hash equals the pinned configuration hash.
+- The usage carries its dispatch message ID.
+
+The contract returns `TrustedAzureByokUsage`, which records the receipt ID,
+runtime instance, registration revision, dispatch ID, deployment ID, pinned
+configuration revision and hash, and receipt payload hash.
+
+`RuntimeUsageSourceReceiptContract.RequireAzureByokProvenance` applies the same
+source checks without the dispatch message ID. Events applies this check to every
+receipt that claims Azure BYOK and rejects a failed claim with
+`runtime_byok_azure_provenance_invalid`. Usage from an untrusted producer never
+enters the ledger. Native SDK usage that has no dispatch message ID passes this
+check and is recorded as `Unpriced`. Only usage that passes
+`RequireTrustedAzureByok` can be priced. Azure pricing is off until `EventsAndSessions:Cost:Azure`
+supplies an explicit rate card; until then admitted Azure BYOK usage is recorded
+as `Unpriced`. Non-Azure BYOK usage is `Unpriced` with `byok-provider-unpriced`.
+Provisioned-throughput usage stays `Unpriced` per event.
+`AzureProvisionedThroughputAllocator.Allocate` returns a report-only allocation
+of a fixed period charge whose shares add up to the charge exactly.
+
+`UsageSpendEvidenceContract` defines the represented-spend read. A
+`UsageSpendEvidenceRequest` names one meter source and unit, an optional
+`UsageSpendPeriod` (inclusive start, exclusive end), and at most 64 unique,
+lowercase dispatch GUIDs. `UsageSpendEvidence` returns `UsageSpendTotal` values
+for the run and the period, one dispatch witness per requested dispatch, and an
+`AccountingCursor` that never decreases between reads. Every witness watermark
+equals the cursor. Events never reports `SourceComplete`; callers compare witness
+receipts with their own completion manifest. `ValidateEvidence` rejects any
+response that does not match its request.
+
+A request can also name an `AgentId`. The evidence then includes an `Agent`
+total for that agent in the run. Dispatch witnesses match dispatches from any run
+in the project, because project budgets hold exposure for other runs.
+
+`SpendBudgetContract` defines spend budgets. A `SpendBudget` has a `BudgetId`, a
+`Revision`, a `Scope` (`project`, `run`, or `agent`), a meter source and unit, an
+optional `SoftLimit`, an optional `HardLimit`, and a positive
+`ReservePerDispatch`. Agent budgets name an `AgentId`. Project budgets name an
+explicit `Period` with an inclusive start and exclusive end. The soft limit
+can't exceed the hard limit, and one configuration layer can't have two budgets
+for the same bucket. `CurrentProjectSpendBudgets` returns the current project
+budgets with the project and platform revisions that produced them.
 
 ## Gateway API and server-sent events
 
@@ -456,6 +503,8 @@ caller cannot submit a resource pin or override the durable binding.
 | `POST /api/projects/{projectId}/runs/{runId}/start` | Run-bound and bodyless. Locks the saved request, accepts the root session, and delivers the saved first message as a root-to-root addressed message with key `{runId}:first`. The owner accepts this self-addressed message only when its payload matches the saved request. Returns `200` with `started`; a replay does not deliver again. |
 | `POST /api/projects/{projectId}/runs/{runId}/cancel` | Requires a token not bound to a run and fresh Projects `cancelRun` permission from a Contributor, Owner, or tenant admin; Viewer receives `403`. Requires one `Idempotency-Key` and accepts an optional `reason`. For an accepted run, advances the fence, sets `cancelled_at` and `completed_at`, and cancels active sessions. Pending requests are cancelled without root admission. Saves a caller-scoped receipt and `orchestrator.run.cancelled` event atomically. A finished run returns `200` with `alreadyTerminal: true` without mutation or another event. |
 | `GET /api/projects/{projectId}/runs` | List accepted runs in the project, newest first, as a `ProjectRunPage`. The caller needs `api.read`, both Orchestrator and Projects audiences, and current project or tenant read permission from Projects & Config. A run-bound token sees only its own run. The keyset cursor is opaque and bound to the query. A state filter is applied to each run's derived state, so a selective filter can read many older runs before it fills a page. Each `ProjectRunSummary` reports the run ID, root session ID, derived state, timestamps, `completedAt`, and the accepting actor as `startedBy`. |
+| `GET /api/projects/{projectId}/source-control/issues` | List synced repository issues from the project backlog as a `ProjectIssuePage`, with no provider call. The caller needs `api.read` and current project or tenant `readProjects`; run-bound tokens are rejected. `state` is `open` (default), `closed`, or `all`. Each `ProjectIssueSummary` reports the task ID and backlog state, provider, repository, issue number, stored title and state, and task timestamps. It has no issue URL or author because the backlog doesn't store them. |
+| `GET /api/projects/{projectId}/source-control/pull-requests` | List pull requests that project runs created or reused, as a `ProjectPullRequestPage`, with no provider call. Authority matches the run list; a run-bound token sees only its run's records. `state` is `open` (default), `closed`, `merged`, or `all`. Each `ProjectPullRequestSummary` reports the provider, repository, number, recorded title and state, URL, head and base branch and commit, `runId`, `disposition` (`created` or `reused`), `recordedAt`, and `updatedAt`. `coverage.recordedSince` is when migration 032 was applied, and `coverage.includesEarlierPullRequests` is always `false`. Before migration 032 is applied, the route returns `503 pull_request_records_unavailable`. |
 | `/api/chief-of-staff/conversations` and `/api/chief-of-staff/priorities` | Caller-private Chief of Staff records in Orchestrator migration 024. Requires `api.read`, both audiences, and a token that is not bound to a project or run. Each call reads fresh Projects authority, filters rows by tenant, issuer, and subject, and redacts conversations and links in projects the caller can no longer read to `access: unavailable`. A conversation binds a `project_run_requests` row that the caller created; it holds no message content. Priorities use per-item `revision` and list `orderRevision` checks, and create requires one `Idempotency-Key`. Links store owner identity only. Reads resolve run and conversation links to the derived run state and report issue, pull request, and artifact state as `unavailable`. No route writes `accepted_runs`, `project_run_requests`, sessions, or gates. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/root` | Accept the root session for the current accepted run selection and register it with Events & Sessions. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/decisions` | Read the current typed decision state and pending gate without exposing a transferable authorization or provider pin. |
@@ -1059,6 +1108,7 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 | `GET /api/authorization/context` | Versioned current effective permission context, filtered by the validated audience, `api.read` scope, purpose, optional tenant selector, and project/run bindings. Returns `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}?runId={runId}` | Read project metadata for an exactly matching run-bound token after fresh current `ReadProjects` authorization. Purpose-bound, unbound, or mismatched tokens and duplicate/unknown query parameters are denied; the response is `Cache-Control: no-store`. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, enabled only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. It requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the active project, current actor membership, active Orchestrator assignment, exact project/run token binding, and matching run selection. |
+| `GET /api/projects/{projectId}/runs/{runId}/spend-budgets` | Orchestrator-only read of `CurrentProjectSpendBudgets`. Requires `api.read`, the Orchestrator scope and current role, an exact project/run binding, and an accepted run selection. Resolves project-scope budgets from the current project and platform revisions, so a changed project budget applies to the next dispatch of every run. Returns `Cache-Control: no-store`. |
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
 

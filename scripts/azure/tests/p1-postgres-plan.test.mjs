@@ -94,13 +94,15 @@ test('Only the existing casting authority function receives direct runtime EXECU
     ['projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)']);
 });
 
-// Migrations 023, 024, 025, and 030 must be reviewed together with their exact runtime grants, never applied by these checks.
-test('Core plan includes all 26 registered versions but never 017; source approval is not execution permission', () => {
+// Migrations 023 through 030 must be reviewed together with their exact runtime grants, never applied by these checks.
+test('Core plan includes all 29 registered versions but never 017; source approval is not execution permission', () => {
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 30]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'user_notification_dismissals').privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
+    .find(table => table.table === 'guardrails_evaluations').privileges, ['SELECT', 'INSERT']);
   for (const name of ['backlog_plan_promotions', 'backlog_task_origins'])
     assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
       .find(table => table.table === name).privileges, ['SELECT', 'INSERT']);
@@ -136,12 +138,9 @@ test('Initializer validates planned and installed mutation guards before it comm
   assert.ok(source.includes("has_column_privilege(@role, @table, @column, 'UPDATE')"));
   assert.doesNotMatch(source, /plan\.Services\.Any\(service => service\.Tables\.Any\(table => table\.MutationDenialRequired\)\)/);
   assert.doesNotMatch(source, /One-column row-lock grants still require reviewed mutation-denial source/);
-  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21,\\s*22,\\s*23,\\s*24,\\s*25,\\s*26,\\s*30\\]\\)'));
-  assert.ok(source.includes('21 => \\"row_lock_record_updates\\"'));
-  assert.ok(source.includes('22 => \\"run_list_completion\\"'));
-  assert.ok(source.includes('23 => \\"project_run_requests\\"'));
-  assert.ok(source.includes('24 => \\"chief_of_staff\\"'));
-  assert.ok(source.includes('30 => \\"backlog_task_origin\\"'));
+  // The plan catalog is compared with the compiled migrators, not regex-pinned source text.
+  assert.doesNotMatch(source, /Enumerable\\\\\.Range\\\\\(1/);
+  assert.ok(source.includes('InitializerChecks.AssertMigrationCatalog(plan.CoreVersions, CoordinationOwnerMigrator.SupportedVersions,'));
 });
 
 // Both owner catalogs must agree with the separately reviewed initializer plan.
@@ -165,21 +164,27 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       : [...source.matchAll(/^\s*(\d+) => "Agentweaver\.EventsAndSessions\.Migrations\.([^"]+)",$/gm)]
         .map(match => [Number(match[1]), match[2]]);
     assert.deepEqual(mappings.map(([version]) => version), versions);
-    assert.deepEqual(embedded, mappings.map(([, filename]) => filename));
+    // Orchestrator 032 is embedded for its explicit, separately approved apply path only.
+    const optional = owner.startsWith('orchestrator/') ? ['032_source_control_pull_request_records.sql'] : [];
+    for (const filename of optional) assert.ok(embedded.includes(filename));
+    assert.deepEqual(embedded.filter(filename => !optional.includes(filename)),
+      mappings.map(([, filename]) => filename));
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 30])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
       assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(23) && !applied.Contains(22))'));
       assert.ok(source.includes('(applied.Contains(24) && !applied.Contains(23))'));
+      assert.ok(source.includes('(applied.Contains(29) && !applied.Contains(28))'));
       assert.ok(!source.includes('if (!applied.Contains(21))'));
       const allowed = source.match(/WHERE version NOT IN \(([\d, ]+)\)/);
-      assert.deepEqual(allowed[1].split(',').map(Number), versions);
+      assert.deepEqual(allowed[1].split(',').map(Number), [...versions, 32]);
       assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
-      assert.ok(source.includes('Enumerable.Range(57, 32)'));
+      assert.ok(source.includes('(applied.Contains(30) && !applied.Contains(26))'));
+      assert.ok(source.includes('Enumerable.Range(57, 42)'));
     } else {
       assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));
       assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));
@@ -191,17 +196,18 @@ test('Current source catalog preserves exact Core and Events versions and embedd
   }
 });
 
-// The initializer must reject a plan or source that omits the new Events index migration.
-test('Initializer requires the reviewed Events project usage migration and exact plan versions', () => {
+// The initializer derives Core and Events versions from the plan and the compiled migrator catalogs.
+test('Initializer binds exact plan versions to compiled migrator catalogs and approved maxima', () => {
   const source = readFileSync(new URL('../../../tools/P1PostgresInitializer/Program.cs', import.meta.url), 'utf8');
-  assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));
-  assert.ok(source.includes('009_project_usage_index.sql'));
-  assert.ok(source.includes('plan.EventsVersions.SequenceEqual(Enumerable.Range(1, 9))'));
+  assert.ok(!source.includes('private const int CurrentSchemaVersion = 9;'));
+  assert.ok(source.includes('InitializerChecks.AssertMigrationCatalog(plan.EventsVersions, EventsAndSessionsMigrator.SupportedVersions,'));
+  assert.ok(source.includes('maxEventsVersion, "Events")'));
+  assert.ok(source.includes('maxCoreVersion, "Core/Orchestrator")'));
 });
 
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 104);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 109);
   const orchestrator = plan.services.find(service => service.schema === 'orchestrator');
   assert.deepEqual(orchestrator.tables.find(table => table.table === 'project_run_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
@@ -214,8 +220,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     ['chief_of_staff_priority_links', ['SELECT', 'INSERT', 'DELETE']],
   ])
     assert.deepEqual(orchestrator.tables.find(item => item.table === table).privileges, privileges);
-  assert.deepEqual(plan.services.map(service => service.functions.length), [4, 0, 4, 4, 17]);
-  assert.equal(plan.services.flatMap(service => service.functions).length, 29);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [4, 0, 4, 4, 21]);
+  assert.equal(plan.services.flatMap(service => service.functions).length, 33);
   const projectSetupGuard = plan.services
     .find(service => service.schema === 'projects_config')
     ?.functions.find(item => item.signature === 'reject_project_setup_operation_mutation()');
