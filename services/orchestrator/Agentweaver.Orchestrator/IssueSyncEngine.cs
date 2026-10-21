@@ -35,6 +35,8 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
                 await store.SetStatusAsync(project, "running", null, page, cursor, ct);
                 var minted = await authority.MintAsync(project.Settings.GrantId, ct);
                 RequireGrant(project, minted.Grant);
+                if (string.IsNullOrWhiteSpace(minted.AccessToken) || minted.ExpiresAt <= time.GetUtcNow())
+                    throw new CoordinationException("issue_sync_credential_invalid", 403);
                 credential = new(minted.AccessToken, minted.ExpiresAt, time);
                 var candidateResult = resolver.Resolve(new(ProviderSeam.SourceControl, null,
                     new Version(1, 0, 0), GitHubSourceControlAdapter.CurrentOptionsSchemaVersion,

@@ -4,11 +4,11 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Projects.Config;
 
-internal static class IssueSyncAuthorityEndpoints
+public static class IssueSyncAuthorityEndpoints
 {
     internal const string Channel = "IssueSyncIdentity";
 
-    internal static void MapIssueSyncAuthority(this WebApplication app, bool internalEnabled)
+    public static void MapIssueSyncAuthority(this IEndpointRouteBuilder app, bool internalEnabled)
     {
         app.MapGet("/api/projects/{projectId}/issue-sync-owner", async (
             string projectId, HttpContext context, ProjectAuthorizationOwner owner,

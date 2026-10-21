@@ -102,6 +102,8 @@ internal static class IssueSyncGrantEndpoints
         { await Error(context, "issue_sync_app_key_unavailable", 503); }
         catch (HttpRequestException)
         { await Error(context, "issue_sync_authority_unavailable", 503); }
+        catch (System.Text.Json.JsonException)
+        { await Error(context, "issue_sync_authority_response_invalid", 503); }
         catch (ArgumentException)
         { await Error(context, "issue_sync_request_invalid", 400); }
     }

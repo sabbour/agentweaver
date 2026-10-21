@@ -17,6 +17,11 @@ schema CREATE or authority function EXECUTE is granted. These database grants,
 the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
+The offline plan hash for this source catalog is
+`56a75908221d48a1ea62660fadded26eec136fc1a9a4f7b26ef9904e140f17aa`.
+It is not an approval receipt. The runner uses its explicit registered version
+list, not contiguous numbering; the absent 017 and 022-025 do not require
+placeholders. Version 027 requires 026 only.
 
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
 open/closed lifecycle and a unique repository issue identity. It takes an

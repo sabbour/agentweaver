@@ -232,6 +232,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                     endpoints.MapProjectConfigEndpoints(
                         enableBrokerRunBinding: brokerRunBindingAudience is not null);
                     endpoints.MapSkillContentEndpoints();
+                    endpoints.MapIssueSyncAuthority(internalEnabled: false);
                 });
             });
         }).StartAsync();
