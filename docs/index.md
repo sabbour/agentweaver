@@ -38,6 +38,7 @@ Azure environment is deployed.
 | [Web client](./guide/web-client.md) | Configure the browser client and its authentication flow. |
 | [Identity Broker scopes](./guide/identity-scopes.md) | Understand the permissions shown on the Broker consent screen. |
 | [Testing](./guide/testing.md) | Run the relevant test suites and interpret their limits. |
+| [Plan issues and releases](./guide/release-planning.md) | Label work, choose version milestones and reconcile shipped changes. |
 | [Azure acceptance](./guide/azure-acceptance.md) | Prepare and verify approved Azure acceptance checks. |
 
 ## Reference

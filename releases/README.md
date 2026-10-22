@@ -1,5 +1,10 @@
 # Foundation release composition (schema version 1)
 
+For issue labels, version milestones and post-publication reconciliation,
+follow [Plan issues and releases](../docs/guide/release-planning.md).
+Those planning records do not replace the component changesets, manifest or
+source-bound publication and acceptance evidence described below.
+
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
 It tracks the current prepared source versions for 23 product components:
 13 packages and 10 service images, plus the separate acceptance-only

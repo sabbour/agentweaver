@@ -32,6 +32,8 @@ rendering the source does not deploy a platform.
 ## Test and accept
 
 - [Testing](./testing.md): run tests and interpret exactly what they prove.
+- [Plan issues and releases](./release-planning.md): label work, choose
+  version milestones and reconcile publication and acceptance evidence.
 - [Environment Sandbox testing](./environment-sandbox-testing.md): run
   controlled lifecycle and provider tests.
 - [Azure acceptance](./azure-acceptance.md): verify the deployed foundation
