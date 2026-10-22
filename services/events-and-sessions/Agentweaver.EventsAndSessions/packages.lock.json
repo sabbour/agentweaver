@@ -343,13 +343,13 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.objectstore.azureblob": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
           "Azure.Storage.Blobs": "[12.26.0, )"
         }
       },
@@ -362,7 +362,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.telemetry": {
