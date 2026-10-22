@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { DB_MAINTENANCE_TARGET } from '../lib/db-maintenance.mjs';
-import { SETUP_TARGET, parseSetupArgs, readSetupState, runDbMaintenanceSetup, setupScopes } from '../lib/db-maintenance-setup.mjs';
+import { SETUP_TARGET, parseSetupArgs, readSetupState, runDbMaintenanceSetup, setupScopes,
+  workflowAuthorizationResources } from '../lib/db-maintenance-setup.mjs';
 
 const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
 const fail = (stderr = 'failed', status = 1) => ({ status, stdout: '', stderr });
@@ -14,17 +15,20 @@ const environmentPath = `repos/${SETUP_TARGET.repository}/environments/${SETUP_T
 const allRoles = [
   { role: 'Reader', scope: scopes.resourceGroup },
   { role: 'Azure Kubernetes Service Cluster User Role', scope: scopes.cluster },
-  { role: `Agentweaver DB Maintenance Kubernetes (${DB_MAINTENANCE_TARGET.resourceGroup})`, scope: scopes.namespace },
 ];
 
 /**
  * A fake Azure and GitHub. complete=true starts fully set up. The Bicep deployment creates the
- * identity, credential, and roles; gh calls create the environment, branch rule, and variable.
+ * identity, credential, and Azure roles; kubectl applies namespace RBAC; gh creates the environment.
  */
-function world({ complete = false, accountType = 'user', admin = 'true', extraRule, prepare = {} } = {}) {
+function world({ complete = false, accountType = 'user', admin = 'true', extraRule, prepare = {},
+  authorization = { azureRbac: true, kubernetesRbac: true } } = {}) {
+  const resources = complete ? workflowAuthorizationResources(PRINCIPAL_ID) : [];
   const live = complete
-    ? { identity: true, roles: [...allRoles], environment: true, rules: [{ name: 'v1', type: 'branch' }], variable: CLIENT_ID }
-    : { identity: false, roles: [], environment: false, rules: [], variable: undefined };
+    ? { identity: true, roles: [...allRoles], environment: true, rules: [{ name: 'v1', type: 'branch' }], variable: CLIENT_ID,
+      kubernetesResources: new Map(resources.map(resource =>
+        [`${resource.kind.toLowerCase()}/${resource.metadata.name}`, structuredClone(resource)])) }
+    : { identity: false, roles: [], environment: false, rules: [], variable: undefined, kubernetesResources: new Map() };
   if (extraRule) live.rules.push(extraRule);
   const calls = [];
   const runnerCalls = [];
@@ -35,6 +39,8 @@ function world({ complete = false, accountType = 'user', admin = 'true', extraRu
     if (command === 'az') {
       if (args[0] === 'account') return ok(JSON.stringify({ id: DB_MAINTENANCE_TARGET.subscriptionId,
         tenantId: DB_MAINTENANCE_TARGET.tenantId, user: { name: 'admin@example.test', type: accountType } }));
+      if (args[0] === 'aks' && args[1] === 'show') return ok(JSON.stringify(authorization));
+      if (args[0] === 'aks' && args[1] === 'get-credentials') return ok();
       if (args[0] === 'group') return ok('{}');
       if (args[0] === 'identity' && args[1] === 'federated-credential')
         return ok(JSON.stringify(live.identity ? [{ issuer: SETUP_TARGET.githubIssuer, audiences: ['api://AzureADTokenExchange'],
@@ -48,6 +54,22 @@ function world({ complete = false, accountType = 'user', admin = 'true', extraRu
       if (args[0] === 'deployment') {
         Object.assign(live, { identity: true, roles: [...allRoles] });
         return ok(JSON.stringify({ name: SETUP_TARGET.identity, clientId: CLIENT_ID, principalObjectId: PRINCIPAL_ID }));
+      }
+    }
+    if (command === 'kubelogin') return ok();
+    if (command === 'kubectl') {
+      const actionIndex = args.findIndex(arg => ['apply', 'get'].includes(arg));
+      const action = args[actionIndex];
+      if (action === 'apply') {
+        const resource = JSON.parse(settings.input);
+        live.kubernetesResources.set(`${resource.kind.toLowerCase()}/${resource.metadata.name}`, resource);
+        return ok(JSON.stringify(resource));
+      }
+      if (action === 'get') {
+        const kind = args[actionIndex + 1];
+        const name = args[actionIndex + 2];
+        const resource = live.kubernetesResources.get(`${kind}/${name}`);
+        return resource ? ok(JSON.stringify(resource)) : fail(`Error from server (NotFound): ${kind} "${name}" not found.`);
       }
     }
     if (command === 'gh') {
@@ -105,13 +127,57 @@ test('execute creates only what is missing, then verifies it', async () => {
   const receipt = await runDbMaintenanceSetup(parseSetupArgs(['--execute']), fake.deps);
   assert.equal(receipt.result, 'succeeded');
   assert.deepEqual(receipt.steps.map(step => step.name),
-    ['accounts-verified', 'p1-prepared', 'workflow-identity-deployed', 'github-environment-ready', 'setup-verified']);
+    ['accounts-verified', 'p1-prepared', 'workflow-identity-deployed', 'workflow-kubernetes-authorization-applied',
+      'github-environment-ready', 'setup-verified']);
   assert.equal(fake.runnerCalls[0].execute, true);
   assert.equal(fake.live.variable, CLIENT_ID);
   assert.deepEqual(fake.live.rules, [{ name: 'v1', type: 'branch' }]);
+  assert.deepEqual(fake.live.roles, allRoles);
+  const applied = fake.calls.filter(call => call.command === 'kubectl' && call.args.includes('apply'))
+    .map(call => JSON.parse(call.settings.input));
+  assert.deepEqual(applied, workflowAuthorizationResources(PRINCIPAL_ID));
   const deploy = fake.calls.find(call => call.args[0] === 'deployment');
   assert.ok(deploy.args.includes(SETUP_TARGET.template));
   assert.ok(deploy.args.includes(`sourceSha=${'b'.repeat(40)}`));
+});
+
+test('setup verifies both AKS authorization modes before changing the workflow identity', async () => {
+  const fake = world({ authorization: { azureRbac: false, kubernetesRbac: true } });
+  await assert.rejects(runDbMaintenanceSetup(parseSetupArgs(['--execute']), fake.deps),
+    /both Azure RBAC for Kubernetes and Kubernetes RBAC enabled/);
+  const authorizationCall = fake.calls.find(call => call.command === 'az' && call.args[0] === 'aks' && call.args[1] === 'show');
+  assert.equal(authorizationCall.args[authorizationCall.args.indexOf('--query') + 1],
+    '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac}');
+  assert.ok(!fake.calls.some(call => call.command === 'az' && call.args[0] === 'deployment'));
+  assert.ok(!fake.calls.some(call => call.command === 'kubectl' && call.args.includes('apply')));
+});
+
+test('AKS source enables both authorization modes used by setup', () => {
+  const source = readFileSync('infra/bicep/modules/aks.bicep', 'utf8');
+  assert.match(source, /enableRBAC:\s*true/);
+  assert.match(source, /enableAzureRBAC:\s*true/);
+});
+
+test('namespace Role grants only maintenance verbs and binds the workflow object ID', () => {
+  const [role, binding] = workflowAuthorizationResources(PRINCIPAL_ID);
+  assert.equal(role.metadata.namespace, DB_MAINTENANCE_TARGET.namespace);
+  assert.deepEqual(role.rules, [
+    { apiGroups: ['batch'], resources: ['jobs'], verbs: ['create', 'delete', 'get', 'list', 'watch'] },
+    { apiGroups: [''], resources: ['pods'], verbs: ['get', 'list'] },
+    { apiGroups: [''], resources: ['pods/log'], verbs: ['get'] },
+    { apiGroups: [''], resources: ['configmaps'], verbs: ['create', 'get', 'patch'] },
+    { apiGroups: [''], resources: ['serviceaccounts'], verbs: ['create', 'get', 'patch'] },
+    { apiGroups: ['coordination.k8s.io'], resources: ['leases'], verbs: ['create', 'delete', 'get'] },
+    { apiGroups: ['cilium.io'], resources: ['ciliumnetworkpolicies'], verbs: ['create', 'get', 'patch'] },
+    { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['orchestrator', 'events-and-sessions'],
+      verbs: ['get', 'list', 'patch', 'watch'] },
+  ]);
+  assert.deepEqual(binding.subjects, [{
+    kind: 'User', name: PRINCIPAL_ID, apiGroup: 'rbac.authorization.k8s.io',
+  }]);
+  assert.deepEqual(binding.roleRef, {
+    kind: 'Role', name: SETUP_TARGET.kubernetesRole, apiGroup: 'rbac.authorization.k8s.io',
+  });
 });
 
 test('a rerun on a complete setup deploys nothing and adds no branch rule', async () => {
@@ -140,19 +206,26 @@ test('state reads count a role only at its exact scope', () => {
   assert.deepEqual(state.gaps, ['Role "Reader" is not assigned at the resourceGroup scope.']);
 });
 
-test('the workflow identity template trusts only the v1-db-maintenance environment and grants namespace-scoped rights', () => {
+test('the workflow identity template trusts its environment and creates no Azure custom role', () => {
   const source = readFileSync('infra/bicep/db-maintenance-ci-identity.bicep', 'utf8');
   assert.match(source, /token\.actions\.githubusercontent\.com/);
   assert.match(source, /repo:\$\{githubRepository\}:environment:\$\{githubEnvironment\}/);
-  assert.doesNotMatch(source, /Microsoft\.ContainerService\/managedClusters\/[^']*\/\*/);
-  assert.doesNotMatch(source, /pods\/exec|secrets|roleAssignments\/write|deployments\/delete/);
+  assert.doesNotMatch(source, /resource\s+\w+\s+'Microsoft\.Authorization\/roleDefinitions@/);
+  assert.match(source, /resource readerAssignment 'Microsoft\.Authorization\/roleAssignments/);
+  assert.match(source, /resource clusterUserAssignment 'Microsoft\.Authorization\/roleAssignments/);
   const result = spawnSync('az', ['bicep', 'build', '--file', 'infra/bicep/db-maintenance-ci-identity.bicep', '--stdout'],
     { encoding: 'utf8', shell: process.platform === 'win32' });
-  // The Bicep CLI is optional offline; when present the compiled scope must be the namespace.
+  // The Bicep CLI is optional offline; when present verify it compiles to Azure role assignments only.
   if (result.error || result.status !== 0) return;
-  const flat = JSON.stringify(JSON.parse(result.stdout));
-  assert.match(flat, /Microsoft\.ContainerService\/managedClusters\/namespaces/);
-  assert.match(flat, /Microsoft\.ManagedIdentity\/userAssignedIdentities\/federatedIdentityCredentials/);
+  const template = JSON.parse(result.stdout);
+  assert.ok(template.resources.every(resource => resource.type !== 'Microsoft.Authorization/roleDefinitions'));
+  assert.deepEqual(template.resources.filter(resource => resource.type === 'Microsoft.Authorization/roleAssignments')
+    .map(resource => resource.properties.roleDefinitionId).sort(), [
+      "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('clusterUserRoleId'))]",
+      "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('readerRoleId'))]",
+    ].sort());
+  assert.ok(template.resources.some(resource =>
+    resource.type === 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials'));
 });
 
 test('the workflow uses the variable and environment that setup creates', () => {

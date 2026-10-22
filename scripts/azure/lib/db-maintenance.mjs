@@ -60,19 +60,27 @@ const LOCKED_PROJECTS = [
   join('tools', 'IdentityPostgresTcpProxy', 'IdentityPostgresTcpProxy.csproj'),
 ];
 const PERMISSIONS = [
-  ['create', 'jobs'], ['get', 'jobs'], ['delete', 'jobs'],
+  ['create', 'jobs'], ['get', 'jobs'], ['delete', 'jobs'], ['list', 'jobs'], ['watch', 'jobs'],
   ['get', 'pods'], ['list', 'pods'], ['get', 'pods', 'log'],
   ['create', 'leases.coordination.k8s.io'], ['get', 'leases.coordination.k8s.io'],
   ['delete', 'leases.coordination.k8s.io'],
   ['get', 'configmaps'], ['create', 'configmaps'], ['patch', 'configmaps'],
   ['get', 'serviceaccounts'], ['patch', 'serviceaccounts'], ['create', 'serviceaccounts'],
   ['get', 'ciliumnetworkpolicies.cilium.io'], ['patch', 'ciliumnetworkpolicies.cilium.io'],
-  ['create', 'ciliumnetworkpolicies.cilium.io'], ['get', 'deployments.apps'],
+  ['create', 'ciliumnetworkpolicies.cilium.io'],
+  ...['orchestrator', 'events-and-sessions'].flatMap(name => [
+    ['get', 'deployments.apps', undefined, name], ['list', 'deployments.apps', undefined, name],
+    ['watch', 'deployments.apps', undefined, name],
+  ]),
 ];
 // Apps-only needs the lock, the two Deployments, and the state ConfigMap for roll-forward.
 const APP_PERMISSIONS = [
   ['create', 'leases.coordination.k8s.io'], ['get', 'leases.coordination.k8s.io'],
-  ['delete', 'leases.coordination.k8s.io'], ['get', 'deployments.apps'], ['patch', 'deployments.apps'],
+  ['delete', 'leases.coordination.k8s.io'],
+  ...['orchestrator', 'events-and-sessions'].flatMap(name => [
+    ['get', 'deployments.apps', undefined, name], ['list', 'deployments.apps', undefined, name],
+    ['watch', 'deployments.apps', undefined, name], ['patch', 'deployments.apps', undefined, name],
+  ]),
   ['get', 'configmaps'], ['create', 'configmaps'], ['patch', 'configmaps'],
 ];
 // Each Job: its kustomize name, the image, and the plan field whose versions its marker must report.
@@ -520,12 +528,19 @@ export async function runDbMaintenance(options, overrides = {}) {
     // the workflow's federated login alike.
     must(exec('kubelogin', ['convert-kubeconfig', '--login', 'azurecli', '--kubeconfig', kubeconfig]),
       'Could not configure kubelogin');
+    // The Role restricts Deployment access by name, so preflight each target with the same name.
     const required = options.appsOnly ? APP_PERMISSIONS
-      : options.deployApps ? [...PERMISSIONS, ['patch', 'deployments.apps']] : PERMISSIONS;
-    const missing = required.filter(([verb, resource, sub]) => kubectl(
-      ['auth', 'can-i', verb, sub ? `${resource}/${sub}` : resource]).stdout.trim() !== 'yes');
+      : options.deployApps ? [...PERMISSIONS, ...['orchestrator', 'events-and-sessions']
+        .map(name => ['patch', 'deployments.apps', undefined, name])] : PERMISSIONS;
+    const missing = required.filter(([verb, resource, sub, resourceName]) => {
+      const target = sub ? `${resource}/${sub}` : resource;
+      // kubectl auth can-i uses TYPE/NAME to match the Role's resourceNames rule.
+      const args = ['auth', 'can-i', verb, resourceName ? `${target}/${resourceName}` : target];
+      return kubectl(args).stdout.trim() !== 'yes';
+    });
     if (missing.length)
-      throw new Error(`Missing Kubernetes permissions: ${missing.map(entry => entry.join(' ')).join(', ')}`);
+      throw new Error(`Missing Kubernetes permissions: ${missing.map(([verb, resource, sub, resourceName]) =>
+        `${verb} ${resourceName ? `${resource}/${resourceName}` : sub ? `${resource}/${sub}` : resource}`).join(', ')}`);
     step('cluster-access-verified');
 
     // 5. Templates render and match the reviewed shape.

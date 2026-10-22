@@ -72,8 +72,23 @@ writes a receipt:
 | Part | What it creates |
 | --- | --- |
 | P1 migration identity | The identity, its federated credential, its ServiceAccount and egress policy, and the schema ownership handover. It reuses the runner in `--prepare-only` mode, with the same preflight, lock, cleanup, and receipt. |
-| Workflow identity | `infra/bicep/db-maintenance-ci-identity.bicep`: the identity `agentweaver-id-db-maintenance`, a federated credential for the GitHub environment `v1-db-maintenance`, Reader on the resource group, AKS Cluster User on the cluster, and a custom Kubernetes role scoped to the `agentweaver` namespace. |
+| Workflow identity | `infra/bicep/db-maintenance-ci-identity.bicep` creates `agentweaver-id-db-maintenance`, its federated credential for `v1-db-maintenance`, Reader on the resource group, and AKS Cluster User on the cluster. Setup applies a Kubernetes Role and RoleBinding in the `agentweaver` namespace. |
 | GitHub environment | The environment `v1-db-maintenance`, limited to the `v1` branch, and its variable `AZURE_DB_MAINTENANCE_CLIENT_ID`. |
+
+The AKS template enables both Azure RBAC and Kubernetes RBAC, and setup checks
+that both are enabled before it continues. The built-in AKS RBAC Writer role
+covers standard resources such as Jobs, Deployments, pod logs, and ConfigMaps,
+but it also grants access to Secrets and lets the identity run Pods as any
+ServiceAccount in the namespace. It also does not grant access to the Cilium
+network-policy resource that the runner checks. Instead, setup applies a
+Kubernetes Role with only the verbs the runner needs, including access to that
+Cilium resource. Deployment access is limited by name to `orchestrator` and
+`events-and-sessions`. The RoleBinding names the workflow identity's object ID.
+This uses both AKS authorization models without creating an Azure custom role
+definition. Setup reads the Role and RoleBinding back to verify their exact
+permissions and identity. It never removes the workflow identity, Azure
+assignments, Role, or RoleBinding, so a failed setup can be checked and safely
+rerun.
 
 Run the setup with the Azure CLI signed in as the PostgreSQL Entra
 administrator, with the right to assign roles in the `agentweaver` resource
