@@ -31,6 +31,7 @@ function ownerChoices(): ProjectConfigurationChoices {
         { reference: 'platform-model', sources: ['platformDefault'] },
         { reference: 'planner', sources: ['platformTask'] },
       ],
+      savedReferences: [],
     },
     providers: {
       projectOverridesSupported: false,
@@ -130,14 +131,26 @@ describe('readable project configuration', () => {
     expect((onChange.mock.calls[1][0] as ProjectConfiguration).modelSelection).toEqual(saved);
   });
 
-  it('uses free-text model entry with explicit fallback messaging when choices are unavailable', () => {
+  it('reports the missing model capability catalog and lists saved references as unverified', () => {
     const configuration = fixture();
     const unavailable = ownerChoices();
     unavailable.models.state = 'unavailable';
-    unavailable.models.unavailableReason = 'platform_runtime_unconfigured';
+    unavailable.models.unavailableReason = 'model_capability_catalog_unavailable';
+    unavailable.models.choices = [];
+    unavailable.models.reasoningEfforts = [];
+    unavailable.models.savedReferences = [
+      { reference: 'model-default', sources: ['projectSaved'] },
+      { reference: 'platform-model', sources: ['platformDefault'] },
+    ];
     render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={unavailable} part="models" />);
-    expect(screen.getByText(/platform runtime defaults are not configured/)).toBeTruthy();
+    expect(screen.getByText(/project service has no model capability catalog yet/)).toBeTruthy();
+    expect(screen.getByText(/not verified until a run starts/)).toBeTruthy();
+    expect(screen.getByText('Saved model references (not verified as eligible)')).toBeTruthy();
+    expect(screen.getByText('model-default (projectSaved)')).toBeTruthy();
+    expect(screen.getByText('platform-model (platformDefault)')).toBeTruthy();
+    // Saved references never become selectable choices.
     expect(screen.getByLabelText('Default model reference').tagName).toBe('INPUT');
+    expect(screen.getByLabelText('Planning model').tagName).toBe('INPUT');
 
     const failedRender = render(<ConfigurationFields configuration={configuration} onChange={vi.fn()}
       choicesError part="models" />);

@@ -918,13 +918,29 @@ else if (route.OperationId is
             ("projectId", Str()), ("projectConfigurationRevision", Int()), ("platformRuntimeRevision", Int()),
             ("models", Ref("ProjectModelChoices")), ("providers", Ref("ProjectProviderChoices"))),
         ["ProjectModelChoices"] = Obj(
-            ["state", "unavailableReason", "runtimeEligibility", "reasoningEfforts", "defaultReasoningEffort", "choices"],
+            ["state", "unavailableReason", "runtimeEligibility", "reasoningEfforts", "defaultReasoningEffort", "choices", "savedReferences"],
             ("state", Enum("available", "unavailable")),
-            ("unavailableReason", Nullable(Enum("platform_runtime_unconfigured"))),
+            ("unavailableReason", Nullable(Enum("model_capability_catalog_unavailable"))),
             ("runtimeEligibility", Enum("verifiedAtRunStart")),
-            ("reasoningEfforts", Arr(Enum("low", "medium", "high", "xhigh"))),
+            ("reasoningEfforts", new
+            {
+                type = "array",
+                items = Enum("low", "medium", "high", "xhigh"),
+                description = "Owner-admitted supported reasoning efforts. Empty while state is unavailable.",
+            }),
             ("defaultReasoningEffort", Enum("low", "medium", "high", "xhigh")),
-            ("choices", Arr(Ref("ProjectModelReferenceChoice")))),
+            ("choices", new
+            {
+                type = "array",
+                items = Ref("ProjectModelReferenceChoice"),
+                description = "Owner-admitted eligible model references. Empty while state is unavailable.",
+            }),
+            ("savedReferences", new
+            {
+                type = "array",
+                items = Ref("ProjectModelReferenceChoice"),
+                description = "References already saved in platform or project configuration. Saved does not mean eligible; the runtime verifies each reference when a run starts.",
+            })),
         ["ProjectModelReferenceChoice"] = Obj(["reference", "sources"],
             ("reference", Str()),
             ("sources", Arr(Enum("platformDefault", "platformTask", "platformRole", "platformAgent", "projectSaved")))),
@@ -1160,13 +1176,13 @@ else if (route.OperationId is
             {
                 type = "array",
                 items = Ref("ProjectProviderOverride"),
-                description = "Project provider overrides are unsupported. Writes must be empty or unchanged legacy values; run selection ignores stored overrides.",
+                description = "Project provider overrides are unsupported. Writes must send an empty array; any non-empty value returns 400. The owner keeps legacy stored values unchanged, and run selection ignores them.",
             }),
             ("orderedProviderOverrides", new
             {
                 type = "array",
                 items = Ref("ProjectOrderedProviderOverride"),
-                description = "Project provider overrides are unsupported. Writes must be empty or unchanged legacy values; run selection ignores stored overrides.",
+                description = "Project provider overrides are unsupported. Writes must send an empty array; any non-empty value returns 400. The owner keeps legacy stored values unchanged, and run selection ignores them.",
             }),
             ("agentCharters", Arr(Ref("ProjectAgentCharter"))),
             ("casting", Arr(Ref("ProjectAgentCast"))),

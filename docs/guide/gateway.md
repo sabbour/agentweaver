@@ -103,17 +103,29 @@ parameters, and the Gateway returns the owner response with
 
 The response is an eligibility and selection view, not a provisioning result.
 It does not fetch credentials, create resources, make a live model call, or
-guarantee that an upstream provider is available. Model references are checked
-against the runtime binding when a run starts. Accepted run selections remain
-immutable; a later project setting change does not rewrite an active run's
-selection.
+guarantee that an upstream provider is available. Accepted run selections
+remain immutable; a later project setting change does not rewrite an active
+run's selection.
+
+The `models` block currently always reports `state: "unavailable"` with
+`unavailableReason: "model_capability_catalog_unavailable"` and empty
+`choices` and `reasoningEfforts`. Projects & Config has no model capability
+catalog: model capabilities live in the agent runtime's model bindings and in
+the hosted model list that the runtime reads when a run starts. The owner does
+not infer eligibility from saved values. `savedReferences` lists model
+references already saved in platform or project configuration; saved does not
+mean eligible. The runtime checks each reference when a run starts.
 
 Projects can override model configuration only. Provider choices for
 non-model platform components are selected by platform configuration and are
-read-only in project settings. Historical project provider-override values
-remain loadable and are ignored for new provider resolution; they are not
-silently migrated or substituted. The owner reports unavailable catalog or
-runtime states explicitly rather than choosing a different provider.
+read-only in project settings. Configuration writes must send empty
+`providerOverrides` and `orderedProviderOverrides` arrays; any non-empty value,
+including an unchanged copy of a stored value, returns
+`400 project_provider_override_unsupported`. Historical stored values are kept
+on the new revision, reported as ignored, and not used for new provider
+resolution; they are not silently migrated or deleted. The owner reports
+unavailable catalog or runtime states explicitly rather than choosing a
+different provider.
 
 ## Read project and Skill data
 

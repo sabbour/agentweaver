@@ -37,6 +37,7 @@ public sealed partial class ProjectsConfigService
         CancellationToken cancellationToken)
     {
         RequireCastingWrite(caller, projectId);
+        RejectSubmittedProviderOverrides(draft);
         return CreateCastingProposalAsync(
             caller,
             projectId,
@@ -158,7 +159,9 @@ public sealed partial class ProjectsConfigService
             var current = Deserialize<ProjectConfiguration>(currentConfiguration.ConfigurationJson);
             var draft = createDraft(current);
             ArgumentNullException.ThrowIfNull(draft);
-            RequireNoNewProviderOverrides(current, draft);
+            // Submitted drafts were checked for empty overrides; owner-built drafts copy current values.
+            // Either way the stored overrides are carried forward unchanged.
+            draft = KeepStoredProviderOverrides(current, draft);
             var normalized = ProjectConfigurationValidator.ValidateTransition(
                 current,
                 draft);
@@ -246,7 +249,8 @@ public sealed partial class ProjectsConfigService
                 ?? throw ProjectConfigException.NotFound();
             var currentConfiguration = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
             ArgumentNullException.ThrowIfNull(draft);
-            RequireNoNewProviderOverrides(currentConfiguration, draft);
+            RejectSubmittedProviderOverrides(draft);
+            draft = KeepStoredProviderOverrides(currentConfiguration, draft);
             var normalized = ProjectConfigurationValidator.ValidateTransition(
                 currentConfiguration,
                 draft);
@@ -309,7 +313,8 @@ public sealed partial class ProjectsConfigService
             var currentConfiguration = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
             var proposedConfiguration = Deserialize<ProjectConfiguration>(proposal.DraftJson);
             // Also covers proposals drafted before project provider overrides were rejected.
-            RequireNoNewProviderOverrides(currentConfiguration, proposedConfiguration);
+            RequireStoredProviderOverridesUnchanged(currentConfiguration, proposedConfiguration);
+            proposedConfiguration = KeepStoredProviderOverrides(currentConfiguration, proposedConfiguration);
             var configuration = ProjectConfigurationValidator.ValidateTransition(
                 currentConfiguration,
                 proposedConfiguration);

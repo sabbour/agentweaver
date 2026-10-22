@@ -1495,14 +1495,14 @@ export interface ProjectConfigurationChoices {
   platformRuntimeRevision: number;
   models: {
     state: 'available' | 'unavailable';
-    unavailableReason: 'platform_runtime_unconfigured' | null;
+    /** No owner-admitted model capability catalog exists yet; choices and efforts are empty when unavailable. */
+    unavailableReason: 'model_capability_catalog_unavailable' | null;
     runtimeEligibility: 'verifiedAtRunStart';
     reasoningEfforts: ReasoningEffort[];
     defaultReasoningEffort: ReasoningEffort;
-    choices: Array<{
-      reference: string;
-      sources: Array<'platformDefault' | 'platformTask' | 'platformRole' | 'platformAgent' | 'projectSaved'>;
-    }>;
+    choices: ProjectModelReferenceChoice[];
+    /** References already saved in platform or project configuration. Saved does not mean eligible. */
+    savedReferences: ProjectModelReferenceChoice[];
   };
   providers: {
     projectOverridesSupported: false;
@@ -1515,6 +1515,12 @@ export interface ProjectConfigurationChoices {
     }>;
     ignoredProjectOverrides: string[];
   };
+}
+
+/** A model reference and the owner-held configuration sources that contain it. */
+export interface ProjectModelReferenceChoice {
+  reference: string;
+  sources: Array<'platformDefault' | 'platformTask' | 'platformRole' | 'platformAgent' | 'projectSaved'>;
 }
 
 /** Provider metadata considered when resolving an effective seam selection. */

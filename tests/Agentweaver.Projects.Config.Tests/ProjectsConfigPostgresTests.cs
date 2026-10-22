@@ -180,18 +180,22 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         await SeedHistoricalConfigurationAsync(db, project, owner.ActorId, saved);
         var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
 
-        var beforePlatformConfiguration = await service.GetProjectConfigurationChoicesAsync(
+        // Platform defaults are shared by the fixture database, so only this project's saved references are exact.
+        var projectSaved = await service.GetProjectConfigurationChoicesAsync(
             owner, project.ProjectId, CancellationToken.None);
-        Assert.Equal(2, beforePlatformConfiguration.ProjectConfigurationRevision);
-        Assert.Equal(0, beforePlatformConfiguration.PlatformRuntimeRevision);
-        Assert.Equal("unavailable", beforePlatformConfiguration.Models.State);
-        Assert.Equal("platform_runtime_unconfigured", beforePlatformConfiguration.Models.UnavailableReason);
-        Assert.Equal("verifiedAtRunStart", beforePlatformConfiguration.Models.RuntimeEligibility);
+        Assert.Equal(2, projectSaved.ProjectConfigurationRevision);
+        Assert.Equal("unavailable", projectSaved.Models.State);
+        Assert.Equal("model_capability_catalog_unavailable", projectSaved.Models.UnavailableReason);
+        Assert.Equal("verifiedAtRunStart", projectSaved.Models.RuntimeEligibility);
+        Assert.Equal("high", projectSaved.Models.DefaultReasoningEffort);
+        Assert.Empty(projectSaved.Models.Choices);
+        Assert.Empty(projectSaved.Models.ReasoningEfforts);
         Assert.Equal(
             ["saved-agent-model", "saved-default", "saved-role-model", "saved-task"],
-            beforePlatformConfiguration.Models.Choices.Select(choice => choice.Reference).ToArray());
-        Assert.All(beforePlatformConfiguration.Models.Choices, choice =>
-            Assert.Equal(["projectSaved"], choice.Sources));
+            projectSaved.Models.SavedReferences
+                .Where(choice => choice.Sources.Contains("projectSaved"))
+                .Select(choice => choice.Reference)
+                .ToArray());
 
         var foreignOwner = await SeedCallerAsync(
             db, authorityStore, "choices-foreign-owner-" + suffix, "other-tenant-" + suffix,
@@ -215,19 +219,23 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         };
         var configuredPlatform = await service.UpdatePlatformRuntimeDefaultsAsync(
             platformAdmin, platformHead.Revision, platformDefaults, CancellationToken.None);
-        var available = await service.GetProjectConfigurationChoicesAsync(
+        var configured = await service.GetProjectConfigurationChoicesAsync(
             owner, project.ProjectId, CancellationToken.None);
-        Assert.Equal(configuredPlatform.Revision, available.PlatformRuntimeRevision);
-        Assert.Equal("available", available.Models.State);
-        Assert.Null(available.Models.UnavailableReason);
-        Assert.Contains(available.Models.Choices, choice =>
+        Assert.Equal(configuredPlatform.Revision, configured.PlatformRuntimeRevision);
+        // Configured platform defaults are saved references, not an admitted capability catalog.
+        Assert.Equal("unavailable", configured.Models.State);
+        Assert.Equal("model_capability_catalog_unavailable", configured.Models.UnavailableReason);
+        Assert.Empty(configured.Models.Choices);
+        Assert.Empty(configured.Models.ReasoningEfforts);
+        Assert.Contains(configured.Models.SavedReferences, choice =>
             choice.Reference == "platform-model" && choice.Sources.Contains("platformDefault"));
-        Assert.Contains(available.Models.Choices, choice =>
+        Assert.Contains(configured.Models.SavedReferences, choice =>
             choice.Reference == "platform-task" && choice.Sources.Contains("platformTask"));
-        Assert.Contains(available.Models.Choices, choice =>
+        Assert.Contains(configured.Models.SavedReferences, choice =>
             choice.Reference == "platform-role-model" && choice.Sources.Contains("platformRole"));
-        Assert.Contains(available.Models.Choices, choice =>
+        Assert.Contains(configured.Models.SavedReferences, choice =>
             choice.Reference == "platform-agent-model" && choice.Sources.Contains("platformAgent"));
+        var available = configured;
         Assert.DoesNotContain("private-model-key", JsonSerializer.Serialize(available, LegacyJsonOptions()));
         Assert.DoesNotContain("exact-version", JsonSerializer.Serialize(available, LegacyJsonOptions()));
         Assert.False(available.Providers.ProjectOverridesSupported);
@@ -245,7 +253,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var disabledSandbox = Assert.Single(disabled.Providers.Seams, seam => seam.Seam == "sandbox");
         Assert.Equal("unavailable", disabledSandbox.State);
         Assert.Equal("provider_disabled", disabledSandbox.UnavailableReason);
-        Assert.Equal(["sandbox-platform"], disabledSandbox.ProviderIds);
+        Assert.Equal(["sandbox-platform"], disabledSandbox.ProviderIds.ToArray());
 
         var viewerMembership = await SeedMembershipAsync(
             authorityStore, "choices-viewer-" + suffix, tenantId);
@@ -293,7 +301,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.Equal("project_provider_override_unsupported", unsupported.Code);
         Assert.Equal(StatusCodes.Status400BadRequest, unsupported.StatusCode);
         Assert.Equal(
-            "Platform components other than models are selected by the platform and cannot be overridden by a project.",
+            "Platform components other than models are selected by the platform and cannot be overridden by a project. " +
+            "Send empty providerOverrides and orderedProviderOverrides; stored values are kept and ignored.",
             unsupported.Message);
 
         var legacy = ProjectSettings() with
@@ -306,14 +315,27 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         };
         var projectHead = await service.GetProjectAsync(owner, project.ProjectId, CancellationToken.None);
         var legacyRevision = await SeedHistoricalConfigurationAsync(db, projectHead, owner.ActorId, legacy);
-        var carryForward = legacy with
+        var unchangedResubmit = legacy with
         {
             ModelSelection = legacy.ModelSelection! with { Reference = "project-model-updated" },
         };
+        var unchangedError = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.UpdateProjectConfigurationAsync(
+                owner, project.ProjectId, legacyRevision.Revision, unchangedResubmit, CancellationToken.None));
+        Assert.Equal("project_provider_override_unsupported", unchangedError.Code);
+        Assert.Equal(StatusCodes.Status400BadRequest, unchangedError.StatusCode);
+
+        var carryForward = unchangedResubmit with { ProviderOverrides = [], OrderedProviderOverrides = [] };
         var carried = await service.UpdateProjectConfigurationAsync(
             owner, project.ProjectId, legacyRevision.Revision, carryForward, CancellationToken.None);
+        Assert.Equal("project-model-updated", carried.Configuration.ModelSelection!.Reference);
         Assert.Equal(legacy.ProviderOverrides, carried.Configuration.ProviderOverrides);
-        Assert.Equal(legacy.OrderedProviderOverrides, carried.Configuration.OrderedProviderOverrides);
+        Assert.Equal(OrderedOverrideKeys(legacy.OrderedProviderOverrides), OrderedOverrideKeys(carried.Configuration.OrderedProviderOverrides));
+
+        var choices = await service.GetProjectConfigurationChoicesAsync(
+            owner, project.ProjectId, CancellationToken.None);
+        Assert.False(choices.Providers.ProjectOverridesSupported);
+        Assert.Equal(["guardrails", "sandbox"], choices.Providers.IgnoredProjectOverrides.ToArray());
 
         var orchestratorMembership = await SeedMembershipAsync(
             authorityStore, "provider-boundary-orchestrator-" + suffix, tenantId);
@@ -333,13 +355,19 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
 
         var castingError = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.CreateCastingProposalAsync(
-                owner, project.ProjectId, carried.Revision,
-                carried.Configuration with
-                {
-                    ProviderOverrides = [new ProjectProviderOverride(ProviderSeam.Sandbox, "sandbox-other")],
-                },
-                CancellationToken.None));
+                owner, project.ProjectId, carried.Revision, carried.Configuration, CancellationToken.None));
         Assert.Equal("project_provider_override_unsupported", castingError.Code);
+        var proposal = await service.CreateCastingProposalAsync(
+            owner, project.ProjectId, carried.Revision,
+            carried.Configuration with { ProviderOverrides = [], OrderedProviderOverrides = [] },
+            CancellationToken.None);
+        Assert.Equal(legacy.ProviderOverrides, proposal.Draft.ProviderOverrides);
+        Assert.Equal(OrderedOverrideKeys(legacy.OrderedProviderOverrides), OrderedOverrideKeys(proposal.Draft.OrderedProviderOverrides));
+        var castingUpdateError = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.UpdateCastingProposalAsync(
+                owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision,
+                proposal.Draft, CancellationToken.None));
+        Assert.Equal("project_provider_override_unsupported", castingUpdateError.Code);
 
         var reordered = carried.Configuration with
         {
@@ -353,14 +381,14 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 owner, project.ProjectId, carried.Revision, reordered, CancellationToken.None));
         Assert.Equal("project_provider_override_unsupported", reorderedError.Code);
 
-        var cleared = await service.UpdateProjectConfigurationAsync(
+        var kept = await service.UpdateProjectConfigurationAsync(
             owner,
             project.ProjectId,
             carried.Revision,
             carried.Configuration with { ProviderOverrides = [], OrderedProviderOverrides = [] },
             CancellationToken.None);
-        Assert.Empty(cleared.Configuration.ProviderOverrides);
-        Assert.Empty(cleared.Configuration.OrderedProviderOverrides);
+        Assert.Equal(legacy.ProviderOverrides, kept.Configuration.ProviderOverrides);
+        Assert.Equal(OrderedOverrideKeys(legacy.OrderedProviderOverrides), OrderedOverrideKeys(kept.Configuration.OrderedProviderOverrides));
         Assert.Equal(platform.Revision, accepted.PlatformRuntimeRevision);
     }
 
@@ -3300,6 +3328,9 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             MaxPromptTokens = 20000,
         },
     };
+
+    private static string[] OrderedOverrideKeys(ImmutableArray<ProjectOrderedProviderOverride> overrides) =>
+        overrides.Select(item => item.Seam + ":" + string.Join(",", item.ProviderIds)).ToArray();
 
     private static ProjectConfiguration ProjectSettings() => new()
     {

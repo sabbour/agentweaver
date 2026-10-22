@@ -145,14 +145,20 @@ public sealed class GatewayBacklogOpenApiTests
             StringComparison.OrdinalIgnoreCase);
 
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
-        Assert.Contains("platform_runtime_unconfigured",
-            schemas.GetProperty("ProjectModelChoices").GetProperty("properties")
+        var modelChoices = schemas.GetProperty("ProjectModelChoices");
+        Assert.Contains("model_capability_catalog_unavailable",
+            modelChoices.GetProperty("properties")
                 .GetProperty("unavailableReason").GetProperty("anyOf")[0].GetProperty("enum")
                 .EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("savedReferences",
+            modelChoices.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("Saved does not mean eligible",
+            modelChoices.GetProperty("properties").GetProperty("savedReferences")
+                .GetProperty("description").GetString());
         var projectConfiguration = schemas.GetProperty("ProjectConfiguration").GetProperty("properties");
-        Assert.Contains("run selection ignores stored overrides",
+        Assert.Contains("any non-empty value returns 400",
             projectConfiguration.GetProperty("providerOverrides").GetProperty("description").GetString());
-        Assert.Contains("run selection ignores stored overrides",
+        Assert.Contains("any non-empty value returns 400",
             projectConfiguration.GetProperty("orderedProviderOverrides").GetProperty("description").GetString());
     }
 }

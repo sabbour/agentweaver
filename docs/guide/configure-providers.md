@@ -42,8 +42,10 @@ selectable.
 The authenticated project configuration choices endpoint exposes current
 platform provider selections for display alongside model references and
 supported reasoning efforts. It is not a provisioning check or a promise that
-an upstream provider or resource is available. Legacy project provider
-overrides remain in stored revisions for compatibility but are ignored by new
+an upstream provider or resource is available. Configuration writes must send
+empty provider-override arrays; any non-empty value returns
+`400 project_provider_override_unsupported`. Legacy project provider overrides
+remain in stored revisions for compatibility but are ignored by new
 selection; they are not automatically removed or migrated. See
 [Project settings](../experience/configuration.md) for the owner-backed
 choices and save behavior.

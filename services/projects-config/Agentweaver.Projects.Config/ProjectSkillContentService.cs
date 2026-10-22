@@ -396,7 +396,8 @@ public sealed class SkillContentService(
             caller,
             projectId,
             request.ExpectedProjectConfigurationRevision,
-            current.Configuration with { Skills = settings },
+            // Stored provider overrides are carried forward by the owner, so submit none.
+            current.Configuration with { Skills = settings, ProviderOverrides = [], OrderedProviderOverrides = [] },
             cancellationToken).ConfigureAwait(false);
     }
 

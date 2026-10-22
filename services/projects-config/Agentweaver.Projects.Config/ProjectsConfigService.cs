@@ -49,14 +49,20 @@ public sealed record ProjectConfigurationChoices(
     ProjectModelChoices Models,
     ProjectProviderChoices Providers);
 
-/// <summary>Model references and reasoning choices that may be selected for future runs.</summary>
+/// <summary>
+/// Model references and reasoning choices that may be selected for future runs. <see cref="Choices"/> and
+/// <see cref="ReasoningEfforts"/> list only owner-admitted eligible values; they are empty with an explicit
+/// unavailable state when the owner has no model capability source. <see cref="SavedReferences"/> are references
+/// already saved in platform or project configuration and are never eligible solely because they are saved.
+/// </summary>
 public sealed record ProjectModelChoices(
     string State,
     string? UnavailableReason,
     string RuntimeEligibility,
     ImmutableArray<string> ReasoningEfforts,
     string DefaultReasoningEffort,
-    ImmutableArray<ProjectModelReferenceChoice> Choices);
+    ImmutableArray<ProjectModelReferenceChoice> Choices,
+    ImmutableArray<ProjectModelReferenceChoice> SavedReferences);
 
 /// <summary>A model reference and the owner-held configuration sources that contain it.</summary>
 public sealed record ProjectModelReferenceChoice(
@@ -492,7 +498,8 @@ public sealed partial class ProjectsConfigService
             ?? throw ProjectConfigException.NotFound();
         var previous = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
         ArgumentNullException.ThrowIfNull(configuration);
-        RequireNoNewProviderOverrides(previous, configuration);
+        RejectSubmittedProviderOverrides(configuration);
+        configuration = KeepStoredProviderOverrides(previous, configuration);
         var normalized = await SkillContentService.ValidateConfigurationAsync(
             db, project.ProjectId, previous, configuration, cancellationToken).ConfigureAwait(false);
         if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
@@ -1559,7 +1566,7 @@ public sealed partial class ProjectsConfigService
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
 
-    private static ProjectModelChoices BuildModelChoices(
+    internal static ProjectModelChoices BuildModelChoices(
         ProjectConfiguration project,
         VersionedPlatformRuntimeDefaults platform)
     {
@@ -1596,19 +1603,23 @@ public sealed partial class ProjectsConfigService
             Add(item.Selection.Reference, "projectSaved");
 
         string[] sourceOrder = ["platformDefault", "platformTask", "platformRole", "platformAgent", "projectSaved"];
-        var choices = references.OrderBy(item => item.Key, StringComparer.Ordinal)
+        var savedReferences = references.OrderBy(item => item.Key, StringComparer.Ordinal)
             .Select(item => new ProjectModelReferenceChoice(
                 item.Key,
                 sourceOrder.Where(item.Value.Contains).ToImmutableArray()))
             .ToImmutableArray();
-        var available = platform.Revision > 0 && platform.Defaults is not null;
+        // Projects.Config has no admitted model capability source. Enabled model references and their reasoning
+        // support live in the runtime model-binding snapshot (AgentHost:ModelBindings) and, for hosted Copilot,
+        // the SDK model list the agent runtime reads with the run's credential at start. Saved references are
+        // reported as saved only; persistence never makes a reference or effort eligible.
         return new ProjectModelChoices(
-            available ? "available" : "unavailable",
-            available ? null : "platform_runtime_unconfigured",
+            "unavailable",
+            "model_capability_catalog_unavailable",
             "verifiedAtRunStart",
-            ["low", "medium", "high", "xhigh"],
+            [],
             "high",
-            choices);
+            [],
+            savedReferences);
     }
 
     private ProjectProviderChoices BuildProviderChoices(ProjectConfiguration project)
@@ -1671,19 +1682,52 @@ public sealed partial class ProjectsConfigService
         JsonNamingPolicy.CamelCase.ConvertName(value.ToString());
 
     /// <summary>
-    /// Rejects project provider overrides. Legacy stored overrides may be resubmitted unchanged so other
-    /// edits still save; they are kept but ignored by run selection.
+    /// Rejects caller-submitted project provider overrides. Any non-empty <c>providerOverrides</c> or
+    /// <c>orderedProviderOverrides</c> is refused, including a copy of legacy stored values; callers send empty
+    /// arrays and the owner carries stored values forward with <see cref="KeepStoredProviderOverrides"/>.
     /// </summary>
-    internal static void RequireNoNewProviderOverrides(ProjectConfiguration previous, ProjectConfiguration configuration)
+    internal static void RejectSubmittedProviderOverrides(ProjectConfiguration? submitted)
     {
-        if ((!configuration.ProviderOverrides.IsDefaultOrEmpty &&
-                !SameProviderOverrides(configuration.ProviderOverrides, previous.ProviderOverrides)) ||
-            (!configuration.OrderedProviderOverrides.IsDefaultOrEmpty &&
-                !SameOrderedProviderOverrides(configuration.OrderedProviderOverrides, previous.OrderedProviderOverrides)))
-            throw ProjectConfigException.Invalid(
-                "project_provider_override_unsupported",
-                "Platform components other than models are selected by the platform and cannot be overridden by a project.");
+        if (submitted is null)
+            return;
+        if (!submitted.ProviderOverrides.IsDefaultOrEmpty || !submitted.OrderedProviderOverrides.IsDefaultOrEmpty)
+            throw ProviderOverrideUnsupported();
     }
+
+    /// <summary>
+    /// Copies the stored provider overrides onto a new revision so legacy values are never deleted by a write.
+    /// Run selection ignores them; a default (missing) array is left for validation to reject.
+    /// </summary>
+    internal static ProjectConfiguration KeepStoredProviderOverrides(
+        ProjectConfiguration stored, ProjectConfiguration configuration) => configuration with
+    {
+        ProviderOverrides = configuration.ProviderOverrides.IsDefault || stored.ProviderOverrides.IsDefault
+            ? configuration.ProviderOverrides
+            : stored.ProviderOverrides,
+        OrderedProviderOverrides = configuration.OrderedProviderOverrides.IsDefault || stored.OrderedProviderOverrides.IsDefault
+            ? configuration.OrderedProviderOverrides
+            : stored.OrderedProviderOverrides,
+    };
+
+    /// <summary>
+    /// Rejects an owner-stored proposal draft whose provider overrides differ from the stored configuration,
+    /// such as a proposal drafted before project provider overrides were refused. An empty draft array is
+    /// accepted because confirmation restores the stored values rather than clearing them.
+    /// </summary>
+    internal static void RequireStoredProviderOverridesUnchanged(
+        ProjectConfiguration stored, ProjectConfiguration draft)
+    {
+        if ((!draft.ProviderOverrides.IsDefaultOrEmpty &&
+                !SameProviderOverrides(draft.ProviderOverrides, stored.ProviderOverrides)) ||
+            (!draft.OrderedProviderOverrides.IsDefaultOrEmpty &&
+                !SameOrderedProviderOverrides(draft.OrderedProviderOverrides, stored.OrderedProviderOverrides)))
+            throw ProviderOverrideUnsupported();
+    }
+
+    private static ProjectConfigException ProviderOverrideUnsupported() => ProjectConfigException.Invalid(
+        "project_provider_override_unsupported",
+        "Platform components other than models are selected by the platform and cannot be overridden by a project. " +
+        "Send empty providerOverrides and orderedProviderOverrides; stored values are kept and ignored.");
 
     private static bool SameProviderOverrides(
         ImmutableArray<ProjectProviderOverride> incoming,

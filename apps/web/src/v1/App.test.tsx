@@ -249,12 +249,13 @@ function projectConfigurationChoices(projectId: string): ProjectConfigurationCho
     projectConfigurationRevision: 1,
     platformRuntimeRevision: 1,
     models: {
-      state: 'available',
-      unavailableReason: null,
+      state: 'unavailable',
+      unavailableReason: 'model_capability_catalog_unavailable',
       runtimeEligibility: 'verifiedAtRunStart',
-      reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+      reasoningEfforts: [],
       defaultReasoningEffort: 'high',
-      choices: [{ reference: 'owner-model', sources: ['platformDefault'] }],
+      choices: [],
+      savedReferences: [{ reference: 'owner-model', sources: ['platformDefault', 'projectSaved'] }],
     },
     providers: {
       projectOverridesSupported: false,
@@ -1827,7 +1828,7 @@ describe('v1 web project scoping', () => {
     expect(within(danger).getByText('Risk')).toBeTruthy();
   });
 
-  it('loads owner-backed configuration choices alongside the current project settings', async () => {
+  it('loads owner configuration choices and shows saved model references as unverified', async () => {
     const current = projectConfiguration('p1', 1);
     mocks.getProjectConfiguration.mockResolvedValue({
       ...current,
@@ -1836,9 +1837,12 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/settings?section=models');
     render(<App />);
 
-    const modelSelect = await screen.findByLabelText('Default model reference');
-    expect(modelSelect.tagName).toBe('SELECT');
-    expect(await within(modelSelect).findByRole('option', { name: 'owner-model' })).toBeTruthy();
+    // The owner has no model capability catalog, so saved references are shown as unverified, not as choices.
+    expect(await screen.findByText(/no model capability catalog/)).toBeTruthy();
+    expect(screen.getByText('owner-model (platformDefault, projectSaved)')).toBeTruthy();
+    const modelInput = screen.getByLabelText('Default model reference') as HTMLInputElement;
+    expect(modelInput.tagName).toBe('INPUT');
+    expect(modelInput.value).toBe('owner-model');
     await waitFor(() => expect(mocks.getProjectConfigurationChoices).toHaveBeenCalledWith(
       'broker-token', 'p1', 'tenant-1',
     ));

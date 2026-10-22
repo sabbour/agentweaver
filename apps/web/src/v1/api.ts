@@ -144,6 +144,15 @@ export function encodeSegments(...segments: string[]): string {
 }
 
 /**
+ * Projects cannot override platform provider components, so writes send empty
+ * provider override arrays. The service keeps any legacy stored values, which
+ * run selection ignores.
+ */
+export function withoutProviderOverrides(configuration: ProjectConfiguration): ProjectConfiguration {
+  return { ...configuration, providerOverrides: [], orderedProviderOverrides: [] };
+}
+
+/**
  * Sends one JSON request to `url` with a Broker token and preserves structured
  * error details in {@link GatewayError}. Requests omit ambient credentials, skip
  * the cache, and send the tenant selector only when one is given.
@@ -427,7 +436,7 @@ export class AgentweaverGatewayClient {
   ): Promise<VersionedProjectConfiguration> {
     return this.request(token, `/projects/${encodeSegments(projectId)}/configuration`, {
       method: 'PUT',
-      body: JSON.stringify({ expectedRevision, configuration }),
+      body: JSON.stringify({ expectedRevision, configuration: withoutProviderOverrides(configuration) }),
     }, this.baseUrl, tenantSelector);
   }
 
@@ -2055,7 +2064,7 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'casting', 'proposals')}`,
-      { method: 'POST', body: JSON.stringify(request) },
+      { method: 'POST', body: JSON.stringify({ ...request, draft: withoutProviderOverrides(request.draft) }) },
       this.baseUrl,
       tenantSelector,
     );
@@ -2075,7 +2084,7 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId)}`,
-      { method: 'PATCH', body: JSON.stringify(request) },
+      { method: 'PATCH', body: JSON.stringify({ ...request, draft: withoutProviderOverrides(request.draft) }) },
       this.baseUrl,
       tenantSelector,
     );

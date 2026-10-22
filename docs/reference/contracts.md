@@ -70,11 +70,17 @@ The authenticated
 `GET /api/v1/projects/{projectId}/configuration/choices` endpoint returns
 current project-scoped model references, supported reasoning efforts, and
 platform provider selections for settings. It is a no-store eligibility view,
-not a provisioning check or live upstream result. Model eligibility is checked
-against the runtime binding when a run starts, and accepted run selections
-remain immutable. Project overrides remain available for model configuration;
-non-model provider selections are platform-owned. Legacy project provider
-override values remain stored but are ignored for new provider resolution.
+not a provisioning check or live upstream result. Because Projects & Config
+has no model capability catalog, `models` is always `unavailable` with reason
+`model_capability_catalog_unavailable`, empty `choices` and `reasoningEfforts`,
+and a `savedReferences` list that is not an eligibility claim. Model
+eligibility is checked against the runtime binding when a run starts, and
+accepted run selections remain immutable. Project overrides remain available
+for model configuration; non-model provider selections are platform-owned.
+Writes must send empty `providerOverrides` and `orderedProviderOverrides`
+arrays (non-empty values return `400 project_provider_override_unsupported`).
+Legacy stored values are kept on new revisions but are ignored for new
+provider resolution.
 
 `SessionsCapabilities` in `Agentweaver.Abstractions` defines the shared
 capability identifiers for Sessions providers. The native PostgreSQL journal

@@ -54,7 +54,11 @@ pins, egress narrowing, run limits, and optional Source Control settings.
 Current project-level selection is available for model configuration only.
 Provider choices for other platform components are resolved from platform
 configuration; legacy project provider-override values remain loadable but are
-ignored for new selections.
+ignored for new selections. Writes must send empty provider-override arrays,
+and the service carries stored legacy values forward unchanged. The
+configuration choices read reports model choices as unavailable because this
+service has no model capability catalog; saved model references are listed
+separately and are not treated as eligible.
 
 When you update a revision, supply the expected current revision. The service
 appends a new revision and advances the head. If another writer wins first,

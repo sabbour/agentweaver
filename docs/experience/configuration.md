@@ -24,7 +24,7 @@ adds a new configuration revision. The same page also has
 | **General** | Rename the project. Read its ID, state, and created and updated times. |
 | **Access** | Read your permissions in this project. Manage members when the service allows it. See [Manage members](#manage-members). |
 | **Repository** | Set the repository owner and name, and the **Sign-in method**: **Not set**, **GitHub App**, or **Stored secret**. |
-| **Models** | Set **Model defaults** and **Models by task** using the owner's current model and reasoning choices when available. |
+| **Models** | Set **Model defaults** and **Models by task** using the owner's current model and reasoning choices when available. Until the owner has a model capability catalog, entries are typed and verified when a run starts. |
 | **Platform components** | Read the provider choices selected by the platform. Projects cannot override non-model platform components. |
 | **Run limits** | Set model turns, tool calls, child sessions, child sessions at once, run time in seconds, and prompt tokens. Leave a field empty to use the platform limit. |
 | **Connections** | Connect the GitHub Repo App, GitHub Copilot, and remote MCP servers. See [connections](./connections.md). |
@@ -48,20 +48,23 @@ against the active runtime binding when a run starts. Accepted run selections
 are immutable, so a settings change does not change a run that has already
 started.
 
-If the platform runtime is not configured, or the choices request is
-unavailable, the page reports that state and permits the existing model
-reference to be entered. It does not silently replace a saved model or
-reasoning effort. Current platform choices do not make an upstream model
-available, provision credentials, or guarantee that a run can start.
+The project service does not yet have a model capability catalog, so eligible
+model choices are reported as unavailable. **Models** says so explicitly, lists
+the saved model references as **not verified as eligible**, and keeps model
+references and reasoning levels as typed entries that are verified only when a
+run starts. It does not present saved references as eligible choices, and it
+does not silently replace a saved model or reasoning effort. Current platform
+choices do not make an upstream model available, provision credentials, or
+guarantee that a run can start.
 
 Only model configuration can be overridden at project level. Provider
 selections for other platform components come from platform configuration and
 are displayed read-only. Legacy project provider-override values remain in
 stored configuration, are labeled as ignored, and do not affect new run
-selections. Saving an unchanged legacy value preserves it; changing a
-non-empty legacy provider override is rejected. An explicit empty value can
-clear one. This behavior does not migrate or delete existing values
-automatically. For provider configuration guidance, see the
+selections. Saves send empty provider-override fields, and the owner keeps the
+stored legacy values unchanged. Any non-empty provider override, including an
+unchanged copy of the stored value, is rejected. This behavior does not
+migrate or delete existing values. For provider configuration guidance, see the
 [provider configuration guide](../guide/configure-providers.md).
 
 ### Change the default model
@@ -106,11 +109,11 @@ changes before you assign a skill.
 | State | Result |
 | --- | --- |
 | Loading | The form waits for the owner revision. |
-| Choices unavailable | The form reports the unavailable state and keeps model reference entry available; it does not substitute another choice. |
+| Model choices unavailable | The form states that the project service has no model capability catalog, lists saved references as not verified, and keeps typed model reference entry; it does not substitute another choice. |
 | Invalid JSON or a nonobject value in **Advanced** | The app displays an error and does not send a write. |
 | Stale `expectedRevision` | The owner returns a conflict. Reload, review your changes against the current document, and save again. |
 | Invalid provider, model, or configuration | The owner's validation response remains visible. |
-| Changed non-empty legacy provider overrides | The owner rejects the write; restore the stored value or explicitly clear it. |
+| Non-empty provider overrides in a write | The owner rejects the write with `project_provider_override_unsupported`. The app sends empty provider-override fields, so edits to them in **Advanced** are not saved; stored legacy values are kept and ignored. |
 | Saved | The app displays the returned revision and accepted document. |
 | Unknown `section` value | The page opens **General**. |
 

@@ -120,9 +120,21 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
         {choicesError && <p className="v1-muted" role="status">
           Owner-backed model choices could not be loaded. Enter an existing model reference; the runtime checks availability when a run starts.
         </p>}
-        {choices?.models.state === 'unavailable' && <p className="v1-muted" role="status">
-          Model choices are unavailable because platform runtime defaults are not configured. Enter an existing model reference; the runtime checks availability when a run starts.
-        </p>}
+        {choices?.models.state === 'unavailable' && <div role="status">
+          <p className="v1-muted">
+            {choices.models.unavailableReason === 'model_capability_catalog_unavailable'
+              ? 'Eligible model choices are unavailable: the project service has no model capability catalog yet. '
+              : 'Eligible model choices are unavailable. '}
+            Model references and reasoning levels entered here are not verified until a run starts.
+          </p>
+          {choices.models.savedReferences.length > 0 && <>
+            <p className="v1-muted">Saved model references (not verified as eligible)</p>
+            <ul>
+              {choices.models.savedReferences.map((saved) =>
+                <li key={saved.reference}>{saved.reference} ({saved.sources.join(', ')})</li>)}
+            </ul>
+          </>}
+        </div>}
         <div className="v1-inline-form">
           <Field label="Default model reference">
             {ownerChoicesAvailable ? <Select value={configuration.modelSelection?.reference ?? ''} disabled={readOnly}
