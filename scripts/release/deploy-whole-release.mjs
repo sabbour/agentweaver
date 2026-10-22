@@ -14,7 +14,7 @@ import {
 } from './image-rollout-common.mjs';
 import {
   WHOLE_RELEASE_RECEIPT_DIRECTORY, compareWholeReleaseState, checkSchemaCompatibility,
-  plannedWholeReleaseInventory, resolveWholeReleaseImages,
+  plannedWholeReleaseInventory, prepareGatewaySmokeContext, resolveWholeReleaseImages,
   runGatewaySmokeChecks, verifyWholeReleaseImages, verifyWholeReleaseReadback,
   wholeReleaseFail, wholeReleaseUpdates, writeWholeReleaseReceipt, wholeReleaseComparison,
 } from './whole-release.mjs';
@@ -41,13 +41,13 @@ Without --execute the command reads live state and writes a complete rollout pla
   --resource-group <name>              Resource group containing the P0 cluster. Required.
   --cluster <name>                     P0 AKS cluster name. Required.
   --execute                            Roll out every differing service and run smoke checks.
-  --gateway-url <url>                  Authenticated Gateway origin for execute smoke checks.
-  --tenant-id <id>                     Tenant selector for Gateway smoke checks.
-  --gateway-token-env <name>           Environment variable containing the broker token.
-  --issuer <url>                       Broker token issuer.
-  --audience <value>                   Broker token audience.
-  --actor-id <id>                      Broker token subject.
-  --project-id <id>                    Project used for run and metrics smoke checks.
+  --gateway-url <url>                  Override the deployed Gateway origin for smoke checks.
+  --tenant-id <id>                     Override the signed-in actor's Gateway tenant.
+  --gateway-token-env <name>           Environment variable containing a broker token.
+  --issuer <url>                       Override the deployed Broker token issuer.
+  --audience <value>                   Override the deployed Broker token audience.
+  --actor-id <id>                      Require this Broker token subject.
+  --project-id <id>                    Require this active project for run and metrics checks.
   --receipt-dir <directory>            Receipt directory. Default: ~/.agentweaver/whole-release.
   --readiness-timeout-seconds <n>      Rollout timeout. Default: 600.
   --help                               Show this help.
@@ -106,9 +106,14 @@ export function parseWholeReleaseArgs(argv = []) {
       options.readinessTimeoutSeconds < 60 || options.readinessTimeoutSeconds > 3600) {
     wholeReleaseFail('--readiness-timeout-seconds must be an integer from 60 to 3600.');
   }
-  if (options.execute && ![options.gatewayUrl, options.tenantId, options.issuer, options.audience,
-    options.actorId, options.projectId].every(value => typeof value === 'string' && value.length > 0)) {
-    wholeReleaseFail('execute mode requires Gateway smoke-check identity and project options.');
+  for (const key of ['gatewayUrl', 'tenantId', 'gatewayTokenEnv', 'issuer', 'audience', 'actorId', 'projectId']) {
+    const value = options[key];
+    if (value !== undefined && (typeof value !== 'string' || !value || value.trim() !== value)) {
+      wholeReleaseFail(`--${key.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)} must not be empty or contain surrounding whitespace.`);
+    }
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(options.gatewayTokenEnv)) {
+    wholeReleaseFail('--gateway-token-env must be a valid environment variable name.');
   }
   return options;
 }
@@ -144,6 +149,19 @@ function requireNoMaintenanceLock(kubectl) {
   if (!/NotFound/i.test(result.stderr ?? '')) {
     wholeReleaseFail(`could not verify the db:maintenance lock: ${(result.stderr ?? '').trim()}`);
   }
+}
+
+function readGatewayRuntimeConfig(kubectl) {
+  const result = kubectl(['get', 'configmap', 'gateway-runtime-config', '-o', 'json']);
+  if (result.status !== 0) {
+    wholeReleaseFail(`could not read gateway-runtime-config: ${(result.stderr ?? '').trim()}`);
+  }
+  const configMap = parseJson(result.stdout, 'Gateway runtime ConfigMap');
+  if (configMap.kind !== 'ConfigMap' || configMap.metadata?.name !== 'gateway-runtime-config'
+    || configMap.metadata?.namespace !== NAMESPACE || !configMap.data || typeof configMap.data !== 'object') {
+    wholeReleaseFail('gateway-runtime-config is not the expected ConfigMap in the agentweaver namespace.');
+  }
+  return configMap.data;
 }
 
 function verifyPods(items, services) {
@@ -190,6 +208,7 @@ export async function runWholeRelease(options, overrides = {}) {
     exec: run, readFile: readFileSync, verifyImage: verifyServiceRegistryImage,
     withKubeconfig: withP0UserKubeconfig, writeReceipt: writeWholeReleaseReceipt,
     now: () => new Date(), newRunId: randomUUID, log: message => console.log(message),
+    fetchImpl: globalThis.fetch, prepareSmoke: prepareGatewaySmokeContext,
     smoke: runGatewaySmokeChecks, ...overrides,
   };
   const runId = deps.newRunId();
@@ -270,6 +289,13 @@ export async function runWholeRelease(options, overrides = {}) {
         return;
       }
 
+      receipt.smoke = { status: 'preparing', checks: [] };
+      const smokeContext = await deps.prepareSmoke({
+        gatewayRuntimeConfig: readGatewayRuntimeConfig(kubectl),
+        options,
+        fetchImpl: deps.fetchImpl,
+      });
+      receipt.smoke = { status: 'not-run', checks: [] };
       executionStarted = true;
       const updates = wholeReleaseUpdates(services);
       // Roll out identity and data services first, then Gateway, MCP, and Web.
@@ -312,12 +338,7 @@ export async function runWholeRelease(options, overrides = {}) {
       receipt.pods.services = verifyPods(podInventory, services);
       receipt.pods.status = 'passed';
       receipt.smoke = { status: 'waiting', checks: [] };
-      receipt.smoke.checks = await deps.smoke({
-        gatewayUrl: options.gatewayUrl, tenantId: options.tenantId,
-        token: process.env[options.gatewayTokenEnv], issuer: options.issuer,
-        audience: options.audience, actorId: options.actorId, projectId: options.projectId,
-        fetchImpl: deps.fetchImpl,
-      });
+      receipt.smoke.checks = await deps.smoke(smokeContext);
       receipt.smoke.status = 'passed';
       // Only all-passing readback, Pod, and Gateway checks justify a deployed receipt.
       receipt.status = 'deployed';
@@ -330,7 +351,8 @@ export async function runWholeRelease(options, overrides = {}) {
       clusterName: options.clusterName,
     }, action, {
       requiredPermissions: [
-        ['get', 'namespace/agentweaver'], ['get', 'leases', NAMESPACE], ['get', 'deployments', NAMESPACE],
+        ['get', 'namespace/agentweaver'], ['get', 'leases', NAMESPACE],
+        ['get', 'configmaps', NAMESPACE], ['get', 'deployments', NAMESPACE],
         ...(options.execute ? [
           ['patch', 'deployments', NAMESPACE], ['watch', 'deployments', NAMESPACE],
           ['get', 'replicasets', NAMESPACE], ['get', 'pods', NAMESPACE],
@@ -349,7 +371,9 @@ export async function runWholeRelease(options, overrides = {}) {
     if (receipt.schema.status === 'not-run') receipt.schema = { status: 'failed', error: receipt.error, checks: [] };
     if (receipt.readiness.status === 'waiting') receipt.readiness = { status: 'failed', error: receipt.error };
     if (receipt.pods.status === 'waiting') receipt.pods = { status: 'failed', error: receipt.error, services: [] };
-    if (receipt.smoke.status === 'waiting') receipt.smoke = { status: 'failed', error: receipt.error, checks: [] };
+    if (['preparing', 'waiting'].includes(receipt.smoke.status)) {
+      receipt.smoke = { status: 'failed', error: receipt.error, checks: [] };
+    }
     if (executionStarted && before && receipt.deployments.after.length === 0) {
       try {
         // Capture the live partial state so the failed receipt is actionable without another write.

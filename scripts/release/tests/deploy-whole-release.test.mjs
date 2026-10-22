@@ -98,6 +98,17 @@ function makeFixture({
         ? { status: 0, stdout: JSON.stringify({ spec: { holderIdentity: 'active-maintenance-run' } }), stderr: '' }
         : { status: 1, stdout: '', stderr: 'Error from server (NotFound): leases not found' };
     }
+    if (action === 'get' && args.includes('configmap')) {
+      return { status: 0, stdout: JSON.stringify({
+        kind: 'ConfigMap',
+        metadata: { name: 'gateway-runtime-config', namespace: 'agentweaver' },
+        data: {
+          Gateway__WebOrigin: 'https://portal.example.test',
+          Identity__Issuer: 'https://agentweaver.example.test/',
+          Identity__Audience: 'https://agentweaver.example.test/',
+        },
+      }), stderr: '' };
+    }
     if (action === 'get' && args.includes('deployments')) {
       return { status: 0, stdout: JSON.stringify({ kind: 'List', items: state }), stderr: '' };
     }
@@ -172,13 +183,14 @@ function makeFixture({
       publicationPath: 'publication.json', subscriptionId: 'sub', resourceGroup: 'rg',
       clusterName: 'cluster', receiptDir: 'receipts', readinessTimeoutSeconds: 60,
       gatewayUrl: 'https://gateway.example/', tenantId: 'tenant', issuer: 'issuer',
-      audience: 'audience', actorId: 'actor', projectId: 'project',
+      audience: 'audience', actorId: 'actor', projectId: 'project', gatewayTokenEnv: 'TEST_TOKEN',
     },
     overrides: {
       root: process.cwd(), exec, readFile: () => JSON.stringify(publication),
       verifyImage: async image => images.get(image),
       withKubeconfig: (target, action) => action(['--kubeconfig', 'offline']),
       schemaCheck: async () => [{ deployment: 'orchestrator', accepted: { minSchema: 1, maxSchema: 2 } }],
+      prepareSmoke: async () => ({ token: 'test-broker-token' }),
       smoke: async () => [
         { operationId: 'listProjects', status: 200 }, { operationId: 'listChiefOfStaffPriorities', status: 200 },
         { operationId: 'listProjectRuns', status: 200 }, { operationId: 'readProjectMetrics', status: 200 },
@@ -192,13 +204,26 @@ function makeFixture({
   };
 }
 
-test('whole-release arguments require target and authenticated execute smoke inputs', () => {
+test('whole-release arguments require the target while smoke identity flags remain optional overrides', () => {
   assert.equal(parseWholeReleaseArgs(['--help']).help, true);
   assert.throws(() => parseWholeReleaseArgs(['--publication', 'receipt.json']), /--subscription-id/);
-  assert.throws(() => parseWholeReleaseArgs([
+  const target = [
     '--publication', 'receipt.json', '--subscription-id', 'sub', '--resource-group', 'rg', '--cluster', 'c',
     '--execute',
-  ]), /Gateway smoke-check identity/);
+  ];
+  const options = parseWholeReleaseArgs(target);
+  assert.equal(options.execute, true);
+  assert.equal(options.gatewayUrl, undefined);
+  assert.equal(options.gatewayTokenEnv, 'AGENTWEAVER_GATEWAY_TOKEN');
+  const overridden = parseWholeReleaseArgs([
+    ...target, '--gateway-url', 'https://gateway.example/', '--tenant-id', 'tenant',
+    '--gateway-token-env', 'CUSTOM_TOKEN', '--issuer', 'https://identity.example/',
+    '--audience', 'audience', '--actor-id', 'actor', '--project-id', 'project',
+  ]);
+  assert.equal(overridden.gatewayTokenEnv, 'CUSTOM_TOKEN');
+  assert.equal(overridden.projectId, 'project');
+  assert.throws(() => parseWholeReleaseArgs([...target, '--gateway-token-env', 'NOT A NAME']),
+    /valid environment variable name/);
 });
 
 test('dry run compares every service and performs no cluster write', async () => {
@@ -220,9 +245,25 @@ test('a complete rollout writes deployed only after readiness, Pod, and Gateway 
   assert.equal(receipt.readiness.status, 'passed');
   assert.equal(receipt.pods.status, 'passed');
   assert.equal(receipt.smoke.status, 'passed');
+  assert.equal(JSON.stringify(receipt).includes('test-broker-token'), false);
   assert.equal(world.written[0].receipt.status, 'deployed');
   assert.equal(world.calls.filter(call => call.command === 'kubectl' && call.args.includes('patch')).length,
     WHOLE_RELEASE_SERVICES.length);
+});
+
+test('smoke identity failure writes a partial receipt before any Deployment patch', async () => {
+  const world = makeFixture();
+  world.overrides.prepareSmoke = async () => {
+    throw new Error('P1 identity could not be established.');
+  };
+  await assert.rejects(runWholeRelease({ ...world.options, execute: true }, world.overrides),
+    /Whole-release rollout partial/);
+
+  const receipt = world.written[0].receipt;
+  assert.equal(receipt.status, 'partial');
+  assert.equal(receipt.smoke.status, 'failed');
+  assert.equal(receipt.deployments.after.length, 0);
+  assert.equal(world.calls.some(call => call.command === 'kubectl' && call.args.includes('patch')), false);
 });
 
 test('whole-release waits for a terminating old ReplicaSet Pod to disappear before strict verification', async () => {

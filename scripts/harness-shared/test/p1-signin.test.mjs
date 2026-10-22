@@ -10,6 +10,7 @@ import {
   P1_SIGNIN_PROFILE_ROOT,
   authorizeP1InBrowser,
   createP1AuthorizationRequest,
+  getValidatedP1BrokerTokenActorId,
   isAuthorizeUrl,
   validateP1BrokerToken,
   withFreshP1BrowserContext,
@@ -232,6 +233,31 @@ test('Broker tokens must match actor, issuer, audience, expiry, required scopes,
     actorId: ENVIRONMENT.actorId,
     projectId: PROJECT_ID,
     runId: RUN_ID,
+    now: () => NOW,
+  }), /does not match/);
+});
+
+test('a run token subject can be derived only after its issuer, audience, expiry, and scopes are validated', () => {
+  const token = jwt({ actorId: 'signed-in-actor', scopes: P1_RUN_SCOPES });
+  assert.equal(getValidatedP1BrokerTokenActorId(token, {
+    issuer: ISSUER,
+    audience: AUDIENCE,
+    requiredScopes: ['api.read', 'projects.orchestrator'],
+    now: () => NOW,
+  }), 'signed-in-actor');
+  assert.throws(() => getValidatedP1BrokerTokenActorId(token, {
+    issuer: ISSUER,
+    audience: AUDIENCE,
+    actorId: 'different-actor',
+    requiredScopes: ['api.read', 'projects.orchestrator'],
+    now: () => NOW,
+  }), /does not match/);
+  assert.throws(() => getValidatedP1BrokerTokenActorId(jwt({
+    actorId: 'signed-in-actor', projectId: PROJECT_ID, runId: RUN_ID, scopes: P1_RUN_SCOPES,
+  }), {
+    issuer: ISSUER,
+    audience: AUDIENCE,
+    requiredScopes: ['api.read', 'projects.orchestrator'],
     now: () => NOW,
   }), /does not match/);
 });
