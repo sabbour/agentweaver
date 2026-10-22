@@ -51,6 +51,10 @@ Azure workflow.
 
 ## Version boundary
 
+For contributor planning, use [Plan issues and releases](docs/guide/release-planning.md).
+Scheduled issues and pull requests use version milestones; labels describe
+scope, triage and current work. Release evidence determines what shipped.
+
 Agentweaver 0.x remains a separate product line on `dev`. Read the
 [0.x documentation](https://sabbour.github.io/agentweaver/) for that product.
 The v1 branch is a separate rebuild; it does not silently upgrade or replace
