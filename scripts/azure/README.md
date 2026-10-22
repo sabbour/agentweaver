@@ -328,9 +328,11 @@ For routine updates, use the
 (`npm run db:maintenance`). It runs the migrations as in-cluster Jobs and needs
 no tunnel. `npm run db:maintenance:setup` prepares it once: it creates the
 migration and workflow identities, runs the schema ownership handover, and
-configures the GitHub environment, then checks all of it. Without `--execute`
-it only checks. After the handover, the operator no longer owns the P1 schemas,
-and the two modes below fail their ownership checks.
+configures the GitHub environment, then applies and checks the workflow
+identity's namespace-scoped Kubernetes Role and RoleBinding. It creates no
+custom Azure role definition. Without `--execute` it only checks. After the
+handover, the operator no longer owns the P1 schemas, and the two modes below
+fail their ownership checks.
 
 Use these modes for a database that is already initialized. Neither needs a
 prior receipt, recreates roles or schemas, resets data, or reruns the Identity

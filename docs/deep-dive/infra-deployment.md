@@ -51,7 +51,9 @@ The Orchestrator and Events and Sessions migrations run as Jobs from the
 command, `npm run db:maintenance`, runs the Broker and P1 Jobs, checks that
 the running service images support the new schema, and writes a receipt.
 `npm run db:maintenance:setup` creates the identities, role assignments, and
-GitHub environment that the command and its workflow need. See
+GitHub environment that the command and its workflow need. Setup also applies
+and verifies a narrow Kubernetes Role and RoleBinding for the workflow identity;
+it creates no custom Azure role. See
 [Database maintenance](../guide/database-maintenance.md).
 
 Orchestrator migration 032, which adds Source Control pull request records,

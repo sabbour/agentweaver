@@ -68,11 +68,13 @@ const PERMISSIONS = [
   ['get', 'serviceaccounts'], ['patch', 'serviceaccounts'], ['create', 'serviceaccounts'],
   ['get', 'ciliumnetworkpolicies.cilium.io'], ['patch', 'ciliumnetworkpolicies.cilium.io'],
   ['create', 'ciliumnetworkpolicies.cilium.io'], ['get', 'deployments.apps'],
+  ['list', 'deployments.apps'], ['watch', 'deployments.apps'],
 ];
 // Apps-only needs the lock, the two Deployments, and the state ConfigMap for roll-forward.
 const APP_PERMISSIONS = [
   ['create', 'leases.coordination.k8s.io'], ['get', 'leases.coordination.k8s.io'],
-  ['delete', 'leases.coordination.k8s.io'], ['get', 'deployments.apps'], ['patch', 'deployments.apps'],
+  ['delete', 'leases.coordination.k8s.io'], ['get', 'deployments.apps'], ['list', 'deployments.apps'],
+  ['watch', 'deployments.apps'], ['patch', 'deployments.apps'],
   ['get', 'configmaps'], ['create', 'configmaps'], ['patch', 'configmaps'],
 ];
 // Each Job: its kustomize name, the image, and the plan field whose versions its marker must report.
