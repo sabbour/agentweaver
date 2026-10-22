@@ -6,7 +6,11 @@ on:
     paths:
       - 'releases/receipts/**'
   workflow_dispatch:
-
+    inputs:
+      rebuild_all_images:
+        description: Rebuild every product image instead of reusing unchanged published digests
+        type: boolean
+        default: false
 permissions:
   contents: read
 
@@ -139,12 +143,18 @@ jobs:
           npm_config_cache: ${{ runner.temp }}/agentweaver-release-npm-cache
           npm_config_update_notifier: 'false'
         run: npm run release:prepare-build-inputs
+      # Unchanged images keep their published digest and original provenance; scripts/release/image-reuse.mjs
+      # derives every image's inputs from the source tree so preparation and publication agree.
+      - name: Plan product image reuse
+        env:
+          RELEASE_REBUILD_ALL_IMAGES: ${{ inputs.rebuild_all_images && 'true' || 'false' }}
+        run: npm run release:plan-image-reuse -- --out artifacts/release/image-reuse-plan.json --registry ghcr.io/sabbour
       - name: Build product Docker images
         env:
           DOCKER_CONTEXT: default
           BUILDX_BUILDER: default
           npm_config_cache: ${{ runner.temp }}/agentweaver-release-npm-cache
-        run: npm run release:pack -- --images-only --platform-only --out artifacts/release/images
+        run: npm run release:pack -- --images-only --platform-only --reuse-plan artifacts/release/image-reuse-plan.json --out artifacts/release/images
       - uses: actions/upload-artifact@v4
         with:
           name: v1-release-images-${{ github.sha }}-${{ github.run_id }}
@@ -201,6 +211,7 @@ jobs:
           RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
           RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
           RELEASE_BASE_SHA: ${{ needs.validate.outputs.release_base_sha }}
+          RELEASE_REBUILD_ALL_IMAGES: ${{ inputs.rebuild_all_images && 'true' || 'false' }}
           DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
         run: node scripts/release/publish.mjs releases/foundation.json artifacts/release/publish "$GITHUB_SHA" --confirm-publication --platform-only
       - uses: actions/upload-artifact@v4

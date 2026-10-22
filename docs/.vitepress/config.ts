@@ -59,6 +59,7 @@ export default defineConfig({
             { text: 'Gateway/BFF', link: '/guide/gateway' },
             { text: 'Chief of Staff', link: '/guide/chief-of-staff' },
             { text: 'Platform components', link: '/guide/platform-components' },
+            { text: 'Run database maintenance', link: '/guide/database-maintenance' },
           ],
         },
         {
@@ -140,6 +141,7 @@ export default defineConfig({
             { text: 'Events', link: '/reference/events' },
             { text: 'Web client', link: '/reference/web' },
             { text: 'MCP tools', link: '/reference/mcp-tools' },
+            { text: 'AgentSuite import', link: '/reference/agentsuite-import' },
             { text: 'Contracts and endpoints', link: '/reference/contracts' },
             { text: 'Component releases', link: '/reference/releases' },
           ],

@@ -34,6 +34,12 @@ Connection mutation bodies do not accept OAuth codes, access tokens, or client s
 | `POST /api/projects/{projectId}/remote-mcp/connections/{connectionId}/enable` | Enable a connection against the expected row revision. |
 | `POST /api/projects/{projectId}/remote-mcp/connections/{connectionId}/disable` | Disable a connection and clear its current catalog pointer. |
 | `DELETE /api/projects/{projectId}/remote-mcp/connections/{connectionId}` | Mark a connection Removed without erasing its history. Send a JSON body with `expectedRowRevision` and `idempotencyKey`. |
+| `POST /api/projects/{projectId}/remote-mcp/connections/{connectionId}/discover` | Discover the tool catalog of an enabled connection and pin it as a new immutable discovery revision. Send `expectedRowRevision` and `idempotencyKey`. |
+| `POST /api/projects/{projectId}/remote-mcp/connections/{connectionId}/invocation-validity` | Compare a review reference and one tool revision with the current head. Returns `RemoteMcpInvocationValidity`. |
+| `GET /api/projects/{projectId}/remote-mcp/directory` | List the project connections with configuration revisions, configuration checksums, and catalog state. Query: `pageSize` (1–100, default 50) and `after`. |
+| `GET /api/projects/{projectId}/remote-mcp/registry/servers` | Read one page of the configured MCP Registry. Query: `cursor`. |
+
+The Gateway exposes the directory route as `GET /api/v1/projects/{projectId}/remote-mcp/connections` (operation `listRemoteMcpConnections`). The other routes stay on the Environment owner.
 
 Mutation bodies include an idempotency key. Update and state mutations also include the expected row revision. The DELETE request uses `RemoteMcpConnectionStateRequest` as a JSON body; it does not move these values to headers or query parameters. The Identity-binding request uses `operationId` as its durable idempotency key and includes the expected configuration revision and SHA-256. A successful bind returns `RemoteMcpIdentityBindingReceipt` with `projectId`, `connectionId`, `operationId`, `finalConfigurationRevision`, `finalConfigurationSha256`, and `identityBindingReference`. Success and replay return 200; malformed references return 400; current authorization failures return 401 or 403; missing connections return 404; stale pins, mode conflicts, or idempotency conflicts return 409. Connection handlers set `Cache-Control: no-store` on responses that they handle.
 
@@ -67,13 +73,74 @@ Limits are 1 MiB per document, depth 32, 100 Registry page items, 2,048 cursor c
 
 The Registry parser requires an exact server version. It rejects `latest`, templated endpoints, unsupported transports, and Registry-supplied headers. It accepts only static HTTPS DNS endpoints for `streamable-http`.
 
-The tools-list parser accepts at most 128 tools. Each tool must have a unique name and an object input schema. The parser returns exact schema, tool, and catalog digests.
+The tools-list parser accepts at most 128 tools across all pages. Each tool must have a unique name and an object input schema. `BuildCatalog` joins the pages and rejects a duplicate name on any page. The parser returns exact schema, tool, and catalog digests.
 
-The parser is not connected to a public Registry or MCP discovery route. `SaveDiscoveryAsync` has no public route. It accepts only an enabled connection, the exact pinned Registry metadata digest when applicable, and a typed applied network-policy reference. This store does not independently prove that the reference matches current provider state.
+## Discovery
+
+`RemoteMcpDiscoveryService` runs discovery for one enabled connection. It requires current `WriteProjects` authority and the expected row revision. It follows `tools/list` cursors until the last page and stops at the parser limits. When the connection has a Registry pin, it reads the exact Registry version again and compares the digest with the pin. A changed digest fails discovery with 409 and keeps the old catalog.
+
+Discovery calls `IRemoteMcpDiscoverySource`. The default `UnavailableRemoteMcpDiscoverySource` returns 503 `remote_mcp_discovery_transport_unavailable` and sends no network request. A trusted transport source replaces it when one is registered. Discovery output is a candidate for review. It does not accept a tool for use.
+
+A repeated discovery request with the same idempotency key returns the first result. Discovery reuses the existing `SaveDiscovery` idempotency operation, so it needs no new migration or grant.
 
 ## Pin and execution limits
 
-Configuration revisions and saved catalog rows are immutable. Disable, removal, or a configuration change clears the current catalog pointer. The old rows remain available as history. An unavailable discovery source cannot change a saved pin because this source candidate has no discovery request route.
+Configuration revisions and saved catalog rows are immutable. Disable, removal, or a configuration change clears the current catalog pointer. The old rows remain available as history. An unavailable discovery source fails the request and does not change a saved pin.
+
+## Review references and invocation validity
+
+`Agentweaver.Abstractions` defines the contracts that reviewed tool snapshots store and check:
+
+- `RemoteMcpConnectionReviewReference` pins the project, connection, configuration revision, configuration SHA-256, discovery revision, and catalog SHA-256. Any change to the endpoint, resource, transport, authentication mode, Identity binding, or Registry pin creates a new configuration checksum. A token rotation does not change the reference.
+- `RemoteMcpConnectionReview.Evaluate` compares a reference and one tool revision with the current snapshot. It returns `RemoteMcpInvocationValidity` with a `RemoteMcpInvocationDenial` reason.
+- A changed configuration, catalog, or tool returns `reviewRequired: true`. The caller needs a new review. Environment never accepts a changed connection on its own.
+- A delegated OAuth connection returns `credentialValidityRequired: true` and the Identity binding reference. The caller must also get a current Identity credential decision before it sends a request.
+- `RemoteMcpConnectionDirectoryEntry` and `RemoteMcpConnectionDirectoryPage` carry the safe directory fields. They never contain credentials, tokens, or tool schemas.
+
+Environment rejects run-bound callers on these routes. These routes don't send requests to the remote server. The trusted transport admits and sends run-time calls.
+
+## AgentSuite tool providers
+
+An AgentSuite package describes a remote Streamable HTTP provider with a `ToolProvider` document listed in its `ToolProviderCatalog`. The package declares the tools that the agent needs. It never contains the endpoint, a secret, or a credential. A project binds each provider (`id@version`) to one of its Remote MCP connections by connection ID. The connection ID is a GUID in `D` format.
+
+`RemoteMcpToolProviderRequirement` carries the provider reference, the `streamable-http` transport, whether the provider declares static header secrets, and each tool's name, effect, approval mode, and delegated authorization flag. `RemoteMcpToolProviderBinding.Evaluate` checks the requirement against the current connection snapshot and returns `RemoteMcpToolProviderBindingResult`:
+
+- A bound result pins the configuration revision and SHA-256, the discovery revision, the catalog SHA-256, and the exact revision of each required tool. Reviewed tool snapshots store these pins.
+- A denied result gives one reason: `ConnectionNotEnabled`, `CatalogMissing`, `CatalogStale`, `ToolMissing` (with the missing tool names), `DelegatedAuthorizationUnavailable`, or `HeaderSecretsUnsupported`.
+
+The connection configuration replaces the provider's endpoint references:
+
+| Provider field | Source of truth |
+| --- | --- |
+| `endpointRef` | Connection endpoint URI and OAuth resource URI |
+| `network[].destinationRef` | Egress derived from the connection endpoint by the trusted transport |
+| `delegatedAuthorization.credential.bindingRef` | Connection Identity binding. Requires delegated OAuth. |
+| `headers[].secretRef` | Not supported. Binding returns `HeaderSecretsUnsupported`. |
+| `timeouts` | Capped by Environment execution limits |
+
+Binding never reads a credential. Run-time use still requires `RemoteMcpConnectionReview.Evaluate` and a current Identity credential decision.
+
+### Import records
+
+The AgentSuite import stores each binding as `toolConnections[{ toolProvider, connectionId }]`, where `toolProvider` is `id@version`. Projects & Config checks only the shape: `connectionId` must be a lowercase `D` format GUID and not the empty GUID. It never calls Environment and never resolves an endpoint or secret. Import reports these blockers:
+
+- `tool_connection_unbound`: a remote provider has no connection ID.
+- `tool_connection_header_secrets_unsupported`: the provider declares header `secretRef` values. This matches `HeaderSecretsUnsupported`.
+
+When a reviewed tool snapshot is built, the caller derives `RemoteMcpToolProviderRequirement` from the import record and calls `RemoteMcpToolProviderBinding.Evaluate` with the bound connection's current snapshot. Import doesn't call Environment, so a connection can change between import and review. The binding check at review time catches that change.
+
+## Credential validity
+
+Identity owns delegated OAuth credentials. `POST /internal/connections/remote-mcp/{connectionId}/validity` (Gateway: `POST /api/connections/remote-mcp/v1/{connectionId}/validity`) answers whether the caller's credential is valid now for an expected configuration revision and checksum. It returns `RemoteMcpCredentialValidity`:
+
+- `valid` and a `RemoteMcpCredentialDenial` reason: `NotConnected`, `ConsentPending`, `RefreshPending`, `RefreshIndeterminate`, `Disconnected`, `Revoked`, `Expired`, `ConfigurationChanged`, `ConnectionRemoved`, or `CredentialChanged`.
+- The connection, credential, and configuration revisions, the configuration SHA-256, and the access token expiry for a valid credential.
+
+The response never contains token values, secret identifiers, or secret versions. Identity checks project read authority before and after the Environment read, then reads the connection row again. A refresh, rotation, or disconnect during those waits returns `CredentialChanged`. The route never refreshes or recovers a credential.
+
+`RemoteMcpRemoteUse.Admit` combines Environment invocation validity with Identity credential validity. It allows a call only when Environment allows the reviewed connection and, for delegated OAuth, Identity reports a valid credential at the same configuration revision and checksum. A disconnected or revoked credential blocks use even when the Environment connection stays enabled. Any component that sends a request to a remote MCP server, such as the runtime that runs reviewed tool snapshots or the network path that carries the request, calls `Admit` immediately before each send. A decision from an earlier call is never reused, because a credential can be revoked or a configuration can change between calls.
+
+Disconnect clears Identity's local token references. It does not call a provider revocation endpoint.
 
 The Cilium Environment provider enforces L3/L4 egress only. Remote MCP needs L7 mediation, so this provider does not authorize or execute MCP requests.
 

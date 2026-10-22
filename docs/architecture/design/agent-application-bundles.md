@@ -139,8 +139,62 @@ They define behavior to retain, not automatic package or runtime compatibility:
 | [Image publication](https://github.com/sabbour/agentweaver/blob/d984e8bba4e6932eef4de69e93bc5be94868b16b/.github/workflows/publish-images.yml) | Source-bound publication receipts and separation of publication from deployment | Platform-image releases do not define app install/upgrade or publisher trust. |
 
 Compatible validation code can be reused after review.
-A 0.x package converter, full application installer, or completed canvas loader is not assumed.
+A full application installer or completed canvas loader is not assumed.
 
+### Blueprints on AgentSuite
+
+This section records the user's decisions for blueprints and maps every 0.x blueprint criterion to its v1 home.
+It records an architecture. It doesn't waive, drop, or approve any criterion, and it doesn't resolve any row of the
+v1 parity checklist.
+
+#### Decisions
+
+- **Delivery.** The user directed: "Blueprints should be supplied via Agent Suite." Blueprints are delivered and
+  materialized as native AgentSuite packages. The AgentSuite validator and import service
+  are the only runtime loader, and an import becomes a
+  reviewable casting proposal.
+- **Option A.** The user chose option A: packages stay conformant to the native AgentSuite specification. There is
+  no second validator mode and no placeholder image digest. Build profiles pin real, digest-addressed images. Tests
+  use build profiles clearly labeled test-only, and shipped resources never do.
+- **Timing.** The packaged built-in blueprints ship after the AgentHost image that their build
+  profiles pin is published. The built-in catalog isn't complete until they ship. This is the
+  only change the user approved; it changes timing, not criteria.
+- **0.x packages.** v1 has no runtime loader for 0.x
+  `blueprint-package-v1` packages. `AgentSuiteBlueprintConverter` in Projects & Config converts 0.x blueprint JSON
+  and 0.x packages to AgentSuite content at build time. It checks packages with the 0.x validator, ported without
+  behavior changes to `Agentweaver.Projects.Config.BlueprintPackages`, and the 0.x contract tests run against it.
+- **Projection.** Each roster role becomes one AgentSuite agent. Its instructions are the exact 0.x charter text,
+  and its description is the role title. A package role's `default_model` becomes the agent model. The workflows,
+  default workflow, review policy, sandbox profile, and skill bindings travel with the import as the
+  `ProjectAgentSuiteBlueprint` projection, because they aren't AgentSuite fields.
+- **Generated agent definition.** The `.agent.md` file is for GitHub Copilot, not AgentSuite.
+  v1 publishes it for download only and doesn't write it into run checkouts.
+
+#### 0.x criteria and their v1 homes
+
+Status values: **Kept** means v1 meets the criterion today. **Replaced** names the v1 mechanism and the criterion it
+still meets. **Unclear** means the criterion isn't resolved yet; it is neither dropped nor approved.
+
+| 0.x criterion | Status | v1 home and evidence |
+| --- | --- | --- |
+| The 5 built-in blueprints keep their roster, workflows, review policy, sandbox profile, and skill bindings | Kept | The catalog serves them from embedded 0.x JSON. A test proves each one passes every `Validate` rule except workflow availability. |
+| Built-ins delivered as AgentSuite packages | Unclear | The converter produces them. Golden test-only archives pass the upstream `agentsuite` validator and the AgentSuite import validator. The shipped packages wait for the published AgentHost image. |
+| Listing reports exportability with sorted, distinct, bounded 0.x codes; only exportable blueprints apply by ID | Kept | `GET /api/blueprints`. The code `blueprint_invalid` is added when a `Validate` rule fails, so the list can't report a blueprint as exportable that apply rejects. |
+| 0.x codes `role_malformed` and `charter_missing` | Unclear | v1 roles are compiled casting definitions that always carry a charter, so neither condition has a v1 source. |
+| Validate checks a blueprint without changing state and uses the 0.x rules | Kept | `POST /api/blueprints/validate`, with the same rules, reserved-role and collision checks. |
+| Apply stages a reviewed casting proposal; default workflow is the first; every workflow is referenced; skill bindings apply; the source blueprint is recorded; nothing changes until confirmation | Replaced | The blueprint casting-proposal route and, for AgentSuite imports, `ApplyBlueprint` on the AgentSuite import draft. Both keep the 0.x result and change nothing until a revision-fenced confirmation. Skill bindings never change a skill's `Enabled` setting, and each binding that can't apply is listed in `unresolvedSkillBindings` with `skill_not_installed`, `skill_not_pinned`, or `skill_disabled`. |
+| Inline 0.x JSON blueprint apply | Kept, replacement unclear | The inline route stays. Its planned replacement, an AgentSuite archive upload, meets the criterion only when archive import plus the projection gives the same proposal result. A unit test, for each built-in, compares `ApplyBlueprint` on an import-shaped draft with inline apply and finds the same charters, casting, workflows, skills, egress, and unresolved bindings. Both paths also reject the same unavailable workflows, so the test uses the `default` workflow, the only one registered today. A service test also imports each converted built-in through the AgentSuite import service with its projection and gets the same proposal and unresolved bindings as inline apply. |
+| A project references several workflows from one blueprint | Kept | The proposal records every blueprint workflow. |
+| Deterministic suggest from repository signals, with GitHub fallback | Unclear | Not implemented in v1. |
+| Generated workflow YAML | Unclear | Depends on the Orchestrator workflow library, which doesn't define these workflows yet. |
+| Restricted sandbox shell approval | Unclear | v1 maps `restricted` to empty egress narrowing. Shell approval has no v1 owner yet. |
+| Strict `blueprint-package-v1` rules: schema, IDs, SemVer, inventory, paths, sizes, digests, duplicate properties, invalid Unicode, traversal, self-listing manifest | Replaced | The converter input check. It uses the ported 0.x validator, and the 0.x contract tests, error strings, and golden digests run in Projects & Config. |
+| Package workflow and skill definitions | Unclear | The converter refuses them today. v1 workflows come from the Orchestrator library and skills from the project skill catalog. |
+| GitHub import pinned to the resolved commit, with symlink, submodule, LFS, case-collision, size, and truncation checks | Unclear | Not implemented. The alternatives table below defers Git refs as the portable install contract; that isn't a drop of this criterion. |
+| Owner-scoped package library: idempotent import and immutable-version conflict | Unclear | Not implemented. Import identity belongs to the AgentSuite import service. |
+| Imported blueprints validate with the catalog rules before apply | Replaced | `ValidateBlueprint` checks the projection against the catalog rules and the imported agents. The AgentSuite import service runs it before `ApplyBlueprint`. A failure returns `400 invalid_blueprint` and stores nothing. |
+| Generation jobs and correction | Unclear | Output must be an AgentSuite package that passes the AgentSuite import validator. It needs Orchestrator generation support, which v1 doesn't have yet. |
+| Generated repository agent definition | Unclear | The planned v1 form is a download-only operator definition. Writing to the repository and handling user edits aren't implemented. |
 ## Manifest and content contract
 
 The proposed application schema is `agentweaver.application/1`.
@@ -765,9 +819,6 @@ content. This is a source-only validation foundation, not completion of B1 or
 installation acceptance; the remaining B1 checks require their owning
 implementations and evidence.
 
-Implementation issues can use those owner-aligned slices.
-The tracking issue contains B1-B5 and Canvas C1-C5.
-This specification does not add a new internal coordination ledger.
 Future product changes require component changesets and affected documentation.
 Source-only candidates remain distinct from deployed acceptance.
 

@@ -1186,7 +1186,10 @@ public sealed partial class GitHubSourceControlAdapter : ISourceControlAdapter, 
             ReadRequiredString(@base, "ref"),
             ReadRequiredString(@base, "sha"),
             merged,
-            disposition);
+            disposition,
+            // Title is display data only. It's optional so a response without it still parses,
+            // and it isn't part of the exact-match checks above.
+            ReadOptionalString(root, "title"));
     }
 
     /// <summary>Requires a pull request's branches and head/base SHAs to equal the request exactly.</summary>
@@ -1369,6 +1372,21 @@ public sealed partial class GitHubSourceControlAdapter : ISourceControlAdapter, 
             !string.IsNullOrWhiteSpace(value.GetString()))
             return value.GetString()!;
         throw InvalidResponse("GitHub returned an incomplete response.");
+    }
+
+    /// <summary>Reads an optional string; a missing, null, or blank value returns null.</summary>
+    /// <exception cref="SourceControlOperationException">The value is present but isn't a string.</exception>
+    private static string? ReadOptionalString(JsonElement source, string property)
+    {
+        if (!source.TryGetProperty(property, out var value) || value.ValueKind == JsonValueKind.Null)
+            return null;
+        // A present value of the wrong type means the response isn't what GitHub documents, so
+        // fail instead of guessing.
+        if (value.ValueKind != JsonValueKind.String)
+            throw InvalidResponse("GitHub returned an invalid response.");
+        // Treat a blank string like a missing value, so callers only see a usable title or null.
+        var text = value.GetString();
+        return string.IsNullOrWhiteSpace(text) ? null : text;
     }
 
     /// <summary>Reads a required string nested under a required JSON object.</summary>

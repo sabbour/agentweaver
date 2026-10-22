@@ -15,7 +15,7 @@ import {
   PanelLeftExpand24Regular,
   Settings24Regular,
 } from '@fluentui/react-icons';
-import { GLOBAL_NAV_ITEMS, NAV_SECTIONS, navItemPath } from './navConfig';
+import { GLOBAL_NAV_ITEMS, NAV_SECTIONS, NEW_SESSION_NAV_KEY, SETTINGS_NAV_KEY, navItemPath } from './navConfig';
 import { useAppVersion } from '../../hooks/useAppVersion';
 import { NotificationBell } from './NotificationBell';
 import { ProjectSwitcher } from './ProjectSwitcher';
@@ -25,7 +25,7 @@ import { createNewAssistantSessionState } from '../../routes/assistantNavigation
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { GlobalNavItemDef, NavItemDef, NavSectionDef } from './navConfig';
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 // Persistent left navigation. Native FluentUI rebuild — no copilot-fluent-system
 // kit imports. Copilot-style single rail: chrome (brand + collapse), a header
 // slot (project switcher), a scrollable nav area, and a bottom persona footer.
@@ -78,21 +78,67 @@ function formatVersionBadge(version: string): string {
 
 /**
  * Renders the primary navigation using the configured app routes and current project context.
- * `useAppVersion` supplies the version display; route hooks determine active navigation and local
- * state supports responsive navigation behavior.
+ * This wrapper fills the rail's slots with the 0.x data sources: the app version, the
+ * project switcher with its own project list, the notification bell, and the GitHub identity.
  */
 export function LeftNav({
+  ...props
+}: LeftNavProps) {
+  const version = useAppVersion();
+  // All drawing happens in LeftNavView. This wrapper only supplies the parts
+  // that call 0.x APIs, so the v1 shell can reuse the same rail with its own parts.
+  return (
+    <LeftNavView
+      {...props}
+      version={version}
+      projectSwitcher={<ProjectSwitcher {...props} />}
+      notifications={<NotificationBell />}
+      identity={(collapsed, footerMeta) => (
+        <GitHubIdentityBadge projectId={props.projectId} collapsed={collapsed} footerMeta={footerMeta} />
+      )}
+    />
+  );
+}
+
+/**
+ * Props for the rail view. The caller supplies every part that needs data
+ * (version, project switcher, bell, identity), so the rail itself makes no API calls.
+ */
+export interface LeftNavViewProps extends LeftNavProps {
+  version: string;
+  projectSwitcher: ReactNode;
+  notifications?: ReactNode;
+  /** Renders the footer identity. Receives the collapsed state and the status and version badges for its menu. */
+  identity: (collapsed: boolean, footerMeta: ReactNode) => ReactNode;
+  /** Replaces the default "go to /assistant" behavior of the new chat button. */
+  onNewSession?: () => void;
+  /** Extra content placed under the Sessions entry. */
+  sessionAction?: ReactNode;
+  /** When set, only these global entries are shown. When omitted, all are shown. */
+  visibleGlobalKeys?: readonly string[];
+  /** When set, only these project entries are shown. When omitted, all are shown. */
+  visibleProjectKeys?: readonly string[];
+  showNewSession?: boolean;
+}
+
+/** Renders the 0.x rail unchanged; callers supply identity and project data. */
+export function LeftNavView({
   projectId,
   activeKey,
-  pathname,
-  isFallbackProject,
-  onFallbackProjectMissing,
   isPlatformAdmin = false,
   tourTargets,
   onTakeProductTour,
-}: LeftNavProps) {
+  version,
+  projectSwitcher,
+  notifications,
+  identity,
+  onNewSession,
+  sessionAction,
+  visibleGlobalKeys,
+  visibleProjectKeys,
+  showNewSession = true,
+}: LeftNavViewProps) {
   const styles = useStyles();
-  const version = useAppVersion();
   const versionLabel = formatVersionBadge(version);
   const footerVersionText = versionLabel ? `v${versionLabel}` : 'Alpha';
   const navigate = useNavigate();
@@ -103,12 +149,19 @@ export function LeftNav({
       return false;
     }
   });
+  // Split the configured entries into the parts of the rail. When the caller
+  // passes visible keys, drop every entry not in the list, then drop sections
+  // left with no entries so no empty heading or divider is drawn.
   const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
-    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions'),
-    globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions'),
-    primarySections: NAV_SECTIONS.filter((section) => !section.anchorBottom),
-    bottomSections: NAV_SECTIONS.filter((section) => section.anchorBottom),
-  }), []);
+    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
+    globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
+    primarySections: NAV_SECTIONS.filter((section) => !section.anchorBottom)
+      .map((section) => ({ ...section, items: section.items.filter((item) => !visibleProjectKeys || visibleProjectKeys.includes(item.key)) }))
+      .filter((section) => section.items.length > 0),
+    bottomSections: NAV_SECTIONS.filter((section) => section.anchorBottom)
+      .map((section) => ({ ...section, items: section.items.filter((item) => !visibleProjectKeys || visibleProjectKeys.includes(item.key)) }))
+      .filter((section) => section.items.length > 0),
+  }), [visibleGlobalKeys, visibleProjectKeys]);
 
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
@@ -123,11 +176,22 @@ export function LeftNav({
   };
 
   const startNewSession = () => {
+    // A caller-supplied handler wins. Otherwise open a new assistant chat,
+    // scoped to the current project when there is one.
+    if (onNewSession) {
+      onNewSession();
+      return;
+    }
     const search = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
     navigate(`/assistant${search}`, { state: createNewAssistantSessionState() });
   };
 
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  // The New session and Settings buttons show as selected on their own pages,
+  // like the nav links, so those pages do not fall back to Overview.
+  const newSessionSelected = activeKey === NEW_SESSION_NAV_KEY;
+  const settingsSelected = activeKey === SETTINGS_NAV_KEY;
+  const newSessionClassName = `aw-nav-action-button${newSessionSelected ? ' aw-nav-action-button--selected' : ''}`;
 
   const goTo = (path: string) => {
     setSettingsMenuOpen(false);
@@ -237,6 +301,8 @@ export function LeftNav({
                   appearance="subtle"
                   icon={<Settings24Regular />}
                   aria-label="Settings"
+                  aria-current={settingsSelected ? 'page' : undefined}
+                  className={settingsSelected ? 'aw-nav-action-button--selected' : undefined}
                   data-testid="settings-menu-button"
                 />
               </Tooltip>
@@ -287,7 +353,7 @@ export function LeftNav({
               )}
             </PopoverSurface>
           </Popover>
-          <NotificationBell />
+          {notifications}
           <Button
             appearance="subtle"
             icon={collapsed ? <PanelLeftExpand24Regular /> : <PanelLeftContract24Regular />}
@@ -303,12 +369,7 @@ export function LeftNav({
           points now live in the global Sessions hub / /assistant route. */}
       {!collapsed && (
         <div className="aw-rail-header">
-          <ProjectSwitcher
-            projectId={projectId}
-            pathname={pathname}
-            isFallbackProject={isFallbackProject}
-            onFallbackProjectMissing={onFallbackProjectMissing}
-          />
+          {projectSwitcher}
         </div>
       )}
 
@@ -330,15 +391,16 @@ export function LeftNav({
             {collapsed ? (
               <div role="group" aria-label="Sessions" className="aw-nav-section" style={{ gap: '2px' }}>
                 {renderGlobalItem(globalSessionsItem)}
-                <Tooltip content="New session" relationship="label" positioning="after">
+                {showNewSession && <Tooltip content="New session" relationship="label" positioning="after">
                   <Button
                     appearance="subtle"
                     icon={<AddRegular />}
                     aria-label="New session"
+                    aria-current={newSessionSelected ? 'page' : undefined}
                     onClick={startNewSession}
-                    className="aw-nav-action-button"
+                    className={newSessionClassName}
                   />
-                </Tooltip>
+                </Tooltip>}
               </div>
             ) : (
               <div role="group" aria-label="Sessions" className="aw-nav-section">
@@ -353,20 +415,23 @@ export function LeftNav({
                     <span className="aw-nav-item__icon" aria-hidden="true">{globalSessionsItem.icon}</span>
                     <span className="aw-nav-item__label">{globalSessionsItem.label}</span>
                   </Link>
-                  <Tooltip content="New session" relationship="label" positioning="after">
+                  {showNewSession && <Tooltip content="New session" relationship="label" positioning="after">
                     <Button
                       appearance="subtle"
                       icon={<AddRegular />}
                       aria-label="New session"
+                      aria-current={newSessionSelected ? 'page' : undefined}
                       onClick={startNewSession}
-                      className="aw-nav-action-button"
+                      className={newSessionClassName}
                     />
-                  </Tooltip>
+                  </Tooltip>}
                 </div>
               </div>
             )}
           </>
         )}
+
+        {sessionAction}
 
         {/* Project-scoped primary sections, each preceded by a thin divider */}
         {projectId && primarySections.map((section) => (
@@ -387,10 +452,9 @@ export function LeftNav({
 
       {/* Footer: signed-in identity. Status and version appear in its menu footer. */}
       <div className="aw-rail-footer">
-        <GitHubIdentityBadge
-          projectId={projectId}
-          collapsed={collapsed}
-          footerMeta={(
+        {/* The caller decides which identity control to show. The rail passes
+            the status dot and version badge so they keep the 0.x footer layout. */}
+        {identity(collapsed, (
             <>
               <StatusDot />
               <Badge
@@ -402,8 +466,7 @@ export function LeftNav({
                 <span className="aw-identity-menu-footer__version-text">{footerVersionText}</span>
               </Badge>
             </>
-          )}
-        />
+        ))}
       </div>
     </nav>
   );

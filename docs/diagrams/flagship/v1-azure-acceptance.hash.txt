@@ -2,7 +2,7 @@
   "version": 2,
   "source": {
     "file": "v1-azure-acceptance.json",
-    "sha256": "be86ffa6b8ecb3646d944b83c242af32f0cdb97158fab04225a7df800cc849e9"
+    "sha256": "bd5958bc03cfd82d1a5a2463830a542bb2515a8c205cb4e2c7f6fd786aa3aaed"
   },
   "drawio": {
     "file": "v1-azure-acceptance.drawio",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-azure-acceptance.png",
-    "sha256": "a44c2c82bb7804a1677af89d43dfc2cd71ab01564e60ef0d18c5ca2686e25b41"
+    "sha256": "2ad34da3f9c1709312eb064611c56278cb3567255fabb0509c0ba4c482c91202"
   }
 }

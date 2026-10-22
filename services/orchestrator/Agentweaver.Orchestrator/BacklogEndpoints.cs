@@ -34,6 +34,9 @@ public static partial class CoordinationEndpoints
             "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
             RemoveBacklogDependencyAsync);
         backlog.MapPost("/tasks/{taskId}/claim", ClaimBacklogTaskAsync);
+        backlog.MapPost("/promotions", PromoteBacklogWorkPlanAsync);
+        projectBacklog.MapGet("/promotions", ReadProjectBacklogPromotionsAsync);
+        projectBacklog.MapGet("/origins", ReadProjectBacklogTaskOriginsAsync);
         return app;
     }
 
@@ -60,6 +63,80 @@ public static partial class CoordinationEndpoints
             async (revalidate, ct) => BacklogResult(await backlog.SetTaskContentAsync(
                 new BacklogTaskReference(projectId, taskId), request.Content,
                 request.ExpectedGraphRevision, request.ExpectedTaskRevision, ct, revalidate).ConfigureAwait(false)));
+
+    /// <summary>Reads recorded plan promotions for a project, oldest first.</summary>
+    private static Task<IResult> ReadProjectBacklogPromotionsAsync(
+        string projectId, HttpContext context, ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: false,
+            async (_, ct) => Results.Ok(new
+            {
+                promotions = await backlog.ReadPromotionsAsync(projectId, ct).ConfigureAwait(false)
+            }));
+
+    /// <summary>Reads the origin of each promoted task. Tasks captured directly have no entry.</summary>
+    private static Task<IResult> ReadProjectBacklogTaskOriginsAsync(
+        string projectId, HttpContext context, ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: false,
+            async (_, ct) => Results.Ok(new
+            {
+                origins = await backlog.ReadTaskOriginsAsync(projectId, ct).ConfigureAwait(false)
+            }));
+
+    /// <summary>
+    /// Promotes the run's current confirmed work plan into backlog tasks and records each task's origin.
+    /// </summary>
+    private static Task<IResult> PromoteBacklogWorkPlanAsync(
+        string projectId,
+        string runId,
+        PromoteBacklogWorkPlanRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        BacklogOwnerStore backlog,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore runSelectionContexts) =>
+        ExecuteBacklogOperationAsync(projectId, runId, context, options, projects,
+            async (actor, selection, revalidate, ct) =>
+            {
+                if (request is null || string.IsNullOrWhiteSpace(request.RootSessionId) ||
+                    string.IsNullOrWhiteSpace(request.WorkPlanId) ||
+                    request.ExpectedDecisionStateVersion < 1 || request.ExpectedExecutionFence < 1)
+                    throw new CoordinationException("backlog_promotion_invalid", StatusCodes.Status400BadRequest);
+                // Check the request against the current decision before opening the backlog transaction.
+                // The store checks again under its locks.
+                var identity = new SessionIdentity(projectId, runId, request.RootSessionId);
+                var decision = await decisions.ReadCurrentAsync(actor, identity, selection, ct)
+                    .ConfigureAwait(false);
+                if (decision.StateVersion != request.ExpectedDecisionStateVersion ||
+                    decision.State.Fence != request.ExpectedExecutionFence ||
+                    !decision.State.CanDispatch ||
+                    decision.State.ConfirmedWorkPlan is not { } confirmedPlan ||
+                    !string.Equals(confirmedPlan.Plan.Id, request.WorkPlanId, StringComparison.Ordinal))
+                    throw new CoordinationException("backlog_promotion_stale", StatusCodes.Status409Conflict);
+                // Use the selection context stored at confirmation. If none is stored, rebuild it from the
+                // selection snapshot, unless the plan needs a provider binding that only the stored context has.
+                var selectionContext = await runSelectionContexts.ReadAsync(
+                    selection.Selection, decision.State.Fence, ct).ConfigureAwait(false);
+                if (selectionContext is null && RequiresProviderBinding(decision.State, confirmedPlan.Plan))
+                    throw new CoordinationException(
+                        "backlog_promotion_selection_unavailable", StatusCodes.Status409Conflict);
+                selectionContext ??= CoordinatorWorkflowCatalog.CreateRunSelectionContext(
+                    selection.Selection.Snapshot);
+                var result = await backlog.PromoteWorkPlanAsync(
+                    actor,
+                    selection,
+                    request.RootSessionId,
+                    request.WorkPlanId,
+                    request.ExpectedDecisionStateVersion,
+                    request.ExpectedExecutionFence,
+                    request.ExpectedGraphRevision,
+                    request.IdempotencyKey,
+                    selectionContext,
+                    decisions,
+                    revalidate,
+                    ct).ConfigureAwait(false);
+                return BacklogResult(result);
+            });
 
     /// <summary>Rechecks actor, membership, bindings and role revisions after waits and before commit.</summary>
     private static Task<IResult> ExecuteProjectBacklogOperationAsync(
@@ -380,6 +457,18 @@ public sealed record BacklogTaskRevisionRequest(
 /// Request body for changing dependency edges at an expected graph revision.
 /// </summary>
 public sealed record BacklogGraphRevisionRequest(long ExpectedGraphRevision);
+
+/// <summary>
+/// Request body for promoting a run's confirmed work plan into backlog tasks.
+/// </summary>
+/// <remarks>Retry with the same idempotency key and values to read the stored promotion.</remarks>
+public sealed record PromoteBacklogWorkPlanRequest(
+    string RootSessionId,
+    string WorkPlanId,
+    long ExpectedDecisionStateVersion,
+    long ExpectedExecutionFence,
+    long ExpectedGraphRevision,
+    string IdempotencyKey);
 
 /// <summary>
 /// Request body for claiming a task with optimistic revisions and a retry-safe idempotency key.

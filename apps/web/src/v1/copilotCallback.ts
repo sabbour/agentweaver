@@ -45,13 +45,13 @@ export function expectedCopilotCallbackState(
   try {
     authorization = new URL(authorizationUri);
   } catch {
-    throw new Error('The Gateway returned an invalid GitHub authorization URL.');
+    throw new Error('The server returned an invalid GitHub authorization URL.');
   }
   if (authorization.protocol !== 'https:' ||
       authorization.username ||
       authorization.password ||
       authorization.hash) {
-    throw new Error('The Gateway returned an insecure GitHub authorization URL.');
+    throw new Error('The server returned an insecure GitHub authorization URL.');
   }
 
   const redirectUris = authorization.searchParams.getAll('redirect_uri');
@@ -63,7 +63,7 @@ export function expectedCopilotCallbackState(
 
   const states = authorization.searchParams.getAll('state');
   if (states.length !== 1 || !isBoundedParameter(states[0], COPILOT_CALLBACK_STATE_LIMIT)) {
-    throw new Error('The Gateway returned an invalid GitHub authorization state.');
+    throw new Error('The server returned an invalid GitHub authorization state.');
   }
   return states[0];
 }

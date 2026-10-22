@@ -24,7 +24,28 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
         {
             IsToolInvocation = isToolInvocation, DispatchId = dispatchId, CostTurnId = costTurnId
         };
-        await RequireAsync(request, requireCurrentAuthority, cancellationToken).ConfigureAwait(false);
+        await RequireAsync(request, requireCurrentAuthority, cancellationToken, ModelTurnContent(actionId, input))
+            .ConfigureAwait(false);
+    }
+
+    // The owner returns runtime_owner_content_required when platform Guardrails checks apply to a model turn.
+    // Only then does the client send the UTF-8 model-turn text, so runs without Guardrails never send prompt text.
+    // Input that isn't strict UTF-8 or exceeds the content limit has no content form, and the owner withholds it.
+    private static string? ModelTurnContent(string actionId, ReadOnlyMemory<byte> input)
+    {
+        // Only model turns can carry content. Oversized input is skipped here so the owner withholds it,
+        // instead of the client sending a request that validation would reject.
+        if (actionId != "model.turn" || input.IsEmpty || input.Length > RuntimeActionContract.MaximumContentBytes)
+            return null;
+        // Decode strictly so the text re-encodes to the exact same bytes, and so the input hash still matches.
+        try
+        {
+            return new System.Text.UTF8Encoding(false, true).GetString(input.Span);
+        }
+        catch (System.Text.DecoderFallbackException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -33,13 +54,34 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
     /// </summary>
     internal async Task RequireAsync(
         RuntimeActionRequest request, Func<CancellationToken, Task> requireCurrentAuthority,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? content = null)
     {
         RuntimeActionContract.Validate(request);
+        // Check the content locally before any network call, so text whose digest doesn't match the request's
+        // input hash is never sent to the owner.
+        if (content is not null)
+            _ = RuntimeActionContract.ValidateContent(new RuntimeActionContentRequest(request, content));
         await requireCurrentAuthority(cancellationToken).ConfigureAwait(false);
-        var admitted = await SendAdmissionAsync(
-            "/internal/runtime/actions/authorize", request, requireCurrentAuthority, cancellationToken)
-            .ConfigureAwait(false);
+        // First try the normal admission, which carries only the hash. Content is sent only if the owner asks.
+        RuntimeActionAdmission admitted;
+        try
+        {
+            admitted = await SendAdmissionAsync(
+                "/internal/runtime/actions/authorize", request, requireCurrentAuthority, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException failure) when (failure.Code == "runtime_owner_content_required")
+        {
+            // The owner needs the text to run Guardrails checks. Without a content form, the action can't be
+            // admitted, so fail with a specific code instead of retrying without content.
+            if (content is null)
+                throw new RuntimeAuthorizationException("runtime_guardrails_content_unsupported");
+            // Re-check authority before the second call, because it may have been revoked during the first one.
+            await requireCurrentAuthority(cancellationToken).ConfigureAwait(false);
+            admitted = await SendAdmissionAsync(
+                "/internal/runtime/actions/authorize-content", new RuntimeActionContentRequest(request, content),
+                requireCurrentAuthority, cancellationToken).ConfigureAwait(false);
+        }
         if (admitted.ContractVersion != 1 || admitted.Request != request ||
             admitted.PolicyReceiptId != request.EventId || admitted.GrantId != request.EventId.ToString("N") ||
             admitted.GrantRevision != "1")

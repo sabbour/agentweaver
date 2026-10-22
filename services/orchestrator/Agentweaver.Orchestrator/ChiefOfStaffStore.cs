@@ -340,8 +340,13 @@ public sealed class ChiefOfStaffStore
         return await MutatePriorityAsync(actor, tenantId, priorityId, request.ExpectedRevision,
             async (connection, transaction) =>
             {
+                var repositoryIdentity = await HasRepositoryIdentityAsync(connection, transaction, cancellationToken);
+                // A rolling deployment can serve the old schema, but must not lose new target identity.
+                if (request.Kind is "issue" or "pull_request" && !repositoryIdentity)
+                    throw new CoordinationException("database_update_pending", StatusCodes.Status503ServiceUnavailable);
                 if (request.Kind == "conversation")
                 {
+                    // A conversation link must belong to this caller, tenant and project, not just exist.
                     await using var owned = new NpgsqlCommand($"""
                         SELECT 1 FROM {_schema}.chief_of_staff_conversations
                         WHERE conversation_id = @conversation AND project_id = @project AND tenant_id = @tenant
@@ -353,10 +358,12 @@ public sealed class ChiefOfStaffStore
                     if (await owned.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
                         throw new CoordinationException("priority_link_target_not_found", StatusCodes.Status404NotFound);
                 }
+                var identityColumns = repositoryIdentity ? ", provider_id, repository_owner, repository_name" : "";
+                var identityValues = repositoryIdentity ? ", @provider, @repositoryOwner, @repositoryName" : "";
                 await using var insert = new NpgsqlCommand($"""
                     INSERT INTO {_schema}.chief_of_staff_priority_links
-                        (priority_id, link_id, kind, project_id, run_id, conversation_id, item_number, artifact_id)
-                    SELECT @id, @link, @kind, @project, @run, @conversation, @number, @artifact
+                        (priority_id, link_id, kind, project_id, run_id, conversation_id, item_number, artifact_id{identityColumns})
+                    SELECT @id, @link, @kind, @project, @run, @conversation, @number, @artifact{identityValues}
                     WHERE (SELECT count(*) FROM {_schema}.chief_of_staff_priority_links WHERE priority_id = @id) < @maximum
                     ON CONFLICT DO NOTHING
                     RETURNING 1
@@ -371,9 +378,14 @@ public sealed class ChiefOfStaffStore
                 insert.Parameters.AddWithValue("number", NpgsqlDbType.Bigint, (object?)request.Number ?? DBNull.Value);
                 insert.Parameters.AddWithValue(
                     "artifact", NpgsqlDbType.Varchar, (object?)request.ArtifactId ?? DBNull.Value);
+                // Preserve the selected repository, not only its locally scoped issue or PR number.
+                insert.Parameters.AddWithValue("provider", NpgsqlDbType.Varchar, (object?)request.ProviderId ?? DBNull.Value);
+                insert.Parameters.AddWithValue("repositoryOwner", NpgsqlDbType.Varchar, (object?)request.Repository?.Owner ?? DBNull.Value);
+                insert.Parameters.AddWithValue("repositoryName", NpgsqlDbType.Varchar, (object?)request.Repository?.Name ?? DBNull.Value);
                 insert.Parameters.AddWithValue("maximum", NpgsqlDbType.Integer, MaximumLinks);
                 if (await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     return;
+                // Distinguish the bounded-list limit from an exact target duplicate without changing either row.
                 await using var count = new NpgsqlCommand(
                     $"SELECT count(*) FROM {_schema}.chief_of_staff_priority_links WHERE priority_id = @id",
                     connection, transaction);
@@ -510,6 +522,11 @@ public sealed class ChiefOfStaffStore
         }
 
         var links = new Dictionary<string, List<ChiefOfStaffPriorityLink>>(StringComparer.Ordinal);
+        // Schema 031 has no repository columns. Keep every existing read usable during rollout.
+        var repositoryIdentity = await HasRepositoryIdentityAsync(connection, transaction, cancellationToken);
+        var identityProjection = repositoryIdentity
+            ? "l.provider_id, l.repository_owner, l.repository_name"
+            : "NULL::varchar, NULL::varchar, NULL::varchar";
         await using (var select = new NpgsqlCommand($"""
             SELECT l.priority_id, l.link_id, l.kind, l.project_id, l.run_id, l.conversation_id, l.item_number,
                 l.artifact_id, l.created_at,
@@ -523,7 +540,7 @@ public sealed class ChiefOfStaffStore
                     WHEN 'conversation' THEN coalesce({RunStateSql("cr", "croot")}, cq.state)
                     ELSE 'unavailable'
                 END AS state,
-                c.run_id
+                c.run_id, {identityProjection}
             FROM {_schema}.chief_of_staff_priority_links AS l
             JOIN {_schema}.chief_of_staff_priorities AS p ON p.priority_id = l.priority_id
             LEFT JOIN {_schema}.accepted_runs AS r
@@ -559,7 +576,9 @@ public sealed class ChiefOfStaffStore
                     reader.IsDBNull(6) ? null : reader.GetInt64(6),
                     reader.IsDBNull(7) ? null : reader.GetString(7),
                     found && !reader.IsDBNull(10) ? reader.GetString(10) : null,
-                    reader.GetFieldValue<DateTimeOffset>(8));
+                    reader.GetFieldValue<DateTimeOffset>(8),
+                    reader.IsDBNull(12) ? null : reader.GetString(12),
+                    reader.IsDBNull(12) ? null : new ProjectSourceControlRepository(reader.GetString(13), reader.GetString(14)));
                 if (!links.TryGetValue(reader.GetString(0), out var bucket))
                     links[reader.GetString(0)] = bucket = [];
                 bucket.Add(link);
@@ -617,6 +636,11 @@ public sealed class ChiefOfStaffStore
     private static void ValidateLink(AddChiefOfStaffPriorityLinkRequest request)
     {
         static bool Id(string? value) => value is not null && IsIdentity(value);
+        // New repository links must be complete. Existing number-only rows are not rewritten.
+        var repositoryLink = request.Kind is "issue" or "pull_request";
+        var repositoryIdentityValid = repositoryLink
+            ? Id(request.ProviderId) && Id(request.Repository?.Owner) && Id(request.Repository?.Name)
+            : request.ProviderId is null && request.Repository is null;
         var valid = request.Kind switch
         {
             "run" => Id(request.RunId) && request.ConversationId is null && request.Number is null && request.ArtifactId is null,
@@ -628,8 +652,19 @@ public sealed class ChiefOfStaffStore
                 request.Number is null,
             _ => false
         };
-        if (!valid || !Id(request.ProjectId))
+        if (!valid || !Id(request.ProjectId) || !repositoryIdentityValid)
             throw new CoordinationException("priority_link_invalid", StatusCodes.Status400BadRequest);
+    }
+
+    private async Task<bool> HasRepositoryIdentityAsync(
+        NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
+    {
+        // The migration records its receipt atomically with columns and indexes. Do not cache it:
+        // the same image must gain the feature as soon as the database update commits.
+        await using var command = new NpgsqlCommand(
+            $"SELECT EXISTS (SELECT 1 FROM {_schema}.coordination_schema_migrations WHERE version = 33)",
+            connection, transaction);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
     private static string ValidateOutcome(string? outcome)

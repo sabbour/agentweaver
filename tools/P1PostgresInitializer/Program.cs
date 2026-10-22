@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Agentweaver.Environment;
 using Agentweaver.EventsAndSessions;
@@ -32,20 +33,35 @@ var continuationMode = args.Length == 17 && args[0] == "--continue-after-project
 var freshMode = args.Length == 9 && args[0] == "--initialize" &&
     args[1] == "--source-sha" && args[3] == "--core-merge-sha" &&
     args[5] == "--plan-sha256" && args[7] == "--receipt";
-if (!freshMode && !continuationMode)
+// Inspection is read-only and needs no Core merge or receipt.
+var inspectMode = args.Length == 5 && args[0] == "--inspect" &&
+    args[1] == "--source-sha" && args[3] == "--plan-sha256";
+// Incremental continuation of an already initialized database: --dry-run writes nothing; --receipt applies.
+var pendingMode = (args.Length == 12 || args.Length == 13) && args[0] == "--apply-pending-migrations" &&
+    args[1] == "--source-sha" && args[3] == "--core-merge-sha" && args[5] == "--plan-sha256" &&
+    args[7] == "--max-core-version" && args[9] == "--max-events-version" &&
+    (args.Length == 12 ? args[11] == "--dry-run" : args[11] == "--receipt");
+// Each mode accepts one exact argument shape. Positional checks keep a typo from silently selecting
+// a different mode. The 12-argument pending form ends with --dry-run, so it is read-only too.
+var readOnlyMode = inspectMode || (pendingMode && args.Length == 12);
+if (!freshMode && !continuationMode && !inspectMode && !pendingMode)
     throw new ArgumentException(
-        "Use --plan, --initialize --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --receipt PATH, or the reviewed --continue-after-projects-config mode with its prior source, plan, and receipt hashes.");
+        "Use --plan; --inspect --source-sha SHA --plan-sha256 SHA256; --apply-pending-migrations --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --max-core-version N --max-events-version N (--dry-run | --receipt PATH); --initialize --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --receipt PATH; or the reviewed --continue-after-projects-config mode with its prior source, plan, and receipt hashes.");
 
+// Argument positions differ by mode. Inspection has no Core merge, so its plan hash sits at index 4.
+// Only writing modes get a receipt path; read-only runs leave receiptArgument null.
 var sourceSha = args[2];
-var coreMergeSha = args[4];
-var expectedPlanHash = args[6];
+var coreMergeSha = inspectMode ? null : args[4];
+var expectedPlanHash = inspectMode ? args[4] : args[6];
 var priorSourceSha = continuationMode ? args[8] : null;
 var priorPlanHash = continuationMode ? args[10] : null;
 var priorReceiptArgument = continuationMode ? args[12] : null;
 var priorReceiptHash = continuationMode ? args[14] : null;
-var receiptArgument = continuationMode ? args[16] : args[8];
+var receiptArgument = continuationMode ? args[16] : freshMode ? args[8] : pendingMode && !readOnlyMode ? args[12] : null;
+int? maxCoreVersion = pendingMode ? ParseVersion(args[8]) : null;
+int? maxEventsVersion = pendingMode ? ParseVersion(args[10]) : null;
 if (!Regex.IsMatch(sourceSha, "^[0-9a-f]{40}$") ||
-    !Regex.IsMatch(coreMergeSha, "^[0-9a-f]{40}$") ||
+    (coreMergeSha is not null && !Regex.IsMatch(coreMergeSha, "^[0-9a-f]{40}$")) ||
     !Regex.IsMatch(expectedPlanHash, "^[0-9a-f]{64}$") ||
     (continuationMode && (!Regex.IsMatch(priorSourceSha!, "^[0-9a-f]{40}$") ||
         !Regex.IsMatch(priorPlanHash!, "^[0-9a-f]{64}$") ||
@@ -54,7 +70,9 @@ if (!Regex.IsMatch(sourceSha, "^[0-9a-f]{40}$") ||
 // Never initialize from a dirty or stale checkout, and require the separately reviewed Core merge to be an ancestor.
 var worktreeStatus = await RunLocalAsync("git", ["status", "--porcelain", "--untracked-files=all"]);
 var statusEntries = worktreeStatus.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-var invalidStatus = continuationMode
+// Fresh initialization needs a fully clean checkout. Later modes may also see receipts that earlier
+// runs left under Temp/, so untracked files there are allowed. Any other change is rejected.
+var invalidStatus = continuationMode || inspectMode || pendingMode
     ? statusEntries.Any(line => !line.StartsWith("?? Temp/", StringComparison.Ordinal) &&
         !line.StartsWith("?? Temp\\", StringComparison.Ordinal))
     : statusEntries.Length != 0;
@@ -64,31 +82,16 @@ if (invalidStatus ||
     throw new InvalidOperationException("Initialization requires the clean, locally fetched, reviewed current v1 tip.");
 if (continuationMode)
     await RunLocalAsync("git", ["merge-base", "--is-ancestor", priorSourceSha!, sourceSha]);
-await RunLocalAsync("git", ["merge-base", "--is-ancestor", coreMergeSha, sourceSha]);
-var coreParents = await RunLocalAsync("git", ["show", "--format=%P", "--no-patch", coreMergeSha]);
-if (coreParents.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 2)
-    throw new InvalidOperationException("The supplied Core commit must be the actual separately reviewed merge.");
-var migratorSource = await File.ReadAllTextAsync(
-    Path.Combine("services", "orchestrator", "Agentweaver.Orchestrator", "CoordinationOwnerMigrator.cs"));
-// Core versions include durable interactive requests and must match the reviewed plan; 017 stays excluded.
-if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,\s*19,\s*20,\s*21,\s*22,\s*23,\s*24,\s*25,\s*26,\s*27\]\)") ||
-    !migratorSource.Contains("16 => \"project_backlog\"", StringComparison.Ordinal) ||
-    !migratorSource.Contains("18 => \"reviewed_remote_tool_snapshots\"", StringComparison.Ordinal) ||
-    !migratorSource.Contains("21 => \"row_lock_record_updates\"", StringComparison.Ordinal) ||
-    !migratorSource.Contains("22 => \"run_list_completion\"", StringComparison.Ordinal) ||
-    !migratorSource.Contains("23 => \"project_run_requests\"", StringComparison.Ordinal) ||
-    !migratorSource.Contains("24 => \"chief_of_staff\"", StringComparison.Ordinal) ||
-    !migratorSource.Contains("25 => \"user_notification_dismissals\"", StringComparison.Ordinal) ||
-    !migratorSource.Contains("26 => \"backlog_task_content\"", StringComparison.Ordinal) ||
-    !migratorSource.Contains("27 => \"periodic_issue_sync\"", StringComparison.Ordinal))
-    throw new InvalidOperationException("Reviewed Core 016/018/021/022/023/024/025/026/027 migration wiring is required before initialization; 017 is not permitted.");
-
-// The Events reporting index is a separately reviewed live-apply prerequisite, never an implicit runtime write.
-var eventsMigratorSource = await File.ReadAllTextAsync(
-    Path.Combine("services", "events-and-sessions", "Agentweaver.EventsAndSessions", "EventsAndSessionsMigrator.cs"));
-if (!eventsMigratorSource.Contains("private const int CurrentSchemaVersion = 9;", StringComparison.Ordinal) ||
-    !eventsMigratorSource.Contains("9 => \"Agentweaver.EventsAndSessions.Migrations.009_project_usage_index.sql\"", StringComparison.Ordinal))
-    throw new InvalidOperationException("Reviewed Events 009 project usage index wiring is required before initialization.");
+if (coreMergeSha is not null)
+{
+    // Inspection skips this because it writes nothing. Writing modes require the reviewed Core merge
+    // to be in this source's history. git exits non-zero, and RunLocalAsync throws, when it is not.
+    await RunLocalAsync("git", ["merge-base", "--is-ancestor", coreMergeSha, sourceSha]);
+    // A real merge commit has exactly two parents. This rejects an ordinary commit SHA passed by mistake.
+    var coreParents = await RunLocalAsync("git", ["show", "--format=%P", "--no-patch", coreMergeSha]);
+    if (coreParents.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 2)
+        throw new InvalidOperationException("The supplied Core commit must be the actual separately reviewed merge.");
+}
 
 var planJson = await RunLocalAsync("node", ["scripts/azure/lib/p1-postgres-plan.mjs", "--json"]);
 // The reviewed plan hash binds every later role, schema, relation, and grant decision to source output.
@@ -99,8 +102,14 @@ var plan = JsonSerializer.Deserialize<PostgresPlan>(planJson, new JsonSerializer
 {
     PropertyNameCaseInsensitive = true,
 }) ?? throw new InvalidOperationException("The exact source plan is missing.");
-if (plan.EventsVersions is null || !plan.EventsVersions.SequenceEqual(Enumerable.Range(1, 9)))
-    throw new InvalidOperationException("The reviewed Events migration plan must include exactly versions 001 through 009.");
+// The plan catalog, not pinned source text, defines the versions; it must equal what the compiled migrators would apply.
+// The migrators always apply every missing version they know. So when a maximum is given, it must
+// be the last catalog version. A source that contains a newer migration then stops here, before any
+// connection, instead of applying more than the operator approved.
+InitializerChecks.AssertMigrationCatalog(plan.CoreVersions, CoordinationOwnerMigrator.SupportedVersions,
+    maxCoreVersion, "Core/Orchestrator");
+InitializerChecks.AssertMigrationCatalog(plan.EventsVersions, EventsAndSessionsMigrator.SupportedVersions,
+    maxEventsVersion, "Events");
 InitializerChecks.AssertPrincipalObjectIds(plan.Services);
 InitializerChecks.AssertMutationDenialPlan(plan.Services);
 InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);
@@ -133,9 +142,10 @@ if (continuationMode)
         throw new InvalidOperationException("The prior receipt's plan is not the exact same target and runtime mapping as the current source.");
 }
 
-var receiptPath = Path.GetFullPath(receiptArgument);
 var receiptRoot = Path.GetFullPath("Temp") + Path.DirectorySeparatorChar;
-if (!receiptPath.StartsWith(receiptRoot, StringComparison.OrdinalIgnoreCase))
+// Read-only modes never create a receipt; every writing mode records each stage durably.
+var receiptPath = receiptArgument is null ? null : Path.GetFullPath(receiptArgument);
+if (receiptPath is not null && !receiptPath.StartsWith(receiptRoot, StringComparison.OrdinalIgnoreCase))
     throw new ArgumentException("Use a new receipt file beneath this source copy's Temp directory.");
 if (continuationMode)
 {
@@ -154,13 +164,19 @@ if (continuationMode)
         JsonSerializer.Deserialize<ContinuationReceiptEntry>(line,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
         ?? throw new InvalidOperationException("The prior receipt contains an invalid record.")).ToArray();
-    InitializerChecks.AssertContinuationReceipt(priorEntries, priorSourceSha!, coreMergeSha, priorPlanHash!);
+    InitializerChecks.AssertContinuationReceipt(priorEntries, priorSourceSha!, coreMergeSha!, priorPlanHash!);
 }
-Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
 // Create the receipt once and flush every stage so an interruption never looks like an unrecorded success.
-await using var receipt = new FileStream(receiptPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+FileStream? receipt = null;
+if (receiptPath is not null)
+{
+    Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
+    receipt = new FileStream(receiptPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+}
+await using var receiptOwner = receipt;
 async Task RecordAsync(string stage)
 {
+    if (receipt is null) return;
     var line = JsonSerializer.Serialize(new { stage, sourceSha, coreMergeSha, planHash, at = DateTimeOffset.UtcNow });
     await receipt.WriteAsync(Encoding.UTF8.GetBytes(line + "\n"));
     receipt.Flush(flushToDisk: true);
@@ -183,6 +199,8 @@ try
             Database = database, Username = plan.Target.OperatorName, Password = token.Token,
             SslMode = SslMode.VerifyFull, Timeout = 30, CommandTimeout = 60,
             ApplicationName = "agentweaver-p1-postgres-operator-initializer",
+            // Read-only modes start every session read-only; RESET/DISCARD keeps this startup default.
+            Options = readOnlyMode ? "-c default_transaction_read_only=on" : null,
         };
         var builder = new NpgsqlDataSourceBuilder(settings.ConnectionString);
         builder.UseSslClientAuthenticationOptionsCallback(options => options.TargetHost = plan.Target.PostgresHost);
@@ -208,8 +226,22 @@ try
     }
     await using var source = CreateSource(plan.Target.Database);
     await using var connection = await source.OpenConnectionAsync(cancellationToken);
-    if (!continuationMode)
+    if (readOnlyMode)
     {
+        // Confirm the server applied the read-only startup option on both connections. If it ignored
+        // the option, stop before the first catalog read rather than trusting the request.
+        foreach (var session in new[] { principalConnection, connection })
+        {
+            await using var readOnly = new NpgsqlCommand(
+                "SELECT pg_catalog.current_setting('default_transaction_read_only') = 'on'", session);
+            if (await readOnly.ExecuteScalarAsync(cancellationToken) is not true)
+                throw new InvalidOperationException("The read-only session setting was not accepted. No reads or writes were attempted.");
+        }
+    }
+    if (freshMode)
+    {
+        // Only fresh initialization requires an empty target. The other modes expect the roles and
+        // schemas to exist already and check them in their own branches.
         await using var fresh = new NpgsqlCommand("""
             SELECT current_user = @operator AND current_database() = 'agentweaver'
               AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = ANY(@roles))
@@ -225,6 +257,270 @@ try
     var operatorOid = await ReadJsonAsync<uint>(connection, null,
         "SELECT to_jsonb(oid::bigint)::text FROM pg_catalog.pg_roles WHERE rolname = current_user", cancellationToken);
     RuntimePrincipal[] principals = [];
+
+    if (inspectMode)
+    {
+        // Inspection reports live facts for operator review and never asserts or changes them.
+        var planPrincipals = await P1PostgresContinuation.ReadPrincipalsAsync(
+            principalConnection, null, plan, cancellationToken);
+        string principalStatus;
+        try
+        {
+            // Run the same principal checks the writing modes use, but record a mismatch in the report
+            // instead of stopping. The operator needs to see every difference, not only the first one.
+            var grantors = InitializerChecks.CaptureMembershipGrantors(
+                plan.Services, planPrincipals, operatorOid, plan.Target.TenantId);
+            InitializerChecks.AssertPrincipals(
+                plan.Services, planPrincipals, operatorOid, plan.Target.TenantId, grantors);
+            principalStatus = "exact";
+        }
+        catch (InvalidOperationException error)
+        {
+            principalStatus = $"mismatch: {error.Message}";
+        }
+        var services = new JsonArray();
+        foreach (var service in plan.Services)
+        {
+            // A missing role or schema is reported as such. Schema details are read only when the schema exists.
+            var roleExists = planPrincipals.Any(item => item.Role == service.Role);
+            var schema = await ReadNodeAsync(connection, InitializerChecks.SchemaStateQuery, cancellationToken,
+                new NpgsqlParameter("schema", service.Schema));
+            var item = new JsonObject
+            {
+                ["service"] = service.Service,
+                ["schema"] = service.Schema,
+                ["role"] = service.Role,
+                ["roleExists"] = roleExists,
+                ["schemaState"] = schema,
+            };
+            if (schema is not null)
+            {
+                foreach (var (table, column) in HistoryTables(service))
+                    item[table] = column == "version"
+                        ? ToNode(await ReadIntHistoryAsync(connection, service.Schema, table, cancellationToken))
+                        : ToNode(await ReadTextHistoryAsync(connection, service.Schema, table, cancellationToken));
+                var planned = service.Service switch
+                {
+                    "orchestrator" => plan.CoreVersions,
+                    "events-and-sessions" => plan.EventsVersions,
+                    _ => null,
+                };
+                if (planned is not null)
+                {
+                    // Only Core and Events use integer version histories that can be partly applied.
+                    // Pending versions are planned but absent; unplanned versions exist live but not in this source.
+                    var applied = await ReadIntHistoryAsync(connection, service.Schema,
+                        HistoryTables(service)[0].Table, cancellationToken) ?? [];
+                    item["plannedVersions"] = ToNode(planned);
+                    item["pendingVersions"] = ToNode(planned.Except(applied).ToArray());
+                    item["unplannedAppliedVersions"] = ToNode(applied.Except(planned).ToArray());
+                }
+                var relations = await ReadRelationsAsync(connection, null, service, roleExists, cancellationToken);
+                // Show live runtime privileges next to the planned ones. A null plan value means the relation
+                // is not in the plan at all; an empty list means it is planned as owner-only.
+                item["relations"] = JsonSerializer.SerializeToNode(relations.Select(relation => new
+                {
+                    relation.Name,
+                    relation.Kind,
+                    relation.Owner,
+                    relation.RuntimePrivileges,
+                    PlannedPrivileges = service.Tables.SingleOrDefault(table => table.Table == relation.Name)?.Privileges
+                        ?? (service.OwnerOnlyTables.Contains(relation.Name) || service.OwnerOnlySequences.Contains(relation.Name)
+                            ? Array.Empty<string>() : (string[]?)null),
+                }), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+                item["missingPlannedRelations"] = ToNode(service.Tables.Select(table => table.Table)
+                    .Concat(service.OwnerOnlyTables).Concat(service.OwnerOnlySequences)
+                    .Except(relations.Select(relation => relation.Name)).ToArray());
+                try
+                {
+                    // Reuse the service migrator's own startup verification. Failure is reported, not thrown,
+                    // because an older live schema is an expected inspection result.
+                    await P1PostgresContinuation.VerifyServiceMigrationsAsync(source, service, cancellationToken);
+                    item["sourceMigrationVerification"] = "complete";
+                }
+                catch (Exception error) when (error is InvalidOperationException or PostgresException)
+                {
+                    item["sourceMigrationVerification"] = $"incomplete: {error.GetType().Name}";
+                }
+            }
+            services.Add(item);
+        }
+        var report = new JsonObject
+        {
+            ["mode"] = "inspect",
+            ["writes"] = false,
+            ["sourceSha"] = sourceSha,
+            ["planSha256"] = planHash,
+            ["postgresHost"] = plan.Target.PostgresHost,
+            ["database"] = plan.Target.Database,
+            ["operator"] = plan.Target.OperatorName,
+            ["planPrincipalStatus"] = principalStatus,
+            ["planPrincipals"] = JsonSerializer.SerializeToNode(planPrincipals,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
+            ["entraServicePrincipals"] = await ReadNodeAsync(principalConnection, InitializerChecks.ServicePrincipalsQuery, cancellationToken),
+            ["databaseGrants"] = await ReadNodeAsync(connection, InitializerChecks.DatabaseGrantsQuery, cancellationToken),
+            ["identityBroker"] = new JsonObject
+            {
+                ["schemaState"] = await ReadNodeAsync(connection, InitializerChecks.SchemaStateQuery, cancellationToken,
+                    new NpgsqlParameter("schema", "identity_broker")),
+                ["__ef_migrations_history"] = ToNode(await ReadTextHistoryAsync(
+                    connection, "identity_broker", "__ef_migrations_history", cancellationToken)),
+            },
+            ["services"] = services,
+        };
+        Console.WriteLine(report.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        Console.WriteLine("P1_POSTGRES_INSPECTION_FINISHED writes=false");
+        return 0;
+    }
+
+    if (pendingMode)
+    {
+        // Incremental continuation proves the whole initialized state before its first write and never creates,
+        // drops, or resets roles or schemas. Only Core/Orchestrator and Events may have pending versions.
+        // Step 1: the five runtime roles must map exactly to their Entra principals, and each must already
+        // have CONNECT. This mode never creates roles or grants CONNECT, so anything missing stops the run.
+        principals = await P1PostgresContinuation.ReadPrincipalsAsync(principalConnection, null, plan, cancellationToken);
+        var grantors = InitializerChecks.CaptureMembershipGrantors(
+            plan.Services, principals, operatorOid, plan.Target.TenantId);
+        InitializerChecks.AssertPrincipals(plan.Services, principals, operatorOid, plan.Target.TenantId, grantors);
+        InitializerChecks.AssertRuntimeDatabaseConnect(existingBoundary, principals.Select(item => item.Oid).ToArray());
+        await AssertPreflightAsync(connection, plan, existingBoundary, operatorOid, cancellationToken);
+        // Step 2: check each service before any write. "before" keeps the live history for the receipt;
+        // "pending" keeps the planned versions that are not yet applied.
+        var before = new Dictionary<string, int[]>(StringComparer.Ordinal);
+        var pending = new Dictionary<string, int[]>(StringComparer.Ordinal);
+        foreach (var service in plan.Services)
+        {
+            // The schema must be owned by the operator and grant the runtime role only USAGE, and every
+            // live table or sequence must be one the plan knows about. Unknown objects stop the run.
+            var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
+            InitializerChecks.AssertServiceSchemaAcl(service,
+                await ReadJsonAsync<SchemaAclState>(connection, null, InitializerChecks.SchemaAclQuery, cancellationToken,
+                    new NpgsqlParameter("schema", service.Schema)),
+                operatorOid, runtimeOid);
+            InitializerChecks.AssertRelationsWithinPlan(service,
+                await ReadRelationsAsync(connection, null, service, true, cancellationToken), plan.Target.OperatorName);
+            var planned = PlannedVersions(service);
+            if (planned is not null)
+            {
+                // An initialized database always has a history table. Pending versions must extend the live
+                // history as a suffix; a gap or an unknown live version fails here.
+                var applied = await ReadIntHistoryAsync(connection, service.Schema,
+                    HistoryTables(service)[0].Table, cancellationToken)
+                    ?? throw new InvalidOperationException($"The {service.Service} migration history is missing.");
+                before[service.Service] = [.. applied.Order()];
+                pending[service.Service] = InitializerChecks.PendingMigrationVersions(planned, applied, service.Service);
+                // Services with pending versions are verified after they migrate, not now.
+                if (pending[service.Service].Length != 0) continue;
+            }
+            // Services with nothing pending must already match the reviewed migrations, inventory, and grants exactly.
+            await P1PostgresContinuation.VerifyServiceMigrationsAsync(source, service, cancellationToken);
+            await P1PostgresContinuation.AssertOwnedObjectsAsync(
+                connection, service, plan.Target.OperatorName, cancellationToken);
+            // The grant readback runs inside a transaction that is always rolled back, so it cannot change anything.
+            await using var readback = await connection.BeginTransactionAsync(cancellationToken);
+            await AssertFunctionGrantsAsync(connection, readback, service, operatorOid, runtimeOid, cancellationToken);
+            await transactionCheckAsync(connection, readback, service, operatorOid, runtimeOid, cancellationToken);
+            await readback.RollbackAsync(cancellationToken);
+        }
+        // A dry run stops here after printing what it would apply. It has made no writes and has no receipt.
+        var summary = JsonSerializer.Serialize(new { before, pending, maxCoreVersion, maxEventsVersion });
+        if (readOnlyMode)
+        {
+            Console.WriteLine(summary);
+            Console.WriteLine("P1_POSTGRES_PENDING_MIGRATIONS_DRY_RUN writes=false");
+            return 0;
+        }
+
+        // Step 3: migrate each service that has pending versions. The receipt records the start and the end
+        // of each one so an interrupted run shows exactly where it stopped.
+        await RecordAsync($"pending_state_checked:{summary}");
+        foreach (var service in plan.Services.Where(item => pending.GetValueOrDefault(item.Service)?.Length > 0))
+        {
+            // Repeat the boundary preflight right before each migration in case another session changed it.
+            await AssertPreflightAsync(connection, plan, existingBoundary, operatorOid, cancellationToken);
+            await RecordAsync($"{service.Service}:migration_begin:{string.Join(',', pending[service.Service])}");
+            // The service's own migrator applies all of its missing versions. The catalog check earlier
+            // proved that this set is exactly the reviewed plan, so nothing beyond it can run.
+            await P1PostgresContinuation.MigrateServiceAsync(source, service, cancellationToken);
+            await P1PostgresContinuation.VerifyServiceMigrationsAsync(source, service, cancellationToken);
+            // After migrating, the live history must equal the planned versions exactly.
+            var after = await ReadIntHistoryAsync(connection, service.Schema,
+                HistoryTables(service)[0].Table, cancellationToken) ?? [];
+            if (!after.Order().SequenceEqual(PlannedVersions(service)!))
+                throw new InvalidOperationException($"The {service.Service} history after migration differs from the reviewed plan.");
+            // New tables must be owned by the operator, not by the runtime role.
+            await P1PostgresContinuation.AssertOwnedObjectsAsync(
+                connection, service, plan.Target.OperatorName, cancellationToken);
+            await RecordAsync($"{service.Service}:migrated:{string.Join(',', after.Order())}");
+        }
+
+        // Re-apply the exact planned grants for the two incrementally migrated services in one checked transaction.
+        await using (var grants = await connection.BeginTransactionAsync(cancellationToken))
+        {
+            foreach (var service in plan.Services.Where(item => PlannedVersions(item) is not null))
+            {
+                // Grants are additive and idempotent, so re-granting already present privileges is safe.
+                // New tables from the pending migrations get their planned privileges here.
+                await ExecuteAsync(connection, grants,
+                    $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}", cancellationToken);
+                foreach (var table in service.Tables)
+                {
+                    var relation = $"{Quote(service.Schema)}.{Quote(table.Table)}";
+                    await ExecuteAsync(connection, grants,
+                        $"GRANT {string.Join(", ", table.Privileges)} ON TABLE {relation} TO {Quote(service.Role)}",
+                        cancellationToken);
+                    // Some tables also let the runtime role update only a lock column.
+                    if (table.LockColumn is not null)
+                        await ExecuteAsync(connection, grants,
+                            $"GRANT UPDATE ({Quote(table.LockColumn)}) ON TABLE {relation} TO {Quote(service.Role)}",
+                            cancellationToken);
+                }
+                foreach (var function in service.Functions)
+                {
+                    var signature = $"{Quote(service.Schema)}.{function.Signature}";
+                    // PostgreSQL grants EXECUTE to PUBLIC by default. Remove it, then grant EXECUTE only
+                    // to the runtime role when the plan allows it.
+                    await ExecuteAsync(connection, grants,
+                        $"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC", cancellationToken);
+                    if (function.Execute)
+                        await ExecuteAsync(connection, grants,
+                            $"GRANT EXECUTE ON FUNCTION {signature} TO {Quote(service.Role)}", cancellationToken);
+                }
+            }
+            // CONNECT already exists, so the database ACL and protected state must be byte-for-byte unchanged.
+            InitializerChecks.AssertBoundary(existingBoundary,
+                await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken), []);
+            // Read every service's grants back inside the same transaction. Any difference throws, and the
+            // transaction is disposed without commit, so no partial grant change is kept.
+            foreach (var service in plan.Services)
+            {
+                var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
+                await AssertFunctionGrantsAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
+                await transactionCheckAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
+            }
+            await grants.CommitAsync(cancellationToken);
+        }
+        // Step 4: record the final histories. Runtime identity sign-in and deployment are proven later, not here.
+        var final = new Dictionary<string, int[]>(StringComparer.Ordinal);
+        foreach (var service in plan.Services.Where(item => PlannedVersions(item) is not null))
+            final[service.Service] = [.. (await ReadIntHistoryAsync(connection, service.Schema,
+                HistoryTables(service)[0].Table, cancellationToken) ?? []).Order()];
+        var finalSummary = JsonSerializer.Serialize(new { before, after = final });
+        await RecordAsync($"pending_migrations_and_exact_grants_committed:{finalSummary}");
+        Console.WriteLine(finalSummary);
+        Console.WriteLine("P1_POSTGRES_PENDING_MIGRATIONS_APPLIED runtimeIdentityProof=false deploymentProof=false");
+        return 0;
+    }
+
+    // Only Core/Orchestrator and Events have integer version lists in the plan. Other services return null,
+    // which means "no incremental migrations allowed; verify only".
+    int[]? PlannedVersions(ServicePlan service) => service.Service switch
+    {
+        "orchestrator" => plan.CoreVersions,
+        "events-and-sessions" => plan.EventsVersions,
+        _ => null,
+    };
 
     if (continuationMode)
     {
@@ -243,7 +539,7 @@ try
             plan.Target.TenantId, cancellationToken);
         await RecordAsync("projects_config_prefix_checked");
     }
-    else
+    else if (freshMode)
     {
         // Fresh initialization accepts only an empty target, then verifies role mappings before committing role setup.
         await RecordAsync("fresh_target_checked");
@@ -428,13 +724,88 @@ try
 }
 catch (Exception error)
 {
-    await InitializerChecks.ReportFailureAsync(error, receiptPath, RecordAsync, Console.Error,
+    await InitializerChecks.ReportFailureAsync(error, receiptPath ?? "(none: read-only mode wrote no receipt)",
+        RecordAsync, Console.Error,
         error is PostgresException postgres ? postgres.SqlState : null);
     return 1;
 }
 
 // Quotes identifiers using the same source-checked rules as the invariant helpers.
 static string Quote(string value) => InitializerChecks.Quote(value);
+
+// Parses an explicit approved maximum migration version.
+static int ParseVersion(string value) => Regex.IsMatch(value, "^[1-9][0-9]{0,3}$")
+    ? int.Parse(value, System.Globalization.CultureInfo.InvariantCulture)
+    : throw new ArgumentException("Maximum migration versions must be positive integers.");
+
+// Lists each service's migration history tables; the first is the service's own versioned history.
+static (string Table, string Column)[] HistoryTables(ServicePlan service) => service.Service switch
+{
+    "projects-config" or "environment" => [("__ef_migrations_history", "MigrationId")],
+    "knowledge" => [("knowledge_schema_migrations", "version"), ("outbox_schema_migrations", "version")],
+    "events-and-sessions" => [("sessions_schema_migrations", "version"), ("outbox_schema_migrations", "version")],
+    "orchestrator" => [("coordination_schema_migrations", "version"), ("outbox_schema_migrations", "version")],
+    _ => throw new InvalidOperationException("The source plan contains an unsupported service."),
+};
+
+// Reads an integer migration history, or null when the history table does not exist.
+static async Task<int[]?> ReadIntHistoryAsync(NpgsqlConnection connection, string schema, string table,
+    CancellationToken cancellationToken)
+{
+    // Null (no table) differs from an empty list (table exists, nothing applied). Callers treat them differently.
+    if (!await RelationExistsAsync(connection, schema, table, cancellationToken)) return null;
+    await using var query = new NpgsqlCommand(
+        $"SELECT version FROM {Quote(schema)}.{Quote(table)} ORDER BY version", connection);
+    var versions = new List<int>();
+    await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+    while (await reader.ReadAsync(cancellationToken)) versions.Add(reader.GetInt32(0));
+    return [.. versions];
+}
+
+// Reads an Entity Framework migration history, or null when the history table does not exist.
+static async Task<string[]?> ReadTextHistoryAsync(NpgsqlConnection connection, string schema, string table,
+    CancellationToken cancellationToken)
+{
+    // Same null-versus-empty rule as the integer history. Entity Framework ids are text, so they are read as strings.
+    if (!await RelationExistsAsync(connection, schema, table, cancellationToken)) return null;
+    await using var query = new NpgsqlCommand(
+        $"SELECT \"MigrationId\" FROM {Quote(schema)}.{Quote(table)} ORDER BY 1", connection);
+    var migrations = new List<string>();
+    await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+    while (await reader.ReadAsync(cancellationToken)) migrations.Add(reader.GetString(0));
+    return [.. migrations];
+}
+
+// Checks relation existence without failing on a missing schema.
+static async Task<bool> RelationExistsAsync(NpgsqlConnection connection, string schema, string table,
+    CancellationToken cancellationToken)
+{
+    // to_regclass returns NULL instead of raising an error when the schema or table is missing. The name is
+    // passed as a parameter, so it is never spliced into the SQL text.
+    await using var exists = new NpgsqlCommand("SELECT pg_catalog.to_regclass(@name) IS NOT NULL", connection);
+    exists.Parameters.AddWithValue("name", $"{Quote(schema)}.{Quote(table)}");
+    return await exists.ExecuteScalarAsync(cancellationToken) is true;
+}
+
+// Reads every relation in one service schema with its owner and the runtime role's effective privileges.
+static Task<RelationState[]> ReadRelationsAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction,
+    ServicePlan service, bool roleExists, CancellationToken cancellationToken) =>
+    ReadJsonAsync<RelationState[]>(connection, transaction, InitializerChecks.RelationStateQuery, cancellationToken,
+        new NpgsqlParameter("schema", service.Schema), new NpgsqlParameter("role", service.Role),
+        new NpgsqlParameter("has_role", roleExists));
+
+// Reads an optional JSON readback for the inspection report.
+static async Task<JsonNode?> ReadNodeAsync(NpgsqlConnection connection, string sql,
+    CancellationToken cancellationToken, params NpgsqlParameter[] parameters)
+{
+    // The queries build their JSON in SQL. No row, or a NULL value, becomes null in the report instead of an error.
+    await using var query = new NpgsqlCommand(sql, connection);
+    query.Parameters.AddRange(parameters);
+    return await query.ExecuteScalarAsync(cancellationToken) is string json ? JsonNode.Parse(json) : null;
+}
+
+// Converts a value for the inspection report, keeping null as JSON null.
+static JsonNode? ToNode<T>(T? value) where T : class => value is null ? null : JsonSerializer.SerializeToNode(value);
 
 // Executes one command in the transaction selected by the caller.
 static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, string sql, CancellationToken cancellationToken)

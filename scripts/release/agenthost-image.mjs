@@ -14,12 +14,14 @@ export const AGENTHOST_PROJECT = 'services/agenthost/Agentweaver.AgentHost/Agent
 /** Dockerfile used to build the AgentHost container image. */
 export const AGENTHOST_DOCKERFILE = 'services/agenthost/Agentweaver.AgentHost/Dockerfile';
 const runtimePath = 'services/agenthost/Agentweaver.AgentHost/runtime-manifest.json';
-const inputDirectories = [
+/** Source directories copied into the AgentHost Docker build context; image reuse fingerprints them too. */
+export const AGENTHOST_INPUT_DIRECTORIES = Object.freeze([
   'packages/Agentweaver.Abstractions', 'packages/Agentweaver.Identity',
   'packages/Agentweaver.AgentRuntime', 'packages/Agentweaver.Providers',
   'packages/Agentweaver.SourceControl', 'packages/Agentweaver.Telemetry',
   'services/agenthost/Agentweaver.AgentHost',
-];
+]);
+const inputDirectories = AGENTHOST_INPUT_DIRECTORIES;
 const reject = message => { throw new Error(`AgentHost image: ${message}`); };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);

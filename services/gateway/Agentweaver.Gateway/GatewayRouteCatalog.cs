@@ -11,6 +11,7 @@ public enum GatewayOwner
     Knowledge,
     Events,
     IdentityBroker,
+    Environment,
 }
 
 /// <summary>Describes one versioned public route and how the Gateway proxies its request.</summary>
@@ -167,6 +168,10 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, "/catalog/roles", "/api/catalog/roles",
             "listProjectCastingRoles", "List built-in casting roles", forwardTenantSelector: true);
         const long skillContentMaximumRequestBytes = 3 * 1024 * 1024;
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/skill-marketplaces/definitions",
+            "/api/projects/{projectId}/skill-marketplaces/definitions",
+            "listMarketplaceDefinitions", "List suggested skill marketplaces for a project",
+            forwardTenantSelector: true);
         var marketplaceSources = "/projects/{projectId}/skill-marketplaces/sources";
         Add("GET", GatewayOwner.Projects, marketplaceSources, "/api" + marketplaceSources,
             "listMarketplaceSources", "List project marketplace sources",
@@ -221,9 +226,32 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/skills",
             "listProjectSkillInventory", "Read current project skill inventory",
             ["cursor", "pageSize"], forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-imports",
+            "/api/projects/{projectId}/agentsuite-imports",
+            "importProjectAgentSuite", "Validate an AgentSuite archive and stage a casting proposal", body: true,
+            // Fits a base64 archive of the owner's 16 MiB decoded limit plus request fields.
+            maximumRequestBodyBytes: 24 * 1024 * 1024, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-imports/{sourceIdentity}",
+            "/api/projects/{projectId}/agentsuite-imports/{sourceIdentity}",
+            "getProjectAgentSuiteImport", "Read a retained AgentSuite import record",
+            forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-agents/{effectiveAgentId}/policy",
+            "/api/projects/{projectId}/agentsuite-agents/{effectiveAgentId}/policy",
+            "getProjectAgentSuiteAgentPolicy", "Read the policy bound to an imported AgentSuite agent",
+            forwardTenantSelector: true);
         // Project-scoped run reads accept an unbound token; a run-bound token is narrowed to its run.
         Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
             "/api/projects/{projectId}/runs", "listProjectRuns", "List project runs",
+            ["state", "cursor", "pageSize"], forwardTenantSelector: true);
+        // Stored Source Control reads make no provider call. Issues come from backlog content that issue
+        // sync stored. Pull requests come from records that runs wrote on create or reuse; a run-bound
+        // token is narrowed to its run.
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/source-control/issues",
+            "/api/projects/{projectId}/source-control/issues", "listProjectIssues", "List synced project issues",
+            ["state", "cursor", "pageSize"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/source-control/pull-requests",
+            "/api/projects/{projectId}/source-control/pull-requests", "listProjectPullRequests",
+            "List pull requests recorded by project runs",
             ["state", "cursor", "pageSize"], forwardTenantSelector: true);
         // Each reporting owner aggregates only its own data; the Gateway remains a catalog proxy.
         Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/metrics",
@@ -522,6 +550,13 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Events, run + "/usage",
             "/internal" + run + "/usage",
             "readRunUsage", "Read run usage totals", forwardTenantSelector: true);
+
+        Add("GET", GatewayOwner.Environment, "/projects/{projectId}/remote-mcp/connections",
+            "/api/projects/{projectId}/remote-mcp/directory",
+            "listRemoteMcpConnections",
+            "List Remote MCP connections with configuration checksums",
+            ["pageSize", "after"],
+            forwardTenantSelector: true);
 
         return routes.ToImmutable();
     }

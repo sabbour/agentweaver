@@ -1130,41 +1130,6 @@ export interface ConnectedRepository {
   html_url: string;
 }
 
-/** Project role assignment returned for a principal. */
-export interface ProjectRoleAssignment {
-  assignment_id: string;
-  principal_id: string;
-  display_name: string | null;
-  email: string | null;
-  role: string;
-  scope: string;
-}
-
-/** Principal, role, and optional display metadata for a project role grant. */
-export interface CreateProjectRoleAssignmentRequest {
-  principal_id: string;
-  role: string;
-  display_name?: string | null;
-  email?: string | null;
-}
-
-/** Effective authentication and project-role permissions visible to the current user. */
-export interface ProjectAccessOverview {
-  auth_mode: AuthMode;
-  platform_roles: string[];
-  platform_roles_source?: string | null;
-  current_user_project_role?: string | null;
-  can_manage_role_assignments?: boolean;
-  can_manage_project_github_identity?: boolean;
-  project_role_assignments: ProjectRoleAssignment[];
-  /**
-   * The repository-access GitHub login effective for this project, when known. Currently always
-   * null — populating it requires reading Repo App installation identity, which is owned by a
-   * separate workstream.
-   */
-  effective_github_login?: string | null;
-}
-
 /** Readiness split across interactive AI, unattended AI, and repository access. */
 export interface UnattendedReadiness {
   status: 'interactive_ready' | 'unattended_ready' | 'repository_ready' | 'reauthorization_required' | 'unavailable';

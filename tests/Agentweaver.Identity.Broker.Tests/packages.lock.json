@@ -1411,8 +1411,8 @@
       "agentweaver.agenthost": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.AgentRuntime": "[1.1.1, )",
-          "Agentweaver.SourceControl": "[1.0.2, )",
+          "Agentweaver.AgentRuntime": "[1.2.0, )",
+          "Agentweaver.SourceControl": "[1.1.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
           "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
@@ -1421,17 +1421,17 @@
       "agentweaver.agentruntime": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.3.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
           "GitHub.Copilot.SDK": "[1.0.18, )"
         }
       },
       "agentweaver.environment": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.3.0, )",
-          "Agentweaver.Providers": "[1.0.2, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
+          "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Providers.Sandbox.AgentSandbox": "[1.1.4, )",
           "Agentweaver.Providers.Storage.AzureFiles": "[1.0.4, )",
           "Azure.Identity": "[1.17.1, )",
@@ -1443,11 +1443,11 @@
       "agentweaver.eventsandsessions": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.3.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
           "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
-          "Agentweaver.Persistence.Postgres": "[1.0.2, )",
-          "Agentweaver.Providers": "[1.0.2, )",
+          "Agentweaver.Persistence.Postgres": "[1.1.1, )",
+          "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
@@ -1458,8 +1458,8 @@
       "agentweaver.gateway": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.3.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
           "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
@@ -1468,15 +1468,15 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.identity.broker": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Identity": "[1.3.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
           "Agentweaver.Secrets.AzureKeyVault": "[1.0.2, )",
-          "Agentweaver.SourceControl": "[1.0.2, )",
+          "Agentweaver.SourceControl": "[1.1.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
           "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.0, )",
@@ -1491,10 +1491,10 @@
       "agentweaver.knowledge": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.3.0, )",
-          "Agentweaver.Persistence.Postgres": "[1.0.2, )",
-          "Agentweaver.Providers": "[1.0.2, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.1.1, )",
+          "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
@@ -1506,8 +1506,8 @@
       "agentweaver.mcp": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.3.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "ModelContextProtocol.AspNetCore": "[0.3.0-preview.2, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
@@ -1517,19 +1517,19 @@
       "agentweaver.objectstore.azureblob": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
           "Azure.Storage.Blobs": "[12.26.0, )"
         }
       },
       "agentweaver.orchestrator": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.3.0, )",
-          "Agentweaver.Orchestrator.Core": "[1.1.1, )",
-          "Agentweaver.Persistence.Postgres": "[1.0.2, )",
-          "Agentweaver.Providers": "[1.0.2, )",
-          "Agentweaver.SourceControl": "[1.0.2, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
+          "Agentweaver.Orchestrator.Core": "[1.2.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.1.1, )",
+          "Agentweaver.Providers": "[1.1.0, )",
+          "Agentweaver.SourceControl": "[1.1.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.Agents.AI.Workflows": "[1.19.0, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
@@ -1540,8 +1540,8 @@
       "agentweaver.orchestrator.core": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Providers": "[1.0.2, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Providers": "[1.1.0, )",
           "Microsoft.AgentGovernance": "[4.0.0, )"
         }
       },
@@ -1554,10 +1554,10 @@
       "agentweaver.projects.config": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Identity": "[1.3.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
           "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
-          "Agentweaver.Providers": "[1.0.2, )",
+          "Agentweaver.Providers": "[1.1.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
           "Microsoft.EntityFrameworkCore": "[10.0.12, )",
@@ -1568,7 +1568,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
         }
@@ -1576,19 +1576,19 @@
       "agentweaver.providers.sandbox.agentsandbox": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.providers.storage.azurefiles": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.secrets.azurekeyvault": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Azure.Security.KeyVault.Secrets": "[4.8.0, )",
           "Microsoft.Identity.Client": "[4.78.0, )"
@@ -1597,8 +1597,8 @@
       "agentweaver.sourcecontrol": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Providers": "[1.0.2, )"
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Providers": "[1.1.0, )"
         }
       },
       "agentweaver.telemetry": {

@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "1.0.0-draft",
+  "mediaType": "application/vnd.agentsuite.manifest.v1+json",
+  "name": "coordinator-workers",
+  "agents": [
+    {
+      "id": "coordinator",
+      "path": "agents/coordinator.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.agent.v1+json",
+        "digest": "sha256:5228a15e81e7b854391771c7f112731a3eefbbc18ebff00026ae6b50318f4278",
+        "size": 572
+      }
+    },
+    {
+      "id": "writer",
+      "path": "agents/writer.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.agent.v1+json",
+        "digest": "sha256:4b4cca93b854e51a03a70a8a34d7db096b4ba8a02218fabc39c732933289a0f8",
+        "size": 640
+      }
+    },
+    {
+      "id": "reviewer",
+      "path": "agents/reviewer.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.agent.v1+json",
+        "digest": "sha256:2798abcfc91d5e08465766a3724e6ff56033e5eb4ead28042d5b1eb4b45abe01",
+        "size": 431
+      }
+    }
+  ],
+  "toolProviderCatalog": {
+    "id": "catalog",
+    "path": "tool-providers/catalog.json",
+    "descriptor": {
+      "mediaType": "application/vnd.agentsuite.tool.provider.catalog.v1+json",
+      "digest": "sha256:933283a1fa90fd488db3f872fb89dc1572a5f638bf0a81514a542333e310ef95",
+      "size": 121
+    }
+  },
+  "compositions": [
+    {
+      "agent": "coordinator",
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "path": "compositions/coordinator-linux-amd64.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.composition.v1+json",
+        "digest": "sha256:1549ee400c89659c63257cd97963ad1e4f98cf1435f531196e41729f12205b29",
+        "size": 207
+      }
+    },
+    {
+      "agent": "writer",
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "path": "compositions/writer-linux-amd64.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.composition.v1+json",
+        "digest": "sha256:c19a6173a3bad6723b5f4c36f49c8ee21afbd65317d9c9c4275ebd130b2223d5",
+        "size": 202
+      }
+    },
+    {
+      "agent": "reviewer",
+      "platform": {
+        "os": "linux",
+        "architecture": "amd64"
+      },
+      "path": "compositions/reviewer-linux-amd64.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.composition.v1+json",
+        "digest": "sha256:7944749017eca10606dc5c02b48084943883ba94a769afdcdee8dc998f934544",
+        "size": 204
+      }
+    }
+  ],
+  "buildProfiles": [
+    {
+      "id": "default",
+      "path": "build-profiles/default.json",
+      "descriptor": {
+        "mediaType": "application/vnd.agentsuite.build.profile.v1+json",
+        "digest": "sha256:a7e6136d7e7daf2fcd7e61a149000382032dcbf140f2dda1076d2ee85d0a62cd",
+        "size": 820
+      }
+    }
+  ]
+}

@@ -190,6 +190,48 @@ function buildProxy(repoRoot, outputDirectory, {
   assertCommand(result, 'Could not build the temporary PostgreSQL TCP proxy');
 }
 
+/** Final line of a successful, read-back ownership handover. */
+export const P1_OWNERSHIP_HANDOVER_MARKER = 'P1_POSTGRES_OWNERSHIP_HANDOVER_VERIFIED ';
+
+const P1_MODES = new Set(['initialize', 'inspect', 'apply-pending', 'apply-pending-dry-run']);
+// Each initializer mode prints its own final marker line. The runner accepts success only when it sees the
+// marker for the mode it asked for, so a run that stopped early or ran a different mode cannot pass.
+const P1_MARKERS = {
+  initialize: 'P1_POSTGRES_OPERATOR_INITIALIZATION_FINISHED runtimeIdentityProof=false deploymentProof=false',
+  inspect: 'P1_POSTGRES_INSPECTION_FINISHED writes=false',
+  'apply-pending-dry-run': 'P1_POSTGRES_PENDING_MIGRATIONS_DRY_RUN writes=false',
+  'apply-pending': 'P1_POSTGRES_PENDING_MIGRATIONS_APPLIED runtimeIdentityProof=false deploymentProof=false',
+};
+const P1_VERIFICATION = {
+  initialize: 'operator-initialization',
+  inspect: 'read-only-inspection',
+  'apply-pending-dry-run': 'read-only-pending-migration-dry-run',
+  'apply-pending': 'pending-migrations-applied',
+};
+
+// Explicit approved maxima are small positive integers; the initializer rejects any catalog that ends elsewhere.
+function isApprovedMaximum(value) {
+  return Number.isSafeInteger(value) && value > 0 && value < 10_000;
+}
+
+/** Builds the exact P1 initializer arguments for one validated mode. */
+export function p1InitializerArguments(mode, settings) {
+  // Inspection needs only the source commit and plan hash. It takes no Core merge, maxima or receipt.
+  const source = ['--source-sha', settings.sourceSha];
+  if (mode === 'inspect') return ['--inspect', ...source, '--plan-sha256', settings.planSha256];
+  const bound = [...source, '--core-merge-sha', settings.coreMergeSha, '--plan-sha256', settings.planSha256];
+  // Fresh initialization keeps its original argument list.
+  if (mode === 'initialize') return ['--initialize', ...bound, '--receipt', settings.receiptPath];
+  // Pending-migration modes pass the approved maxima. A dry run writes nothing, so it gets no receipt;
+  // the real run writes a new receipt file.
+  return [
+    '--apply-pending-migrations', ...bound,
+    '--max-core-version', String(settings.maxCoreVersion),
+    '--max-events-version', String(settings.maxEventsVersion),
+    ...(mode === 'apply-pending-dry-run' ? ['--dry-run'] : ['--receipt', settings.receiptPath]),
+  ];
+}
+
 /**
  * Applies the identity PostgreSQL bootstrap through the validated private connection path.
  * An optional P1 initializer must use the locally computed plan hash and a new source-local receipt;
@@ -202,6 +244,7 @@ export async function bootstrapIdentityPostgres({
   verifyOnly = false,
   foundationProbePrincipalObjectId,
   p1Initializer,
+  p1OwnershipHandover,
 }, {
   execAz = runAz,
   execKubelogin = (args, options) => run('kubelogin', args, options),
@@ -225,23 +268,54 @@ export async function bootstrapIdentityPostgres({
          value.toLowerCase() === foundationProbePrincipalObjectId.toLowerCase()))) {
     throw new Error('Probe PostgreSQL bootstrap requires its distinct exact native principal and cannot run Identity verification.');
   }
+  if (p1OwnershipHandover !== undefined) {
+    // The handover runs only against an already bootstrapped database, so Identity is verified
+    // read-only first. It cannot be combined with the initializer or the Probe bootstrap, and it
+    // needs the exact migration principal from the identity deployment.
+    if (!verifyOnly || p1Initializer !== undefined || foundationProbePrincipalObjectId !== undefined ||
+        !GUID_PATTERN.test(p1OwnershipHandover?.migrationPrincipalObjectId ?? '') ||
+        [runtimePrincipalObjectId, migrationPrincipalObjectId].some(value =>
+          value.toLowerCase() === p1OwnershipHandover.migrationPrincipalObjectId.toLowerCase())) {
+      throw new Error('The P1 ownership handover requires Identity verification only and its own distinct migration principal.');
+    }
+  }
   if (p1Initializer !== undefined) {
     if (p1Initializer === null || typeof p1Initializer !== 'object') {
       throw new Error('Combined PostgreSQL initialization requires a P1 initializer receipt configuration.');
     }
+    // A missing mode means the original fresh-initialize call.
+    const p1Mode = p1Initializer.mode ?? 'initialize';
+    if (!P1_MODES.has(p1Mode))
+      throw new Error('The P1 initializer mode must be initialize, inspect, apply-pending, or apply-pending-dry-run.');
+    // Only fresh initialization runs Identity bootstrap; inspection and incremental continuation target an
+    // initialized database, so Identity Broker is verified read-only first and never re-bootstrapped.
+    const writesReceipt = p1Mode === 'initialize' || p1Mode === 'apply-pending';
+    const needsCoreMerge = p1Mode !== 'inspect';
+    const pendingMode = p1Mode.startsWith('apply-pending');
     const receiptPath = typeof p1Initializer.receiptPath === 'string'
       ? resolve(p1Initializer.receiptPath) : '';
     const receiptRelativePath = receiptPath ? relative(resolve(repoRoot, 'Temp'), receiptPath) : '';
-    if (verifyOnly || !GUID_PATTERN.test(runtimePrincipalObjectId ?? '') ||
+    // Validate every setting before opening any tunnel:
+    // - verifyOnly must be false only for initialize, so an initialized database is never re-bootstrapped;
+    // - the source and plan hashes must be exact, and the plan hash must match this checkout;
+    // - the Core merge SHA is required except for inspection, where it is forbidden;
+    // - maxima are required for the pending modes and forbidden for the others;
+    // - writing modes need a new receipt path inside Temp; read-only modes must not pass one.
+    if (verifyOnly !== (p1Mode !== 'initialize') || !GUID_PATTERN.test(runtimePrincipalObjectId ?? '') ||
         !GUID_PATTERN.test(migrationPrincipalObjectId ?? '') ||
         !/^[0-9a-f]{40}$/.test(p1Initializer.sourceSha ?? '') ||
-        !/^[0-9a-f]{40}$/.test(p1Initializer.coreMergeSha ?? '') ||
+        (needsCoreMerge ? !/^[0-9a-f]{40}$/.test(p1Initializer.coreMergeSha ?? '')
+          : p1Initializer.coreMergeSha !== undefined) ||
         !/^[0-9a-f]{64}$/.test(p1Initializer.planSha256 ?? '') ||
         p1Initializer.planSha256 !== p1PostgresPlanHash() ||
-        !receiptPath || !receiptRelativePath || receiptRelativePath === '..' ||
-        receiptRelativePath.startsWith(`..${sep}`) || isAbsolute(receiptRelativePath) ||
-        existsSync(receiptPath)) {
-      throw new Error('Combined PostgreSQL initialization requires exact lowercase source hashes and a new receipt under the source Temp directory.');
+        (pendingMode
+          ? !isApprovedMaximum(p1Initializer.maxCoreVersion) || !isApprovedMaximum(p1Initializer.maxEventsVersion)
+          : p1Initializer.maxCoreVersion !== undefined || p1Initializer.maxEventsVersion !== undefined) ||
+        (writesReceipt
+          ? !receiptPath || !receiptRelativePath || receiptRelativePath === '..' ||
+            receiptRelativePath.startsWith(`..${sep}`) || isAbsolute(receiptRelativePath) || existsSync(receiptPath)
+          : p1Initializer.receiptPath !== undefined)) {
+      throw new Error('Combined PostgreSQL initialization requires exact lowercase source hashes, explicit maximum versions for continuation, and a new receipt under the source Temp directory only for writing modes.');
     }
   }
 
@@ -421,23 +495,56 @@ export async function bootstrapIdentityPostgres({
       portForwardPid: portForward.pid,
     };
 
+    if (p1OwnershipHandover) {
+      // Hand schema ownership to the P1 migration role through the same tunnel. The program is
+      // idempotent and commits only after its own readback, so a rerun is safe.
+      const handover = execDotnet([
+        'run', '--file', join(repoRoot, 'scripts', 'azure', 'lib', 'p1-postgres-ownership-handover.cs'),
+        '--verbosity', 'quiet', '--', '--execute',
+      ], {
+        check: false,
+        cwd: repoRoot,
+        timeout: 600_000,
+        env: {
+          ...process.env,
+          P1Handover__PostgresHost: postgresHost,
+          P1Handover__AdminUsername: adminUsername,
+          P1Handover__MigrationRole: `${resourceGroup}-id-p1-postgres-migration`,
+          P1Handover__MigrationPrincipalObjectId: p1OwnershipHandover.migrationPrincipalObjectId,
+          P1Handover__LocalPort: String(LOCAL_PORT),
+        },
+      });
+      const handoverLine = (handover.stdout ?? '').split(/\r?\n/)
+        .find(line => line.startsWith(P1_OWNERSHIP_HANDOVER_MARKER));
+      if (handover.status !== 0 || !handoverLine)
+        throw new Error(`P1 ownership handover failed: ${diagnostic(handover)}`);
+      bootstrapReceipt.p1OwnershipHandover = { verification: 'ownership-handover', readback: redact(handoverLine) };
+    }
+
     if (p1Initializer) {
+      // Run the initializer through the same tunnel used for the Identity Broker step.
+      const p1Mode = p1Initializer.mode ?? 'initialize';
       const p1Result = execDotnet([
         'run', '--project', join(repoRoot, 'tools', 'P1PostgresInitializer', 'P1PostgresInitializer.csproj'),
-        '--no-launch-profile', '--', '--initialize',
-        '--source-sha', p1Initializer.sourceSha,
-        '--core-merge-sha', p1Initializer.coreMergeSha,
-        '--plan-sha256', p1Initializer.planSha256,
-        '--receipt', p1Initializer.receiptPath,
+        '--no-launch-profile', '--', ...p1InitializerArguments(p1Mode, p1Initializer),
       ], { check: false, cwd: repoRoot, timeout: 600_000 });
       const p1Output = [p1Result.stderr, p1Result.stdout].filter(Boolean).join('\n').trim();
-      const p1Marker = 'P1_POSTGRES_OPERATOR_INITIALIZATION_FINISHED runtimeIdentityProof=false deploymentProof=false';
+      const p1Marker = P1_MARKERS[p1Mode];
+      // Success needs both a zero exit code and this mode's marker. Error output is redacted before it is shown.
       if (p1Result.status !== 0 || !p1Result.stdout.includes(p1Marker))
-        throw new Error(`P1 PostgreSQL initialization failed; inspect its stage receipt ${p1Initializer.receiptPath}: ${redact(p1Output || `dotnet exited with status ${p1Result.status}`)}`);
+        throw new Error(`P1 PostgreSQL ${p1Mode === 'initialize' ? 'initialization' : p1Mode} failed${p1Initializer.receiptPath ? `; inspect its stage receipt ${p1Initializer.receiptPath}` : ' without writing'}: ${redact(p1Output || `dotnet exited with status ${p1Result.status}`)}`);
       bootstrapReceipt.p1Initializer = {
-        verification: 'operator-initialization',
+        verification: P1_VERIFICATION[p1Mode],
         planSha256: p1Initializer.planSha256,
-        receiptPath: p1Initializer.receiptPath,
+        ...(p1Initializer.receiptPath ? { receiptPath: p1Initializer.receiptPath } : {}),
+        ...(p1Mode.startsWith('apply-pending') ? {
+          maxCoreVersion: p1Initializer.maxCoreVersion,
+          maxEventsVersion: p1Initializer.maxEventsVersion,
+        } : {}),
+        // Inspection and continuation readbacks hold role names, OIDs, grants, and versions; never credentials.
+        ...(p1Mode === 'initialize' ? {} : {
+          report: redact(p1Result.stdout.slice(0, p1Result.stdout.lastIndexOf(p1Marker)).trim()),
+        }),
         runtimeIdentityProof: false,
         deploymentProof: false,
       };

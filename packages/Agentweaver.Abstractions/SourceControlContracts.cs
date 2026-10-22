@@ -263,6 +263,10 @@ public enum SourceControlPullRequestDisposition
 }
 
 /// <summary>Provider-returned pull request branches, commit pins, state, and disposition.</summary>
+/// <param name="Title">
+/// The provider's current title, or null when the provider didn't return one. Merge intents clear it,
+/// so their stored request data doesn't depend on a title that can change remotely.
+/// </param>
 public sealed record SourceControlPullRequest(
     long Number,
     Uri HtmlUrl,
@@ -272,7 +276,8 @@ public sealed record SourceControlPullRequest(
     string BaseBranch,
     string BaseSha,
     bool Merged,
-    SourceControlPullRequestDisposition Disposition);
+    SourceControlPullRequestDisposition Disposition,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Title = null);
 
 /// <summary>Normalized review decisions returned by a Source Control provider.</summary>
 public enum SourceControlReviewState

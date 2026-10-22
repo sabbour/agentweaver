@@ -160,6 +160,7 @@ Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | GET | `/openapi/v1.json` | Public | OpenAPI 3.1 route and schema catalog. |
+| GET | `/agents/agentweaver.agent.md` | Public | Operator agent definition as `text/markdown`; excluded from OpenAPI and the MCP catalog. |
 | GET | `/api/v1/authorization/context` | Bearer; `api.read`, non-purpose token | Fresh Projects actor, tenant, binding, and effective authority. |
 | GET | `/health/live` | Public | Process liveness. |
 | GET | `/health/ready` | Public | Gateway host readiness. |
@@ -252,6 +253,7 @@ exposes project configuration and run-selection operations.
 | POST | `/{projectId}/casting/proposals` | Admin | Stage a complete configuration draft for review. | Yes |
 | POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | Yes |
 | POST | `/{projectId}/casting/proposals/manual` | Admin | Create a manual proposal. | Yes |
+| POST | `/{projectId}/casting/proposals/blueprint` | Admin | Create a proposal from a blueprint. Returns the proposal and the skill bindings it couldn't apply. | No |
 | GET | `/{projectId}/casting/proposals` | Read | List proposals with optional `limit` (1–100, default 50). | Yes |
 | GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | Yes |
 | PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | Yes |
@@ -259,6 +261,9 @@ exposes project configuration and run-selection operations.
 | POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | Yes |
 | GET | `/{projectId}/casting/export` | Admin | Export current casting or optional positive `revision`. | Yes |
 | POST | `/{projectId}/casting/import` | Admin | Stage a digest-checked transfer; request body limit 1 MiB. | Yes |
+| POST | `/{projectId}/agentsuite-imports` | Admin | Validate a native AgentSuite archive and stage its agents as a casting proposal; request body limit 24 MiB. | Yes |
+| GET | `/{projectId}/agentsuite-imports/{sourceIdentity}` | Read | Read a retained AgentSuite import record. | Yes |
+| GET | `/{projectId}/agentsuite-agents/{effectiveAgentId}/policy` | Read | Read the policy bound to an imported agent. | Yes |
 | PUT | `/{projectId}/runs/{runId}/selection` | Selection | Accept an immutable run selection. | Yes |
 | GET | `/{projectId}/runs/{runId}/selection` | Selection | Read the accepted selection. | Yes |
 | PUT | `/{projectId}/runs/{runId}/interactive-selection` | Selection | Accept a new chat run selection from current server configuration. The Orchestrator calls this route during run creation. | No |
@@ -362,6 +367,8 @@ Owner.
 | GET | `/api/authorization/context` | Bearer; `api.read`, non-purpose token | Read current authority. | `/api/v1/authorization/context` |
 | GET | `/api/casting/templates` | Bearer | Read built-in casting templates. | `/api/v1/casting/templates` |
 | GET | `/api/catalog/roles` | Bearer | Read built-in roles. | `/api/v1/catalog/roles` |
+| GET | `/api/blueprints` | Bearer; any signed-in caller | List built-in blueprints with their availability. | No |
+| POST | `/api/blueprints/validate` | Bearer; any signed-in caller | Check a blueprint without changing state. | No |
 | GET | `/api/platform/runtime-defaults/` | `api.read`, `projects.admin`, unbound PlatformAdmin | Read platform runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | PUT | `/api/platform/runtime-defaults/` | Same PlatformAdmin authority | Append runtime defaults. | `/api/v1/platform/runtime-defaults` |
 | GET | `/api/platform/components` | `api.read`, unbound, current TenantAdmin for the caller's tenant or PlatformAdmin | Read active platform components and readiness for every area. See [Platform components](../guide/platform-components.md). | `/api/v1/platform/components` |
@@ -424,6 +431,10 @@ use Admin authority. Upstream content reads recheck current authority.
 | GET | `/{sourceId}/browse` | Browse `expectedSourceRevision`, optional `query`, `page`, and `pageSize`. | Yes |
 | POST | `/{sourceId}/preview` | Validate selected content at a resolved commit. | Yes |
 | POST | `/{sourceId}/import` | Import selected content with digest and idempotency checks. | Yes |
+
+`GET /api/projects/{projectId}/skill-marketplaces/definitions` uses Read
+authority and lists the suggested marketplaces. The Gateway path is
+`/api/v1/projects/{projectId}/skill-marketplaces/definitions`.
 
 See [Projects & Config](../architecture/projects-config.md) and
 [Skill marketplace sources](../architecture/skill-marketplace.md).
@@ -500,6 +511,59 @@ A run-bound token sees only its own run. `pageSize` defaults to 25 and accepts
 `400 run_state_filter_invalid`, `cursor_invalid`, or `page_size_invalid`.
 Pass `nextCursor` back with the same filter and page size.
 `title` and `goal` are `null` until a run start request stores them.
+
+### Project issue and pull request lists
+
+These reads return Agentweaver's stored data. They make no source control
+provider call at read time, so they don't need a provider credential.
+
+| Path | Query | Gateway |
+| --- | --- | --- |
+| `GET /api/projects/{projectId}/source-control/issues` | `state`, `cursor`, `pageSize` | Yes, `listProjectIssues` |
+| `GET /api/projects/{projectId}/source-control/pull-requests` | `state`, `cursor`, `pageSize` | Yes, `listProjectPullRequests` |
+
+The Gateway path adds `/v1` after `/api`. Both routes need the `api.read`
+scope, return `Cache-Control: no-store`, and recheck Projects read permission
+after the read. If permission is lost during the read, the route returns
+`403` with no items. `pageSize` defaults to 25 and accepts 1–100. Unknown or
+repeated query parameters return `400 query_invalid`. A bad cursor or page
+size returns `400 cursor_invalid` or `page_size_invalid`. Pass `nextCursor`
+back with the same filter and page size.
+
+**Issue list.** Returns repository issues that
+[periodic issue sync](#periodic-issue-sync) linked to backlog tasks, ordered by
+issue number, newest first. The caller needs current project or tenant
+`readProjects` permission. Run-bound tokens are rejected. `state` is `open`
+(default), `closed`, or `all`; another value returns
+`400 issue_state_filter_invalid`. Archived tasks and tasks without an issue
+link aren't listed, and a project without an issue sync configuration returns
+an empty page. Each item has the task ID and backlog state, provider,
+repository, issue number, stored title, stored state, and task timestamps.
+The backlog doesn't store an issue URL or author, so items don't include them.
+
+**Pull request list.** Returns pull requests that the project's runs created
+or reused, as Source Control recorded them, ordered by `recordedAt`, newest
+first. The caller needs the same permission as the run list. A run-bound token
+sees only its own run's records. `state` is `open` (default), `closed`,
+`merged`, or `all`; another value returns
+`400 pull_request_state_filter_invalid`. Each item has the provider,
+repository, number, title, URL, state, head and base branch and commit, and
+its provenance: `runId`, `disposition` (`created` or `reused`), `recordedAt`,
+and `updatedAt`. Title and state are the values from the last time a run
+recorded the pull request, not live provider values.
+
+The pull request list isn't a complete pull request history. Recording starts
+when Orchestrator migration `032_source_control_pull_request_records.sql` is
+applied. `coverage.recordedSince` reports that time, and
+`coverage.includesEarlierPullRequests` is always `false`. Older pull requests
+aren't recorded. Until migration 032 is applied, the route returns
+`503 pull_request_records_unavailable`, not an empty list. An empty list would
+wrongly tell a client that the project has no pull requests; the 503 says the
+records don't exist yet. Migration 032 is
+code-only: startup, the default migrator, and the P1 initializer don't apply it.
+
+These routes are the data source for issue and pull request pickers. The web
+picker doesn't use them yet.
 
 ### Project metrics and usage
 
@@ -637,8 +701,17 @@ Revisions and conflicts:
 
 Link kinds are `run`, `conversation`, `issue`, `pull_request`, and `artifact`.
 Every link names `projectId`. `run` needs `runId`, `conversation` needs
-`conversationId`, `issue` and `pull_request` need `number`, and `artifact`
-needs `runId` and `artifactId`. Reads resolve each link:
+`conversationId`, `issue` and `pull_request` need `number`, `providerId`, and
+`repository: { owner, name }`, and `artifact`
+needs `runId` and `artifactId`. Identity is returned unchanged in list, read and
+write receipts, and removed with other protected target fields after read loss.
+New repository links without complete identity return `400 priority_link_invalid`.
+Before Core migration 033, a compatible owner returns
+`503 database_update_pending` for those saves and leaves the revision unchanged.
+Existing number-only rows remain readable; clients must refuse ambiguous targets
+rather than infer a repository from the number.
+
+Reads resolve each link:
 
 | Kind | `state` |
 | --- | --- |
@@ -719,6 +792,58 @@ All routes use Coordination authority and current owner task/graph revisions.
 | PUT | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Add dependency. |
 | DELETE | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Remove dependency. |
 | POST | `/tasks/{taskId}/claim` | Atomically claim with current prerequisite evidence. |
+| POST | `/promotions` | Promote the run's confirmed work plan into backlog tasks. |
+
+#### Plan promotion and task origin
+
+`POST /promotions` turns the current confirmed work plan of a coordinator run
+into backlog tasks. The body contains `rootSessionId`, `workPlanId`,
+`expectedDecisionStateVersion`, `expectedExecutionFence`,
+`expectedGraphRevision`, and `idempotencyKey` (1-128 characters). The owner
+checks that the plan is still the confirmed, dispatchable plan of the root
+session, that the fence and decision version match, and that the run has no
+registered children and no MAF dispatch records.
+
+Each plan item becomes one open task. The task title is the item title and the
+description is the item task text. The task ID is `plan-` followed by 32
+lowercase hexadecimal characters of a SHA-256 hash of the length-prefixed project,
+run, plan, and item IDs. Each item dependency becomes a task dependency. The tasks, edges,
+promotion record, and one origin record per task commit in one transaction.
+The decision state does not change. After promotion, MAF dispatch rejects the
+promoted plan with `maf_execution_dispatch_stale`.
+
+A retry with the same key and values returns the stored promotion. The
+response is a `BacklogPlanPromotion` with `promotionId`, `projectId`, `runId`,
+`rootSessionId`, `workPlanId`, `workflowId`, `workflowRevision`,
+`decisionStateVersion`, `executionFence`, `graphRevision`, `promotedAt`, and
+`tasks` (`taskId` and `workItemId`, ordered by `workItemId`).
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `backlog_promotion_invalid` | 400 | A required value is missing or out of range. |
+| `backlog_promotion_stale` | 409 | The plan, decision version, or fence is no longer current. |
+| `backlog_promotion_run_started` | 409 | The run has children or dispatch records. |
+| `backlog_promotion_conflict` | 409 | The plan was already promoted with another key. |
+| `backlog_promotion_idempotency_conflict` | 409 | The key was used with different values. |
+| `backlog_promotion_selection_unavailable` | 409 | The pinned selection context is missing. |
+
+A stale graph revision returns `409` with typed backlog issues.
+
+Two native project routes read the recorded data with current `ReadProjects`
+authority:
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET | `/api/projects/{projectId}/backlog/promotions` | `{ promotions }`, oldest first. |
+| GET | `/api/projects/{projectId}/backlog/origins` | `{ origins }`, ordered by task ID. |
+
+A `BacklogTaskOrigin` contains `task` (`projectId` and `taskId`),
+`promotionId`, `runId`, `rootSessionId`, `workPlanId`, and `workItemId`.
+Tasks added by ordinary capture or the run `POST /tasks` route have no origin
+record. Migration `030_backlog_task_origin.sql` must be applied before these
+routes work. Applying the migration, granting access to the new tables, and
+accepting the changed PostgreSQL plan hash each require separate operator
+approval.
 
 ### Source Control
 
@@ -782,7 +907,8 @@ and the exact current registration, proof, action, turn, or receipt binding.
 | --- | --- | --- |
 | GET | `/registrations/{runtimeInstanceId:guid}` | Read current registration. |
 | GET | `/registrations/{runtimeInstanceId:guid}/skills` | Read accepted runtime skill material. |
-| POST | `/actions/authorize` | Authorize action and commit guarded admission. |
+| POST | `/actions/authorize` | Authorize action and commit guarded admission. Returns HTTP 428 with `runtime_guardrails_content_required` when ordered Guardrails checks apply to a model turn. |
+| POST | `/actions/authorize-content` | Authorize a model turn with its exact UTF-8 text so the ordered Guardrails checks can run. The text is never stored. |
 | POST | `/actions/verify` | Revalidate action proof. |
 | POST | `/actions/credit-denials/read` | Read action credit denial. |
 | POST | `/remote-tool-results/verify` | Verify reviewed remote result proof. |

@@ -41,6 +41,21 @@ tests use local fixtures; they do not connect to Azure. PostgreSQL-backed
 suites require the container engine. A missing engine, permission to pull the
 image, or database startup fails those suites; it does not count as a pass.
 
+## Test web browser journeys
+
+The Web end-to-end tests use Playwright with fake Broker and Gateway services.
+They check the built app with fixture data; they do not contact deployed
+services. The Chief of Staff journey checks that Priority creation and order
+survive a reload, notes save successfully, and a conversation link created from
+Priorities is still shown after a reload.
+
+Run the Web build and the focused browser journeys from the repository root:
+
+```powershell
+npm --prefix apps/web run build
+node --test apps/web/e2e/cos.e2e.test.mjs apps/web/e2e/priority-links.e2e.test.mjs apps/web/e2e/artifact.e2e.test.mjs
+```
+
 To run named project suites after the Release build, use:
 
 ```powershell
@@ -153,9 +168,8 @@ The historical comparison baseline was approximately 29 minutes median for
 v1 PR CI versus 15 minutes for dev, with Broker alone taking 13m46s.
 Performance acceptance requires at least three representative successful PR
 runs, a median total duration of at most 20 minutes and a longest Broker shard
-of at most 8 minutes. Record run URLs, cache warmth and runner/queue caveats
-on the tracking issue before closing it; configuration changes alone do not
-prove those timing targets.
+of at most 8 minutes. Use run results to verify these targets; configuration
+changes alone do not prove them.
 
 ## Measure v1 coverage weekly
 
@@ -165,6 +179,18 @@ the same test jobs run with instrumentation, and the same `foundation` gate
 must pass. The coverage job merges the .NET shard reports without rerunning
 tests and uploads the source-bound `v1-coverage-<sha>-<attempt>` artifact,
 which is kept for 30 days.
+
+Every suite artifact is bound to the run attempt that produced it. Each .NET
+shard and the Node and Web coverage jobs write `attempt.json` (suite, run
+attempt, and job status) and upload `<artifact>-<attempt>`, for example
+`v1-dotnet-identity-broker-2-2`. **Re-run failed jobs** keeps the artifacts of
+jobs that passed, so a rerun has one artifact per attempt for each rerun suite.
+Before combining, `scripts/coverage/attempts.mjs select` keeps only the newest
+attempt of each suite. It fails if that attempt has no marker, a marker from
+another suite or attempt, or a job status other than `success`. The selected
+attempt of each suite is recorded in `attempts.json` and in the `suiteAttempts`
+field of `source.json`. Data from a failed attempt therefore never enters the
+combined report.
 
 GitHub runs scheduled workflows only from the default branch, which is `dev`.
 A `dev` copy of `v1-coverage.yml` runs every Monday at 05:00 UTC and
@@ -238,6 +264,10 @@ checks. Run the source preflight without starting PostgreSQL:
 ```powershell
 dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresInitializerTests
 ```
+
+These source checks include the migration catalog maximum, live-history prefix,
+runtime CONNECT, relation, and schema ACL checks used by
+`--apply-pending-migrations`.
 
 Run the production catalog SQL cases and continuation checks against the
 disposable PostgreSQL fixture:
@@ -423,7 +453,10 @@ This read-only probe requires an already authorized client and real Environment
 creation receipt. Stored rows alone do not prove dispatch, a late provider
 callback, or verified resource release. The full harness runner checks source
 and deployment evidence before it reads credentials or starts a surface
-client. It does not sign in, refresh tokens, or grant authority. For setup
+client. It does not sign in, refresh tokens, or grant authority. When the
+publication receipt reuses an unchanged image, the deployment evidence checks
+that image's registry labels against the commit that originally built it, not
+the release commit. For setup
 requirements, see the
 [API harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/api-harness/README.md),
 [UI harness guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),
@@ -454,7 +487,7 @@ Use the following table when you report test results:
 | --- | --- | --- |
 | Release and deployment tooling | Source manifests, receipts, release validation, controlled GitHub/registry/Kubernetes transports, and failure handling. | Artifact publication, write access to external registries, a live deployment, or release approval. |
 | Providers and resource selection | Catalog validation, cardinality and override rules, capability negotiation, immutable selection pins, meter-source compatibility, and adapter request contracts. | Resource provisioning, SDK model-source provenance, cloud access, pricing, or network-policy enforcement. |
-| Orchestrator | Workflow grammar and step-DAG validation, bounded WorkPlans, schedule and event-predicate evaluation, backlog graph edits, readiness evidence, MAF capture checks, provider pins, Policy evaluation, and action-guard receipts. PostgreSQL cases exercise backlog edits, concurrent claims, restart replay, and rollback on lost authority. | Automatic workflow initiation, full child dispatch, live model output, deployed authorization, production Prompt Shields transport, trusted Guardrails adapters, MAF gate wiring, or protected-effect call-site enforcement. A compiled PostgreSQL case is not database execution evidence. |
+| Orchestrator | Workflow grammar and step-DAG validation, bounded WorkPlans, schedule and event-predicate evaluation, backlog graph edits, readiness evidence, MAF capture checks, provider pins, Policy evaluation, action-guard receipts, and ordered Guardrails checks with a stubbed Prompt Shields transport. PostgreSQL cases exercise backlog edits, concurrent claims, restart replay, rollback on lost authority, and immutable Guardrails evidence. | Automatic workflow initiation, full child dispatch, live model output, deployed authorization, a live Content Safety resource, MAF gate wiring, or protected-effect call-site enforcement. A compiled PostgreSQL case is not database execution evidence. |
 | Gateway and Identity | Broker-issued tokens, owner authorization fixtures, route contracts, status forwarding, current-grant checks, and reauthorization before event writes. | Deployed Gateway or owner availability, live OAuth, native TLS handshakes, live Kubernetes ownership, or an external identity-provider response. |
 | AgentHost and model execution | The pinned SDK sends real test turns to an isolated loopback endpoint. Tests check bearer, model, request path, session marker, response receipt, and measured compaction under a bounded token limit. | Hosted Copilot, production BYOK access, paid model execution, or deployed runtime behavior. |
 | Cost and usage | Published Copilot rate cards, model-scoped Azure token arithmetic, explicit `Unpriced` results, immutable source bindings, controlled SDK evidence, real disposable PostgreSQL transactions, and replay. The combined Broker scenario controls the external SDK transport and credential backend. | A paid model call, live Azure pricing, or deployed Broker/provider behavior. |

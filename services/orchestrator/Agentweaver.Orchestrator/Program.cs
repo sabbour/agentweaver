@@ -5,6 +5,7 @@ using Agentweaver.Orchestrator;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.Persistence.Postgres;
 using Agentweaver.Providers;
 using Agentweaver.SourceControl;
 using Azure.Core;
@@ -28,10 +29,29 @@ if (migrate)
         builder.Configuration,
         "OrchestratorMigration",
         "Orchestrator:Migration:WorkloadIdentity");
+    // An optional runtime role turns on the plan-gated grant step used by the maintenance Job.
+    // The plan is checked before any connection, so a wrong hash, role, schema, or catalog
+    // stops the Job before it migrates anything.
+    var runtimeRole = builder.Configuration["Orchestrator:Migration:RuntimeRole"];
+    var plannedGrants = string.IsNullOrWhiteSpace(runtimeRole)
+        ? null
+        : PlannedRuntimeGrants.Load("orchestrator", schema, runtimeRole,
+            builder.Configuration["Orchestrator:Migration:PlanSha256"] ?? "",
+            CoordinationOwnerMigrator.SupportedVersions);
     var migrationCredential = new WorkloadIdentityCredential(migration.Identity);
     await using var migrationDataSource = CoordinationPostgresDataSource.Create(
         migration.ConnectionString, migrationCredential);
     await CoordinationOwnerMigrator.MigrateAsync(migrationDataSource, schema);
+    if (plannedGrants is not null)
+    {
+        // The migrator skips versions already in its ledger, so a rerun only repeats the grants,
+        // which are idempotent. The marker carries the final ledger for the run receipt.
+        await using var grantConnection = await migrationDataSource.OpenConnectionAsync();
+        await PlannedRuntimeGrants.ApplyAndVerifyAsync(grantConnection, plannedGrants);
+        var applied = await PlannedRuntimeGrants.ReadVersionsAsync(
+            grantConnection, schema, "coordination_schema_migrations");
+        Console.WriteLine(PlannedRuntimeGrants.FormatMarker(plannedGrants, applied));
+    }
     return;
 }
 
@@ -119,6 +139,12 @@ builder.Services.AddSingleton(services => new ChiefOfStaffStore(
 builder.Services.AddSingleton(services => new ProjectRunReadStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema));
+builder.Services.AddSingleton(services => new ProjectIssueReadStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
+builder.Services.AddSingleton(services => new ProjectPullRequestReadStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
 builder.Services.AddSingleton(services => new BacklogOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema));
@@ -187,6 +213,8 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
     services.GetRequiredService<TimeProvider>(),
     services.GetService<IExecutableActionSourceReceiptWriter>(),
     services.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
+// Registers the ordered Guardrails checks. Prompt Shields is added only when its settings section exists.
+builder.Services.AddGuardrails(builder.Configuration, options.Schema);
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
 var remoteToolTlsSection = builder.Configuration.GetSection("Orchestrator:RemoteToolResults:Tls");
 if (remoteToolTlsSection.Exists())
@@ -278,6 +306,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
 });
 app.MapCoordinationEndpoints();
 app.MapProjectRunEndpoints();
+app.MapProjectSourceControlEndpoints();
 app.MapChiefOfStaffEndpoints();
 app.MapBacklogEndpoints();
 app.MapIssueSync();

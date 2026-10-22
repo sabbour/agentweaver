@@ -3,6 +3,7 @@ import {
   AUTH_TRANSACTION_STORAGE_KEY,
   buildAuthorizeUrl,
   clearAuthorizationTransaction,
+  displayNameFromIdToken,
   exchangeAuthorizationCode,
   IDENTITY_CALLBACK_MESSAGE_TYPE,
   parseAuthorizationCallbackMessage,
@@ -298,5 +299,30 @@ describe('Identity Broker authorization', () => {
     }));
     expect(token.access_token).toBe('access-value');
     expect(token.refresh_token).toBe('refresh-value');
+  });
+});
+
+/** Builds an unsigned JWT-shaped token whose payload is `claims` (base64url, no padding). */
+function idToken(claims: Record<string, unknown>): string {
+  const encode = (value: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${encode({ alg: 'RS256' })}.${encode(claims)}.signature`;
+}
+
+describe('displayNameFromIdToken', () => {
+  it('reads the name claim, including non-ASCII names', () => {
+    expect(displayNameFromIdToken(idToken({ sub: 'u1', name: '  Zoë Ångström ' }))).toBe('Zoë Ångström');
+  });
+
+  it('falls back to preferred_username', () => {
+    expect(displayNameFromIdToken(idToken({ sub: 'u1', preferred_username: 'ada@example.test' }))).toBe('ada@example.test');
+  });
+
+  it('returns null when there is no usable name or the token is unreadable', () => {
+    expect(displayNameFromIdToken(undefined)).toBeNull();
+    expect(displayNameFromIdToken(idToken({ sub: 'u1' }))).toBeNull();
+    expect(displayNameFromIdToken(idToken({ sub: 'u1', name: '   ' }))).toBeNull();
+    expect(displayNameFromIdToken('not-a-token')).toBeNull();
+    expect(displayNameFromIdToken('a.%%%.c')).toBeNull();
   });
 });

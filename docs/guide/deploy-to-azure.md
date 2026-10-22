@@ -250,6 +250,12 @@ Orchestrator migration 025 adds caller-specific notification dismissals. It
 creates one new, empty table, `user_notification_dismissals`, and doesn't alter
 or scan existing tables. The reviewed plan grants `SELECT, INSERT` on that
 table.
+Orchestrator migration 031 adds caller-specific promotion dismissals in the
+new `user_notification_promotion_dismissals` table. It requires migrations
+025 and 030. Its foreign key to `backlog_plan_promotions` takes a
+`SHARE ROW EXCLUSIVE` lock on that table until commit. The reviewed plan
+grants only `SELECT, INSERT` on the new table. Migration 031 and its grants
+are source changes only; applying them requires separate approval.
 
 Then review and run the source-bound PostgreSQL initializer:
 
@@ -275,6 +281,12 @@ verify the database and roles with read-only catalog queries before installing
 the product bundle. The Broker runtime identity does not own the schema. If
 the identity or database setup is not approved or complete, stop before
 applying product workloads.
+
+If the database is already initialized, don't rerun initialization. Apply later
+reviewed migrations with the
+[database maintenance runner](database-maintenance.md), which also keeps the
+services on matching images. Services verify their schema version at startup,
+so apply migrations before you install workloads that expect them.
 
 For each database workload, verify that:
 
@@ -472,6 +484,42 @@ bootstrap; `release:deploy` is the separate release-acceptance deployment
 path. Both require a source-bound publication and explicit `--execute` for
 cluster writes. See [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
 and the [Kubernetes operator guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md).
+
+For a Web-only image update, use the separate `release:deploy-web` command with
+the publication receipt from the selected release. It always selects
+`Agentweaver.Web`; it has no option to select another service. The command
+requires a clean checkout whose source is already in `origin/v1`, the explicit
+Kubernetes context for the approved cluster, and a digest-pinned current Web
+image. It reads `releases/foundation.json` from the publication source commit.
+That tracked draft manifest supplies the Web version; the publication receipt
+must contain exactly one matching planned and published Web image, and its
+published image reference supplies the immutable digest. If the image was
+reused, the receipt must also agree on its original build commit and source
+tree. Before reading Deployments, the command checks the source ancestry, image
+tag, registry digest, and OCI revision, source tree, and version.
+
+Run without `--execute` first. This checks the cluster state and writes a plan
+receipt without changing it. The receipt lists the current and planned image
+digests for every Deployment in the `agentweaver` namespace.
+The inventory must be nonempty. The command accepts Kubernetes `List` and
+`DeploymentList` wrappers only when every item is an `apps/v1` Deployment in
+namespace `agentweaver`; malformed or unrelated items stop the rollout.
+
+```powershell
+npm run release:deploy-web -- `
+  --publication artifacts\release\publication.json `
+  --context <approved-kubernetes-context>
+```
+
+After reviewing the plan and target, add `--execute` to the same command. It
+changes only the `web` container image in `deployment/web`, using the digest
+from the publication receipt. A resource-version check stops an update if the
+Deployment changes between validation and the patch. The command waits for Web readiness,
+verifies that all other Deployment settings and images are unchanged, and
+writes a receipt with before and after image digests for every Deployment and
+the Web Deployment revision.
+This path does not install resources or change infrastructure, identity, or
+database state.
 
 ## 8. Verify the installation
 

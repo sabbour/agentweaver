@@ -145,7 +145,7 @@ export function parseAuthorizationResult(
   const state = url.searchParams.get('state');
   if (!code && !error) return undefined;
   if (state !== expectedState)
-    throw new Error('The Identity Broker returned an authorization response with an invalid state.');
+    throw new Error('The sign-in response has an invalid state.');
   if (error) return { error, description: url.searchParams.get('error_description') ?? undefined };
   return { code: code!, state: state! };
 }
@@ -264,6 +264,35 @@ export function isConsentPrompt(value: unknown): value is BrokerConsentPrompt {
     typeof prompt.csrf_token === 'string';
 }
 
+const DISPLAY_NAME_LIMIT = 256;
+
+/**
+ * Reads the person's display name from an ID token: the `name` claim, else
+ * `preferred_username`. The name is only shown in the persona menu, so the
+ * signature is not checked here; authorization never depends on it. Returns
+ * null for a missing or unreadable token, or when neither claim is a non-empty string.
+ */
+export function displayNameFromIdToken(idToken: unknown): string | null {
+  if (typeof idToken !== 'string') return null;
+  const payload = idToken.split('.')[1];
+  if (!payload) return null;
+  try {
+    // JWT segments are base64url without padding; atob needs standard base64.
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=');
+    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+    const claims = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    if (!claims || typeof claims !== 'object') return null;
+    for (const key of ['name', 'preferred_username']) {
+      const value = (claims as Record<string, unknown>)[key];
+      if (typeof value === 'string' && value.trim()) return value.trim().slice(0, DISPLAY_NAME_LIMIT);
+    }
+    return null;
+  } catch {
+    // A malformed token only costs the display name; the label falls back to "Account".
+    return null;
+  }
+}
+
 /** Exchanges an authorization code using the transaction's PKCE verifier. */
 export async function exchangeAuthorizationCode(
   config: AuthorizationConfig,
@@ -317,7 +346,7 @@ async function readTokenResponse(response: Response): Promise<BrokerTokenRespons
       ? result.error_description
       : typeof result.error === 'string'
         ? result.error
-        : `Identity Broker token exchange failed with HTTP ${response.status}.`;
+        : `Sign-in failed with HTTP ${response.status}.`;
     throw new Error(description);
   }
   return result as unknown as BrokerTokenResponse;

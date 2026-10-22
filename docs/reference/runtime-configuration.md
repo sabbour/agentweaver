@@ -221,6 +221,36 @@ grants without a manual `GRANT`. Rerunning an older migration image does not.
 The guarded operator bootstrap can also apply the canonical grant file after
 migration; it changes all listed table grants, not just history access.
 
+### P1 migration Job settings
+
+The [database maintenance runner](../guide/database-maintenance.md) runs the
+Orchestrator and Events & Sessions images with `--migrate` as Kubernetes Jobs.
+The Jobs in `deploy/k8s/migrations/p1-postgres` set these keys. `<Service>` is
+`Orchestrator` or `EventsAndSessions`.
+
+Events & Sessions validates its Sessions and Messaging options before it enters
+the migration branch. Its Job sets every option explicitly and keeps each value
+equal to the Events & Sessions runtime configuration; it does not rely on code
+defaults. Orchestrator enters its migration branch before loading normal runtime
+provider settings, so its Job needs the migration connection, identity, and
+grant-plan settings instead.
+
+| Key | Contract | Default and how to obtain it |
+| --- | --- | --- |
+| `ConnectionStrings__OrchestratorMigration`, `ConnectionStrings__EventsAndSessionsMigration` | Password-free connection string whose user is `agentweaver-id-p1-postgres-migration`, the schema owner after the ownership handover. | No default. The kustomization sets the server name. |
+| `<Service>__Migration__WorkloadIdentity__TenantId`, `__ClientId`, `__TokenFilePath` | Workload identity of the `p1-postgres-migration` ServiceAccount. | The runner sets the client ID from its identity deployment. The manifest holds a zero placeholder that is never applied. |
+| `<Service>__Migration__RuntimeRole` | Runtime role that receives the planned grants: `agentweaver-id-orchestrator` or `agentweaver-id-events-and-sessions`. Optional. | Set by the Job manifest. Without it, `--migrate` applies migrations only. |
+| `<Service>__Migration__PlanSha256` | SHA-256 of the reviewed plan embedded in the image. Required when the runtime role is set. | Set by the Job manifest. The run fails before it connects when the hash, role, schema, or compiled migration catalog differs from the plan. |
+
+With the runtime role set, a run applies only the grants the plan names, reads
+each grant back, and prints one `P1_POSTGRES_RUNTIME_GRANTS_VERIFIED` line with
+the service, schema, role, plan hash, and applied versions. The runner requires
+that line.
+
+The Events & Sessions Job also repeats the Sessions and Messaging settings from
+`events-and-sessions-runtime-config.json`. Keep its `Provider` and `Messaging`
+environment values identical to that file.
+
 ## Identity Broker settings
 
 The `identity-broker-runtime-config.json` map supplies the issuer, upstream
@@ -279,6 +309,7 @@ omits it. The Broker reconciles only these declared clients at startup.
 | `Gateway__Owners__Knowledge` | Required HTTPS service root for Knowledge. |
 | `Gateway__Owners__Events` | Required HTTPS service root for Events & Sessions. |
 | `Gateway__Owners__IdentityBrokerAddress` | Required HTTPS service root for Identity Broker. |
+| `Gateway__Owners__Environment` | Optional HTTPS service root for Environment. The Remote MCP connection directory route uses it. Without it, the route returns 503 `owner_not_configured`. |
 | `Gateway__WebOrigin` | Required exact HTTPS Web origin. It must not contain a path, wildcard, credentials, query, or fragment. |
 | `Gateway__OwnerRequestTimeoutSeconds` | Optional Gateway setting. Integer from `1` through `120`; default is `15`. |
 | `Gateway__BaseAddress` | Required HTTPS Gateway service root for the MCP host. |
@@ -483,6 +514,58 @@ The `orchestrator-runtime-config.json` map contains:
 The policy document is YAML for the `agt.dotnet-yaml` adapter. The provider is
 platform-singleton; project configuration cannot replace it. A policy
 evaluation is not itself an action grant.
+
+## Guardrails settings
+
+The Orchestrator registers the Azure AI Content Safety Prompt Shields check
+only when the `Guardrails__PromptShields` section exists. Prompt Shields is the
+only supported Guardrails check in P2. It runs on model-turn user input.
+
+| Setting | Contract |
+| --- | --- |
+| `Guardrails__PromptShields__Endpoint` | Required HTTPS Content Safety resource endpoint, for example `https://<resource>.cognitiveservices.azure.com/`. |
+| `Guardrails__PromptShields__OptionsRevision` | Required revision matching the catalog registration. |
+| `Guardrails__PromptShields__ResourceId` | Required stable identifier for the Content Safety resource. |
+| `Guardrails__PromptShields__ResourceGeneration` | Required positive resource generation. Increase only after replacing the resource. |
+| `Guardrails__PromptShields__ProviderId` | Catalog provider ID. Defaults to `azure-prompt-shields`. |
+| `Guardrails__PromptShields__ApiVersion` | Content Safety API version. Defaults to `2024-09-01`. |
+| `Guardrails__PromptShields__RequestTimeoutSeconds` | Classifier request timeout from 1 to 60 seconds. Defaults to `10`. |
+
+The classifier authenticates with the Orchestrator workload identity and the
+`https://cognitiveservices.azure.com/.default` scope. It never reads an API
+key. Grant the Orchestrator managed identity the **Cognitive Services User**
+role on the Content Safety resource.
+
+The checks run only for runs whose accepted Projects snapshot has an ordered
+Guardrails selection. Add a Guardrails `azure-prompt-shields` registration with
+adapter version `1.0.0`, options schema version `1`, and the
+advertised capabilities `guardrails.prompt-injection.detect` and
+`guardrails.stage.user-input.content.text` to the Projects & Config provider
+catalog. Then add it to the catalog's ordered Guardrails selection. When a run
+selects Guardrails and the Orchestrator has no matching registration, model
+turns fail closed with `runtime_guardrails_unavailable`.
+
+Findings narrow the AGT decision; the classifier doesn't withhold content by
+itself. Add a rule under `rules:` in the platform policy document that denies
+`model.turn` when a finding exists. Give it a higher priority than the rule
+that allows `model.turn`:
+
+```yaml
+- name: deny-guardrails-findings
+  condition: "guardrails_finding_count > 0"
+  action: deny
+  priority: 200
+```
+
+The gate also provides the `guardrails_stage`, `guardrails_content_class`, and
+`guardrails_findings` context keys. `guardrails_findings` lists each finding as
+`code:Severity`, separated by semicolons. A detected attack has the code
+`prompt_shields.user_prompt_attack`.
+
+Apply Orchestrator migration 028 (`guardrails_evaluations`) with the explicit
+`--migrate` command before you enable the checks. The table stores one
+immutable evidence row per admitted operation. It holds digests, provider IDs,
+versions, finding codes, and the AGT outcome, and never the content.
 
 ## Events & Sessions settings
 

@@ -17,19 +17,23 @@ and read-only bootstrap verification checks those grants after migration.
 See [Broker database permissions](../reference/runtime-configuration#identity-broker-migration-history-and-grants).
 These steps do not change the resource topology shown below.
 
+The Orchestrator and Events & Sessions migrations use the separate P1 migration
+identity. The Events & Sessions Job repeats its Sessions and Messaging settings
+from the runtime map because the host validates them before `--migrate`.
+
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. No live deployment or P0 completion is claimed." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate P1 migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. No live deployment or P0 completion is claimed." />
   </a>
   <figcaption>Structural resource and evidence dependencies. Bicep and Kustomize definitions are not a deployment record; the figure does not claim live readiness or P0 completion.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.drawio'">Open editable draw.io source</a></p>
 
-The following sequence shows the verifier's time-ordered, read-only checks after the probe Job completes. It does not launch the Job or deploy resources.
+The following sequence shows the verifier's time-ordered, read-only checks after the probe Job completes. It does not launch the Job or deploy resources. The P1 PostgreSQL migration Jobs are separate; the Events & Sessions Job validates its provider settings before migration.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked. The P1 PostgreSQL migration Jobs are separate from this probe; Events & Sessions validates provider settings before running migrations." />
   </a>
   <figcaption>Ordered acceptance evidence checks, not a deployment sequence. Only complete source-, target-, image-, identity-, receipt-, and telemetry-bound evidence sets <code>deployedAcceptance</code>; the result does not claim broader P0 readiness.</figcaption>
 </figure>
@@ -174,8 +178,10 @@ type, function source/owner, and runtime EXECUTE restriction. Its role stage
 checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
-Its source catalog includes 20 Core migration versions, with version 17 excluded, and eight Events versions.
-It retains 95 tables, eight row-lock columns, and 29 exact function signatures.
+Its source catalog includes 31 Core migration versions (1 through 16, 18
+through 31, and 33), with versions 17 and 32 excluded, and nine Events versions. The initializer
+compares that catalog with each migrator's compiled version list.
+It retains 110 tables, eight row-lock columns, and 33 exact function signatures.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,
@@ -183,6 +189,11 @@ or default privileges.
 Only casting authority can receive direct runtime EXECUTE.
 Restricted-role behavior and actual PostgreSQL catalog behavior still require
 separate database proof; source tests do not execute the initializer.
+For an initialized database, `--inspect` reads roles, schemas, migration
+history, and grants without writing. `--apply-pending-migrations` applies only
+missing Core and Events versions up to explicit maximum versions, then the
+exact plan grants. It fails closed if the source catalog extends past those
+maximums.
 The separate continuation mode admits only the exact Projects-only prefix,
 checks ordered EF migration histories and every service's migration inventory,
 and migrates the other schemas without runtime object grants. Its pre-grant
@@ -195,6 +206,28 @@ These source changes do not change the P0 Azure topology.
 See the [operator initialization procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-operator-initialization),
 the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 and the [source-test boundary](../guide/testing).
+
+### P1 migration identity
+
+`infra/bicep/p1-postgres-migration-identity.bicep` defines one more identity,
+`agentweaver-id-p1-postgres-migration`, federated only to the
+`p1-postgres-migration` ServiceAccount in `agentweaver`. It has no Azure
+resource role. After a one-time ownership handover it owns the `orchestrator`
+and `events_sessions` schemas, so migration Jobs run in the cluster under their
+own egress policy instead of through an operator tunnel. The
+[database maintenance runner](../guide/database-maintenance.md) deploys this
+template, applies the ServiceAccount and egress policy, performs the handover
+once, and runs the migration Jobs.
+
+`infra/bicep/db-maintenance-ci-identity.bicep` defines the identity that the
+database maintenance workflow uses, `agentweaver-id-db-maintenance`. GitHub
+Actions signs in as it only from the `v1-db-maintenance` environment. It can
+read the resource group, get cluster credentials, and manage the maintenance
+Kubernetes objects in the `agentweaver` namespace. It cannot deploy Azure
+resources or assign roles, so it uses the migration identity as it is and
+never runs the handover. `npm run db:maintenance:setup`, run once by the
+PostgreSQL Entra administrator, creates both identities, runs the handover, and
+configures the GitHub environment.
 
 ## Network and acceptance checks
 
