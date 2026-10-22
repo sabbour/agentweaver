@@ -25,6 +25,7 @@ export function selectPublishedComponentImage(publication, manifest, componentId
   const fail = message => {
     throw new Error(`${label} publication image: ${message}`);
   };
+  // Reject partial and image-only receipts before using them to choose a release image.
   if (!isRecord(publication) || publication.schemaVersion !== 1 ||
       !SHA.test(publication.sourceSha ?? '') || publication.status !== 'published' ||
       !HEX_SHA256.test(publication.provenanceSha256 ?? '') ||
@@ -49,6 +50,7 @@ export function selectPublishedComponentImage(publication, manifest, componentId
     fail(`source manifest has no valid ${componentId} version.`);
   }
 
+  // Exactly one plan/result pair prevents duplicate records or a missing artifact from being treated as proof.
   const planned = publication.planned.filter(entry => entry?.id === componentId);
   const published = publication.published.filter(entry => entry?.id === componentId);
   if (planned.length !== 1 || published.length !== 1) {
@@ -80,6 +82,7 @@ export function selectPublishedComponentImage(publication, manifest, componentId
   }
 
   const repository = `ghcr.io/sabbour/${componentImageRepository(componentId)}`;
+  // Reused builds use their original source in the tag; ordinary builds keep the manifest version tag.
   const expectedTag = publication.requiredPackageIds === undefined
     ? component.version : componentImageTag(component.version, imageSourceSha);
   const imagePrefix = `${repository}@`;

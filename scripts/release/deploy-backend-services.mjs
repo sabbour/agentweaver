@@ -131,6 +131,7 @@ function requireAncestor(exec, root, sourceSha, target, description) {
 
 function validateBackendDeployment(inventory, service, image) {
   const deployment = inventory.byName.get(service.deployment);
+  // Require one explicitly labeled workload so a similarly named Deployment cannot be selected by accident.
   const selected = [...inventory.byName.values()].filter(item =>
     item.metadata?.labels?.['agentweaver.io/service'] === service.deployment ||
     item.spec?.template?.metadata?.labels?.['agentweaver.io/workload'] === service.deployment);
@@ -153,6 +154,7 @@ function validateBackendDeployment(inventory, service, image) {
   }
   const { container, index } = matches[0];
   const repository = `ghcr.io/sabbour/${componentImageRepository(service.componentId)}`;
+  // The current image must already belong to this service's digest-pinned repository before it can be replaced.
   if (typeof deployment.metadata.uid !== 'string' || deployment.metadata.uid.length === 0 ||
       typeof container.image !== 'string' || !container.image.startsWith(`${repository}@`)) {
     fail(`current ${service.deployment} Deployment has no stable identity or digest-pinned service image.`);
@@ -176,6 +178,7 @@ function validateBackendDeployment(inventory, service, image) {
 }
 
 function parseKubernetesObjects(result, fail) {
+  // kubectl returns a generic List here; accept only namespaced ReplicaSets and Pods for ownership checks.
   if (result.status !== 0) fail(`could not read ReplicaSets and Pods: ${result.stderr?.trim() ?? ''}`);
   const list = parseJson(result.stdout, 'Kubernetes ReplicaSet and Pod list');
   if (!isRecord(list) || list.kind !== 'List' || !Array.isArray(list.items) || list.items.length === 0) {
@@ -216,6 +219,7 @@ function verifyBackendPods(items, services, after, fail) {
     const ownedPods = pods.filter(pod =>
       Array.isArray(pod.metadata?.ownerReferences) && pod.metadata.ownerReferences.some(owner =>
         owner.kind === 'ReplicaSet' && replicaSetUids.has(owner.uid)));
+    // Require the settled inventory to contain exactly the requested replicas; extras and gaps both fail closed.
     if (ownedPods.length !== service.replicas) {
       fail(`${service.deployment} has ${ownedPods.length} active Pods; expected ${service.replicas}.`);
     }
@@ -259,6 +263,7 @@ function verifyBackendPods(items, services, after, fail) {
 }
 
 function requiredPermissions(execute) {
+  // Planning is read-only; execution adds only the patch, watch, and Pod/ReplicaSet reads it needs.
   return [
     ['get', 'namespace/agentweaver'],
     ['get', 'deployments', NAMESPACE],
@@ -349,6 +354,7 @@ export async function runBackendImageRollout(options, overrides = {}) {
       });
       requireAncestor(deps.exec, root, selected.imageSourceSha, 'origin/v1',
         `${service.deployment} image source`);
+      // Registry metadata must independently match the receipt's source, version, and accepted digest.
       const verified = await deps.verifyImage(selected.image);
       if (!verified || !IMAGE_DIGEST.test(verified.digest ?? '') ||
           !(verified.acceptedDigests instanceof Set) || !verified.acceptedDigests.has(selected.digest) ||
@@ -392,6 +398,7 @@ export async function runBackendImageRollout(options, overrides = {}) {
         }));
 
         if (!options.execute) {
+          // Keep dry run read-only after validating every publication image and live Deployment.
           receipt.result = 'planned';
           deps.log(`Dry run passed. Only the six named backend Deployment images would change in namespace ${NAMESPACE}.`);
           return;
@@ -435,6 +442,7 @@ export async function runBackendImageRollout(options, overrides = {}) {
 
         const after = inventory();
         receipt.deployments.after = after.records;
+        // Permit only the controller's revision annotation to vary during image rollouts.
         verifyDeploymentPreservation(before, after, updates, {
           namespace: NAMESPACE,
           label: 'backend service',
@@ -477,6 +485,7 @@ export async function runBackendImageRollout(options, overrides = {}) {
         };
         receipt.result = 'succeeded';
       } catch (error) {
+        // Preserve a failed receipt even when an earlier patch in this action already changed the cluster.
         if (receipt.readiness.status === 'waiting') {
           receipt.readiness = {
             status: 'failed',
@@ -515,7 +524,7 @@ export async function runBackendImageRollout(options, overrides = {}) {
     receipt.error = redact(error instanceof Error ? error.message : String(error));
   }
 
-  // Six backend images can be current while Web or another owner service is still old.
+  // This command covers six images only, so it must never certify the whole installation as deployed.
   receipt.installation = { status: 'partial' };
   receipt.completedAt = deps.now().toISOString();
   try {

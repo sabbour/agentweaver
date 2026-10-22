@@ -72,6 +72,7 @@ function gitOutput(exec, root, args, action) {
 export function resolveWholeReleaseImages(publication, manifest, previousPublication, {
   git, exec, root, verifyImage = verifyServiceRegistryImage,
 }) {
+  // Bind the full service set to a complete publication before comparing it with live Deployments.
   if (!isRecord(publication) || publication.status !== 'published' ||
       !SHA.test(publication.sourceSha ?? '') || !Array.isArray(publication.planned) ||
       !Array.isArray(publication.published)) {
@@ -94,6 +95,7 @@ export function resolveWholeReleaseImages(publication, manifest, previousPublica
     const currentPlanned = publication.planned.filter(entry => entry?.id === service.componentId);
     const currentPublished = publication.published.filter(entry => entry?.id === service.componentId);
     const currentHasImage = currentPublished.length > 0;
+    // A planned image without a published result is a failed publication, not permission to reuse an older image.
     if (!currentHasImage && currentPlanned.length > 0) {
       wholeReleaseFail(`${service.deployment} was planned by this publication but has no published image.`);
     }
@@ -104,6 +106,7 @@ export function resolveWholeReleaseImages(publication, manifest, previousPublica
     // Only an unchanged manifest version can reuse an omitted image from the previous publication.
     const sourceManifest = currentHasImage ? manifest : manifestForPrevious(previous, service, exec, root);
     if (!currentHasImage) {
+      // Matching manifest versions prove this omission is unchanged rather than an unbuilt service update.
       const previousComponents = sourceManifest.components?.filter(component =>
         component?.id === service.componentId) ?? [];
       if (previousComponents.length !== 1 ||
@@ -123,6 +126,7 @@ export function resolveWholeReleaseImages(publication, manifest, previousPublica
 }
 
 function manifestForPrevious(previous, service, exec, root) {
+  // Read the previous manifest at its recorded source commit; the current manifest cannot prove its old artifact.
   const manifest = parseJson(gitOutput(exec, root, ['show', `${previous.sourceSha}:releases/foundation.json`],
     'Could not read the previous source-bound manifest'), 'previous source-bound release manifest');
   if (!manifest.components?.some(component => component?.id === service.componentId)) {
@@ -152,6 +156,7 @@ export async function verifyWholeReleaseImages(images, verifyImage) {
  * patch is planned. This prevents a similarly named workload from being selected.
  */
 export function compareWholeReleaseState(inventory, images) {
+  // Require exact coverage so an unrecognized or missing Deployment cannot be skipped in a whole-release receipt.
   const liveNames = new Set(inventory.byName.keys());
   const unknown = [...liveNames].filter(name => !SERVICE_NAMES.has(name));
   if (unknown.length) wholeReleaseFail(`unknown or unmapped Deployments: ${unknown.sort().join(', ')}.`);
@@ -211,6 +216,7 @@ export function wholeReleaseComparison(services) {
  * This is read-only: schema changes remain the responsibility of db:maintenance.
  */
 export async function checkSchemaCompatibility({ services, kubectl, deps, root, exec }) {
+  // Compare recorded schema state to image-supported ranges; this path never changes database state.
   const stateResult = kubectl(['get', 'configmap', STATE_NAME, '-o', 'json']);
   if (stateResult.status !== 0) {
     wholeReleaseFail(`could not read ${STATE_NAME}; run db:maintenance before the whole release.`);
@@ -265,6 +271,7 @@ export async function runGatewaySmokeChecks({
     ['readProjectMetrics', { pathParameters: { projectId } }],
   ];
   const checks = [];
+  // These discovered Gateway operations are read-only smoke checks, not deployment mutations.
   for (const [operationId, input] of calls) {
     if (!client.operations.has(operationId)) wholeReleaseFail(`Gateway does not advertise ${operationId}.`);
     const call = await client.invoke(operationId, input);
@@ -290,6 +297,7 @@ export function wholeReleaseUpdates(services) {
 }
 
 export function verifyWholeReleaseReadback(before, after, services, updates, fail = wholeReleaseFail) {
+  // Ignore only controller revision metadata; every other Deployment setting must survive the image update.
   verifyDeploymentPreservation(before, after, updates, {
     namespace: 'agentweaver',
     label: 'whole release',

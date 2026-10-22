@@ -272,7 +272,7 @@ export async function runWholeRelease(options, overrides = {}) {
 
       executionStarted = true;
       const updates = wholeReleaseUpdates(services);
-      // Preserve the reviewed dependency order; edge services move only after their prerequisites.
+      // Roll out identity and data services first, then Gateway, MCP, and Web.
       for (const deployment of SAFE_ROLLOUT_ORDER) {
         const service = services.find(item => item.deployment === deployment);
         if (!service?.changed) continue;
