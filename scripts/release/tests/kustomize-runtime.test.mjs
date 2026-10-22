@@ -25,6 +25,7 @@ function publicationImages(ids = components) {
 }
 
 test('parses rendered resources into a Kubernetes List and ignores empty documents', () => {
+  // The blank YAML document between the two resources must be skipped.
   const resources = parseKustomizeResources([
     'apiVersion: v1',
     'kind: ConfigMap',
@@ -48,6 +49,7 @@ test('parses rendered resources into a Kubernetes List and ignores empty documen
 });
 
 test('rejects empty and malformed Kustomize output', () => {
+  // Whitespace and YAML null both produce no resources; malformed YAML is a separate failure.
   assert.throws(() => parseKustomizeResources('  '), /Kustomize rendered no Kubernetes resources/);
   assert.throws(() => parseKustomizeResources('---\n...\n'),
     /Kustomize rendered no Kubernetes resources/);
@@ -56,6 +58,7 @@ test('rejects empty and malformed Kustomize output', () => {
 });
 
 test('creates exact digest entries from the publication receipt, including AgentHost sandbox digest', () => {
+  // AgentHost uses its sandbox digest; other services carry an image reference with a digest.
   const images = publicationImages();
   const entries = createKustomizeImageEntries(images);
 
@@ -77,6 +80,7 @@ test('creates exact digest entries from the publication receipt, including Agent
 });
 
 test('validates every Kustomize image transform against the publication receipt', () => {
+  // Change one pin at a time to check duplicate names, wrong digests, and tags independently.
   const images = publicationImages();
   const entries = createKustomizeImageEntries(images);
 

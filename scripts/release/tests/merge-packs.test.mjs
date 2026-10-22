@@ -122,6 +122,7 @@ test('rejects unlisted image output rather than copying it into the publisher in
 
 test('rejects source changes before reading release packs', t => {
   const f = fixture(t);
+  // The fixture is committed and clean, so this edit isolates the dirty-source check.
   writeFileSync(path.join(f.root, 'releases', 'foundation.json'), 'changed');
 
   assert.throws(() => mergePacks(
@@ -131,6 +132,7 @@ test('rejects source changes before reading release packs', t => {
 
 test('rejects overlapping artifact directories without copying files', t => {
   const f = fixture(t);
+  // Put the output under the package input to verify overlap is rejected before copying.
   const combined = path.join(f.packages, 'combined');
 
   assert.throws(() => mergePacks(
@@ -141,6 +143,7 @@ test('rejects overlapping artifact directories without copying files', t => {
 
 test('rejects an existing nonempty combined directory without replacing its contents', t => {
   const f = fixture(t);
+  // Preserve a sentinel file to prove a rejected merge does not overwrite existing output.
   mkdirSync(f.combined, { recursive: true });
   writeFileSync(path.join(f.combined, 'keep.txt'), 'existing output');
 
