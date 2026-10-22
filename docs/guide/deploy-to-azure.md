@@ -501,6 +501,9 @@ tag, registry digest, and OCI revision, source tree, and version.
 Run without `--execute` first. This checks the cluster state and writes a plan
 receipt without changing it. The receipt lists the current and planned image
 digests for every Deployment in the `agentweaver` namespace.
+The inventory must be nonempty. The command accepts Kubernetes `List` and
+`DeploymentList` wrappers only when every item is an `apps/v1` Deployment in
+namespace `agentweaver`; malformed or unrelated items stop the rollout.
 
 ```powershell
 npm run release:deploy-web -- `
