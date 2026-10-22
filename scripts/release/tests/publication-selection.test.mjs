@@ -51,6 +51,8 @@ test('rejects selections that are not bound to the current manifest versions', (
     [{ id: 'Agentweaver.Missing', toVersion: '1.0.0' }, /for Agentweaver\.Missing/],
     [{ id: 'Agentweaver.Alpha', toVersion: '9.9.9' }, /for Agentweaver\.Alpha/],
     [{ id: 'Agentweaver.Alpha' }, /for Agentweaver\.Alpha/],
+    // A numeric version must not be accepted as a manifest version string.
+    [{ id: 'Agentweaver.Alpha', toVersion: 1 }, /for Agentweaver\.Alpha/],
     [null, /for an unknown component/],
   ];
   for (const [entry, message] of cases) {
