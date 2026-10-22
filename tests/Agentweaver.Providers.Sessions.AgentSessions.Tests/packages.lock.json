@@ -141,7 +141,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
+          "Agentweaver.Abstractions": "[1.3.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
         }
@@ -149,8 +149,8 @@
       "agentweaver.providers.sessions.agentsessions": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Providers": "[1.0.2, )",
+          "Agentweaver.Abstractions": "[1.3.0, )",
+          "Agentweaver.Providers": "[1.1.0, )",
           "Google.Protobuf": "[3.36.2, )"
         }
       }
