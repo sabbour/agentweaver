@@ -1,5 +1,6 @@
 using Agentweaver.Orchestrator;
 using Agentweaver.Persistence.Postgres;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using Xunit;
 
@@ -78,6 +79,30 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await AssertCurrentSchemaAsync();
         Assert.Equal(history, await ReadMigrationHistoryAsync(int.MaxValue));
+    }
+
+    [Fact]
+    public async Task UnknownSchemaVersionLogsTheReadinessFailureReasonAtWarningLevel()
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (34)
+            """, connection))
+            await insert.ExecuteNonQueryAsync();
+
+        // Version 34 is intentionally outside the set accepted by the readiness verifier.
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        var sink = new ReadinessCapturingLogger();
+
+        Assert.True(new ReadinessFailureLogger(sink).TryLog(failure));
+
+        var entry = Assert.Single(sink.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains(nameof(InvalidOperationException), entry.Message);
+        Assert.Contains(failure.Message, entry.Message);
+        Assert.Null(entry.Exception);
     }
 
     [Fact]
