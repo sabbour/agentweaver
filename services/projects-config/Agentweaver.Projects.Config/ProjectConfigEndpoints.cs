@@ -149,7 +149,7 @@ public static class ProjectConfigEndpoints
         projects.MapGet("/{projectId}", async (
             string projectId,
             HttpContext context,
-            ProjectsConfigService service,
+            [FromServices] ProjectsConfigService service,
             ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {

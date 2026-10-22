@@ -1,5 +1,6 @@
 ---
 "Agentweaver.Gateway": minor
+"Agentweaver.Identity.Broker": patch
 "Agentweaver.Projects.Config": minor
 "Agentweaver.Web": minor
 ---

@@ -402,6 +402,8 @@ public sealed class CopilotConnectionAuthority(
             var project = await RuntimeOwnerHttpTransport.SendAsync<ProjectSummaryProof>(
                 projects, options.ProjectsOwnerAddress, $"/api/projects/{Uri.EscapeDataString(scopeId)}",
                 actor, null, cancellationToken);
+            if (project.EffectiveRoles is null)
+                throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
             if (project.ProjectId != scopeId || project.Revision <= 0 || project.State != "active")
                 throw Denied("copilot_connection_project_unavailable");
         }
@@ -513,7 +515,4 @@ public sealed class CopilotConnectionAuthority(
         }
     }
 
-    private sealed record ProjectSummaryProof(
-        string ProjectId, string Name, string State, long Revision, long ConfigurationRevision,
-        DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
 }
