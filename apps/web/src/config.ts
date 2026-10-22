@@ -1,4 +1,5 @@
-// Resolves the API host at runtime and synchronizes short-lived auth state between open tabs.
+// Resolves the retained API client's base at runtime and synchronizes short-lived auth state between open tabs.
+import { gatewayBaseUrl } from './v1/config';
 /** Runtime deployment settings that may be injected by the web host before the app bundle runs. */
 type RuntimeConfig = {
   API_URL?: string;
@@ -13,34 +14,32 @@ declare global {
 
 const runtimeConfig = typeof window !== 'undefined' ? window.__AGENTWEAVER_CONFIG__ : undefined;
 
-// API_URL is the API ORIGIN only (no `/api` suffix). The API client (client.ts request())
-// and the raw fetch call sites own the single `/api` prefix for XHR endpoints, while the
-// Browser-redirect endpoints (`/auth/entra/*`) live at the origin root.
-//
-// A runtime-config value of "" is VALID and means "same origin as the served app" (used on
-// the deployed gateway where the frontend and API share a host). Because "" is falsy, we
-// must check for a defined string rather than rely on `||` truthiness — otherwise an empty
-// deployed value would incorrectly fall through to the localhost dev default.
+/** Uses the same injected Gateway base as v1, retaining the old origin only for local development. */
 function resolveApiUrl(): string {
+  // A production build must use the v1 Gateway; the v1 resolver validates its runtime target.
+  if (import.meta.env.PROD) return gatewayBaseUrl;
+  // During local 0.x development, preserve an explicitly supplied legacy origin (including same-origin "").
   if (runtimeConfig && typeof runtimeConfig.API_URL === 'string') return runtimeConfig.API_URL;
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+  // A local v1 runtime override also takes precedence over the old monolith default.
+  if (typeof window !== 'undefined' && window.__AGENTWEAVER_CONFIG_BASE64__?.GATEWAY_URL) return gatewayBaseUrl;
+  if (import.meta.env.VITE_GATEWAY_URL) return gatewayBaseUrl;
   return 'http://localhost:5000';
 }
 
-/** API origin used by HTTP clients; API routes add their own `/api` prefix. */
+/** API base used by retained clients: a v1 Gateway path in production, an origin in 0.x development. */
 export const API_URL = resolveApiUrl();
 
-// External integrations need an absolute URL. When API_URL is the deployed same-origin sentinel
-// (""), use the browser origin rather than producing a relative path.
 /** Resolves the public API host, using the browser origin for an empty deployment value and removing one trailing slash. */
 export function resolvePublicApiOrigin(apiUrl = API_URL): string {
-  return (apiUrl || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
+  // Retained integration and redirect URLs need the origin, not the versioned Gateway route.
+  return (apiUrl.replace(/\/api\/v1\/?$/, '') || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
 }
 
 /** Public MCP endpoint derived from the resolved API origin. */
 export const MCP_URL = `${resolvePublicApiOrigin()}/mcp`;
 /** Root-level Entra browser redirect endpoint; unlike API calls it has no `/api` prefix. */
-export const ENTRA_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/entra/authorize`;
+export const ENTRA_AUTHORIZE_URL = `${API_URL.endsWith('/api/v1') ? resolvePublicApiOrigin() : API_URL.replace(/\/$/, '')}/auth/entra/authorize`;
 
 /** Session-scoped storage key for the short-lived session token. */
 export const SESSION_TOKEN_STORAGE_KEY = 'agentweaver.sessionToken';

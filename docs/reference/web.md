@@ -32,8 +32,8 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/RunOutputCaptures.tsx` | **Produced files** on the run Changes tab: saved file sets and their patches. |
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
 | `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP saved connection list, connection status, sign-in, refresh, and disconnect in project settings. |
-| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. |
-| `src/v1/OverviewPage.tsx` | Cross-project home: operations summary, recent projects, metrics for one selected project, recent runs, and items that need input. |
+| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, breadcrumbs, notification bell, and persona menu filled with Gateway projects and the Broker session. The v1 rail also links to the Chief of Staff section on Overview. |
+| `src/v1/OverviewPage.tsx` | Cross-project home: Chief of Staff (Priorities, New chat, and My conversations), operations summary, recent projects, metrics for one selected project, recent runs, and items that need input. |
 | `src/v1/SessionsPage.tsx` | Runs across all visible projects, newest first, with **Load more** and **New session**. |
 | `src/v1/NewSessionPage.tsx`, `src/v1/pendingRun.ts` | New session: create a run, sign in silently for that run, and start it. The pending run is kept in session storage across the sign-in. |
 | `src/v1/StopRunButton.tsx` | **Stop run** with a confirmation dialog and one idempotency key per dialog. |
@@ -70,7 +70,7 @@ data hooks are not mounted.
 | Browser route | Handler |
 | --- | --- |
 | `/` | Redirect to `/overview`. |
-| `/overview` | `OverviewPage`. |
+| `/overview` | `OverviewPage`; the **Chief of Staff** rail link opens `/overview#chief-of-staff`. |
 | `/projects` | `ProjectsPage`. |
 | `/projects/:projectId` | `DashboardPage`. |
 | `/projects/:projectId/settings` | `ProjectConfigurationPage`; `section` selects `general`, `access`, `repository`, `models`, `components`, `limits`, `connections`, `history`, `danger`, or `advanced`. Missing or unknown values open `general`. |
@@ -108,13 +108,14 @@ procedures and setting sources. The table below documents the values the v1
 client reads.
 
 `src/v1/config.ts` reads decoded
-`window.__AGENTWEAVER_CONFIG_BASE64__` values first, then Vite build-time values,
-then the default listed below. An empty decoded runtime value is treated as
-absent.
+`window.__AGENTWEAVER_CONFIG_BASE64__` values first, then Vite build-time values.
+An empty decoded runtime value is treated as absent. In production, a missing
+Gateway URL stops startup with a configuration error instead of sending
+requests to localhost. The local development server can use the default below.
 
 | Runtime key | Environment variable | Default or requirement |
 | --- | --- | --- |
-| `GATEWAY_URL` | `VITE_GATEWAY_URL` | `/api/v1`; includes the version prefix. Trailing slashes are removed. |
+| `GATEWAY_URL` | `VITE_GATEWAY_URL` | Required in production; `/api/v1` in development. Includes the version prefix. Trailing slashes are removed. |
 | `IDENTITY_BROKER_URL` | `VITE_IDENTITY_BROKER_URL` | Required Broker URL. Trailing slashes are removed for request construction. |
 | `IDENTITY_BROKER_ISSUER` | `VITE_IDENTITY_BROKER_ISSUER` | Explicit issuer, or the canonical HTTPS Broker URL when valid. |
 | `OAUTH_CLIENT_ID` | `VITE_OAUTH_CLIENT_ID` | Required registered OAuth client ID. |
@@ -141,13 +142,27 @@ script before the application bundle. The host's empty Gateway setting becomes
 `/api/v1`.
 
 Do not use the 0.x `API_URL`, `VITE_API_URL`, or `VITE_API_KEY` settings for this
-client. Do not put secrets in these public settings.
+client. The retained 0.x client also reads the v1 Gateway base in production;
+it does not mount the 0.x Overview or Dashboard pages. Its old localhost
+default applies only to local development. Do not put secrets in public settings.
 
 ## API client
 
 `AgentweaverGatewayClient` uses the configured versioned base URL for product
 requests. Connection lifecycle calls use the Gateway origin/root and their
 explicit nonversioned paths.
+
+```mermaid
+flowchart LR
+  runtime[Runtime Gateway URL] --> gateway[Public Gateway /api/v1]
+  overview[Overview] --> overviewReads[Projects, runs, metrics, usage, notifications]
+  overviewReads --> gateway
+  dashboard[Project dashboard] --> dashboardReads[Project, configuration, runs, metrics, usage]
+  dashboardReads --> gateway
+  retained[Retained 0.x page sources] --> overviewReads
+  retained --> dashboardReads
+  shell[Project switcher and notification bell] --> gateway
+```
 
 Requests use a bearer token, `Accept: application/json`, and `cache: no-store`.
 JSON writes add `Content-Type: application/json`. Ambient cookies are omitted

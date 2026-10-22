@@ -1,6 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AppShell } from '../components/shell/AppShell';
+import { LeftNavView } from '../components/shell/LeftNav';
 import { useAppShellFocus } from '../components/shell/AppShellFocusContext';
 import {
   MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT,
@@ -203,8 +204,31 @@ describe('AppShell navigation', () => {
     expect(screen.getByText('Overview')).toBeDefined();
     expect(screen.getByText('Projects')).toBeDefined();
     expect(screen.getByRole('group', { name: 'Sessions' })).toBeDefined();
+    expect(screen.queryByRole('link', { name: 'Chief of Staff' })).toBeNull();
     expect(screen.queryByText('Work')).toBeNull();
     expect(screen.queryByText('System')).toBeNull();
+  });
+
+  it('shows the Chief of Staff section link when requested by the v1 shell', () => {
+    render(
+      <Wrapper>
+        <MemoryRouter initialEntries={['/overview#chief-of-staff']}>
+          <LeftNavView
+            projectId={undefined}
+            pathname="/overview"
+            activeKey="chief-of-staff"
+            version=""
+            projectSwitcher={<span />}
+            identity={() => <span />}
+            visibleGlobalKeys={['overview', 'chief-of-staff']}
+            showNewSession={false}
+          />
+        </MemoryRouter>
+      </Wrapper>,
+    );
+    const link = screen.getByRole('link', { name: 'Chief of Staff' });
+    expect(link.getAttribute('href')).toBe('/overview#chief-of-staff');
+    expect(link.getAttribute('aria-current')).toBe('page');
   });
 
   it('shows the settings gear menu items conditionally', async () => {
