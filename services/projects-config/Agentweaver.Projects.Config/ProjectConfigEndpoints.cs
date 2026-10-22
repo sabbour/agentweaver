@@ -199,7 +199,7 @@ public static class ProjectConfigEndpoints
         projects.MapGet("/{projectId}/role-assignments", async (
             string projectId,
             HttpContext context,
-            ProjectRoleAssignmentService service,
+            [FromServices] ProjectRoleAssignmentService service,
             ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
@@ -224,7 +224,7 @@ public static class ProjectConfigEndpoints
             string projectId,
             AssignProjectRoleRequest request,
             HttpContext context,
-            ProjectRoleAssignmentService service,
+            [FromServices] ProjectRoleAssignmentService service,
             ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
@@ -252,7 +252,7 @@ public static class ProjectConfigEndpoints
             string projectId,
             Guid assignmentId,
             HttpContext context,
-            ProjectRoleAssignmentService service,
+            [FromServices] ProjectRoleAssignmentService service,
             ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
