@@ -1,6 +1,5 @@
 # Story: Authorize exact run-bound secret redemption
 
-**Issue:** [#1776](https://github.com/sabbour/agentweaver/issues/1776).
 **Status:** implemented CANDIDATE; not admitted, released or deployed.
 
 A trusted host composes `Agentweaver.Identity.AuthorizedSecretRedemption`

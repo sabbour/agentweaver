@@ -3,9 +3,7 @@
 Use this article to distinguish local source checks from checks against an
 approved Azure deployment. Bicep compilation and Kubernetes rendering validate
 the checked-in configuration; neither proves that Azure resources or services
-are deployed. Deployment and smoke acceptance are tracked separately in
-[issue #1812](https://github.com/sabbour/agentweaver/issues/1812) and
-[issue #1814](https://github.com/sabbour/agentweaver/issues/1814).
+are deployed. Deployment and smoke acceptance are separate, approved operations.
 
 ## Prerequisites
 

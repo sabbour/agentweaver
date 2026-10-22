@@ -128,8 +128,8 @@ Retention follows owner records; the Blob adapter does not decide which run data
 The current source implements this typed Events interface with the existing Blob adapter.
 It supports bounded `TurnContent` and `SdkCache` material, committed journal references, and authorized integrity-checked reads.
 The diagram describes source behavior, not a deployed route.
-[#1903](https://github.com/sabbour/agentweaver/issues/1903) tracks the bounded integration
-inside the original AgentHost and orchestration criteria, not a new blanket P1 prerequisite.
+The integration is bounded by the existing AgentHost and orchestration acceptance
+criteria. It is not a new blanket P1 prerequisite.
 `IObjectStore` is a shared adapter, not a requirement to introduce another service.
 A cache comes from actual SDK-supported serialization through the runtime's custom filesystem.
 Do not rewrite an opaque SDK payload to fabricate safety or claim portable restore without SDK support.

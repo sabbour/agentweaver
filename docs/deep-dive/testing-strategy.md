@@ -138,7 +138,7 @@ lower-level identity provider can preserve it only when a separate actor
 credential is independently available. The Host-caller probe-provider gap is
 still blocked; the launcher does not supply Host-caller probe adapters.
 
-The v1 UI surface remains blocked on #1859. Do not target the current
+The v1 UI surface remains blocked until the 0.x UI is restored onto v1. Do not target the current
 `apps/web/src/v1/App.tsx` pages with new UI selectors or page providers.
 
 Pass the exact native and dispatch-recovery output envelopes with

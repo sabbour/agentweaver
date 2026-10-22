@@ -1,6 +1,5 @@
 # Story: Dedicated Azure P0 infrastructure
 
-**Issue:** [#1777](https://github.com/sabbour/agentweaver/issues/1777).
 **Status:** Source definitions and validation tooling; no completed P0 smoke acceptance.
 
 ## Scope
@@ -15,8 +14,8 @@ Kustomize target.
 Identity is the product host. Relay is a persistence library, and release
 is a CLI. They are not four broker/auth/relay/release runtime services.
 The `foundation-probe` principal belongs to the acceptance-only
-[#1784 Job](https://github.com/sabbour/agentweaver/issues/1784), not the operator CLI.
-That issue owns executable .NET probe code, the image receipt, and scoped Job
+[foundation probe Job](foundation-probe.md), not the operator CLI.
+The probe owns its executable .NET code, its image receipt, and its scoped Job
 egress. Identity runtime and migration have their own separate UAMIs and
 federated ServiceAccounts. No Azure resource, principal, PostgreSQL role, or
 Kubernetes workload was created by these source definitions.
@@ -124,15 +123,15 @@ The named `identityBrokerRuntimeIdentity` and `identityBrokerMigrationIdentity`
 outputs have the same fields and identify separate service accounts. The
 runtime alone receives Key Vault Secrets User on the exact existing vault; the
 migration identity receives no Azure resource role. These named outputs do not
-change the strict #1784 probe target DTO or create PostgreSQL principals.
+change the strict foundation probe target DTO or create PostgreSQL principals.
 The `foundationResources` output contains exact cluster, vault, storage, container, PostgreSQL, workspace, and Application Insights resource IDs.
 It also contains `vaultUri`, `blobContainerUri`, `postgresHost`, and the workspace GUID.
 The producer does not invent database roles, secret fixtures, registry publication, or successful probe effects.
 The tooling rejects mismatched resource IDs, endpoints, identity fields, and workspace GUIDs.
 
-These outputs are deployment configuration, not a new #1784 target schema.
-The strict #1784 target DTO rejects unknown fields.
-Its owner must explicitly map or add fields before the executable probe can consume this configuration.
+These outputs are deployment configuration, not a new probe target schema.
+The strict probe target DTO rejects unknown fields.
+The probe owner must explicitly map or add fields before the executable probe can consume this configuration.
 
 This receipt proves **infrastructure only**. No resource consumes a service
 image, and no service rollout or immutable image proof occurs here.
@@ -157,7 +156,7 @@ Admin or another replacement role. They do not enable local accounts or grant
 Azure permissions at resource-group or subscription scope.
 
 AKS enables ACNS security and leaves ACNS observability disabled. This
-security-only setting supports the #1784 FQDN-filtering work; it does not
+security-only setting supports the foundation probe's FQDN-based egress filtering; it does not
 establish a deployed FQDN policy or prove enforcement. Runtime Kubernetes must
 be 1.29 or later. The template leaves `kubernetesVersion` empty so AKS selects
 its currently supported default instead of pinning an older release.
@@ -333,7 +332,7 @@ or migration privileges. Bootstrap grants schema USAGE.
 The post-migration `postgres-runtime-grants.sql` defines only required persistence
 table DML and explicitly denies access to the migration registry.
 Current persistence migrations use no sequences.
-Domain tables and sequence USAGE require separately reviewed grants from #1784.
+Domain tables and sequence USAGE require separately reviewed grants owned by the foundation probe.
 No blanket table grant or default privilege admits future tables.
 The procedure addresses dedicated-database PUBLIC grants.
 Existing role memberships and inherited privileges require a separate audit.
@@ -366,11 +365,11 @@ Read-only bootstrap verification remains non-mutating.
 The current `PostgresOutbox.MigrateAsync` creates a schema and migration tables.
 It must run with the migration principal before runtime proof.
 Existing outbox/inbox migrations do not create the probe's domain-effect table.
-#1784 must define that table in the same approved migration boundary.
+The foundation probe must define that table in the same approved migration boundary.
 Bootstrap and migration success require real database evidence before acceptance.
-This slice makes no claim about undocumented transaction restrictions.
+These definitions make no claim about undocumented transaction restrictions.
 
-The #1784 probe and Identity runtime both use native asynchronous Npgsql
+The foundation probe and Identity runtime both use native asynchronous Npgsql
 `UsePasswordProvider` callbacks with explicit `WorkloadIdentityCredential`
 configuration and the PostgreSQL token scope
 `https://ossrdbms-aad.database.windows.net/.default`. Npgsql invokes the

@@ -168,9 +168,8 @@ The historical comparison baseline was approximately 29 minutes median for
 v1 PR CI versus 15 minutes for dev, with Broker alone taking 13m46s.
 Performance acceptance requires at least three representative successful PR
 runs, a median total duration of at most 20 minutes and a longest Broker shard
-of at most 8 minutes. Record run URLs, cache warmth and runner/queue caveats
-on the tracking issue before closing it; configuration changes alone do not
-prove those timing targets.
+of at most 8 minutes. Use run results to verify these targets; configuration
+changes alone do not prove them.
 
 ## Measure v1 coverage weekly
 
@@ -393,10 +392,8 @@ deployed owner services.
 ## Planned GitHub Canvas adapter acceptance
 
 GitHub Canvas adapter cases are unexecuted requirements, not a passing suite
-or current adapter support. The research recorded in
-[issue #1901](https://github.com/sabbour/agentweaver/issues/1901) did not run
-interoperability, rendering, or restart tests. Implementation work is tracked
-in [issue #1904](https://github.com/sabbour/agentweaver/issues/1904). Do not
+or current adapter support. The Canvas research did not run interoperability, rendering, or restart tests.
+The adapter is not implemented yet. Do not
 report the planned cases as product behavior or passing test evidence.
 
 ## Test retained API, UI, and MCP adapters

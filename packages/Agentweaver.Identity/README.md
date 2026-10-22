@@ -123,7 +123,7 @@ running service, or Azure deployment. It does not mint tokens, authenticate a
 caller over a network, or replace `ISecretRedemption`'s existing contract or
 the Key Vault adapter's composition. `IGrantAuthority` is a contract; a
 durable, revocable grant store is outside this library. The Identity broker's
-P0 composition (#1783) implements that authority in its owned PostgreSQL schema
+P0 composition implements that authority in its owned PostgreSQL schema
 and exposes the authenticated redemption boundary; deployment and Azure
 acceptance remain separate. See
 [docs/architecture/design/provider-seams.md#secrets](../../docs/architecture/design/provider-seams.md#secrets)
