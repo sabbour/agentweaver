@@ -228,6 +228,13 @@ Orchestrator and Events & Sessions images with `--migrate` as Kubernetes Jobs.
 The Jobs in `deploy/k8s/migrations/p1-postgres` set these keys. `<Service>` is
 `Orchestrator` or `EventsAndSessions`.
 
+Events & Sessions validates its Sessions and Messaging options before it enters
+the migration branch. Its Job sets every option explicitly and keeps each value
+equal to the Events & Sessions runtime configuration; it does not rely on code
+defaults. Orchestrator enters its migration branch before loading normal runtime
+provider settings, so its Job needs the migration connection, identity, and
+grant-plan settings instead.
+
 | Key | Contract | Default and how to obtain it |
 | --- | --- | --- |
 | `ConnectionStrings__OrchestratorMigration`, `ConnectionStrings__EventsAndSessionsMigration` | Password-free connection string whose user is `agentweaver-id-p1-postgres-migration`, the schema owner after the ownership handover. | No default. The kustomization sets the server name. |
@@ -239,6 +246,10 @@ With the runtime role set, a run applies only the grants the plan names, reads
 each grant back, and prints one `P1_POSTGRES_RUNTIME_GRANTS_VERIFIED` line with
 the service, schema, role, plan hash, and applied versions. The runner requires
 that line.
+
+The Events & Sessions Job also repeats the Sessions and Messaging settings from
+`events-and-sessions-runtime-config.json`. Keep its `Provider` and `Messaging`
+environment values identical to that file.
 
 ## Identity Broker settings
 

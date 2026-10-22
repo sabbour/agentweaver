@@ -588,6 +588,89 @@ test('the connectivity probe runs under the migration egress label with no token
   assert.match(pod.containers[0].image, /@sha256:[0-9a-f]{64}$/);
   assert.match(pod.containers[0].command[2], new RegExp(CONNECTIVITY_MARKER));
 });
+
+test('P1 migration Jobs provide valid settings and Events provider values match runtime config', () => {
+  // Render the checked-in overlay and load the same Events & Sessions values used by its runtime Deployment.
+  const resources = parseKustomizeResources(kustomize('deploy/k8s/migrations/p1-postgres').stdout).items;
+  const runtime = JSON.parse(readFileSync(
+    'deploy/k8s/runtime-configs/events-and-sessions-runtime-config.json', 'utf8')).data;
+  // Select each named Job and index only its explicit environment so omitted values cannot pass by using defaults.
+  const environmentFor = name => {
+    const job = resources.find(item => item.kind === 'Job' && item.metadata?.name === name);
+    assert.ok(job, `Rendered migration overlay must contain Job ${name}.`);
+    return {
+      command: job.spec.template.spec.containers[0].command,
+      env: new Map(job.spec.template.spec.containers[0].env.map(({ name: key, value }) => [key, value])),
+    };
+  };
+  const events = environmentFor('events-and-sessions-migration');
+  const orchestrator = environmentFor('orchestrator-migration');
+  const eventValue = key => {
+    assert.ok(events.env.has(key), `${key} must be explicit in the Events & Sessions Job.`);
+    return events.env.get(key);
+  };
+  const integer = key => {
+    const value = eventValue(key);
+    assert.match(value, /^-?\d+$/, `${key} must be an integer string.`);
+    const parsed = Number(value);
+    assert.ok(Number.isSafeInteger(parsed), `${key} must be safely representable as an integer.`);
+    return parsed;
+  };
+
+  // Compare every Sessions and Messaging option that Program validates before it reaches --migrate.
+  const providerKeys = [
+    'EventsAndSessions__Provider__ResourceId',
+    'EventsAndSessions__Provider__DatabaseName',
+    'EventsAndSessions__Provider__ResourceGeneration',
+    'EventsAndSessions__Provider__Schema',
+    'EventsAndSessions__Provider__OptionsRevision',
+    'EventsAndSessions__Provider__OptionsSchemaVersion',
+    'EventsAndSessions__Provider__PollIntervalMilliseconds',
+    'EventsAndSessions__Provider__ReferenceRetentionDays',
+  ];
+  const messagingKeys = [
+    'EventsAndSessions__Messaging__OptionsRevision',
+    'EventsAndSessions__Messaging__OptionsSchemaVersion',
+    'EventsAndSessions__Messaging__ClaimLeaseSeconds',
+    'EventsAndSessions__Messaging__MaximumMessageLifetimeDays',
+  ];
+  for (const key of [...providerKeys, ...messagingKeys])
+    assert.equal(eventValue(key), runtime[key], `${key} must match the Events & Sessions runtime config.`);
+
+  // Mirror the Sessions provider Validate() requirements so matching an invalid runtime value also fails.
+  assert.match(eventValue(providerKeys[0]), /^[A-Za-z0-9._:-]{1,256}$/);
+  assert.match(eventValue(providerKeys[1]), /^[A-Za-z0-9._:-]{1,256}$/);
+  assert.ok(integer(providerKeys[2]) >= 1);
+  const schema = eventValue(providerKeys[3]);
+  assert.match(schema, /^[a-z][a-z0-9_]{0,62}$/);
+  assert.ok(!['public', 'pg_catalog', 'information_schema'].includes(schema) && !schema.startsWith('pg_'));
+  assert.match(eventValue(providerKeys[4]), /^[A-Za-z0-9._:-]{1,128}$/);
+  assert.equal(integer(providerKeys[5]), 1);
+  assert.ok(integer(providerKeys[6]) >= 50 && integer(providerKeys[6]) <= 30_000);
+  assert.ok(integer(providerKeys[7]) >= 1 && integer(providerKeys[7]) <= 3650);
+
+  // Mirror the Messaging provider Validate() requirements for revision and numeric bounds.
+  const messagingRevision = eventValue(messagingKeys[0]);
+  assert.ok(messagingRevision.length > 0 && messagingRevision.length <= 128 &&
+    !/[\s\u0000-\u001f\u007f-\u009f]/u.test(messagingRevision));
+  assert.equal(integer(messagingKeys[1]), 1);
+  assert.ok(integer(messagingKeys[2]) >= 10 && integer(messagingKeys[2]) <= 3600);
+  assert.ok(integer(messagingKeys[3]) >= 1 && integer(messagingKeys[3]) <= 7);
+
+  // Check the migration-only inputs for both Jobs; Orchestrator reaches this path before loading runtime provider settings.
+  assert.deepEqual(events.command, ['dotnet', 'Agentweaver.EventsAndSessions.dll', '--migrate']);
+  assert.deepEqual(orchestrator.command, ['dotnet', 'Agentweaver.Orchestrator.dll', '--migrate']);
+  for (const [env, service] of [[events.env, 'EventsAndSessions'], [orchestrator.env, 'Orchestrator']]) {
+    assert.ok(env.get(`ConnectionStrings__${service}Migration`), `${service} migration connection must be set.`);
+    assert.match(env.get(`${service}__Migration__WorkloadIdentity__TenantId`), /^[0-9a-f-]{36}$/i);
+    assert.match(env.get(`${service}__Migration__WorkloadIdentity__ClientId`), /^[0-9a-f-]{36}$/i);
+    assert.equal(env.get(`${service}__Migration__WorkloadIdentity__TokenFilePath`),
+      '/var/run/secrets/azure/tokens/azure-identity-token');
+    assert.ok(env.get(`${service}__Migration__RuntimeRole`));
+    assert.equal(env.get(`${service}__Migration__PlanSha256`), REVIEWED_PLAN_SHA256);
+  }
+});
+
 const eventsImage = character => imageReference('Agentweaver.EventsAndSessions', digest(character));
 const apps = (running, expected = 'b') => [
   { deployment: 'orchestrator', component: 'Agentweaver.Orchestrator', status: 'match',
