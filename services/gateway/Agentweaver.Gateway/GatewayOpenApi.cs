@@ -33,6 +33,7 @@ internal static partial class GatewayOpenApi
             ["revokeProjectRoleAssignment"] = C(null, "ProjectRoleAssignment", "200"),
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
             ["updateProjectConfiguration"] = C("UpdateProjectConfigurationRequest", "VersionedProjectConfiguration", "200"),
+            ["getProjectConfigurationChoices"] = C(null, "ProjectConfigurationChoices", "200"),
             // Casting contracts mirror Projects, including draft and configuration revision fences.
             ["createProjectCastingProposal"] = C("CreateProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
             ["createScenarioProjectCastingProposal"] = C("CreateScenarioProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
@@ -311,12 +312,14 @@ internal static partial class GatewayOpenApi
                         status == "202"
                             ? "Accepted by the owner; this does not mean the requested work is complete."
                             : "Owner response; returned by the owning service.",
-                        route.OperationId == "readRuntimeObservationV1" && status == "200"
+                        (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices") && status == "200"
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
                                 ["Cache-Control"] = new
                                 {
-                                    description = "Runtime evidence responses are not cacheable.",
+                                    description = route.OperationId == "getProjectConfigurationChoices"
+                                        ? "Project configuration choice responses are not cacheable."
+                                        : "Runtime evidence responses are not cacheable.",
                                     schema = new { type = "string", example = "no-store" },
                                 },
                             }
@@ -355,6 +358,11 @@ internal static partial class GatewayOpenApi
             responses["404"] = ProblemResponse(
                 "The owner hides foreign projects and memberships found inactive or stale during the inventory recheck. " +
                 "Inactive membership rejected during initial caller resolution returns 403.");
+        }
+        else if (route.OperationId == "getProjectConfigurationChoices")
+        {
+            responses["400"] = ProblemResponse("The request must not include query parameters.");
+            responses["404"] = ProblemResponse("The owner did not find an accessible project.");
         }
         else if (route.OperationId == "importProjectAgentSuite")
         {
@@ -934,6 +942,56 @@ else if (route.OperationId is
         ["VersionedProjectConfiguration"] = Obj(["projectId", "revision", "configuration", "updatedByActorId", "createdAt"],
             ("projectId", Str()), ("revision", Int()), ("configuration", Ref("ProjectConfiguration")),
             ("updatedByActorId", Str()), ("createdAt", Date())),
+        ["ProjectConfigurationChoices"] = Obj(
+            ["projectId", "projectConfigurationRevision", "platformRuntimeRevision", "models", "providers"],
+            ("projectId", Str()), ("projectConfigurationRevision", Int()), ("platformRuntimeRevision", Int()),
+            ("models", Ref("ProjectModelChoices")), ("providers", Ref("ProjectProviderChoices"))),
+        ["ProjectModelChoices"] = Obj(
+            ["state", "unavailableReason", "runtimeEligibility", "bindingsRevision", "defaultReasoningEffort", "choices", "savedReferences"],
+            ("state", Enum("available", "unavailable")),
+            ("unavailableReason", Nullable(Enum("model_capability_catalog_unavailable"))),
+            ("runtimeEligibility", Enum("verifiedAtRunStart")),
+            ("bindingsRevision", new
+            {
+                type = new[] { "string", "null" },
+                description = "Revision of the runtime model-binding copy the choices came from. Null while state is unavailable.",
+            }),
+            ("defaultReasoningEffort", Enum("low", "medium", "high", "xhigh")),
+            ("choices", new
+            {
+                type = "array",
+                items = Ref("ProjectModelChoice"),
+                description = "Enabled runtime model bindings, ordered by reference. Disabled bindings and saved-only references are never listed. Empty while state is unavailable.",
+            }),
+            ("savedReferences", new
+            {
+                type = "array",
+                items = Ref("ProjectModelReferenceChoice"),
+                description = "References already saved in platform or project configuration. Saved does not mean eligible; the runtime verifies each reference when a run starts.",
+            })),
+        ["ProjectModelChoice"] = Obj(["reference", "sourceMode", "reasoningEffortSource", "reasoningEfforts"],
+            ("reference", Str()),
+            ("sourceMode", Enum("hostedCopilot", "byok")),
+            ("reasoningEffortSource", Enum("modelBinding", "verifiedAtRunStart")),
+            ("reasoningEfforts", new
+            {
+                type = "array",
+                items = Enum("low", "medium", "high", "xhigh"),
+                description = "Reasoning efforts configured for a BYOK binding. Empty for hosted references, whose reasoning levels are verified when a run starts.",
+            })),
+        ["ProjectModelReferenceChoice"] = Obj(["reference", "sources"],
+            ("reference", Str()),
+            ("sources", Arr(Enum("platformDefault", "platformTask", "platformRole", "platformAgent", "projectSaved")))),
+        ["ProjectProviderChoices"] = Obj(["projectOverridesSupported", "seams", "ignoredProjectOverrides"],
+            ("projectOverridesSupported", Bool()), ("seams", Arr(Ref("ProjectProviderSeamChoice"))),
+            ("ignoredProjectOverrides", Arr(ProviderSeamSchema()))),
+        ["ProjectProviderSeamChoice"] = Obj(
+            ["seam", "cardinality", "state", "unavailableReason", "providerIds"],
+            ("seam", ProviderSeamSchema()),
+            ("cardinality", Enum("exclusive", "orderedComposite", "platformSingleton", "layered", "keyedByMeterSource", "perApplication")),
+            ("state", Enum("selected", "unavailable")),
+            ("unavailableReason", Nullable(Enum("provider_not_registered", "provider_disabled"))),
+            ("providerIds", Arr(Str()))),
         ["UpdateProjectConfigurationRequest"] = Obj(["expectedRevision", "configuration"],
             ("expectedRevision", Int()), ("configuration", Ref("ProjectConfiguration"))),
         ["CreateProjectCastingProposalRequest"] = StrictObj(["expectedConfigurationRevision", "draft"],
@@ -1152,8 +1210,18 @@ else if (route.OperationId is
             ("modelTaskOverrides", Arr(Ref("ModelTaskSelectionOverride"))),
             ("modelRoleOverrides", Arr(Ref("ModelRoleSelectionOverride"))),
             ("modelAgentOverrides", Arr(Ref("ModelAgentSelectionOverride"))),
-            ("providerOverrides", Arr(Ref("ProjectProviderOverride"))),
-            ("orderedProviderOverrides", Arr(Ref("ProjectOrderedProviderOverride"))),
+            ("providerOverrides", new
+            {
+                type = "array",
+                items = Ref("ProjectProviderOverride"),
+                description = "Project provider overrides are unsupported. Writes must send an empty array; any non-empty value returns 400. The owner keeps legacy stored values unchanged, and run selection ignores them.",
+            }),
+            ("orderedProviderOverrides", new
+            {
+                type = "array",
+                items = Ref("ProjectOrderedProviderOverride"),
+                description = "Project provider overrides are unsupported. Writes must send an empty array; any non-empty value returns 400. The owner keeps legacy stored values unchanged, and run selection ignores them.",
+            }),
             ("agentCharters", Arr(Ref("ProjectAgentCharter"))),
             ("casting", Arr(Ref("ProjectAgentCast"))),
             ("blueprintWorkflowReferences", Arr(Ref("BlueprintWorkflowReference"))),

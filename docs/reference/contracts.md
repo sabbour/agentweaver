@@ -66,6 +66,26 @@ These records contain no credentials or option values. Follow
 a provider. See [Providers and models](../architecture/providers-models) for
 resolver limits.
 
+The authenticated
+`GET /api/v1/projects/{projectId}/configuration/choices` endpoint returns
+current project-scoped model references, supported reasoning efforts, and
+platform provider selections for settings. It is a no-store eligibility view,
+not a provisioning check or live upstream result. When Projects & Config has
+the read-only model-binding copy, `models` is `available` with a
+`bindingsRevision` and one `choices` entry per enabled binding. BYOK entries
+list their configured `reasoningEfforts`; hosted entries report
+`reasoningEffortSource: "verifiedAtRunStart"` with no levels. Without the
+copy, `models` is `unavailable` with reason
+`model_capability_catalog_unavailable` and empty `choices`. In both states,
+`savedReferences` is not an eligibility claim. Model
+eligibility is checked against the runtime binding when a run starts, and
+accepted run selections remain immutable. Project overrides remain available
+for model configuration; non-model provider selections are platform-owned.
+Writes must send empty `providerOverrides` and `orderedProviderOverrides`
+arrays (non-empty values return `400 project_provider_override_unsupported`).
+Legacy stored values are kept on new revisions but are ignored for new
+provider resolution.
+
 `SessionsCapabilities` in `Agentweaver.Abstractions` defines the shared
 capability identifiers for Sessions providers. The native PostgreSQL journal
 advertises `SessionsCapabilities.All`; other providers may advertise a smaller

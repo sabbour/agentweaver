@@ -90,6 +90,54 @@ owner response, and returns it with `Cache-Control: no-store`. Treat the
 response as current display context, not a grant. Owners recheck authorization
 for each protected operation.
 
+## Read project configuration choices
+
+Use
+`GET /api/v1/projects/{projectId}/configuration/choices` to read the current
+model references, supported reasoning efforts, and platform provider choices
+for project settings and run selection. The route forwards the bearer token
+and optional tenant selector to Projects & Config. The owner checks current
+project read authority and tenant/project scope. The request accepts no query
+parameters, and the Gateway returns the owner response with
+`Cache-Control: no-store`.
+
+The response is an eligibility and selection view, not a provisioning result.
+It does not fetch credentials, create resources, make a live model call, or
+guarantee that an upstream provider is available. Accepted run selections
+remain immutable; a later project setting change does not rewrite an active
+run's selection.
+
+When the deployment supplies the read-only model-binding copy, the `models`
+block reports `state: "available"` with the copy's `bindingsRevision`. Each
+entry in `choices` is an enabled binding with its `reference`, `sourceMode`
+(`byok` or `hostedCopilot`), `reasoningEffortSource`, and `reasoningEfforts`.
+For a BYOK binding, `reasoningEffortSource` is `modelBinding` and
+`reasoningEfforts` lists the configured levels. For a hosted binding,
+`reasoningEffortSource` is `verifiedAtRunStart` and `reasoningEfforts` is
+empty: the runtime checks the requested level against the hosted model list
+when a run starts. Disabled bindings are not listed. Choices never contain
+model IDs, provider settings, or credential references, and the owner does not
+add choices from saved values or a fixed list.
+
+When the copy is absent, `models` reports `state: "unavailable"` with
+`unavailableReason: "model_capability_catalog_unavailable"`, a null
+`bindingsRevision`, and empty `choices`. A malformed copy stops the service at
+startup instead of producing a partial list. In both states,
+`savedReferences` lists model references already saved in platform or project
+configuration; saved does not mean eligible. The runtime checks each
+reference when a run starts.
+
+Projects can override model configuration only. Provider choices for
+non-model platform components are selected by platform configuration and are
+read-only in project settings. Configuration writes must send empty
+`providerOverrides` and `orderedProviderOverrides` arrays; any non-empty value,
+including an unchanged copy of a stored value, returns
+`400 project_provider_override_unsupported`. Historical stored values are kept
+on the new revision, reported as ignored, and not used for new provider
+resolution; they are not silently migrated or deleted. The owner reports
+unavailable catalog or runtime states explicitly rather than choosing a
+different provider.
+
 ## Read project and Skill data
 
 The Gateway forwards Skills and marketplace operations to Projects & Config.

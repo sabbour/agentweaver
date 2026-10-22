@@ -1,6 +1,12 @@
 import { Field, Input, Select } from '@fluentui/react-components';
 import { PageSection } from '../components/ui/PageSection';
-import type { ModelSelectionSettings, ModelTaskKind, ProjectConfiguration, ReasoningEffort } from './contracts';
+import type {
+  ModelSelectionSettings,
+  ModelTaskKind,
+  ProjectConfiguration,
+  ProjectConfigurationChoices,
+  ReasoningEffort,
+} from './contracts';
 import { needsModelCredential } from './modelCredential';
 
 /** Owner-defined task names, not an invented model eligibility catalog. */
@@ -10,6 +16,14 @@ const TASKS: ReadonlyArray<{ value: ModelTaskKind; label: string }> = [
   { value: 'creativeWriting', label: 'Creative writing' }, { value: 'complex', label: 'Complex work' },
   { value: 'codeWriting', label: 'Code writing' }, { value: 'straightforward', label: 'Straightforward work' },
 ];
+
+const REASONING_EFFORTS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh'];
+const REASONING_LABELS: Record<ReasoningEffort, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+};
 
 /** Narrows a select value to the reasoning levels accepted by the owner. */
 function reasoning(value: string): ReasoningEffort | null {
@@ -25,20 +39,59 @@ function reasoning(value: string): ReasoningEffort | null {
  * saved model restores it. `part` limits the output to the model fields or the
  * platform component implementation fields; omit it to show both.
  */
-export function ConfigurationFields({ configuration, onChange, readOnly = false, savedSelection, part }: {
+export function ConfigurationFields({ configuration, onChange, readOnly = false, savedSelection, part, choices, choicesError = false }: {
   configuration: ProjectConfiguration;
   onChange: (configuration: ProjectConfiguration) => void;
   readOnly?: boolean;
   /** Owner-saved default selection; omit for read-only history. */
   savedSelection?: ModelSelectionSettings | null;
   part?: 'models' | 'components';
+  /** Current owner-backed selection choices; they do not imply runtime provisioning. */
+  choices?: ProjectConfigurationChoices | null;
+  /** True when the choices endpoint could not be read. */
+  choicesError?: boolean;
 }) {
+  const ownerChoicesAvailable = choices?.models.state === 'available';
+  const modelChoices = ownerChoicesAvailable ? choices.models.choices : [];
+  const modelReferences = modelChoices.map((choice) => choice.reference);
+  const ineligibleSavedReferences = ownerChoicesAvailable
+    ? choices.models.savedReferences.filter((saved) => !modelReferences.includes(saved.reference))
+    : [];
+  /**
+   * Reasoning levels offered for a model. BYOK bindings list their configured levels. Hosted models, unlisted
+   * references and inherited defaults show every owner-accepted level, because the runtime checks those
+   * levels when a run starts; this keeps the select from ever being empty.
+   */
+  const effortsFor = (reference: string | null | undefined): ReasoningEffort[] => {
+    const choice = modelChoices.find((item) => item.reference === reference);
+    return choice?.reasoningEffortSource === 'modelBinding' ? choice.reasoningEfforts : REASONING_EFFORTS;
+  };
+  /** Hint shown under a reasoning select when the chosen model is hosted. */
+  const effortHint = (reference: string | null | undefined) =>
+    modelChoices.find((item) => item.reference === reference)?.reasoningEffortSource === 'verifiedAtRunStart'
+      ? 'Reasoning levels for this model are checked when a run starts.'
+      : undefined;
+  const modelOption = (reference: string) => (
+    <option key={reference} value={reference}>
+      {modelReferences.includes(reference) ? reference : `${reference} (not currently eligible)`}
+    </option>
+  );
+  /** Option for a saved reasoning level that the selected model does not list. */
+  const savedEffortOption = (effort: ReasoningEffort) => (
+    <option value={effort}>{`${REASONING_LABELS[effort]} (saved; not listed for this model)`}</option>
+  );
+  const defaultReference = configuration.modelSelection?.reference;
+  const defaultEfforts = effortsFor(defaultReference);
   /** Changes the default model and decides what happens to its credential pin. */
   const setModelReference = (reference: string) => {
-    // Typing into an empty field and clearing it again should not create an
-    // empty model selection that would then be saved.
-    if (!reference && !configuration.modelSelection) return;
-    const current = configuration.modelSelection;
+    if (!reference) {
+      if (configuration.modelSelection)
+        onChange({ ...configuration, modelSelection: null });
+      return;
+    }
+    const current = configuration.modelSelection
+      // After "Use platform default", returning to the saved model restores its full binding.
+      ?? (savedSelection && reference === savedSelection.reference ? savedSelection : null);
     // A credential pin belongs to one model. When the saved selection has a pin:
     // - back on the saved model: restore the saved pin;
     // - on any other model: clear it, so the user must choose a credential.
@@ -65,7 +118,8 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
   const missingCredential = needsModelCredential(configuration, savedSelection);
   // Show the credential fields when a pin exists now or existed when saved.
   // The second case keeps the fields visible after a model change clears the pin.
-  const showCredential = Boolean(savedSelection?.credentialReference || configuration.modelSelection?.credentialReference);
+  const showCredential = Boolean(configuration.modelSelection &&
+    (savedSelection?.credentialReference || configuration.modelSelection.credentialReference));
   /** Sets or clears the model override for one task kind. */
   const setTask = (taskKind: ModelTaskKind, reference: string | null, effort: ReasoningEffort | null) => {
     const overrides = configuration.modelTaskOverrides ?? [];
@@ -81,13 +135,45 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
   return (
     <div className="v1-stack">
       {part !== 'components' && <>
-      <PageSection title="Model defaults" description="Use an existing model reference. Available choices are not listed by this version. Saved changes apply to future runs.">
+      <PageSection title="Model defaults" description="Use an owner-listed model reference when available. Choices describe eligibility only; they do not provision models or change runs that already started.">
+        {choicesError && <p className="v1-muted" role="status">
+          Owner-backed model choices could not be loaded. Enter an existing model reference; the runtime checks availability when a run starts.
+        </p>}
+        {choices?.models.state === 'unavailable' && <div role="status">
+          <p className="v1-muted">
+            {choices.models.unavailableReason === 'model_capability_catalog_unavailable'
+              ? 'Eligible model choices are unavailable: the project service has no runtime model-binding list configured. '
+              : 'Eligible model choices are unavailable. '}
+            Model references and reasoning levels entered here are not verified until a run starts.
+          </p>
+          {choices.models.savedReferences.length > 0 && <>
+            <p className="v1-muted">Saved model references (not verified as eligible)</p>
+            <ul>
+              {choices.models.savedReferences.map((saved) =>
+                <li key={saved.reference}>{saved.reference} ({saved.sources.join(', ')})</li>)}
+            </ul>
+          </>}
+        </div>}
+        {ownerChoicesAvailable && ineligibleSavedReferences.length > 0 && <div role="status">
+          <p className="v1-muted">Saved model references not currently eligible</p>
+          <ul>
+            {ineligibleSavedReferences.map((saved) =>
+              <li key={saved.reference}>{saved.reference} ({saved.sources.join(', ')})</li>)}
+          </ul>
+        </div>}
         <div className="v1-inline-form">
           <Field label="Default model reference">
-            <Input value={configuration.modelSelection?.reference ?? ''} readOnly={readOnly}
-              onChange={(_, data) => setModelReference(data.value)} />
+            {ownerChoicesAvailable ? <Select value={configuration.modelSelection?.reference ?? ''} disabled={readOnly}
+              onChange={(_, data) => setModelReference(data.value)}>
+              <option value="">Use platform default</option>
+              {modelReferences.map(modelOption)}
+              {configuration.modelSelection?.reference &&
+                !modelReferences.includes(configuration.modelSelection.reference) &&
+                modelOption(configuration.modelSelection.reference)}
+            </Select> : <Input value={configuration.modelSelection?.reference ?? ''} readOnly={readOnly}
+              onChange={(_, data) => setModelReference(data.value)} />}
           </Field>
-          <Field label="Default reasoning effort">
+          <Field label="Default reasoning effort" hint={effortHint(defaultReference)}>
             <Select value={configuration.modelSelection?.reasoningEffort ?? ''} disabled={readOnly || !configuration.modelSelection}
               // Reasoning effort is stored on the model selection, so it can only
               // change after a default model exists.
@@ -97,9 +183,14 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
                   modelSelection: { ...configuration.modelSelection, reasoningEffort: reasoning(data.value) },
                 });
               }}>
-              <option value="">Use platform default</option>
-              <option value="low">Low</option><option value="medium">Medium</option>
-              <option value="high">High</option><option value="xhigh">Extra high</option>
+              <option value="">
+                {`Use platform default${ownerChoicesAvailable ? ` (${REASONING_LABELS[choices.models.defaultReasoningEffort]})` : ''}`}
+              </option>
+              {configuration.modelSelection?.reasoningEffort &&
+                !defaultEfforts.includes(configuration.modelSelection.reasoningEffort) &&
+                savedEffortOption(configuration.modelSelection.reasoningEffort)}
+              {defaultEfforts.map((effort) =>
+                <option key={effort} value={effort}>{REASONING_LABELS[effort]}</option>)}
             </Select>
           </Field>
         </div>
@@ -117,49 +208,60 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
           </div>
         )}
       </PageSection>
-      <PageSection title="Models by task" description="Leave a field empty to inherit its default. The service validates references and supported reasoning levels.">
+      <PageSection title="Models by task" description="Leave a field empty to inherit its default. Owner-listed references are eligible choices; the runtime checks availability when a run starts.">
         {TASKS.map(({ value, label }) => {
           const selected = configuration.modelTaskOverrides?.find((item) => item.taskKind === value)?.selection;
+          // A task without its own model inherits the project default model, so its levels follow that model.
+          const taskReference = selected?.reference ?? defaultReference;
+          const taskEfforts = effortsFor(taskReference);
           return <div className="v1-inline-form" key={value}>
             <Field label={`${label} model`}>
-              <Input value={selected?.reference ?? ''} placeholder="Use default" readOnly={readOnly}
-                onChange={(_, data) => setTask(value, data.value || null, selected?.reasoningEffort ?? null)} />
+              {ownerChoicesAvailable ? <Select value={selected?.reference ?? ''} disabled={readOnly}
+                onChange={(_, data) => setTask(value, data.value || null, selected?.reasoningEffort ?? null)}>
+                <option value="">Use default</option>
+                {modelReferences.map(modelOption)}
+                {selected?.reference && !modelReferences.includes(selected.reference) && modelOption(selected.reference)}
+              </Select> : <Input value={selected?.reference ?? ''} placeholder="Use default" readOnly={readOnly}
+                onChange={(_, data) => setTask(value, data.value || null, selected?.reasoningEffort ?? null)} />}
             </Field>
-            <Field label={`${label} reasoning effort`}>
+            <Field label={`${label} reasoning effort`} hint={effortHint(taskReference)}>
               <Select value={selected?.reasoningEffort ?? ''} disabled={readOnly}
                 onChange={(_, data) => setTask(value, selected?.reference ?? null, reasoning(data.value))}>
-                <option value="">Use default</option><option value="low">Low</option>
-                <option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option>
+                <option value="">Use default</option>
+                {selected?.reasoningEffort && !taskEfforts.includes(selected.reasoningEffort) &&
+                  savedEffortOption(selected.reasoningEffort)}
+                {taskEfforts.map((effort) =>
+                  <option key={effort} value={effort}>{REASONING_LABELS[effort]}</option>)}
               </Select>
             </Field>
           </div>;
         })}
       </PageSection>
       </>}
-      {/* Implementation choices can only be edited, not added: the list shows the overrides already saved. */}
-      {part !== 'models' && <PageSection title="Platform component implementations" description="Choose which implementation a platform component uses in this project. Enter saved implementation IDs; this version does not list the choices.">
-        {configuration.providerOverrides.map((provider, index) => (
-          <Field key={`${provider.seam}-${index}`} label={`${provider.seam} implementation`}>
-            <Input value={provider.providerId} readOnly={readOnly}
-              onChange={(_, data) => onChange({
-                ...configuration,
-                providerOverrides: configuration.providerOverrides.map((item, i) => i === index ? { ...item, providerId: data.value } : item),
-              })} />
+      {part !== 'models' && <PageSection title="Platform component implementations" description="Provider components are selected by the platform and cannot be overridden by a project. These selections do not imply provisioning.">
+        {choicesError && <p className="v1-muted" role="status">Platform component selections could not be loaded.</p>}
+        {choices && choices.providers.seams.map((seam) => (
+          <Field key={seam.seam} label={`${seam.seam} (${seam.cardinality})`}>
+            <Input value={seam.state === 'selected'
+              ? seam.providerIds.join(', ')
+              : `Unavailable (${seam.unavailableReason ?? 'unknown'}): ${seam.providerIds.join(', ')}`}
+              readOnly />
           </Field>
         ))}
-        {configuration.providerOverrides.length === 0 && <p className="v1-muted">No project choices. Platform defaults apply.</p>}
-        {configuration.orderedProviderOverrides.map((provider, index) => (
-          <Field key={`${provider.seam}-${index}`} label={`${provider.seam} implementation order`} hint="Separate implementation IDs with commas, in priority order.">
-            <Input value={provider.providerIds.join(', ')} readOnly={readOnly}
-              // Split on commas and trim each ID, keeping the order. Empty
-              // entries are not removed here.
-              onChange={(_, data) => onChange({
-                ...configuration,
-                orderedProviderOverrides: configuration.orderedProviderOverrides.map((item, i) => i === index
-                  ? { ...item, providerIds: data.value.split(',').map((id) => id.trim()) } : item),
-              })} />
-          </Field>
-        ))}
+        {!choicesError && !choices && <p className="v1-muted">Platform component selections are not available for this view.</p>}
+        {choices && choices.providers.seams.length === 0 && <p className="v1-muted">No platform provider selections are configured.</p>}
+        <p className="v1-muted">Projects can override model configuration only; provider components are selected by the platform.</p>
+        {(configuration.providerOverrides.length > 0 || configuration.orderedProviderOverrides.length > 0) && (
+          <div>
+            <p className="v1-muted">Saved project override (ignored)</p>
+            <ul>
+              {configuration.providerOverrides.map((provider, index) =>
+                <li key={`single-${provider.seam}-${index}`}>{provider.seam}: {provider.providerId}</li>)}
+              {configuration.orderedProviderOverrides.map((provider, index) =>
+                <li key={`ordered-${provider.seam}-${index}`}>{provider.seam}: {provider.providerIds.join(' → ')}</li>)}
+            </ul>
+          </div>
+        )}
       </PageSection>}
     </div>
   );

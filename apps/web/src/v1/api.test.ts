@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AgentweaverGatewayClient } from './api';
-import type { KnowledgeRecordTransferBundle } from './contracts';
+import type { KnowledgeRecordTransferBundle, ProjectConfiguration } from './contracts';
 
 describe('Gateway API client', () => {
   it('reads exact captured file bytes and the digest with the explicit tenant', async () => {
@@ -31,6 +31,34 @@ describe('Gateway API client', () => {
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
     await expect(client.readSourceControlOutputCapture('token', 'p', 'r', 's', null, 'requested'))
       .rejects.toMatchObject({ status: 502, code: 'invalid_owner_response' });
+  });
+
+  it('sends empty provider overrides on project configuration and casting draft writes', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response('{}', {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const configuration = {
+      modelSelection: { reference: 'model-a' },
+      providerOverrides: [{ seam: 'sandbox', providerId: 'legacy-sandbox' }],
+      orderedProviderOverrides: [{ seam: 'guardrails', providerIds: ['legacy-a', 'legacy-b'] }],
+    } as unknown as ProjectConfiguration;
+
+    await client.updateProjectConfiguration('token', 'p1', 3, configuration);
+    await client.createCastingDraftProposal('token', 'p1', { expectedConfigurationRevision: 3, draft: configuration });
+    await client.updateCastingProposal('token', 'p1', 'proposal-1', { expectedDraftRevision: 2, draft: configuration });
+
+    const bodies = fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)));
+    expect(bodies[0]).toEqual({
+      expectedRevision: 3,
+      configuration: { modelSelection: { reference: 'model-a' }, providerOverrides: [], orderedProviderOverrides: [] },
+    });
+    for (const body of bodies.slice(1)) {
+      expect(body.draft.modelSelection).toEqual({ reference: 'model-a' });
+      expect(body.draft.providerOverrides).toEqual([]);
+      expect(body.draft.orderedProviderOverrides).toEqual([]);
+    }
+    expect(configuration.providerOverrides).toHaveLength(1);
   });
 
   it('does not send a request without a Broker access token', async () => {

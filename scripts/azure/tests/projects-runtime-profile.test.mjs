@@ -18,6 +18,14 @@ function fixture() {
   return input;
 }
 
+/** The model-binding copy is optional; tests of required runtime keys start without it. */
+const isModelBindingKey = key => key.startsWith('AgentHost__ModelBindings');
+function requiredFixture() {
+  const input = fixture();
+  for (const key of Object.keys(input.configuration)) if (isModelBindingKey(key)) delete input.configuration[key];
+  return input;
+}
+
 test('example remains incomplete until Broker authentication values are supplied', () => {
   assert.throws(() => renderProjectsProfile(example), /explicit nonempty string/);
 });
@@ -101,7 +109,7 @@ test('validator returns only runtime data and does not mutate its input', () => 
 });
 
 test('every required runtime field rejects missing, empty, padded, control-bearing and non-string values', () => {
-  for (const key of Object.keys(fixture().configuration)) {
+  for (const key of Object.keys(requiredFixture().configuration)) {
     const missing = fixture();
     delete missing.configuration[key];
     assert.throws(() => renderProjectsProfile(missing), /missing field/, key);
@@ -175,4 +183,79 @@ test('only the managed Broker HTTPS root and recognized runtime keys are accepte
   const extraRootInput = fixture();
   extraRootInput.image = 'ghcr.io/example/image:latest';
   assert.throws(() => renderProjectsProfile(extraRootInput), /unsupported field/);
+});
+
+/** Add a read-only model-binding eligibility copy with one hosted, one BYOK and one disabled binding. */
+function bindingFixture() {
+  const input = requiredFixture();
+  Object.assign(input.configuration, {
+    AgentHost__ModelBindingsRevision: 'models-r7',
+    AgentHost__ModelBindings__reasoning__SourceMode: 'HostedCopilot',
+    AgentHost__ModelBindings__reasoning__Enabled: 'true',
+    AgentHost__ModelBindings__coder__SourceMode: 'Byok',
+    AgentHost__ModelBindings__coder__Enabled: 'true',
+    AgentHost__ModelBindings__coder__SupportedReasoningEfforts__0: 'high',
+    AgentHost__ModelBindings__coder__SupportedReasoningEfforts__1: 'low',
+    AgentHost__ModelBindings__retired__SourceMode: 'Byok',
+    AgentHost__ModelBindings__retired__Enabled: 'false',
+    AgentHost__ModelBindings__retired__SupportedReasoningEfforts__0: 'medium',
+  });
+  return input;
+}
+
+test('model-binding eligibility copy is optional and renders unchanged when valid', () => {
+  assert.deepEqual(renderProjectsProfile(requiredFixture()).data, requiredFixture().configuration);
+  const input = bindingFixture();
+  assert.deepEqual(renderProjectsProfile(input), { data: input.configuration });
+  const exampleBindings = Object.fromEntries(
+    Object.entries(fixture().configuration).filter(([key]) => isModelBindingKey(key)));
+  const deployedBindings = Object.fromEntries(
+    Object.entries(sourceConfiguration).filter(([key]) => isModelBindingKey(key)));
+  assert.ok(Object.keys(deployedBindings).length > 0);
+  assert.deepEqual(exampleBindings, deployedBindings);
+  assert.deepEqual(renderProjectsProfile(fixture()), { data: fixture().configuration });
+});
+
+test('model-binding copy rejects provider, credential and malformed eligibility fields', () => {
+  const cases = [
+    ['ModelId', input => { input.configuration.AgentHost__ModelBindings__coder__ModelId = 'gpt-x'; }, /unsupported model binding field/],
+    ['provider URL', input => { input.configuration.AgentHost__ModelBindings__coder__Provider__BaseUrl = 'https://models.example/'; }, /unsupported model binding field/],
+    ['provider header', input => { input.configuration.AgentHost__ModelBindings__coder__Provider__Headers__Authorization = 'Bearer x'; }, /unsupported model binding field/],
+    ['credential reference', input => { input.configuration.AgentHost__ModelBindings__coder__CredentialReference = 'kv://secret'; }, /unsupported model binding field/],
+    ['prompt capacity', input => { input.configuration.AgentHost__ModelBindings__coder__PromptCapacityTokens = '1000'; }, /unsupported model binding field/],
+    ['bad reference', input => { input.configuration['AgentHost__ModelBindings__bad ref__SourceMode'] = 'Byok'; }, /unsupported model binding field/],
+    ['revision without bindings', input => {
+      for (const key of Object.keys(input.configuration)) if (key.startsWith('AgentHost__ModelBindings__')) delete input.configuration[key];
+    }, /at least one model binding/],
+    ['bindings without revision', input => { delete input.configuration.AgentHost__ModelBindingsRevision; }, /valid model-bindings revision/],
+    ['malformed revision', input => { input.configuration.AgentHost__ModelBindingsRevision = 'bad revision'; }, /valid model-bindings revision/],
+    ['unknown source mode', input => { input.configuration.AgentHost__ModelBindings__coder__SourceMode = 'Foundry'; }, /'coder' is incomplete or invalid/],
+    ['missing enabled', input => { delete input.configuration.AgentHost__ModelBindings__coder__Enabled; }, /'coder' is incomplete or invalid/],
+    ['non-boolean enabled', input => { input.configuration.AgentHost__ModelBindings__coder__Enabled = 'True'; }, /'coder' is incomplete or invalid/],
+    ['missing source mode', input => { delete input.configuration.AgentHost__ModelBindings__coder__SourceMode; }, /'coder' is incomplete or invalid/],
+    ['unknown effort', input => { input.configuration.AgentHost__ModelBindings__coder__SupportedReasoningEfforts__1 = 'max'; }, /'coder' is incomplete or invalid/],
+    ['duplicate effort', input => { input.configuration.AgentHost__ModelBindings__coder__SupportedReasoningEfforts__1 = 'high'; }, /'coder' is incomplete or invalid/],
+    ['effort index gap', input => {
+      delete input.configuration.AgentHost__ModelBindings__coder__SupportedReasoningEfforts__0;
+    }, /'coder' is incomplete or invalid/],
+    ['non-string effort', input => { input.configuration.AgentHost__ModelBindings__coder__SupportedReasoningEfforts__1 = 1; }, /'coder' is incomplete or invalid/],
+    // .NET reads ':' and '__' as hierarchy separators, so such a reference would not reach the service intact.
+    ['colon in reference', input => { input.configuration['AgentHost__ModelBindings__model:alias__SourceMode'] = 'Byok'; }, /unsupported model binding field/],
+    ['double underscore in reference', input => { input.configuration.AgentHost__ModelBindings__model__alias__SourceMode = 'Byok'; }, /unsupported model binding field/],
+  ];
+  for (const [name, mutate, expected] of cases) {
+    const input = bindingFixture();
+    mutate(input);
+    assert.throws(() => renderProjectsProfile(input), expected, name);
+  }
+});
+
+test('model-binding copy accepts every effort shape AgentHost accepts', () => {
+  // AgentHost ignores hosted binding efforts and accepts a BYOK binding with none; the copy must not fail on either.
+  const input = bindingFixture();
+  delete input.configuration.AgentHost__ModelBindings__retired__SupportedReasoningEfforts__0;
+  input.configuration.AgentHost__ModelBindings__reasoning__SupportedReasoningEfforts__0 = 'low';
+  input.configuration['AgentHost__ModelBindings__gpt-6.1_sol__SourceMode'] = 'HostedCopilot';
+  input.configuration['AgentHost__ModelBindings__gpt-6.1_sol__Enabled'] = 'true';
+  assert.deepEqual(renderProjectsProfile(input), { data: input.configuration });
 });
