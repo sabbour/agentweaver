@@ -22,7 +22,7 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.3.0, )"
+          "Agentweaver.Abstractions": "[1.4.0, )"
         }
       }
     }

@@ -2,6 +2,17 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-22T22:41:37.240Z — source `a0856e97d2e7df43b9ee85cf29e120c862cf4f55`
+
+- `Agentweaver.Abstractions`: 1.3.0 -> 1.4.0 (minor) — .changeset/user-run-messages.md
+- `Agentweaver.EventsAndSessions`: 1.3.1 -> 1.3.2 (patch) — .changeset/readiness-failure-reasons.md, .changeset/user-run-messages.md
+- `Agentweaver.Gateway`: 1.3.0 -> 1.4.0 (minor) — .changeset/model-choices-2132.md, .changeset/project-effective-role-display.md, .changeset/project-run-list-me-filter.md, .changeset/user-run-messages.md
+- `Agentweaver.Identity.Broker`: 1.2.0 -> 1.2.1 (patch) — .changeset/project-effective-role-display.md
+- `Agentweaver.Orchestrator`: 1.3.0 -> 1.4.0 (minor) — .changeset/project-run-list-me-filter.md, .changeset/readiness-failure-reasons.md, .changeset/user-run-messages.md
+- `Agentweaver.Persistence.Postgres`: 1.1.1 -> 1.2.0 (minor) — .changeset/readiness-failure-reasons.md
+- `Agentweaver.Projects.Config`: 1.3.0 -> 1.4.0 (minor) — .changeset/model-choices-2132.md, .changeset/project-effective-role-display.md
+- `Agentweaver.Web`: 1.2.1 -> 1.3.0 (minor) — .changeset/model-choices-2132.md, .changeset/priority-pr-picker-unavailable.md, .changeset/project-effective-role-display.md, .changeset/project-run-list-me-filter.md, .changeset/user-run-messages.md
+
 ## 2026-10-22T12:15:08.488Z — source `20cfec5a9f2ce02b982cbadd19d1a004c85323d8`
 
 - `Agentweaver.Abstractions`: 1.2.0 -> 1.3.0 (minor) — .changeset/agentsessions-record-verifier-2113.md
