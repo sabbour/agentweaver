@@ -7,6 +7,8 @@ compatibility. It does not, by itself, prove that an artifact was published or
 that a service was deployed.
 
 For the full release process, see the [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md).
+For issue labels, version milestones, release reconciliation and acceptance
+repairs, see [Plan issues and releases](../guide/release-planning.md).
 For deployment settings, see [Runtime configuration](./runtime-configuration.md).
 
 ## Current manifest status

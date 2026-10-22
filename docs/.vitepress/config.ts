@@ -66,6 +66,7 @@ export default defineConfig({
           text: 'Test and troubleshoot',
           items: [
             { text: 'Testing', link: '/guide/testing' },
+            { text: 'Plan issues and releases', link: '/guide/release-planning' },
             { text: 'Environment Sandbox testing', link: '/guide/environment-sandbox-testing' },
             { text: 'Azure acceptance', link: '/guide/azure-acceptance' },
             { text: 'Troubleshooting', link: '/guide/troubleshooting' },
