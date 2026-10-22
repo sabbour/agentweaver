@@ -378,7 +378,7 @@ export function connectivityProbeJob({ name, workload, runId, host, namespace })
           securityContext: { runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: { type: 'RuntimeDefault' } },
           containers: [{
             name: 'probe', image: PROBE_IMAGE, command: ['sh', '-c', script, 'probe', host],
-            resources: { requests: { cpu: '10m', memory: '16Mi' }, limits: { cpu: '100m', memory: '32Mi' } },
+            resources: { requests: { cpu: '25m', memory: '32Mi' }, limits: { cpu: '100m', memory: '32Mi' } },
             securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ['ALL'] } },
           }],
         },

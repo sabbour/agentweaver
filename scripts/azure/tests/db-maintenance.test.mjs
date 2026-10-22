@@ -583,6 +583,7 @@ test('the connectivity probe runs under the migration egress label with no token
   const pod = job.spec.template.spec;
   assert.equal(job.spec.template.metadata.labels['agentweaver.io/workload'], 'identity-broker-migration');
   assert.equal(pod.automountServiceAccountToken, false);
+  assert.deepEqual(pod.containers[0].resources.requests, { cpu: '25m', memory: '32Mi' });
   assert.equal(pod.containers[0].securityContext.allowPrivilegeEscalation, false);
   assert.match(pod.containers[0].image, /@sha256:[0-9a-f]{64}$/);
   assert.match(pod.containers[0].command[2], new RegExp(CONNECTIVITY_MARKER));
