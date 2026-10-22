@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startStaticServer, openApp, runRoom } from './harness.mjs';
-import { notification, priority, project, run } from '../src/v1/__fixtures__/cosGateway.ts';
+import { NOW, notification, priority, project, run } from '../src/v1/__fixtures__/cosGateway.ts';
 
 let server;
 before(async () => { server = await startStaticServer(); });
@@ -61,10 +61,17 @@ test('new chat: one create for a double send, and the chat survives reload', asy
   }
 });
 
-test('priorities: create, checklist, link a run, reorder, and a revision conflict', async () => {
+test('priorities: create and reorder survive reload, notes save, conversation links persist, and conflicts keep drafts', async () => {
   const app = await openApp({
     origin: server.origin,
-    seed: { runs: { p1: [run('r-2', 'active', 'Profile the API')] }, priorities: [priority('pr-1', 'Hire two engineers')] },
+    seed: {
+      runs: { p1: [run('r-2', 'active', 'Profile the API')] },
+      conversations: [{
+        conversationId: 'conv-r-2', access: 'available', projectId: 'p1', runId: 'r-2',
+        rootSessionId: 'r-2-root', title: 'Profile the API', requestState: 'started', runState: 'active', createdAt: NOW,
+      }],
+      priorities: [priority('pr-1', 'Hire two engineers')],
+    },
   });
   try {
     const { page } = app;
@@ -98,6 +105,40 @@ test('priorities: create, checklist, link a run, reorder, and a revision conflic
     await row.getByRole('button', { name: 'Move up: Cut latency' }).click();
     await page.getByRole('listitem', { name: 'Priority 1: Cut latency' }).waitFor();
     assert.deepEqual(app.gateway.state.priorities.map((value) => value.outcome), ['Cut latency', 'Hire two engineers']);
+
+    // The server's order and the created Priority must both survive a full page reload.
+    await page.reload();
+    await page.getByRole('listitem', { name: 'Priority 1: Cut latency' }).waitFor();
+    await page.getByRole('listitem', { name: 'Priority 2: Hire two engineers' }).waitFor();
+    assert.deepEqual(app.gateway.state.priorities.map((value) => value.outcome), ['Cut latency', 'Hire two engineers']);
+
+    const editCreated = row.getByRole('button', { name: 'Edit: Cut latency' });
+    await editCreated.click();
+    const createdEdit = row.getByRole('form', { name: 'Edit Priority: Cut latency' });
+    await createdEdit.getByLabel('Notes').fill('Focus on backend requests');
+    await createdEdit.getByRole('button', { name: 'Save' }).click();
+    await row.getByText('Focus on backend requests', { exact: true }).waitFor();
+    assert.equal(app.gateway.state.priorities.find((value) => value.outcome === 'Cut latency').notes, 'Focus on backend requests');
+
+    // Create a conversation link through the Priority form, then verify it is reloaded from Gateway state.
+    await row.getByRole('button', { name: 'Add link to Cut latency' }).click();
+    const conversationForm = row.getByRole('form', { name: 'Add link to Cut latency' });
+    await conversationForm.getByLabel('Link type').selectOption('conversation');
+    await conversationForm.getByLabel('Conversation', { exact: true }).selectOption('conv-r-2');
+    await conversationForm.getByRole('button', { name: 'Add link' }).click();
+    await row.getByText('Conversation · Run r-2', { exact: true }).waitFor();
+    assert.deepEqual(
+      app.gateway.state.priorities.find((value) => value.outcome === 'Cut latency').links.map(({ kind, projectId, runId, conversationId }) =>
+        ({ kind, projectId, runId, conversationId })),
+      [
+        { kind: 'run', projectId: 'p1', runId: 'r-2', conversationId: undefined },
+        { kind: 'conversation', projectId: 'p1', runId: 'r-2', conversationId: 'conv-r-2' },
+      ],
+    );
+    await page.reload();
+    const reloadedRow = page.getByRole('listitem', { name: 'Priority 1: Cut latency' });
+    await reloadedRow.getByText('Conversation · Run r-2', { exact: true }).waitFor();
+    await reloadedRow.getByText('Focus on backend requests', { exact: true }).waitFor();
 
     const other = item('Hire two engineers');
     await other.getByRole('button', { name: 'Edit: Hire two engineers' }).click();

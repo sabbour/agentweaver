@@ -19,6 +19,7 @@ surface journey does not prove every native execution boundary.
 | `scripts/ui-harness/` | Injected-page observation and owner receipt checks |
 | `scripts/mcp-harness/` | MCP transport, discovery, and tool-result tests |
 | `scripts/harness-shared/` | Target/auth guards, journeys, redaction, and acceptance results |
+| `apps/web/e2e/` | Playwright journeys against the built Web app with fake Broker and Gateway services, including Priority create/order, notes, conversation links, and reloads |
 | `scripts/coverage/` | Coverage collection and receipt guards |
 | `.github/workflows/v1-ci.yml` and `v1-docs-ci.yml` | Automatic source and documentation validation |
 | Integration-image, release-pack, and continuation workflows | Artifact preparation and controlled publication |
