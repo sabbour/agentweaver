@@ -1,6 +1,5 @@
 /** Browser bootstrap for the v1 app, including development focus support and a top-level render fallback. */
 import './index.css';
-import App from './App.tsx';
 import { Component, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ErrorInfo, ReactNode } from 'react';
@@ -42,11 +41,21 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-// Mount the application in strict mode and keep uncaught component errors at the UI boundary.
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </StrictMode>,
-)
+// Load the app after creating the root so a missing deployed Gateway setting can
+// render a readable startup error instead of leaving the user with a blank page.
+const root = createRoot(document.getElementById('root')!);
+void import('./App.tsx').then(({ default: App }) => {
+  // Component failures after startup still use the existing render error boundary.
+  root.render(<StrictMode><ErrorBoundary><App /></ErrorBoundary></StrictMode>);
+}).catch((reason: unknown) => {
+  // Show only the known configuration message; other import failures need a generic reload prompt.
+  const missingGateway = reason instanceof Error && reason.message.startsWith('Gateway URL');
+  root.render(
+    <main role="alert" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
+      <section style={{ maxWidth: 520 }}>
+        <h1>{missingGateway ? 'Gateway configuration is unavailable' : 'Something went wrong'}</h1>
+        <p>{missingGateway ? reason.message : 'The app could not start. Reload the page to try again.'}</p>
+      </section>
+    </main>,
+  );
+});

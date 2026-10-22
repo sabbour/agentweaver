@@ -153,7 +153,10 @@ export function LeftNavView({
   // passes visible keys, drop every entry not in the list, then drop sections
   // left with no entries so no empty heading or divider is drawn.
   const { globalPrimaryItems, globalSessionsItem, primarySections, bottomSections } = useMemo(() => ({
-    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) => item.key !== 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
+    globalPrimaryItems: GLOBAL_NAV_ITEMS.filter((item) =>
+      item.key !== 'sessions'
+      && (!item.v1Only || visibleGlobalKeys?.includes(item.key))
+      && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
     globalSessionsItem: GLOBAL_NAV_ITEMS.find((item) => item.key === 'sessions' && (!visibleGlobalKeys || visibleGlobalKeys.includes(item.key))),
     primarySections: NAV_SECTIONS.filter((section) => !section.anchorBottom)
       .map((section) => ({ ...section, items: section.items.filter((item) => !visibleProjectKeys || visibleProjectKeys.includes(item.key)) }))

@@ -63,8 +63,8 @@ function project(projectId: string, name: string, updatedAt: string, state: Proj
   return { projectId, name, state, revision: 1, configurationRevision: 1, createdAt: updatedAt, updatedAt };
 }
 
-function renderPage() {
-  return render(<MemoryRouter><OverviewPage /></MemoryRouter>);
+function renderPage(initialEntry = '/overview') {
+  return render(<MemoryRouter initialEntries={[initialEntry]}><OverviewPage /></MemoryRouter>);
 }
 
 describe('OverviewPage metrics', () => {
@@ -117,5 +117,28 @@ describe('OverviewPage metrics', () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Metrics appear when you have an active project.')).toBeTruthy());
     expect(mocks.useProjectMetrics).toHaveBeenLastCalledWith(null, '30d');
+  });
+
+  it('groups Priorities, New chat, and My conversations under Chief of Staff', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Chief of Staff' })).toBeTruthy());
+    const group = screen.getByRole('heading', { name: 'Chief of Staff' }).closest('section');
+    expect(group).toBeTruthy();
+    for (const heading of ['Priorities', 'New chat', 'My conversations']) {
+      expect(group?.contains(screen.getByRole('heading', { name: heading }))).toBe(true);
+    }
+  });
+
+  it('scrolls to the Chief of Staff section after its project-gated page content loads', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    try {
+      renderPage('/overview#chief-of-staff');
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' }));
+    } finally {
+      if (descriptor) Object.defineProperty(Element.prototype, 'scrollIntoView', descriptor);
+      else Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+    }
   });
 });

@@ -168,6 +168,7 @@ export function DashboardPage() {
               <div>
                 <Text as="h2" id="project-status-title" className={styles.healthTitle}>{readiness.title}</Text>
                 <Text className={styles.healthCopy}>{readiness.body}</Text>
+                <Text className={styles.healthCopy}>Live project health is unavailable. This status shows saved setup only.</Text>
               </div>
               <ul className={styles.checks} aria-label="Setup checks">
                 {readiness.checks.map((check) => (

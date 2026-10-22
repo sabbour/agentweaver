@@ -82,7 +82,9 @@ function SharedAttentionBell({ projectNames }: { projectNames: ReadonlyMap<strin
  * Picks the rail item to highlight. v1 routes that the shared nav config does
  * not know are mapped here, so they never fall back to Overview.
  */
-function shellActiveKey(pathname: string, projectId: string | undefined): string {
+function shellActiveKey(pathname: string, projectId: string | undefined, hash: string): string {
+  // The rail shortcut points to a section of Overview rather than a new page.
+  if (pathname === '/overview' && hash === '#chief-of-staff') return 'chief-of-staff';
   // The new session page highlights the New session button.
   if (pathname === '/assistant') return NEW_SESSION_NAV_KEY;
   // Settings pages highlight the Settings menu button.
@@ -149,12 +151,12 @@ export function RetainedShell({ children }: { children: ReactNode }) {
         {/* The rail shows the 0.x pages, plus the Sessions group with its New
             session button. Operations pages show what current reads support. */}
         <LeftNavView
-          visibleGlobalKeys={['overview', 'projects', 'sessions']}
+          visibleGlobalKeys={['overview', 'chief-of-staff', 'projects', 'sessions']}
           visibleProjectKeys={['dashboard', 'board', 'flow', 'orchestrations', 'workspace', 'agents', 'skills', 'memories', 'workflows', 'observability', 'diagnostics', 'heartbeat', 'cluster']}
           showNewSession
           projectId={projectId}
           pathname={location.pathname}
-          activeKey={shellActiveKey(location.pathname, projectId)}
+          activeKey={shellActiveKey(location.pathname, projectId, location.hash)}
           version={packageInfo.version}
           projectSwitcher={(
             <ProjectSwitcherView

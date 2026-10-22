@@ -10,8 +10,10 @@ afterEach(() => {
   FakeBroadcastChannel.reset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.resetModules();
   delete (window as unknown as { __AGENTWEAVER_CONFIG__?: unknown }).__AGENTWEAVER_CONFIG__;
+  delete window.__AGENTWEAVER_CONFIG_BASE64__;
 });
 
 class FakeBroadcastChannel {
@@ -93,6 +95,21 @@ describe('ApiClient request() single /api prefix', () => {
       'http://localhost:5000/api/runs/abc',
       expect.anything(),
     );
+  });
+
+  it('uses the injected v1 Gateway path in production without calling localhost', async () => {
+    vi.stubEnv('PROD', true);
+    window.__AGENTWEAVER_CONFIG_BASE64__ = { GATEWAY_URL: btoa('/api/v1') };
+    const config = await loadConfigWith(undefined);
+    expect(config.API_URL).toBe('/api/v1');
+    const fetchSpy = spyFetch();
+    const { apiClient } = await import('../api/apiClient');
+    await apiClient.listProjects();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/api\/v1\/projects(?:\?|$)/),
+      expect.anything(),
+    );
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('localhost'))).toBe(false);
   });
 
   describe('cross-tab session auth', () => {

@@ -54,10 +54,53 @@ function defaultBrokerIssuer(value: string): string {
 const brokerUrlSetting =
   runtimeSetting('IDENTITY_BROKER_URL') ?? environment.VITE_IDENTITY_BROKER_URL ?? '';
 
+/** Resolves the versioned Gateway URL and rejects a missing or local production target. */
+function resolveGatewayBaseUrl(): string {
+  // Runtime settings take precedence over build-time values, as on the static Web host.
+  const configured = runtimeSetting('GATEWAY_URL') ?? environment.VITE_GATEWAY_URL;
+  if (!configured) {
+    // The development server can proxy the default path; a deployed build must have a configured target.
+    if (environment.PROD) throw new Error('Gateway URL is missing from the web configuration. Ask your administrator to check the deployment.');
+    return '/api/v1';
+  }
+  const base = trimTrailingSlash(configured);
+  if (environment.PROD) {
+    // Production accepts only an absolute URL or a same-origin path; backslashes can be normalized into a new host.
+    const absolute = /^[a-z][a-z\d+\-.]*:\/\//i.test(base);
+    const rootRelative = base.startsWith('/') && !base.startsWith('//');
+    const invalidMessage = 'Gateway URL must point to a valid deployed HTTP(S) /api/v1 endpoint, not localhost.';
+    let target: URL;
+    try {
+      // Parse the URL before checking its path so query text cannot masquerade as the /api/v1 suffix.
+      if ((!absolute && !rootRelative) || base.includes('\\')) throw new Error(invalidMessage);
+      target = absolute
+        ? new URL(base)
+        : new URL(base, typeof window === 'undefined' ? 'https://gateway.invalid' : window.location.origin);
+    } catch {
+      // Keep malformed runtime values inside the same named startup configuration error.
+      throw new Error(invalidMessage);
+    }
+    const hostname = target.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    const local = absolute && (
+      hostname === 'localhost' || hostname.endsWith('.localhost')
+      || hostname.startsWith('127.') || hostname === '0.0.0.0'
+      || hostname === '::1' || hostname.startsWith('::ffff:127.')
+    );
+    if (
+      !['http:', 'https:'].includes(target.protocol)
+      || !target.pathname.endsWith('/api/v1')
+      || base.includes('?')
+      || base.includes('#')
+      || target.username
+      || target.password
+      || local
+    ) throw new Error(invalidMessage);
+  }
+  return base;
+}
+
 /** Gateway origin/path, preferring host-injected settings over build-time values. */
-export const gatewayBaseUrl = trimTrailingSlash(
-  runtimeSetting('GATEWAY_URL') ?? environment.VITE_GATEWAY_URL ?? '/api/v1',
-);
+export const gatewayBaseUrl = resolveGatewayBaseUrl();
 /** Identity Broker base URL used by the OAuth client. */
 export const brokerBaseUrl = trimTrailingSlash(brokerUrlSetting);
 /** OIDC issuer from explicit configuration or a validated HTTPS Broker URL. */

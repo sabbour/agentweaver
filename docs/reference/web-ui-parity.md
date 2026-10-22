@@ -39,6 +39,10 @@ The UI says **platform component** for a replaceable platform area and
 ```mermaid
 flowchart LR
   signin[Sign in] --> overview[Overview]
+  overview --> chief[Chief of Staff]
+  chief --> priorities[Priorities]
+  chief --> newchat[New chat]
+  chief --> conversations[My conversations]
   overview --> projects[Projects]
   overview --> sessions[Sessions]
   overview --> attention[Needs attention]
@@ -63,6 +67,18 @@ flowchart LR
   dashboard --> settings[Project settings]
 ```
 
+The Overview groups Priorities, New chat, and My conversations under
+**Chief of Staff**. A v1-only rail link opens that section; 0.x navigation is
+unchanged. The active Overview and Dashboard load from Gateway project, run,
+metric, usage, configuration, and notification reads. The retained 0.x Overview and
+Dashboard source files also use only published Gateway reads. They preserve
+their panels but are not mounted in the v1 route tree. Overview shows usage and
+recent runs for the four most recently updated active projects; Dashboard
+shows project metrics, run totals, and model usage for the selected range.
+Neither page calls the old global overview or project dashboard endpoint. The
+notification bell and project switcher use the same published Gateway routes.
+When a read fails, its value is unavailable, not zero or healthy.
+
 ## Surfaces
 
 Each row says what works and what is still missing. The missing parts link to
@@ -72,16 +88,16 @@ Each row says what works and what is still missing. The missing parts link to
 | --- | --- | --- |
 | Sign-in | Broker sign-in in the 0.x card. | Nothing. |
 | Consent | Permission explanations in the sign-in card. | Nothing. |
-| Shell and breadcrumbs | 0.x rail with **Overview**, **Projects**, and **Sessions**, the **New session** button, project switcher, persona menu, and `Projects / project / page` breadcrumbs. Project pages list Flow, Workflows, Workspace, Observability, Diagnostics, Heartbeat, and Cluster. | Nothing. |
+| Shell and breadcrumbs | 0.x rail with **Overview**, the v1-only **Chief of Staff** section link, **Projects**, and **Sessions**, the **New session** button, project switcher, persona menu, and `Projects / project / page` breadcrumbs. Project pages list Flow, Workflows, Workspace, Observability, Diagnostics, Heartbeat, and Cluster. | Nothing. |
 | Notification bell | Your notifications across projects, with the pending count, links to the run Approvals tab or the Board, and **Dismiss**. | Nothing. |
-| Overview | **Operations** card, recent projects, metrics and usage for one chosen project, recent runs across projects, and **Needs attention**. | Totals across all projects (cross-project overview). |
+| Overview | **Chief of Staff** group with Priorities, New chat, and My conversations; **Operations** card, recent projects, metrics and usage for one chosen project, recent runs across projects, and **Needs attention**. A note in Operations explains that cross-project totals are unavailable. | Totals across all projects (cross-project overview). |
 | Sessions | Runs across your projects, newest first, with **Load more**, **Refresh**, and **New session**. | Nothing. |
 | New session | `/assistant` picks a project, creates the run with the first message, signs in silently for that run, starts it, and opens Chat. | A run without a project (operator assistant). |
 | Start task | Floating **Start task** button. Its dialog captures a task into the Backlog and opens the Board. | Nothing. |
 | Projects gallery | 0.x tiles with state and your access. | Nothing. |
 | Create blank project | Dialog with a project name. | Nothing. |
 | Create from GitHub | Creates the project, then saves the repository with GitHub App sign-in. | Owner grant on create (behavior limit). |
-| Dashboard | Readiness from saved configuration, metric tiles, **Activity** chart, run totals, model and agent usage, and quick actions. | Live project health (behavior limit). |
+| Dashboard | Readiness from saved configuration, metric tiles, **Activity** chart, run totals, model and agent usage, and quick actions. The status card explains that live project health is unavailable. | Live project health (behavior limit). |
 | Orchestrations | **Active** and **Recent** sections with **Load more**, a state summary, and **Refresh**. | Run delete and archive. |
 | Run page | Two-pane layout with status strip, **Run tree**, and tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. **Stop run** while the run is open. | Terminal diagnostic and retry. |
 | Run Chat | Journal and a composer for the coordinator or the selected session. | Nothing. |
@@ -149,6 +165,11 @@ route catalog today. The web client does not work around them.
 | Automation status | `GET /api/projects/{p}/automation/status`, `POST …/activate`, `POST …/deactivate` | `GET /api/v1/projects/{projectId}/automation`, `POST /api/v1/projects/{projectId}/automation/activate`, `POST /api/v1/projects/{projectId}/automation/deactivate` | Report and switch backlog automation; add a Board control. |
 | Response-duration percentiles | `GET /api/projects/{p}/metrics` fields `responseDuration` and `timeToFirstToken` (`p50Ms`, `p95Ms`) | Same fields on `GET /api/v1/projects/{projectId}/metrics` | Add p50 and p95 to the metrics response; show two tiles on Observability. |
 | Cross-project overview | `GET /api/overview` | `GET /api/v1/overview` | Return totals across the caller's projects; show them on Overview and on `/observability`. |
+| Live project health | `GET /api/projects/{p}/dashboard` | `GET /api/v1/projects/{projectId}/health` | Define an owner read for the project's current run health, publish it through the Gateway, then show it in the dashboard status card. Until then, show saved setup readiness instead. |
+| Overview activity feed | `GET /api/overview` field `recent_activity` | `GET /api/v1/overview` field `recentActivity` | Collect run, merge, and deployment events from the relevant owners, then provide a caller-scoped event list. Until then, show recent run states only. |
+| Dashboard task completions | `GET /api/projects/{p}/dashboard` field `tasks_done_this_week` | `GET /api/v1/projects/{projectId}/task-metrics` | Record task completion timestamps in the backlog owner and return measured counts by range. Until then, keep the completed tasks tile unavailable. |
+| Dashboard agent leaderboard | `GET /api/projects/{p}/metrics` field `leaderboard` | `GET /api/v1/projects/{projectId}/agent-metrics` | Add per-agent run outcomes and duration data to the run owner, with its agent identity, before publishing ranked agent results. Until then, show an unavailable leaderboard, not project-wide success as an agent score. |
+| Daily success trend | `GET /api/projects/{p}/metrics` daily quality trend | `GET /api/v1/projects/{projectId}/metrics` field `dailySuccess` | Aggregate the run owner's terminal outcomes by day and return the numerator and denominator per bucket. Until then, show the selected-range success rate without a daily trend. |
 | Run traces | `GET /api/metrics/runs/{runId}/traces` | `GET /api/v1/projects/{projectId}/runs/{runId}/traces` | Run Activity replays run events today. Add span timing and show a trace view. |
 | Diagnostics | `GET /api/diagnostics`, `GET /api/diagnostics/detailed` | `GET /api/v1/platform/diagnostics` | Return service self-checks; add a section on Diagnostics. |
 | Project diagnostics | `GET /api/projects/{p}/diagnostics` | `GET /api/v1/projects/{projectId}/diagnostics` | Return configuration and connection checks for one project. |

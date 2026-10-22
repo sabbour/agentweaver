@@ -20,10 +20,11 @@ const scopes = 'api.read api.write projects.admin';
 const encode = (value) => Buffer.from(value).toString('base64');
 
 /** Serves dist with SPA fallback and a runtime config that points sign-in at the fake Broker. */
-export async function startStaticServer() {
+export async function startStaticServer({ includeGateway = true } = {}) {
   // The app reads its settings from `env-config.js` at startup. Serving our own
   // copy points sign-in at the fake Broker instead of a real one.
   const config = `window.__AGENTWEAVER_CONFIG_BASE64__ = ${JSON.stringify({
+    ...(includeGateway ? { GATEWAY_URL: encode('/api/v1') } : {}),
     IDENTITY_BROKER_URL: encode(BROKER),
     OAUTH_CLIENT_ID: encode('agentweaver-web'),
     OAUTH_SCOPES: encode(scopes),
