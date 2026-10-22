@@ -149,9 +149,13 @@ function SourceControlPage({ projectId, kind, filter, onSelect, busy, number, pr
   };
   const label = kind === 'issue' ? 'Issue' : 'Pull request';
   const url = saved && providerUrl(kind, saved);
+  // This 503 means records do not exist yet, so it is not an empty list or a retryable failure.
+  const pullRequestsUnavailable = error != null && kind === 'pull_request' &&
+    errorCode(error) === 'pull_request_records_unavailable';
   return <div className="v1-stack">
     {loading && <Loading label={`Loading ${label.toLowerCase()} records`} />}
-    {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
+    {pullRequestsUnavailable ? <Text>This server does not record pull requests yet.</Text>
+      : error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
     {coverage && <Text>Stored pull requests since {new Date(coverage).toLocaleString()}. Earlier pull requests are not included.</Text>}
     {number === undefined ? <>
       {rows.length > 0 && <Field label={label}>
@@ -174,12 +178,12 @@ function SourceControlPage({ projectId, kind, filter, onSelect, busy, number, pr
       {kind === 'issue' ? 'No synced issues match this state.' : 'No stored pull requests match this state.'}
     </Text>}
     {cursor && <Button disabled={loading || checking} onClick={() => void read(cursor)}>Load more {kind === 'issue' ? 'issues' : 'pull requests'}</Button>}
-    <Button disabled={loading || checking} onClick={() => {
-      // Refresh is a new page sequence, not an append to old results.
-      seenCursors.current.clear();
-      setRows([]);
-      setPicked('');
-      void read(null);
-    }}>{error != null ? 'Try again' : 'Refresh records'}</Button>
+    {!pullRequestsUnavailable && <Button disabled={loading || checking} onClick={() => {
+        // Refresh is a new page sequence, not an append to old results.
+        seenCursors.current.clear();
+        setRows([]);
+        setPicked('');
+        void read(null);
+      }}>{error != null ? 'Try again' : 'Refresh records'}</Button>}
   </div>;
 }

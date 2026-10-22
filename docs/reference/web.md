@@ -23,7 +23,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/authProtocol.ts` | PKCE, state and callback validation, consent, and Broker token requests. |
 | `src/v1/config.ts` | Runtime and build-time configuration. |
 | `src/v1/api.ts` | Gateway HTTP client, structured errors, header forwarding, and server-sent events (SSE) parsing. |
-| `src/v1/contracts.ts` | Browser DTOs and authority-response validation, including project issue and pull request list pages. The picker UI doesn't use those list pages yet. |
+| `src/v1/contracts.ts` | Browser DTOs and authority-response validation, including the project issue and pull request list pages used by the Priority picker. |
 | `src/v1/useRunJournal.ts` | Replay, live reconnect, event deduplication, and scope checks. |
 | `src/v1/repoApp.ts` | Direct cookie-authenticated Broker Repo App client and callback messages. |
 | `src/v1/CopilotUserConnectionPanel.tsx` | Project Copilot authorization popup and owner status. |

@@ -160,7 +160,9 @@ you send appears in **Messages** after the agent records it.
 - Issues come from the project's synced issue records, not a provider search.
   Pull requests come from records saved by project runs since recording began.
   The list shows its coverage date; earlier pull requests are not included.
-  A service error is shown as an error, never as an empty list.
+  If recording has not started, the picker says **This server does not record
+  pull requests yet.**; **Link pull request** stays disabled and no retry is
+  offered. Other service errors remain errors, not empty lists.
 - After reload, saved issue and pull request links read their metadata again.
   Select **Open issue** or **Open pull request** to open the provider's page.
   Older targets may require **Load more** before they can be reopened.
