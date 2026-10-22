@@ -387,7 +387,7 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             .Where(parameter => parameter.GetProperty("in").GetString() == "query")
             .ToArray();
         Assert.Equal(
-            new[] { "state", "cursor", "pageSize" },
+            new[] { "state", "startedBy", "cursor", "pageSize" },
             runListQuery.Select(parameter => parameter.GetProperty("name").GetString()).ToArray());
         Assert.All(runListQuery, parameter => Assert.False(parameter.GetProperty("required").GetBoolean()));
         var runPageSize = runListQuery.Single(parameter => parameter.GetProperty("name").GetString() == "pageSize")
@@ -401,7 +401,8 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             .GetProperty("ProjectRunSummary");
         Assert.False(runSummary.GetProperty("additionalProperties").GetBoolean());
         Assert.Equal(
-            new[] { "runId", "rootSessionId", "title", "goal", "state", "createdAt", "updatedAt", "completedAt", "startedBy" },
+            new[] { "runId", "rootSessionId", "title", "goal", "workflowId", "state", "needsInputCount",
+                "createdAt", "updatedAt", "completedAt", "startedBy" },
             runSummary.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
 
         foreach (var operationId in new[] { "listProjectIssues", "listProjectPullRequests" })
