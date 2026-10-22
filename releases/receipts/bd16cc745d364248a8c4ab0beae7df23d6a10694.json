@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "bd16cc745d364248a8c4ab0beae7df23d6a10694",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "8f9fb483e31b40d2509daf514c819be9066eeccb2fc3c32ec8c07f75d5b71890",
+  "appliedAt": "2026-10-22T04:20:20.545Z",
+  "components": [
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/postgres-function-oid-2226.md",
+      "archivedPath": ".changeset/archive/postgres-function-oid-2226.md",
+      "sha256": "105a9fbce8da3a503c9d95d3f193d98869c1bc8b8b42b68bcadb8ca3126f7cab"
+    }
+  ]
+}
