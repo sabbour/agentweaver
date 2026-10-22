@@ -485,6 +485,33 @@ path. Both require a source-bound publication and explicit `--execute` for
 cluster writes. See [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
 and the [Kubernetes operator guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md).
 
+For a Web-only image update, use the separate `release:deploy-web` command with
+the publication receipt from the selected release. It always selects
+`Agentweaver.Web`; it has no option to select another service. The command
+requires a clean checkout whose source is already in `origin/v1`, the explicit
+Kubernetes context for the approved cluster, and a digest-pinned current Web
+image. It checks the publication source, Web image digest, and OCI revision
+before it reads the Deployments.
+
+Run without `--execute` first. This checks the cluster state and writes a plan
+receipt without changing it. The receipt lists the current and planned image
+digests for every Deployment in the `agentweaver` namespace.
+
+```powershell
+npm run release:deploy-web -- `
+  --publication artifacts\release\publication.json `
+  --context <approved-kubernetes-context>
+```
+
+After reviewing the plan and target, add `--execute` to the same command. It
+changes only the `web` container image in `deployment/web`, using the digest
+from the publication receipt. A resource-version check stops an update if the
+Deployment changes between validation and the patch. The command waits for Web readiness,
+verifies that all other Deployment settings and images are unchanged, and
+writes a receipt with before and after image digests for every Deployment.
+This path does not install resources or change infrastructure, identity, or
+database state.
+
 ## 8. Verify the installation
 
 1. Confirm the expected namespace and workloads exist:
