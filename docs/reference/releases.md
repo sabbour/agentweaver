@@ -189,6 +189,9 @@ publication source, and original build commit must all be in the current
 `origin/v1` history. The command then uses a resource-version-guarded patch on
 only the Web container and records readiness and before/after state in its
 receipt.
+The Deployment inventory accepts Kubernetes `List` and `DeploymentList`
+wrappers only when every item is an `apps/v1` Deployment in namespace
+`agentweaver`.
 
 Run the deployment command without `--execute` first. The default is a
 read-only dry run:

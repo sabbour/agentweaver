@@ -67,6 +67,7 @@ function makeFixture({
   mutateNonWeb,
   mutateWebAnnotation,
   bumpWebRevision = true,
+  inventoryKind = 'List',
   manifestOverrides,
   publicationOverrides,
 } = {}) {
@@ -108,6 +109,12 @@ function makeFixture({
     makeDeployment('orchestrator', `ghcr.io/sabbour/agentweaver.orchestrator@${digest('2')}`, { initContainer: true }),
     makeDeployment('identity-broker', `ghcr.io/sabbour/agentweaver.identity.broker@${digest('3')}`),
   ];
+  const inventory = {
+    apiVersion: inventoryKind === 'List' ? 'v1' : 'apps/v1',
+    items: state,
+    kind: inventoryKind,
+    metadata: { resourceVersion: 'inventory-rv1' },
+  };
   const calls = [];
   const written = [];
   const exec = (command, args, settings = {}) => {
@@ -130,7 +137,7 @@ function makeFixture({
     if (command !== 'kubectl') throw new Error(`Unexpected command ${command}`);
     const action = args[4];
     if (action === 'get' && args[5] === 'deployments') {
-      return { status: 0, stdout: JSON.stringify({ kind: 'DeploymentList', items: state }), stderr: '' };
+      return { status: 0, stdout: JSON.stringify(inventory), stderr: '' };
     }
     if (action === 'patch') {
       assert.deepEqual(args.slice(5, 8), ['deployment', 'web', '--type=json']);
@@ -161,6 +168,7 @@ function makeFixture({
     calls,
     written,
     options,
+    inventory,
     manifest,
     publication,
     overrides: {
@@ -281,6 +289,62 @@ test('dry run records current and planned digests for every Deployment without w
   assert.deepEqual(receipt.deployments.after, []);
   assert.equal(fixture.calls.some(call => call.command === 'kubectl' && call.args[4] !== 'get'), false);
   assert.equal(fixture.written.length, 1);
+});
+
+test('kubectl List wrapper is accepted for an apps/v1 Deployment inventory', async () => {
+  const fixture = makeFixture();
+  const receipt = await runWebImageRollout(fixture.options, fixture.overrides);
+
+  assert.equal(receipt.result, 'planned');
+  assert.deepEqual(receipt.deployments.before.map(entry => entry.name),
+    ['identity-broker', 'orchestrator', 'web']);
+});
+
+test('typed DeploymentList wrapper remains accepted', async () => {
+  const fixture = makeFixture({ inventoryKind: 'DeploymentList' });
+  const receipt = await runWebImageRollout(fixture.options, fixture.overrides);
+
+  assert.equal(receipt.result, 'planned');
+});
+
+test('an empty Deployment list is rejected', async () => {
+  const fixture = makeFixture();
+  fixture.inventory.items = [];
+
+  await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+    /has no valid Deployment list/);
+});
+
+test('a Deployment list with non-array items is rejected', async () => {
+  const fixture = makeFixture();
+  fixture.inventory.items = {};
+
+  await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+    /has no valid Deployment list/);
+});
+
+test('every Deployment list item must be an apps/v1 Deployment in agentweaver', async t => {
+  const invalidItem = [
+    ['a non-Deployment object', item => { item.kind = 'Pod'; }],
+    ['an object with a different API version', item => { item.apiVersion = 'v1'; }],
+    ['an object from another namespace', item => { item.metadata.namespace = 'other'; }],
+  ];
+  for (const [description, mutate] of invalidItem) {
+    await t.test(description, async () => {
+      const fixture = makeFixture();
+      mutate(fixture.inventory.items[0]);
+
+      await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+        /not an apps\/v1 Deployment in namespace agentweaver/);
+    });
+  }
+});
+
+test('an unsupported Deployment list wrapper is rejected', async () => {
+  const fixture = makeFixture({ inventoryKind: 'PodList' });
+
+  await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+    /has no valid Deployment list/);
 });
 
 test('execution patches only Web and verifies every non-Web Deployment is preserved', async () => {

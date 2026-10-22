@@ -242,11 +242,14 @@ function parseWebRevision(deployment, where) {
 }
 
 function deploymentRecord(deployment) {
+  if (!isRecord(deployment) || deployment.apiVersion !== 'apps/v1' ||
+      deployment.kind !== 'Deployment' || deployment.metadata?.namespace !== NAMESPACE) {
+    fail(`Deployment list contains an item that is not an apps/v1 Deployment in namespace ${NAMESPACE}.`);
+  }
   const name = deployment.metadata?.name;
   if (typeof name !== 'string' || name.trim() !== name || name.length === 0 ||
-      deployment.metadata?.namespace !== NAMESPACE || !isRecord(deployment.spec) ||
-      !isRecord(deployment.spec.template?.spec)) {
-    fail('a Deployment has an invalid name, namespace, or pod template.');
+      !isRecord(deployment.spec) || !isRecord(deployment.spec.template?.spec)) {
+    fail('a Deployment has an invalid name or pod template.');
   }
   const template = deployment.spec.template.spec;
   if (!Array.isArray(template.containers) || template.containers.length === 0) {
@@ -286,7 +289,9 @@ function deploymentInventory(exec, options, root) {
   ], { cwd: root, check: false });
   if (result.status !== 0) fail(`could not read Deployments in namespace ${NAMESPACE}: ${result.stderr.trim()}`);
   const list = parseJson(result.stdout, 'Kubernetes Deployment list');
-  if (list.kind !== 'DeploymentList' || !Array.isArray(list.items) || list.items.length === 0) {
+  // kubectl emits a generic List for `get deployments`; accept the typed wrapper too for compatibility.
+  if (!isRecord(list) || !['List', 'DeploymentList'].includes(list.kind) ||
+      !Array.isArray(list.items) || list.items.length === 0) {
     fail(`namespace ${NAMESPACE} has no valid Deployment list.`);
   }
   const byName = new Map();
