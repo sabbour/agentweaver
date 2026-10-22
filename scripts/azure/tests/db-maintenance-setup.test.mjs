@@ -147,7 +147,7 @@ test('setup verifies both AKS authorization modes before changing the workflow i
     /both Azure RBAC for Kubernetes and Kubernetes RBAC enabled/);
   const authorizationCall = fake.calls.find(call => call.command === 'az' && call.args[0] === 'aks' && call.args[1] === 'show');
   assert.equal(authorizationCall.args[authorizationCall.args.indexOf('--query') + 1],
-    '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRBAC}');
+    '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac}');
   assert.ok(!fake.calls.some(call => call.command === 'az' && call.args[0] === 'deployment'));
   assert.ok(!fake.calls.some(call => call.command === 'kubectl' && call.args.includes('apply')));
 });
@@ -162,14 +162,15 @@ test('namespace Role grants only maintenance verbs and binds the workflow object
   const [role, binding] = workflowAuthorizationResources(PRINCIPAL_ID);
   assert.equal(role.metadata.namespace, DB_MAINTENANCE_TARGET.namespace);
   assert.deepEqual(role.rules, [
-    { apiGroups: ['batch'], resources: ['jobs'], verbs: ['create', 'delete', 'get'] },
+    { apiGroups: ['batch'], resources: ['jobs'], verbs: ['create', 'delete', 'get', 'list', 'watch'] },
     { apiGroups: [''], resources: ['pods'], verbs: ['get', 'list'] },
     { apiGroups: [''], resources: ['pods/log'], verbs: ['get'] },
     { apiGroups: [''], resources: ['configmaps'], verbs: ['create', 'get', 'patch'] },
     { apiGroups: [''], resources: ['serviceaccounts'], verbs: ['create', 'get', 'patch'] },
     { apiGroups: ['coordination.k8s.io'], resources: ['leases'], verbs: ['create', 'delete', 'get'] },
     { apiGroups: ['cilium.io'], resources: ['ciliumnetworkpolicies'], verbs: ['create', 'get', 'patch'] },
-    { apiGroups: ['apps'], resources: ['deployments'], verbs: ['get', 'list', 'patch', 'watch'] },
+    { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['orchestrator', 'events-and-sessions'],
+      verbs: ['get', 'list', 'patch', 'watch'] },
   ]);
   assert.deepEqual(binding.subjects, [{
     kind: 'User', name: PRINCIPAL_ID, apiGroup: 'rbac.authorization.k8s.io',

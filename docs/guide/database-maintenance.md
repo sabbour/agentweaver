@@ -82,11 +82,13 @@ but it also grants access to Secrets and lets the identity run Pods as any
 ServiceAccount in the namespace. It also does not grant access to the Cilium
 network-policy resource that the runner checks. Instead, setup applies a
 Kubernetes Role with only the verbs the runner needs, including access to that
-Cilium resource, and binds it to the workflow identity's object ID. This uses
-both AKS authorization models without creating an Azure custom role definition.
-Setup reads the Role and RoleBinding back to verify their exact permissions and
-identity. It never removes the workflow identity, Azure assignments, Role, or
-RoleBinding, so a failed setup can be checked and safely rerun.
+Cilium resource. Deployment access is limited by name to `orchestrator` and
+`events-and-sessions`. The RoleBinding names the workflow identity's object ID.
+This uses both AKS authorization models without creating an Azure custom role
+definition. Setup reads the Role and RoleBinding back to verify their exact
+permissions and identity. It never removes the workflow identity, Azure
+assignments, Role, or RoleBinding, so a failed setup can be checked and safely
+rerun.
 
 Run the setup with the Azure CLI signed in as the PostgreSQL Entra
 administrator, with the right to assign roles in the `agentweaver` resource

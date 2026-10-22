@@ -288,6 +288,15 @@ test('dry run checks every precondition, takes no lock, and changes nothing', as
     assert.deepEqual([...fake.cluster.keys()], ['configmap/identity-broker-migration-config']);
     assert.ok(!kubectlActions(fake.calls).some(action => ['create', 'apply', 'delete'].includes(action)));
     assert.ok(fake.calls.some(call => call.command === 'dotnet' && call.args.includes('--locked-mode')));
+    const authChecks = fake.calls.filter(call => call.command === 'kubectl' && call.args[4] === 'auth')
+      .map(call => call.args.slice(6));
+    assert.ok(authChecks.some(([verb, resource]) => verb === 'list' && resource === 'jobs'));
+    assert.ok(authChecks.some(([verb, resource]) => verb === 'watch' && resource === 'jobs'));
+    assert.deepEqual(new Set(authChecks.filter(([, resource]) => resource.startsWith('deployments.apps/'))
+      .map(([verb, resource]) => `${verb}:${resource.slice('deployments.apps/'.length)}`)), new Set([
+      'get:orchestrator', 'list:orchestrator', 'watch:orchestrator',
+      'get:events-and-sessions', 'list:events-and-sessions', 'watch:events-and-sessions',
+    ]));
     assert.equal(fake.receipts.length, 1);
     assert.equal(fake.receipts[0].receipt.result, 'dry-run-passed');
   } finally { fake.done(); }
@@ -498,7 +507,8 @@ test('a planned readiness gap migrates, deploys the matching digests in the same
     const set = fake.calls.find(call => call.args[4] === 'set');
     assert.deepEqual(set.args.slice(5), ['image', 'deployment/events-and-sessions',
       `events-and-sessions=${imageReference('Agentweaver.EventsAndSessions', digest('b'))}`]);
-    assert.ok(fake.calls.some(call => call.args[4] === 'auth' && call.args.includes('deployments.apps') && call.args.includes('patch')));
+    assert.ok(fake.calls.some(call => call.args[4] === 'auth' && call.args.includes('deployments.apps/events-and-sessions') &&
+      call.args.includes('patch')));
   } finally { fake.done(); }
 });
 

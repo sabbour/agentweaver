@@ -147,12 +147,12 @@ federated credential trusts GitHub Actions jobs that use the
 Cluster User on the cluster, and no custom Azure role. The setup script applies
 a Kubernetes Role and RoleBinding only in the `agentweaver` namespace. The Role
 allows the maintenance Jobs, pod logs, ConfigMaps, Leases, ServiceAccounts,
-Cilium network policies, and Deployments used by the runner. The identity
-cannot deploy Azure resources, assign roles, or connect to PostgreSQL. Its
-parameters are `namePrefix`, `tags`, `sourceSha`, `githubRepository`, and
-`githubEnvironment`. `npm run db:maintenance:setup` deploys the identity and
-checks the Azure assignments, then applies and reads back the Kubernetes
-authorization.
+Cilium network policies, and the `orchestrator` and `events-and-sessions`
+Deployments used by the runner. The identity cannot deploy Azure resources,
+assign roles, or connect to PostgreSQL. Its parameters are `namePrefix`,
+`tags`, `sourceSha`, `githubRepository`, and `githubEnvironment`.
+`npm run db:maintenance:setup` deploys the identity and checks the Azure
+assignments, then applies and reads back the Kubernetes authorization.
 
 Projects & Config applies migrations as its schema owner. After migration
 `20261009021400_AddCastingAuthorityLockFunction` is applied, an approved

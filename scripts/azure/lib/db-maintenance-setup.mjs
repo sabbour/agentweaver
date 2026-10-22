@@ -67,7 +67,7 @@ export function setupScopes(target = DB_MAINTENANCE_TARGET) {
 }
 
 export function workflowAuthorizationResources(principalObjectId) {
-  // Grant only the Kubernetes API verbs used by maintenance, including its Cilium policy check.
+  // Job list/watch keeps foreground cleanup reliable; named Deployments limit access to the two rollouts.
   const namespace = DB_MAINTENANCE_TARGET.namespace;
   const roleName = SETUP_TARGET.kubernetesRole;
   return [
@@ -76,14 +76,15 @@ export function workflowAuthorizationResources(principalObjectId) {
       kind: 'Role',
       metadata: { name: roleName, namespace },
       rules: [
-        { apiGroups: ['batch'], resources: ['jobs'], verbs: ['create', 'delete', 'get'] },
+        { apiGroups: ['batch'], resources: ['jobs'], verbs: ['create', 'delete', 'get', 'list', 'watch'] },
         { apiGroups: [''], resources: ['pods'], verbs: ['get', 'list'] },
         { apiGroups: [''], resources: ['pods/log'], verbs: ['get'] },
         { apiGroups: [''], resources: ['configmaps'], verbs: ['create', 'get', 'patch'] },
         { apiGroups: [''], resources: ['serviceaccounts'], verbs: ['create', 'get', 'patch'] },
         { apiGroups: ['coordination.k8s.io'], resources: ['leases'], verbs: ['create', 'delete', 'get'] },
         { apiGroups: ['cilium.io'], resources: ['ciliumnetworkpolicies'], verbs: ['create', 'get', 'patch'] },
-        { apiGroups: ['apps'], resources: ['deployments'], verbs: ['get', 'list', 'patch', 'watch'] },
+        { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['orchestrator', 'events-and-sessions'],
+          verbs: ['get', 'list', 'patch', 'watch'] },
       ],
     },
     {
@@ -177,7 +178,7 @@ export function readSetupState(exec) {
   // RBAC evaluates the narrow Role/RoleBinding that this setup applies for the maintenance identity.
   const authorization = json(exec('az', ['aks', 'show', '--resource-group', target.resourceGroup,
     '--name', target.clusterName, '--subscription', target.subscriptionId,
-    '--query', '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRBAC}', '-o', 'json']),
+    '--query', '{azureRbac:aadProfile.enableAzureRbac,kubernetesRbac:enableRbac}', '-o', 'json']),
   'Could not read AKS authorization settings');
   state.kubernetesAuthorization = authorization;
   if (authorization?.azureRbac !== true || authorization?.kubernetesRbac !== true)
