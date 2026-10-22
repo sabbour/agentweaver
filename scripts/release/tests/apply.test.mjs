@@ -11,7 +11,7 @@ import {
 } from '../changesets.mjs';
 import { createPlan, planChecksum } from '../plan.mjs';
 import {
-  readPublicationPackageComponents, selectPublicationPackageComponents,
+  readPublicationPackageComponents, resolveVersionApplicationSourceSha, selectPublicationPackageComponents,
 } from '../publication-selection.mjs';
 
 const csproj = (version, references = []) => `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup>` +
