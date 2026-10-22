@@ -25,7 +25,10 @@ function makeDeployment(name, image, { web = false, initContainer = false } = {}
       name,
       namespace: 'agentweaver',
       labels,
-      annotations: { 'test.agentweaver.io/keep': name },
+      annotations: {
+        'test.agentweaver.io/keep': name,
+        ...(web ? { 'deployment.kubernetes.io/revision': '1' } : {}),
+      },
       generation: 1,
       resourceVersion: `${name}-rv1`,
     },
@@ -51,7 +54,13 @@ function makeDeployment(name, image, { web = false, initContainer = false } = {}
   };
 }
 
-function makeFixture({ currentWebImage = `ghcr.io/sabbour/agentweaver-web@${digest('1')}`, rejectAncestry, mutateNonWeb } = {}) {
+function makeFixture({
+  currentWebImage = `ghcr.io/sabbour/agentweaver-web@${digest('1')}`,
+  rejectAncestry,
+  mutateNonWeb,
+  mutateWebAnnotation,
+  bumpWebRevision = true,
+} = {}) {
   const manifest = {
     stage: 'release',
     evidence: { sourceSha, deploymentSha: sourceSha },
@@ -121,6 +130,8 @@ function makeFixture({ currentWebImage = `ghcr.io/sabbour/agentweaver-web@${dige
       assert.equal(operations[0].value, deployment.metadata.resourceVersion);
       assert.equal(deployment.spec.template.spec.containers[0].image, operations[1].value);
       deployment.spec.template.spec.containers[0].image = operations[2].value;
+      if (bumpWebRevision) deployment.metadata.annotations['deployment.kubernetes.io/revision'] = '2';
+      if (mutateWebAnnotation) deployment.metadata.annotations['test.agentweaver.io/keep'] = 'changed';
       deployment.metadata.resourceVersion = 'web-rv2';
       deployment.metadata.generation = 2;
       deployment.status.observedGeneration = 2;
@@ -195,6 +206,7 @@ test('execution patches only Web and verifies every non-Web Deployment is preser
   assert.equal(receipt.result, 'succeeded');
   assert.equal(receipt.changed, true);
   assert.equal(receipt.readiness.status, 'passed');
+  assert.deepEqual(receipt.webDeploymentRevision, { before: '1', after: '2' });
   assert.equal(receipt.deployments.before.length, 3);
   assert.equal(receipt.deployments.after.length, 3);
   for (const name of ['identity-broker', 'orchestrator']) {
@@ -208,6 +220,28 @@ test('execution patches only Web and verifies every non-Web Deployment is preser
   assert.deepEqual(patches[0].args.slice(5, 7), ['deployment', 'web']);
   assert.equal(fixture.calls.some(call => call.command === 'kubectl' &&
     ['apply', 'set', 'delete'].includes(call.args[4])), false);
+});
+
+test('execution requires a higher Web revision after changing the image', async () => {
+  const fixture = makeFixture({ bumpWebRevision: false });
+
+  await assert.rejects(
+    runWebImageRollout({ ...fixture.options, execute: true }, fixture.overrides),
+    /Web Deployment controller revision did not increase/,
+  );
+  assert.deepEqual(fixture.written[0].receipt.webDeploymentRevision, { before: '1', after: '1' });
+  assert.equal(fixture.written[0].receipt.result, 'failed');
+});
+
+test('a Web annotation change other than the controller revision still fails preservation', async () => {
+  const fixture = makeFixture({ mutateWebAnnotation: true });
+
+  await assert.rejects(
+    runWebImageRollout({ ...fixture.options, execute: true }, fixture.overrides),
+    /Web rollout changed settings other than the selected container image/,
+  );
+  assert.deepEqual(fixture.written[0].receipt.webDeploymentRevision, { before: '1', after: '2' });
+  assert.equal(fixture.written[0].receipt.result, 'failed');
 });
 
 test('execution fails and records after digests if a non-Web Deployment changes', async () => {

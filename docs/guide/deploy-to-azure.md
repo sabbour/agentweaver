@@ -508,7 +508,8 @@ changes only the `web` container image in `deployment/web`, using the digest
 from the publication receipt. A resource-version check stops an update if the
 Deployment changes between validation and the patch. The command waits for Web readiness,
 verifies that all other Deployment settings and images are unchanged, and
-writes a receipt with before and after image digests for every Deployment.
+writes a receipt with before and after image digests for every Deployment and
+the Web Deployment revision.
 This path does not install resources or change infrastructure, identity, or
 database state.
 

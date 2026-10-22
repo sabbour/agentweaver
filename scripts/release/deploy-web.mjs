@@ -15,6 +15,7 @@ import { verifyServiceRegistryImage } from './registry.mjs';
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WEB_COMPONENT = 'Agentweaver.Web';
 const WEB_DEPLOYMENT = 'web';
+const WEB_REVISION_ANNOTATION = 'deployment.kubernetes.io/revision';
 const WEB_IMAGE_REPOSITORY = `ghcr.io/sabbour/${componentImageRepository(WEB_COMPONENT)}`;
 const NAMESPACE = 'agentweaver';
 const SHA = /^[a-f0-9]{40}$/;
@@ -205,12 +206,30 @@ function imageDigest(image, where) {
   return match[1];
 }
 
-function deploymentSettings(deployment) {
+function deploymentSettings(deployment, { ignoreControllerRevision = false } = {}) {
+  const annotations = { ...(deployment.metadata?.annotations ?? {}) };
+  if (ignoreControllerRevision) {
+    // Kubernetes increments this controller-owned annotation when it creates a new Web revision.
+    delete annotations[WEB_REVISION_ANNOTATION];
+  }
   return {
     labels: deployment.metadata?.labels ?? {},
-    annotations: deployment.metadata?.annotations ?? {},
+    annotations,
     spec: deployment.spec,
   };
+}
+
+function webRevisionValue(deployment) {
+  const revision = deployment.metadata?.annotations?.[WEB_REVISION_ANNOTATION];
+  return typeof revision === 'string' ? revision : null;
+}
+
+function parseWebRevision(deployment, where) {
+  const revision = webRevisionValue(deployment);
+  if (revision === null || !/^(0|[1-9]\d*)$/.test(revision) || !Number.isSafeInteger(Number(revision))) {
+    fail(`${where} has no valid ${WEB_REVISION_ANNOTATION} annotation.`);
+  }
+  return Number(revision);
 }
 
 function deploymentRecord(deployment) {
@@ -336,7 +355,11 @@ function verifyPreservation(before, after, targetImage, webIndex) {
     const current = after.byName.get(name);
     const expected = structuredClone(original);
     if (name === WEB_DEPLOYMENT) expected.spec.template.spec.containers[webIndex].image = targetImage;
-    if (!isDeepStrictEqual(deploymentSettings(current), deploymentSettings(expected))) {
+    const ignoreControllerRevision = name === WEB_DEPLOYMENT;
+    if (!isDeepStrictEqual(
+      deploymentSettings(current, { ignoreControllerRevision }),
+      deploymentSettings(expected, { ignoreControllerRevision }),
+    )) {
       fail(name === WEB_DEPLOYMENT
         ? 'the Web rollout changed settings other than the selected container image.'
         : `non-Web Deployment ${name} changed during the Web rollout.`);
@@ -393,6 +416,7 @@ export async function runWebImageRollout(options, overrides = {}) {
     webImage: null,
     imageRevision: null,
     imageVersion: null,
+    webDeploymentRevision: { before: null, after: null },
     changed: false,
     deployments: { before: [], plannedAfter: [], after: [] },
     readiness: { status: 'not-run' },
@@ -443,6 +467,7 @@ export async function runWebImageRollout(options, overrides = {}) {
     before = deploymentInventory(deps.exec, options, root);
     web = validateWebDeployment(before);
     receipt.deployments.before = before.records;
+    receipt.webDeploymentRevision.before = webRevisionValue(web.deployment);
     receipt.changed = web.currentImage !== selected.image;
     receipt.deployments.plannedAfter = plannedInventory(before, web, selected.image).records;
 
@@ -451,7 +476,9 @@ export async function runWebImageRollout(options, overrides = {}) {
       deps.log(`Dry run passed. Only deployment/${WEB_DEPLOYMENT} container ${WEB_DEPLOYMENT} would use ${selected.image}.`);
     } else {
       executionStarted = true;
+      let webRevisionBefore;
       if (receipt.changed) {
+        webRevisionBefore = parseWebRevision(web.deployment, 'current Web Deployment');
         const resourceVersion = web.deployment.metadata?.resourceVersion;
         if (typeof resourceVersion !== 'string' || resourceVersion.length === 0) {
           fail('current Web Deployment has no resourceVersion for a guarded update.');
@@ -480,8 +507,15 @@ export async function runWebImageRollout(options, overrides = {}) {
 
       const after = deploymentInventory(deps.exec, options, root);
       receipt.deployments.after = after.records;
-      verifyPreservation(before, after, selected.image, web.containerIndex);
       const currentWeb = after.byName.get(WEB_DEPLOYMENT);
+      receipt.webDeploymentRevision.after = webRevisionValue(currentWeb);
+      if (receipt.changed) {
+        const webRevisionAfter = parseWebRevision(currentWeb, 'updated Web Deployment');
+        if (webRevisionAfter <= webRevisionBefore) {
+          fail('Web Deployment controller revision did not increase after changing its image.');
+        }
+      }
+      verifyPreservation(before, after, selected.image, web.containerIndex);
       const currentImage = currentWeb.spec.template.spec.containers[web.containerIndex].image;
       if (currentImage !== selected.image) fail('Web Deployment readback does not match the verified image digest.');
       receipt.readiness = { status: 'passed', timeoutSeconds: options.readinessTimeoutSeconds,
@@ -502,7 +536,9 @@ export async function runWebImageRollout(options, overrides = {}) {
     if (executionStarted && before && receipt.deployments.after.length === 0) {
       try {
         // Record live digests even on failed execution so the receipt reflects partial changes.
-        receipt.deployments.after = deploymentInventory(deps.exec, options, root).records;
+        const after = deploymentInventory(deps.exec, options, root);
+        receipt.deployments.after = after.records;
+        receipt.webDeploymentRevision.after = webRevisionValue(after.byName.get(WEB_DEPLOYMENT));
       } catch (afterError) {
         receipt.afterReadError = redact(afterError instanceof Error ? afterError.message : String(afterError));
       }
