@@ -387,6 +387,21 @@ The `projects-config-runtime-config.json` map contains:
 | `ProjectsConfig__PrivilegedSetup__ApprovedIssuer` | Exact issuer approved for the privileged project-setup command: `https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/`. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedTenantId` | Exact approved Entra tenant: `72f988bf-86f1-41af-91ab-2d7cd011db47`. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedSubject` | Exact approved caller subject: `518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0`. This is the approved user's Identity Broker user ID, which the Broker issues as the token `sub` claim. It is not the Entra object ID. Do not add another subject or role. |
+| `AgentHost__ModelBindingsRevision` | Optional. A read-only copy of the AgentHost model-binding revision. Set it together with at least one binding below, and use the same value as AgentHost. When both the revision and the bindings are absent, model choices are reported as `unavailable`. |
+| `AgentHost__ModelBindings__<reference>__SourceMode` | Required for each copied binding: `HostedCopilot` or `Byok`, matching AgentHost. |
+| `AgentHost__ModelBindings__<reference>__Enabled` | Required for each copied binding: `true` or `false`. Disabled bindings are not offered as choices. |
+| `AgentHost__ModelBindings__<reference>__SupportedReasoningEfforts__<n>` | Optional. Indexes start at `0` with no gaps; values are unique entries from `low`, `medium`, `high`, and `xhigh`. For `Byok`, these are the levels offered in project settings, and an enabled `Byok` binding with no levels is not offered because no run can start with it. For `HostedCopilot`, any listed levels are ignored: hosted reasoning levels are checked when a run starts. |
+
+The model-binding copy holds only eligibility fields. The profile renderer and
+the service reject model IDs, `Provider` fields (URLs, headers, API versions),
+credential references, `PromptCapacityTokens`, and any other binding field.
+Reference names cannot contain `:` or `__`, because the service reads both as
+configuration hierarchy separators.
+AgentHost keeps the full bindings and checks the selected binding again when a
+run starts. When you change the AgentHost bindings, update this copy with the
+same references, source modes, enabled states, reasoning efforts, and revision.
+Because the ConfigMap is immutable, follow
+[Update an immutable ConfigMap](#update-an-immutable-configmap).
 
 The following settings are supplied only to the explicit migration or first
 TenantAdmin command. They are not part of the runtime ConfigMap:

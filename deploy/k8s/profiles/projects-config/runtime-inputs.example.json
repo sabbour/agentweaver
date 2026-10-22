@@ -5,7 +5,16 @@
     "ProjectsConfig__Database__WorkloadIdentity__ClientId": "b65f060f-364b-45ea-adf4-f704c176f33e",
     "ProjectsConfig__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
     "ProjectsConfig__Authentication__Authority": null,
-    "ProjectsConfig__Authentication__Audience": null
+    "ProjectsConfig__Authentication__Audience": null,
+    "AgentHost__ModelBindingsRevision": "p1-v1.0.1",
+    "AgentHost__ModelBindings__reasoning__SourceMode": "HostedCopilot",
+    "AgentHost__ModelBindings__reasoning__Enabled": "true",
+    "AgentHost__ModelBindings__coding__SourceMode": "HostedCopilot",
+    "AgentHost__ModelBindings__coding__Enabled": "true",
+    "AgentHost__ModelBindings__gpt-6.1-sol__SourceMode": "HostedCopilot",
+    "AgentHost__ModelBindings__gpt-6.1-sol__Enabled": "true",
+    "AgentHost__ModelBindings__gpt-6-luna__SourceMode": "HostedCopilot",
+    "AgentHost__ModelBindings__gpt-6-luna__Enabled": "true"
   },
   "privilegedSetupConfiguration": {
     "ConnectionStrings__ProjectsConfigAuthority": null,

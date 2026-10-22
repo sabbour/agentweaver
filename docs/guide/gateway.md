@@ -107,14 +107,25 @@ guarantee that an upstream provider is available. Accepted run selections
 remain immutable; a later project setting change does not rewrite an active
 run's selection.
 
-The `models` block currently always reports `state: "unavailable"` with
-`unavailableReason: "model_capability_catalog_unavailable"` and empty
-`choices` and `reasoningEfforts`. Projects & Config has no model capability
-catalog: model capabilities live in the agent runtime's model bindings and in
-the hosted model list that the runtime reads when a run starts. The owner does
-not infer eligibility from saved values. `savedReferences` lists model
-references already saved in platform or project configuration; saved does not
-mean eligible. The runtime checks each reference when a run starts.
+When the deployment supplies the read-only model-binding copy, the `models`
+block reports `state: "available"` with the copy's `bindingsRevision`. Each
+entry in `choices` is an enabled binding with its `reference`, `sourceMode`
+(`byok` or `hostedCopilot`), `reasoningEffortSource`, and `reasoningEfforts`.
+For a BYOK binding, `reasoningEffortSource` is `modelBinding` and
+`reasoningEfforts` lists the configured levels. For a hosted binding,
+`reasoningEffortSource` is `verifiedAtRunStart` and `reasoningEfforts` is
+empty: the runtime checks the requested level against the hosted model list
+when a run starts. Disabled bindings are not listed. Choices never contain
+model IDs, provider settings, or credential references, and the owner does not
+add choices from saved values or a fixed list.
+
+When the copy is absent, `models` reports `state: "unavailable"` with
+`unavailableReason: "model_capability_catalog_unavailable"`, a null
+`bindingsRevision`, and empty `choices`. A malformed copy stops the service at
+startup instead of producing a partial list. In both states,
+`savedReferences` lists model references already saved in platform or project
+configuration; saved does not mean eligible. The runtime checks each
+reference when a run starts.
 
 Projects can override model configuration only. Provider choices for
 non-model platform components are selected by platform configuration and are

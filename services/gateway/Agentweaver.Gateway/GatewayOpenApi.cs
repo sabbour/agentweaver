@@ -918,28 +918,37 @@ else if (route.OperationId is
             ("projectId", Str()), ("projectConfigurationRevision", Int()), ("platformRuntimeRevision", Int()),
             ("models", Ref("ProjectModelChoices")), ("providers", Ref("ProjectProviderChoices"))),
         ["ProjectModelChoices"] = Obj(
-            ["state", "unavailableReason", "runtimeEligibility", "reasoningEfforts", "defaultReasoningEffort", "choices", "savedReferences"],
+            ["state", "unavailableReason", "runtimeEligibility", "bindingsRevision", "defaultReasoningEffort", "choices", "savedReferences"],
             ("state", Enum("available", "unavailable")),
             ("unavailableReason", Nullable(Enum("model_capability_catalog_unavailable"))),
             ("runtimeEligibility", Enum("verifiedAtRunStart")),
-            ("reasoningEfforts", new
+            ("bindingsRevision", new
             {
-                type = "array",
-                items = Enum("low", "medium", "high", "xhigh"),
-                description = "Owner-admitted supported reasoning efforts. Empty while state is unavailable.",
+                type = new[] { "string", "null" },
+                description = "Revision of the runtime model-binding copy the choices came from. Null while state is unavailable.",
             }),
             ("defaultReasoningEffort", Enum("low", "medium", "high", "xhigh")),
             ("choices", new
             {
                 type = "array",
-                items = Ref("ProjectModelReferenceChoice"),
-                description = "Owner-admitted eligible model references. Empty while state is unavailable.",
+                items = Ref("ProjectModelChoice"),
+                description = "Enabled runtime model bindings, ordered by reference. Disabled bindings and saved-only references are never listed. Empty while state is unavailable.",
             }),
             ("savedReferences", new
             {
                 type = "array",
                 items = Ref("ProjectModelReferenceChoice"),
                 description = "References already saved in platform or project configuration. Saved does not mean eligible; the runtime verifies each reference when a run starts.",
+            })),
+        ["ProjectModelChoice"] = Obj(["reference", "sourceMode", "reasoningEffortSource", "reasoningEfforts"],
+            ("reference", Str()),
+            ("sourceMode", Enum("hostedCopilot", "byok")),
+            ("reasoningEffortSource", Enum("modelBinding", "verifiedAtRunStart")),
+            ("reasoningEfforts", new
+            {
+                type = "array",
+                items = Enum("low", "medium", "high", "xhigh"),
+                description = "Reasoning efforts configured for a BYOK binding. Empty for hosted references, whose reasoning levels are verified when a run starts.",
             })),
         ["ProjectModelReferenceChoice"] = Obj(["reference", "sources"],
             ("reference", Str()),

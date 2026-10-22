@@ -50,19 +50,30 @@ public sealed record ProjectConfigurationChoices(
     ProjectProviderChoices Providers);
 
 /// <summary>
-/// Model references and reasoning choices that may be selected for future runs. <see cref="Choices"/> and
-/// <see cref="ReasoningEfforts"/> list only owner-admitted eligible values; they are empty with an explicit
-/// unavailable state when the owner has no model capability source. <see cref="SavedReferences"/> are references
-/// already saved in platform or project configuration and are never eligible solely because they are saved.
+/// Model references and reasoning choices that may be selected for future runs. <see cref="Choices"/> lists only
+/// enabled references from the deployment's model-binding copy; it is empty with an explicit unavailable state when
+/// no copy is configured. <see cref="SavedReferences"/> are references already saved in platform or project
+/// configuration and are never eligible solely because they are saved.
 /// </summary>
 public sealed record ProjectModelChoices(
     string State,
     string? UnavailableReason,
     string RuntimeEligibility,
-    ImmutableArray<string> ReasoningEfforts,
+    string? BindingsRevision,
     string DefaultReasoningEffort,
-    ImmutableArray<ProjectModelReferenceChoice> Choices,
+    ImmutableArray<ProjectModelChoice> Choices,
     ImmutableArray<ProjectModelReferenceChoice> SavedReferences);
+
+/// <summary>
+/// One enabled model reference. BYOK references list their configured reasoning efforts
+/// (<c>reasoningEffortSource</c> <c>modelBinding</c>); hosted Copilot references list none because their efforts
+/// are verified against the SDK model list when a run starts (<c>verifiedAtRunStart</c>).
+/// </summary>
+public sealed record ProjectModelChoice(
+    string Reference,
+    string SourceMode,
+    string ReasoningEffortSource,
+    ImmutableArray<string> ReasoningEfforts);
 
 /// <summary>A model reference and the owner-held configuration sources that contain it.</summary>
 public sealed record ProjectModelReferenceChoice(
@@ -124,18 +135,24 @@ public sealed partial class ProjectsConfigService
     private readonly ProviderCatalog providerCatalog;
     private readonly TimeProvider timeProvider;
     private readonly IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory;
+    private readonly ModelBindingCapabilities modelBindings;
 
-    /// <summary>Creates the service over the request context, provider catalog, clock, and optional transaction factory.</summary>
+    /// <summary>
+    /// Creates the service over the request context, provider catalog, clock, optional transaction factory, and
+    /// optional model-binding copy. Without a copy, model choices are reported as unavailable.
+    /// </summary>
     public ProjectsConfigService(
         ProjectsConfigDbContext db,
         ProviderCatalog providerCatalog,
         TimeProvider timeProvider,
-        IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory = null)
+        IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory = null,
+        ModelBindingCapabilities? modelBindings = null)
     {
         this.db = db;
         this.providerCatalog = providerCatalog;
         this.timeProvider = timeProvider;
         this.dbContextFactory = dbContextFactory;
+        this.modelBindings = modelBindings ?? ModelBindingCapabilities.Unavailable;
     }
 
     /// <summary>
@@ -159,7 +176,7 @@ public sealed partial class ProjectsConfigService
         var configuration = Deserialize<ProjectConfiguration>(configurationRevision.ConfigurationJson);
         var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
         var platform = await ReadPlatformDefaultsAsync(platformHead, cancellationToken).ConfigureAwait(false);
-        var modelChoices = BuildModelChoices(configuration, platform);
+        var modelChoices = BuildModelChoices(configuration, platform, modelBindings);
 
         return new ProjectConfigurationChoices(
             project.ProjectId,
@@ -1566,9 +1583,14 @@ public sealed partial class ProjectsConfigService
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Lists enabled model references from the model-binding copy and the references already saved in platform and
+    /// project configuration. Saved references are reported separately and never become choices.
+    /// </summary>
     internal static ProjectModelChoices BuildModelChoices(
         ProjectConfiguration project,
-        VersionedPlatformRuntimeDefaults platform)
+        VersionedPlatformRuntimeDefaults platform,
+        ModelBindingCapabilities modelBindings)
     {
         var references = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         void Add(string? reference, string source)
@@ -1608,17 +1630,39 @@ public sealed partial class ProjectsConfigService
                 item.Key,
                 sourceOrder.Where(item.Value.Contains).ToImmutableArray()))
             .ToImmutableArray();
-        // Projects.Config has no admitted model capability source. Enabled model references and their reasoning
-        // support live in the runtime model-binding snapshot (AgentHost:ModelBindings) and, for hosted Copilot,
-        // the SDK model list the agent runtime reads with the run's credential at start. Saved references are
-        // reported as saved only; persistence never makes a reference or effort eligible.
+        // Without a deployment-supplied model-binding copy there is no capability source, so report that plainly
+        // instead of treating saved references as eligible.
+        if (!modelBindings.IsAvailable)
+        {
+            return new ProjectModelChoices(
+                "unavailable",
+                "model_capability_catalog_unavailable",
+                "verifiedAtRunStart",
+                null,
+                "high",
+                [],
+                savedReferences);
+        }
+
+        // Only enabled bindings are selectable; disabled ones are omitted because AgentHost refuses them at run start.
+        // An enabled BYOK binding with no efforts is omitted too: AgentHost accepts only a listed effort for BYOK, so
+        // no run could start with it. BYOK efforts come from the binding. Hosted efforts are left empty, even if the
+        // binding lists some, because AgentHost checks them against the SDK model list with the run's credential at
+        // start, which this owner cannot read.
+        var choices = modelBindings.Bindings
+            .Where(binding => binding.Enabled &&
+                (binding.SourceMode != "Byok" || !binding.SupportedReasoningEfforts.IsEmpty))
+            .Select(binding => binding.SourceMode == "Byok"
+                ? new ProjectModelChoice(binding.Reference, "byok", "modelBinding", binding.SupportedReasoningEfforts)
+                : new ProjectModelChoice(binding.Reference, "hostedCopilot", "verifiedAtRunStart", []))
+            .ToImmutableArray();
         return new ProjectModelChoices(
-            "unavailable",
-            "model_capability_catalog_unavailable",
+            "available",
+            null,
             "verifiedAtRunStart",
-            [],
+            modelBindings.Revision,
             "high",
-            [],
+            choices,
             savedReferences);
     }
 

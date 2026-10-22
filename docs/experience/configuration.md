@@ -24,7 +24,7 @@ adds a new configuration revision. The same page also has
 | **General** | Rename the project. Read its ID, state, and created and updated times. |
 | **Access** | Read your permissions in this project. Manage members when the service allows it. See [Manage members](#manage-members). |
 | **Repository** | Set the repository owner and name, and the **Sign-in method**: **Not set**, **GitHub App**, or **Stored secret**. |
-| **Models** | Set **Model defaults** and **Models by task** using the owner's current model and reasoning choices when available. Until the owner has a model capability catalog, entries are typed and verified when a run starts. |
+| **Models** | Set **Model defaults** and **Models by task**. When the owner lists eligible models, the fields are selects. Otherwise, entries are typed and verified when a run starts. |
 | **Platform components** | Read the provider choices selected by the platform. Projects cannot override non-model platform components. |
 | **Run limits** | Set model turns, tool calls, child sessions, child sessions at once, run time in seconds, and prompt tokens. Leave a field empty to use the platform limit. |
 | **Connections** | Connect the GitHub Repo App, GitHub Copilot, and remote MCP servers. See [connections](./connections.md). |
@@ -48,14 +48,22 @@ against the active runtime binding when a run starts. Accepted run selections
 are immutable, so a settings change does not change a run that has already
 started.
 
-The project service does not yet have a model capability catalog, so eligible
-model choices are reported as unavailable. **Models** says so explicitly, lists
-the saved model references as **not verified as eligible**, and keeps model
-references and reasoning levels as typed entries that are verified only when a
-run starts. It does not present saved references as eligible choices, and it
-does not silently replace a saved model or reasoning effort. Current platform
-choices do not make an upstream model available, provision credentials, or
-guarantee that a run can start.
+When the project service lists eligible models, **Models** shows model
+references as selects that contain only enabled models. A saved reference that
+is not in the list stays selected, is labeled **(not currently eligible)**, and
+is listed under **Saved model references not currently eligible**. The form
+never drops it silently. For a BYOK model, the reasoning select offers only the
+levels that model supports; a saved level outside that list is labeled
+**(saved; not listed for this model)**. For a hosted model, the reasoning
+select offers every level and says **Reasoning levels for this model are
+checked when a run starts.**
+
+When the project service has no model list, **Models** says so explicitly,
+lists the saved model references as **not verified as eligible**, and keeps
+model references and reasoning levels as typed entries that are verified only
+when a run starts. In both cases, the form does not silently replace a saved
+model or reasoning effort. Current platform choices do not make an upstream
+model available, provision credentials, or guarantee that a run can start.
 
 Only model configuration can be overridden at project level. Provider
 selections for other platform components come from platform configuration and
@@ -109,7 +117,8 @@ changes before you assign a skill.
 | State | Result |
 | --- | --- |
 | Loading | The form waits for the owner revision. |
-| Model choices unavailable | The form states that the project service has no model capability catalog, lists saved references as not verified, and keeps typed model reference entry; it does not substitute another choice. |
+| Model choices available | Model fields are selects of enabled models. Saved references outside the list stay visible and are labeled not currently eligible. Hosted models show that reasoning levels are checked when a run starts. |
+| Model choices unavailable | The form states that the project service has no runtime model-binding list configured, lists saved references as not verified, and keeps typed model reference entry; it does not substitute another choice. |
 | Invalid JSON or a nonobject value in **Advanced** | The app displays an error and does not send a write. |
 | Stale `expectedRevision` | The owner returns a conflict. Reload, review your changes against the current document, and save again. |
 | Invalid provider, model, or configuration | The owner's validation response remains visible. |

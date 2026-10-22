@@ -252,7 +252,7 @@ function projectConfigurationChoices(projectId: string): ProjectConfigurationCho
       state: 'unavailable',
       unavailableReason: 'model_capability_catalog_unavailable',
       runtimeEligibility: 'verifiedAtRunStart',
-      reasoningEfforts: [],
+      bindingsRevision: null,
       defaultReasoningEffort: 'high',
       choices: [],
       savedReferences: [{ reference: 'owner-model', sources: ['platformDefault', 'projectSaved'] }],
@@ -1837,8 +1837,8 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/settings?section=models');
     render(<App />);
 
-    // The owner has no model capability catalog, so saved references are shown as unverified, not as choices.
-    expect(await screen.findByText(/no model capability catalog/)).toBeTruthy();
+    // The owner has no model-binding list, so saved references are shown as unverified, not as choices.
+    expect(await screen.findByText(/no runtime model-binding list configured/)).toBeTruthy();
     expect(screen.getByText('owner-model (platformDefault, projectSaved)')).toBeTruthy();
     const modelInput = screen.getByLabelText('Default model reference') as HTMLInputElement;
     expect(modelInput.tagName).toBe('INPUT');

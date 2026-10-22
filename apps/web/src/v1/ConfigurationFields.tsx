@@ -52,17 +52,36 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
   choicesError?: boolean;
 }) {
   const ownerChoicesAvailable = choices?.models.state === 'available';
-  const modelReferences = ownerChoicesAvailable
-    ? choices.models.choices.map((choice) => choice.reference)
+  const modelChoices = ownerChoicesAvailable ? choices.models.choices : [];
+  const modelReferences = modelChoices.map((choice) => choice.reference);
+  const ineligibleSavedReferences = ownerChoicesAvailable
+    ? choices.models.savedReferences.filter((saved) => !modelReferences.includes(saved.reference))
     : [];
-  const reasoningEfforts = ownerChoicesAvailable
-    ? choices.models.reasoningEfforts
-    : REASONING_EFFORTS;
+  /**
+   * Reasoning levels offered for a model. BYOK bindings list their configured levels. Hosted models, unlisted
+   * references and inherited defaults show every owner-accepted level, because the runtime checks those
+   * levels when a run starts; this keeps the select from ever being empty.
+   */
+  const effortsFor = (reference: string | null | undefined): ReasoningEffort[] => {
+    const choice = modelChoices.find((item) => item.reference === reference);
+    return choice?.reasoningEffortSource === 'modelBinding' ? choice.reasoningEfforts : REASONING_EFFORTS;
+  };
+  /** Hint shown under a reasoning select when the chosen model is hosted. */
+  const effortHint = (reference: string | null | undefined) =>
+    modelChoices.find((item) => item.reference === reference)?.reasoningEffortSource === 'verifiedAtRunStart'
+      ? 'Reasoning levels for this model are checked when a run starts.'
+      : undefined;
   const modelOption = (reference: string) => (
     <option key={reference} value={reference}>
-      {modelReferences.includes(reference) ? reference : `${reference} (saved)`}
+      {modelReferences.includes(reference) ? reference : `${reference} (not currently eligible)`}
     </option>
   );
+  /** Option for a saved reasoning level that the selected model does not list. */
+  const savedEffortOption = (effort: ReasoningEffort) => (
+    <option value={effort}>{`${REASONING_LABELS[effort]} (saved; not listed for this model)`}</option>
+  );
+  const defaultReference = configuration.modelSelection?.reference;
+  const defaultEfforts = effortsFor(defaultReference);
   /** Changes the default model and decides what happens to its credential pin. */
   const setModelReference = (reference: string) => {
     if (!reference) {
@@ -123,7 +142,7 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
         {choices?.models.state === 'unavailable' && <div role="status">
           <p className="v1-muted">
             {choices.models.unavailableReason === 'model_capability_catalog_unavailable'
-              ? 'Eligible model choices are unavailable: the project service has no model capability catalog yet. '
+              ? 'Eligible model choices are unavailable: the project service has no runtime model-binding list configured. '
               : 'Eligible model choices are unavailable. '}
             Model references and reasoning levels entered here are not verified until a run starts.
           </p>
@@ -134,6 +153,13 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
                 <li key={saved.reference}>{saved.reference} ({saved.sources.join(', ')})</li>)}
             </ul>
           </>}
+        </div>}
+        {ownerChoicesAvailable && ineligibleSavedReferences.length > 0 && <div role="status">
+          <p className="v1-muted">Saved model references not currently eligible</p>
+          <ul>
+            {ineligibleSavedReferences.map((saved) =>
+              <li key={saved.reference}>{saved.reference} ({saved.sources.join(', ')})</li>)}
+          </ul>
         </div>}
         <div className="v1-inline-form">
           <Field label="Default model reference">
@@ -147,7 +173,7 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
             </Select> : <Input value={configuration.modelSelection?.reference ?? ''} readOnly={readOnly}
               onChange={(_, data) => setModelReference(data.value)} />}
           </Field>
-          <Field label="Default reasoning effort">
+          <Field label="Default reasoning effort" hint={effortHint(defaultReference)}>
             <Select value={configuration.modelSelection?.reasoningEffort ?? ''} disabled={readOnly || !configuration.modelSelection}
               // Reasoning effort is stored on the model selection, so it can only
               // change after a default model exists.
@@ -161,11 +187,9 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
                 {`Use platform default${ownerChoicesAvailable ? ` (${REASONING_LABELS[choices.models.defaultReasoningEffort]})` : ''}`}
               </option>
               {configuration.modelSelection?.reasoningEffort &&
-                !reasoningEfforts.includes(configuration.modelSelection.reasoningEffort) &&
-                <option value={configuration.modelSelection.reasoningEffort}>
-                  {`${REASONING_LABELS[configuration.modelSelection.reasoningEffort]} (saved)`}
-                </option>}
-              {reasoningEfforts.map((effort) =>
+                !defaultEfforts.includes(configuration.modelSelection.reasoningEffort) &&
+                savedEffortOption(configuration.modelSelection.reasoningEffort)}
+              {defaultEfforts.map((effort) =>
                 <option key={effort} value={effort}>{REASONING_LABELS[effort]}</option>)}
             </Select>
           </Field>
@@ -187,6 +211,9 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
       <PageSection title="Models by task" description="Leave a field empty to inherit its default. Owner-listed references are eligible choices; the runtime checks availability when a run starts.">
         {TASKS.map(({ value, label }) => {
           const selected = configuration.modelTaskOverrides?.find((item) => item.taskKind === value)?.selection;
+          // A task without its own model inherits the project default model, so its levels follow that model.
+          const taskReference = selected?.reference ?? defaultReference;
+          const taskEfforts = effortsFor(taskReference);
           return <div className="v1-inline-form" key={value}>
             <Field label={`${label} model`}>
               {ownerChoicesAvailable ? <Select value={selected?.reference ?? ''} disabled={readOnly}
@@ -197,15 +224,13 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
               </Select> : <Input value={selected?.reference ?? ''} placeholder="Use default" readOnly={readOnly}
                 onChange={(_, data) => setTask(value, data.value || null, selected?.reasoningEffort ?? null)} />}
             </Field>
-            <Field label={`${label} reasoning effort`}>
+            <Field label={`${label} reasoning effort`} hint={effortHint(taskReference)}>
               <Select value={selected?.reasoningEffort ?? ''} disabled={readOnly}
                 onChange={(_, data) => setTask(value, selected?.reference ?? null, reasoning(data.value))}>
                 <option value="">Use default</option>
-                {selected?.reasoningEffort && !reasoningEfforts.includes(selected.reasoningEffort) &&
-                  <option value={selected.reasoningEffort}>
-                    {`${REASONING_LABELS[selected.reasoningEffort]} (saved)`}
-                  </option>}
-                {reasoningEfforts.map((effort) =>
+                {selected?.reasoningEffort && !taskEfforts.includes(selected.reasoningEffort) &&
+                  savedEffortOption(selected.reasoningEffort)}
+                {taskEfforts.map((effort) =>
                   <option key={effort} value={effort}>{REASONING_LABELS[effort]}</option>)}
               </Select>
             </Field>

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ConfigurationFields } from './ConfigurationFields';
 import { needsModelCredential } from './modelCredential';
@@ -25,11 +25,11 @@ function ownerChoices(): ProjectConfigurationChoices {
       state: 'available',
       unavailableReason: null,
       runtimeEligibility: 'verifiedAtRunStart',
-      reasoningEfforts: ['low', 'xhigh'],
+      bindingsRevision: 'models-r7',
       defaultReasoningEffort: 'xhigh',
       choices: [
-        { reference: 'platform-model', sources: ['platformDefault'] },
-        { reference: 'planner', sources: ['platformTask'] },
+        { reference: 'platform-model', sourceMode: 'byok', reasoningEffortSource: 'modelBinding', reasoningEfforts: ['low', 'xhigh'] },
+        { reference: 'planner', sourceMode: 'hostedCopilot', reasoningEffortSource: 'verifiedAtRunStart', reasoningEfforts: [] },
       ],
       savedReferences: [],
     },
@@ -88,19 +88,25 @@ describe('readable project configuration', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('uses owner-backed model choices and keeps an unlisted saved value selectable', () => {
+  it('uses owner-backed model choices and keeps an unlisted saved value visible as not eligible', () => {
     const configuration = fixture();
+    const choices = ownerChoices();
+    choices.models.savedReferences = [
+      { reference: 'model-default', sources: ['projectSaved'] },
+      { reference: 'platform-model', sources: ['platformDefault'] },
+    ];
     const onChange = vi.fn();
-    render(<ConfigurationFields configuration={configuration} onChange={onChange} choices={ownerChoices()}
+    render(<ConfigurationFields configuration={configuration} onChange={onChange} choices={choices}
       savedSelection={configuration.modelSelection} part="models" />);
     const defaultModel = screen.getByLabelText('Default model reference') as HTMLSelectElement;
-    expect(Array.from(defaultModel.options).map((option) => option.textContent)).toContain('model-default (saved)');
-    expect(Array.from(defaultModel.options).map((option) => option.value)).toContain('platform-model');
+    expect(Array.from(defaultModel.options).map((option) => option.textContent))
+      .toEqual(['Use platform default', 'platform-model', 'planner', 'model-default (not currently eligible)']);
+    expect(defaultModel.value).toBe('model-default');
     expect(screen.getByLabelText('Planning model').tagName).toBe('SELECT');
-    const defaultEffort = screen.getByLabelText('Default reasoning effort');
-    expect(within(defaultEffort).queryByRole('option', { name: 'Medium' })).toBeNull();
-    expect(within(defaultEffort).getByRole('option', { name: 'Extra high' })).toBeTruthy();
-    expect(within(defaultEffort).getByRole('option', { name: 'High (saved)' })).toBeTruthy();
+    // Only saved references outside the eligible list are called out.
+    expect(screen.getByText('Saved model references not currently eligible')).toBeTruthy();
+    expect(screen.getByText('model-default (projectSaved)')).toBeTruthy();
+    expect(screen.queryByText('platform-model (platformDefault)')).toBeNull();
 
     fireEvent.change(defaultModel, { target: { value: 'platform-model' } });
     expect((onChange.mock.calls[0][0] as ProjectConfiguration).modelSelection).toEqual({
@@ -108,6 +114,27 @@ describe('readable project configuration', () => {
       reference: 'platform-model',
       credentialReference: null,
     });
+  });
+
+  it('offers only the reasoning levels a BYOK binding lists and marks an unlisted saved level', () => {
+    const configuration: ProjectConfiguration = {
+      ...fixture(), modelSelection: { reference: 'platform-model', reasoningEffort: 'high' }, modelTaskOverrides: [],
+    };
+    render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={ownerChoices()} part="models" />);
+    const defaultEffort = screen.getByLabelText('Default reasoning effort') as HTMLSelectElement;
+    expect(Array.from(defaultEffort.options).map((option) => option.textContent)).toEqual([
+      'Use platform default (Extra high)', 'High (saved; not listed for this model)', 'Low', 'Extra high',
+    ]);
+    expect(screen.queryByText(/checked when a run starts/)).toBeNull();
+  });
+
+  it('explains that hosted reasoning levels are checked at run start and never shows an empty select', () => {
+    render(<ConfigurationFields configuration={fixture()} onChange={vi.fn()} choices={ownerChoices()} part="models" />);
+    // The planning task uses the hosted "planner" reference.
+    const planningEffort = screen.getByLabelText('Planning reasoning effort') as HTMLSelectElement;
+    expect(Array.from(planningEffort.options).map((option) => option.textContent))
+      .toEqual(['Use default', 'Low', 'Medium', 'High', 'Extra high']);
+    expect(screen.getAllByText('Reasoning levels for this model are checked when a run starts.')).toHaveLength(1);
   });
 
   it('restores the full saved hosted binding after clearing to the platform default', () => {
@@ -131,19 +158,19 @@ describe('readable project configuration', () => {
     expect((onChange.mock.calls[1][0] as ProjectConfiguration).modelSelection).toEqual(saved);
   });
 
-  it('reports the missing model capability catalog and lists saved references as unverified', () => {
+  it('reports the missing model-binding list and lists saved references as unverified', () => {
     const configuration = fixture();
     const unavailable = ownerChoices();
     unavailable.models.state = 'unavailable';
     unavailable.models.unavailableReason = 'model_capability_catalog_unavailable';
+    unavailable.models.bindingsRevision = null;
     unavailable.models.choices = [];
-    unavailable.models.reasoningEfforts = [];
     unavailable.models.savedReferences = [
       { reference: 'model-default', sources: ['projectSaved'] },
       { reference: 'platform-model', sources: ['platformDefault'] },
     ];
     render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={unavailable} part="models" />);
-    expect(screen.getByText(/project service has no model capability catalog yet/)).toBeTruthy();
+    expect(screen.getByText(/project service has no runtime model-binding list configured/)).toBeTruthy();
     expect(screen.getByText(/not verified until a run starts/)).toBeTruthy();
     expect(screen.getByText('Saved model references (not verified as eligible)')).toBeTruthy();
     expect(screen.getByText('model-default (projectSaved)')).toBeTruthy();

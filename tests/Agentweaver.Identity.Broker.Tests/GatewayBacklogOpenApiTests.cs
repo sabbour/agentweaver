@@ -155,6 +155,24 @@ public sealed class GatewayBacklogOpenApiTests
         Assert.Contains("Saved does not mean eligible",
             modelChoices.GetProperty("properties").GetProperty("savedReferences")
                 .GetProperty("description").GetString());
+        Assert.Equal(
+            new string?[] { "state", "unavailableReason", "runtimeEligibility", "bindingsRevision", "defaultReasoningEffort", "choices", "savedReferences" },
+            modelChoices.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal("#/components/schemas/ProjectModelChoice",
+            modelChoices.GetProperty("properties").GetProperty("choices").GetProperty("items")
+                .GetProperty("$ref").GetString());
+        var modelChoice = schemas.GetProperty("ProjectModelChoice").GetProperty("properties");
+        Assert.Equal(new string?[] { "hostedCopilot", "byok" },
+            modelChoice.GetProperty("sourceMode").GetProperty("enum").EnumerateArray()
+                .Select(item => item.GetString()).ToArray());
+        Assert.Equal(new string?[] { "modelBinding", "verifiedAtRunStart" },
+            modelChoice.GetProperty("reasoningEffortSource").GetProperty("enum").EnumerateArray()
+                .Select(item => item.GetString()).ToArray());
+        Assert.Contains("verified when a run starts",
+            modelChoice.GetProperty("reasoningEfforts").GetProperty("description").GetString());
+        // The choice item carries eligibility fields only; provider and credential data stay with AgentHost.
+        Assert.Equal(["reasoningEffortSource", "reasoningEfforts", "reference", "sourceMode"],
+            modelChoice.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray());
         var projectConfiguration = schemas.GetProperty("ProjectConfiguration").GetProperty("properties");
         Assert.Contains("any non-empty value returns 400",
             projectConfiguration.GetProperty("providerOverrides").GetProperty("description").GetString());

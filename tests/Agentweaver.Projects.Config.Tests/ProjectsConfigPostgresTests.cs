@@ -189,7 +189,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.Equal("verifiedAtRunStart", projectSaved.Models.RuntimeEligibility);
         Assert.Equal("high", projectSaved.Models.DefaultReasoningEffort);
         Assert.Empty(projectSaved.Models.Choices);
-        Assert.Empty(projectSaved.Models.ReasoningEfforts);
+        Assert.Null(projectSaved.Models.BindingsRevision);
         Assert.Equal(
             ["saved-agent-model", "saved-default", "saved-role-model", "saved-task"],
             projectSaved.Models.SavedReferences
@@ -204,6 +204,26 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var hidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.GetProjectConfigurationChoicesAsync(foreignOwner, project.ProjectId, CancellationToken.None));
         Assert.Equal(StatusCodes.Status404NotFound, hidden.StatusCode);
+
+        // With the deployment's binding copy, choices are the enabled bindings only; saved references stay separate.
+        var bindingService = new ProjectsConfigService(
+            db, CreateProviderCatalog(), TimeProvider.System,
+            modelBindings: ProjectModelChoicesTests.SampleBindings());
+        var bound = await bindingService.GetProjectConfigurationChoicesAsync(
+            owner, project.ProjectId, CancellationToken.None);
+        Assert.Equal(project.ProjectId, bound.ProjectId);
+        Assert.Equal("available", bound.Models.State);
+        Assert.Null(bound.Models.UnavailableReason);
+        Assert.Equal("models-r7", bound.Models.BindingsRevision);
+        Assert.Equal(["byok-coder", "hosted-reasoning"], bound.Models.Choices.Select(item => item.Reference).ToArray());
+        Assert.Equal(["low", "xhigh"], bound.Models.Choices[0].ReasoningEfforts.ToArray());
+        Assert.Equal("verifiedAtRunStart", bound.Models.Choices[1].ReasoningEffortSource);
+        Assert.DoesNotContain(bound.Models.Choices, item => item.Reference == "retired");
+        Assert.Contains(bound.Models.SavedReferences, item => item.Reference == "saved-default");
+        Assert.DoesNotContain("private-model-key", JsonSerializer.Serialize(bound, LegacyJsonOptions()));
+        var boundHidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            bindingService.GetProjectConfigurationChoicesAsync(foreignOwner, project.ProjectId, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status404NotFound, boundHidden.StatusCode);
 
         var platformAdmin = await SeedCallerAsync(
             db, authorityStore, "choices-platform-admin-" + suffix, tenantId,
@@ -226,7 +246,6 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.Equal("unavailable", configured.Models.State);
         Assert.Equal("model_capability_catalog_unavailable", configured.Models.UnavailableReason);
         Assert.Empty(configured.Models.Choices);
-        Assert.Empty(configured.Models.ReasoningEfforts);
         Assert.Contains(configured.Models.SavedReferences, choice =>
             choice.Reference == "platform-model" && choice.Sources.Contains("platformDefault"));
         Assert.Contains(configured.Models.SavedReferences, choice =>

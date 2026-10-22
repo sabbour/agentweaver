@@ -1495,12 +1495,14 @@ export interface ProjectConfigurationChoices {
   platformRuntimeRevision: number;
   models: {
     state: 'available' | 'unavailable';
-    /** No owner-admitted model capability catalog exists yet; choices and efforts are empty when unavailable. */
+    /** The project service has no runtime model-binding copy; choices are empty when unavailable. */
     unavailableReason: 'model_capability_catalog_unavailable' | null;
     runtimeEligibility: 'verifiedAtRunStart';
-    reasoningEfforts: ReasoningEffort[];
+    /** Revision of the model-binding copy the choices came from; null when unavailable. */
+    bindingsRevision: string | null;
     defaultReasoningEffort: ReasoningEffort;
-    choices: ProjectModelReferenceChoice[];
+    /** Enabled runtime model bindings. Disabled bindings and saved-only references are never listed. */
+    choices: ProjectModelChoice[];
     /** References already saved in platform or project configuration. Saved does not mean eligible. */
     savedReferences: ProjectModelReferenceChoice[];
   };
@@ -1515,6 +1517,17 @@ export interface ProjectConfigurationChoices {
     }>;
     ignoredProjectOverrides: string[];
   };
+}
+
+/**
+ * One enabled model reference. BYOK references list their configured reasoning efforts; hosted references list
+ * none because their reasoning levels are verified when a run starts.
+ */
+export interface ProjectModelChoice {
+  reference: string;
+  sourceMode: 'hostedCopilot' | 'byok';
+  reasoningEffortSource: 'modelBinding' | 'verifiedAtRunStart';
+  reasoningEfforts: ReasoningEffort[];
 }
 
 /** A model reference and the owner-held configuration sources that contain it. */

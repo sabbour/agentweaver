@@ -70,10 +70,14 @@ The authenticated
 `GET /api/v1/projects/{projectId}/configuration/choices` endpoint returns
 current project-scoped model references, supported reasoning efforts, and
 platform provider selections for settings. It is a no-store eligibility view,
-not a provisioning check or live upstream result. Because Projects & Config
-has no model capability catalog, `models` is always `unavailable` with reason
-`model_capability_catalog_unavailable`, empty `choices` and `reasoningEfforts`,
-and a `savedReferences` list that is not an eligibility claim. Model
+not a provisioning check or live upstream result. When Projects & Config has
+the read-only model-binding copy, `models` is `available` with a
+`bindingsRevision` and one `choices` entry per enabled binding. BYOK entries
+list their configured `reasoningEfforts`; hosted entries report
+`reasoningEffortSource: "verifiedAtRunStart"` with no levels. Without the
+copy, `models` is `unavailable` with reason
+`model_capability_catalog_unavailable` and empty `choices`. In both states,
+`savedReferences` is not an eligibility claim. Model
 eligibility is checked against the runtime binding when a run starts, and
 accepted run selections remain immutable. Project overrides remain available
 for model configuration; non-model provider selections are platform-owned.
