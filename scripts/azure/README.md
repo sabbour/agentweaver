@@ -236,8 +236,8 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 31.
-These are 30 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16, 18 through 31, and 33.
+These are 31 registered versions; versions 17 and 32 remain excluded.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,
@@ -322,6 +322,15 @@ dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~
 ```
 
 ### Applying later approved migrations
+
+For routine updates, use the
+[database maintenance runner](../../docs/guide/database-maintenance.md)
+(`npm run db:maintenance`). It runs the migrations as in-cluster Jobs and needs
+no tunnel. `npm run db:maintenance:setup` prepares it once: it creates the
+migration and workflow identities, runs the schema ownership handover, and
+configures the GitHub environment, then checks all of it. Without `--execute`
+it only checks. After the handover, the operator no longer owns the P1 schemas,
+and the two modes below fail their ownership checks.
 
 Use these modes for a database that is already initialized. Neither needs a
 prior receipt, recreates roles or schemas, resets data, or reruns the Identity

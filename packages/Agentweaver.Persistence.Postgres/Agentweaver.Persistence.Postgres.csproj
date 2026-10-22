@@ -9,5 +9,8 @@
     <PackageReference Include="Npgsql" Version="10.0.3" />
     <EmbeddedResource Include="Migrations\001_outbox.sql" />
     <EmbeddedResource Include="Migrations\002_consumer_inbox.sql" />
+    <!-- The reviewed P1 plan; migration Jobs grant only what it names and check its exact hash. -->
+    <EmbeddedResource Include="..\..\scripts\azure\lib\p1-postgres-plan.json"
+                      LogicalName="Agentweaver.Persistence.Postgres.p1-postgres-plan.json" />
   </ItemGroup>
 </Project>

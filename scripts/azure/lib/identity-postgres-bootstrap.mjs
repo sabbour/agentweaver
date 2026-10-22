@@ -190,6 +190,9 @@ function buildProxy(repoRoot, outputDirectory, {
   assertCommand(result, 'Could not build the temporary PostgreSQL TCP proxy');
 }
 
+/** Final line of a successful, read-back ownership handover. */
+export const P1_OWNERSHIP_HANDOVER_MARKER = 'P1_POSTGRES_OWNERSHIP_HANDOVER_VERIFIED ';
+
 const P1_MODES = new Set(['initialize', 'inspect', 'apply-pending', 'apply-pending-dry-run']);
 // Each initializer mode prints its own final marker line. The runner accepts success only when it sees the
 // marker for the mode it asked for, so a run that stopped early or ran a different mode cannot pass.
@@ -241,6 +244,7 @@ export async function bootstrapIdentityPostgres({
   verifyOnly = false,
   foundationProbePrincipalObjectId,
   p1Initializer,
+  p1OwnershipHandover,
 }, {
   execAz = runAz,
   execKubelogin = (args, options) => run('kubelogin', args, options),
@@ -263,6 +267,17 @@ export async function bootstrapIdentityPostgres({
        [runtimePrincipalObjectId, migrationPrincipalObjectId].some(value =>
          value.toLowerCase() === foundationProbePrincipalObjectId.toLowerCase()))) {
     throw new Error('Probe PostgreSQL bootstrap requires its distinct exact native principal and cannot run Identity verification.');
+  }
+  if (p1OwnershipHandover !== undefined) {
+    // The handover runs only against an already bootstrapped database, so Identity is verified
+    // read-only first. It cannot be combined with the initializer or the Probe bootstrap, and it
+    // needs the exact migration principal from the identity deployment.
+    if (!verifyOnly || p1Initializer !== undefined || foundationProbePrincipalObjectId !== undefined ||
+        !GUID_PATTERN.test(p1OwnershipHandover?.migrationPrincipalObjectId ?? '') ||
+        [runtimePrincipalObjectId, migrationPrincipalObjectId].some(value =>
+          value.toLowerCase() === p1OwnershipHandover.migrationPrincipalObjectId.toLowerCase())) {
+      throw new Error('The P1 ownership handover requires Identity verification only and its own distinct migration principal.');
+    }
   }
   if (p1Initializer !== undefined) {
     if (p1Initializer === null || typeof p1Initializer !== 'object') {
@@ -479,6 +494,32 @@ export async function bootstrapIdentityPostgres({
       proxyConfigMap: configMapName,
       portForwardPid: portForward.pid,
     };
+
+    if (p1OwnershipHandover) {
+      // Hand schema ownership to the P1 migration role through the same tunnel. The program is
+      // idempotent and commits only after its own readback, so a rerun is safe.
+      const handover = execDotnet([
+        'run', '--file', join(repoRoot, 'scripts', 'azure', 'lib', 'p1-postgres-ownership-handover.cs'),
+        '--verbosity', 'quiet', '--', '--execute',
+      ], {
+        check: false,
+        cwd: repoRoot,
+        timeout: 600_000,
+        env: {
+          ...process.env,
+          P1Handover__PostgresHost: postgresHost,
+          P1Handover__AdminUsername: adminUsername,
+          P1Handover__MigrationRole: `${resourceGroup}-id-p1-postgres-migration`,
+          P1Handover__MigrationPrincipalObjectId: p1OwnershipHandover.migrationPrincipalObjectId,
+          P1Handover__LocalPort: String(LOCAL_PORT),
+        },
+      });
+      const handoverLine = (handover.stdout ?? '').split(/\r?\n/)
+        .find(line => line.startsWith(P1_OWNERSHIP_HANDOVER_MARKER));
+      if (handover.status !== 0 || !handoverLine)
+        throw new Error(`P1 ownership handover failed: ${diagnostic(handover)}`);
+      bootstrapReceipt.p1OwnershipHandover = { verification: 'ownership-handover', readback: redact(handoverLine) };
+    }
 
     if (p1Initializer) {
       // Run the initializer through the same tunnel used for the Identity Broker step.

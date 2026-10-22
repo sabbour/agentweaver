@@ -174,8 +174,8 @@ type, function source/owner, and runtime EXECUTE restriction. Its role stage
 checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
-Its source catalog includes 30 Core migration versions (1 through 16 and 18
-through 31), with version 17 excluded, and nine Events versions. The initializer
+Its source catalog includes 31 Core migration versions (1 through 16, 18
+through 31, and 33), with versions 17 and 32 excluded, and nine Events versions. The initializer
 compares that catalog with each migrator's compiled version list.
 It retains 110 tables, eight row-lock columns, and 33 exact function signatures.
 The Environment runtime bootstrap profile replacement store requires a separate
@@ -202,6 +202,28 @@ These source changes do not change the P0 Azure topology.
 See the [operator initialization procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-operator-initialization),
 the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 and the [source-test boundary](../guide/testing).
+
+### P1 migration identity
+
+`infra/bicep/p1-postgres-migration-identity.bicep` defines one more identity,
+`agentweaver-id-p1-postgres-migration`, federated only to the
+`p1-postgres-migration` ServiceAccount in `agentweaver`. It has no Azure
+resource role. After a one-time ownership handover it owns the `orchestrator`
+and `events_sessions` schemas, so migration Jobs run in the cluster under their
+own egress policy instead of through an operator tunnel. The
+[database maintenance runner](../guide/database-maintenance.md) deploys this
+template, applies the ServiceAccount and egress policy, performs the handover
+once, and runs the migration Jobs.
+
+`infra/bicep/db-maintenance-ci-identity.bicep` defines the identity that the
+database maintenance workflow uses, `agentweaver-id-db-maintenance`. GitHub
+Actions signs in as it only from the `v1-db-maintenance` environment. It can
+read the resource group, get cluster credentials, and manage the maintenance
+Kubernetes objects in the `agentweaver` namespace. It cannot deploy Azure
+resources or assign roles, so it uses the migration identity as it is and
+never runs the handover. `npm run db:maintenance:setup`, run once by the
+PostgreSQL Entra administrator, creates both identities, runs the handover, and
+configures the GitHub environment.
 
 ## Network and acceptance checks
 

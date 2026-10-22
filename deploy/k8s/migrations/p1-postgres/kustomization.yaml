@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentweaver
+resources:
+  - serviceaccount.yaml
+  - egress.yaml
+  - orchestrator-job.yaml
+  - events-and-sessions-job.yaml
+patches:
+  - target:
+      group: cilium.io
+      version: v2
+      kind: CiliumNetworkPolicy
+      name: p1-postgres-migration-egress
+    patch: |-
+      - op: replace
+        path: /spec/egress/0/toPorts/0/rules/dns/1/matchName
+        value: agentweaver-pg.postgres.database.azure.com
+      - op: replace
+        path: /spec/egress/2/toFQDNs/0/matchName
+        value: agentweaver-pg.postgres.database.azure.com
+  - target:
+      kind: Job
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: Host=agentweaver-pg.postgres.database.azure.com;Database=agentweaver;Username=agentweaver-id-p1-postgres-migration;Port=5432
