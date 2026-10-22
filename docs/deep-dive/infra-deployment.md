@@ -56,6 +56,11 @@ and verifies a narrow Kubernetes Role and RoleBinding for the workflow identity;
 it creates no custom Azure role. See
 [Database maintenance](../guide/database-maintenance.md).
 
+The Events & Sessions migration Job includes every Sessions and Messaging option
+from its runtime map because the host validates them before it enters
+`--migrate`. The Orchestrator migration branch runs before normal provider
+settings are loaded.
+
 Orchestrator migration 032, which adds Source Control pull request records,
 is optional and code-only. The default migrator, startup verification, and the
 P1 initializer don't apply it, and the owner starts and serves its routes

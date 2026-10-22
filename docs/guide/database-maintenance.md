@@ -56,6 +56,11 @@ The P1 migration Jobs require images built from source that prints the grants
 marker. Older images fail the grants check after they migrate. Use
 `--apps-only` to move services onto an older release.
 
+The Events & Sessions Job also sets the full Sessions and Messaging provider
+configuration from its runtime map. The host validates those settings before
+it enters `--migrate`. Orchestrator handles `--migrate` before loading normal
+runtime provider settings.
+
 ### One-time setup
 
 One command sets up everything that routine runs need. Run it once per

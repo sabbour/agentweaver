@@ -611,6 +611,11 @@ issuer, subject, project/run bounds, and fresh effective project permission. The
 are service-internal contracts, not public product API routes; tenant and platform
 role claims are not required.
 
+The P1 Events & Sessions migration Job runs the executable with only `--migrate`.
+The host validates Sessions and Messaging options before entering that branch, so
+the Job repeats each option from the runtime map instead of relying on defaults.
+Orchestrator selects its migration branch before loading normal provider settings.
+
 | Method and path | Contract |
 | --- | --- |
 | `GET /health/live` | Process liveness. |

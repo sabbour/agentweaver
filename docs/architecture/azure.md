@@ -17,19 +17,23 @@ and read-only bootstrap verification checks those grants after migration.
 See [Broker database permissions](../reference/runtime-configuration#identity-broker-migration-history-and-grants).
 These steps do not change the resource topology shown below.
 
+The Orchestrator and Events & Sessions migrations use the separate P1 migration
+identity. The Events & Sessions Job repeats its Sessions and Messaging settings
+from the runtime map because the host validates them before `--migrate`.
+
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. No live deployment or P0 completion is claimed." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate P1 migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. No live deployment or P0 completion is claimed." />
   </a>
   <figcaption>Structural resource and evidence dependencies. Bicep and Kustomize definitions are not a deployment record; the figure does not claim live readiness or P0 completion.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.drawio'">Open editable draw.io source</a></p>
 
-The following sequence shows the verifier's time-ordered, read-only checks after the probe Job completes. It does not launch the Job or deploy resources.
+The following sequence shows the verifier's time-ordered, read-only checks after the probe Job completes. It does not launch the Job or deploy resources. The P1 PostgreSQL migration Jobs are separate; the Events & Sessions Job validates its provider settings before migration.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked. The P1 PostgreSQL migration Jobs are separate from this probe; Events & Sessions validates provider settings before running migrations." />
   </a>
   <figcaption>Ordered acceptance evidence checks, not a deployment sequence. Only complete source-, target-, image-, identity-, receipt-, and telemetry-bound evidence sets <code>deployedAcceptance</code>; the result does not claim broader P0 readiness.</figcaption>
 </figure>

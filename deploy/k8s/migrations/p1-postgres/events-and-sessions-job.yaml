@@ -43,6 +43,7 @@ spec:
           # The migration role owns the schema. With RuntimeRole and PlanSha256 set, the service
           # applies only the reviewed plan grants and prints a verified marker with its ledger.
           env:
+            # Program validates these runtime provider options before it handles --migrate.
             - name: ConnectionStrings__EventsAndSessionsMigration
               value: "Host=CHANGEME-POSTGRES-HOST;Database=agentweaver;Username=agentweaver-id-p1-postgres-migration;Port=5432"
             - name: EventsAndSessions__Migration__WorkloadIdentity__TenantId
@@ -55,6 +56,26 @@ spec:
               value: "events-sessions-provider:p1-v1.0.0"
             - name: EventsAndSessions__Provider__DatabaseName
               value: "agentweaver"
+            - name: EventsAndSessions__Provider__ResourceGeneration
+              value: "1"
+            - name: EventsAndSessions__Provider__Schema
+              value: "events_sessions"
+            - name: EventsAndSessions__Provider__OptionsSchemaVersion
+              value: "1"
+            - name: EventsAndSessions__Provider__OptionsRevision
+              value: "native-postgres-v1"
+            - name: EventsAndSessions__Provider__PollIntervalMilliseconds
+              value: "250"
+            - name: EventsAndSessions__Provider__ReferenceRetentionDays
+              value: "365"
+            - name: EventsAndSessions__Messaging__OptionsSchemaVersion
+              value: "1"
+            - name: EventsAndSessions__Messaging__OptionsRevision
+              value: "native-postgres-messaging-v1"
+            - name: EventsAndSessions__Messaging__ClaimLeaseSeconds
+              value: "120"
+            - name: EventsAndSessions__Messaging__MaximumMessageLifetimeDays
+              value: "1"
             - name: EventsAndSessions__Migration__RuntimeRole
               value: "agentweaver-id-events-and-sessions"
             - name: EventsAndSessions__Migration__PlanSha256
