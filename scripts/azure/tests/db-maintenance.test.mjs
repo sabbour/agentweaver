@@ -540,6 +540,7 @@ test('--apps-only rolls services to the pinned digests under the lock and runs n
       receiptDir: fake.receiptDir }, fake.deps);
     assert.equal(receipt.result, 'succeeded');
     assert.equal(receipt.scope, 'apps-only');
+    assert.equal(receipt.installation.status, 'partial');
     assert.deepEqual(receipt.steps.map(step => step.name).slice(-4),
       ['lock-acquired', 'app-image-set', 'app-ready', 'app-ready']);
     // No identity, handover, egress, probe, or migration Job is touched.
