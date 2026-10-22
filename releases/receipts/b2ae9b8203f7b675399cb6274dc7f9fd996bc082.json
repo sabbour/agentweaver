@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "b2ae9b8203f7b675399cb6274dc7f9fd996bc082",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "0cae7d323e0835f1fa5f9c316398775219b6fbad5e335d3b1d1f4f4bbf9ba327",
+  "appliedAt": "2026-10-22T01:33:16.850Z",
+  "components": [
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.FoundationProbe",
+      "fromVersion": "0.0.3",
+      "toVersion": "0.0.4",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Mcp",
+      "fromVersion": "1.0.3",
+      "toVersion": "1.0.4",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "fromVersion": "1.0.2",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/chief-of-staff-output-browser.md",
+      "archivedPath": ".changeset/archive/chief-of-staff-output-browser.md",
+      "sha256": "d1cf11da57c8878b3e15c16835f92163f77ccfb2668d9c6d7d405cc9c77185a4"
+    },
+    {
+      "sourcePath": ".changeset/chief-of-staff-web-ui.md",
+      "archivedPath": ".changeset/archive/chief-of-staff-web-ui.md",
+      "sha256": "d9d59c767b5a75af375684fa627b62c97a642ac1bd5544c038780e4d0867b163"
+    },
+    {
+      "sourcePath": ".changeset/p1-db-maintenance-grants.md",
+      "archivedPath": ".changeset/archive/p1-db-maintenance-grants.md",
+      "sha256": "2a4f2b4d3e954a047acf0047a784a14ff798b34d99ff737a21aa8be016bbb4a9"
+    },
+    {
+      "sourcePath": ".changeset/priority-repository-identity.md",
+      "archivedPath": ".changeset/archive/priority-repository-identity.md",
+      "sha256": "4bf7e954409df89f115fc704ace7b931e84a76efe83a421fc0766d57c981399b"
+    },
+    {
+      "sourcePath": ".changeset/v1-blueprint-catalog-2179.md",
+      "archivedPath": ".changeset/archive/v1-blueprint-catalog-2179.md",
+      "sha256": "c53248317bef8d638d3329651244d9662b0d53310d83e415dced8987d87534e7"
+    },
+    {
+      "sourcePath": ".changeset/v1-retained-web-ui-1859.md",
+      "archivedPath": ".changeset/archive/v1-retained-web-ui-1859.md",
+      "sha256": "eee4faf5f66e6de56d7622c530cd124aa3bf6c6f915662f700125f73558b8684"
+    }
+  ]
+}

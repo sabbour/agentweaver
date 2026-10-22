@@ -396,14 +396,14 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.orchestrator.core": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Providers": "[1.0.2, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Providers": "[1.1.0, )",
           "Microsoft.AgentGovernance": "[4.0.0, )"
         }
       },
@@ -416,14 +416,14 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.sourcecontrol": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.1.1, )",
-          "Agentweaver.Providers": "[1.0.2, )"
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Providers": "[1.1.0, )"
         }
       }
     }

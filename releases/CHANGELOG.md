@@ -2,6 +2,17 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-22T01:33:16.850Z — source `b2ae9b8203f7b675399cb6274dc7f9fd996bc082`
+
+- `Agentweaver.EventsAndSessions`: 1.2.0 -> 1.3.0 (minor) — .changeset/p1-db-maintenance-grants.md
+- `Agentweaver.FoundationProbe`: 0.0.3 -> 0.0.4 (patch) — .changeset/p1-db-maintenance-grants.md
+- `Agentweaver.Gateway`: 1.2.0 -> 1.3.0 (minor) — .changeset/priority-repository-identity.md, .changeset/v1-blueprint-catalog-2179.md
+- `Agentweaver.Mcp`: 1.0.3 -> 1.0.4 (patch) — .changeset/priority-repository-identity.md
+- `Agentweaver.Orchestrator`: 1.2.0 -> 1.3.0 (minor) — .changeset/p1-db-maintenance-grants.md, .changeset/priority-repository-identity.md
+- `Agentweaver.Persistence.Postgres`: 1.0.2 -> 1.1.0 (minor) — .changeset/p1-db-maintenance-grants.md
+- `Agentweaver.Projects.Config`: 1.2.0 -> 1.3.0 (minor) — .changeset/v1-blueprint-catalog-2179.md
+- `Agentweaver.Web`: 1.1.0 -> 1.2.0 (minor) — .changeset/chief-of-staff-output-browser.md, .changeset/chief-of-staff-web-ui.md, .changeset/v1-blueprint-catalog-2179.md, .changeset/v1-retained-web-ui-1859.md
+
 ## 2026-10-21T18:53:27.653Z — source `c6dbc1a4ef8db2831927101042c382fac48bd611`
 
 - `Agentweaver.Abstractions`: 1.1.1 -> 1.2.0 (minor) — .changeset/agentsuite-native-import-2114.md, .changeset/chief-of-staff-a1-a2.md, .changeset/g1-project-run-admission.md, .changeset/g3-project-metrics-api.md, .changeset/p2-azure-byok-cost-1924.md, .changeset/p2-periodic-issue-sync.md, .changeset/p2-project-issue-pr-lists.md, .changeset/p2-remote-mcp-connections-catalog.md, .changeset/p2-remote-mcp-oauth-validity.md, .changeset/p2-scoped-budgets-1926.md, .changeset/v1-platform-components-report.md

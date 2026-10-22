@@ -340,25 +340,25 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.0.0, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.0.0, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.providers.sandbox.agentsandbox": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.0.0, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.providers.storage.azurefiles": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.0.0, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       }
     }
