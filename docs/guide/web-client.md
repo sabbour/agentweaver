@@ -194,10 +194,10 @@ You don't type a run ID. The client reads runs from the project run list:
   holds runs that are working, open, or waiting for input. **Recent** holds
   finished runs: done, failed, cancelled, or with an unknown outcome. Each
   section loads more rows with **Load more**.
-- **Sessions** shows runs across all your projects, newest first, with a
-  project column. Select **Load more** to read the next page. If the client
-  can't read the runs of some projects, for example because you don't have
-  read access, a warning names those projects.
+- **Sessions** shows only runs you started across the projects you can read,
+  newest first, with a project column. Select **Load more** to read the next page.
+  If the client can't read the runs of some projects, for example because you
+  don't have read access, a warning names those projects.
 - **Overview** and the project **Dashboard** show the newest runs.
 
 Each row has **Open**, which opens the run page. A row shows the run title. If

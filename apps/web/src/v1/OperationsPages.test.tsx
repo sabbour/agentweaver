@@ -87,7 +87,7 @@ const INTERNAL_NAMES = /gateway|broker|orchestrator|projects owner|coordinator|\
 
 function run(runId: string, title: string, state: ProjectRunSummary['state'] = 'active'): ProjectRunSummary {
   return {
-    runId, rootSessionId: 'coordinator', title, goal: null, state,
+    runId, rootSessionId: 'coordinator', title, goal: null, workflowId: null, state, needsInputCount: 0,
     createdAt: '2026-01-02T00:00:00Z', updatedAt: '2026-01-02T00:00:00Z', completedAt: null,
     startedBy: { issuer: 'https://broker.test', subject: 'user-1' },
   };

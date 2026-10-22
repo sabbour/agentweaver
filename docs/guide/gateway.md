@@ -141,15 +141,19 @@ and returns its status and body with `Cache-Control: no-store`.
 - `pageSize` defaults to 25 and accepts 1 through 100.
 - `state` filters by a comma-separated list of derived states, or by the
   `open` (`idle`, `active`, `blocked`) and `terminal` aliases.
+- `startedBy=me` filters to runs accepted by the caller's exact issuer and
+  subject. The Sessions page uses this filter.
 - `cursor` continues from the previous page's `nextCursor`. Send the same
-  `state` and `pageSize` values with it.
+  `state`, `startedBy`, and `pageSize` values with it. When `startedBy=me`,
+  the cursor is also bound to the caller identity.
 - Items are ordered by creation time, newest first. Pages are not a snapshot;
   a run created after the first page is not repeated.
 
 The owner checks the caller's current project or tenant read permission with
 Projects & Config. A run-bound token sees only its own run. The list reads
-persisted run records only. `title` and `goal` are `null` until a run start
-request stores them.
+persisted run records only. Saved run requests supply `title`, `goal`, and
+`workflowId`. `needsInputCount` counts durable pending decision gates; metadata
+can be `null` when an older or non-interactive run has no saved request.
 
 ## List project issues and pull requests
 

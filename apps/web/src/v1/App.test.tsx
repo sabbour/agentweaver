@@ -1489,7 +1489,12 @@ describe('v1 web project scoping', () => {
       projectId,
       nextCursor: null,
       items: options.states?.includes('open')
-        ? [{ runId: 'r1', title: 'Fix the build', state: 'active', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', startedBy: { issuer: 'https://issuer.test', subject: 'user' } }]
+        ? [{
+          runId: 'r1', rootSessionId: null, title: 'Fix the build', goal: null, workflowId: null,
+          state: 'active', needsInputCount: 0, createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z', completedAt: null,
+          startedBy: { issuer: 'https://issuer.test', subject: 'user' },
+        }]
         : [],
     }));
     window.history.replaceState({}, '', '/projects/p1/orchestrations');

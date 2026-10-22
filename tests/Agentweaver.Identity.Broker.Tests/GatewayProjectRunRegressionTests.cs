@@ -11,6 +11,37 @@ namespace Agentweaver.Identity.Broker.Tests;
 /// <summary>Guards the Gateway catalog, OpenAPI, CORS, and body-limit contract for interactive runs.</summary>
 public sealed class GatewayProjectRunRegressionTests
 {
+    [Fact]
+    public async Task ProjectRunListOpenApiDescribesCallerFilterAndSummaryFields()
+    {
+        await using var gateway = await StartAsync();
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        var operation = root.GetProperty("paths")
+            .GetProperty("/api/v1/projects/{projectId}/runs").GetProperty("get");
+        Assert.Equal("listProjectRuns", operation.GetProperty("operationId").GetString());
+        var startedBy = Assert.Single(operation.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("name").GetString() == "startedBy");
+        Assert.Equal(new[] { "me" }, startedBy.GetProperty("schema").GetProperty("enum")
+            .EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains("exact caller identity", operation.GetProperty("description").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+
+        var summary = root.GetProperty("components").GetProperty("schemas").GetProperty("ProjectRunSummary");
+        var required = summary.GetProperty("required").EnumerateArray()
+            .Select(value => value.GetString()).ToArray();
+        Assert.Contains("workflowId", required);
+        Assert.Contains("needsInputCount", required);
+        var properties = summary.GetProperty("properties");
+        var workflowId = properties.GetProperty("workflowId").GetProperty("anyOf").EnumerateArray().ToArray();
+        Assert.Equal("string", workflowId[0].GetProperty("type").GetString());
+        Assert.Equal("null", workflowId[1].GetProperty("type").GetString());
+        Assert.Equal("integer", properties.GetProperty("needsInputCount").GetProperty("type").GetString());
+        Assert.Equal("int64", properties.GetProperty("needsInputCount").GetProperty("format").GetString());
+    }
+
     [Theory]
     [InlineData("/api/v1/projects/{projectId}/runs", "createProjectRun", "201",
         "CreateProjectRunRequest", "CreateProjectRunResponse")]

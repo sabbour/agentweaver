@@ -41,7 +41,8 @@ function runs(projectId: string, entries: Array<[string, string, string | null]>
     projectId,
     nextCursor,
     items: entries.map(([runId, createdAt, title]) => ({
-      runId, rootSessionId: null, title, goal: null, state: 'active', createdAt, updatedAt: createdAt, completedAt: null,
+      runId, rootSessionId: null, title, goal: null, workflowId: null, state: 'active', needsInputCount: 0,
+      createdAt, updatedAt: createdAt, completedAt: null,
       startedBy: { issuer: 'https://issuer.test', subject: 'user' },
     })),
   };
@@ -71,14 +72,18 @@ describe('SessionsPage', () => {
     // An untitled run with no goal shows "Run" and its short ID.
     expect(within(list).getByText('Run b1')).toBeTruthy();
     expect(within(list).getByText(/^Beta \u00b7 Started/)).toBeTruthy();
-    expect(mocks.listProjectRuns).toHaveBeenCalledWith('token', 'p1', { cursor: null, pageSize: 10 }, 'tenant');
+    expect(mocks.listProjectRuns).toHaveBeenCalledWith(
+      'token', 'p1', { startedBy: 'me', cursor: null, pageSize: 10 }, 'tenant',
+    );
   });
 
   it('loads more runs from projects with another page', async () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
     expect(await screen.findByText('Oldest')).toBeTruthy();
-    expect(mocks.listProjectRuns).toHaveBeenCalledWith('token', 'p1', { cursor: 'more', pageSize: 10 }, 'tenant');
+    expect(mocks.listProjectRuns).toHaveBeenCalledWith(
+      'token', 'p1', { startedBy: 'me', cursor: 'more', pageSize: 10 }, 'tenant',
+    );
     expect(mocks.listProjectRuns).not.toHaveBeenCalledWith('token', 'p2', expect.objectContaining({ cursor: expect.any(String) }), 'tenant');
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   });
