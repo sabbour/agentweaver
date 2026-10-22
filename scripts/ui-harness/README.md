@@ -93,7 +93,7 @@ Gate-answer, approval, rejection, and addressed-message journeys use the
 borrowed page and verify the actual owner response.
 
 The shared P1 CLI currently returns a blocked result for the UI surface:
-**blocked on #1859** until the 0.x UI is restored onto v1. Do not build
+**blocked** until the 0.x UI is restored onto v1. Do not build
 selectors against the current `apps/web/src/v1/App.tsx` pages or use a
 `--page-module` as a workaround. No UI page provider is supplied by the
 one-account sign-in launcher.
@@ -103,7 +103,7 @@ npm run harness:p1:signin-run -- --surface ui --input <manifest.json> --output <
 ```
 
 The UI blocker is returned before a browser is opened or sign-in is attempted.
-When UI work resumes under #1859, add a page provider against the restored
+When the restored UI is available on v1, add a page provider against the restored
 surface and its explicit contract tests. The launcher uses one account only;
 distinct denied-actor coverage is unavailable in this one-account operator
 flow. A lower-level runner can retain that check only when a separate actor

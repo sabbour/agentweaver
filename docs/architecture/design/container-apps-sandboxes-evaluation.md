@@ -5,8 +5,8 @@ Keep it as a P3 research option behind Environment's exclusive Sandbox contract.
 The documented microVM isolation is promising, but storage, network verification,
 ownership recovery, and AgentHost integration need separate implementation and proof.
 
-This evaluation addresses [#1899](https://github.com/sabbour/agentweaver/issues/1899).
-It does not implement an adapter, authorize a cloud trial, or add a P1/P2 dependency.
+This evaluation asks whether Azure Container Apps dynamic sessions can host
+Agentweaver sandboxes. It does not implement an adapter, authorize a cloud trial, or add a P1/P2 dependency.
 It does not restore Container Apps as an Application Hosting provider.
 AKS `agent-sandbox` remains the default Sandbox; Azure Files remains the default Storage.
 Any implementation needs a separate issue and approval after these findings.
@@ -46,10 +46,8 @@ The v1 comparison uses the admitted Sandbox, Storage, and Network source at
 See the [Environment Sandbox guide](../environment-sandbox.md),
 [Storage design](provider-seams.md#storage), and
 [egress guide](../environment-egress.md).
-AgentHost requirements also use the admitted source at
-[`61820d0`](https://github.com/sabbour/agentweaver/tree/61820d03caf6d5b412178795a1139538afe39eaa), merged through
-[#1933](https://github.com/sabbour/agentweaver/pull/1933), tracked by
-[#1856](https://github.com/sabbour/agentweaver/issues/1856).
+AgentHost requirements also use the admitted AgentHost source at
+[`61820d0`](https://github.com/sabbour/agentweaver/tree/61820d03caf6d5b412178795a1139538afe39eaa).
 Source admission is not evidence of a released or deployed AgentHost.
 
 ## Compatibility matrix

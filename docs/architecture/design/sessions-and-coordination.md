@@ -253,7 +253,7 @@ It reads the model reference from the current registration, not the configure bo
 The immutable platform or project selection also fixes the hosted Copilot or BYOK mode.
 BYOK uses explicit SDK provider configuration without Copilot authentication, refresh, or catalog lookup.
 Hosted envelope parsing alone does not prove connection ownership or entitlement.
-The Identity-owned typed connection lifecycle supplies current owner, revision, exact-version, kind, and freshness proof under #1906.
+The Identity-owned typed connection lifecycle supplies current owner, revision, exact-version, kind, and freshness proof.
 It exchanges the consumed nonce for a source credential and checks current authority
 before and after native session creation. It returns one fully initialized immutable
 session; failures dispose the SDK session and revoke or invalidate the source credential.
@@ -295,7 +295,7 @@ calls, and messages (`packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`).
 0.x already persists idempotent addressed messages with claim, delivery,
 acknowledgment, expiration, and undeliverable states
 (`apps/Agentweaver.Api/Memory/AddressedMessageService.cs`).
-[#1406](https://github.com/sabbour/agentweaver/issues/1406) extends that path with
+v1 extends that path with
 tracked acknowledgment and correlated replies; 1.0 builds on it rather than inventing
 addressed delivery. Steering directives instead use a separate `SteeringDirectives` table
 (`apps/Agentweaver.Api/Coordinator/CoordinatorSteeringService.cs`). Question and tool
@@ -366,8 +366,7 @@ model call is bit-for-bit deterministic.
 
 Suspend/resume is a workflow transition, not a request to delete a sandbox. A manifest
 pairs its control-plane and workspace versions; no environment snapshot implicitly
-includes volume data. This protocol fulfills the 1.0 design of
-[#1410](https://github.com/sabbour/agentweaver/issues/1410) without requiring a VM
+includes volume data. This protocol delivers the 1.0 suspend/resume design without requiring a VM
 snapshot provider at cutover.
 
 This state diagram shows a requested suspension, an optional guest snapshot, and the
@@ -588,8 +587,7 @@ sequenceDiagram
 The run page answers "what is happening?", "what needs my action?", and "what will the
 next action repeat or preserve?" using that snapshot. Recovery effects come from
 workflow transitions and the manifest, not a guess from the UI. This carries forward
-the run-state and blocker work in
-[#1402](https://github.com/sabbour/agentweaver/issues/1402).
+the 0.x run-state and blocker reporting.
 Harness subagents used only inside a Copilot turn remain ephemeral and are not session
 tree nodes; durable, isolated workflow child work is.
 
@@ -620,8 +618,7 @@ idempotency key and apply per-thread ordering. There is no exactly-once transpor
 ([R9](../decisions/0001-platform-architecture.md#risk-register)).
 Acknowledgment means "received", not "approved" or "completed". The plan gate accepts
 an explicit approve/reject verb; the question gate accepts an explicit answer. This
-preserves the addressed-message distinction from
-[#1406](https://github.com/sabbour/agentweaver/issues/1406).
+preserves the addressed-message distinction between receipt and decision.
 
 The current v1 source implements a minimal Orchestrator owner for accepted root and
 child sessions, fenced turn state, pending requests, parent notifications, and a
@@ -849,14 +846,11 @@ A user action in a surface arrives as a typed message, not as an untracked UI co
 - **P0 — Foundation:** native Postgres identities, service schemas and outbox, Object
   Store references, and provider contracts support the journal and future manifest.
 - **P1 — Core:** journal, MAF checkpoints, cache references, session tree, addressed
-  messages, Knowledge records, coordination verbs, status snapshot
-  ([#1402](https://github.com/sabbour/agentweaver/issues/1402)), and tracked message
-  acknowledgment ([#1406](https://github.com/sabbour/agentweaver/issues/1406)) ship with
+  messages, Knowledge records, coordination verbs, status snapshot, and tracked message
+  acknowledgment ship with
   the native providers. The UI and MCP server read the same workflow state.
-- **P2 — Parity and cutover:** suspend/resume with manifest
-  ([#1410](https://github.com/sabbour/agentweaver/issues/1410)), explicit Squad
-  import/export, Canvas surface messages, Cosmos and Redis Memory providers, and the parity acceptance list from
-  [#1405](https://github.com/sabbour/agentweaver/issues/1405) are verified on an
+- **P2 — Parity and cutover:** suspend/resume with manifest, explicit Squad
+  import/export, Canvas surface messages, Cosmos and Redis Memory providers, and the 0.x parity acceptance list are verified on an
   exact-SHA AKS deployment before cutover. VM snapshots are not required.
 - **P3 — After cutover:** consider a gated AKS guest-snapshot adapter and write or
   capture support for the optional AgentSessions provider. Cosmos and Redis are P2 Memory work, not Sessions

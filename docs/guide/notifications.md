@@ -112,6 +112,5 @@ uses the same route as gates and is stored per caller.
 
 This matches the 0.x promotion source with one difference: v1 shows one notice per
 promotion instead of one per run. A v1 run promotes each work plan at most once.
-
 Promotions use persisted task origins rather than task creation times. This
 keeps ordinary task capture separate from work created by a confirmed plan.

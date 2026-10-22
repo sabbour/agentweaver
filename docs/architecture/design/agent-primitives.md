@@ -1,11 +1,10 @@
-# Agent primitives proof of concept
+# Agent primitives and AgentSessions
 
 > Part of [ADR 0001: Agentweaver 1.0 platform architecture](../decisions/0001-platform-architecture.md). **Status:** Proposed.
 
 This page describes how Agentweaver uses the public
 [agent-primitives/sessions](https://github.com/agent-primitives/sessions) (AgentSessions) and
-[agent-primitives/suite](https://github.com/agent-primitives/suite) (AgentSuite) contracts in the
-P2 proof of concept tracked by epic [#2111](https://github.com/sabbour/agentweaver/issues/2111).
+[agent-primitives/suite](https://github.com/agent-primitives/suite) (AgentSuite) contracts.
 
 ## Pinned upstream sources
 

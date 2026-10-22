@@ -8,7 +8,7 @@ tooling for read-only plan, exact-SHA confirmed deploy, and a blocking
 acceptance entrypoint (`scripts/azure/`). This is infrastructure-as-code and
 validation tooling, not a product library: no `foundation.json` component
 changed version, and no Azure resource has been provisioned. See
-[docs/specs/1777-azure-p0-infrastructure.md](../docs/specs/1777-azure-p0-infrastructure.md)
+[docs/specs/azure-p0-infrastructure.md](../docs/specs/azure-p0-infrastructure.md)
 for scope and boundaries.
 
 The tools bind the actual account, dedicated resource ownership, reviewed source,

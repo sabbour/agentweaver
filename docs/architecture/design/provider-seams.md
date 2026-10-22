@@ -1017,12 +1017,12 @@ application server or an agent sandbox.
 
 The planned adapters are A2UI and a GitHub Canvas-compatible adapter. P2 includes
 research and reverse engineering behind this boundary. The
-[#1901 findings](applications-and-surfaces.md#github-canvas-evidence-and-versions)
+[GitHub Canvas research findings](applications-and-surfaces.md#github-canvas-evidence-and-versions)
 establish experimental declaration, typed-action callback, and lifecycle shapes;
 no portable GitHub content format, rendering catalog, or browser bridge is established.
-No interoperability was executed. [#1904](https://github.com/sabbour/agentweaver/issues/1904)
-implements only the admitted declaration/action subset after the
-[#1878](https://github.com/sabbour/agentweaver/issues/1878) C1 owner-state contract.
+No interoperability was executed. The GitHub Canvas adapter implements only the
+admitted declaration/action subset, and only after the Canvas C1 owner-state
+contract exists.
 
 Both adapters require bounded validated schemas, negotiated rendering capabilities,
 and immutable adapter/profile/content pins. A2UI pins its specification and component
@@ -1328,7 +1328,7 @@ volumes and Postgres-backed state, not by retaining dual local/cloud code paths.
 | --- | --- |
 | P0 Foundation | DI contracts, catalog/resolvers/pinning, conformance kit, Postgres schemas and outbox, Blob Object Store, Key Vault/workload identity, OpenTelemetry/Azure Monitor. |
 | P1 Core and defaults | Native Sessions/Memory, agent-sandbox, Azure Files, Cilium intent, AGT, GitHub, Copilot cost ledger; AgentHost startup phases, retention, reclaim, and run fencing. |
-| P2 Parity and cutover | Manifest-based suspend/resume, Guardrails, permission metadata, own Tool & MCP gateway and MCP catalog, Cosmos and Redis Memory providers, Azure BYOK pricing/budgets, built-in AKS Application Hosting, [Canvas and A2UI #1878](https://github.com/sabbour/agentweaver/issues/1878) with [GitHub declaration/action research #1901](https://github.com/sabbour/agentweaver/issues/1901) and separate [adapter #1904](https://github.com/sabbour/agentweaver/issues/1904), context ordering and cache telemetry; exact-SHA AKS persona harnesses and parity-map acceptance. Research is not implementation or interoperability. No Elastic SAN or additional hosting adapters. |
+| P2 Parity and cutover | Manifest-based suspend/resume, Guardrails, permission metadata, own Tool & MCP gateway and MCP catalog, Cosmos and Redis Memory providers, Azure BYOK pricing/budgets, built-in AKS Application Hosting, Canvas and A2UI with GitHub declaration/action research and a separate GitHub Canvas adapter, context ordering and cache telemetry; exact-SHA AKS persona harnesses and parity-map acceptance. Research is not implementation or interoperability. No Elastic SAN or additional hosting adapters. |
 | P3 After cutover | Gated AKS snapshot/restore; OpenSandbox, Agent Substrate, and Container Apps Sandboxes evaluation; AgentSessions write and capture support; agent filesystem providers; agentgateway. Elastic SAN has no committed delivery phase. |
 
 No P2 requirement depends on an optional P3 provider. The active 0.x line supplies behavioral parity

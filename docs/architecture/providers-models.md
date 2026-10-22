@@ -138,7 +138,8 @@ Container Apps Sandboxes is a later Sandbox evaluation, not an application host.
 
 ## GitHub Canvas research boundary
 
-A source review inspected the experimental public SDK at commit
+The GitHub Canvas research inspected the
+experimental public SDK at commit
 [`2023ed29af3cae890b26f9e2a269a04d8ac7ba60`](https://github.com/github/copilot-sdk/tree/2023ed29af3cae890b26f9e2a269a04d8ac7ba60)
 and permitted local declarations. The source snapshot reports SDK `0.0.0-dev`,
 CLI `1.0.93-3`, and global wire protocol `3`; observed app discovery used
@@ -155,9 +156,9 @@ artifact ownership. An instance or URL is not an artifact or grant. Reconnect mu
 preserve its binding and obtain a fresh location; successful close does not prove cleanup.
 The [detailed evidence, unknowns, and subset](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/applications-and-surfaces.md#github-canvas-evidence-and-versions)
 and [planned acceptance cases](../guide/testing.md#planned-github-canvas-adapter-acceptance)
-define the separate adapter boundary. Canvas remains unimplemented in the current
-source enum and resolver. Research alone does not establish interoperability,
-deployment, or publication acceptance.
+inform a separate GitHub Canvas adapter.
+Canvas remains unimplemented in the current source enum and resolver. The research does not
+implement that adapter or establish deployment or publication acceptance.
 
 ## Existing model and provider integrations
 
@@ -232,8 +233,9 @@ Core binds token measurements to these facts, the producer registration, and the
 Events reads the immutable Core receipt by reference. It does not accept caller-supplied provider authority.
 Unknown pricing remains `Unpriced`.
 
-AgentHost mode selection, hosted Copilot connection refresh, and GitHub App
-credentials have separate ownership and acceptance paths.
+Identity owns the Copilot connection and refresh lifecycle.
+Repository GitHub App credentials are a separate Identity connection.
+AgentHost mode selection remains a separate path.
 Platform/project model selection remains the documented scope. GitHub-user account linking
 can authenticate a deliberately selected Copilot binding; it does not add personal BYOK
 settings or personal model-provider preference or fallback.

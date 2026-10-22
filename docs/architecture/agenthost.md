@@ -266,8 +266,7 @@ capacity-attributed `query` error. This is not a hard admission check for every
 internal provider request or a no-send guarantee, and input is not silently
 truncated. This is not an owner-side raw-request token counter or a cumulative
 token budget. Native and hosted deployment evidence is still
-required; issue [#1855](https://github.com/sabbour/agentweaver/issues/1855)
-remains open.
+required.
 
 Each built-in tool approval checks current owner authority and Policy again.
 The pre-tool callback checks Policy without reserving a tool slot.

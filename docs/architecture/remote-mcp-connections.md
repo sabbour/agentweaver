@@ -309,7 +309,7 @@ Missing network enforcement or purpose evidence still denies
 both a send and credential delivery. Management reads retain Projects authority;
 these types do not expose an unauthenticated connection resolver.
 
-This source does not prove a Registry fetch, MCP handshake, `tools/list` request, reviewed tool selection, native SDK use, or remote tool call. Tool acceptance belongs to the separate reviewed-call work in [#1925](https://github.com/sabbour/agentweaver/issues/1925). OAuth binding belongs to [#1927](https://github.com/sabbour/agentweaver/issues/1927). Trusted transport belongs to [#1929](https://github.com/sabbour/agentweaver/issues/1929).
+This source does not prove a Registry fetch, MCP handshake, `tools/list` request, reviewed tool selection, native SDK use, or remote tool call. Tool acceptance, OAuth binding, and trusted transport are separate capabilities. Each one needs its own reviewed implementation and evidence.
 
 ```mermaid
 sequenceDiagram
