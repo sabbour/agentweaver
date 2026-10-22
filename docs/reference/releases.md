@@ -173,6 +173,79 @@ settings, and provider-catalog source. The
 values. Secrets, private keys, certificates, CA data, database grants and
 migrations, and Gateway placement remain operator-managed.
 
+### Whole-release rollout
+
+A publication is not deployed when only some images have been published or
+rolled out. Patch publications can omit unchanged images, so the rollout
+command accepts the previous published receipt for those images. It resolves
+one intended digest for every installed service and records the source commit
+that built each image.
+
+Use the whole-release command for the P0 installation:
+
+```powershell
+npm run release:deploy-whole -- `
+  --publication <publication.json> `
+  --previous-publication <previous-publication.json> `
+  --subscription-id <subscription-id> `
+  --resource-group <resource-group> `
+  --cluster <cluster-name>
+```
+
+The default mode reads every Deployment through the temporary P0 user
+kubeconfig. It rejects unknown or missing services, compares intended and live
+digests in one table, and checks the recorded database schema against the
+schema range accepted by the Orchestrator and Events and Sessions images.
+Schema changes still run only through `db:maintenance`; this command does not
+run migrations or reset data. It stops if the database-maintenance lock is
+held. Wait for maintenance to finish before starting this command, and do not
+start maintenance until the whole-release command has finished.
+
+Run the same command with `--execute` only after reviewing the plan. Execute
+mode patches only the named application containers, in a fixed safe order. It
+waits for each rollout, checks Deployment readiness, checks every Pod image ID,
+and waits up to two minutes for terminating or older-ReplicaSet Pods to disappear
+before checking the final Pod inventory. It then runs authenticated Gateway
+smoke checks for Projects, Priorities, project runs, and project metrics.
+The command writes one receipt with status `deployed` only when every check
+passes. Any failed service or check writes a `partial` receipt and exits
+non-zero.
+
+The Web-only and backend-only commands remain useful for diagnosis and
+controlled component work, but their receipts always report the installation
+as `partial`. A component receipt never inherits `deployed` status from an
+earlier whole-release check.
+
+### Backend service image rollout
+
+`release:deploy-backend-services` updates only these existing Deployments in
+the `agentweaver` namespace: `gateway`, `identity-broker`, `mcp`,
+`environment`, `knowledge`, and `projects-config`. It reads the matching
+service versions from `releases/foundation.json` at the publication source
+commit. Each service must have exactly one planned and one published image.
+The archive hash, immutable image tag, source commit, source tree, and registry
+image metadata must agree before the command reads the cluster.
+
+The default mode is read-only. It verifies the six publication images, reads
+the Deployment inventory through the temporary P0 user kubeconfig, and writes
+a plan receipt. The inventory accepts Kubernetes `List` and `DeploymentList`
+wrappers only when every item is an `apps/v1` Deployment in namespace
+`agentweaver`.
+
+```powershell
+npm run release:deploy-backend-services -- --publication <publication.json> --subscription-id <subscription-id> --resource-group <resource-group> --cluster <cluster-name>
+```
+
+After reviewing the receipt and confirming the Azure target, repeat the
+command with `--execute`. The command uses resource-version-guarded JSON
+patches to change only the six selected application container images. It waits
+for each Deployment rollout, checks that other Deployment settings and images
+did not change, and verifies the image ID of every selected Pod against the
+registry-verified publication digest. Before verification, it waits up to two
+minutes for terminating or older-ReplicaSet Pods to disappear. It writes a receipt with the source,
+target, before and after images, readiness, and Pod image IDs. This path does
+not install resources or run database migrations, resets, or schema changes.
+
 ### Web-only image rollout
 
 `release:deploy-web` reads the tracked `releases/foundation.json` manifest from

@@ -86,6 +86,7 @@ function assertNamespaceReadback(result) {
 
 /**
  * Obtains a short-lived kubeconfig, runs the supplied action, then removes the temporary directory.
+ * Async actions keep the kubeconfig until their returned promise settles.
  * Required API permissions are checked before the action, and temporary credentials are always removed.
  */
 export function withP0UserKubeconfig({
@@ -99,6 +100,7 @@ export function withP0UserKubeconfig({
   const directory = mkdtempSync(join(tmpdir(), 'agentweaver-p0-kubeconfig-'));
   const kubeconfig = join(directory, 'config');
   let failure;
+  let failed = false;
   let receipt;
   try {
     const credentials = execAz([
@@ -117,18 +119,37 @@ export function withP0UserKubeconfig({
     receipt = action(['--kubeconfig', kubeconfig]);
   } catch (error) {
     failure = error;
+    failed = true;
   }
 
-  try {
-    rmSync(directory, { recursive: true, force: true });
-  } catch (cleanupError) {
-    const cleanupMessage = redact(cleanupError.message);
-    if (failure) {
-      throw new Error(`${failure.message}; temporary kubeconfig cleanup failed: ${cleanupMessage}`);
+  const cleanup = (actionFailure, actionFailed = false) => {
+    try {
+      rmSync(directory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      const cleanupMessage = redact(cleanupError.message);
+      if (actionFailed) {
+        const actionMessage = actionFailure instanceof Error ? actionFailure.message : String(actionFailure);
+        throw new Error(`${actionMessage}; temporary kubeconfig cleanup failed: ${cleanupMessage}`);
+      }
+      throw new Error(`Temporary kubeconfig cleanup failed: ${cleanupMessage}`);
     }
-    throw new Error(`Temporary kubeconfig cleanup failed: ${cleanupMessage}`);
+  };
+
+  if (failed) {
+    cleanup(failure, true);
+    throw failure;
   }
-  if (failure) throw failure;
+  if (receipt && typeof receipt.then === 'function') {
+    // Keep the user credentials available until async cluster work finishes, then always remove them.
+    return Promise.resolve(receipt).then(value => {
+      cleanup();
+      return value;
+    }, error => {
+      cleanup(error, true);
+      throw error;
+    });
+  }
+  cleanup();
   return receipt;
 }
 

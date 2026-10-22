@@ -485,6 +485,31 @@ path. Both require a source-bound publication and explicit `--execute` for
 cluster writes. See [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
 and the [Kubernetes operator guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md).
 
+For a complete publication rollout, use `release:deploy-whole`. It resolves
+the intended image for every installed service, using a previous publication
+receipt for unchanged images, then compares every live Deployment before any
+write. Dry run is read-only. Execute mode updates only the selected
+application containers, waits for readiness, verifies every Pod image ID and
+ReplicaSet, and waits up to two minutes for terminating or older-ReplicaSet
+Pods to disappear before final verification. It then runs authenticated Gateway
+checks for Projects, Priorities, project runs, and project metrics. Database
+migrations remain a separate `db:maintenance` operation.
+
+```powershell
+npm run release:deploy-whole -- `
+  --publication artifacts\release\publication.json `
+  --previous-publication artifacts\release\previous-publication.json `
+  --subscription-id <subscription-id> `
+  --resource-group <resource-group> `
+  --cluster <cluster-name>
+```
+
+The whole-release receipt is `deployed` only when all services and smoke
+checks pass. A failed or incomplete rollout writes `partial` and exits
+non-zero. Component-only rollout receipts also report the installation as
+partial. Wait for `db:maintenance` to finish before running the whole-release
+command, and do not start maintenance until the rollout has finished.
+
 For a Web-only image update, use the separate `release:deploy-web` command with
 the publication receipt from the selected release. It always selects
 `Agentweaver.Web`; it has no option to select another service. The command

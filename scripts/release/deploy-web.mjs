@@ -2,14 +2,18 @@
  * Rolls out only the published Web image in an existing v1 namespace.
  * It verifies the source-bound publication before reading or changing Deployments.
  */
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { run, redact } from '../azure/lib/exec.mjs';
-import { componentImageRepository, componentImageTag } from './pack.mjs';
+import { componentImageRepository } from './pack.mjs';
+import {
+  canonicalJson, deploymentInventory, imageDigest, planDeploymentInventory,
+  verifyDeploymentPreservation, verifyDeploymentReady, writeRolloutReceipt,
+} from './image-rollout-common.mjs';
+import { selectPublishedComponentImage } from './publication-image.mjs';
 import { verifyServiceRegistryImage } from './registry.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -19,7 +23,6 @@ const WEB_REVISION_ANNOTATION = 'deployment.kubernetes.io/revision';
 const WEB_IMAGE_REPOSITORY = `ghcr.io/sabbour/${componentImageRepository(WEB_COMPONENT)}`;
 const NAMESPACE = 'agentweaver';
 const SHA = /^[a-f0-9]{40}$/;
-const HEX_SHA256 = /^[a-f0-9]{64}$/;
 const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
 
 export const WEB_ROLLOUT_USAGE = `Usage: npm run release:deploy-web -- --publication <publication.json> --context <approved-kube-context> [options]
@@ -40,17 +43,6 @@ function fail(message) {
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function canonicalJson(value) {
-  // Sort object keys recursively so semantically identical Kubernetes specs hash the same way.
-  return JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
-    ? Object.fromEntries(Object.entries(item).sort(([left], [right]) => left.localeCompare(right)))
-    : item);
-}
-
-function sha256(value) {
-  return createHash('sha256').update(value).digest('hex');
 }
 
 function parseJson(text, name) {
@@ -118,114 +110,9 @@ function requireAncestor(exec, root, sourceSha, target, description) {
   if (result.status !== 0) fail(`${description} ${sourceSha} is not an ancestor of ${target}.`);
 }
 
-/**
- * Selects the exact Web entry from the publication receipt and source manifest.
- * A reused image keeps its original revision, which must remain an ancestor of the release source.
- */
 function selectPublishedWeb(publication, manifest, git, exec, root) {
-  // Validate the complete receipt shape before trusting any component entry from it.
-  if (!isRecord(publication) || publication.schemaVersion !== 1 ||
-      !SHA.test(publication.sourceSha ?? '') || publication.status !== 'published' ||
-      !HEX_SHA256.test(publication.provenanceSha256 ?? '') ||
-      publication.mode === 'images-only' ||
-      (publication.requiredPackageIds !== undefined &&
-        (!Array.isArray(publication.requiredPackageIds) ||
-          new Set(publication.requiredPackageIds).size !== publication.requiredPackageIds.length ||
-          publication.requiredPackageIds.some(id => typeof id !== 'string'))) ||
-      !Array.isArray(publication.planned) || !Array.isArray(publication.published)) {
-    fail('publication receipt is missing, partial, or not a standard release publication.');
-  }
-  // The manifest is read from publication.sourceSha by the caller; standard publications keep it as a draft.
-  if (!isRecord(manifest) || manifest.stage !== 'draft' || !Array.isArray(manifest.components)) {
-    fail('source manifest is not a tracked draft with a component list.');
-  }
-  // The manifest supplies the intended Web version; published artifact digests belong to the receipt.
-  const components = manifest.components.filter(component => component?.id === WEB_COMPONENT);
-  if (components.length !== 1) fail('source manifest must contain exactly one Agentweaver.Web component.');
-  const component = components[0];
-  if (component.kind !== 'service' || typeof component.version !== 'string' ||
-      component.version.trim() !== component.version || component.version.length === 0) {
-    fail('source manifest has no valid Agentweaver.Web version.');
-  }
-
-  // Require one planned and one published Web record so unrelated entries cannot supply the image.
-  const planned = publication.planned.filter(entry => entry?.id === WEB_COMPONENT);
-  const published = publication.published.filter(entry => entry?.id === WEB_COMPONENT);
-  if (planned.length !== 1 || published.length !== 1) {
-    fail('publication receipt must contain exactly one planned and published Web image.');
-  }
-  const plan = planned[0];
-  const result = published[0];
-  // Match both records to the source version and to the exact archive measured during publication.
-  if (plan.kind !== 'image' || result.kind !== 'image' ||
-      plan.version !== component.version || result.version !== component.version ||
-      !HEX_SHA256.test(plan.sha256 ?? '') || result.archiveSha256 !== plan.sha256) {
-    fail('Web publication receipt does not prove the exact source-manifest artifact.');
-  }
-
-  // A newly built image belongs to this publication; a reused image keeps its original build identity.
-  let imageSourceSha = publication.sourceSha;
-  let imageSourceTree;
-  if (plan.reused !== undefined || result.reused !== undefined) {
-    // Reuse requires the current receipt format and keeps the identity of the original image build.
-    const reused = plan.reused;
-    if (publication.requiredPackageIds === undefined ||
-        !isRecord(reused) || !isDeepStrictEqual(result.reused, reused) ||
-        !SHA.test(reused.sourceSha ?? '') || reused.sourceSha === publication.sourceSha ||
-        !SHA.test(reused.sourceTree ?? '') || !SHA.test(reused.receiptSourceSha ?? '') ||
-        !IMAGE_DIGEST.test(reused.inputFingerprint ?? '')) {
-      fail('reused Web image provenance is malformed or differs between the plan and result.');
-    }
-    imageSourceSha = reused.sourceSha;
-    imageSourceTree = reused.sourceTree;
-    requireAncestor(exec, root, imageSourceSha, publication.sourceSha, 'reused image source');
-  }
-  // The tag names the image's build commit, while the immutable digest comes from the published result.
-  const expectedTag = publication.requiredPackageIds === undefined
-    ? component.version : componentImageTag(component.version, imageSourceSha);
-  const imagePrefix = `${WEB_IMAGE_REPOSITORY}@`;
-  const publishedDigest = typeof result.image === 'string' && result.image.startsWith(imagePrefix)
-    ? result.image.slice(imagePrefix.length) : undefined;
-  if (plan.destination !== `${WEB_IMAGE_REPOSITORY}:${expectedTag}` ||
-      !IMAGE_DIGEST.test(publishedDigest ?? '') || /^0+$/.test(publishedDigest?.slice(7) ?? '')) {
-    fail('Web image tag, repository, digest, and source manifest do not agree.');
-  }
-  const expectedImage = `${WEB_IMAGE_REPOSITORY}@${publishedDigest}`;
-  // Bind the reused build tree to Git rather than trusting the receipt's source-tree string alone.
-  const actualImageSourceTree = git('rev-parse', `${imageSourceSha}^{tree}`).trim();
-  if (!SHA.test(actualImageSourceTree) ||
-      (imageSourceTree !== undefined && imageSourceTree !== actualImageSourceTree)) {
-    fail('Web image source tree does not match its exact Git source commit.');
-  }
-  imageSourceTree = actualImageSourceTree;
-  return {
-    sourceSha: publication.sourceSha,
-    imageSourceSha,
-    imageSourceTree,
-    version: component.version,
-    image: expectedImage,
-    digest: publishedDigest,
-  };
-}
-
-function imageDigest(image, where) {
-  if (typeof image !== 'string' || image.trim() !== image) fail(`${where} has an invalid image reference.`);
-  const match = /@(sha256:[a-f0-9]{64})$/.exec(image);
-  if (!match) fail(`${where} image is not pinned by an immutable sha256 digest.`);
-  return match[1];
-}
-
-function deploymentSettings(deployment, { ignoreControllerRevision = false } = {}) {
-  const annotations = { ...(deployment.metadata?.annotations ?? {}) };
-  if (ignoreControllerRevision) {
-    // Kubernetes increments this controller-owned annotation when it creates a new Web revision.
-    delete annotations[WEB_REVISION_ANNOTATION];
-  }
-  return {
-    labels: deployment.metadata?.labels ?? {},
-    annotations,
-    spec: deployment.spec,
-  };
+  return selectPublishedComponentImage(publication, manifest, WEB_COMPONENT,
+    { git, exec, root, label: 'Web' });
 }
 
 function webRevisionValue(deployment) {
@@ -239,71 +126,6 @@ function parseWebRevision(deployment, where) {
     fail(`${where} has no valid ${WEB_REVISION_ANNOTATION} annotation.`);
   }
   return Number(revision);
-}
-
-function deploymentRecord(deployment) {
-  if (!isRecord(deployment) || deployment.apiVersion !== 'apps/v1' ||
-      deployment.kind !== 'Deployment' || deployment.metadata?.namespace !== NAMESPACE) {
-    fail(`Deployment list contains an item that is not an apps/v1 Deployment in namespace ${NAMESPACE}.`);
-  }
-  const name = deployment.metadata?.name;
-  if (typeof name !== 'string' || name.trim() !== name || name.length === 0 ||
-      !isRecord(deployment.spec) || !isRecord(deployment.spec.template?.spec)) {
-    fail('a Deployment has an invalid name or pod template.');
-  }
-  const template = deployment.spec.template.spec;
-  if (!Array.isArray(template.containers) || template.containers.length === 0) {
-    fail(`Deployment ${name} has no application containers.`);
-  }
-  const initContainers = template.initContainers ?? [];
-  if (!Array.isArray(initContainers)) fail(`Deployment ${name} has an invalid init container list.`);
-  // Include init containers so each Deployment snapshot accounts for every pinned image.
-  const containers = [
-    ...initContainers,
-    ...template.containers,
-  ];
-  const names = new Set();
-  const images = containers.map((container, index) => {
-    if (typeof container?.name !== 'string' || container.name.length === 0 || names.has(container.name)) {
-      fail(`Deployment ${name} has a missing or duplicate container name.`);
-    }
-    names.add(container.name);
-    const kind = index < initContainers.length ? 'initContainer' : 'container';
-    return {
-      kind,
-      name: container.name,
-      image: container.image,
-      digest: imageDigest(container.image, `Deployment ${name} container ${container.name}`),
-    };
-  });
-  return {
-    name,
-    images,
-    settingsSha256: sha256(canonicalJson(deploymentSettings(deployment))),
-  };
-}
-
-function deploymentInventory(exec, options, root) {
-  const result = exec('kubectl', [
-    '--context', options.context, '--namespace', NAMESPACE, 'get', 'deployments', '--output', 'json',
-  ], { cwd: root, check: false });
-  if (result.status !== 0) fail(`could not read Deployments in namespace ${NAMESPACE}: ${result.stderr.trim()}`);
-  const list = parseJson(result.stdout, 'Kubernetes Deployment list');
-  // kubectl emits a generic List for `get deployments`; accept the typed wrapper too for compatibility.
-  if (!isRecord(list) || !['List', 'DeploymentList'].includes(list.kind) ||
-      !Array.isArray(list.items) || list.items.length === 0) {
-    fail(`namespace ${NAMESPACE} has no valid Deployment list.`);
-  }
-  const byName = new Map();
-  const records = [];
-  for (const deployment of list.items) {
-    const record = deploymentRecord(deployment);
-    if (byName.has(record.name)) fail(`Deployment ${record.name} appears more than once.`);
-    byName.set(record.name, deployment);
-    records.push(record);
-  }
-  records.sort((left, right) => left.name.localeCompare(right.name));
-  return { byName, records };
 }
 
 /**
@@ -352,53 +174,6 @@ function validateWebDeployment(inventory) {
   };
 }
 
-function plannedInventory(before, web, targetImage) {
-  const items = [...before.byName.values()].map(deployment => structuredClone(deployment));
-  const plannedWeb = items.find(item => item.metadata.name === WEB_DEPLOYMENT);
-  plannedWeb.spec.template.spec.containers[web.containerIndex].image = targetImage;
-  return { items, records: items.map(deploymentRecord).sort((left, right) => left.name.localeCompare(right.name)) };
-}
-
-function verifyPreservation(before, after, targetImage, webIndex) {
-  // Compare full Deployment settings and permit only the selected Web container image to differ.
-  if (before.byName.size !== after.byName.size ||
-      [...before.byName.keys()].some(name => !after.byName.has(name))) {
-    fail('the Deployment set changed during the Web rollout.');
-  }
-  for (const [name, original] of before.byName) {
-    const current = after.byName.get(name);
-    const expected = structuredClone(original);
-    if (name === WEB_DEPLOYMENT) expected.spec.template.spec.containers[webIndex].image = targetImage;
-    const ignoreControllerRevision = name === WEB_DEPLOYMENT;
-    if (!isDeepStrictEqual(
-      deploymentSettings(current, { ignoreControllerRevision }),
-      deploymentSettings(expected, { ignoreControllerRevision }),
-    )) {
-      fail(name === WEB_DEPLOYMENT
-        ? 'the Web rollout changed settings other than the selected container image.'
-        : `non-Web Deployment ${name} changed during the Web rollout.`);
-    }
-  }
-}
-
-function verifyWebReady(deployment, replicas) {
-  const generation = deployment.metadata?.generation;
-  const observedGeneration = deployment.status?.observedGeneration;
-  const status = deployment.status ?? {};
-  // The controller must observe this exact generation and have every requested replica available.
-  if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(observedGeneration) ||
-      observedGeneration < generation || status.updatedReplicas !== replicas ||
-      status.readyReplicas !== replicas || status.availableReplicas !== replicas) {
-    fail('Web rollout completed without every requested replica observed, updated, ready, and available.');
-  }
-  return { generation, observedGeneration, replicas, readyReplicas: status.readyReplicas };
-}
-
-function defaultWriteReceipt(file, receipt) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx' });
-}
-
 /**
  * Verifies the source and published image, snapshots every Deployment, and optionally patches one Web image.
  * A JSON Patch resourceVersion test prevents a stale plan from overwriting a concurrent Deployment update.
@@ -409,7 +184,7 @@ export async function runWebImageRollout(options, overrides = {}) {
     exec: run,
     readFile: readFileSync,
     verifyImage: verifyServiceRegistryImage,
-    writeReceipt: defaultWriteReceipt,
+    writeReceipt: writeRolloutReceipt,
     now: () => new Date(),
     newRunId: randomUUID,
     log: message => console.log(message),
@@ -434,6 +209,7 @@ export async function runWebImageRollout(options, overrides = {}) {
     changed: false,
     deployments: { before: [], plannedAfter: [], after: [] },
     readiness: { status: 'not-run' },
+    installation: { status: 'partial' },
     result: 'running',
   };
   let primaryError;
@@ -445,6 +221,10 @@ export async function runWebImageRollout(options, overrides = {}) {
   const kubectl = args => deps.exec('kubectl', [
     '--context', options.context, '--namespace', NAMESPACE, ...args,
   ], { cwd: root, check: false });
+  const inventory = () => deploymentInventory(
+    (args, settings) => deps.exec('kubectl', ['--context', options.context, ...args], settings),
+    NAMESPACE, root, fail,
+  );
 
   try {
     if (!options.context || !options.publicationPath || !Number.isInteger(options.readinessTimeoutSeconds)) {
@@ -478,12 +258,16 @@ export async function runWebImageRollout(options, overrides = {}) {
     receipt.imageRevision = verified.sourceSha;
     receipt.imageVersion = verified.version;
 
-    before = deploymentInventory(deps.exec, options, root);
+    before = inventory();
     web = validateWebDeployment(before);
+    const updates = new Map([[WEB_DEPLOYMENT, [{
+      containerIndex: web.containerIndex,
+      image: selected.image,
+    }]]]);
     receipt.deployments.before = before.records;
     receipt.webDeploymentRevision.before = webRevisionValue(web.deployment);
     receipt.changed = web.currentImage !== selected.image;
-    receipt.deployments.plannedAfter = plannedInventory(before, web, selected.image).records;
+    receipt.deployments.plannedAfter = planDeploymentInventory(before, updates, NAMESPACE, fail).records;
 
     if (!options.execute) {
       receipt.result = 'planned';
@@ -519,7 +303,7 @@ export async function runWebImageRollout(options, overrides = {}) {
       ]);
       if (rollout.status !== 0) fail(`Web Deployment did not become ready: ${rollout.stderr.trim()}`);
 
-      const after = deploymentInventory(deps.exec, options, root);
+      const after = inventory();
       receipt.deployments.after = after.records;
       const currentWeb = after.byName.get(WEB_DEPLOYMENT);
       receipt.webDeploymentRevision.after = webRevisionValue(currentWeb);
@@ -529,11 +313,16 @@ export async function runWebImageRollout(options, overrides = {}) {
           fail('Web Deployment controller revision did not increase after changing its image.');
         }
       }
-      verifyPreservation(before, after, selected.image, web.containerIndex);
+      verifyDeploymentPreservation(before, after, updates, {
+        namespace: NAMESPACE,
+        label: 'Web',
+        ignoredAnnotations: new Map([[WEB_DEPLOYMENT, [WEB_REVISION_ANNOTATION]]]),
+        fail,
+      });
       const currentImage = currentWeb.spec.template.spec.containers[web.containerIndex].image;
       if (currentImage !== selected.image) fail('Web Deployment readback does not match the verified image digest.');
       receipt.readiness = { status: 'passed', timeoutSeconds: options.readinessTimeoutSeconds,
-        ...verifyWebReady(currentWeb, web.replicas) };
+        ...verifyDeploymentReady(currentWeb, web.replicas, 'Web', fail) };
       receipt.result = 'succeeded';
     }
   } catch (error) {
@@ -550,7 +339,7 @@ export async function runWebImageRollout(options, overrides = {}) {
     if (executionStarted && before && receipt.deployments.after.length === 0) {
       try {
         // Record live digests even on failed execution so the receipt reflects partial changes.
-        const after = deploymentInventory(deps.exec, options, root);
+        const after = inventory();
         receipt.deployments.after = after.records;
         receipt.webDeploymentRevision.after = webRevisionValue(after.byName.get(WEB_DEPLOYMENT));
       } catch (afterError) {
@@ -559,6 +348,8 @@ export async function runWebImageRollout(options, overrides = {}) {
     }
   }
 
+  // A component rollout is never whole-installation evidence by itself.
+  receipt.installation = { status: 'partial' };
   receipt.completedAt = deps.now().toISOString();
   try {
     deps.writeReceipt(receiptPath, receipt);
@@ -570,7 +361,7 @@ export async function runWebImageRollout(options, overrides = {}) {
     throw new Error(`Web-only rollout completed but its receipt could not be written: ${redact(writeError.message)}`,
       { cause: writeError });
   }
-  deps.log(`Wrote Web-only rollout receipt: ${receiptPath}`);
+  deps.log(`Wrote Web-only rollout receipt: ${receiptPath}; installation remains ${receipt.installation.status}.`);
   if (primaryError) {
     throw new Error(`Web-only rollout ${receipt.result}; receipt: ${receiptPath}; ${receipt.error}`, { cause: primaryError });
   }

@@ -477,7 +477,7 @@ export async function runDbMaintenance(options, overrides = {}) {
     runId, mode: options.releaseLock ? 'release-lock' : options.execute ? 'execute' : 'dry-run',
     scope: options.appsOnly ? 'apps-only' : options.prepareOnly ? 'prepare' : 'migrations',
     startedAt: deps.now().toISOString(), target: { ...target }, planSha256: REVIEWED_PLAN_SHA256,
-    steps: [], cleanup: {}, result: 'running',
+    steps: [], cleanup: {}, installation: { status: 'partial' }, result: 'running',
   };
   const step = (name, detail = {}) => { receipt.steps.push({ name, at: deps.now().toISOString(), ...detail }); log(`- ${name}`); };
   const directory = mkdtempSync(join(tmpdir(), 'agentweaver-db-maintenance-'));
@@ -965,13 +965,16 @@ export async function runDbMaintenance(options, overrides = {}) {
       if (receipt.result === 'succeeded') receipt.result = 'failed';
     }
     receipt.finishedAt = deps.now().toISOString();
+    // Database maintenance changes only two schema owners; it cannot prove that the other
+    // services and the authenticated Gateway checks are current.
+    receipt.installation = { status: 'partial' };
     // The receipt is written on every path, so a failed run leaves the same evidence as a good one.
     // Receipts live outside the checkout by default, so they never dirty the tree for the next run.
     const receiptDirectory = resolve(repoRoot, options.receiptDir);
     mkdirSync(receiptDirectory, { recursive: true });
     receipt.receiptPath = join(receiptDirectory, `${runId}.json`);
     deps.writeReceipt(receipt.receiptPath, receipt);
-    log(`Receipt: ${receipt.receiptPath} (${receipt.result})`);
+    log(`Receipt: ${receipt.receiptPath} (${receipt.result}); installation remains ${receipt.installation.status}`);
     if (!primaryError && cleanupErrors.length) primaryError = new Error(`Cleanup failed: ${cleanupErrors.join(', ')}`);
     else if (primaryError && cleanupErrors.length) primaryError.message += `; cleanup also failed: ${cleanupErrors.join(', ')}`;
   }

@@ -256,6 +256,12 @@ npm run db:maintenance -- --execute --apps-only `
 Only the container image changes. The runner never creates a Deployment, and it
 fails if one is missing.
 
+Apps-only maintenance is not a release completion check. Its receipt reports
+the installation as `partial` because Web, Gateway, Projects, and the other
+services may still be on older images. Use the whole-release rollout after
+maintenance. The installation counts as deployed only when that command writes
+a whole-release receipt with status `deployed`.
+
 ## Reconcile Broker egress drift
 
 Every run compares the live `identity-broker-migration-egress` policy with the

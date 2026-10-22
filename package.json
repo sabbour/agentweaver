@@ -13,6 +13,8 @@
     "release:integration-publish": "node scripts/release/publish.mjs releases/foundation.json artifacts/release/integration",
     "release:deploy": "node scripts/release/deploy.mjs",
     "release:deploy-web": "node scripts/release/deploy-web.mjs",
+    "release:deploy-backend-services": "node scripts/release/deploy-backend-services.mjs",
+    "release:deploy-whole": "node scripts/release/deploy-whole-release.mjs",
     "release:deploy-bootstrap": "node scripts/release/deploy.mjs --pre-acceptance",
     "release:deploy-integration": "node scripts/release/deploy-integration.mjs",
     "release:prepare-build-inputs": "node scripts/release/prepare-build-inputs.mjs",
