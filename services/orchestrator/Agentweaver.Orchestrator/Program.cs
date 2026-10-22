@@ -284,6 +284,7 @@ builder.Services.ConfigureHttpJsonOptions(json =>
 
 var app = builder.Build();
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
+var readinessFailureLogger = new ReadinessFailureLogger(app.Logger);
 await CoordinationOwnerMigrator.VerifyAsync(dataSource, schema);
 app.UseAuthentication();
 app.UseAuthorization();
@@ -301,6 +302,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
     catch (Exception exception) when (exception is not OutOfMemoryException)
     {
+        readinessFailureLogger.TryLog(exception);
         return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
     }
 });

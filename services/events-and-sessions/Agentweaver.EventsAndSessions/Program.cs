@@ -268,6 +268,7 @@ builder.Services.AddSingleton<PostgresAddressedMessageStore>(services =>
 // Verify the schema before accepting traffic, then expose only the routes enabled by configuration.
 var app = builder.Build();
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
+var readinessFailureLogger = new ReadinessFailureLogger(app.Logger);
 await EventsAndSessionsMigrator.VerifyAsync(dataSource, options.Schema);
 app.UseAuthentication();
 app.UseAuthorization();
@@ -291,6 +292,7 @@ app.MapGet("/health/ready", async (CancellationToken ct) =>
     }
     catch (Exception exception) when (exception is not OutOfMemoryException)
     {
+        readinessFailureLogger.TryLog(exception);
         return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
     }
 });
