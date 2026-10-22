@@ -1,6 +1,6 @@
 # ADR 0002: Owner-delegated project issue synchronization
 
-**Status:** Accepted for the #2176 source implementation; not deployed.
+**Status:** Accepted and implemented in source for periodic project issue synchronization; not deployed.
 
 ## Context
 
@@ -8,8 +8,8 @@
 The 0.x story requires periodic work without a signed-in owner manually importing
 each cycle. Existing run-bound grants cannot authorize a background project job.
 An installation ID, saved actor ID, or persisted user bearer is not authority.
-The [owner decision](https://github.com/sabbour/agentweaver/issues/2176#issuecomment-6305136576)
-approves a separately reviewed existing-owner delegation path.
+The project owner approved a separately reviewed delegation path. In that path an
+existing project Owner explicitly delegates issue-sync authority to a background job.
 
 ## Decision
 
@@ -47,7 +47,7 @@ token, bearer, private key or OAuth secret.
 
 The grant ID is a background-job authority reference, not a run ID. Public
 management, private issuance, current-owner proof, mint auditing and bounded
-credential lifetime are separate building blocks. #1914 schedules can reuse
+credential lifetime are separate building blocks. Future scheduled work can reuse
 this owner-delegation pattern and the existing Projects proof/mTLS transport,
 but must define a separately reviewed purpose and minimum operation scope.
 A schedule must not use an issue-write grant to start runs or redeem run

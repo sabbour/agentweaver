@@ -1,15 +1,15 @@
 /**
  * Cross-project Overview in the 0.x layout: Operations card, Recent projects,
  * project metrics and usage, Recent runs, and Needs attention. Counts come from
- * the project list, the newest runs of each project, and your notifications. The
+ * the project list, project metrics, the newest runs, and your notifications. The
  * service reports metrics and usage per project only, so the metrics section
- * shows one chosen project and says so. Personal Priorities, new chat and private
- * conversations sit alongside these project-owned views without controlling them.
+ * shows one chosen project and says so. Chief of Staff groups personal Priorities,
+ * new chat, and private conversations without controlling project-owned views.
  */
 import { Button, Select, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { AttentionList } from './AttentionList';
 import { useAuth } from './AuthContext';
 import { gatewayClient } from './api';
@@ -27,6 +27,7 @@ import { PrioritiesPanel } from './PrioritiesPanel';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXL },
+  chiefOfStaff: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
   headerActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
   generated: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   card: {
@@ -114,6 +115,7 @@ const RECENT_PROJECT_LIMIT = 6;
 /** Renders the signed-in user's cross-project home. */
 export function OverviewPage() {
   const styles = useStyles();
+  const location = useLocation();
   const { apiCall } = useAuth();
   // Shared with the rail bell, so a dismiss in either place shows in both.
   const attention = useSharedRunAttention();
@@ -152,6 +154,13 @@ export function OverviewPage() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  useEffect(() => {
+    // The page panels wait for projects; scroll after that gate mounts the linked section.
+    if (location.hash !== '#chief-of-staff' || !projects) return;
+    const target = document.getElementById('chief-of-staff');
+    if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' });
+  }, [location.hash, projects]);
+
   // Only active projects count as recent. Archived projects are counted in the
   // Operations card but not listed. ISO timestamps sort correctly as strings,
   // so newest first is a reverse string compare.
@@ -188,14 +197,18 @@ export function OverviewPage() {
       {projects && (
         <>
           {/* Personal planning stays separate from execution and project metrics. */}
-          <PrioritiesPanel priorities={priorities} projects={projects} conversations={conversations} />
-          <NewChatPanel projects={projects} onChanged={conversations.reload} />
-          <ConversationList conversations={conversations} projectNames={projectNames} />
+          <section className={styles.chiefOfStaff} aria-labelledby="chief-of-staff">
+            <Text as="h2" id="chief-of-staff" className={styles.sectionTitle}>Chief of Staff</Text>
+            <PrioritiesPanel priorities={priorities} projects={projects} conversations={conversations} />
+            <NewChatPanel projects={projects} onChanged={conversations.reload} />
+            <ConversationList conversations={conversations} projectNames={projectNames} />
+          </section>
           <section className={styles.card} aria-labelledby="overview-operations">
             <div className={styles.cardHead}>
               <span className={styles.cardHeadIcon}><Pulse24Regular /></span>
               <Text as="h2" id="overview-operations" className={styles.cardHeadTitle}>Operations</Text>
             </div>
+            <Text className={styles.muted}>Cross-project run totals are unavailable. The Gateway does not provide an overview total yet.</Text>
             <div className={styles.glanceGrid}>
               <div className={styles.glance}>
                 <Text className={styles.glanceLabel}>Active projects</Text>

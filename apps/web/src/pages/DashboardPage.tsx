@@ -1,6 +1,7 @@
-import {
-  apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+import { gatewayClient } from '../v1/api';
+import { useAuth } from '../v1/AuthContext';
+import { formatCost } from '../v1/projectMetrics';
+import type { ProjectMetrics, ProjectUsage } from '../v1/contracts';
 import {
   Badge,
   Button,
@@ -22,7 +23,6 @@ import {
 } from '@fluentui/react-icons';
 import { AiCredits } from '../components/AiCredits';
 import { AgentInvocationChart } from '../components/dashboard/AgentInvocationChart';
-import { ModelPerformancePanels } from '../components/dashboard/ModelPerformancePanels';
 import { MetricEmptyState,
   MetricSectionHeading } from '../components/MetricTypography';
 import { PageHeader } from '../components/PageHeader';
@@ -30,12 +30,18 @@ import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import { ErrorState } from '../components/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ProjectMetricsDto, ThroughputPointDto } from '../api/types';
-// Dashboard — the project HOME (/projects/:projectId). Consumes the live
-// GET /api/projects/{id}/dashboard endpoint (real data only; no cost). Renders
-// overview counters, a 30-day throughput chart, and an agent leaderboard.
-// Workflow-health is intentionally not rendered: the backend omits it because a
-// run row carries no workflow-definition reference (see MetricsDtos.cs).
+import type { AgentLeaderboardEntryDto, ThroughputPointDto } from '../api/types';
+
+/** Summary fields the v1 owners can prove; the two 0.x-only totals stay unavailable. */
+type ProjectSummaryData = {
+  runs_this_week: number;
+  runs_total: number;
+  active_runs: number;
+  active_agents: null;
+  tasks_done_this_week: null;
+};
+/** View model for the retained dashboard without requesting its unpublished 0.x endpoint. */
+type DashboardData = { project_id: string; project_name: string; generated_utc: string; summary: ProjectSummaryData };
 
 /**
  * Project-home dashboard. It combines a summary response with range-specific
@@ -482,16 +488,15 @@ function formatSuccessRate(row: AgentLeaderboardEntryDto): string {
  * evidence; missing telemetry is not treated as evidence of poor health.
  */
 function statusTone(
-  summary: ProjectDashboardDto['summary'],
+  summary: ProjectSummaryData,
   leaderboard: AgentLeaderboardEntryDto[],
   evidence: { created: number; done: number; successBasis: number; hasModelTelemetry: boolean },
 ): HealthTone {
   const riskyAgent = leaderboard.some((row) => row.runsTotal > 0 && row.successRate < 50);
   if (riskyAgent) return 'attention';
-  if (summary.active_runs > 0 || summary.active_agents > 0) return 'active';
+  if (summary.active_runs > 0) return 'active';
   const hasActivity =
     summary.runs_this_week > 0 ||
-    summary.tasks_done_this_week > 0 ||
     summary.runs_total > 0 ||
     evidence.created > 0 ||
     evidence.done > 0;
@@ -507,14 +512,15 @@ function plural(value: number, singular: string, pluralLabel = `${singular}s`): 
 }
 
 /** Reports whether the summary contains any run or task activity. */
-function hasSummaryActivity(summary: ProjectDashboardDto['summary']): boolean {
-  return summary.runs_this_week > 0 || summary.tasks_done_this_week > 0 || summary.runs_total > 0;
+function hasSummaryActivity(summary: ProjectSummaryData): boolean {
+  // Only count measured run activity; v1 has no task completion timestamp.
+  return summary.runs_this_week > 0 || summary.runs_total > 0;
 }
 
 /** Supplies the copy and badge tone associated with a derived health state. */
 function statusCopy(
   tone: HealthTone,
-  summary: ProjectDashboardDto['summary'],
+  summary: ProjectSummaryData,
   hasQualityEvidence = true,
 ): { label: string; badge: 'success' | 'warning' | 'subtle'; title: string; body: string } {
   switch (tone) {
@@ -529,17 +535,17 @@ function statusCopy(
       return {
         label: 'Active',
         badge: 'success',
-        title: 'Agents are working on this project.',
+        title: 'Runs are active in this project.',
         body: hasQualityEvidence
-          ? `${plural(summary.active_runs, 'run')} and ${plural(summary.active_agents, 'agent')} are active.`
-          : `${plural(summary.active_runs, 'run')} and ${plural(summary.active_agents, 'agent')} are active. Model and agent data is not available yet.`,
+          ? `${plural(summary.active_runs, 'run')} are active. Active agent count is unavailable.`
+          : `${plural(summary.active_runs, 'run')} are active. Agent counts and model data are unavailable.`,
       };
     case 'steady':
       return {
         label: 'Idle',
-        badge: 'success',
+        badge: 'subtle',
         title: 'No runs are active.',
-        body: `${plural(summary.runs_this_week, 'run')} started and ${plural(summary.tasks_done_this_week, 'task')} completed this week.`,
+        body: `${plural(summary.runs_this_week, 'run')} started this week. Task completions are unavailable.`,
       };
     case 'insufficient':
       return {
@@ -547,7 +553,7 @@ function statusCopy(
         badge: 'subtle',
         title: 'Run activity is available.',
         body: hasSummaryActivity(summary)
-          ? `${plural(summary.runs_this_week, 'run')} started and ${plural(summary.tasks_done_this_week, 'task')} completed this week.`
+          ? `${plural(summary.runs_this_week, 'run')} started this week. Task completions are unavailable.`
           : 'The selected range has run activity.',
       };
     case 'quiet':
@@ -561,19 +567,15 @@ function statusCopy(
 }
 
 /** Detects non-empty usage or latency data rather than merely present arrays. */
-function hasModelTelemetry(metrics: ProjectMetricsDto | null): boolean {
-  return Boolean(
-    metrics?.modelUsage?.some((row) => row.invocationCount > 0 || row.totalNanoAiu > 0) ||
-    metrics?.responseDuration?.some((row) => row.p50Ms != null || row.p95Ms != null) ||
-    metrics?.timeToFirstToken?.some((row) => row.p50Ms != null || row.p95Ms != null) ||
-    metrics?.aiCreditUsageTrend?.some((point) => point.totalNanoAiu > 0),
-  );
+function hasModelTelemetry(usage: ProjectUsage | null): boolean {
+  // A measured request or ledger subtotal is evidence; an empty response is not.
+  return Boolean(usage?.usageByModel.some((row) => row.requestCount != null || row.cost.length > 0));
 }
 
 /** Selects the main navigation action appropriate to current project evidence. */
 function primaryActionFor(
   tone: HealthTone,
-  summary: ProjectDashboardDto['summary'],
+  summary: ProjectSummaryData,
 ): { label: string; path: 'board' | 'flow' | 'orchestrations' } {
   switch (tone) {
     case 'attention':
@@ -586,14 +588,14 @@ function primaryActionFor(
       if (hasSummaryActivity(summary)) return { label: 'Open Board', path: 'board' };
       return { label: 'Open Flow', path: 'flow' };
     case 'quiet':
-      return { label: 'Start task', path: 'orchestrations' };
+      return { label: 'Open Board', path: 'board' };
   }
 }
 
 /** Selects supporting navigation actions without repeating the primary action. */
 function secondaryActionsFor(
   tone: HealthTone,
-  summary: ProjectDashboardDto['summary'],
+  summary: ProjectSummaryData,
 ): Array<{ label: string; path: 'board' | 'flow' | 'orchestrations' }> {
   if (tone === 'attention') return [{ label: 'Open Board', path: 'board' }, { label: 'Open Orchestrations', path: 'orchestrations' }];
   if (tone === 'active') return [{ label: 'Open Flow', path: 'flow' }, { label: 'Open Orchestrations', path: 'orchestrations' }];
@@ -605,19 +607,6 @@ function secondaryActionsFor(
 /** Totals a single throughput series across the selected time window. */
 function sumThroughput(points: ThroughputPointDto[], field: 'created' | 'done'): number {
   return points.reduce((sum, point) => sum + point[field], 0);
-}
-
-/** Computes run-weighted success and returns the scored-run count as its evidence base. */
-function averageSuccess(leaderboard: AgentLeaderboardEntryDto[]): { rate: number | null; basis: number } {
-  let weighted = 0;
-  let total = 0;
-  for (const row of leaderboard) {
-    if (row.runsTotal > 0) {
-      weighted += row.successRate * row.runsTotal;
-      total += row.runsTotal;
-    }
-  }
-  return { rate: total ? weighted / total : null, basis: total };
 }
 
 /** Renders created and completed run counts as two lines over the same date axis. */
@@ -678,54 +667,70 @@ function LoadingDashboard() {
 export function DashboardPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
+  const { apiCall } = useAuth();
 
   // Dashboard summary and analytics are separate API responses; retain their own
   // state so the range selector can update metrics without conflating summary data.
-  const [data, setData] = useState<ProjectDashboardDto | null>(null);
-  const [metrics, setMetrics] = useState<ProjectMetricsDto | null>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [metrics, setMetrics] = useState<ProjectMetrics | null>(null);
+  const [usage, setUsage] = useState<ProjectUsage | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [selectedRange, setSelectedRange] = useState<TimeRange>('30d');
-  const formatError = (err: unknown): string =>
-    err instanceof ApiError
-      ? `API error ${err.status}: ${err.body}`
-      : err instanceof Error
-        ? err.message
-        : String(err);
+  const formatError = (err: unknown): string => err instanceof Error ? err.message : String(err);
 
   const mountedRef = useRef(true);
   const inFlightRef = useRef<AbortController | null>(null);
 
   /**
-   * Fetches summary and range metrics together. Abort is expected during polling
-   * overlap or range changes and must not become a visible page error.
+   * Composes the 0.x dashboard panels from the project's published v1 owner reads.
+   * Abort prevents an older poll from updating the page, even though Gateway reads
+   * do not accept an AbortSignal.
    */
   const load = useCallback(async (abortSignal?: AbortSignal) => {
     if (!projectId) return;
     const rangeDates = timeRangeDates(selectedRange);
     try {
-      const [dashboardDto, metricsDto] = await Promise.all([
-        // #208 point 4: this page already fetches the full metrics DTO below, so skip the
-        // dashboard endpoint's own internal 8-way metrics fan-out (its Throughput/AgentLeaderboard
-        // fields are unused here — this page reads those from `metrics` instead).
-        apiClient.getProjectDashboard(projectId, { includeMetrics: false, signal: abortSignal }),
-        apiClient.getProjectMetrics(projectId, rangeDates.from, rangeDates.to, abortSignal),
+      const [project, metricsDto, weekMetrics, usageResult] = await Promise.all([
+        apiCall((token, tenant) => gatewayClient.getProject(token, projectId, tenant), null),
+        apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, projectId, rangeDates, tenant), null),
+        // The "this week" tile needs a seven-day window, not the selected chart range.
+        selectedRange === '7d'
+          ? null
+          : apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, projectId, timeRangeDates('7d'), tenant), null),
+        // Usage can be unavailable independently of the run metrics.
+        apiCall((token, tenant) => gatewayClient.getProjectUsage(token, projectId, rangeDates, tenant), null)
+          .then((value) => ({ value, error: null }), (reason: unknown) => ({ value: null, error: formatError(reason) })),
       ]);
-      if (mountedRef.current) {
-        setData(dashboardDto);
+      if (mountedRef.current && !abortSignal?.aborted) {
+        setData({
+          project_id: project.projectId,
+          project_name: project.name,
+          generated_utc: new Date().toISOString(),
+          summary: {
+            runs_this_week: (weekMetrics ?? metricsDto).runsInRange,
+            runs_total: metricsDto.runsTotal,
+            active_runs: metricsDto.activeRuns,
+            active_agents: null,
+            tasks_done_this_week: null,
+          },
+        });
         setMetrics(metricsDto);
+        setUsage(usageResult.value);
+        setUsageError(usageResult.error);
         setError(null);
       }
     } catch (err) {
       // #208 point 5: an aborted fetch (unmount/range change/overlapping-poll guard) is expected
       // control flow, not a user-facing error — don't surface it.
-      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (abortSignal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
       if (mountedRef.current) setError(formatError(err));
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [projectId, selectedRange]);
+  }, [apiCall, projectId, selectedRange]);
 
   // #208 point 5: single shared entry point for the poll tick AND manual refresh/retry clicks —
   // aborts whatever request is still in flight before starting a new one, so overlapping fan-outs
@@ -765,12 +770,15 @@ export function DashboardPage() {
   // from the same loaded snapshot rather than recalculating them in the markup.
   const dashboardModel = useMemo(() => {
     if (!data) return null;
-    const leaderboard = metrics?.leaderboard ?? [];
-    const throughput = metrics?.throughput ?? [];
+    // Orchestrator reports project success, but no agent-level leaderboard.
+    const leaderboard: AgentLeaderboardEntryDto[] = [];
+    const throughput = metrics?.series.map((point) => ({ date: point.date, created: point.created, done: point.completed })) ?? [];
     const created = sumThroughput(throughput, 'created');
     const done = sumThroughput(throughput, 'done');
-    const success = averageSuccess(leaderboard);
-    const modelTelemetry = hasModelTelemetry(metrics);
+    const success = metrics?.completedRuns
+      ? { rate: metrics.succeededRuns / metrics.completedRuns * 100, basis: metrics.completedRuns }
+      : { rate: null, basis: 0 };
+    const modelTelemetry = hasModelTelemetry(usage);
     const tone = statusTone(data.summary, leaderboard, {
       created,
       done,
@@ -790,7 +798,7 @@ export function DashboardPage() {
       primaryAction,
       secondaryActions: secondaryActionsFor(tone, data.summary),
     };
-  }, [data, metrics]);
+  }, [data, metrics, usage]);
 
   if (!projectId) return null;
 
@@ -854,6 +862,7 @@ export function DashboardPage() {
               <div>
                 <Text as="h2" id="project-status-title" className={styles.healthTitle}>{dashboardModel.copy.title}</Text>
                 <Text className={styles.healthCopy}>{dashboardModel.copy.body}</Text>
+                <Text className={styles.healthCopy}>Live project health is unavailable. This status uses run counts only.</Text>
               </div>
               <div className={styles.quickActions} aria-label="Project actions">
                 <Link
@@ -874,25 +883,25 @@ export function DashboardPage() {
               <div className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Active runs</Text>
                 <Text className={styles.summaryValue}>{data.summary.active_runs}</Text>
-                <Text className={styles.summaryMeta}>{plural(data.summary.active_agents, 'active agent')}</Text>
+                <Text className={styles.summaryMeta}>Active agent count unavailable</Text>
               </div>
               <div className={styles.summaryTile}>
-                <Text className={styles.summaryLabel}>Runs this week</Text>
+                <Text className={styles.summaryLabel}>Runs, last 7 days</Text>
                 <Text className={styles.summaryValue}>{data.summary.runs_this_week}</Text>
                 <Text className={styles.summaryMeta}>{plural(data.summary.runs_total, 'total run')}</Text>
               </div>
               <div className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Completed tasks</Text>
-                <Text className={styles.summaryValue}>{data.summary.tasks_done_this_week}</Text>
-                <Text className={styles.summaryMeta}>This week</Text>
+                <Text className={styles.summaryValue}>—</Text>
+                <Text className={styles.summaryMeta}>Task completion count unavailable</Text>
               </div>
               <div className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Run success</Text>
                 <Text className={styles.summaryValue}>{dashboardModel.success.rate == null ? 'Pending' : `${Math.round(dashboardModel.success.rate)}%`}</Text>
                 <Text className={styles.summaryMeta}>
                   {dashboardModel.success.basis
-                    ? `${dashboardModel.success.basis} scored runs`
-                    : 'No scored runs'}
+                    ? `${dashboardModel.success.basis} completed runs`
+                    : 'No completed runs'}
                 </Text>
               </div>
             </div>
@@ -961,7 +970,7 @@ export function DashboardPage() {
                 </div>
               </div>
               <AgentInvocationChart
-                points={metrics?.invocationTrend ?? []}
+                points={metrics?.series.map((point) => ({ date: point.date, count: point.created })) ?? []}
                 subtitle={`Daily runs created during the ${timeRangeLabel(selectedRange)}.`}
                 emptyLabel="No runs were created in this range. Start a task to add data."
               />
@@ -972,9 +981,10 @@ export function DashboardPage() {
             <div className={styles.diagnosticsHeader}>
               <MetricSectionHeading
                 title={<span id="diagnostics-title">Model and agent metrics</span>}
-                subtitle="Review model usage, response times, costs, and agent success rates."
+                subtitle="Review reported model usage and project run outcomes."
               />
             </div>
+            <Text className={styles.healthCopy}>Agent leaderboard and latency percentiles are unavailable. The Gateway does not report them yet.</Text>
             {!dashboardModel.modelTelemetry && dashboardModel.leaderboard.length === 0 ? (
               <div className={styles.diagnosticsEmpty}>
                 <div>
@@ -984,13 +994,17 @@ export function DashboardPage() {
                       : 'No model or agent data.'}
                   </Text>
                   <MetricEmptyState>
-                    {hasSummaryActivity(data.summary)
-                      ? 'Runs have not reported model usage or agent scores for this range. Open Board or Orchestrations to review recent work.'
+                    {usageError ? `Model usage could not load: ${usageError}` : hasSummaryActivity(data.summary)
+                      ? 'No model usage was reported for this range. Agent scores are unavailable. Open Board or Orchestrations to review recent work.'
                       : 'Start a task. The dashboard adds model and agent data after a run reports it.'}
                   </MetricEmptyState>
+                  <Text as="h3" className={styles.columnTitle}>Model metrics</Text>
+                  <MetricEmptyState>{usageError ? 'Model usage could not load.' : 'No model usage has been recorded for this range.'}</MetricEmptyState>
+                  <Text as="h3" className={styles.columnTitle}>Agent leaderboard</Text>
+                  <MetricEmptyState>Agent scores are unavailable from the Gateway. Open Flow to review agent runs.</MetricEmptyState>
                   <div className={styles.evidenceRail} aria-label="Available dashboard evidence">
-                    <span className={styles.evidencePill}>{plural(data.summary.runs_this_week, 'run')} this week</span>
-                    <span className={styles.evidencePill}>{plural(data.summary.tasks_done_this_week, 'task')} done this week</span>
+                    <span className={styles.evidencePill}>{plural(data.summary.runs_this_week, 'run')} in the last 7 days</span>
+                    <span className={styles.evidencePill}>Task completions unavailable</span>
                     <span className={styles.evidencePill}>{plural(data.summary.runs_total, 'total run')}</span>
                     <span className={styles.evidencePill}>{plural(data.summary.active_runs, 'active run')}</span>
                   </div>
@@ -1021,13 +1035,26 @@ export function DashboardPage() {
                 <div className={styles.diagnosticsBody}>
                   <div className={styles.diagnosticsColumn} aria-labelledby="model-performance-title">
                     <Text as="h3" id="model-performance-title" className={styles.columnTitle}>Model metrics</Text>
-                    <ModelPerformancePanels metrics={metrics} />
+                    {usageError ? <MetricEmptyState>Model usage could not load: {usageError}</MetricEmptyState>
+                      : usage?.usageByModel.length ? (
+                        <Table aria-label="Model usage" size="small">
+                          <TableHeader><TableRow><TableHeaderCell>Model</TableHeaderCell><TableHeaderCell>Requests</TableHeaderCell><TableHeaderCell>Tokens</TableHeaderCell><TableHeaderCell>Cost</TableHeaderCell></TableRow></TableHeader>
+                          <TableBody>{usage.usageByModel.map((row) => (
+                            <TableRow key={row.id}>
+                              <TableCell>{row.id}</TableCell>
+                              <TableCell>{row.requestCount ?? '—'}</TableCell>
+                              <TableCell>{row.inputTokens != null && row.outputTokens != null ? row.inputTokens + row.outputTokens : '—'}</TableCell>
+                              <TableCell>{row.cost.length ? row.cost.map(formatCost).join(', ') : '—'}</TableCell>
+                            </TableRow>
+                          ))}</TableBody>
+                        </Table>
+                      ) : <MetricEmptyState>No model usage has been recorded for this range.</MetricEmptyState>}
                   </div>
 
                   <div className={styles.diagnosticsColumn} aria-labelledby="agent-leaderboard-title">
                     <div className={styles.leaderboardHeader}>
                       <Text as="h3" id="agent-leaderboard-title" className={styles.columnTitle}>Agent leaderboard</Text>
-                      <Text className={styles.healthCopy}>Open an agent to review its runs and success rate.</Text>
+                      <Text className={styles.healthCopy}>Agent scores are unavailable. Open Flow to review agent runs.</Text>
                     </div>
                     {dashboardModel.leaderboard.length === 0 ? (
                       <div className={styles.leaderboardPending}>

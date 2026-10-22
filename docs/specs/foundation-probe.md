@@ -1,7 +1,6 @@
 # Story: P0 Foundation Probe
 
-**Issue:** [#1784](https://github.com/sabbour/agentweaver/issues/1784).
-**Prerequisite:** [#1777 dedicated Azure P0 infrastructure](1777-azure-p0-infrastructure.md).
+**Prerequisite:** [Dedicated Azure P0 infrastructure](azure-p0-infrastructure.md).
 **Status:** The corrected image keeps version `0.0.0`. The initial replacement and sampler-fixed replacement each require separate confirmation and a distinct permanent single-use claim. Each preserves the previous image by digest. Source and publication do not prove a successful runtime acceptance Job.
 
 ## Scope and boundaries
@@ -39,7 +38,7 @@ Its top-level fields are:
 | `deploymentName`, `deploymentId` | The selected successful infrastructure deployment and its exact ARM ID. |
 | `infrastructure` | Independent deployment scope, source SHA, Git tree, input hash, and original foundation binding. |
 | `aksOidcIssuerUrl` | HTTPS issuer from the deployment output. |
-| `foundationProbeIdentity` | The #1777 identity object, including resource ID, distinct client/principal IDs, namespace, and service account. |
+| `foundationProbeIdentity` | The infrastructure deployment's `foundationProbeIdentity` output, including resource ID, distinct client/principal IDs, namespace, and service account. |
 | `foundationResources` | Exact cluster, Key Vault, storage account/container, PostgreSQL server, workspace, and Application Insights IDs/endpoints. |
 | `runtime` | Explicit database name/role/schema and exact Key Vault fixture name/version. These values are not guessed by the probe. |
 
@@ -47,7 +46,7 @@ Its top-level fields are:
 the source metadata embedded in the image. The runtime role is
 `foundation_probe_runtime`, the schema is `foundation_probe`, and the fixture is
 the exact 32-lowercase-hex `foundation-probe` secret version. Operators or the
-acceptance orchestrator must map the supported #1777 output fields and separately
+acceptance orchestrator must map the supported infrastructure output fields and separately
 approved runtime configuration into this DTO.
 
 Image-build provenance does not determine the infrastructure deployment name.
@@ -158,8 +157,8 @@ names and matching `toFQDNs` destinations. AKS requires ACNS Container Network
 Security to enforce FQDN filtering
 ([Microsoft Learn](https://learn.microsoft.com/en-us/azure/aks/how-to-apply-fqdn-filtering-policies)).
 The current v1 AKS template uses API `2024-09-01` and enables ACNS security
-without enabling observability; that separately owned infrastructure update
-landed in #1799. This probe issue does not modify AKS infrastructure or incur
+without enabling observability. That setting belongs to the infrastructure
+template, not to the probe. The probe does not modify AKS infrastructure or incur
 additional ACNS cost.
 The acceptance consumer performs a read-only ARM GET of the exact AKS resource
 ID from a successful source-bound deployment receipt (API version `2024-09-01`)
@@ -191,7 +190,7 @@ Different principal mappings or incompatible fixture state block the operation.
 
 The in-pod output is only one evidence source. The external acceptance consumer
 owns Job/pod identity, completion and exit code, immutable registry digest, and
-fresh post-completion Monitor ingestion. Issue #1801 adds that consumer in
+fresh post-completion Monitor ingestion. The consumer is implemented in
 [`verify-acceptance.mjs`](../../scripts/azure/verify-acceptance.mjs). It reads
 the exact Job, its pod, the ServiceAccount, and an immutable target ConfigMap.
 It checks Job ownership by UID, the bounded one-shot deadline, pod namespace,

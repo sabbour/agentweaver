@@ -2,8 +2,9 @@
 
 These dependency-free tools define and inspect infrastructure.
 They do not deploy a service or prove workload identity.
-The [infrastructure specification](../../docs/specs/1777-azure-p0-infrastructure.md)
-describes source receipts, target guards, and the separate runtime acceptance checks.
+The [Azure P0 infrastructure specification](../../docs/specs/azure-p0-infrastructure.md)
+describes source receipts, target guards, and the separate
+[Foundation Probe](../../docs/specs/foundation-probe.md) runtime gate.
 
 ## Offline validation
 
@@ -464,7 +465,8 @@ cost by 50%, plus per-node service charges. Quota headroom does not prove region
 
 AKS opts into Advanced Container Networking Services (ACNS) with security
 enabled and observability disabled, the security-only configuration needed for
-runtime fully qualified domain name filtering. Runtime Kubernetes must be version 1.29 or later.
+fully qualified domain name (FQDN) egress filtering. Runtime Kubernetes must
+be version 1.29 or later.
 The template leaves `kubernetesVersion` empty so AKS selects its currently
 supported default rather than pinning an older version.
 

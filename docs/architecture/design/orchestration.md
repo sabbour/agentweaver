@@ -758,11 +758,9 @@ scheduling rules:
 | Publish action and surface panel | Platform publish gate and typed surface action; no second publication state machine |
 
 The [status snapshot](sessions-and-coordination.md#session-tree-and-status) carries the
-run-state and recovery-effects acceptance from
-[#1402](https://github.com/sabbour/agentweaver/issues/1402).
+run-state and recovery-effects acceptance for session status.
 The [message primitive](sessions-and-coordination.md#one-coordination-message) retains
-tracked acknowledgment and correlated replies from
-[#1406](https://github.com/sabbour/agentweaver/issues/1406), but only gate transitions
+tracked acknowledgment and correlated replies, but only gate transitions
 approve work. User surface actions arrive as typed messages; the application and
 surface model is specified in [Applications and surfaces](applications-and-surfaces.md).
 
@@ -790,8 +788,7 @@ Ephemeral harness subagents do not become nodes in the session tree.
   checkpoints, run limits, child-work joins, journal, gates, and the session tree.
   Start persona harnesses against exact-SHA AKS deployments at the end of P1 and continue them through cutover.
 - **P2 — Parity and cutover:** close the
-  [#1405](https://github.com/sabbour/agentweaver/issues/1405) behavior-guarantee
-  list, complete application `live`/`preview`/`published` stages and the publish
+  0.x behavior-guarantee list, complete application `live`/`preview`/`published` stages and the publish
   gate, enforce budgets and all required surface actions through the separate Canvas
   boundary, and pass API, UI, and MCP
   harnesses on an exact-SHA AKS deployment.

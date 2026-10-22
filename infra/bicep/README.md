@@ -47,7 +47,7 @@ The Blob zone is shared with the dedicated storage Private Endpoint.
 Private Logs queries require an approved VNet-connected Job, VM, or VPN and
 correct private DNS. An ARM query cannot use Private Link.
 The default-deny Kubernetes base does not provide exporter egress.
-The #1784 Job overlay owns explicit egress and executable runtime proof.
+The foundation probe Job overlay owns explicit egress and executable runtime proof.
 
 ## Local compilation
 
@@ -84,7 +84,7 @@ but does not query existing credentials to distinguish creates from updates.
 
 ## Identity and PostgreSQL
 
-The `foundation-probe` UAMI and ServiceAccount are reserved for the #1784
+The `foundation-probe` UAMI and ServiceAccount are reserved for the foundation probe
 acceptance-only Job. Identity is the product host; Relay is a persistence
 library and release is a CLI. The identity module defines separate
 `identity-broker` runtime and `identity-broker-migration` UAMIs and federated
@@ -124,7 +124,7 @@ The Identity host uses native asynchronous Npgsql password-provider callbacks
 with its explicit `WorkloadIdentityCredential` for each new physical
 connection. Startup verifies the schema and migration state but never applies
 migrations or provisions database roles. The
-[infrastructure specification](../../docs/specs/1777-azure-p0-infrastructure.md)
+[infrastructure specification](../../docs/specs/azure-p0-infrastructure.md)
 records the full acceptance boundary. No live database or Azure operation is
 part of these definitions.
 

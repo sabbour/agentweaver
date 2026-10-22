@@ -168,9 +168,8 @@ The historical comparison baseline was approximately 29 minutes median for
 v1 PR CI versus 15 minutes for dev, with Broker alone taking 13m46s.
 Performance acceptance requires at least three representative successful PR
 runs, a median total duration of at most 20 minutes and a longest Broker shard
-of at most 8 minutes. Record run URLs, cache warmth and runner/queue caveats
-on the tracking issue before closing it; configuration changes alone do not
-prove those timing targets.
+of at most 8 minutes. Use run results to verify these targets; configuration
+changes alone do not prove them.
 
 ## Measure v1 coverage weekly
 
@@ -180,6 +179,18 @@ the same test jobs run with instrumentation, and the same `foundation` gate
 must pass. The coverage job merges the .NET shard reports without rerunning
 tests and uploads the source-bound `v1-coverage-<sha>-<attempt>` artifact,
 which is kept for 30 days.
+
+Every suite artifact is bound to the run attempt that produced it. Each .NET
+shard and the Node and Web coverage jobs write `attempt.json` (suite, run
+attempt, and job status) and upload `<artifact>-<attempt>`, for example
+`v1-dotnet-identity-broker-2-2`. **Re-run failed jobs** keeps the artifacts of
+jobs that passed, so a rerun has one artifact per attempt for each rerun suite.
+Before combining, `scripts/coverage/attempts.mjs select` keeps only the newest
+attempt of each suite. It fails if that attempt has no marker, a marker from
+another suite or attempt, or a job status other than `success`. The selected
+attempt of each suite is recorded in `attempts.json` and in the `suiteAttempts`
+field of `source.json`. Data from a failed attempt therefore never enters the
+combined report.
 
 GitHub runs scheduled workflows only from the default branch, which is `dev`.
 A `dev` copy of `v1-coverage.yml` runs every Monday at 05:00 UTC and
@@ -381,10 +392,8 @@ deployed owner services.
 ## Planned GitHub Canvas adapter acceptance
 
 GitHub Canvas adapter cases are unexecuted requirements, not a passing suite
-or current adapter support. The research recorded in
-[issue #1901](https://github.com/sabbour/agentweaver/issues/1901) did not run
-interoperability, rendering, or restart tests. Implementation work is tracked
-in [issue #1904](https://github.com/sabbour/agentweaver/issues/1904). Do not
+or current adapter support. The Canvas research did not run interoperability, rendering, or restart tests.
+The adapter is not implemented yet. Do not
 report the planned cases as product behavior or passing test evidence.
 
 ## Test retained API, UI, and MCP adapters
