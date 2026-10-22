@@ -86,7 +86,7 @@ beforeEach(() => {
   mocks.captureBacklogTask.mockReset();
   mocks.editBacklogTaskContent.mockReset();
   mocks.getAuthorizationContext.mockReset().mockResolvedValue(context(['readProjects', 'writeProjects']));
-  mocks.getProject.mockReset().mockResolvedValue({ projectId: 'p1', name: 'Alpha' });
+  mocks.getProject.mockReset().mockResolvedValue({ projectId: 'p1', name: 'Alpha', effectiveRoles: [] });
 });
 
 describe('BoardPage', () => {

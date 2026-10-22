@@ -364,6 +364,11 @@ unrelated APIs do not receive the selector. Owners recheck current authority
 for every protected operation. The context response is not a permission grant
 or a cached authorization decision.
 
+`ProjectSummary` responses also include `effectiveRoles` for the signed-in
+caller. The Web client displays those owner-confirmed role names and their
+tenant or project scope on project tiles and headers; it does not use them to
+authorize operations.
+
 ## Edit project settings and read history
 
 **Project settings** has a section rail: **General**, **Access**,

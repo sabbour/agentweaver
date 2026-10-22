@@ -33,7 +33,7 @@ vi.mock('./pageParts', async () => {
 import { GatewayError } from './api';
 
 function project(projectId: string, name: string): ProjectSummary {
-  return { projectId, name, state: 'active', revision: 1, configurationRevision: 1, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+  return { projectId, name, state: 'active', revision: 1, configurationRevision: 1, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', effectiveRoles: [] };
 }
 
 function runs(projectId: string, entries: Array<[string, string, string | null]>, nextCursor: string | null = null): ProjectRunPage {

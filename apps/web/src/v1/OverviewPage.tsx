@@ -15,7 +15,7 @@ import { useAuth } from './AuthContext';
 import { gatewayClient } from './api';
 import type { ProjectSummary } from './contracts';
 import { errorCode, errorMessage } from './errors';
-import { ErrorNotice, Loading, PageHeading } from './pageParts';
+import { ErrorNotice, Loading, PageHeading, ProjectRoleBadge } from './pageParts';
 import { metricTiles, useProjectMetrics, type MetricsRangeKey } from './projectMetrics';
 import { ProjectMetricsSections } from './ProjectMetricsSections';
 import { useSharedRunAttention } from './RunAttentionContext';
@@ -243,7 +243,8 @@ export function OverviewPage() {
                       <span className={styles.iconBubble}><FolderRegular /></span>
                       <Text className={styles.projectName}>{project.name}</Text>
                     </div>
-                    <span className={styles.stat}><ClockRegular />Updated {new Date(project.updatedAt).toLocaleString()}</span>
+                    <ProjectRoleBadge roles={project.effectiveRoles} />
+                    <span className={styles.stat}><ClockRegular />Updated {new Date(project.updatedAt).toLocaleString()}</span>
                   </Link>
                 ))}
               </div>

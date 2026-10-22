@@ -239,6 +239,14 @@ Use [Configure providers](../guide/configure-providers.md) to set up providers
 before you accept a run selection. The routes below show where the Gateway
 exposes project configuration and run-selection operations.
 
+Every response containing a `ProjectSummary` includes `effectiveRoles`. Each
+entry identifies a role name and its exact `tenant` or `project` resource
+scope. Projects & Config includes only active roles for the current caller on
+the project or its selected tenant and rechecks them against current owner
+state. Tenant-wide roles appear on each applicable tenant project. These
+values are for display only: they are not permissions, a client-side
+authorization cache, or a grant.
+
 | Method | Native suffix | Auth | Purpose | Gateway |
 | --- | --- | --- | --- | --- |
 | POST | `/` | Admin; unbound token, TenantAdmin | Create a project without assigning an Owner. | Yes, empty suffix |

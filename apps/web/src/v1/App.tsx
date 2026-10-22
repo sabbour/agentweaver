@@ -93,7 +93,7 @@ import type {
 import type { RunBinding } from './authProtocol';
 import { useRunJournal } from './useRunJournal';
 import { errorCode, errorMessage } from './errors';
-import { ErrorNotice, Loading, PageHeading, Panel } from './pageParts';
+import { ErrorNotice, Loading, PageHeading, Panel, ProjectRoleBadge } from './pageParts';
 import { RunOutputCapturesPanel } from './RunOutputCaptures';
 import { OutputCaptureBrowser } from './OutputCaptureBrowser';
 import { TranscriptPanel } from './TranscriptPanel';
@@ -116,7 +116,7 @@ import { StopRunButton } from './StopRunButton';
 import { AgentsView } from './AgentsView';
 import { CastTeamPage } from './CastTeamPage';
 import { PlatformSettingsPage } from './PlatformSettingsPage';
-import { accessSummary, permissionsForProject, useAuthorizationContext, useProjectConfiguration, useProjectSummary } from './projectData';
+import { useProjectConfiguration, useProjectSummary } from './projectData';
 import { runListErrorMessage, useProjectRunList } from './runListData';
 import { CONFIGURATION_SECTIONS, SETTINGS_SECTIONS, settingsSection } from './settingsSections';
 import type { SettingsSection } from './settingsSections';
@@ -212,7 +212,6 @@ function ProjectsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   // The caller's role grants. Each tile uses them to show a short access
   // summary for that project. Tiles show without it while it loads.
-  const authorization = useAuthorizationContext();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -309,7 +308,7 @@ function ProjectsPage() {
                   primary={project.name}
                   secondary={project.projectId}
                   badges={<Badge appearance="tint" size="small" color={project.state === 'active' ? 'success' : 'subtle'}>{project.state}</Badge>}
-                  meta={<><Badge appearance="outline" size="small">Revision {project.revision}</Badge>{authorization.data && <Badge appearance="outline" size="small">{accessSummary(permissionsForProject(authorization.data, project.projectId))}</Badge>}</>}
+                  meta={<><Badge appearance="outline" size="small">Revision {project.revision}</Badge><ProjectRoleBadge roles={project.effectiveRoles} /></>}
                   actions={<Button appearance="primary" size="small" onClick={() => navigate(`/projects/${encodeURIComponent(project.projectId)}`)}>Open</Button>}
                   actionsAlwaysVisible
                   onClick={() => navigate(`/projects/${encodeURIComponent(project.projectId)}`)}

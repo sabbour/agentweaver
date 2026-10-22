@@ -21,7 +21,17 @@ public sealed record ProjectSummary(
     long Revision,
     long ConfigurationRevision,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    /// <summary>Current roles for the caller on this project or its tenant, for display only.</summary>
+    public IReadOnlyList<EffectiveProjectRole> EffectiveRoles { get; init; } = [];
+}
+
+/// <summary>A current caller role and the exact resource scope that owns it.</summary>
+public sealed record EffectiveProjectRole(
+    ProjectAuthorityResourceType ResourceType,
+    string ResourceId,
+    ProjectAuthorityRole Role);
 
 /// <summary>One immutable project configuration revision with its author and creation time.</summary>
 public sealed record VersionedProjectConfiguration(
@@ -262,7 +272,7 @@ public sealed partial class ProjectsConfigService
             CreatedAt = now,
         });
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        return ToSummary(project);
+        return await ToSummaryAsync(project, caller, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Lists projects in the active tenant, filtering non-admin results to projects with a current read role.</summary>
@@ -283,23 +293,23 @@ public sealed partial class ProjectsConfigService
             cancellationToken).ConfigureAwait(false);
         var projects = await query.OrderBy(project => project.CreatedAt)
             .ToArrayAsync(cancellationToken).ConfigureAwait(false);
-        if (isTenantAdmin)
-            return projects.Select(ToSummary).ToImmutableArray();
-
         var visible = ImmutableArray.CreateBuilder<ProjectSummary>();
         foreach (var project in projects)
         {
-            if (await HasAnyCurrentRoleAsync(
-                caller,
-                ProjectAuthorityResourceType.Project,
-                project.ProjectId,
-                [
-                    ProjectAuthorityRole.Owner,
-                    ProjectAuthorityRole.Contributor,
-                    ProjectAuthorityRole.Viewer,
-                ],
-                cancellationToken).ConfigureAwait(false))
-                visible.Add(ToSummary(project));
+            // Tenant admins see every project in their selected tenant; other callers need a current project read role.
+            if (!isTenantAdmin && !await HasAnyCurrentRoleAsync(
+                    caller,
+                    ProjectAuthorityResourceType.Project,
+                    project.ProjectId,
+                    [
+                        ProjectAuthorityRole.Owner,
+                        ProjectAuthorityRole.Contributor,
+                        ProjectAuthorityRole.Viewer,
+                    ],
+                    cancellationToken).ConfigureAwait(false))
+                continue;
+
+            visible.Add(await ToSummaryAsync(project, caller, cancellationToken).ConfigureAwait(false));
         }
         return visible.ToImmutable();
     }
@@ -326,7 +336,7 @@ public sealed partial class ProjectsConfigService
         }
         var project = await FindProjectAsync(
             caller, projectId, ProjectAccess.Read, runId, cancellationToken).ConfigureAwait(false);
-        return ToSummary(project);
+        return await ToSummaryAsync(project, caller, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Updates project metadata at an expected revision and advances the mutable project head.</summary>
@@ -360,7 +370,7 @@ public sealed partial class ProjectsConfigService
         {
             throw ProjectConfigException.Conflict("The project revision has changed.");
         }
-        return ToSummary(project);
+        return await ToSummaryAsync(project, caller, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Reads the current or a retained immutable configuration revision for an authorized project.</summary>
@@ -1649,9 +1659,45 @@ public sealed partial class ProjectsConfigService
                 StatusCodes.Status400BadRequest);
     }
 
-    private static ProjectSummary ToSummary(ProjectRecord project) =>
-        new(project.ProjectId, project.Name, project.State, project.Revision,
+    private async Task<ProjectSummary> ToSummaryAsync(
+        ProjectRecord project,
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken)
+    {
+        // Read assignments from live owner state instead of caller.Grants, which can predate a grant or revocation.
+        // Pin the query to this active actor membership so another actor's or tenant's assignments cannot appear.
+        var currentRoles = await (
+            from membership in db.TenantMemberships.AsNoTracking()
+            join assignment in db.RoleAssignments.AsNoTracking()
+                on membership.MembershipId equals assignment.MembershipId
+            where membership.MembershipId == caller.MembershipId &&
+                membership.Issuer == caller.Issuer &&
+                membership.Subject == caller.ActorId &&
+                membership.TenantId == caller.TenantId &&
+                membership.Revision == caller.MembershipRevision &&
+                membership.State == ProjectAuthorityRecordState.Active &&
+                assignment.State == ProjectAuthorityRecordState.Active &&
+                ((assignment.ResourceType == ProjectAuthorityResourceType.Project &&
+                    assignment.ResourceId == project.ProjectId) ||
+                 (assignment.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                    assignment.ResourceId == caller.TenantId))
+            select new EffectiveProjectRole(
+                assignment.ResourceType, assignment.ResourceId, assignment.Role))
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var summary = new ProjectSummary(
+            project.ProjectId, project.Name, project.State, project.Revision,
             project.ConfigurationRevision, project.CreatedAt, project.UpdatedAt);
+        return summary with
+        {
+            EffectiveRoles = currentRoles
+                .OrderBy(role => role.ResourceType)
+                .ThenBy(role => role.ResourceId, StringComparer.Ordinal)
+                .ThenBy(role => role.Role)
+                .ToArray(),
+        };
+    }
 
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, JsonOptions);
 

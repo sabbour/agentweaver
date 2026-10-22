@@ -10,6 +10,20 @@ To configure a provider, follow [Configure providers](../guide/configure-provide
 For runtime settings and deployment configuration, see
 [Runtime configuration](./runtime-configuration.md).
 
+## Project role display
+
+The Projects & Config owner includes `effectiveRoles` in every `ProjectSummary`
+response. Each entry contains
+`resourceType` (`tenant` or `project`), `resourceId`, and `role` (`tenantAdmin`,
+`owner`, `contributor`, `viewer`, or `orchestrator`). Project roles apply only
+to the summary's project; tenant roles apply only within the caller's selected
+tenant. The owner returns current roles for the caller, not assignments held
+by another actor.
+
+The Web client uses these values to label project tiles and headers. The role
+labels do not authorize actions or replace permission checks. Every protected
+operation continues to check current owner authority.
+
 ## Caller attention
 
 The Orchestrator's `UserNotification` projects persisted pending coordinator

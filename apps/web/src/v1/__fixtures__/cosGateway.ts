@@ -55,7 +55,7 @@ export const NOW = '2026-10-20T12:00:00.000Z';
 
 /** Builds an active project with fixed revisions. */
 export function project(projectId: string, name = projectId): ProjectSummary {
-  return { projectId, name, state: 'active', revision: 1, configurationRevision: 3, createdAt: NOW, updatedAt: NOW };
+  return { projectId, name, state: 'active', revision: 1, configurationRevision: 3, createdAt: NOW, updatedAt: NOW, effectiveRoles: [] };
 }
 
 /** Builds a run summary. Terminal states get a completion time, like the real owner. */

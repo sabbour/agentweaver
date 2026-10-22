@@ -163,6 +163,14 @@ export interface ProjectSummary {
   configurationRevision: number;
   createdAt: string;
   updatedAt: string;
+  effectiveRoles: EffectiveProjectRole[];
+}
+
+/** A current owner-confirmed role and its exact tenant or project scope. */
+export interface EffectiveProjectRole {
+  resourceType: 'tenant' | 'project';
+  resourceId: string;
+  role: 'tenantAdmin' | 'owner' | 'contributor' | 'viewer' | 'orchestrator';
 }
 
 /** Reference to the selected model and its optional credential resource. */

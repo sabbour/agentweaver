@@ -123,6 +123,110 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task ProjectSummariesReturnOnlyCurrentCallerRolesForTheirProjectAndTenant()
+    {
+        await using var db = CreateDbContext();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var projects = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var roles = new ProjectRoleAssignmentService(
+            new PooledDbContextFactory<ProjectsConfigDbContext>(CreateDbContextOptions()), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var subject = "role-display-admin-" + suffix;
+        var tenantA = "role-display-tenant-a-" + suffix;
+        var tenantB = "role-display-tenant-b-" + suffix;
+        string[] scopes = ["api.read", "projects.admin"];
+        var adminA = await SeedCallerAsync(db, store, subject, tenantA, scopes,
+            ProjectAuthorityResourceType.Tenant, tenantA, ProjectAuthorityRole.TenantAdmin);
+        var projectA = await projects.CreateProjectAsync(adminA, "Role display A", CancellationToken.None);
+        var projectAOther = await projects.CreateProjectAsync(adminA, "Role display A other", CancellationToken.None);
+        var adminB = await SeedCallerAsync(db, store, subject, tenantB, scopes,
+            ProjectAuthorityResourceType.Tenant, tenantB, ProjectAuthorityRole.TenantAdmin);
+        var projectB = await projects.CreateProjectAsync(adminB, "Role display B", CancellationToken.None);
+
+        var projectOwnerAssignment = await store.AssignRoleAsync(
+            adminA.MembershipId, ProjectAuthorityResourceType.Project, projectA.ProjectId,
+            ProjectAuthorityRole.Owner, "fixture");
+        await store.AssignRoleAsync(
+            adminA.MembershipId, ProjectAuthorityResourceType.Project, projectAOther.ProjectId,
+            ProjectAuthorityRole.Orchestrator, "fixture");
+        var otherActorMembership = await SeedMembershipAsync(store, "role-display-other-" + suffix, tenantA);
+        await store.AssignRoleAsync(
+            otherActorMembership, ProjectAuthorityResourceType.Project, projectA.ProjectId,
+            ProjectAuthorityRole.Owner, "fixture");
+        await store.AssignRoleAsync(
+            otherActorMembership, ProjectAuthorityResourceType.Project, projectA.ProjectId,
+            ProjectAuthorityRole.Viewer, "fixture");
+
+        // The same actor can belong to two tenants; each summary must stay within the selected membership.
+        var callerA = await ResolveCallerAsync(db, subject, tenantA, scopes);
+        await store.AssignRoleAsync(
+            callerA.MembershipId, ProjectAuthorityResourceType.Project, projectA.ProjectId,
+            ProjectAuthorityRole.Contributor, "fixture");
+        var summaryA = await projects.GetProjectAsync(callerA, projectA.ProjectId, CancellationToken.None);
+        Assert.Contains(summaryA.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            role.ResourceId == tenantA &&
+            role.Role == ProjectAuthorityRole.TenantAdmin);
+        Assert.Contains(summaryA.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Project &&
+            role.ResourceId == projectA.ProjectId &&
+            role.Role == ProjectAuthorityRole.Owner);
+        Assert.Contains(summaryA.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Project &&
+            role.ResourceId == projectA.ProjectId &&
+            role.Role == ProjectAuthorityRole.Contributor);
+        Assert.DoesNotContain(summaryA.EffectiveRoles, role =>
+            role.Role == ProjectAuthorityRole.Viewer ||
+            role.ResourceId == projectAOther.ProjectId ||
+            role.ResourceId == projectB.ProjectId ||
+            role.ResourceId == tenantB);
+        var listedSummaryA = (await projects.ListProjectsAsync(callerA, CancellationToken.None))
+            .Single(summary => summary.ProjectId == projectA.ProjectId);
+        Assert.Equal(summaryA.EffectiveRoles, listedSummaryA.EffectiveRoles);
+
+        var summaryAOther = await projects.GetProjectAsync(callerA, projectAOther.ProjectId, CancellationToken.None);
+        Assert.Contains(summaryAOther.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Project &&
+            role.ResourceId == projectAOther.ProjectId &&
+            role.Role == ProjectAuthorityRole.Orchestrator);
+        Assert.DoesNotContain(summaryAOther.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Project && role.ResourceId == projectA.ProjectId);
+
+        var callerB = await ResolveCallerAsync(db, subject, tenantB, scopes);
+        var summaryB = await projects.GetProjectAsync(callerB, projectB.ProjectId, CancellationToken.None);
+        Assert.Contains(summaryB.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            role.ResourceId == tenantB &&
+            role.Role == ProjectAuthorityRole.TenantAdmin);
+        Assert.DoesNotContain(summaryB.EffectiveRoles, role =>
+            role.ResourceId == tenantA || role.ResourceId == projectA.ProjectId);
+
+        // Keep a role in the resolved snapshot, then revoke it; the subsequent summary must use current owner state.
+        var revoked = await roles.RevokeAsync(
+            callerA, projectA.ProjectId, projectOwnerAssignment.AssignmentId, projectOwnerAssignment.Revision,
+            CancellationToken.None);
+        Assert.Equal(ProjectAuthorityRecordState.Revoked, revoked.State);
+        var staleSummary = await projects.GetProjectAsync(callerA, projectA.ProjectId, CancellationToken.None);
+        Assert.DoesNotContain(staleSummary.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Project &&
+            role.ResourceId == projectA.ProjectId &&
+            role.Role == ProjectAuthorityRole.Owner);
+        Assert.DoesNotContain(staleSummary.EffectiveRoles, role => role.Role == ProjectAuthorityRole.Viewer);
+
+        var refreshedCaller = await ResolveCallerAsync(db, subject, tenantA, scopes);
+        var refreshedSummary = await projects.GetProjectAsync(
+            refreshedCaller, projectA.ProjectId, CancellationToken.None);
+        Assert.DoesNotContain(refreshedSummary.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Project &&
+            role.ResourceId == projectA.ProjectId &&
+            role.Role == ProjectAuthorityRole.Owner);
+        Assert.Contains(refreshedSummary.EffectiveRoles, role =>
+            role.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            role.ResourceId == tenantA &&
+            role.Role == ProjectAuthorityRole.TenantAdmin);
+    }
+
+    [Fact]
     public async Task RoleAssignmentApiRejectsInvalidInputBeforeWriting()
     {
         await using var db = CreateDbContext();

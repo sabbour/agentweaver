@@ -7,13 +7,8 @@ import type { ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui/PageHeader';
 import { PageSection } from '../components/ui/PageSection';
-import {
-  accessSummary,
-  PERMISSION_LABELS,
-  permissionsForProject,
-  useAuthorizationContext,
-  useProjectSummary,
-} from './projectData';
+import type { EffectiveProjectRole } from './contracts';
+import { useProjectSummary } from './projectData';
 
 const useStyles = makeStyles({
   breadcrumb: {
@@ -69,11 +64,8 @@ export function Panel({ title, children, actions, description }: {
  * 0.x breadcrumb: `Projects / project` on the project home and
  * `Projects / project / page` on other project pages.
  */
-export function ProjectBreadcrumb({ projectId, page }: { projectId: string; page?: string }) {
+export function ProjectBreadcrumb({ projectId, page, name }: { projectId: string; page?: string; name: string }) {
   const styles = useStyles();
-  const project = useProjectSummary(projectId);
-  // Show the ID until the project name loads, or if it cannot load.
-  const name = project.data?.name ?? projectId;
   return (
     <nav className={styles.breadcrumb} aria-label="Breadcrumb">
       <Link to="/projects" className={styles.breadcrumbLink}>Projects</Link>
@@ -92,29 +84,26 @@ export function ProjectBreadcrumb({ projectId, page }: { projectId: string; page
 }
 
 /**
- * Shows what the signed-in user can do in a project, from the owner's
- * authorization context. The tooltip lists each permission and where it comes from.
+ * Shows the role names and resource scopes returned by the Projects owner.
+ * This display is informational; protected operations still perform their own owner checks.
  */
-export function ProjectAccessBadge({ projectId }: { projectId: string }) {
-  const context = useAuthorizationContext();
-  // Render nothing until permissions load, so the badge never shows a wrong guess.
-  if (!context.data) return null;
-  const permissions = permissionsForProject(context.data, projectId);
-  const summary = accessSummary(permissions);
-  // Tooltip text: each permission with its scope (project, tenant, or platform).
-  const detail = permissions.length === 0
-    ? 'You have no permissions in this project.'
-    : permissions.map((item) => `${PERMISSION_LABELS[item.permission]} (${item.scope})`).join(', ');
+export function ProjectRoleBadge({ roles }: { roles: readonly EffectiveProjectRole[] }) {
+  if (roles.length === 0) return null;
+  const label = (role: EffectiveProjectRole['role']) => `${role[0].toUpperCase()}${role.slice(1)}`;
+  const names = roles.map((role) => label(role.role)).join(' · ');
+  const detail = roles.map((role) =>
+    `${label(role.role)} (${role.resourceType === 'tenant' ? 'tenant' : 'project'}: ${role.resourceId})`,
+  ).join(', ');
   return (
     <Tooltip content={detail} relationship="description">
-      <Badge appearance="outline" color={summary === 'Can edit' ? 'brand' : 'informative'}>{summary}</Badge>
+      <Badge appearance="outline" color="informative">{names}</Badge>
     </Tooltip>
   );
 }
 
 /**
  * Page header used by every v1 page. On project routes it adds the 0.x
- * breadcrumb and the user's access badge.
+ * breadcrumb and current owner-confirmed role display.
  */
 export function PageHeading({ title, description, actions, page, breadcrumb = true }: {
   title: string;
@@ -125,14 +114,17 @@ export function PageHeading({ title, description, actions, page, breadcrumb = tr
   breadcrumb?: boolean;
 }) {
   const { projectId } = useParams();
-  // Breadcrumb and access badge only make sense on project routes. A page can
-  // pass breadcrumb={false} to hide the breadcrumb.
+  const project = useProjectSummary(projectId ?? '');
+  // One owner read supplies both the breadcrumb name and role display. No role
+  // is shown until that project's current summary arrives.
   return <PageHeader
     title={title}
     description={description}
-    breadcrumbs={projectId && breadcrumb ? <ProjectBreadcrumb projectId={projectId} page={page} /> : undefined}
+    breadcrumbs={projectId && breadcrumb ? (
+      <ProjectBreadcrumb projectId={projectId} page={page} name={project.data?.name ?? projectId} />
+    ) : undefined}
     actions={<>
-      {projectId && <ProjectAccessBadge projectId={projectId} />}
+      {projectId && project.data && <ProjectRoleBadge roles={project.data.effectiveRoles} />}
       {actions}
     </>}
   />;

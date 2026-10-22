@@ -17,9 +17,12 @@ and role assignments determine which projects are visible.
 3. Select the tile or its **Open** button.
 
 Each tile shows the project name, project ID, state, revision, and your
-access. Access is **Can edit**, **Can view**, or **No access**. The app reads it
-from your current authorization context. **Overview** also lists up to six
-recently updated active projects under **Recent projects**.
+owner-confirmed role names, such as **TenantAdmin**, **Owner**, or
+**Orchestrator**. Each role carries its tenant or project resource scope, and
+the same names appear in project headers. These labels are informational;
+Projects & Config continues to check current owner authority for every
+protected operation. **Overview** also lists up to six recently updated active
+projects under **Recent projects**.
 
 **Expected result:** The project's **Dashboard** opens.
 
@@ -156,9 +159,9 @@ are source candidates; the route list does not confirm deployment.
 
 | Operation | Gateway request | Owner | Result |
 | --- | --- | --- | --- |
-| List or refresh | `GET /api/v1/projects` | Projects & Config | Returns projects visible to the current caller. |
+| List or refresh | `GET /api/v1/projects` | Projects & Config | Returns visible projects with the current caller's effective role names and resource scopes. |
 | Create | `POST /api/v1/projects` with `{ "name": "..." }` | Projects & Config | Creates a project in the selected tenant; it does not grant project roles. |
-| Read the project | `GET /api/v1/projects/{projectId}` | Projects & Config | Returns the project summary. |
+| Read the project | `GET /api/v1/projects/{projectId}` | Projects & Config | Returns the project summary with the current caller's effective role names and resource scopes. |
 | Read configuration | `GET /api/v1/projects/{projectId}/configuration` | Projects & Config | Returns the configuration that the Dashboard readiness card uses. |
 | Save the GitHub repository | `PUT /api/v1/projects/{projectId}/configuration` | Projects & Config | Saves the repository for a project created from a GitHub repository. |
 | List runs | `GET /api/v1/projects/{projectId}/runs` | Orchestrator | Returns one page of runs, newest first. The `state` filter and `cursor` select the rows. |

@@ -40,7 +40,7 @@ function page(projectId: string, items: ProjectRunSummary[], nextCursor: string 
 }
 
 function project(projectId: string, name: string): ProjectSummary {
-  return { projectId, name, state: 'active', revision: 1, configurationRevision: 1, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' };
+  return { projectId, name, state: 'active', revision: 1, configurationRevision: 1, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', effectiveRoles: [] };
 }
 
 beforeEach(() => {
