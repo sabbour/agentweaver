@@ -546,11 +546,105 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
     ProjectsConfig__PrivilegedSetup__ApprovedIssuer: broker,
     ProjectsConfig__PrivilegedSetup__ApprovedTenantId: tenant,
     ProjectsConfig__PrivilegedSetup__ApprovedSubject: '518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0',
+    AgentHost__ModelBindingsRevision: 'p1-v1.0.1',
+    AgentHost__ModelBindings__reasoning__SourceMode: 'HostedCopilot',
+    AgentHost__ModelBindings__reasoning__Enabled: 'true',
+    AgentHost__ModelBindings__coding__SourceMode: 'HostedCopilot',
+    AgentHost__ModelBindings__coding__Enabled: 'true',
+    'AgentHost__ModelBindings__gpt-6.1-sol__SourceMode': 'HostedCopilot',
+    'AgentHost__ModelBindings__gpt-6.1-sol__Enabled': 'true',
+    'AgentHost__ModelBindings__gpt-6-luna__SourceMode': 'HostedCopilot',
+    'AgentHost__ModelBindings__gpt-6-luna__Enabled': 'true',
   });
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
     undefined);
   assert.equal(Object.keys(projects.data).some(key => key.includes('BrokerRunBinding')), false);
+});
+
+/** Return the binding revision, references and source modes from flat runtime keys. */
+function modelBindingView(data) {
+  const prefix = 'AgentHost__ModelBindings__';
+  const sourceModes = Object.fromEntries(Object.entries(data)
+    .filter(([key]) => key.startsWith(prefix) && key.endsWith('__SourceMode'))
+    .map(([key, value]) => [key.slice(prefix.length, -'__SourceMode'.length), value])
+    .sort(([left], [right]) => left.localeCompare(right)));
+  return { revision: data.AgentHost__ModelBindingsRevision, sourceModes };
+}
+
+/** Fail if the Projects binding copy carries anything beyond eligibility fields. */
+function assertEligibilityOnly(data, location) {
+  for (const [key, value] of Object.entries(data)) {
+    if (!key.startsWith('AgentHost__')) continue;
+    assert.match(key,
+      /^AgentHost__(?:ModelBindingsRevision|ModelBindings__[A-Za-z0-9._:-]+__(?:SourceMode|Enabled|SupportedReasoningEfforts__\d+))$/,
+      `${location}: ${key}`);
+    assert.doesNotMatch(key, /ModelId|Provider|BaseUrl|Header|Credential|ApiKey|Token/i, `${location}: ${key}`);
+    assert.doesNotMatch(value, /:\/\/|Bearer|key=/i, `${location}: ${key}`);
+  }
+}
+
+test('Events and Projects render identical model-binding references and revisions without provider data', async () => {
+  const { renderEventsProfile } = await import('../../../deploy/k8s/profiles/events-and-sessions/render.mjs');
+  const { renderProjectsProfile } = await import('../../../deploy/k8s/profiles/projects-config/render.mjs');
+  const readProfileInput = name => JSON.parse(readFileSync(
+    path.join(root, 'deploy', 'k8s', 'profiles', name, 'runtime-inputs.example.json'), 'utf8')).configuration;
+  const withoutBindings = configuration => Object.fromEntries(Object.entries(configuration)
+    .filter(([key]) => !key.startsWith('AgentHost__ModelBindings')));
+
+  // One source binding set feeds both profiles: Events receives model IDs, Projects only eligibility fields.
+  const source = {
+    revision: 'models-drift-r1',
+    bindings: {
+      reasoning: { ModelId: 'gpt-hosted', SourceMode: 'HostedCopilot', Enabled: 'true', efforts: [] },
+      coder: { ModelId: 'gpt-byok', SourceMode: 'Byok', Enabled: 'true', efforts: ['high', 'low'] },
+      retired: { ModelId: 'gpt-old', SourceMode: 'Byok', Enabled: 'false', efforts: ['medium'] },
+    },
+  };
+  const eventsConfiguration = withoutBindings(Object.fromEntries(Object.entries(readProfileInput('events-and-sessions'))
+    .map(([key, value]) => [key, value ?? events.data[key]])));
+  Object.assign(eventsConfiguration, {
+    Identity__Issuer: broker,
+    Identity__Audience: broker,
+    ProjectsConfig__AuthorizationContext__Audience: broker,
+    EventsAndSessions__OrchestratorOwner__Audience: broker,
+    AgentHost__ModelBindingsRevision: source.revision,
+  });
+  const projectsConfiguration = withoutBindings(readProfileInput('projects-config'));
+  Object.assign(projectsConfiguration, {
+    ProjectsConfig__Authentication__Authority: broker,
+    ProjectsConfig__Authentication__Audience: broker,
+    AgentHost__ModelBindingsRevision: source.revision,
+  });
+  for (const [reference, binding] of Object.entries(source.bindings)) {
+    const prefix = `AgentHost__ModelBindings__${reference}__`;
+    eventsConfiguration[`${prefix}ModelId`] = binding.ModelId;
+    eventsConfiguration[`${prefix}SourceMode`] = binding.SourceMode;
+    projectsConfiguration[`${prefix}SourceMode`] = binding.SourceMode;
+    projectsConfiguration[`${prefix}Enabled`] = binding.Enabled;
+    binding.efforts.forEach((effort, index) => {
+      projectsConfiguration[`${prefix}SupportedReasoningEfforts__${index}`] = effort;
+    });
+  }
+  const renderedEvents = renderEventsProfile({ configuration: eventsConfiguration }).data;
+  const renderedProjects = renderProjectsProfile({ configuration: projectsConfiguration }).data;
+  assert.deepEqual(modelBindingView(renderedProjects), modelBindingView(renderedEvents));
+  assert.deepEqual(Object.keys(modelBindingView(renderedProjects).sourceModes), ['coder', 'reasoning', 'retired']);
+  assertEligibilityOnly(renderedProjects, 'rendered Projects configuration');
+
+  // The deployed snapshots and the AgentHost example must also agree on references and revision.
+  const agentHost = JSON.parse(parse(readFileSync(
+    path.join(root, 'deploy', 'k8s', 'profiles', 'agenthost', 'runtime-config.example.yaml'), 'utf8'))
+    .data['appsettings.json']).AgentHost;
+  const agentHostView = {
+    revision: agentHost.ModelBindingsRevision,
+    sourceModes: Object.fromEntries(Object.entries(agentHost.ModelBindings)
+      .map(([reference, binding]) => [reference, binding.SourceMode])
+      .sort(([left], [right]) => left.localeCompare(right))),
+  };
+  assert.deepEqual(modelBindingView(projects.data), modelBindingView(events.data));
+  assert.deepEqual(modelBindingView(projects.data), agentHostView);
+  assertEligibilityOnly(projects.data, 'deployed Projects configuration');
 });
 
 // Keep the base policies in Kustomize and bound external names to their required ports.

@@ -101,6 +101,9 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
         npgsql => npgsql.MigrationsHistoryTable(
             "__ef_migrations_history", ProjectsConfigDbContext.Schema));
 });
+// Read-only eligibility copy of the AgentHost model bindings; malformed input stops startup, absent input means
+// model choices are reported as unavailable.
+builder.Services.AddSingleton(ModelBindingCapabilities.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectsConfigService>();
 builder.Services.AddScoped<ProjectRoleAssignmentService>();
 builder.Services.AddScoped<MarketplaceSourceStore>();

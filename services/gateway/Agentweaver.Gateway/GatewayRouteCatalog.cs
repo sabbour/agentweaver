@@ -139,6 +139,10 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/configuration",
             "updateProjectConfiguration", "Update project configuration", body: true,
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/configuration/choices",
+            "/api/projects/{projectId}/configuration/choices",
+            "getProjectConfigurationChoices", "Read eligible model and platform component choices",
+            forwardTenantSelector: true);
         // Casting remains owner-authorized; revisions travel in bodies, not idempotency headers.
         var casting = "/projects/{projectId}/casting";
         Add("POST", GatewayOwner.Projects, casting + "/proposals", "/api" + casting + "/proposals",

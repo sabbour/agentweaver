@@ -41,6 +41,59 @@ public sealed record VersionedProjectConfiguration(
     string UpdatedByActorId,
     DateTimeOffset CreatedAt);
 
+/// <summary>Read-only eligibility choices for model references and platform-selected provider components.</summary>
+public sealed record ProjectConfigurationChoices(
+    string ProjectId,
+    long ProjectConfigurationRevision,
+    long PlatformRuntimeRevision,
+    ProjectModelChoices Models,
+    ProjectProviderChoices Providers);
+
+/// <summary>
+/// Model references and reasoning choices that may be selected for future runs. <see cref="Choices"/> lists only
+/// enabled references from the deployment's model-binding copy; it is empty with an explicit unavailable state when
+/// no copy is configured. <see cref="SavedReferences"/> are references already saved in platform or project
+/// configuration and are never eligible solely because they are saved.
+/// </summary>
+public sealed record ProjectModelChoices(
+    string State,
+    string? UnavailableReason,
+    string RuntimeEligibility,
+    string? BindingsRevision,
+    string DefaultReasoningEffort,
+    ImmutableArray<ProjectModelChoice> Choices,
+    ImmutableArray<ProjectModelReferenceChoice> SavedReferences);
+
+/// <summary>
+/// One enabled model reference. BYOK references list their configured reasoning efforts
+/// (<c>reasoningEffortSource</c> <c>modelBinding</c>); hosted Copilot references list none because their efforts
+/// are verified against the SDK model list when a run starts (<c>verifiedAtRunStart</c>).
+/// </summary>
+public sealed record ProjectModelChoice(
+    string Reference,
+    string SourceMode,
+    string ReasoningEffortSource,
+    ImmutableArray<string> ReasoningEfforts);
+
+/// <summary>A model reference and the owner-held configuration sources that contain it.</summary>
+public sealed record ProjectModelReferenceChoice(
+    string Reference,
+    ImmutableArray<string> Sources);
+
+/// <summary>Platform provider selections and project overrides that are retained but ignored.</summary>
+public sealed record ProjectProviderChoices(
+    bool ProjectOverridesSupported,
+    ImmutableArray<ProjectProviderSeamChoice> Seams,
+    ImmutableArray<string> IgnoredProjectOverrides);
+
+/// <summary>Selected provider IDs for one platform seam, including explicit upstream availability.</summary>
+public sealed record ProjectProviderSeamChoice(
+    string Seam,
+    string Cardinality,
+    string State,
+    string? UnavailableReason,
+    ImmutableArray<string> ProviderIds);
+
 /// <summary>Current platform runtime defaults, or an empty revision-zero head before the first configuration.</summary>
 public sealed record VersionedPlatformRuntimeDefaults(
     long Revision,
@@ -82,18 +135,55 @@ public sealed partial class ProjectsConfigService
     private readonly ProviderCatalog providerCatalog;
     private readonly TimeProvider timeProvider;
     private readonly IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory;
+    private readonly ModelBindingCapabilities modelBindings;
 
-    /// <summary>Creates the service over the request context, provider catalog, clock, and optional transaction factory.</summary>
+    /// <summary>
+    /// Creates the service over the request context, provider catalog, clock, optional transaction factory, and
+    /// optional model-binding copy. Without a copy, model choices are reported as unavailable.
+    /// </summary>
     public ProjectsConfigService(
         ProjectsConfigDbContext db,
         ProviderCatalog providerCatalog,
         TimeProvider timeProvider,
-        IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory = null)
+        IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory = null,
+        ModelBindingCapabilities? modelBindings = null)
     {
         this.db = db;
         this.providerCatalog = providerCatalog;
         this.timeProvider = timeProvider;
         this.dbContextFactory = dbContextFactory;
+        this.modelBindings = modelBindings ?? ModelBindingCapabilities.Unavailable;
+    }
+
+    /// <summary>
+    /// Reads current-tenant project model references and platform provider selections for display and selection.
+    /// These choices describe eligibility only: they provision nothing and never alter accepted immutable run pins.
+    /// </summary>
+    public async Task<ProjectConfigurationChoices> GetProjectConfigurationChoicesAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        var project = await FindProjectAsync(
+            caller, projectId, ProjectAccess.Read, cancellationToken).ConfigureAwait(false);
+        var configurationRevision = await db.ProjectConfigurationRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(
+                item => item.ProjectId == project.ProjectId && item.Revision == project.ConfigurationRevision,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw ProjectConfigException.NotFound();
+        var configuration = Deserialize<ProjectConfiguration>(configurationRevision.ConfigurationJson);
+        var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
+        var platform = await ReadPlatformDefaultsAsync(platformHead, cancellationToken).ConfigureAwait(false);
+        var modelChoices = BuildModelChoices(configuration, platform, modelBindings);
+
+        return new ProjectConfigurationChoices(
+            project.ProjectId,
+            configurationRevision.Revision,
+            platform.Revision,
+            modelChoices,
+            BuildProviderChoices(configuration));
     }
 
     /// <summary>Loads a project after checking current read or write authority for marketplace operations.</summary>
@@ -424,6 +514,9 @@ public sealed partial class ProjectsConfigService
             .ConfigureAwait(false)
             ?? throw ProjectConfigException.NotFound();
         var previous = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+        ArgumentNullException.ThrowIfNull(configuration);
+        RejectSubmittedProviderOverrides(configuration);
+        configuration = KeepStoredProviderOverrides(previous, configuration);
         var normalized = await SkillContentService.ValidateConfigurationAsync(
             db, project.ProjectId, previous, configuration, cancellationToken).ConfigureAwait(false);
         if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
@@ -597,7 +690,7 @@ public sealed partial class ProjectsConfigService
             request = request with { Context = CreateInteractiveRunContext(projectConfiguration, defaults) };
 
         var modelSelections = ResolveModelSelections(projectConfiguration, defaults, request.Context);
-        var providers = ResolveProviders(projectConfiguration, request.Context);
+        var providers = ResolveProviders(request.Context);
         var egress = ProjectConfigurationValidator.ResolveEgress(
             defaults.EgressBaseline,
             projectConfiguration.EgressNarrowing,
@@ -1199,9 +1292,7 @@ public sealed partial class ProjectsConfigService
         ImmutableArray<ModelTaskSelectionReference> TaskSelections);
 
     /// <summary>Resolves provider candidates by seam cardinality and preserves all selected candidate/version metadata.</summary>
-    private ImmutableArray<EffectiveProviderSelection> ResolveProviders(
-        ProjectConfiguration project,
-        RunSelectionContext context)
+    private ImmutableArray<EffectiveProviderSelection> ResolveProviders(RunSelectionContext context)
     {
         var resolver = new ProviderResolver(providerCatalog);
         var selections = ImmutableArray.CreateBuilder<EffectiveProviderSelection>();
@@ -1220,11 +1311,9 @@ public sealed partial class ProjectsConfigService
                 case ProviderCardinality.Exclusive:
                 case ProviderCardinality.PlatformSingleton:
                 {
-                    var providerOverride = project.ProviderOverrides
-                        .SingleOrDefault(item => item.Seam == requirement.Seam)?.ProviderId;
                     var result = resolver.Resolve(new ProviderResolutionRequest(
                         requirement.Seam,
-                        providerOverride,
+                        null,
                         version,
                         requirement.RequiredOptionsSchemaVersion,
                         requirement.RequiredCapabilities));
@@ -1235,11 +1324,9 @@ public sealed partial class ProjectsConfigService
                 }
                 case ProviderCardinality.OrderedComposite:
                 {
-                    var projectIds = project.OrderedProviderOverrides
-                        .SingleOrDefault(item => item.Seam == requirement.Seam)?.ProviderIds;
                     var result = resolver.ResolveOrdered(new OrderedProviderResolutionRequest(
                         requirement.Seam,
-                        projectIds,
+                        null,
                         version,
                         requirement.RequiredOptionsSchemaVersion,
                         requirement.RequiredCapabilities));
@@ -1494,6 +1581,222 @@ public sealed partial class ProjectsConfigService
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical, JsonOptions);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Lists enabled model references from the model-binding copy and the references already saved in platform and
+    /// project configuration. Saved references are reported separately and never become choices.
+    /// </summary>
+    internal static ProjectModelChoices BuildModelChoices(
+        ProjectConfiguration project,
+        VersionedPlatformRuntimeDefaults platform,
+        ModelBindingCapabilities modelBindings)
+    {
+        var references = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        void Add(string? reference, string source)
+        {
+            if (string.IsNullOrWhiteSpace(reference))
+                return;
+            if (!references.TryGetValue(reference, out var sources))
+            {
+                sources = new HashSet<string>(StringComparer.Ordinal);
+                references.Add(reference, sources);
+            }
+            sources.Add(source);
+        }
+
+        if (platform.Defaults is { } defaults)
+        {
+            Add(defaults.ModelSelection?.Reference, "platformDefault");
+            foreach (var item in defaults.ModelTaskDefaults)
+                Add(item.Selection.Reference, "platformTask");
+            foreach (var item in defaults.ModelRoleDefaults)
+                Add(item.Selection.Reference, "platformRole");
+            foreach (var item in defaults.ModelAgentDefaults)
+                Add(item.Selection.Reference, "platformAgent");
+        }
+
+        Add(project.ModelSelection?.Reference, "projectSaved");
+        foreach (var item in project.ModelTaskOverrides)
+            Add(item.Selection.Reference, "projectSaved");
+        foreach (var item in project.ModelRoleOverrides)
+            Add(item.Selection.Reference, "projectSaved");
+        foreach (var item in project.ModelAgentOverrides)
+            Add(item.Selection.Reference, "projectSaved");
+
+        string[] sourceOrder = ["platformDefault", "platformTask", "platformRole", "platformAgent", "projectSaved"];
+        var savedReferences = references.OrderBy(item => item.Key, StringComparer.Ordinal)
+            .Select(item => new ProjectModelReferenceChoice(
+                item.Key,
+                sourceOrder.Where(item.Value.Contains).ToImmutableArray()))
+            .ToImmutableArray();
+        // Without a deployment-supplied model-binding copy there is no capability source, so report that plainly
+        // instead of treating saved references as eligible.
+        if (!modelBindings.IsAvailable)
+        {
+            return new ProjectModelChoices(
+                "unavailable",
+                "model_capability_catalog_unavailable",
+                "verifiedAtRunStart",
+                null,
+                "high",
+                [],
+                savedReferences);
+        }
+
+        // Only enabled bindings are selectable; disabled ones are omitted because AgentHost refuses them at run start.
+        // An enabled BYOK binding with no efforts is omitted too: AgentHost accepts only a listed effort for BYOK, so
+        // no run could start with it. BYOK efforts come from the binding. Hosted efforts are left empty, even if the
+        // binding lists some, because AgentHost checks them against the SDK model list with the run's credential at
+        // start, which this owner cannot read.
+        var choices = modelBindings.Bindings
+            .Where(binding => binding.Enabled &&
+                (binding.SourceMode != "Byok" || !binding.SupportedReasoningEfforts.IsEmpty))
+            .Select(binding => binding.SourceMode == "Byok"
+                ? new ProjectModelChoice(binding.Reference, "byok", "modelBinding", binding.SupportedReasoningEfforts)
+                : new ProjectModelChoice(binding.Reference, "hostedCopilot", "verifiedAtRunStart", []))
+            .ToImmutableArray();
+        return new ProjectModelChoices(
+            "available",
+            null,
+            "verifiedAtRunStart",
+            modelBindings.Revision,
+            "high",
+            choices,
+            savedReferences);
+    }
+
+    private ProjectProviderChoices BuildProviderChoices(ProjectConfiguration project)
+    {
+        var seams = ImmutableArray.CreateBuilder<ProjectProviderSeamChoice>();
+        foreach (var seam in Enum.GetValues<ProviderSeam>())
+        {
+            var providerIds = GetPlatformProviderIds(seam);
+            if (providerIds.IsEmpty)
+                continue;
+
+            string? unavailableReason = null;
+            foreach (var id in providerIds)
+            {
+                if (!providerCatalog.TryGetProvider(id, out var registration) || registration is null)
+                {
+                    unavailableReason = "provider_not_registered";
+                    break;
+                }
+                if (!registration.Enabled)
+                {
+                    unavailableReason = "provider_disabled";
+                    break;
+                }
+            }
+
+            seams.Add(new ProjectProviderSeamChoice(
+                ToWireLabel(seam),
+                ToWireLabel(ProviderSeams.Cardinality(seam)),
+                unavailableReason is null ? "selected" : "unavailable",
+                unavailableReason,
+                providerIds));
+        }
+
+        var ignoredOverrides = project.ProviderOverrides.Select(item => ToWireLabel(item.Seam))
+            .Concat(project.OrderedProviderOverrides.Select(item => ToWireLabel(item.Seam)))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(item => item, StringComparer.Ordinal)
+            .ToImmutableArray();
+        return new ProjectProviderChoices(false, seams.ToImmutable(), ignoredOverrides);
+    }
+
+    private ImmutableArray<string> GetPlatformProviderIds(ProviderSeam seam)
+    {
+        var providerIds = ImmutableArray.CreateBuilder<string>();
+        if (providerCatalog.TryGetDefault(seam, out var defaultId) && defaultId is not null)
+            providerIds.Add(defaultId);
+        if (providerCatalog.TryGetOrdered(seam, out var ordered))
+            providerIds.AddRange(ordered);
+        if (seam == ProviderSeam.NetworkPolicy)
+            foreach (var layer in Enum.GetValues<NetworkPolicyLayer>())
+                if (providerCatalog.TryGetLayer(layer, out var layerId) && layerId is not null)
+                    providerIds.Add(layerId);
+        if (seam == ProviderSeam.Cost)
+            providerIds.AddRange(providerCatalog.MeterSourceSelections.Select(item => item.ProviderId));
+        return providerIds.ToImmutable();
+    }
+
+    private static string ToWireLabel<TEnum>(TEnum value) where TEnum : struct, Enum =>
+        JsonNamingPolicy.CamelCase.ConvertName(value.ToString());
+
+    /// <summary>
+    /// Rejects caller-submitted project provider overrides. Any non-empty <c>providerOverrides</c> or
+    /// <c>orderedProviderOverrides</c> is refused, including a copy of legacy stored values; callers send empty
+    /// arrays and the owner carries stored values forward with <see cref="KeepStoredProviderOverrides"/>.
+    /// </summary>
+    internal static void RejectSubmittedProviderOverrides(ProjectConfiguration? submitted)
+    {
+        if (submitted is null)
+            return;
+        if (!submitted.ProviderOverrides.IsDefaultOrEmpty || !submitted.OrderedProviderOverrides.IsDefaultOrEmpty)
+            throw ProviderOverrideUnsupported();
+    }
+
+    /// <summary>
+    /// Copies the stored provider overrides onto a new revision so legacy values are never deleted by a write.
+    /// Run selection ignores them; a default (missing) array is left for validation to reject.
+    /// </summary>
+    internal static ProjectConfiguration KeepStoredProviderOverrides(
+        ProjectConfiguration stored, ProjectConfiguration configuration) => configuration with
+    {
+        ProviderOverrides = configuration.ProviderOverrides.IsDefault || stored.ProviderOverrides.IsDefault
+            ? configuration.ProviderOverrides
+            : stored.ProviderOverrides,
+        OrderedProviderOverrides = configuration.OrderedProviderOverrides.IsDefault || stored.OrderedProviderOverrides.IsDefault
+            ? configuration.OrderedProviderOverrides
+            : stored.OrderedProviderOverrides,
+    };
+
+    /// <summary>
+    /// Rejects an owner-stored proposal draft whose provider overrides differ from the stored configuration,
+    /// such as a proposal drafted before project provider overrides were refused. An empty draft array is
+    /// accepted because confirmation restores the stored values rather than clearing them.
+    /// </summary>
+    internal static void RequireStoredProviderOverridesUnchanged(
+        ProjectConfiguration stored, ProjectConfiguration draft)
+    {
+        if ((!draft.ProviderOverrides.IsDefaultOrEmpty &&
+                !SameProviderOverrides(draft.ProviderOverrides, stored.ProviderOverrides)) ||
+            (!draft.OrderedProviderOverrides.IsDefaultOrEmpty &&
+                !SameOrderedProviderOverrides(draft.OrderedProviderOverrides, stored.OrderedProviderOverrides)))
+            throw ProviderOverrideUnsupported();
+    }
+
+    private static ProjectConfigException ProviderOverrideUnsupported() => ProjectConfigException.Invalid(
+        "project_provider_override_unsupported",
+        "Platform components other than models are selected by the platform and cannot be overridden by a project. " +
+        "Send empty providerOverrides and orderedProviderOverrides; stored values are kept and ignored.");
+
+    private static bool SameProviderOverrides(
+        ImmutableArray<ProjectProviderOverride> incoming,
+        ImmutableArray<ProjectProviderOverride> previous) =>
+        !previous.IsDefault &&
+        incoming.Length == previous.Length &&
+        incoming.All(item => item is not null) &&
+        incoming.SequenceEqual(previous);
+
+    private static bool SameOrderedProviderOverrides(
+        ImmutableArray<ProjectOrderedProviderOverride> incoming,
+        ImmutableArray<ProjectOrderedProviderOverride> previous)
+    {
+        if (previous.IsDefault || incoming.Length != previous.Length)
+            return false;
+        for (var index = 0; index < incoming.Length; index++)
+        {
+            var current = incoming[index];
+            var prior = previous[index];
+            if (current is null || prior is null || current.ProviderIds.IsDefault || prior.ProviderIds.IsDefault ||
+                current.Seam != prior.Seam ||
+                !current.ProviderIds.SequenceEqual(prior.ProviderIds, StringComparer.Ordinal))
+                return false;
+        }
+        return true;
     }
 
     private sealed record LegacyEgressFingerprint(string Host, int Port, EgressProtocol Protocol);

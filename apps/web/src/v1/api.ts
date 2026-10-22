@@ -63,6 +63,7 @@ import type {
   OwnerRunStatus,
   ProjectAuthorizationContextResponse,
   ProjectConfiguration,
+  ProjectConfigurationChoices,
   ProjectRole,
   ProjectRoleAssignmentList,
   ProjectRoleAssignmentView,
@@ -140,6 +141,15 @@ function problemMessage(problem: Record<string, unknown>, status: number): strin
 /** Encodes each path segment independently so identifiers cannot alter route structure. */
 export function encodeSegments(...segments: string[]): string {
   return segments.map((part) => encodeURIComponent(part)).join('/');
+}
+
+/**
+ * Projects cannot override platform provider components, so writes send empty
+ * provider override arrays. The service keeps any legacy stored values, which
+ * run selection ignores.
+ */
+export function withoutProviderOverrides(configuration: ProjectConfiguration): ProjectConfiguration {
+  return { ...configuration, providerOverrides: [], orderedProviderOverrides: [] };
 }
 
 /**
@@ -401,6 +411,21 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /** Reads current-tenant model choices and platform provider selections for one project. */
+  getProjectConfigurationChoices(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectConfigurationChoices> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'configuration', 'choices')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
   /** Replaces project configuration using the caller's expected revision. */
   updateProjectConfiguration(
     token: string,
@@ -411,7 +436,7 @@ export class AgentweaverGatewayClient {
   ): Promise<VersionedProjectConfiguration> {
     return this.request(token, `/projects/${encodeSegments(projectId)}/configuration`, {
       method: 'PUT',
-      body: JSON.stringify({ expectedRevision, configuration }),
+      body: JSON.stringify({ expectedRevision, configuration: withoutProviderOverrides(configuration) }),
     }, this.baseUrl, tenantSelector);
   }
 
@@ -2045,7 +2070,7 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'casting', 'proposals')}`,
-      { method: 'POST', body: JSON.stringify(request) },
+      { method: 'POST', body: JSON.stringify({ ...request, draft: withoutProviderOverrides(request.draft) }) },
       this.baseUrl,
       tenantSelector,
     );
@@ -2065,7 +2090,7 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId)}`,
-      { method: 'PATCH', body: JSON.stringify(request) },
+      { method: 'PATCH', body: JSON.stringify({ ...request, draft: withoutProviderOverrides(request.draft) }) },
       this.baseUrl,
       tenantSelector,
     );

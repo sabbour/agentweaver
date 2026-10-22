@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ConfigurationFields } from './ConfigurationFields';
 import { needsModelCredential } from './modelCredential';
-import type { ProjectConfiguration } from './contracts';
+import type { ProjectConfiguration, ProjectConfigurationChoices } from './contracts';
 
 /** A complete configuration with unrelated exact references to preserve during edits. */
 function fixture(): ProjectConfiguration {
@@ -13,6 +13,37 @@ function fixture(): ProjectConfiguration {
     orderedProviderOverrides: [{ seam: 'tools', providerIds: ['first', 'second'] }],
     agentCharters: [], casting: [], blueprintWorkflowReferences: [], skills: [], runLimits: {},
     sourceControl: { authMode: 'githubApp', appConnectionId: 'saved-connection' },
+  };
+}
+
+function ownerChoices(): ProjectConfigurationChoices {
+  return {
+    projectId: 'project-1',
+    projectConfigurationRevision: 4,
+    platformRuntimeRevision: 2,
+    models: {
+      state: 'available',
+      unavailableReason: null,
+      runtimeEligibility: 'verifiedAtRunStart',
+      bindingsRevision: 'models-r7',
+      defaultReasoningEffort: 'xhigh',
+      choices: [
+        { reference: 'platform-model', sourceMode: 'byok', reasoningEffortSource: 'modelBinding', reasoningEfforts: ['low', 'xhigh'] },
+        { reference: 'planner', sourceMode: 'hostedCopilot', reasoningEffortSource: 'verifiedAtRunStart', reasoningEfforts: [] },
+      ],
+      savedReferences: [],
+    },
+    providers: {
+      projectOverridesSupported: false,
+      seams: [{
+        seam: 'sandbox',
+        cardinality: 'exclusive',
+        state: 'selected',
+        unavailableReason: null,
+        providerIds: ['sandbox-platform'],
+      }],
+      ignoredProjectOverrides: ['memory', 'tools'],
+    },
   };
 }
 
@@ -43,14 +74,115 @@ describe('readable project configuration', () => {
     });
   });
 
-  it('preserves provider ordering and all unrelated settings when editing one provider', () => {
+  it('shows platform-selected providers and legacy overrides without editable project controls', () => {
     const configuration = fixture();
     const onChange = vi.fn();
-    render(<ConfigurationFields configuration={configuration} onChange={onChange} />);
-    fireEvent.change(screen.getByLabelText('memory implementation'), { target: { value: 'other' } });
-    expect(onChange).toHaveBeenCalledWith({
-      ...configuration, providerOverrides: [{ seam: 'memory', providerId: 'other' }],
+    render(<ConfigurationFields configuration={configuration} onChange={onChange} choices={ownerChoices()} part="components" />);
+    const sandbox = screen.getByLabelText('sandbox (exclusive)') as HTMLInputElement;
+    expect(sandbox.value).toBe('sandbox-platform');
+    expect(sandbox.readOnly).toBe(true);
+    expect(screen.getByText('Saved project override (ignored)')).toBeTruthy();
+    expect(screen.getByText('memory: native')).toBeTruthy();
+    expect(screen.getByText('tools: first → second')).toBeTruthy();
+    expect(screen.queryByLabelText('memory implementation')).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('uses owner-backed model choices and keeps an unlisted saved value visible as not eligible', () => {
+    const configuration = fixture();
+    const choices = ownerChoices();
+    choices.models.savedReferences = [
+      { reference: 'model-default', sources: ['projectSaved'] },
+      { reference: 'platform-model', sources: ['platformDefault'] },
+    ];
+    const onChange = vi.fn();
+    render(<ConfigurationFields configuration={configuration} onChange={onChange} choices={choices}
+      savedSelection={configuration.modelSelection} part="models" />);
+    const defaultModel = screen.getByLabelText('Default model reference') as HTMLSelectElement;
+    expect(Array.from(defaultModel.options).map((option) => option.textContent))
+      .toEqual(['Use platform default', 'platform-model', 'planner', 'model-default (not currently eligible)']);
+    expect(defaultModel.value).toBe('model-default');
+    expect(screen.getByLabelText('Planning model').tagName).toBe('SELECT');
+    // Only saved references outside the eligible list are called out.
+    expect(screen.getByText('Saved model references not currently eligible')).toBeTruthy();
+    expect(screen.getByText('model-default (projectSaved)')).toBeTruthy();
+    expect(screen.queryByText('platform-model (platformDefault)')).toBeNull();
+
+    fireEvent.change(defaultModel, { target: { value: 'platform-model' } });
+    expect((onChange.mock.calls[0][0] as ProjectConfiguration).modelSelection).toEqual({
+      ...configuration.modelSelection,
+      reference: 'platform-model',
+      credentialReference: null,
     });
+  });
+
+  it('offers only the reasoning levels a BYOK binding lists and marks an unlisted saved level', () => {
+    const configuration: ProjectConfiguration = {
+      ...fixture(), modelSelection: { reference: 'platform-model', reasoningEffort: 'high' }, modelTaskOverrides: [],
+    };
+    render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={ownerChoices()} part="models" />);
+    const defaultEffort = screen.getByLabelText('Default reasoning effort') as HTMLSelectElement;
+    expect(Array.from(defaultEffort.options).map((option) => option.textContent)).toEqual([
+      'Use platform default (Extra high)', 'High (saved; not listed for this model)', 'Low', 'Extra high',
+    ]);
+    expect(screen.queryByText(/checked when a run starts/)).toBeNull();
+  });
+
+  it('explains that hosted reasoning levels are checked at run start and never shows an empty select', () => {
+    render(<ConfigurationFields configuration={fixture()} onChange={vi.fn()} choices={ownerChoices()} part="models" />);
+    // The planning task uses the hosted "planner" reference.
+    const planningEffort = screen.getByLabelText('Planning reasoning effort') as HTMLSelectElement;
+    expect(Array.from(planningEffort.options).map((option) => option.textContent))
+      .toEqual(['Use default', 'Low', 'Medium', 'High', 'Extra high']);
+    expect(screen.getAllByText('Reasoning levels for this model are checked when a run starts.')).toHaveLength(1);
+  });
+
+  it('restores the full saved hosted binding after clearing to the platform default', () => {
+    const configuration: ProjectConfiguration = {
+      ...fixture(),
+      modelSelection: {
+        reference: 'platform-model', reasoningEffort: 'low', sourceMode: 'hostedCopilot', connectionId: 'connection-1',
+      },
+    };
+    const saved = configuration.modelSelection;
+    const onChange = vi.fn();
+    const { rerender } = render(<ConfigurationFields configuration={configuration} onChange={onChange}
+      choices={ownerChoices()} savedSelection={saved} part="models" />);
+    fireEvent.change(screen.getByLabelText('Default model reference'), { target: { value: '' } });
+    const cleared = onChange.mock.calls[0][0] as ProjectConfiguration;
+    expect(cleared.modelSelection).toBeNull();
+
+    rerender(<ConfigurationFields configuration={cleared} onChange={onChange}
+      choices={ownerChoices()} savedSelection={saved} part="models" />);
+    fireEvent.change(screen.getByLabelText('Default model reference'), { target: { value: 'platform-model' } });
+    expect((onChange.mock.calls[1][0] as ProjectConfiguration).modelSelection).toEqual(saved);
+  });
+
+  it('reports the missing model-binding list and lists saved references as unverified', () => {
+    const configuration = fixture();
+    const unavailable = ownerChoices();
+    unavailable.models.state = 'unavailable';
+    unavailable.models.unavailableReason = 'model_capability_catalog_unavailable';
+    unavailable.models.bindingsRevision = null;
+    unavailable.models.choices = [];
+    unavailable.models.savedReferences = [
+      { reference: 'model-default', sources: ['projectSaved'] },
+      { reference: 'platform-model', sources: ['platformDefault'] },
+    ];
+    render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={unavailable} part="models" />);
+    expect(screen.getByText(/project service has no runtime model-binding list configured/)).toBeTruthy();
+    expect(screen.getByText(/not verified until a run starts/)).toBeTruthy();
+    expect(screen.getByText('Saved model references (not verified as eligible)')).toBeTruthy();
+    expect(screen.getByText('model-default (projectSaved)')).toBeTruthy();
+    expect(screen.getByText('platform-model (platformDefault)')).toBeTruthy();
+    // Saved references never become selectable choices.
+    expect(screen.getByLabelText('Default model reference').tagName).toBe('INPUT');
+    expect(screen.getByLabelText('Planning model').tagName).toBe('INPUT');
+
+    const failedRender = render(<ConfigurationFields configuration={configuration} onChange={vi.fn()}
+      choicesError part="models" />);
+    expect(screen.getByText(/choices could not be loaded/)).toBeTruthy();
+    failedRender.unmount();
   });
 
   it('clears a credential pin when the default model changes and restores it for the saved model', () => {

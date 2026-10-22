@@ -27,14 +27,62 @@ const privilegedConfigurationFields = [
   'ProjectsConfig__PrivilegedSetup__ApprovedTenantId',
 ];
 
-function exactFields(value, fields, location) {
+// Projects Config receives only the eligibility fields of the AgentHost model bindings. Model IDs, provider
+// URLs, headers and credential references stay with AgentHost, so those keys are rejected here. References
+// cannot contain ':' or '__' because .NET reads both as configuration hierarchy separators.
+const modelBindingRevisionKey = 'AgentHost__ModelBindingsRevision';
+const modelBindingFieldPattern =
+  /^AgentHost__ModelBindings__([A-Za-z0-9.-]+(?:_[A-Za-z0-9.-]+)*)__(SourceMode|Enabled|SupportedReasoningEfforts__(0|[1-9][0-9]*))$/;
+const reasoningEfforts = ['low', 'medium', 'high', 'xhigh'];
+
+/** Require the declared fields and allow only model-binding keys validated separately. */
+function exactFields(value, fields, location, allowAdditionalField = () => false) {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error(`${location} must be an explicit object.`);
   for (const field of Object.keys(value)) {
-    if (!fields.includes(field)) throw new Error(`${location}: unsupported field '${field}'.`);
+    if (!fields.includes(field) && !allowAdditionalField(field))
+      throw new Error(`${location}: unsupported field '${field}'.`);
   }
   for (const field of fields) {
     if (!Object.hasOwn(value, field)) throw new Error(`${location}: missing field '${field}'.`);
+  }
+}
+
+/**
+ * Validate the optional read-only model-binding copy. Absent keys mean model choices are reported as
+ * unavailable; any partial or malformed copy fails here, matching the checks the service repeats at startup.
+ */
+function validateModelBindings(configuration) {
+  const bindings = new Map();
+  for (const [key, value] of Object.entries(configuration)) {
+    if (!key.startsWith('AgentHost__ModelBindings__')) continue;
+    const match = modelBindingFieldPattern.exec(key);
+    if (!match) throw new Error(`Projects configuration: unsupported model binding field '${key}'.`);
+    const [, reference, field, index] = match;
+    const binding = bindings.get(reference) ?? { efforts: new Map() };
+    if (index === undefined) binding[field] = value;
+    else binding.efforts.set(Number(index), value);
+    bindings.set(reference, binding);
+  }
+  const hasRevision = Object.hasOwn(configuration, modelBindingRevisionKey);
+  if (!hasRevision && bindings.size === 0) return;
+  if (bindings.size === 0)
+    throw new Error('Projects configuration requires at least one model binding when a model-bindings revision is set.');
+  if (typeof configuration[modelBindingRevisionKey] !== 'string' ||
+      !/^[A-Za-z0-9._:-]{1,256}$/.test(configuration[modelBindingRevisionKey]))
+    throw new Error('Projects configuration requires a valid model-bindings revision.');
+  for (const [reference, binding] of bindings) {
+    // Effort indexes must be 0..n-1 so a gap cannot hide a configured value.
+    const ordered = [...binding.efforts.entries()].sort(([left], [right]) => left - right);
+    const efforts = ordered.every(([index], position) => index === position)
+      ? ordered.map(([, value]) => value) : null;
+    if (!['HostedCopilot', 'Byok'].includes(binding.SourceMode) ||
+        !['true', 'false'].includes(binding.Enabled) ||
+        reference.length > 256 ||
+        efforts === null ||
+        efforts.some(effort => !reasoningEfforts.includes(effort)) ||
+        new Set(efforts).size !== efforts.length)
+      throw new Error(`Projects configuration: model binding '${reference}' is incomplete or invalid.`);
   }
 }
 
@@ -85,7 +133,8 @@ export function renderProjectsProfile(input) {
   exactFields(input, ['configuration', ...(hasPrivilegedSetup ? ['privilegedSetupConfiguration'] : [])], 'Projects profile');
 
   const data = input.configuration;
-  exactFields(data, requiredConfiguration, 'Projects configuration');
+  exactFields(data, requiredConfiguration, 'Projects configuration',
+    key => key === modelBindingRevisionKey || key.startsWith('AgentHost__ModelBindings__'));
   for (const key of requiredConfiguration) {
     if (typeof data[key] !== 'string' || !data[key].trim() ||
         data[key] !== data[key].trim() || /[\u0000-\u001f\u007f]/.test(data[key]))
@@ -95,6 +144,7 @@ export function renderProjectsProfile(input) {
     if (data[key] !== value) throw new Error(`Projects configuration: '${key}' differs from the admitted Projects runtime mapping.`);
   }
   issuerHost(data.ProjectsConfig__Authentication__Authority);
+  validateModelBindings(data);
   return { data: {
     ...data,
     ...(hasPrivilegedSetup ? privilegedConfiguration(input.privilegedSetupConfiguration, data) : {}),

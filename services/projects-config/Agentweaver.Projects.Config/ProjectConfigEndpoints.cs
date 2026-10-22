@@ -301,6 +301,30 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        projects.MapGet("/{projectId}/configuration/choices", async (
+            string projectId,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_query", "This endpoint does not accept query parameters.");
+                return Results.Ok(await service.GetProjectConfigurationChoicesAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
         projects.MapPut("/{projectId}/configuration", async (
             string projectId,
             UpdateProjectConfigurationRequest request,

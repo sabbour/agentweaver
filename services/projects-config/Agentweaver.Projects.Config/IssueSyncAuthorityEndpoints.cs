@@ -114,9 +114,6 @@ public static class IssueSyncAuthorityEndpoints
         var source = configuration.Configuration.SourceControl;
         if (source?.AuthMode != SourceControlAuthMode.GitHubApp || source.IdentityConnectionId is null)
             throw new RuntimeAuthorizationException("issue_sync_repository_not_selected");
-        if (configuration.Configuration.ProviderOverrides.Any(provider =>
-            provider.Seam == ProviderSeam.SourceControl && provider.ProviderId != SourceControlProviderIds.GitHub))
-            throw new RuntimeAuthorizationException("issue_sync_provider_unavailable");
         return new(projectId, actor.TenantId, actor.ActorId, source.IdentityConnectionId, source.Repository);
     }
 }

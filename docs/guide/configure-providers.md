@@ -33,10 +33,22 @@ the services or providers are deployed.
 | Cost | `copilot.usage-cost` | Selected for the `copilot.nano_aiu` meter source. It prices supported Copilot usage from a versioned rate card. |
 | Network policy | `cilium` | Selected for the required L3/L4 layer. The adapter also advertises its supported FQDN, CIDR, and DNS capabilities. |
 
-The catalog currently permits no project-level provider overrides. Cost is
-selected by meter source rather than by a general project default. Network
-policy is selected by layer. Do not edit only an application setting to change
-either selection.
+Projects cannot override provider selections for non-model platform
+components. These selections come from the platform catalog: Cost is selected
+by meter source rather than by a general project default, and Network Policy
+is selected by layer. Project model configuration remains independently
+selectable.
+
+The authenticated project configuration choices endpoint exposes current
+platform provider selections for display alongside model references and
+supported reasoning efforts. It is not a provisioning check or a promise that
+an upstream provider or resource is available. Configuration writes must send
+empty provider-override arrays; any non-empty value returns
+`400 project_provider_override_unsupported`. Legacy project provider overrides
+remain in stored revisions for compatibility but are ignored by new
+selection; they are not automatically removed or migrated. See
+[Project settings](../experience/configuration.md) for the owner-backed
+choices and save behavior.
 
 ## Understand source candidates
 
@@ -164,6 +176,13 @@ secrets in the model-binding ConfigMap or headers. An optional
 `SupportedReasoningEfforts` entries must be unique values from `low`,
 `medium`, `high`, or `xhigh`. These contracts describe source support; the
 checked-in deployment profile does not select BYOK.
+
+Projects & Config receives a read-only copy of each binding's source mode,
+enabled state, and BYOK reasoning efforts, plus the same revision, so project
+settings can list eligible model references. The copy never contains model IDs,
+provider settings, headers, or credential references. Keep it in step with the
+AgentHost map; see
+[Projects & Config settings](../reference/runtime-configuration.md#projects-config-settings).
 
 ## Configure spend budgets
 

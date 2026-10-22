@@ -1490,6 +1490,54 @@ export interface VersionedProjectConfiguration {
   createdAt: string;
 }
 
+/** Read-only choices describing model eligibility and platform-selected provider seams. */
+export interface ProjectConfigurationChoices {
+  projectId: string;
+  projectConfigurationRevision: number;
+  platformRuntimeRevision: number;
+  models: {
+    state: 'available' | 'unavailable';
+    /** The project service has no runtime model-binding copy; choices are empty when unavailable. */
+    unavailableReason: 'model_capability_catalog_unavailable' | null;
+    runtimeEligibility: 'verifiedAtRunStart';
+    /** Revision of the model-binding copy the choices came from; null when unavailable. */
+    bindingsRevision: string | null;
+    defaultReasoningEffort: ReasoningEffort;
+    /** Enabled runtime model bindings. Disabled bindings and saved-only references are never listed. */
+    choices: ProjectModelChoice[];
+    /** References already saved in platform or project configuration. Saved does not mean eligible. */
+    savedReferences: ProjectModelReferenceChoice[];
+  };
+  providers: {
+    projectOverridesSupported: false;
+    seams: Array<{
+      seam: string;
+      cardinality: string;
+      state: 'selected' | 'unavailable';
+      unavailableReason: 'provider_not_registered' | 'provider_disabled' | null;
+      providerIds: string[];
+    }>;
+    ignoredProjectOverrides: string[];
+  };
+}
+
+/**
+ * One enabled model reference. BYOK references list their configured reasoning efforts; hosted references list
+ * none because their reasoning levels are verified when a run starts.
+ */
+export interface ProjectModelChoice {
+  reference: string;
+  sourceMode: 'hostedCopilot' | 'byok';
+  reasoningEffortSource: 'modelBinding' | 'verifiedAtRunStart';
+  reasoningEfforts: ReasoningEffort[];
+}
+
+/** A model reference and the owner-held configuration sources that contain it. */
+export interface ProjectModelReferenceChoice {
+  reference: string;
+  sources: Array<'platformDefault' | 'platformTask' | 'platformRole' | 'platformAgent' | 'projectSaved'>;
+}
+
 /** Provider metadata considered when resolving an effective seam selection. */
 export interface ProviderCandidate {
   seam: string;
