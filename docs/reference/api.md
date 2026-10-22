@@ -562,8 +562,9 @@ wrongly tell a client that the project has no pull requests; the 503 says the
 records don't exist yet. Migration 032 is
 code-only: startup, the default migrator, and the P1 initializer don't apply it.
 
-These routes are the data source for issue and pull request pickers. The web
-picker doesn't use them yet.
+These routes are the data source for the Priority issue and pull request
+pickers. When pull request recording has not started, the picker explains that
+records are unavailable rather than treating the response as an empty list.
 
 ### Project metrics and usage
 

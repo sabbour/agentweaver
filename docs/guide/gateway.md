@@ -176,7 +176,9 @@ response reports that time in `coverage.recordedSince`. Before migration 032 is
 applied, the list returns `503 pull_request_records_unavailable` instead of an
 empty list.
 
-The web picker doesn't use these lists yet.
+The Priority picker uses these lists. When pull request recording has not
+started, it explains that records are unavailable instead of treating the
+response as an empty list.
 
 ## Read project metrics and usage
 

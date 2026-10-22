@@ -60,10 +60,17 @@ describe('Priority source control choices', () => {
   it('distinguishes unavailable pull request storage from an empty stored list', async () => {
     vi.mocked(gatewayClient.listProjectPullRequests).mockRejectedValueOnce(
       new GatewayError(503, { code: 'pull_request_records_unavailable' }, 'Pull request records are not available.'));
-    render(<PrioritySourceControl projectId="p1" kind="pull_request" />);
-    await screen.findByRole('alert');
+    const onSelect = vi.fn();
+    const view = render(<PrioritySourceControl projectId="p1" kind="pull_request" onSelect={onSelect} />);
+    await screen.findByText('This server does not record pull requests yet.');
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByText('No stored pull requests match this state.')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(screen.queryByText(/pull_request_records_unavailable|HTTP 503/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Link pull request' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(gatewayClient.listProjectPullRequests).toHaveBeenCalledTimes(1);
+    view.unmount();
+    render(<PrioritySourceControl projectId="p1" kind="pull_request" />);
     await screen.findByText('No stored pull requests match this state.');
     expect(screen.getByText(/Earlier pull requests are not included/)).toBeTruthy();
   });
