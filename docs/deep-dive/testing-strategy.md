@@ -19,6 +19,7 @@ surface journey does not prove every native execution boundary.
 | `scripts/ui-harness/` | Injected-page observation and owner receipt checks |
 | `scripts/mcp-harness/` | MCP transport, discovery, and tool-result tests |
 | `scripts/harness-shared/` | Target/auth guards, journeys, redaction, and acceptance results |
+| `apps/web/e2e/` | Playwright journeys against the built Web app with fake Broker and Gateway services, including Priority create/order, notes, conversation links, and reloads |
 | `scripts/coverage/` | Coverage collection and receipt guards |
 | `.github/workflows/v1-ci.yml` and `v1-docs-ci.yml` | Automatic source and documentation validation |
 | Integration-image, release-pack, and continuation workflows | Artifact preparation and controlled publication |
@@ -44,6 +45,15 @@ reproduce SQLSTATE `42501` on migration history, verify the production
 migration/grant path, repair a missing grant on a no-pending-migrations rerun,
 and reject history writes. They also confirm that read-only verification
 does not repair missing grants. These cases do not change live permissions.
+
+The Orchestrator store suites also prove that optional migration 032 stays
+optional. The default migration set leaves it unapplied, verification accepts
+a schema with or without it but rejects a partial apply, and the explicit
+apply step is idempotent. The full owner journey in
+`CoordinationMessageIntegrationTests` starts the Orchestrator without 032,
+serves the existing routes, and gets `503 pull_request_records_unavailable`
+from the pull request list. It then applies 032 and checks that only new
+create or reuse results are recorded.
 
 Harnesses preserve HTTP errors, owner denials, and `202 Accepted` responses as
 distinct from completed work. They record correlation and revision/fence
@@ -202,12 +212,14 @@ repeated downloads and installs, without caching mutable databases, browser cont
 PR, push, and manual CI runs never collect coverage. The weekly
 `v1-coverage.yml` workflow reuses the same jobs with instrumentation, combines
 the reports without a second pass, and publishes separate .NET, Web, and Node
-line-coverage badges plus one Copilot coverage-improvement issue.
+line-coverage badges plus one Copilot coverage-improvement issue. Each suite
+artifact is bound to its run attempt, so after a failed-jobs rerun the combined
+report uses only the newest passing attempt of each suite.
 The [testing guide](../guide/testing.md#understand-v1-pull-request-ci)
 describes path dependencies, cache invalidation, retained skip behavior and
 the measured performance acceptance criteria. Its
 [coverage section](../guide/testing.md#measure-v1-coverage-weekly) covers the
-schedule, denominators, and one-time Copilot token setup. Controlled journeys
+schedule, denominators, attempt binding, and one-time Copilot token setup. Controlled journeys
 are not automatic deployed acceptance.
 
 The `go` job runs `gofmt`, `go vet`, and `go test` for the Go reference tools in

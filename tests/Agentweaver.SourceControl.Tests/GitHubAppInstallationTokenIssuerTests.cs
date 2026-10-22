@@ -70,6 +70,48 @@ public sealed class GitHubAppInstallationTokenIssuerTests
     }
 
     [Fact]
+    public async Task IssueSyncMintRequestsOnlyIssueWriteAndAcceptsNoPushOrPullRequestAuthority()
+    {
+        var handler = new StubHandler(async (request, _) =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            Assert.Equal([789L], body.RootElement.GetProperty("repository_ids").EnumerateArray()
+                .Select(item => item.GetInt64()).ToArray());
+            var permissions = body.RootElement.GetProperty("permissions");
+            Assert.Single(permissions.EnumerateObject());
+            Assert.Equal("write", permissions.GetProperty("issues").GetString());
+            return JsonResponse("""
+                {"token":"issue-token","expires_at":"2026-10-08T09:47:00Z",
+                 "permissions":{"issues":"write","metadata":"read"}}
+                """);
+        });
+        var time = new FrozenTimeProvider(Now);
+        var key = NewKey(time);
+        var result = await CreateIssuer(handler, time).MintIssueSyncAsync(456, 789, key, default);
+        Assert.True(result.IssueWriteGranted);
+        Assert.False(key.IsUsable());
+        result.Credential.Invalidate();
+    }
+
+    [Theory]
+    [InlineData("\"contents\":\"read\",")]
+    [InlineData("\"contents\":\"write\",")]
+    [InlineData("\"pull_requests\":\"write\",")]
+    [InlineData("\"administration\":\"write\",")]
+    public async Task IssueSyncMintRejectsAnyAdditionalNonMetadataPermission(string extra)
+    {
+        var time = new FrozenTimeProvider(Now);
+        var key = NewKey(time);
+        var handler = new StubHandler((_, _) => Task.FromResult(JsonResponse(
+            "{\"token\":\"issue-token\",\"expires_at\":\"2026-10-08T09:47:00Z\",\"permissions\":{" +
+            extra + "\"issues\":\"write\",\"metadata\":\"read\"}}")));
+        var error = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+            CreateIssuer(handler, time).MintIssueSyncAsync(456, 789, key, default));
+        Assert.Equal(SourceControlFailureCode.RemoteOutcomeUncertain, error.Code);
+        Assert.False(key.IsUsable());
+    }
+
+    [Fact]
     public async Task RejectsAdditionalPermissionsAndInvalidatesPrivateKey()
     {
         var handler = new StubHandler((_, _) => Task.FromResult(JsonResponse(

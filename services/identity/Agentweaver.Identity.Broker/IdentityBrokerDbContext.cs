@@ -17,6 +17,8 @@ public sealed class IdentityBrokerDbContext : DbContext
     }
 
     public DbSet<BrokerUser> Users => Set<BrokerUser>();
+    public DbSet<IssueSyncGrant> IssueSyncGrants => Set<IssueSyncGrant>();
+    public DbSet<IssueSyncMintAudit> IssueSyncMintAudit => Set<IssueSyncMintAudit>();
 
     public DbSet<PendingAuthorization> PendingAuthorizations => Set<PendingAuthorization>();
 
@@ -47,6 +49,8 @@ public sealed class IdentityBrokerDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);
+        modelBuilder.ApplyConfiguration(new IssueSyncGrantModel());
+        modelBuilder.ApplyConfiguration(new IssueSyncMintAuditModel());
         RuntimeGrantModel.Configure(modelBuilder);
         CopilotConnectionModel.Configure(modelBuilder);
         RemoteMcpOAuthModel.Configure(modelBuilder);

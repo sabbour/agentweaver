@@ -8,6 +8,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** Builds a minimal journal event. Pass another run or project id to fake an out-of-scope event. */
 function event(
   eventId: string,
   position: number,
@@ -27,6 +28,7 @@ function event(
   };
 }
 
+/** A promise the test resolves by hand, to control when a response "arrives". */
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((complete) => { resolve = complete; });
@@ -62,6 +64,8 @@ describe('run journal event merging', () => {
       hasMore: false,
     });
     let connectedCursor: string | null = null;
+    // The live stream repeats event-2 (already replayed) to prove it is not shown twice,
+    // then stays open until the test unmounts the hook.
     const liveStream = vi.spyOn(gatewayClient, 'streamEvents').mockImplementation(
       async function* (_token, _projectId, _runId, cursor, signal) {
         connectedCursor = cursor;
@@ -80,6 +84,7 @@ describe('run journal event merging', () => {
       expect(result.current.connected).toBe(true);
     });
     expect(firstReplay).toHaveBeenCalledTimes(2);
+    // Live reading must start from the last replay cursor, so no events fall in a gap.
     expect(connectedCursor).toBe('cursor-2');
     expect(liveStream).toHaveBeenCalledOnce();
     expect(result.current.cursor).toBe('cursor-3');
@@ -92,6 +97,7 @@ describe('run journal event merging', () => {
       nextCursor: string;
       hasMore: boolean;
     }>();
+    // Run r1's replay hangs until the test resolves it. Run r2's replay answers at once.
     vi.spyOn(gatewayClient, 'replayEvents').mockImplementation((_token, _projectId, runId) =>
       runId === 'r1'
         ? oldReplay.promise
@@ -127,6 +133,7 @@ describe('run journal event merging', () => {
       ));
 
     await act(async () => {
+      // Let the old r1 replay finish late. Its events must not leak into the r2 journal.
       oldReplay.resolve({
         events: [event('stale-run', 99, 'r1')],
         nextCursor: 'stale-cursor',
@@ -153,7 +160,56 @@ describe('run journal event merging', () => {
     await waitFor(() =>
       expect(result.current.error?.message).toContain('outside the exact project and run scope'));
     expect(result.current.events).toEqual([]);
+    // A scope violation during replay is fatal, so the live stream is never opened.
     expect(liveStream).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('reconnects quietly from the cursor when the live stream closes cleanly', async () => {
+    vi.spyOn(gatewayClient, 'replayEvents').mockResolvedValue({ events: [], nextCursor: 'cursor-0', hasMore: false });
+    const cursors: Array<string | null> = [];
+    // First connection sends one event and closes cleanly. The second stays open.
+    vi.spyOn(gatewayClient, 'streamEvents').mockImplementation(
+      async function* (_token, _projectId, _runId, cursor, signal) {
+        cursors.push(cursor);
+        if (cursors.length === 1) {
+          yield { cursor: 'cursor-1', event: event('event-1', 1) };
+          return;
+        }
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      },
+    );
+    const { result, unmount } = renderHook(() => useRunJournal('broker-token', 'p1', 'r1'));
+
+    await waitFor(() => expect(cursors).toEqual(['cursor-0', 'cursor-1']));
+    // A clean close is routine, so no error is shown to the user.
+    expect(result.current.error).toBeNull();
+    expect(result.current.events.map((item) => item.eventId)).toEqual(['event-1']);
+    unmount();
+  });
+
+  it('reports a transient stream failure only after three in a row', async () => {
+    vi.spyOn(gatewayClient, 'replayEvents').mockResolvedValue({ events: [], nextCursor: null, hasMore: false });
+    let attempts = 0;
+    const errors: Array<string | null> = [];
+    vi.spyOn(gatewayClient, 'streamEvents').mockImplementation(
+      // eslint-disable-next-line require-yield
+      async function* () {
+        attempts += 1;
+        throw new Error('network down');
+      },
+    );
+    const { result, unmount } = renderHook(() => {
+      const journal = useRunJournal('broker-token', 'p1', 'r1');
+      // Record the error seen on every render, to prove it stayed null before the third failure.
+      errors.push(journal.error?.message ?? null);
+      return journal;
+    });
+
+    // Backoff waits add up (0.5s + 1s), so allow more than the default wait time.
+    await waitFor(() => expect(result.current.error?.message).toBe('network down'), { timeout: 5000 });
+    expect(attempts).toBe(3);
+    expect(errors.slice(0, errors.indexOf('network down')).every((message) => message === null)).toBe(true);
     unmount();
   });
 
@@ -173,6 +229,7 @@ describe('run journal event merging', () => {
     await waitFor(() =>
       expect(result.current.error?.message).toContain('outside the exact project and run scope'));
     expect(result.current.events).toEqual([]);
+    // Called once: a scope violation is not retried like a network failure.
     expect(liveStream).toHaveBeenCalledOnce();
     expect(result.current.connected).toBe(false);
     unmount();

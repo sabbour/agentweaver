@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/runtime-profile.schema.json",
+  "title": "AgentSuite runtime profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mediaType", "id", "runtime", "harness", "renderer", "configurationABI", "imageRequired"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0-draft"},
+    "mediaType": {"const": "application/vnd.agentsuite.runtime.profile.v1+json"},
+    "id": {"allOf": [{"$ref": "suite.schema.json#/$defs/id"}, {"$ref": "eval-evidence.schema.json#/$defs/token"}]},
+    "runtime": {"$ref": "eval-evidence.schema.json#/$defs/implementation"},
+    "harness": {"$ref": "eval-evidence.schema.json#/$defs/implementation"},
+    "renderer": {"$ref": "eval-evidence.schema.json#/$defs/implementation"},
+    "configurationABI": {
+      "description": "Opaque bounded identifier whose support is enforced by execution consumers.",
+      "$ref": "suite.schema.json#/$defs/id"
+    },
+    "imageRequired": {"type": "boolean"}
+  }
+}

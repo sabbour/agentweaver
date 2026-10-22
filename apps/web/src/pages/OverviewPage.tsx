@@ -1,6 +1,6 @@
-import {
-  apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+import { gatewayClient } from '../v1/api';
+import { useAuth } from '../v1/AuthContext';
+import { formatCost } from '../v1/projectMetrics';
 import {
   Badge,
   Button,
@@ -14,7 +14,6 @@ import {
   Text,
   tokens,
 } from '@fluentui/react-components';
-import { AiCredits } from '../components/AiCredits';
 import { MetricCardHeader, MetricEmptyState } from '../components/MetricTypography';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import {
@@ -40,25 +39,22 @@ import {
   Pulse24Regular,
   WarningRegular,
 } from '@fluentui/react-icons';
-import { collectPagedItems } from '../api/pagedResults';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type {
-  BoardDto,
-  ModelUsageBreakdownDto,
-  OverviewDto,
-  Project,
-  ProjectMetricsDto,
-  RecentActivityDto,
-} from '../api/types';
+import type { ProjectMetrics, ProjectSummary, ProjectUsage, ProjectUsageCost, UserNotification } from '../v1/contracts';
+import type { RecentActivityDto } from '../api/types';
 const REFRESH_MS = 10000;
 /** Range keys used for both the current and comparison windows. */
 type TimeRange = '7d' | '30d' | '90d';
 /** Coarse state derived from the active and queued counts for one project. */
-type ProjectStatus = 'active' | 'queued' | 'idle';
+type ProjectStatus = 'active' | 'queued' | 'idle' | 'unknown';
 
-/** Dashboard rollup assembled from the project, team, run, and board endpoints. */
-interface ProjectRollup { project: Project; activeCount: number; queuedCount: number; lastActivityUtc: string | null; agentCount: number | null; runCount: number | null; issueCount: number | null }
+/** Dashboard rollup assembled from project, configuration, run, backlog, and metric reads. */
+interface ProjectRollup { project: ProjectSummary; repository: string | null; activeCount: number | null; blockedCount: number | null; lastActivityUtc: string | null; agentCount: number | null; runCount: string | null; taskCount: number | null; activityUnavailable: boolean; activity: RecentActivityDto[] }
+/** Only the fields supplied by published v1 owners; no synthetic global health or event data. */
+interface OverviewData { generated_utc: string; active_projects: number; recent_activity: RecentActivityDto[]; notifications: UserNotification[]; notificationsUnavailable: boolean; metricsUnavailable: boolean; previousMetricsUnavailable: boolean; usageUnavailable: boolean }
+/** Per-model measured usage. A null count means the owner could not aggregate all records. */
+interface ModelUsageRow { model: string; invocationCount: number | null; tokens: number | null; cost: ProjectUsageCost[] }
 /** Actionable health or queue item shown in the overview attention list. */
 interface AttentionItem { key: string; severity: 'error' | 'warning'; title: string; subtitle: string; time?: string | null; action: string; to: string }
 // Warm monochrome ramp (no blue) — model segments separate by lightness, not hue.
@@ -153,20 +149,27 @@ function timeRangeDates(range: TimeRange, previous = false): { from: string; to:
   return { from: from.toISOString(), to: to.toISOString() };
 }
 /** Converts API and non-API failures into text for the overview alert. */
-function formatError(err: unknown): string { return err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err); }
+function formatError(err: unknown): string { return err instanceof Error ? err.message : String(err); }
 /** Turns event-kind identifiers into readable labels for activity rows. */
 function humanizeKind(kind: string): string { const spaced = (kind || 'activity').replace(/_/g, ' '); return spaced.charAt(0).toUpperCase() + spaced.slice(1); }
 /** Displays a repository owner/name when available, otherwise identifies the project as internal. */
-function projectSlug(project: Project): string {
-  if (!project.source_repository) return 'Internal Project';
-  const source = project.source_repository.replace(/\.git$/i, '');
+function projectSlug(repository: string | null): string {
+  // The v1 project summary has no repository URL; use the saved configuration when present.
+  if (!repository) return 'Repository unavailable';
+  const source = repository.replace(/\.git$/i, '');
   const match = source.match(/github\.com[:/](?<owner>[^/]+)\/(?<repo>[^/]+)$/i);
   if (match?.groups) return `${match.groups.owner}/${match.groups.repo}`;
   const parts = source.split(/[\\/]/).filter(Boolean);
   return parts.length >= 2 ? `${parts.at(-2)}/${parts.at(-1)}` : source;
 }
 /** Gives active work priority over queued work when presenting project status. */
-function statusFor(rollup: ProjectRollup): ProjectStatus { if (rollup.activeCount > 0) return 'active'; if (rollup.queuedCount > 0) return 'queued'; return 'idle'; }
+function statusFor(rollup: ProjectRollup): ProjectStatus {
+  // An unreadable run list is not evidence that the project is idle.
+  if (rollup.activeCount === null || rollup.blockedCount === null) return 'unknown';
+  if (rollup.activeCount > 0) return 'active';
+  if (rollup.blockedCount > 0) return 'queued';
+  return 'idle';
+}
 /** Identifies activity kinds treated as failed or requiring attention. */
 function isFailure(kind: string): boolean { return ['failed', 'merge_failed', 'declined', 'rai_flagged'].includes(kind); }
 /** Selects the activity icon from the event kind without changing its meaning. */
@@ -183,7 +186,7 @@ function LoadingOverview() {
       <div className={styles.healthBlock}>
         <div>
           <Text className={styles.healthTitle}>Preparing overview</Text>
-          <Text className={styles.healthCopy}>Loading live sessions, queued work, service health, and recent activity.</Text>
+          <Text className={styles.healthCopy}>Loading projects, recent runs, usage, and notifications.</Text>
         </div>
         <Badge appearance="tint" color="subtle">Live</Badge>
       </div>
@@ -208,103 +211,93 @@ function LoadingOverview() {
   </div>;
 }
 /** One compact operational count in the overview's glance row. */
-function GlanceItem({ label, value, styles }: { label: string; value: number; styles: ReturnType<typeof useStyles> }) {
+function GlanceItem({ label, value, styles }: { label: string; value: number | string; styles: ReturnType<typeof useStyles> }) {
   return <div className={styles.glanceItem}><Text className={styles.glanceValue}>{value}</Text><Text className={styles.glanceLabel}>{label}</Text></div>;
 }
-/** Counts task cards across board columns, returning null when the board was unavailable. */
-function boardIssueCount(board: BoardDto | null): number | null { return board ? board.columns.reduce((sum, column) => sum + column.cards.filter((card) => card.kind === 'task').length, 0) : null; }
-/** Counts run cards across board columns, returning null when the board was unavailable. */
-function boardRunCount(board: BoardDto | null): number | null { return board ? board.columns.reduce((sum, column) => sum + column.cards.filter((card) => card.kind === 'run').length, 0) : null; }
-/** Sums invocation and AI-credit usage by model across the selected projects. */
-function aggregateModelUsage(metrics: ProjectMetricsDto[]): ModelUsageBreakdownDto[] {
-  const byModel = new Map<string, ModelUsageBreakdownDto>();
-  for (const metric of metrics) for (const row of metric.modelUsage ?? []) { const existing = byModel.get(row.model) ?? { model: row.model, invocationCount: 0, totalNanoAiu: 0 }; existing.invocationCount += row.invocationCount; existing.totalNanoAiu += row.totalNanoAiu; byModel.set(row.model, existing); }
-  return [...byModel.values()].sort((a, b) => b.totalNanoAiu - a.totalNanoAiu);
+/** Adds only measured counts, preserving unknown totals instead of treating null as zero. */
+function sumMeasured(a: number | null, b: number | null): number | null {
+  return a === null || b === null ? null : a + b;
 }
-/** Averages available per-project latency percentiles; absent metrics return null. */
-function aggregatePercentiles(metrics: ProjectMetricsDto[], selector: (metric: ProjectMetricsDto) => ProjectMetricsDto['responseDuration']): { p50: number | null; p95: number | null } | null {
-  const rows = metrics.flatMap((metric) => selector(metric) ?? []);
-  if (rows.length === 0) return null;
-  const avg = (values: Array<number | null | undefined>) => { const present = values.filter((value): value is number => typeof value === 'number'); return present.length ? present.reduce((sum, value) => sum + value, 0) / present.length : null; };
-  return { p50: avg(rows.map((row) => row.p50Ms)), p95: avg(rows.map((row) => row.p95Ms)) };
+/** Groups owner-reported model requests and tokens; costs keep their own units and dispositions. */
+function aggregateModelUsage(usages: ProjectUsage[]): ModelUsageRow[] {
+  const byModel = new Map<string, ModelUsageRow>();
+  for (const usage of usages) for (const row of usage.usageByModel) {
+    const existing = byModel.get(row.id);
+    const tokens = row.inputTokens != null && row.outputTokens != null
+      ? row.inputTokens + row.outputTokens : null;
+    byModel.set(row.id, {
+      model: row.id,
+      invocationCount: existing ? sumMeasured(existing.invocationCount, row.requestCount) : row.requestCount,
+      tokens: existing ? sumMeasured(existing.tokens, tokens) : tokens,
+      // Keep amounts per owner and unit; adding arbitrary currencies or unpriced amounts is invalid.
+      cost: [...(existing?.cost ?? []), ...row.cost],
+    });
+  }
+  return [...byModel.values()].sort((a, b) => (b.tokens ?? -1) - (a.tokens ?? -1));
 }
-/** Formats latency values while preserving missing measurements as an em dash. */
-function formatMs(ms: number | null | undefined): string { if (ms == null) return '—'; return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)}s`; }
-/** Computes a run-weighted success rate and count of scored runs across projects. */
-function aggregateSuccessRate(metrics: ProjectMetricsDto[]): { rate: number | null; basis: number } {
-  let weighted = 0; let total = 0;
-  for (const metric of metrics) for (const row of metric.leaderboard ?? []) if (row.runsTotal > 0) { weighted += row.successRate * row.runsTotal; total += row.runsTotal; }
-  return { rate: total ? weighted / total : null, basis: total };
-}
-/** Combines invocation counts by date and returns values in date order. */
-function aggregateTrend(metrics: ProjectMetricsDto[]): number[] {
-  const byDate = new Map<string, number>();
-  for (const metric of metrics) for (const point of metric.invocationTrend ?? []) byDate.set(point.date, (byDate.get(point.date) ?? 0) + point.count);
-  return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, count]) => count);
-}
-/** Draws a small normalized trend line for success-related activity. */
-function Sparkline({ points }: { points: number[] }) {
-  if (!points.length) return null;
-  const width = 160; const height = 42; const max = Math.max(1, ...points);
-  const path = points.map((point, index) => { const x = points.length <= 1 ? 0 : (index / (points.length - 1)) * width; const y = height - (point / max) * (height - 4) - 2; return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`; }).join(' ');
-  return <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} aria-label="Success trend"><path d={path} fill="none" stroke={tokens.colorBrandForeground1} strokeWidth={2} /></svg>;
+/** Calculates project-run success from completed and succeeded run counts. */
+function aggregateSuccessRate(metrics: ProjectMetrics[]): { rate: number | null; basis: number } {
+  const basis = metrics.reduce((sum, item) => sum + item.completedRuns, 0);
+  const succeeded = metrics.reduce((sum, item) => sum + item.succeededRuns, 0);
+  return { rate: basis ? succeeded / basis * 100 : null, basis };
 }
 /** Draws a usage-share donut for the first five model rows. */
-function Donut({ rows }: { rows: ModelUsageBreakdownDto[] }) {
-  const styles = useStyles(); const total = rows.reduce((sum, row) => sum + row.invocationCount, 0); if (total <= 0) return null;
+function Donut({ rows }: { rows: ModelUsageRow[] }) {
+  const styles = useStyles(); const total = rows.reduce((sum, row) => sum + (row.invocationCount ?? 0), 0); if (total <= 0) return null;
   const segments = rows.slice(0, 5).reduce<{ start: number; segments: string[] }>((acc, row, index) => {
-    const pct = (row.invocationCount / total) * 100;
+    const pct = ((row.invocationCount ?? 0) / total) * 100;
     acc.segments.push(`${modelColors[index % modelColors.length]} ${acc.start}% ${acc.start + pct}%`);
     return { start: acc.start + pct, segments: acc.segments };
   }, { start: 0, segments: [] }).segments;
   return <div style={{ background: `conic-gradient(${segments.join(', ')})` }} className={styles.donut} aria-label="Model usage distribution" />;
 }
 /** Renders aggregated model usage, latency, and weighted success evidence. */
-function UsageTiles({ metrics, previousMetrics, range, recentProjectId }: { metrics: ProjectMetricsDto[]; previousMetrics: ProjectMetricsDto[]; range: TimeRange; recentProjectId?: string }) {
+function UsageTiles({ metrics, previousMetrics, usages, range, recentProjectId, metricsUnavailable, previousMetricsUnavailable, usageUnavailable }: { metrics: ProjectMetrics[]; previousMetrics: ProjectMetrics[]; usages: ProjectUsage[]; range: TimeRange; recentProjectId?: string; metricsUnavailable: boolean; previousMetricsUnavailable: boolean; usageUnavailable: boolean }) {
   const styles = useStyles();
-  const usage = aggregateModelUsage(metrics);
-  const totalInvocations = usage.reduce((sum, row) => sum + row.invocationCount, 0);
-  const response = aggregatePercentiles(metrics, (metric) => metric.responseDuration);
-  const ttft = aggregatePercentiles(metrics, (metric) => metric.timeToFirstToken);
+  const usage = aggregateModelUsage(usages);
+  const totalInvocations = usage.reduce((sum, row) => sum + (row.invocationCount ?? 0), 0);
   const success = aggregateSuccessRate(metrics);
   const previous = aggregateSuccessRate(previousMetrics);
-  const delta = success.rate != null && previous.rate != null ? success.rate - previous.rate : null;
+  const delta = !previousMetricsUnavailable && success.rate != null && previous.rate != null ? success.rate - previous.rate : null;
   const detailsLink = recentProjectId ? `/projects/${recentProjectId}/observability` : '/projects';
   return <div className={styles.usageGrid}>
   <div className={mergeClasses(styles.usageTile, styles.usagePrimary)}>
-      <MetricCardHeader title="Token consumption by model" subtitle={`AIC in the selected ${range} range.`} />
-      {usage.length === 0 ? <MetricEmptyState>No data yet.</MetricEmptyState> : <div className={styles.list}>{usage.slice(0, 4).map((row) => <div key={row.model}><div className={styles.modelRow}><Text className={styles.modelName}>{row.model}</Text>{row.totalNanoAiu > 0 ? <AiCredits totalNanoAiu={row.totalNanoAiu} /> : <Text>—</Text>}</div><div className={styles.barTrack}><div className={styles.bar} style={{ width: `${Math.max(4, (row.totalNanoAiu / Math.max(1, usage[0].totalNanoAiu)) * 100)}%` }} /></div></div>)}</div>}
+      <MetricCardHeader title="Token consumption by model" subtitle={`Measured input and output tokens in the ${range} range.`} />
+      {usageUnavailable ? <MetricEmptyState>Model usage is unavailable from the Gateway.</MetricEmptyState> : usage.length === 0 ? <MetricEmptyState>No usage reported yet.</MetricEmptyState> : <div className={styles.list}>{usage.slice(0, 4).map((row) => <div key={row.model}><div className={styles.modelRow}><Text className={styles.modelName}>{row.model}</Text><Text>{row.tokens == null ? 'Tokens unavailable' : `${row.tokens.toLocaleString()} tokens`}</Text></div><Text className={styles.muted}>{row.cost.length ? row.cost.map(formatCost).join(', ') : 'Cost unavailable'}</Text><div className={styles.barTrack}><div className={styles.bar} style={{ width: `${row.tokens == null ? 0 : Math.max(4, (row.tokens / Math.max(1, usage[0].tokens ?? 1)) * 100)}%` }} /></div></div>)}</div>}
       <Link className={styles.link} to={detailsLink}>View details →</Link>
     </div>
     <div className={styles.usageTile}>
       <MetricCardHeader title="Model usage distribution" subtitle="Share by usage events." />
-      {usage.length === 0 ? <MetricEmptyState>No data yet.</MetricEmptyState> : <div className={styles.donutWrap}><Donut rows={usage} /><div className={styles.legend}>{usage.slice(0, 5).map((row, index) => <span key={row.model} className={styles.legendItem}><span className={styles.swatch} style={{ backgroundColor: modelColors[index % modelColors.length] }} /><span className={styles.modelName}>{row.model}</span><span>{totalInvocations > 0 ? Math.round((row.invocationCount / totalInvocations) * 100) : 0}%</span></span>)}</div></div>}
+      {usageUnavailable ? <MetricEmptyState>Model usage is unavailable from the Gateway.</MetricEmptyState> : totalInvocations === 0 ? <MetricEmptyState>Model request counts are unavailable.</MetricEmptyState> : <div className={styles.donutWrap}><Donut rows={usage} /><div className={styles.legend}>{usage.slice(0, 5).map((row, index) => <span key={row.model} className={styles.legendItem}><span className={styles.swatch} style={{ backgroundColor: modelColors[index % modelColors.length] }} /><span className={styles.modelName}>{row.model}</span><span>{row.invocationCount == null ? '—' : `${Math.round(row.invocationCount / totalInvocations * 100)}%`}</span></span>)}</div></div>}
       <Link className={styles.link} to={detailsLink}>View details →</Link>
     </div>
     <div className={styles.usageTile}>
       <MetricCardHeader title="Response duration" subtitle="Latency percentiles from recent runs." />
-      {!response ? <MetricEmptyState><InfoRegular /> No data yet.</MetricEmptyState> : <div className={styles.percentileGrid}><div className={styles.percentile}><Text className={styles.percentileValue}>{formatMs(response.p50)}</Text><Text className={styles.muted}>P50</Text></div><div className={styles.percentile}><Text className={styles.percentileValue}>{formatMs(response.p95)}</Text><Text className={styles.muted}>P95</Text></div><div className={styles.percentile}><Text className={styles.percentileValue}>—</Text><Text className={styles.muted}>P99</Text></div></div>}
+      <MetricEmptyState>Response duration percentiles are unavailable from the Gateway.</MetricEmptyState>
     </div>
     <div className={styles.usageTile}>
       <MetricCardHeader title="Time to first token (TTFT)" subtitle="First-token latency percentiles." />
-      {!ttft ? <MetricEmptyState><InfoRegular /> No data yet.</MetricEmptyState> : <div className={styles.percentileGrid}><div className={styles.percentile}><Text className={styles.percentileValue}>{formatMs(ttft.p50)}</Text><Text className={styles.muted}>P50</Text></div><div className={styles.percentile}><Text className={styles.percentileValue}>{formatMs(ttft.p95)}</Text><Text className={styles.muted}>P95</Text></div><div className={styles.percentile}><Text className={styles.percentileValue}>—</Text><Text className={styles.muted}>P99</Text></div></div>}
+      <MetricEmptyState>Time to first token is unavailable from the Gateway.</MetricEmptyState>
     </div>
     <div className={styles.usageTile}>
       <MetricCardHeader title="Success rate" subtitle="Weighted by agent run totals." />
-      {success.rate == null ? <MetricEmptyState>No data yet.</MetricEmptyState> : <><Text className={styles.bigNumber}>{Math.round(success.rate)}%</Text><Sparkline points={aggregateTrend(metrics)} /><Text className={styles.muted}>{delta == null ? 'Previous range unavailable' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} pts vs previous range`} · {success.basis} runs</Text></>}
+    {metricsUnavailable ? <MetricEmptyState>Run metrics are unavailable from the Gateway.</MetricEmptyState> : success.rate == null ? <MetricEmptyState>No completed runs in this range.</MetricEmptyState> : <><Text className={styles.bigNumber}>{Math.round(success.rate)}%</Text><Text className={styles.muted}>{delta == null ? 'Previous range unavailable' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} pts vs previous range`} · {success.basis} completed runs</Text><Text className={styles.muted}>Daily success trend is unavailable.</Text></>}
     </div>
   </div>;
 }
 
 export function OverviewPage() {
   const styles = useStyles();
+  const { apiCall } = useAuth();
   // Keep the platform snapshot, recent-project rollups, and two metrics windows
   // separately so partial project metrics can be omitted without losing overview data.
-  const [overview, setOverview] = useState<OverviewDto | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [overview, setOverview] = useState<OverviewData | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [rollups, setRollups] = useState<ProjectRollup[]>([]);
-  const [metrics, setMetrics] = useState<ProjectMetricsDto[]>([]);
-  const [previousMetrics, setPreviousMetrics] = useState<ProjectMetricsDto[]>([]);
+  const [metrics, setMetrics] = useState<ProjectMetrics[]>([]);
+  const [previousMetrics, setPreviousMetrics] = useState<ProjectMetrics[]>([]);
+  const [usages, setUsages] = useState<ProjectUsage[]>([]);
+  const [partialError, setPartialError] = useState<string | null>(null);
   const [range, setRange] = useState<TimeRange>('30d');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -315,35 +308,96 @@ export function OverviewPage() {
   const inFlightRef = useRef<AbortController | null>(null);
 
   /**
-   * Loads platform activity, then enriches the four most recently active projects.
-   * Per-project details use all-settled results so one missing endpoint does not
-   * hide other counts; cancellation is handled as expected control flow.
+   * Loads the published project and notification reads, then enriches recent projects.
+   * Each supplementary owner read can fail independently without concealing the
+   * other panels; a stale response never replaces a newer poll.
    */
   const load = useCallback(async (abortSignal?: AbortSignal) => {
     if (mountedRef.current) setRefreshing(true);
     try {
-      const [overviewDto, projectList] = await Promise.all([
-        apiClient.getOverview(abortSignal),
-        collectPagedItems((options) => apiClient.listProjects(options), { signal: abortSignal }),
+      // Caller notifications are optional: a temporary bell failure must not hide project panels.
+      const [projectList, notificationResult] = await Promise.all([
+        apiCall((token, tenant) => gatewayClient.listProjects(token, tenant), null),
+        apiCall((token, tenant) => gatewayClient.listNotifications(token, { pageSize: 100 }, tenant), null)
+          .then((value) => ({ value }), () => ({ value: null })),
       ]);
-      const activeById = new Map(overviewDto.active_projects.map((project) => [project.project_id, project]));
-      const recent = [...projectList].sort((a, b) => new Date(activeById.get(b.project_id)?.last_activity_utc ?? b.updated_at).getTime() - new Date(activeById.get(a.project_id)?.last_activity_utc ?? a.updated_at).getTime()).slice(0, 4);
+      const notificationPage = notificationResult.value;
+      const recent = projectList.filter((project) => project.state === 'active')
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
       const currentRange = timeRangeDates(range); const previousRange = timeRangeDates(range, true);
       const rollupResults = await Promise.all(recent.map(async (project): Promise<ProjectRollup> => {
-        const [teamResult, runsResult, boardResult] = await Promise.allSettled([apiClient.getTeam(project.project_id), apiClient.getProjectRuns(project.project_id, { includeChildren: true, pageSize: 100 }), apiClient.getBoard(project.project_id)]);
-        const board = boardResult.status === 'fulfilled' ? boardResult.value : null; const active = activeById.get(project.project_id);
-        return { project, activeCount: active?.active_count ?? 0, queuedCount: active?.queued_count ?? 0, lastActivityUtc: active?.last_activity_utc ?? project.updated_at, agentCount: teamResult.status === 'fulfilled' ? teamResult.value.members.length : null, runCount: runsResult.status === 'fulfilled' ? Math.max(runsResult.value.items.length, boardRunCount(board) ?? 0) : boardRunCount(board), issueCount: boardIssueCount(board) };
+        const id = project.projectId;
+        const [configResult, runsResult, backlogResult] = await Promise.allSettled([
+          apiCall((token, tenant) => gatewayClient.getProjectConfiguration(token, id, tenant), null),
+          apiCall((token, tenant) => gatewayClient.listProjectRuns(token, id, { pageSize: 100 }, tenant), null),
+          apiCall((token, tenant) => gatewayClient.readProjectBacklog(token, id, tenant), null),
+        ]);
+        const config = configResult.status === 'fulfilled' ? configResult.value.configuration : null;
+        const runs = runsResult.status === 'fulfilled' ? runsResult.value : null;
+        const repository = config?.sourceControl?.repository;
+        const activity: RecentActivityDto[] = (runs?.items ?? []).slice(0, 10).map((run) => ({
+          project_id: id, project_name: project.name, label: run.title ?? run.goal ?? `Run ${run.runId.slice(0, 8)}`,
+          kind: run.state, timestamp_utc: run.completedAt ?? run.updatedAt,
+        }));
+        return {
+          project, repository: repository ? `${repository.owner}/${repository.name}` : null,
+          activeCount: null,
+          blockedCount: null,
+          lastActivityUtc: runs?.items[0]?.updatedAt ?? project.updatedAt,
+          agentCount: config?.agentCharters.length ?? null,
+          runCount: runs ? `${runs.items.length}${runs.nextCursor ? '+' : ''}` : null,
+          taskCount: backlogResult.status === 'fulfilled' ? backlogResult.value.tasks.filter((task) => !task.isArchived).length : null,
+          activityUnavailable: runsResult.status === 'rejected',
+          activity,
+        };
       }));
-      const [metricResults, previousMetricResults] = await Promise.all([Promise.allSettled(recent.map((project) => apiClient.getProjectMetrics(project.project_id, currentRange.from, currentRange.to, abortSignal))), Promise.allSettled(recent.map((project) => apiClient.getProjectMetrics(project.project_id, previousRange.from, previousRange.to, abortSignal)))]);
-      if (mountedRef.current) { setOverview(overviewDto); setProjects(projectList); setRollups(rollupResults); setMetrics(metricResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])); setPreviousMetrics(previousMetricResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])); setLastUpdated(new Date().toISOString()); setError(null); }
+      const [metricResults, previousMetricResults, usageResults] = await Promise.all([
+        Promise.allSettled(recent.map((project) => apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, project.projectId, currentRange, tenant), null))),
+        Promise.allSettled(recent.map((project) => apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, project.projectId, previousRange, tenant), null))),
+        Promise.allSettled(recent.map((project) => apiCall((token, tenant) => gatewayClient.getProjectUsage(token, project.projectId, currentRange, tenant), null))),
+      ]);
+      const metricsUnavailable = metricResults.some((result) => result.status === 'rejected');
+      const previousMetricsUnavailable = previousMetricResults.some((result) => result.status === 'rejected');
+      const usageUnavailable = usageResults.some((result) => result.status === 'rejected');
+      if (mountedRef.current && !abortSignal?.aborted) {
+        // A run list gives recent run events, not the old cross-project event stream.
+        const recentActivity = rollupResults.flatMap((rollup) => rollup.activity)
+          .sort((a, b) => b.timestamp_utc.localeCompare(a.timestamp_utc)).slice(0, 20);
+        // Metrics include project-wide active and blocked counts; run pages are capped and sorted by creation time.
+        const measuredRollups = rollupResults.map((rollup, index) => {
+          const result = metricResults[index];
+          const metrics = result?.status === 'fulfilled' ? result.value : null;
+          return { ...rollup, activeCount: metrics?.activeRuns ?? null, blockedCount: metrics?.blockedRuns ?? null };
+        });
+        setOverview({
+          generated_utc: new Date().toISOString(),
+          active_projects: projectList.filter((project) => project.state === 'active').length,
+          recent_activity: recentActivity,
+          notifications: notificationPage?.items ?? [],
+          notificationsUnavailable: notificationPage === null,
+          metricsUnavailable,
+          previousMetricsUnavailable,
+          usageUnavailable,
+        });
+        setProjects(projectList);
+        setRollups(measuredRollups);
+        setMetrics(metricResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+        setPreviousMetrics(previousMetricResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+        setUsages(usageResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+        setPartialError(notificationPage === null || metricsUnavailable || previousMetricsUnavailable || usageUnavailable
+          || measuredRollups.some((rollup) => rollup.runCount === null || rollup.agentCount === null || rollup.taskCount === null)
+          ? 'Some project details could not load. Try refreshing.' : null);
+        setLastUpdated(new Date().toISOString());
+        setError(null);
+      }
     } catch (err) {
       // #208 point 5: an aborted fetch (unmount/range change/overlapping-poll guard) is expected
       // control flow, not a user-facing error — don't surface it.
-      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (abortSignal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
       if (mountedRef.current) setError(formatError(err));
     }
     finally { if (mountedRef.current) { setLoading(false); setRefreshing(false); } }
-  }, [range]);
+  }, [apiCall, range]);
 
   // #208 point 5: single shared entry point for the poll tick AND manual refresh/retry clicks —
   // aborts whatever request is still in flight before starting a new one, so overlapping fan-outs
@@ -372,58 +426,75 @@ export function OverviewPage() {
     return () => { mountedRef.current = false; inFlightRef.current?.abort(); clearInterval(iv); };
   }, [load]);
 
-  // Build the highest-priority health, failure, and queue items for the compact alert list.
+  // Show caller notifications first, followed by recent run failures and blocked work.
   const attention = useMemo<AttentionItem[]>(() => {
     const items: AttentionItem[] = [];
-    if (overview?.at_a_glance.health && overview.at_a_glance.health !== 'healthy') items.push({ key: 'health', severity: 'error', title: 'System health degraded', subtitle: 'Overview health is reporting degraded.', action: 'View projects', to: '/projects' });
+    for (const notification of overview?.notifications ?? []) items.push({
+      key: notification.notificationId,
+      severity: 'warning',
+      title: notification.source === 'backlogPromoted' ? 'Backlog ready for review' : notification.prompt ?? 'A run needs your input',
+      subtitle: projects.find((project) => project.projectId === notification.projectId)?.name ?? 'Project',
+      time: notification.createdAt,
+      action: 'Open',
+      to: notification.source === 'backlogPromoted'
+        ? `/projects/${encodeURIComponent(notification.projectId)}/board`
+        : `/projects/${encodeURIComponent(notification.projectId)}/runs/${encodeURIComponent(notification.runId)}?view=approvals`,
+    });
     for (const activity of overview?.recent_activity ?? []) if (isFailure(activity.kind)) items.push({ key: `${activity.project_id}-${activity.timestamp_utc}-${activity.kind}`, severity: 'error', title: activity.label, subtitle: activity.project_name, time: activity.timestamp_utc, action: 'View logs', to: `/projects/${activity.project_id}/orchestrations` });
-    for (const rollup of rollups) if (rollup.queuedCount > 0) items.push({ key: `queued-${rollup.project.project_id}`, severity: 'warning', title: `${rollup.queuedCount} queued ${rollup.queuedCount === 1 ? 'item' : 'items'}`, subtitle: rollup.project.name, time: rollup.lastActivityUtc, action: 'Open project', to: `/projects/${rollup.project.project_id}` });
+    for (const rollup of rollups) if (rollup.blockedCount && rollup.blockedCount > 0) items.push({ key: `blocked-${rollup.project.projectId}`, severity: 'warning', title: `${rollup.blockedCount} ${rollup.blockedCount === 1 ? 'run needs' : 'runs need'} input`, subtitle: rollup.project.name, time: rollup.lastActivityUtc, action: 'Open project', to: `/projects/${rollup.project.projectId}` });
     return items.slice(0, 5);
-  }, [overview, rollups]);
+  }, [overview, projects, rollups]);
   // Group recent events by local calendar day for the activity timeline.
   const groupedActivity = useMemo(() => { const today = new Date().toDateString(); const groups = new Map<string, RecentActivityDto[]>(); for (const item of overview?.recent_activity ?? []) { const label = new Date(item.timestamp_utc).toDateString() === today ? 'Today' : new Date(item.timestamp_utc).toLocaleDateString(); groups.set(label, [...(groups.get(label) ?? []), item]); } return [...groups.entries()]; }, [overview]);
   const focusRollup = rollups[0];
-  const health = overview?.at_a_glance.health === 'healthy' ? 'healthy' : 'degraded';
   return <PageContainer className={styles.root}>
     <PageHeader title="Overview" description="Run and supervise AI agent teams, workflows, and approvals across your projects." actions={<div className={styles.headerActions}>{lastUpdated && <RefreshCountdown className={styles.generated} intervalMs={REFRESH_MS} lastRefreshedAt={new Date(lastUpdated)} refreshing={refreshing} />}{refreshing && overview && <Spinner size="extra-tiny" aria-label="Refreshing overview" />}<Button appearance="subtle" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { setLoading(true); runLoad(); }}>Refresh</Button></div>} />
     {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody><MessageBarActions><Button appearance="transparent" onClick={() => { setLoading(true); runLoad(); }}>Try again</Button></MessageBarActions></MessageBar>}
+    {partialError && <MessageBar intent="warning"><MessageBarBody>{partialError}</MessageBarBody></MessageBar>}
     {loading && !overview && <LoadingOverview />}
     {overview ? <>
       <section className={styles.opsCard} aria-labelledby="overview-operations">
         <div className={styles.cardHead}>
           <span className={styles.cardHeadIcon}><Pulse24Regular /></span>
           <Text as="h2" id="overview-operations" className={styles.cardHeadTitle}>Operations</Text>
-          <Badge appearance="tint" color={health === 'healthy' ? 'success' : 'danger'}><span className={styles.statusPill}><span className={`${styles.dot} ${health === 'healthy' ? styles.dotActive : styles.dotError}`} />{health === 'healthy' ? 'Healthy' : 'Needs review'}</span></Badge>
+          <Badge appearance="tint" color="subtle">Health unavailable</Badge>
           <span className={styles.cardHeadMeta}><ClockRegular /> Generated {timeAgo(overview.generated_utc)}</span>
         </div>
-        <div className={styles.glanceGrid}><GlanceItem label="In flight" value={overview.at_a_glance.in_flight} styles={styles} /><GlanceItem label="Queued work" value={overview.at_a_glance.queued_work} styles={styles} /><GlanceItem label="Done today" value={overview.at_a_glance.done_today} styles={styles} /><GlanceItem label="Active projects" value={overview.at_a_glance.active_projects} styles={styles} /></div>
+        <Text className={styles.muted}>Cross-project in-flight, queued, and completed counts are unavailable from the Gateway.</Text>
+        <div className={styles.glanceGrid}><GlanceItem label="In flight" value="—" styles={styles} /><GlanceItem label="Queued work" value="—" styles={styles} /><GlanceItem label="Done today" value="—" styles={styles} /><GlanceItem label="Active projects" value={overview.active_projects} styles={styles} /></div>
       </section>
       <PageSection title="Recent projects" description="Most recently active repositories with operational counts and queue pressure." actions={<Link className={styles.link} to="/projects">View all projects →</Link>}>
         {rollups.length === 0 ? emptyState(projects.length === 0 ? 'No projects yet.' : 'No recent projects to show.', projects.length === 0 ? 'Create a project, describe its work, and generate or choose the team and workflow.' : 'Recent project activity will appear after an agent run starts.') : <div className={styles.projectGrid}>
-          <div className={styles.focusProject}><MetricCardHeader title="Current focus" subtitle={focusRollup ? 'Most recently active project' : 'No project selected'} />{focusRollup ? <div className={styles.lastActivity}><Text className={styles.projectName}>{focusRollup.project.name}</Text><Text className={styles.healthCopy}>{focusRollup.activeCount > 0 ? `${focusRollup.activeCount} active run${focusRollup.activeCount === 1 ? '' : 's'} need monitoring.` : focusRollup.queuedCount > 0 ? `${focusRollup.queuedCount} queued item${focusRollup.queuedCount === 1 ? '' : 's'} waiting for capacity.` : 'No active work; ready for the next orchestration.'}</Text><Link className={styles.link} to={`/projects/${focusRollup.project.project_id}`}>Open focus project →</Link></div> : null}</div>
+          <div className={styles.focusProject}><MetricCardHeader title="Current focus" subtitle={focusRollup ? 'Most recently updated project' : 'No project selected'} />{focusRollup ? <div className={styles.lastActivity}><Text className={styles.projectName}>{focusRollup.project.name}</Text><Text className={styles.healthCopy}>{focusRollup.activeCount === null ? 'Recent run status is unavailable.' : focusRollup.activeCount > 0 ? `${focusRollup.activeCount} active run${focusRollup.activeCount === 1 ? '' : 's'} need monitoring.` : focusRollup.blockedCount && focusRollup.blockedCount > 0 ? `${focusRollup.blockedCount} ${focusRollup.blockedCount === 1 ? 'run needs' : 'runs need'} input.` : 'No active work in the recent runs.'}</Text><Link className={styles.link} to={`/projects/${focusRollup.project.projectId}`}>Open focus project →</Link></div> : null}</div>
           <div className={styles.projectList}>{rollups.map((rollup) => {
           const status = statusFor(rollup);
-          return <Link key={rollup.project.project_id} to={`/projects/${rollup.project.project_id}`} className={styles.projectCard}>
-            <div className={styles.projectIdentity}><span className={styles.iconBubble}>{rollup.project.origin === 'github' ? <BranchRegular /> : <FolderRegular />}</span><div className={styles.projectTextStack}><Text className={styles.projectName}>{rollup.project.name}</Text><Text className={mergeClasses(styles.muted, styles.projectSlugText)}>{projectSlug(rollup.project)}</Text></div></div>
-            <Badge appearance="tint" color={status === 'active' ? 'success' : status === 'queued' ? 'warning' : 'subtle'}><span className={styles.statusPill}><span className={`${styles.dot} ${status === 'active' ? styles.dotActive : status === 'queued' ? styles.dotQueued : styles.dotIdle}`} />{status.charAt(0).toUpperCase() + status.slice(1)}</span></Badge>
+          return <Link key={rollup.project.projectId} to={`/projects/${encodeURIComponent(rollup.project.projectId)}`} className={styles.projectCard}>
+            <div className={styles.projectIdentity}><span className={styles.iconBubble}>{rollup.repository ? <BranchRegular /> : <FolderRegular />}</span><div className={styles.projectTextStack}><Text className={styles.projectName}>{rollup.project.name}</Text><Text className={mergeClasses(styles.muted, styles.projectSlugText)}>{projectSlug(rollup.repository)}</Text></div></div>
+            <Badge appearance="tint" color={status === 'active' ? 'success' : status === 'queued' ? 'warning' : 'subtle'}><span className={styles.statusPill}><span className={`${styles.dot} ${status === 'active' ? styles.dotActive : status === 'queued' ? styles.dotQueued : styles.dotIdle}`} />{status === 'queued' ? 'Needs input' : status === 'unknown' ? 'Unavailable' : status.charAt(0).toUpperCase() + status.slice(1)}</span></Badge>
             <div className={styles.projectStats}>
               <span className={styles.stat}><ClockRegular />{timeAgo(rollup.lastActivityUtc)}</span>
               <span className={styles.stat}><BotRegular />{rollup.agentCount ?? '—'} agents</span>
               <span className={styles.stat}><PlayRegular />{rollup.runCount ?? '—'} runs</span>
-              <span className={`${styles.stat} ${(rollup.issueCount ?? 0) > 0 ? styles.statDanger : ''}`}><AlertRegular />{rollup.issueCount ?? '—'} issues</span>
+              <span className={`${styles.stat} ${(rollup.taskCount ?? 0) > 0 ? styles.statDanger : ''}`}><AlertRegular />{rollup.taskCount ?? '—'} tasks</span>
             </div>
           </Link>;
         })}</div></div>}
       </PageSection>
       <PageSection title="AI usage & performance" description="Aggregated from existing project observability metrics for the recent projects shown above." actions={<div className={styles.sectionActions}><Text>Range</Text><Select value={range} onChange={(_e, data) => setRange(data.value as TimeRange)} aria-label="AI usage time range" size="small" style={{ width: '120px' }}><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option></Select></div>}>
-        <UsageTiles metrics={metrics} previousMetrics={previousMetrics} range={range} recentProjectId={rollups[0]?.project.project_id} />
+        <UsageTiles metrics={metrics} previousMetrics={previousMetrics} usages={usages} range={range} recentProjectId={rollups[0]?.project.projectId} metricsUnavailable={overview.metricsUnavailable} previousMetricsUnavailable={overview.previousMetricsUnavailable} usageUnavailable={overview.usageUnavailable} />
       </PageSection>
       <div className={styles.mainGrid}>
         <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><TitleText>Activity feed</TitleText></div>
-          {groupedActivity.length === 0 ? emptyState('No recent activity.', 'New agent starts, completions, failures, and merge events will appear here.') : <div className={styles.timeline}>{groupedActivity.map(([day, entries]) => <div key={day} className={styles.list}><Text className={styles.dayLabel}>{day}</Text>{entries.map((entry, index) => <div key={`${entry.project_id}-${entry.timestamp_utc}-${index}`} className={styles.timelineItem}><span className={styles.timelineIcon}>{activityIcon(entry.kind)}</span><div><Text className={styles.timelineTitle}>{entry.project_name}</Text><Text> {entry.label}</Text><div className={styles.timelineBadges}><Badge appearance="tint" color={isFailure(entry.kind) ? 'danger' : entry.kind === 'completed' ? 'success' : 'subtle'}>{humanizeKind(entry.kind)}</Badge></div></div><Text className={styles.muted}>{timeAgo(entry.timestamp_utc)}</Text></div>)}</div>)}</div>}
+          <Text className={styles.muted}>Recent run states are shown. Other platform events are unavailable from the Gateway.</Text>
+          {rollups.some((rollup) => rollup.activityUnavailable) && <Text className={styles.muted}>Recent run activity is unavailable for some projects.</Text>}
+          {groupedActivity.length === 0 ? rollups.some((rollup) => rollup.activityUnavailable)
+            ? <MetricEmptyState>Run activity is unavailable from the Gateway.</MetricEmptyState>
+            : emptyState('No recent runs.', 'Run activity will appear here after a run starts.')
+            : <div className={styles.timeline}>{groupedActivity.map(([day, entries]) => <div key={day} className={styles.list}><Text className={styles.dayLabel}>{day}</Text>{entries.map((entry, index) => <div key={`${entry.project_id}-${entry.timestamp_utc}-${index}`} className={styles.timelineItem}><span className={styles.timelineIcon}>{activityIcon(entry.kind)}</span><div><Text className={styles.timelineTitle}>{entry.project_name}</Text><Text> {entry.label}</Text><div className={styles.timelineBadges}><Badge appearance="tint" color={isFailure(entry.kind) ? 'danger' : entry.kind === 'completed' ? 'success' : 'subtle'}>{humanizeKind(entry.kind)}</Badge></div></div><Text className={styles.muted}>{timeAgo(entry.timestamp_utc)}</Text></div>)}</div>)}</div>}
         </section>
         <section className={`${styles.section} ${styles.panel}`}><div className={styles.sectionHeader}><TitleText>Needs attention</TitleText></div>
-          {attention.length === 0 ? emptyState('Nothing needs attention.', 'No failures or queues need action right now. Keep the overview open while agents run.') : <div className={styles.attentionList}>{attention.map((item) => <div key={item.key} className={`${styles.alertCard} ${item.severity === 'error' ? styles.alertError : styles.alertWarning}`}>{item.severity === 'error' ? <ErrorCircleRegular className={styles.alertErrorIcon} /> : <WarningRegular className={styles.alertWarningIcon} />}<div><Text weight="semibold">{item.title}</Text><br /><Text className={styles.muted}>{item.subtitle}{item.time ? ` · ${timeAgo(item.time)}` : ''}</Text></div><Button as="a" href={item.to} appearance="secondary" size="small" icon={<OpenRegular />}>{item.action}</Button></div>)}</div>}
+          {overview.notificationsUnavailable && <MetricEmptyState>Notifications are unavailable from the Gateway.</MetricEmptyState>}
+          {attention.length === 0 ? overview.notificationsUnavailable ? null : emptyState('Nothing needs attention.', 'No failures or queues need action right now. Keep the overview open while agents run.') : <div className={styles.attentionList}>{attention.map((item) => <div key={item.key} className={`${styles.alertCard} ${item.severity === 'error' ? styles.alertError : styles.alertWarning}`}>{item.severity === 'error' ? <ErrorCircleRegular className={styles.alertErrorIcon} /> : <WarningRegular className={styles.alertWarningIcon} />}<div><Text weight="semibold">{item.title}</Text><br /><Text className={styles.muted}>{item.subtitle}{item.time ? ` · ${timeAgo(item.time)}` : ''}</Text></div><Button as="a" href={item.to} appearance="secondary" size="small" icon={<OpenRegular />}>{item.action}</Button></div>)}</div>}
         </section>
       </div>
     </> : null}

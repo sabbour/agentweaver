@@ -1,0 +1,1 @@
+{"assertions":[{"id":"capital","type":"contains","value":"Paris"},{"id":"not-london","type":"notContains","value":"London"}],"id":"capital","input":"What is the capital of France?","mediaType":"application/vnd.agentsuite.eval.case.v1+json","schemaVersion":"1.0.0-draft"}

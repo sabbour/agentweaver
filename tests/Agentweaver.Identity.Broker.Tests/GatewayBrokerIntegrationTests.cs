@@ -262,6 +262,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.False(authorizationContext.GetProperty("parameters").EnumerateArray()
                 .Single(parameter => parameter.GetProperty("name").GetString() == "X-Agentweaver-Tenant")
                 .GetProperty("required").GetBoolean());
+            var platformComponents = paths.GetProperty("/api/v1/platform/components").GetProperty("get");
+            Assert.Equal("getPlatformComponents", platformComponents.GetProperty("operationId").GetString());
+            Assert.Equal("Projects", platformComponents.GetProperty("x-agentweaver-owner").GetString());
+            Assert.Equal(
+                "#/components/schemas/PlatformComponentReport",
+                platformComponents.GetProperty("responses").GetProperty("200").GetProperty("content")
+                    .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+            Assert.False(paths.TryGetProperty("/api/v1/internal/platform/components", out _));
             Assert.False(paths.TryGetProperty("/api/connections/copilot-user/v1/begin", out _));
             Assert.False(paths.TryGetProperty("/api/auth/github/repo-app/authorizations", out _));
             Assert.False(paths.TryGetProperty("/api/github/repository-selections", out _));
@@ -303,6 +311,40 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 .GetProperty("post");
             Assert.True(mergeIntent.GetProperty("x-agentweaver-accepted-only").GetBoolean());
             Assert.True(mergeIntent.GetProperty("responses").TryGetProperty("202", out _));
+            var outputCaptureBase =
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures";
+            var outputCapturePage = paths.GetProperty(outputCaptureBase).GetProperty("get");
+            Assert.Equal("listSourceControlOutputCaptures", outputCapturePage.GetProperty("operationId").GetString());
+            Assert.Equal(
+                ["limit", "beforeCapturedAt", "beforeCaptureId"],
+                outputCapturePage.GetProperty("parameters").EnumerateArray()
+                    .Where(parameter => parameter.GetProperty("in").GetString() == "query")
+                    .Select(parameter => parameter.GetProperty("name").GetString()!));
+            Assert.Equal(
+                "#/components/schemas/SourceControlOutputCapturePage",
+                outputCapturePage.GetProperty("responses").GetProperty("200").GetProperty("content")
+                    .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+            var outputCapture = paths.GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}" +
+                "/workspaces/{workspaceId}/output-captures").GetProperty("post");
+            Assert.Equal("captureSourceControlWorkspaceOutput", outputCapture.GetProperty("operationId").GetString());
+            Assert.True(outputCapture.GetProperty("responses").TryGetProperty("201", out _));
+            Assert.Equal(
+                "readSourceControlOutputCapture",
+                paths.GetProperty(outputCaptureBase + "/{captureId}").GetProperty("get")
+                    .GetProperty("operationId").GetString());
+            Assert.Equal(
+                "readSourceControlOutputCaptureDiff",
+                paths.GetProperty(outputCaptureBase + "/{captureId}/diff").GetProperty("get")
+                    .GetProperty("operationId").GetString());
+            var outputFile = paths.GetProperty(outputCaptureBase + "/{captureId}/files").GetProperty("get");
+            Assert.True(outputFile.GetProperty("parameters").EnumerateArray()
+                .Single(parameter => parameter.GetProperty("name").GetString() == "path")
+                .GetProperty("required").GetBoolean());
+            var outputFileResponse = outputFile.GetProperty("responses").GetProperty("200");
+            Assert.True(outputFileResponse.GetProperty("content").TryGetProperty("application/octet-stream", out _));
+            Assert.True(outputFileResponse.GetProperty("headers")
+                .TryGetProperty(GatewayRouteCatalog.SourceControlOutputSha256Header, out _));
             var readRecord = paths.GetProperty(
                 "/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}")
                 .GetProperty("get");
@@ -375,6 +417,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             "string",
                             content.GetProperty("text/event-stream").GetProperty("schema")
                                 .GetProperty("type").GetString());
+                    else if (route.OperationId == "readSourceControlOutputCaptureFile")
+                        Assert.True(content.TryGetProperty("application/octet-stream", out _));
                     else
                         Assert.True(content.TryGetProperty("application/json", out _));
                 }

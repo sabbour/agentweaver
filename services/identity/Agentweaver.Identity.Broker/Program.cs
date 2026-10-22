@@ -11,6 +11,7 @@ using Azure.Security.KeyVault.Secrets;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Identity.Broker;
+using Agentweaver.Providers;
 using Agentweaver.SourceControl;
 using Agentweaver.Secrets.AzureKeyVault;
 using Microsoft.AspNetCore.Authentication;
@@ -210,6 +211,14 @@ builder.Services.AddSingleton<ISecretVersionWriter>(provider =>
         provider.GetRequiredService<TokenCredential>(),
         provider.GetRequiredService<SecretClientOptions>()));
 builder.Services.AddHttpContextAccessor();
+var issueSyncWorker = IssueSyncServiceTransport.AddChannel(builder,
+    IssueSyncGrantAuthority.WorkerChannel, "IdentityBroker:IssueSync:WorkerTls", "IdentityBroker", "Orchestrator", true);
+var issueSyncProjects = IssueSyncServiceTransport.AddChannel(builder,
+    IssueSyncGrantAuthority.ProjectsChannel, "IdentityBroker:IssueSync:ProjectsTls", "IdentityBroker", "Projects", false);
+if (issueSyncWorker != issueSyncProjects || issueSyncWorker && identityOptions.GitHubRepoApp is null)
+    throw new InvalidOperationException("Issue sync requires both service TLS channels and GitHub App configuration.");
+builder.Services.AddScoped<IssueSyncGrantAuthority>();
+builder.Services.AddScoped<IIssueSyncProjectAuthority, IssueSyncProjectAuthorityClient>();
 builder.Services.AddHttpClient("github-repo-app-oauth", client =>
     client.BaseAddress = new Uri("https://github.com/"))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
@@ -458,6 +467,9 @@ builder.Services.AddOpenIddict()
     });
 
 builder.Services.AddAuthorization();
+var platformComponentAuthentication = PlatformComponentServiceAuthenticationOptions.ReadOptional(
+    builder.Configuration, identityOptions.SecretRedemption.Audience, identityOptions.RunBinding?.ProjectsAudience);
+builder.Services.AddPlatformComponentServiceAuthentication(platformComponentAuthentication);
 builder.Services.AddCors(options => options.AddPolicy(
     IdentityBrokerOptions.WebCorsPolicyName,
     policy =>
@@ -489,6 +501,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapIdentityBrokerEndpoints();
+app.MapIssueSyncGrants(issueSyncWorker);
 app.MapIdentitySecretRedemptionEndpoints();
 app.MapCopilotConnectionEndpoints();
 app.MapRemoteMcpOAuthManagementEndpoints();
@@ -499,6 +512,22 @@ if (identityOptions.GitHubRepoApp is not null)
 }
 if (runtimeBootstrapOptions is not null)
     app.MapIdentityRuntimeCredentialEndpoints();
+// Secrets always resolve through the configured Azure Key Vault redemption implementation.
+var secretsDescriptor = PlatformComponentCatalogReporter.BuiltInDescriptor(
+    ProviderSeam.Secrets, "azure-key-vault", typeof(AzureKeyVaultSecretRedemption));
+app.MapPlatformComponentOwner(platformComponentAuthentication, async (services, ct) =>
+{
+    await using var scope = services.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+    return await PlatformComponentCatalogReporter.CreateOwnerReportAsync(
+        PlatformComponentOwners.IdentityBroker,
+        token => db.Database.CanConnectAsync(token),
+        (readiness, observedAt) =>
+            [PlatformComponentCatalogReporter.DescribeSelected(
+                PlatformComponentAreaIds.Secrets, secretsDescriptor, readiness, observedAt)],
+        services.GetRequiredService<TimeProvider>(),
+        ct);
+});
 
 app.Run();
 

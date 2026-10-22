@@ -49,9 +49,41 @@ checked-in application catalog:
   `Agentweaver.Providers.Sessions.AgentSessions` package. It replays verified
   AgentSessions record exports. The default catalog does not register it, and
   the Events & Sessions host doesn't reference it.
-- `azure.byok-usage-cost` has an options contract, but the default catalog
-  selects Copilot cost. Azure BYOK usage is not priced until the runtime has
-  trusted provider, deployment, and usage-share evidence.
+- `azure.byok-usage-cost` is off by default. Events admits Azure BYOK usage only
+  from trusted producers. It prices that usage when you configure
+  `EventsAndSessions:Cost:Azure` with a versioned rate card, as shown in the
+  following example. Without that section, the usage is recorded as `Unpriced`.
+
+  ```json
+  {
+    "EventsAndSessions": {
+      "Cost": {
+        "Azure": {
+          "ResourceId": "azure-openai-eastus2",
+          "ResourceGeneration": 1,
+          "OptionsRevision": "azure-cost-v1",
+          "OptionsSchemaVersion": 1,
+          "PricingModel": "StandardTokens",
+          "RateCard": {
+            "Id": "azure-retail-prices.standard.eastus2",
+            "Version": "2026-10-01",
+            "MeterSource": "byok.tokens",
+            "Unit": "USD",
+            "NanoUnitsPerUnit": 1000000,
+            "ModelMultipliers": {
+              "gpt-4.1|input": 2.00,
+              "gpt-4.1|output": 8.00
+            }
+          }
+        }
+      }
+    }
+  }
+  ```
+
+  Rates are per million tokens. Use your own reviewed retail or negotiated prices.
+  To change rates, publish a new `Version`. Runs that already pinned the earlier
+  card keep it, and their new usage stays `Unpriced`.
 - Foundation Probe registrations such as `azure-blob`, `azure-key-vault`, and
   `azure-monitor` are probe descriptors. They do not make application
   providers selectable.
@@ -132,6 +164,72 @@ secrets in the model-binding ConfigMap or headers. An optional
 `SupportedReasoningEfforts` entries must be unique values from `low`,
 `medium`, `high`, or `xhigh`. These contracts describe source support; the
 checked-in deployment profile does not select BYOK.
+
+## Configure spend budgets
+
+Spend budgets limit priced usage that Events records. Add them to
+`runLimits.spendBudgets` in the platform runtime defaults or in a project
+configuration. Each budget limits one meter source and unit at one scope:
+
+| Scope | Limits | Required fields |
+| --- | --- | --- |
+| `run` | The run's total. | None. |
+| `agent` | One agent's total in the run. | `agentId` |
+| `project` | The project's total in one period. | `period` with `periodId`, `startsAt` (inclusive), and `endsAt` (exclusive). |
+
+The following example limits Azure BYOK spend for the project in one month and
+Hosted Copilot usage for each run:
+
+```json
+{
+  "runLimits": {
+    "spendBudgets": [
+      {
+        "budgetId": "azure-monthly",
+        "revision": 1,
+        "scope": "project",
+        "meterSource": "byok.tokens",
+        "unit": "USD",
+        "softLimit": 400,
+        "hardLimit": 500,
+        "reservePerDispatch": 2,
+        "period": {
+          "periodId": "2026-10",
+          "startsAt": "2026-10-01T00:00:00Z",
+          "endsAt": "2026-11-01T00:00:00Z"
+        }
+      },
+      {
+        "budgetId": "copilot-per-run",
+        "revision": 1,
+        "scope": "run",
+        "meterSource": "copilot.nano_aiu",
+        "unit": "AIC",
+        "hardLimit": 50,
+        "reservePerDispatch": 1
+      }
+    ]
+  }
+}
+```
+
+- `softLimit` records one notification per budget and period when committed
+  spend reaches it. It never blocks a dispatch.
+- `hardLimit` blocks a new dispatch before send when committed spend, the
+  reserves of dispatches that Events hasn't accounted for yet, and the new
+  reserve would exceed it.
+- `reservePerDispatch` is the amount that each dispatch holds until Events
+  accounts for it. Set it to at least the expected cost of one turn.
+
+A project can narrow a platform budget by using the same `budgetId` with lower
+or equal limits and the same bucket and period. It can't remove or widen a
+platform budget. A hard budget blocks dispatch when its bucket has unpriced
+usage or when Orchestrator can't read the spend evidence. Configure a rate card
+for the meter source before you set a hard limit, for example the Azure rate
+card in [Understand source candidates](#understand-source-candidates).
+
+For the enforcement design and error codes, see
+[Scoped spend budgets and dispatch exposure](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/provider-seams.md#scoped-spend-budgets-and-dispatch-exposure).
 
 ## Expected result
 

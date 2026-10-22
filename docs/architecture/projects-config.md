@@ -100,9 +100,12 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/projects/{projectId}/configuration` | Append a configuration revision with an expected configuration revision. |
 | `GET /api/casting/templates` | List the built-in scenario templates available to seed a reviewed team proposal. |
 | `GET /api/catalog/roles` | List the role definitions available to scenario and manual team proposals. |
+| `GET /api/blueprints` | List the built-in blueprints with their default workflow and availability. |
+| `POST /api/blueprints/validate` | Check a blueprint against the blueprint rules without changing state. |
 | `POST /api/projects/{projectId}/casting/proposals` | Create a reviewed proposal from a complete project configuration draft. |
 | `POST /api/projects/{projectId}/casting/proposals/scenario` | Create a version-bound proposal from a scenario template. |
 | `POST /api/projects/{projectId}/casting/proposals/manual` | Create a version-bound proposal from selected role IDs. |
+| `POST /api/projects/{projectId}/casting/proposals/blueprint` | Create a version-bound proposal from a built-in blueprint ID or an inline blueprint. |
 | `GET /api/projects/{projectId}/casting/proposals` | List casting proposals for an authorized project. |
 | `GET /api/projects/{projectId}/casting/proposals/{proposalId}` | Read a proposal and its draft for review. |
 | `PATCH /api/projects/{projectId}/casting/proposals/{proposalId}` | Amend a pending proposal against its expected draft revision. |
@@ -112,12 +115,14 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `POST /api/projects/{projectId}/casting/import` | Stage an explicit owner-authorized charter/casting import for review. |
 | `GET /api/platform/runtime-defaults` | Read the platform administrator's current defaults. |
 | `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
+| `GET /api/platform/components` | Report the active implementation and readiness of every platform component area for a current TenantAdmin or PlatformAdmin. Projects collects owner reports in parallel. See [Platform components](../guide/platform-components.md). |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the exact signed project/run binding, active project, current actor membership, active Orchestrator assignment, and matching accepted run-selection snapshot. |
 | `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators; omit `cursor` for the first page. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
+| `GET /api/projects/{projectId}/skill-marketplaces/definitions` | List suggested marketplaces and the matching active source, if any. |
 | `GET, POST /api/projects/{projectId}/skill-marketplaces/sources` | List or add revisioned project skill sources. |
 | `PUT, DELETE /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}` | Update or tombstone a source with its expected revision. |
 | `GET /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/browse` | Resolve a source ref to a commit and return a bounded, filtered, paged manifest index. |
@@ -179,6 +184,28 @@ sequenceDiagram
 ```
 
 Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
+
+### Blueprints
+
+A blueprint is a team recipe carried over from 0.x: a roster of roles, one or more workflows, a review policy, a sandbox profile, and optional skill bindings. Projects & Config embeds the five 0.x blueprints (AI agent engineering, content authoring, PM and software development, product management, and software development).
+
+- `GET /api/blueprints` lists each blueprint with its default workflow (the first workflow) and an `exportability` result. The status is `exportable` or `unavailable`, with sorted reason codes such as `role_missing` or `workflow_unavailable`. A blueprint stays in the list when it is unavailable, so callers can show why.
+- `POST /api/blueprints/validate` checks a blueprint and returns `{ valid, errors }`. It never changes state. The rules match 0.x: id and name are required, the review policy must be `default`, workflows must be known and unique, the sandbox profile must be `default` or `restricted`, roster roles must be catalog or bespoke roles and not reserved, skill bindings must name roster roles, and bespoke roles need a charter of at most 8,192 characters.
+- `POST /api/projects/{projectId}/casting/proposals/blueprint` takes `expectedConfigurationRevision` and either `blueprintId` or an inline `blueprint`. It creates a pending proposal; nothing changes until the proposal is confirmed. The draft casts the roster, adds a `blueprintWorkflowReferences` entry for each workflow, sets `defaultWorkflowId` to the first workflow, assigns bound skills that the project already pins to the matching agents, and, for `restricted`, sets an empty `egressNarrowing` so the project has no network egress. A built-in blueprint can be applied only when it is exportable.
+- The proposal route returns `{ proposal, unresolvedSkillBindings }`. Applying a blueprint never changes a skill's `enabled` setting. Each skill binding that doesn't take effect is listed with its `role`, `skillId`, and a `code`: `skill_not_installed` (the project has no such skill), `skill_not_pinned` (the skill has no pinned agent list), or `skill_disabled` (the agents are assigned, but the skill stays disabled). The list is sorted by role and then skill.
+
+Workflow availability comes from the workflows the v1 Orchestrator registers. Today that is only `default`, so the built-in blueprints report `workflow_unavailable` until the Orchestrator workflow library adds their workflows.
+
+#### Blueprints as AgentSuite packages
+
+Blueprints ship as native AgentSuite packages, and the AgentSuite import is their only runtime loader. Projects & Config provides the parts that convert and apply them:
+
+- `AgentSuiteBlueprintConverter.Convert` turns a 0.x blueprint into a deterministic AgentSuite content archive at build time. Each roster role becomes an agent whose instructions are the exact 0.x charter text. The caller supplies the build profile, its digest-pinned runtime base and harness images, and the agent model. `ConvertPackage` does the same for a 0.x `blueprint-package-v1` package. It checks the package with the 0.x validator, ported without behavior changes to `Agentweaver.Projects.Config.BlueprintPackages`, and refuses workflow and skill definitions.
+- `ProjectBlueprintCatalog.ToAgentSuiteBlueprint` returns the `ProjectAgentSuiteBlueprint` projection: workflows, default workflow, review policy, sandbox profile, and skill bindings.
+- `ProjectBlueprintCatalog.ValidateBlueprint` checks a projection against the suite's agent IDs with the 0.x rules. `ApplyBlueprint` applies it to a casting draft with the same effects as the blueprint proposal route, using the effective agent IDs from the import.
+- When an AgentSuite import request includes `blueprint`, the import service runs `ValidateBlueprint` before it stores anything and `ApplyBlueprint` on the import draft. The response lists `unresolvedSkillBindings` with the same codes as the proposal route. For details, see [AgentSuite import](../reference/agentsuite-import.md#blueprint-data).
+
+The packaged built-in blueprints ship after the AgentHost image that their build profiles pin is published. Until then, the catalog serves the embedded 0.x JSON. For the decisions and how each 0.x criterion maps to v1, see [Blueprints on AgentSuite](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-application-bundles.md#blueprints-on-agentsuite).
 
 Authorized project readers can list and read proposals. Project writers can
 amend a draft with its expected draft revision and explicitly confirm or reject
@@ -277,6 +304,7 @@ does not produce a receipt.
   tokens transiently.
 - Project provider overrides only select provider IDs permitted by the platform catalog. Exclusive, ordered-composite, platform-singleton, layered and meter-keyed Cost seams use the existing `ProviderResolver`; Application Hosting remains unsupported. Cost requirements name a source explicitly, and multiple distinct meter sources can appear in one selection. The snapshot preserves source keys, adapter/options versions and advertised/required capabilities.
 - The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits can only reduce configured platform limits. A prompt-token limit is optional in new platform defaults and run selections. A project inherits the configured platform cap, can narrow it, or can add a cap when the platform has none. Omission stays absent in new selections. Existing configured values and accepted snapshots remain unchanged.
+- `runLimits.spendBudgets` follows the same rule. A project inherits each platform spend budget, can narrow one by reusing its `budgetId`, and can add its own budgets. The run selection snapshot pins run and agent budgets. `GET /api/projects/{projectId}/runs/{runId}/spend-budgets` returns the current project-scope budgets to Orchestrator for each dispatch, so a changed project budget applies to running work. When this route returns `404 Not Found`, Orchestrator treats the project as having no project-scope budgets and enforces only the pinned run and agent budgets. This keeps Orchestrator compatible with a Projects deployment that doesn't serve the route yet.
 - The immutable run-selection snapshot carries the typed platform egress
   baseline, optional project narrowing, admitted run needs, and the effective
   allow list. It also carries each layered Network Policy provider's layer,
@@ -485,7 +513,12 @@ last-Owner invariant, and database append-only triggers.
 ## Skill content and assignment
 
 `POST /api/skills/preview` validates a `SKILL.md` document and its text resources
-and returns a digest without storing the content. Project import requires current
+and returns a digest without storing the content. `POST /api/skills/package`
+groups uploaded files, one ZIP archive, or draft form fields into candidates.
+Each `SKILL.md` marks a skill root, and files under a nested root belong only to
+that nested skill. The route checks every path, applies file-count and size
+limits while it expands an archive, and validates each candidate with the same
+preview rules. It stores nothing. Project import requires current
 project write authority, that exact digest, and an idempotency key. Each successful
 import creates an immutable revision with source provenance. Reusing the key for a
 different request or importing against a stale revision returns a conflict.

@@ -19,8 +19,8 @@ import {
 import type { ReactElement } from 'react';
 // Web app shell information architecture (locked IA, 2026-06-22).
 // Project-scoped sections: WORK / SQUAD / OPERATIONS / SYSTEM. Above them sit
-// global (non-project) destinations: Overview ("Now"), the Projects gallery,
-// and the user-wide Sessions hub.
+// global destinations: Overview ("Now"), the v1 Chief of Staff shortcut, the
+// Projects gallery, and the user-wide Sessions hub.
 export interface NavItemDef {
   // Stable key used as the NavItem value and for active-state matching.
   key: string;
@@ -42,6 +42,8 @@ export interface GlobalNavItemDef {
   path: string;
   // Path prefixes that should also mark this item active.
   matchPrefixes?: string[];
+  // These entries appear only when a version-specific shell explicitly requests them.
+  v1Only?: boolean;
 }
 
 export interface NavSectionDef {
@@ -52,14 +54,23 @@ export interface NavSectionDef {
 }
 
 // Global (project-independent) destinations rendered above the project sections.
-// Overview is the live "Now" page; Projects is the gallery / switcher landing;
-// Sessions is the user's cross-project assistant conversation hub.
+// Chief of Staff is a v1-only shortcut to a section of Overview; Overview is the
+// live "Now" page, Projects is the gallery, and Sessions is the cross-project hub.
+// A chat opened at /assistant also highlights Sessions.
 /** Route definitions for navigation entries that are not scoped to a project. */
 export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
   { key: 'overview', label: 'Overview', icon: <Home24Regular />, path: '/overview', matchPrefixes: ['/overview', '/'] },
+  { key: 'chief-of-staff', label: 'Chief of Staff', icon: <Bot24Regular />, path: '/overview#chief-of-staff', v1Only: true },
   { key: 'projects', label: 'Projects', icon: <Apps24Regular />, path: '/projects', matchPrefixes: ['/projects'] },
-  { key: 'sessions', label: 'Sessions', icon: <Chat24Regular />, path: '/sessions', matchPrefixes: ['/sessions'] },
+  { key: 'sessions', label: 'Sessions', icon: <Chat24Regular />, path: '/sessions', matchPrefixes: ['/sessions', '/assistant'] },
 ];
+
+// Active keys for rail controls that are not nav links. The New session
+// button and the Settings menu button show as selected for these keys.
+/** Active key that highlights the New session button. */
+export const NEW_SESSION_NAV_KEY = 'new-session';
+/** Active key that highlights the Settings menu button. */
+export const SETTINGS_NAV_KEY = 'settings';
 
 // WORK / SQUAD / OPERATIONS / SYSTEM.
 /** Section and item definitions used to construct the main navigation. */

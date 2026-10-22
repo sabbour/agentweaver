@@ -14,13 +14,13 @@ implementation limits.
 
 | Journey | Use this page to |
 | --- | --- |
-| [Sign-in and access](./onboarding-auth.md) | Sign in through the Identity Broker and request access to an exact run. |
-| [Projects](./projects.md) | List or create projects and open an existing run. |
-| [Project configuration](./configuration.md) | Read and append project configuration revisions. |
-| [Skills and marketplace](./skills.md) | Configure public sources, preview and import skills, and assign a revision to agents. |
+| [Sign-in and access](./onboarding-auth.md) | Sign in through the Identity Broker and request access to a run. |
+| [Projects](./projects.md) | Browse and create projects, read the Dashboard, and open a run you opened before. |
+| [Project configuration](./configuration.md) | Edit project settings by section and manage members. |
+| [Skills and marketplace](./skills.md) | On the **Skills** page, configure public sources, preview and import skills, and assign a revision to agents. |
 | [Account connections](./connections.md) | Connect GitHub Repo App or GitHub Copilot and pin a repository to an existing run. |
-| [Runs and sessions](./runs-sessions.md) | Inspect an existing run, respond to requests, follow its event journal, and read usage. |
-| [Knowledge](./knowledge.md) | Search and manage records for an exact project, run, and agent. |
+| [Runs and sessions](./runs-sessions.md) | Use the run tabs, send messages, respond to requests, and read usage. |
+| [Memories](./knowledge.md) | Search and manage memories for a run and an agent. |
 
 ## Related documentation
 

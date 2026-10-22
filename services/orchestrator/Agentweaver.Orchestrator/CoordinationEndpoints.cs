@@ -18,6 +18,12 @@ public static partial class CoordinationEndpoints
     /// </summary>
     public static IEndpointRouteBuilder MapCoordinationEndpoints(this IEndpointRouteBuilder app)
     {
+        // Create and cancel use unbound project authority; only start uses the run-bound owner gate.
+        var runs = app.MapGroup("/api/projects/{projectId}/runs").RequireAuthorization();
+        runs.MapPost("", CreateProjectRunAsync)
+            .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(256 * 1024));
+        runs.MapPost("/{runId}/start", StartProjectRunAsync);
+        runs.MapPost("/{runId}/cancel", CancelProjectRunAsync);
         var coordination = app.MapGroup("/api/projects/{projectId}/runs/{runId}/coordination")
             .RequireAuthorization();
         coordination.MapPost("/root", AcceptRootAsync);
@@ -242,7 +248,7 @@ public static partial class CoordinationEndpoints
     /// <summary>
     /// Converts a coordinator gate into the public session-status blocker shape.
     /// </summary>
-    private static SessionStatusBlocker ToStatusBlocker(CoordinatorGateRequest gate)
+    internal static SessionStatusBlocker ToStatusBlocker(CoordinatorGateRequest gate)
     {
         var kind = gate.Kind switch
         {
@@ -1424,28 +1430,8 @@ public static partial class CoordinationEndpoints
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
-            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
-            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
-                context, projectId, runId, cancellationToken).ConfigureAwait(false);
-            await RequireUnchangedAuthorizedSelectionAsync(
-                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
-            var admission = context.RequestServices.GetService<RuntimeRunAdmissionClient>();
-            var accepted = await store.AcceptRootAsync(
-                actor, selection, request.SessionId, cancellationToken,
-                admission is null ? null : token => admission.ReadAsync(context, selection, token),
-                token => RequireUnchangedAuthorizedSelectionAsync(
-                    context, projectId, runId, selection, projects, token)).ConfigureAwait(false);
-            await decisions.InitializeRootAsync(
-                actor,
-                new SessionIdentity(projectId, runId, accepted.RootSessionId),
-                selection,
-                cancellationToken).ConfigureAwait(false);
-            await RequireUnchangedAuthorizedSelectionAsync(
-                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
-            await events.EnsureSessionAsync(
-                context,
-                new SessionIdentity(projectId, runId, accepted.RootSessionId),
-                cancellationToken).ConfigureAwait(false);
+            var accepted = await AcceptInteractiveRootAsync(projectId, runId, request.SessionId,
+                context, options, projects, events, store, decisions, cancellationToken).ConfigureAwait(false);
             return Results.Created(
                 $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/coordination/root",
                 accepted);
@@ -1905,6 +1891,14 @@ public static partial class CoordinationEndpoints
         }
         catch (CoordinationException exception)
         {
+            // Chat admission is an Orchestrator assignment, not implicit Owner or Contributor authority.
+            if (exception.Code == "project_orchestrator_role_required_acceptRunSelection")
+                return Results.Json(new
+                {
+                    error = exception.Code,
+                    detail = "Creating a chat requires the project Orchestrator role (acceptRunSelection). " +
+                        "Owner or Contributor alone is not sufficient."
+                }, statusCode: exception.StatusCode);
             return Results.Json(new { error = exception.Code }, statusCode: exception.StatusCode);
         }
         catch (Agentweaver.SourceControl.GitWorkspaceException exception)

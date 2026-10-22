@@ -46,6 +46,85 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         await command.ExecuteNonQueryAsync();
     }
 
+    /// <summary>Reads half-open project usage with unit/disposition separation, nulls, and caller isolation.</summary>
+    [Fact]
+    public async Task ProjectUsagePreservesUnitsUnknownsAndRunBoundScope()
+    {
+        var start = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var usage = UsageContractTests.Submission() with { OccurredAt = start };
+        await _ledger.AppendAsync(usage, UsageContractTests.Binding(), UsageContractTests.Price());
+        var eur = UsageContractTests.Card() with { Id = "eur-card", Unit = "EUR" };
+        await _ledger.AppendAsync(usage with { EventId = Guid.NewGuid(), OccurredAt = start.AddHours(1) },
+            UsageContractTests.Binding(eur), new(2m, "EUR", CostDisposition.Reconciled, eur, null));
+        await _ledger.AppendAsync(usage with { EventId = Guid.NewGuid(), OccurredAt = start.AddHours(1) },
+            UsageContractTests.Binding(), new(0.75m, "USD", CostDisposition.Reconciled, UsageContractTests.Card(), null));
+        await CreateSessionAsync("project-1", "run-2", "session-1");
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(),
+            OccurredAt = start.AddHours(2),
+            Attribution = usage.Attribution with { RunId = "run-2" },
+            Measurement = usage.Measurement with { RequestCount = null, InputTokens = null, DurationMilliseconds = null }
+        }, null, new(null, null, CostDisposition.Unpriced, null, "Unknown source."));
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(),
+            Attribution = usage.Attribution with { AgentId = "agent-2" },
+            ModelBinding = usage.ModelBinding with { ModelId = "model-2" },
+            Measurement = usage.Measurement with { RequestCount = 3 }
+        }, null, new(null, null, CostDisposition.Unpriced, null, "Unknown model."));
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(), OccurredAt = start.AddDays(1)
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(), OccurredAt = start.AddTicks(-1)
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(), Attribution = usage.Attribution with { TenantId = "tenant-2" }
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+        await CreateSessionAsync("project-2", "run-1", "session-1");
+        await _ledger.AppendAsync(usage with
+        {
+            EventId = Guid.NewGuid(), Attribution = usage.Attribution with { ProjectId = "project-2" }
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+
+        var options = new PostgresSessionsProviderOptions("resource", "database", 1, _schema, "options-v1");
+        var store = new ProjectUsageReadStore(_fixture.DataSource, options);
+        var range = new ProjectMetricsRange(start, start.AddDays(1));
+        var result = await store.ReadAsync("tenant-1", "project-1", null, range, default);
+        Assert.Equal(2, result.UsageByModel.Count);
+        Assert.Equal(2, result.UsageByAgent.Count);
+        var model = Assert.Single(result.UsageByModel, item => item.Id == "model-1");
+        var agent = Assert.Single(result.UsageByAgent, item => item.Id == "agent-1");
+        Assert.Equal("model-1", model.Id);
+        Assert.Equal("agent-1", agent.Id);
+        Assert.Equal(2, model.Runs);
+        Assert.Null(model.RequestCount);
+        Assert.Null(model.InputTokens);
+        Assert.Null(model.AvgDurationMs);
+        Assert.Null(model.UnpricedRequestCount);
+        Assert.Equal(80m, model.OutputTokens);
+        Assert.Equal(4, model.Cost.Count);
+        Assert.Contains(new ProjectUsageCost("USD", "estimate", 1.25m), model.Cost);
+        Assert.Contains(new ProjectUsageCost("USD", "reconciled", 0.75m), model.Cost);
+        Assert.Contains(new ProjectUsageCost("EUR", "reconciled", 2m), model.Cost);
+        Assert.Contains(new ProjectUsageCost(null, "unpriced", null), model.Cost);
+        Assert.Equal(3, Assert.Single(result.UsageByModel, item => item.Id == "model-2").UnpricedRequestCount);
+        var bound = Assert.Single((await store.ReadAsync("tenant-1", "project-1", "run-1", range, default)).UsageByModel,
+            item => item.Id == "model-1");
+        Assert.Equal(1, bound.Runs);
+        Assert.Equal(3, bound.RequestCount);
+        Assert.Equal(12.5m, bound.AvgDurationMs);
+        Assert.Equal(0, bound.UnpricedRequestCount);
+        Assert.Empty((await store.ReadAsync("tenant-1", "project-1", "foreign-run", range, default)).UsageByAgent);
+        Assert.Single((await store.ReadAsync("tenant-2", "project-1", null, range, default)).UsageByAgent);
+        Assert.Empty((await store.ReadAsync("tenant-1", "project-1", null, new(start, start), default)).UsageByModel);
+        await EventsAndSessionsMigrator.VerifyAsync(_fixture.DataSource, _schema);
+    }
+
     [Fact]
     public async Task NativeConsumerCommitsPriceLedgerRateCardInboxAndReceiptOnceAcrossRestart()
     {
@@ -379,10 +458,41 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var observation = new SdkUsageObservation(
             SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, sdkEvent),
             sdkEvent, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
-            17, 11, 7, 5, 3, null, 12.5m);
+            17, 11, 7, 5, 3, null, 12.5m)
+        {
+            // The A2A message ID links this usage to a dispatch, so it is correlated usage.
+            A2AMessageId = Guid.NewGuid()
+        };
         var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
         var receipt = new RuntimeUsageSourceReceipt(1, Guid.NewGuid(), registration, usage,
             RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
+        // Build a second usage with no A2A message ID. It has no dispatch, so it is uncorrelated.
+        // A distinct SDK event keeps the uncorrelated usage from reusing the correlated usage event ID.
+        // Reusing it with different content would be a ledger conflict, not a second event.
+        var uncorrelatedEvent = Guid.NewGuid().ToString("D");
+        var undispatched = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation with
+        {
+            EventId = SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, uncorrelatedEvent),
+            SdkEventId = uncorrelatedEvent,
+            A2AMessageId = null
+        });
+        // Without a dispatch ID, the usage can't be priced.
+        var untrusted = Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt with
+            {
+                Usage = undispatched,
+                CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(registration, undispatched)
+            }));
+        Assert.Equal("runtime_byok_azure_provenance_invalid", untrusted.Code);
+        // Events still admits it to the ledger as Unpriced so token totals stay complete.
+        var uncorrelated = await NativeConsumer().AppendAsync(receipt with
+        {
+            ReceiptId = Guid.NewGuid(), Usage = undispatched,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(registration, undispatched)
+        }, _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, uncorrelated.Accounting.Disposition);
+        Assert.Null(uncorrelated.Accounting.Amount);
+        Assert.Equal(1, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
 
         var first = await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
         Assert.Equal(CostDisposition.Unpriced, first.Accounting.Disposition);
@@ -395,7 +505,184 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
         Assert.False(totals.IsFullyPriced);
         Assert.Empty(totals.Amounts);
-        Assert.Equal(17, Assert.Single(totals.Agents).InputTokens);
+        // Both the correlated and uncorrelated events contribute 17 input tokens.
+        Assert.Equal(34, Assert.Single(totals.Agents).InputTokens);
+    }
+
+    [Fact]
+    public async Task TrustedAzureByokUsageIsPricedFromThePinnedRateCardAndReadAsSpendEvidence()
+    {
+        // Request run and project totals for a period that covers today, with no dispatch witnesses yet.
+        var periodStart = DateTimeOffset.UtcNow.AddDays(-1);
+        var request = new UsageSpendEvidenceRequest(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD",
+            new("current", periodStart, periodStart.AddDays(2)), []);
+        // An empty ledger reports cursor 0 and a zero total.
+        var empty = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", request);
+        Assert.Equal(0, empty.AccountingCursor);
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), empty.Run);
+
+        // Price the receipt directly with the provider to get the amount the ledger must store.
+        var receipt = AzureByokReceipt();
+        var (consumer, azure, binding) = AzureConsumer(1.25m, 5.75m);
+        var expected = azure.Price(receipt.Usage.Measurement, receipt.Usage.ModelBinding, binding);
+        Assert.Equal(CostDisposition.Estimate, expected.Disposition);
+        // The first append stores that same price, unit, and rate card.
+        var first = await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Estimate, first.Accounting.Disposition);
+        Assert.Equal(expected.Amount, first.Accounting.Amount);
+        Assert.Equal("USD", first.Accounting.Unit);
+        Assert.Equal("azure-retail-prices.standard.eastus2", first.Accounting.RateCardId);
+        // Sending the same receipt again is a duplicate and adds no new charge.
+        Assert.True((await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default)).IsDuplicate);
+
+        // Ask for witnesses of the receipt's dispatch and of a dispatch that never sent usage.
+        var dispatch = receipt.Usage.A2AMessageId!.Value.ToString("D");
+        var withDispatch = request with { DispatchIds = [dispatch, Guid.NewGuid().ToString("D")] };
+        var evidence = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", withDispatch);
+        UsageSpendEvidenceContract.ValidateEvidence(evidence, withDispatch, "tenant-1", "project-1", "run-1");
+        // One priced event moved the cursor to 1. The run and project totals both hold that one price.
+        Assert.Equal(1, evidence.AccountingCursor);
+        Assert.Equal(new UsageSpendTotal(expected.Amount!.Value, 1, 0), evidence.Run);
+        Assert.Equal(evidence.Run, evidence.ProjectPeriod);
+        // The known dispatch is Partial with exactly this receipt and its price.
+        var witness = evidence.Dispatches[0];
+        Assert.Equal(UsageDispatchAccountingStatus.Partial, witness.Status);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(witness.Receipts).SourceReceiptId);
+        Assert.Equal(expected.Amount, witness.KnownPricedSubtotal);
+        // The unknown dispatch is Unknown and has no receipts.
+        Assert.Equal(UsageDispatchAccountingStatus.Unknown, evidence.Dispatches[1].Status);
+        Assert.Empty(evidence.Dispatches[1].Receipts);
+
+        // A changed rate card never reprices the run: history keeps its price and new usage in the
+        // pinned run fails closed as unpriced until the run's pinned card is served again.
+        var (changed, _, _) = AzureConsumer(9.00m, 9.00m);
+        // The replay is a duplicate and keeps the original price, not the new 9.00 rates.
+        var replay = await changed.AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(expected.Amount, replay.Accounting.Amount);
+        // New usage can't be priced from the changed card, so it is stored unpriced.
+        var second = await changed.AppendAsync(AzureByokReceipt(), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, second.Accounting.Disposition);
+        Assert.Equal("pinned-cost-binding-unavailable", second.Accounting.UnpricedReason);
+        // Two events now: the cursor is 2, and the run total is the old price with 1 priced and 1 unpriced event.
+        var later = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", withDispatch);
+        Assert.Equal(2, later.AccountingCursor);
+        Assert.Equal(new UsageSpendTotal(expected.Amount!.Value, 1, 1), later.Run);
+        // The new usage belongs to another dispatch, so this dispatch's receipts are unchanged.
+        // Every witness reports the new cursor 2 as its watermark.
+        Assert.Equal(witness.ReceiptDigest, later.Dispatches[0].ReceiptDigest);
+        Assert.All(later.Dispatches, item => Assert.Equal(2, item.AccountingWatermark));
+
+        // A project period that starts after the usage has a zero total. The run total ignores the period.
+        var outside = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", request with
+        {
+            ProjectPeriod = new("next", periodStart.AddDays(3), periodStart.AddDays(4))
+        });
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), outside.ProjectPeriod);
+        Assert.Equal(later.Run, outside.Run);
+        // All charges are in USD, so an EUR request sees a zero total.
+        var euro = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", request with { Unit = "EUR" });
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), euro.Run);
+    }
+
+    [Fact]
+    public async Task SpendEvidenceReportsAgentTotalsAndWitnessesDispatchesFromOtherRuns()
+    {
+        // Store one priced receipt for run-1, then ask for run, project, and agent totals plus its dispatch witness.
+        var receipt = AzureByokReceipt();
+        var (consumer, _, _) = AzureConsumer(1.25m, 5.75m);
+        var accepted = await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default);
+        var dispatch = receipt.Usage.A2AMessageId!.Value.ToString("D");
+        var periodStart = DateTimeOffset.UtcNow.AddDays(-1);
+        var request = new UsageSpendEvidenceRequest(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD",
+            new("current", periodStart, periodStart.AddDays(2)), [dispatch])
+        {
+            AgentId = receipt.Usage.Attribution.AgentId
+        };
+
+        var own = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", request);
+        UsageSpendEvidenceContract.ValidateEvidence(own, request, "tenant-1", "project-1", "run-1");
+        // The agent total for run-1 is the one priced receipt.
+        Assert.Equal(new UsageSpendTotal(accepted.Accounting.Amount!.Value, 1, 0), own.Agent);
+        // Another run in the same project has no run or agent spend of its own.
+        var other = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-other", request);
+        UsageSpendEvidenceContract.ValidateEvidence(other, request, "tenant-1", "project-1", "run-other");
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), other.Run);
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), other.Agent);
+        // The project period total covers every run, so it matches run-1's view.
+        Assert.Equal(own.ProjectPeriod, other.ProjectPeriod);
+        // The dispatch witness still finds the receipt, even when another run asks for it.
+        Assert.Equal(receipt.ReceiptId, Assert.Single(other.Dispatches[0].Receipts).SourceReceiptId);
+        // An agent that sent no usage has a zero total.
+        var stranger = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1",
+            request with { AgentId = "agent-other" });
+        Assert.Equal(new UsageSpendTotal(0m, 0, 0), stranger.Agent);
+    }
+
+    [Fact]
+    public async Task ConcurrentAzureByokReplaysCommitOneImmutableCharge()
+    {
+        // Two consumers append the same receipt at the same time.
+        var receipt = AzureByokReceipt();
+        var (first, _, _) = AzureConsumer(1.25m, 5.75m);
+        var (second, _, _) = AzureConsumer(1.25m, 5.75m);
+        var results = await Task.WhenAll(
+            first.AppendAsync(receipt, _ => Task.CompletedTask, default),
+            second.AppendAsync(receipt, _ => Task.CompletedTask, default));
+        // Exactly one append stores the charge, the other is a duplicate, and both report the same accounting.
+        Assert.Single(results, result => !result.IsDuplicate);
+        Assert.Equal(results[0].Accounting, results[1].Accounting);
+        // The same receipt with different token counts is rejected, so a stored charge can't change.
+        var conflicting = receipt.Usage with
+        {
+            Measurement = receipt.Usage.Measurement with { InputTokens = 18 }
+        };
+        await Assert.ThrowsAnyAsync<Exception>(() => first.AppendAsync(receipt with
+        {
+            Usage = conflicting,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, conflicting)
+        }, _ => Task.CompletedTask, default));
+        // The ledger holds one event: cursor 1, one priced event, and one receipt for the dispatch.
+        var evidence = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", new(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD", null,
+            [receipt.Usage.A2AMessageId!.Value.ToString("D")]));
+        Assert.Equal(1, evidence.AccountingCursor);
+        Assert.Equal(1, evidence.Run.PricedEvents);
+        Assert.Single(evidence.Dispatches[0].Receipts);
+    }
+
+    [Fact]
+    public async Task NonAzureByokUsageStaysUnpricedEvenWithAnAzureRateCard()
+    {
+        var (consumer, _, _) = AzureConsumer(1.25m, 5.75m);
+        // An OpenAI BYOK receipt can't be priced from an Azure rate card.
+        var accepted = await consumer.AppendAsync(
+            AzureByokReceipt(providerType: "openai"), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, accepted.Accounting.Disposition);
+        Assert.Equal("byok-provider-unpriced", accepted.Accounting.UnpricedReason);
+        Assert.Null(accepted.Accounting.Amount);
+        // The run total has no amount, 0 priced events, and 1 unpriced event.
+        var evidence = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", new(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD", null, []));
+        Assert.Equal(new UsageSpendTotal(0m, 0, 1), evidence.Run);
+    }
+
+    [Fact]
+    public async Task UncorrelatedAzureByokUsageIsAdmittedButNeverPricedFromAnAzureRateCard()
+    {
+        var (consumer, _, _) = AzureConsumer(1.25m, 5.75m);
+        // An Azure receipt without a dispatch link is stored, but Azure pricing doesn't trust it.
+        var accepted = await consumer.AppendAsync(
+            AzureByokReceipt(withoutA2AMessageId: true), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, accepted.Accounting.Disposition);
+        Assert.Equal("byok-provider-unpriced", accepted.Accounting.UnpricedReason);
+        Assert.Null(accepted.Accounting.Amount);
+        // The run total has no amount, 0 priced events, and 1 unpriced event.
+        var evidence = await _ledger.ReadSpendEvidenceAsync("tenant-1", "project-1", "run-1", new(
+            UsageSpendEvidenceContract.CurrentVersion, SdkMeterSources.ByokTokens, "USD", null, []));
+        Assert.Equal(new UsageSpendTotal(0m, 0, 1), evidence.Run);
     }
 
     [Fact]
@@ -1632,6 +1919,75 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         {
             RateCardContentHash = accounting.RateCardContentHash
         };
+    }
+
+    // Builds a ledger consumer that prices BYOK tokens with an Azure rate card for gpt-6.1-sol.
+    // The rates are part of the card version, so different rates make a different card.
+    // The returned binding is the rate card pinned for run-1.
+    private (NativeUsageReceiptConsumer Consumer, AzureCostProvider Provider, CostBinding Binding) AzureConsumer(
+        decimal inputRate, decimal outputRate)
+    {
+        var options = new AzureCostProviderOptions(
+            "azure-openai-deployment-1", 1, "azure-cost-options-v1",
+            AzureCostProviderOptions.CurrentOptionsSchemaVersion, AzureCostPricingModel.StandardTokens,
+            new CostRateCard("azure-retail-prices.standard.eastus2", $"2026-10-01.{inputRate}.{outputRate}",
+                AzureCostProvider.MeterSource, "USD", AzureCostProviderOptions.TokensPerRateUnit,
+                ImmutableDictionary.CreateRange(StringComparer.Ordinal, new[]
+                {
+                    KeyValuePair.Create(AzureCostProviderOptions.InputRateKey("gpt-6.1-sol"), inputRate),
+                    KeyValuePair.Create(AzureCostProviderOptions.OutputRateKey("gpt-6.1-sol"), outputRate)
+                })));
+        var azure = new AzureCostProvider(options);
+        var catalog = ProviderCatalog.Create(
+            [azure.CreateRegistration()], [], [],
+            meterSourceSelections: [new(SdkMeterSources.ByokTokens, AzureCostProvider.ProviderId)]);
+        Assert.True(catalog.IsSuccess, catalog.Error?.Message);
+        var binder = new AzureCostProviderBinder(azure, new(catalog.Value!));
+        var pinned = binder.ResolveAndPin(SdkMeterSources.ByokTokens, "run-1");
+        Assert.True(pinned.IsSuccess, pinned.Error?.Message);
+        var consumer = new NativeUsageReceiptConsumer(_fixture.DataSource,
+            new PostgresSessionsProviderOptions("native-postgres", "test", 1, _schema, "native-options", 1),
+            _ledger, azureProvider: azure, azureBindings: binder);
+        return (consumer, azure, pinned.Value!);
+    }
+
+    // Builds a BYOK usage receipt for run-1 with 17 input and 11 output tokens.
+    // Each call uses a new SDK event and, unless withoutA2AMessageId is set, a new dispatch ID.
+    // providerType picks the BYOK provider recorded on the model binding.
+    private static RuntimeUsageSourceReceipt AzureByokReceipt(
+        string providerType = "azure", bool withoutA2AMessageId = false)
+    {
+        var hosted = NativeReceipt();
+        var registration = hosted.Registration with
+        {
+            Binding = hosted.Registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = new(1, hosted.Usage.SdkSource!.ModelSelectionReference,
+                    hosted.Usage.SdkSource.ModelId, ModelSourceMode.Byok, "byok-bindings-v1", new string('a', 64))
+                {
+                    ProviderType = providerType
+                }
+            }
+        };
+        var source = hosted.Usage.SdkSource! with
+        {
+            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null,
+            ByokProvider = new(providerType, hosted.Usage.SdkSource.ModelId, new string('a', 64)),
+            ModelBindingPin = registration.Binding.ModelBindingPin,
+            ResolvedModelBindingPin = registration.Binding.ModelBindingPin
+        };
+        var sdkEvent = Guid.NewGuid().ToString("D");
+        var observation = new SdkUsageObservation(
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, sdkEvent),
+            sdkEvent, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
+            17, 11, 0, 0, 3, null, 12.5m)
+        {
+            A2AMessageId = withoutA2AMessageId ? null : Guid.NewGuid()
+        };
+        var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
+        return new(1, Guid.NewGuid(), registration, usage,
+            RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
     }
 
     private static RuntimeUsageSourceReceipt NativeReceipt(

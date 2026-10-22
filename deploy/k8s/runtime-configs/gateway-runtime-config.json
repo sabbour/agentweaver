@@ -14,6 +14,7 @@
     "Gateway__Owners__Orchestrator": "https://orchestrator.agentweaver.svc.cluster.local:8443/",
     "Gateway__Owners__Knowledge": "https://knowledge.agentweaver.svc.cluster.local:8443/",
     "Gateway__Owners__Events": "https://events-and-sessions.agentweaver.svc.cluster.local:8443/",
+    "Gateway__Owners__Environment": "https://environment.agentweaver.svc.cluster.local:8443/",
     "Gateway__Owners__IdentityBrokerAddress": "https://identity-broker.agentweaver.svc.cluster.local:443/",
     "Gateway__WebOrigin": "https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io"
   }

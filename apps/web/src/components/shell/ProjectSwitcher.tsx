@@ -92,15 +92,39 @@ export interface ProjectSwitcherProps {
  * data and loading status.
  */
 export function ProjectSwitcher({
+  ...props
+}: ProjectSwitcherProps) {
+  const state = useProjectList();
+  // Load projects with the 0.x hook here, and let the view do all the drawing.
+  // The v1 shell renders the same view with projects from the v1 API.
+  return <ProjectSwitcherView {...props} {...state} />;
+}
+
+/** The switcher only needs each project's ID and name. */
+type SwitcherProject = Pick<Project, 'project_id' | 'name'>;
+
+/**
+ * Draws the project selector from projects the caller supplies. It makes no
+ * API calls itself, so both the 0.x and v1 shells can use it.
+ */
+export function ProjectSwitcherView({
   projectId,
   pathname,
   isFallbackProject,
   onFallbackProjectMissing,
-}: ProjectSwitcherProps) {
+  projects,
+  loading,
+  authError,
+  loadError,
+}: ProjectSwitcherProps & {
+  projects: SwitcherProject[];
+  loading: boolean;
+  authError: boolean;
+  loadError: boolean;
+}) {
   const styles = useStyles();
   const navigate = useNavigate();
 
-  const { projects, loading, authError, loadError } = useProjectList();
   const loaded = !loading;
 
   const [comboValue, setComboValue] = useState('');
@@ -154,7 +178,7 @@ export function ProjectSwitcher({
     return recentIds
       .filter((rid) => rid !== projectId)
       .map((rid) => projects.find((p) => p.project_id === rid))
-      .filter((p): p is Project => Boolean(p))
+      .filter((p): p is SwitcherProject => Boolean(p))
       .filter((p) => !isFiltering || p.name.toLowerCase().includes(q));
   }, [recentIds, projects, projectId, isFiltering, comboValue]);
 

@@ -11,7 +11,6 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getAuthSession: vi.fn(),
     getProjectCopilotConnection: vi.fn(),
-    getProjectAccessOverview: vi.fn(),
     signOutSession: vi.fn(),
   },
 }));
@@ -43,9 +42,6 @@ beforeEach(() => {
     github_login: 'octocat',
     effective_source: 'project',
   });
-  vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
-    effective_github_login: 'octocat',
-  } as never);
   vi.mocked(apiClient.signOutSession).mockResolvedValue(undefined as never);
 });
 
@@ -59,10 +55,9 @@ describe('GitHubIdentityBadge', () => {
 
     await screen.findByText('Signed in');
     expect(screen.getAllByText('Ada Lovelace')).toHaveLength(2);
-    expect(await screen.findByText('Repository access: @octocat')).toBeDefined();
-    expect(screen.getByText('Connected as @octocat')).toBeDefined();
+    expect(await screen.findByText('Connected as @octocat')).toBeDefined();
+    expect(screen.queryByText('Repository access')).toBeNull();
     expect(apiClient.getProjectCopilotConnection).toHaveBeenCalledWith('proj-1');
-    expect(apiClient.getProjectAccessOverview).toHaveBeenCalledWith('proj-1');
     expect(screen.getByRole('link', { name: 'Manage project connections' }).getAttribute('href')).toBe('/projects/proj-1/settings');
     expect(screen.getByRole('link', { name: 'Manage account GitHub connections' }).getAttribute('href')).toBe('/settings');
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeDefined();
@@ -130,12 +125,9 @@ describe('GitHubIdentityBadge', () => {
     assign.mockRestore();
   });
 
-  it('shows specific project GitHub status failures without hiding successful status lines', async () => {
+  it('shows specific project Copilot connection failures', async () => {
     vi.mocked(apiClient.getProjectCopilotConnection).mockRejectedValue(
       new ApiError(409, JSON.stringify({ error: 'project_model_provider_reconnect_required' })) as never,
-    );
-    vi.mocked(apiClient.getProjectAccessOverview).mockRejectedValue(
-      new ApiError(404, 'Not Found') as never,
     );
 
     renderBadge({ projectId: 'proj-1' });
@@ -143,9 +135,6 @@ describe('GitHubIdentityBadge', () => {
     fireEvent.click(screen.getByRole('button', { name: 'GitHub identity' }));
 
     expect(await screen.findByText(
-      'Repository access status is unavailable because this deployment did not return a project access snapshot.',
-    )).toBeDefined();
-    expect(screen.getByText(
       'Reconnect the project GitHub Copilot authorization used for unattended AI work.',
     )).toBeDefined();
   });

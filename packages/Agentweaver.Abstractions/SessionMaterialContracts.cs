@@ -164,6 +164,22 @@ public sealed record SessionMaterialReadResult(SessionMaterialAcknowledgment Mat
     public override string ToString() => nameof(SessionMaterialReadResult) + " [REDACTED]";
 }
 
+/// <summary>Authorized historical turn text without object keys, cache bytes, or runtime configuration.</summary>
+public sealed record SessionTurnContent(Guid EventId, SessionIdentity Identity, string Text)
+{
+    /// <summary>Projects only turn material after the session owner has rechecked current read authority.</summary>
+    public static SessionTurnContent FromMaterial(SessionMaterialReadResult result)
+    {
+        if (result.Material.Reference.Material?.Kind != SessionMaterialKind.TurnContent)
+            throw new ArgumentException("Only recorded turn content can be projected.", nameof(result));
+        return new(result.Material.EventId, result.Material.Identity,
+            System.Text.Encoding.UTF8.GetString(result.Bytes));
+    }
+
+    /// <summary>Prevents conversation text from appearing in diagnostic output.</summary>
+    public override string ToString() => nameof(SessionTurnContent) + " [REDACTED]";
+}
+
 /// <summary>Enforces material size, kind, ownership, event identity, and proof invariants.</summary>
 public static class SessionMaterialValidation
 {

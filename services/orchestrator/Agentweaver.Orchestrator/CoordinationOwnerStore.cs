@@ -1758,7 +1758,7 @@ internal sealed partial class CoordinationOwnerStore
         if (value is not string state)
             throw new CoordinationException(
                 "run_status_unavailable", StatusCodes.Status404NotFound);
-        if (state is not ("idle" or "active" or "blocked" or "completed" or "failed" or "indeterminate"))
+        if (state is not ("idle" or "active" or "blocked" or "completed" or "failed" or "indeterminate" or "cancelled"))
             throw new CoordinationException(
                 "run_status_unavailable", StatusCodes.Status503ServiceUnavailable);
         return state;
@@ -2740,9 +2740,12 @@ internal sealed partial class CoordinationOwnerStore
         var outbound = request.Message;
         if (outbound.OwnerMessageId == Guid.Empty || outbound.Sender != sender ||
             outbound.Recipient.ProjectId != sender.ProjectId ||
-            outbound.Recipient.RunId != sender.RunId ||
-            outbound.Sender.SessionId == outbound.Recipient.SessionId)
+            outbound.Recipient.RunId != sender.RunId)
             throw new CoordinationException("owner_message_invalid", StatusCodes.Status400BadRequest);
+
+        // Root self-delivery is reserved for the durable first-message retry key.
+        if (outbound.Sender == outbound.Recipient && outbound.IdempotencyKey != $"{sender.RunId}:first")
+            throw new CoordinationException("first_message_invalid", StatusCodes.Status409Conflict);
 
         var persistedOutbound = await ReadOutboundMessageAsync(
             outbound.OwnerMessageId, cancellationToken).ConfigureAwait(false);
@@ -2941,6 +2944,10 @@ internal sealed partial class CoordinationOwnerStore
         var target = await ReadSessionAsync(connection, transaction, recipient, forUpdate: true, cancellationToken)
             .ConfigureAwait(false);
         RequireCurrentActiveSession(target, run);
+        // Only durable interactive input may use the root as both its ingress and recipient.
+        if (sender == recipient)
+            await RequirePersistedFirstMessageAsync(connection, transaction, actor, run.TenantId,
+                sender, request, cancellationToken).ConfigureAwait(false);
 
         Guid? replyThreadId = null;
         if (request.ReplyToId is { } replyTo)
@@ -3430,7 +3437,7 @@ internal sealed partial class CoordinationOwnerStore
             session.ExecutionFence != run.Fence ||
             request.ExpectedSessionStateVersion != session.StateVersion)
             throw new CoordinationException("execution_failure_stale", StatusCodes.Status409Conflict);
-        if (run.ExecutionState is "failed" or "indeterminate" or "completed" ||
+        if (run.ExecutionState is "failed" or "indeterminate" or "completed" or "cancelled" ||
             session.LifecycleState != "active" ||
             session.TurnState is not ("active" or "presenting"))
             throw new CoordinationException("execution_failure_conflict", StatusCodes.Status409Conflict);
@@ -4096,6 +4103,8 @@ internal sealed partial class CoordinationOwnerStore
         RequireWriter(session, actor);
         if (session.ExecutionFence != run.Fence)
             throw new CoordinationException("execution_fence_stale", StatusCodes.Status409Conflict);
+        if (run.ExecutionState == "cancelled")
+            throw new CoordinationException("run_terminal", StatusCodes.Status409Conflict);
 
         var notifications = await ReadParentNotificationsAsync(
             connection, transaction, parent, limit, cancellationToken).ConfigureAwait(false);
@@ -4884,6 +4893,8 @@ internal sealed partial class CoordinationOwnerStore
     {
         if (session.ExecutionFence != run.Fence)
             throw new CoordinationException("execution_fence_stale", StatusCodes.Status409Conflict);
+        if (run.ExecutionState == "cancelled")
+            throw new CoordinationException("run_terminal", StatusCodes.Status409Conflict);
         if (run.ExecutionState is "failed" or "indeterminate")
             throw new CoordinationException("execution_recovery_required", StatusCodes.Status409Conflict);
         if (session.LifecycleState != "active")

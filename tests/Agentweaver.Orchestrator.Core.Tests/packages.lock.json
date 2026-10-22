@@ -187,6 +187,14 @@
           "OpenTelemetry.Api": "1.15.3"
         }
       },
+      "Microsoft.AspNetCore.Authentication.JwtBearer": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "0BgDfT1GoZnzjJOBwx5vFMK5JtqsTEas9pCEwd1/KKxNUAqFmreN60WeUoF+CsmSd9tOQuqWedvdBo/QqHuNTQ==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Protocols.OpenIdConnect": "8.0.1"
+        }
+      },
       "Microsoft.Bcl.AsyncInterfaces": {
         "type": "Transitive",
         "resolved": "8.0.0",
@@ -549,6 +557,15 @@
           "Microsoft.IdentityModel.Tokens": "8.19.2"
         }
       },
+      "Microsoft.IdentityModel.Protocols.OpenIdConnect": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "AQDbfpL+yzuuGhO/mQhKNsp44pm5Jv8/BI4KiFXR7beVGZoSH35zMV3PrmcfvSTsyI6qrcR898NzUauD6SRigg==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Protocols": "8.0.1",
+          "System.IdentityModel.Tokens.Jwt": "8.0.1"
+        }
+      },
       "Microsoft.IdentityModel.Tokens": {
         "type": "Transitive",
         "resolved": "8.19.2",
@@ -698,6 +715,15 @@
           "System.Memory.Data": "8.0.1"
         }
       },
+      "System.IdentityModel.Tokens.Jwt": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "GJw3bYkWpOgvN3tJo5X4lYUeIFA2HD293FPUhKmp7qxS+g5ywAb34Dnd3cDAFLkcMohy5XTpoaZ4uAHuw0uSPQ==",
+        "dependencies": {
+          "Microsoft.IdentityModel.JsonWebTokens": "8.0.1",
+          "Microsoft.IdentityModel.Tokens": "8.0.1"
+        }
+      },
       "System.Memory.Data": {
         "type": "Transitive",
         "resolved": "8.0.1",
@@ -781,20 +807,21 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )"
+          "Agentweaver.Abstractions": "[1.2.0, )"
         }
       },
       "agentweaver.orchestrator": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )",
-          "Agentweaver.Identity": "[0.0.0, )",
-          "Agentweaver.Orchestrator.Core": "[0.0.0, )",
-          "Agentweaver.Persistence.Postgres": "[0.0.0, )",
-          "Agentweaver.Providers": "[0.0.0, )",
-          "Agentweaver.SourceControl": "[0.0.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
+          "Agentweaver.Orchestrator.Core": "[1.2.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.1.1, )",
+          "Agentweaver.Providers": "[1.1.0, )",
+          "Agentweaver.SourceControl": "[1.1.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.Agents.AI.Workflows": "[1.19.0, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
           "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
         }
@@ -802,8 +829,8 @@
       "agentweaver.orchestrator.core": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )",
-          "Agentweaver.Providers": "[0.0.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Providers": "[1.1.0, )",
           "Microsoft.AgentGovernance": "[4.0.0, )"
         }
       },
@@ -816,7 +843,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
         }
@@ -824,8 +851,8 @@
       "agentweaver.sourcecontrol": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )",
-          "Agentweaver.Providers": "[0.0.0, )"
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Providers": "[1.1.0, )"
         }
       }
     }
