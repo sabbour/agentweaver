@@ -123,6 +123,7 @@ function requireAncestor(exec, root, sourceSha, target, description) {
  * A reused image keeps its original revision, which must remain an ancestor of the release source.
  */
 function selectPublishedWeb(publication, manifest, git, exec, root) {
+  // Validate the complete receipt shape before trusting any component entry from it.
   if (!isRecord(publication) || publication.schemaVersion !== 1 ||
       !SHA.test(publication.sourceSha ?? '') || publication.status !== 'published' ||
       !HEX_SHA256.test(publication.provenanceSha256 ?? '') ||
@@ -134,21 +135,20 @@ function selectPublishedWeb(publication, manifest, git, exec, root) {
       !Array.isArray(publication.planned) || !Array.isArray(publication.published)) {
     fail('publication receipt is missing, partial, or not a standard release publication.');
   }
-  if (!isRecord(manifest) || manifest.stage !== 'release' ||
-      manifest.evidence?.sourceSha !== publication.sourceSha ||
-      manifest.evidence?.deploymentSha !== publication.sourceSha ||
-      !Array.isArray(manifest.components)) {
-    fail('release manifest is not bound to the publication source.');
+  // The manifest is read from publication.sourceSha by the caller; standard publications keep it as a draft.
+  if (!isRecord(manifest) || manifest.stage !== 'draft' || !Array.isArray(manifest.components)) {
+    fail('source manifest is not a tracked draft with a component list.');
   }
+  // The manifest supplies the intended Web version; published artifact digests belong to the receipt.
   const components = manifest.components.filter(component => component?.id === WEB_COMPONENT);
   if (components.length !== 1) fail('source manifest must contain exactly one Agentweaver.Web component.');
   const component = components[0];
   if (component.kind !== 'service' || typeof component.version !== 'string' ||
-      component.version.trim() !== component.version || component.version.length === 0 ||
-      !IMAGE_DIGEST.test(component.imageDigest ?? '') || /^0+$/.test(component.imageDigest.slice(7))) {
-    fail('source manifest has no valid published Agentweaver.Web image.');
+      component.version.trim() !== component.version || component.version.length === 0) {
+    fail('source manifest has no valid Agentweaver.Web version.');
   }
 
+  // Require one planned and one published Web record so unrelated entries cannot supply the image.
   const planned = publication.planned.filter(entry => entry?.id === WEB_COMPONENT);
   const published = publication.published.filter(entry => entry?.id === WEB_COMPONENT);
   if (planned.length !== 1 || published.length !== 1) {
@@ -156,18 +156,21 @@ function selectPublishedWeb(publication, manifest, git, exec, root) {
   }
   const plan = planned[0];
   const result = published[0];
+  // Match both records to the source version and to the exact archive measured during publication.
   if (plan.kind !== 'image' || result.kind !== 'image' ||
       plan.version !== component.version || result.version !== component.version ||
       !HEX_SHA256.test(plan.sha256 ?? '') || result.archiveSha256 !== plan.sha256) {
     fail('Web publication receipt does not prove the exact source-manifest artifact.');
   }
 
+  // A newly built image belongs to this publication; a reused image keeps its original build identity.
   let imageSourceSha = publication.sourceSha;
   let imageSourceTree;
   if (plan.reused !== undefined || result.reused !== undefined) {
-    // Reused images carry the source identity of the commit that built them, not this release.
+    // Reuse requires the current receipt format and keeps the identity of the original image build.
     const reused = plan.reused;
-    if (!isRecord(reused) || !isDeepStrictEqual(result.reused, reused) ||
+    if (publication.requiredPackageIds === undefined ||
+        !isRecord(reused) || !isDeepStrictEqual(result.reused, reused) ||
         !SHA.test(reused.sourceSha ?? '') || reused.sourceSha === publication.sourceSha ||
         !SHA.test(reused.sourceTree ?? '') || !SHA.test(reused.receiptSourceSha ?? '') ||
         !IMAGE_DIGEST.test(reused.inputFingerprint ?? '')) {
@@ -177,12 +180,18 @@ function selectPublishedWeb(publication, manifest, git, exec, root) {
     imageSourceTree = reused.sourceTree;
     requireAncestor(exec, root, imageSourceSha, publication.sourceSha, 'reused image source');
   }
+  // The tag names the image's build commit, while the immutable digest comes from the published result.
   const expectedTag = publication.requiredPackageIds === undefined
     ? component.version : componentImageTag(component.version, imageSourceSha);
-  const expectedImage = `${WEB_IMAGE_REPOSITORY}@${component.imageDigest}`;
-  if (plan.destination !== `${WEB_IMAGE_REPOSITORY}:${expectedTag}` || result.image !== expectedImage) {
+  const imagePrefix = `${WEB_IMAGE_REPOSITORY}@`;
+  const publishedDigest = typeof result.image === 'string' && result.image.startsWith(imagePrefix)
+    ? result.image.slice(imagePrefix.length) : undefined;
+  if (plan.destination !== `${WEB_IMAGE_REPOSITORY}:${expectedTag}` ||
+      !IMAGE_DIGEST.test(publishedDigest ?? '') || /^0+$/.test(publishedDigest?.slice(7) ?? '')) {
     fail('Web image tag, repository, digest, and source manifest do not agree.');
   }
+  const expectedImage = `${WEB_IMAGE_REPOSITORY}@${publishedDigest}`;
+  // Bind the reused build tree to Git rather than trusting the receipt's source-tree string alone.
   const actualImageSourceTree = git('rev-parse', `${imageSourceSha}^{tree}`).trim();
   if (!SHA.test(actualImageSourceTree) ||
       (imageSourceTree !== undefined && imageSourceTree !== actualImageSourceTree)) {
@@ -195,7 +204,7 @@ function selectPublishedWeb(publication, manifest, git, exec, root) {
     imageSourceTree,
     version: component.version,
     image: expectedImage,
-    digest: component.imageDigest,
+    digest: publishedDigest,
   };
 }
 

@@ -3,12 +3,19 @@ import { test } from 'node:test';
 import { parseWebRolloutArgs, runWebImageRollout } from '../deploy-web.mjs';
 
 const digest = character => `sha256:${character.repeat(64)}`;
-const sourceSha = 'a'.repeat(40);
+const sourceSha = '1e62ed39add74e8aedbdfb781c4a6d18f5b8046f';
+const imageSourceSha = '243843e5043a29d222375efe935972746e2f5f14';
 const headSha = 'b'.repeat(40);
-const sourceTree = 'c'.repeat(40);
-const webDigest = digest('d');
+const sourceTree = '303d5bf8e5a173adb8c63c2005e4e1a5baf72611';
+const webDigest = 'sha256:e280c0db7cc53739799e75068bb0d9eb52c541ed725da1e1dcaf745cb461ab8f';
 const webImage = `ghcr.io/sabbour/agentweaver-web@${webDigest}`;
-const packageSha = 'e'.repeat(64);
+const packageSha = 'c83e0f03da4d3c8eebe77d169a2ebe0b72f4ac544d285e6d21c944d13cedfcb3';
+const reused = {
+  sourceSha: imageSourceSha,
+  sourceTree,
+  inputFingerprint: 'sha256:a215fe1c3939f0b172e974a8a74c248e23f530f5ace8c393ec2c8774d397889e',
+  receiptSourceSha: imageSourceSha,
+};
 
 function makeDeployment(name, image, { web = false, initContainer = false } = {}) {
   const labels = web
@@ -60,29 +67,31 @@ function makeFixture({
   mutateNonWeb,
   mutateWebAnnotation,
   bumpWebRevision = true,
+  manifestOverrides,
+  publicationOverrides,
 } = {}) {
   const manifest = {
-    stage: 'release',
-    evidence: { sourceSha, deploymentSha: sourceSha },
+    stage: 'draft',
     components: [{
       id: 'Agentweaver.Web',
       kind: 'service',
       version: '1.2.0',
-      imageDigest: webDigest,
     }],
+    ...manifestOverrides,
   };
   const publication = {
     schemaVersion: 1,
     sourceSha,
     status: 'published',
-    provenanceSha256: 'f'.repeat(64),
+    provenanceSha256: 'a6341ce79dbb0ff91dac62cc32424a40d16d906c7b044d4f7e621f9a6832d50f',
     requiredPackageIds: [],
     planned: [{
       id: 'Agentweaver.Web',
       version: '1.2.0',
       kind: 'image',
       sha256: packageSha,
-      destination: `ghcr.io/sabbour/agentweaver-web:1.2.0-${sourceSha}`,
+      destination: `ghcr.io/sabbour/agentweaver-web:1.2.0-${imageSourceSha}`,
+      reused: structuredClone(reused),
     }],
     published: [{
       id: 'Agentweaver.Web',
@@ -90,7 +99,9 @@ function makeFixture({
       kind: 'image',
       image: webImage,
       archiveSha256: packageSha,
+      reused: structuredClone(reused),
     }],
+    ...publicationOverrides,
   };
   const state = [
     makeDeployment('web', currentWebImage, { web: true }),
@@ -105,7 +116,7 @@ function makeFixture({
       if (args[0] === 'status') return { status: 0, stdout: '', stderr: '' };
       if (args[0] === 'fetch') return { status: 0, stdout: '', stderr: '' };
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { status: 0, stdout: `${headSha}\n`, stderr: '' };
-      if (args[0] === 'rev-parse' && args[1] === `${sourceSha}^{tree}`) {
+      if (args[0] === 'rev-parse' && args[1] === `${imageSourceSha}^{tree}`) {
         return { status: 0, stdout: `${sourceTree}\n`, stderr: '' };
       }
       if (args[0] === 'show') return { status: 0, stdout: JSON.stringify(manifest), stderr: '' };
@@ -150,6 +161,8 @@ function makeFixture({
     calls,
     written,
     options,
+    manifest,
+    publication,
     overrides: {
       root: process.cwd(),
       exec,
@@ -159,7 +172,7 @@ function makeFixture({
         return {
           digest: webDigest,
           acceptedDigests: new Set([webDigest]),
-          sourceSha,
+          sourceSha: imageSourceSha,
           sourceTree,
           version: '1.2.0',
         };
@@ -178,6 +191,78 @@ test('arguments select only the Web rollout and reject service overrides', () =>
   assert.throws(() => parseWebRolloutArgs(['--publication', 'receipt.json', '--context', 'poc',
     '--readiness-timeout-seconds', '5']), /60 to 3600/);
   assert.equal(parseWebRolloutArgs(['--help']).help, true);
+});
+
+test('standard draft manifest and reused publication receipt select the Web image', async () => {
+  const fixture = makeFixture();
+  const receipt = await runWebImageRollout(fixture.options, fixture.overrides);
+
+  assert.equal(receipt.result, 'planned');
+  assert.equal(receipt.publicationSourceSha, sourceSha);
+  assert.equal(receipt.webImage, webImage);
+  assert.equal(receipt.imageRevision, imageSourceSha);
+  assert.equal(receipt.imageVersion, '1.2.0');
+});
+
+test('a publication without exactly one planned and published Web entry is rejected', async () => {
+  const fixture = makeFixture();
+  fixture.publication.planned = [];
+
+  await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+    /exactly one planned and published Web image/);
+  assert.equal(fixture.calls.some(call => call.command === 'kubectl'), false);
+});
+
+test('a Web receipt version that differs from the draft manifest is rejected', async () => {
+  const fixture = makeFixture();
+  fixture.publication.published[0].version = '1.2.1';
+
+  await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+    /does not prove the exact source-manifest artifact/);
+  assert.equal(fixture.calls.some(call => call.command === 'kubectl'), false);
+});
+
+test('reused Web provenance must agree between planned and published entries', async () => {
+  const fixture = makeFixture();
+  fixture.publication.published[0].reused.sourceSha = '9'.repeat(40);
+
+  await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+    /reused Web image provenance is malformed or differs/);
+  assert.equal(fixture.calls.some(call => call.command === 'kubectl'), false);
+});
+
+test('reused Web images require the current publication receipt format', async () => {
+  const fixture = makeFixture();
+  delete fixture.publication.requiredPackageIds;
+
+  await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+    /reused Web image provenance is malformed or differs/);
+  assert.equal(fixture.calls.some(call => call.command === 'kubectl'), false);
+});
+
+test('a reused Web image must retain its original build tag', async () => {
+  const fixture = makeFixture();
+  fixture.publication.planned[0].destination =
+    `ghcr.io/sabbour/agentweaver-web:1.2.0-${sourceSha}`;
+
+  await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+    /tag, repository, digest, and source manifest do not agree/);
+  assert.equal(fixture.calls.some(call => call.command === 'kubectl'), false);
+});
+
+test('a registry digest that no longer matches the publication is rejected', async () => {
+  const fixture = makeFixture();
+  fixture.overrides.verifyImage = async () => ({
+    digest: digest('1'),
+    acceptedDigests: new Set([digest('1')]),
+    sourceSha: imageSourceSha,
+    sourceTree,
+    version: '1.2.0',
+  });
+
+  await assert.rejects(runWebImageRollout(fixture.options, fixture.overrides),
+    /published Web image digest, OCI revision, source tree, or version differs/);
+  assert.equal(fixture.calls.some(call => call.command === 'kubectl'), false);
 });
 
 test('dry run records current and planned digests for every Deployment without writes', async () => {

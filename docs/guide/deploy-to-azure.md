@@ -490,8 +490,13 @@ the publication receipt from the selected release. It always selects
 `Agentweaver.Web`; it has no option to select another service. The command
 requires a clean checkout whose source is already in `origin/v1`, the explicit
 Kubernetes context for the approved cluster, and a digest-pinned current Web
-image. It checks the publication source, Web image digest, and OCI revision
-before it reads the Deployments.
+image. It reads `releases/foundation.json` from the publication source commit.
+That tracked draft manifest supplies the Web version; the publication receipt
+must contain exactly one matching planned and published Web image, and its
+published image reference supplies the immutable digest. If the image was
+reused, the receipt must also agree on its original build commit and source
+tree. Before reading Deployments, the command checks the source ancestry, image
+tag, registry digest, and OCI revision, source tree, and version.
 
 Run without `--execute` first. This checks the cluster state and writes a plan
 receipt without changing it. The receipt lists the current and planned image
