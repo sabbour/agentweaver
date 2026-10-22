@@ -2,6 +2,10 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-22T04:20:20.545Z — source `bd16cc745d364248a8c4ab0beae7df23d6a10694`
+
+- `Agentweaver.Persistence.Postgres`: 1.1.0 -> 1.1.1 (patch) — .changeset/postgres-function-oid-2226.md
+
 ## 2026-10-22T01:33:16.850Z — source `b2ae9b8203f7b675399cb6274dc7f9fd996bc082`
 
 - `Agentweaver.EventsAndSessions`: 1.2.0 -> 1.3.0 (minor) — .changeset/p1-db-maintenance-grants.md
