@@ -210,8 +210,6 @@ function ProjectsPage() {
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  // The caller's role grants. Each tile uses them to show a short access
-  // summary for that project. Tiles show without it while it loads.
 
   const load = useCallback(async () => {
     setLoading(true);

@@ -487,8 +487,8 @@ describe('v1 web project scoping', () => {
     mocks.rejectKnowledgeProposal.mockReset();
     mocks.replayEvents.mockReset();
     mocks.replayEvents.mockResolvedValue({ events: [], hasMore: false, nextCursor: null });
-    // An unbound caller who can read and edit p1. Pages use this to decide
-    // which actions to offer, such as the "Can edit" badge.
+    // An unbound caller who can read and edit p1. Pages use this context to
+    // decide which actions to offer.
     mocks.getAuthorizationContext.mockReset().mockResolvedValue({
       contractVersion: 1,
       issuer: 'https://broker.test',
