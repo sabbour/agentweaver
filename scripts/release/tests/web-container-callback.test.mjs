@@ -72,6 +72,52 @@ function executeInlineBootstrap(source, search) {
   return { window, location, replacedUrl };
 }
 
+function findJavaScriptImports(source) {
+  const specifiers = new Set();
+  const patterns = [
+    /\bimport\s*\(\s*(['"`])([^'"`]+\.js(?:\?[^'"`]*)?)\1\s*\)/g,
+    /\bimport\s*(['"`])([^'"`]+\.js(?:\?[^'"`]*)?)\1/g,
+    /\b(?:import|export)\s*[^'"`]*?\bfrom\s*(['"`])([^'"`]+\.js(?:\?[^'"`]*)?)\1/g,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) specifiers.add(match[2]);
+  }
+
+  return specifiers;
+}
+
+// Vite can place handlers in chunks loaded by the startup entry's dynamic imports.
+async function fetchJavaScriptAssetGraph(entryPath, origin) {
+  const expectedOrigin = new URL(origin).origin;
+  const pending = [new URL(entryPath, origin)];
+  const assets = new Map();
+
+  while (pending.length > 0) {
+    const assetUrl = pending.pop();
+    if (assets.has(assetUrl.href)) continue;
+
+    const response = await fetch(assetUrl);
+    assert.equal(response.status, 200, `${assetUrl.pathname} is served`);
+    assert.match(response.headers.get('content-type') ?? '', /javascript/i);
+    assert.match(response.headers.get('cache-control') ?? '', /max-age=31536000.*immutable/i);
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(response.headers.get('x-frame-options'), 'DENY');
+
+    const source = await response.text();
+    assets.set(assetUrl.href, source);
+
+    for (const specifier of findJavaScriptImports(source)) {
+      const importedUrl = new URL(specifier, assetUrl);
+      if (importedUrl.origin !== expectedOrigin ||
+          !/^\/assets\/[^/]+\.js$/.test(importedUrl.pathname)) continue;
+      pending.push(importedUrl);
+    }
+  }
+
+  return assets;
+}
+
 test('pinned amd64 Web image serves and sanitizes the Copilot callback', {
   skip: !canRunPinnedImage && !isGitHubActions
     ? 'requires Linux amd64 Docker with the pinned ASP.NET runtime image already cached'
@@ -219,15 +265,10 @@ test('pinned amd64 Web image serves and sanitizes the Copilot callback', {
   const assetPath = [...html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>\s*<\/script>/gi)]
     .map(([, src]) => src).find(src => /^\/assets\/[^/]+\.js$/.test(src));
   assert.match(assetPath ?? '', /^\/assets\/[^/]+\.js$/);
-  const assetResponse = await fetch(new URL(assetPath, origin));
-  assert.equal(assetResponse.status, 200);
-  assert.match(assetResponse.headers.get('content-type') ?? '', /javascript/i);
-  assert.match(assetResponse.headers.get('cache-control') ?? '', /max-age=31536000.*immutable/i);
-  assert.equal(assetResponse.headers.get('x-content-type-options'), 'nosniff');
-  assert.equal(assetResponse.headers.get('x-frame-options'), 'DENY');
-  const asset = await assetResponse.text();
-  assert.ok(asset.includes('agentweaver.copilot-user.callback'),
-    'built Web bundle contains the callback message handler');
+  const startupAssets = await fetchJavaScriptAssetGraph(assetPath, origin);
+  assert.ok([...startupAssets.values()].some(asset =>
+    asset.includes('agentweaver.copilot-user.callback')),
+  'built Web startup module graph contains the callback message handler');
 
   const missingExtensionlessAsset = await fetch(`${origin}/assets/missing`);
   assert.equal(missingExtensionlessAsset.status, 404);
