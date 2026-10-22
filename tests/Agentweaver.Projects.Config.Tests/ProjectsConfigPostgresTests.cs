@@ -329,7 +329,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var carried = await service.UpdateProjectConfigurationAsync(
             owner, project.ProjectId, legacyRevision.Revision, carryForward, CancellationToken.None);
         Assert.Equal("project-model-updated", carried.Configuration.ModelSelection!.Reference);
-        Assert.Equal(legacy.ProviderOverrides, carried.Configuration.ProviderOverrides);
+        Assert.Equal(legacy.ProviderOverrides.ToArray(), carried.Configuration.ProviderOverrides.ToArray());
         Assert.Equal(OrderedOverrideKeys(legacy.OrderedProviderOverrides), OrderedOverrideKeys(carried.Configuration.OrderedProviderOverrides));
 
         var choices = await service.GetProjectConfigurationChoicesAsync(
@@ -361,7 +361,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             owner, project.ProjectId, carried.Revision,
             carried.Configuration with { ProviderOverrides = [], OrderedProviderOverrides = [] },
             CancellationToken.None);
-        Assert.Equal(legacy.ProviderOverrides, proposal.Draft.ProviderOverrides);
+        Assert.Equal(legacy.ProviderOverrides.ToArray(), proposal.Draft.ProviderOverrides.ToArray());
         Assert.Equal(OrderedOverrideKeys(legacy.OrderedProviderOverrides), OrderedOverrideKeys(proposal.Draft.OrderedProviderOverrides));
         var castingUpdateError = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.UpdateCastingProposalAsync(
@@ -387,7 +387,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             carried.Revision,
             carried.Configuration with { ProviderOverrides = [], OrderedProviderOverrides = [] },
             CancellationToken.None);
-        Assert.Equal(legacy.ProviderOverrides, kept.Configuration.ProviderOverrides);
+        Assert.Equal(legacy.ProviderOverrides.ToArray(), kept.Configuration.ProviderOverrides.ToArray());
         Assert.Equal(OrderedOverrideKeys(legacy.OrderedProviderOverrides), OrderedOverrideKeys(kept.Configuration.OrderedProviderOverrides));
         Assert.Equal(platform.Revision, accepted.PlatformRuntimeRevision);
     }
