@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace Agentweaver.Persistence.Postgres;
 
@@ -173,9 +174,12 @@ public static class PlannedRuntimeGrants
                 ("signature", $"{plan.Schema}.{function.Signature}"));
             if (oid is not uint)
                 throw new InvalidOperationException($"The planned function {plan.Schema}.{function.Signature} does not exist.");
+            // Bind the catalog OID explicitly because Npgsql exposes PostgreSQL oid as UInt32.
+            await using var resolve = new NpgsqlCommand(
+                "SELECT @oid::oid::regprocedure::text", connection, transaction);
+            resolve.Parameters.AddWithValue("oid", NpgsqlDbType.Oid, oid);
             // to_regprocedure resolved the signature, so its canonical regprocedure text is safe to inline.
-            var signature = (string)(await ScalarAsync(connection, transaction,
-                "SELECT @oid::oid::regprocedure::text", cancellationToken, ("oid", oid)))!;
+            var signature = (string)(await resolve.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
             // PostgreSQL grants EXECUTE to PUBLIC by default. Remove it, then grant only what the plan allows.
             await ExecuteAsync(connection, transaction, $"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC", cancellationToken);
             if (function.Execute)
