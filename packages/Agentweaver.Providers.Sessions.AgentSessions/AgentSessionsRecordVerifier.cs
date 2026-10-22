@@ -314,9 +314,10 @@ public static class AgentSessionsRecordVerifier
             if (tag == 0)
                 break;
             var field = descriptor.FindFieldByNumber((int)(tag >> 3));
-            if (field is null)
+            var wireType = (WireFormat.WireType)(tag & 7);
+            if (field is null || !HasCompatibleWireType(field, wireType))
                 return true;
-            if (field.FieldType == FieldType.Message && (tag & 7) == (uint)WireFormat.WireType.LengthDelimited)
+            if (field.FieldType == FieldType.Message && wireType == WireFormat.WireType.LengthDelimited)
             {
                 var nested = input.ReadBytes().ToByteArray();
                 if (ContainsUnknownFields(nested, field.MessageType))
@@ -328,6 +329,25 @@ public static class AgentSessionsRecordVerifier
             }
         }
         return false;
+    }
+
+    private static bool HasCompatibleWireType(FieldDescriptor field, WireFormat.WireType wireType)
+    {
+        var expected = field.FieldType switch
+        {
+            FieldType.Double or FieldType.Fixed64 or FieldType.SFixed64 => WireFormat.WireType.Fixed64,
+            FieldType.Float or FieldType.Fixed32 or FieldType.SFixed32 => WireFormat.WireType.Fixed32,
+            FieldType.String or FieldType.Bytes or FieldType.Message => WireFormat.WireType.LengthDelimited,
+            FieldType.Group => WireFormat.WireType.StartGroup,
+            FieldType.Bool or FieldType.Enum or FieldType.Int32 or FieldType.Int64 or FieldType.SInt32 or
+                FieldType.SInt64 or FieldType.UInt32 or FieldType.UInt64 => WireFormat.WireType.Varint,
+            _ => (WireFormat.WireType?)null,
+        };
+
+        // Packed repeated scalars use length-delimited wire encoding instead of their scalar wire type.
+        return expected is { } expectedWireType &&
+            (wireType == expectedWireType ||
+                field.IsPacked && wireType == WireFormat.WireType.LengthDelimited);
     }
 
     private static bool TryParseInt64(string? text, out long value)

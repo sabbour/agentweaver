@@ -6,16 +6,17 @@ This page describes how Agentweaver uses the public
 [agent-primitives/sessions](https://github.com/agent-primitives/sessions) (AgentSessions) and
 [agent-primitives/suite](https://github.com/agent-primitives/suite) (AgentSuite) contracts.
 
-## Pinned upstream sources
+## Upstream source references
 
 | Contract | Repository | Commit | Contract version |
 | --- | --- | --- | --- |
 | AgentSessions | `agent-primitives/sessions` | `465e82175da7815db39ec14852deb3949ff82670` | `0.2.0-draft` |
 | AgentSuite | `agent-primitives/suite` | `a09950a75359cdc7de4d3361694582613f24c732` | `1.0.0-draft` |
 
-The Go reference tools in `tools/agent-primitives` pin these commits in `go.mod`. The .NET
-verifier pins the AgentSessions commit in `AgentSessionsPin` and rejects exports from any other
-commit or contract version with `unsupported_source`.
+The Go reference tools in `tools/agent-primitives` pin the AgentSessions commit in `go.mod`. The
+AgentSuite commit above is a documentation reference. The .NET verifier pins the AgentSessions
+commit in `AgentSessionsPin` and rejects exports from any other commit or contract version with
+`unsupported_source`.
 
 ## AgentSessions as an optional Sessions provider
 
@@ -35,9 +36,14 @@ The `Agentweaver.Providers.Sessions.AgentSessions` package holds all AgentSessio
 
 ### Registration and selection
 
-Register the provider in the host's provider catalog next to the native provider. Keep
-`postgres.native-sessions` as the Sessions default, and allow AgentSessions as a project
-override. The standard `ProviderResolver` then selects a provider for each run:
+The package provides registration and resolution support, but the current Events & Sessions
+host cannot select AgentSessions. The host binds the native PostgreSQL journal directly and
+requests `Append` and `Fork`, which AgentSessions does not offer. Making it selectable requires
+provider-neutral journal routing and capability-aware requests in the host.
+
+In a compatible host, register AgentSessions alongside the native provider. Keep
+`postgres.native-sessions` as the default, and allow AgentSessions as a project override. The
+standard `ProviderResolver` then selects a provider for each run:
 
 - A run with no project override resolves the native PostgreSQL journal.
 - A run with a permitted `agentsessions.records` override resolves AgentSessions. The resolver
@@ -67,6 +73,8 @@ The journal maps each verified record to a `SessionEventEnvelope`:
 
 - Every payload references the record by object key `agentsessions/{uid}/{seq}` with purpose
   `agentsessions.record`.
+- The input set must have one export per upstream session UID. The journal rejects duplicate UIDs
+  because each UID is part of the record object key and event ID.
 - Positions run across the whole run in export order. Cursors have the form
   `agentsessions:{position}`, and a page holds 1 to 1,000 events.
 - Event IDs are the first 16 bytes of SHA-256 over the session uid and the record content hash. A

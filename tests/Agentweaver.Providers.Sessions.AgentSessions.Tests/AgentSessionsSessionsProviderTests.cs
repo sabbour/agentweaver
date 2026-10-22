@@ -230,6 +230,17 @@ public sealed class AgentSessionsRecordJournalTests
     }
 
     [Fact]
+    public void DuplicateUpstreamSessionUidsAreRejected()
+    {
+        var document = Fixture("parent.json");
+
+        var exception = Assert.Throws<ArgumentException>(() => AgentSessionsRecordJournal.Create(
+            Binding(), [new("parent", document), new("another", document)]));
+
+        Assert.Equal("sessions", exception.ParamName);
+    }
+
+    [Fact]
     public void BindingForAnotherProviderIsRejected()
     {
         var native = new SessionProviderBinding(

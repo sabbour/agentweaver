@@ -89,7 +89,9 @@ public sealed class AgentSessionsRecordJournal : ISessionsJournal
             var verification = AgentSessionsRecordVerifier.Verify(session.Document);
             if (!verification.Verified)
                 throw new AgentSessionsVerificationException(session.SessionId, verification);
-            byUid[session.Document.Session.Uid] = session.Document;
+            // Session UIDs determine record object keys and event IDs, so each UID must identify one export.
+            if (!byUid.TryAdd(session.Document.Session.Uid, session.Document))
+                throw new ArgumentException("AgentSessions session UIDs must be unique.", nameof(sessions));
         }
 
         foreach (var session in sessions)

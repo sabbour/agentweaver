@@ -319,13 +319,14 @@ the checkpoint store.
 | Consistency manifest | Pairing and generations that authorize resuming an environment and its workspace | Atomically committed control-plane record, owned by the Orchestrator |
 
 The [Sessions provider](provider-seams.md#sessions) is exclusive for each run and supplies
-ordered playback. The native PostgreSQL journal is the default provider. AgentSessions is one
-optional Sessions provider implementation: a run that selects it through a permitted project
-override replays verified AgentSessions record exports through the same `ISessionsJournal`
-contract. It is read-only, it does not mediate Copilot model calls, and it does not make
-re-execution deterministic. The platform builds, tests, and runs with it absent
-([R1](../decisions/0001-platform-architecture.md#risk-register)). See
-[Agent primitives proof of concept](agent-primitives.md#agentsessions-as-an-optional-sessions-provider).
+ordered playback. The native PostgreSQL journal is the default provider. AgentSessions is an
+optional Sessions provider implementation that can replay verified record exports through the
+same `ISessionsJournal` contract. The current Events & Sessions host cannot select it: the host
+binds the native journal directly and requests `Append` and `Fork`, which AgentSessions does not
+offer. Host-level selection requires provider-neutral journal routing and capability-aware
+requests. AgentSessions remains read-only and does not mediate Copilot model calls or make
+re-execution deterministic. The platform builds, tests, and runs with the package absent. See
+[Agent primitives and AgentSessions](agent-primitives.md#agentsessions-as-an-optional-sessions-provider).
 
 ### The Copilot conversation cache
 
