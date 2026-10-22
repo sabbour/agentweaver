@@ -149,7 +149,6 @@ public static class ProjectConfigEndpoints
         projects.MapGet("/{projectId}", async (
             string projectId,
             HttpContext context,
-            [FromServices] ProjectsConfigService service,
             ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
@@ -159,6 +158,7 @@ public static class ProjectConfigEndpoints
                     context.Request.Query["runId"].Count > 1)
                     throw ProjectConfigException.Forbidden();
                 var runId = context.Request.Query["runId"].FirstOrDefault();
+                var service = context.RequestServices.GetRequiredService<ProjectsConfigService>();
                 context.Response.Headers.CacheControl = "no-store";
                 return Results.Ok(await service.GetProjectAsync(
                     await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
