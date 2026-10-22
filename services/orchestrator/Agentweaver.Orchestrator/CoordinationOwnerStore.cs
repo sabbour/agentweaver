@@ -2978,6 +2978,11 @@ internal sealed partial class CoordinationOwnerStore
         var target = await ReadSessionAsync(connection, transaction, recipient, forUpdate: true, cancellationToken)
             .ConfigureAwait(false);
         RequireCurrentActiveSession(target, run);
+        if (sender == recipient && !allowCoordinatorSelfDelivery)
+            await RequirePersistedFirstMessageAsync(
+                connection, transaction, actor, run.TenantId, sender, request, cancellationToken)
+                .ConfigureAwait(false);
+
         Guid? replyThreadId = null;
         if (request.ReplyToId is { } replyTo)
         {
@@ -3024,9 +3029,8 @@ internal sealed partial class CoordinationOwnerStore
         }
 
         // Only the run-level user route may send plain text from the coordinator to itself.
-        if (sender == recipient &&
-            (!allowCoordinatorSelfDelivery ||
-             sender.SessionId != source.RootSessionId ||
+        if (sender == recipient && allowCoordinatorSelfDelivery &&
+            (sender.SessionId != source.RootSessionId ||
              !AddressedMessageValidation.IsRunUserMessage(draft)))
             await RequirePersistedFirstMessageAsync(
                 connection, transaction, actor, run.TenantId, sender, request, cancellationToken)
