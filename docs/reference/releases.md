@@ -11,8 +11,8 @@ For deployment settings, see [Runtime configuration](./runtime-configuration.md)
 
 ## Current manifest status
 
-`releases/foundation.json` is the tracked draft manifest. It contains 24
-components: 13 contracts or libraries, 10 product services, and the separate
+`releases/foundation.json` is the tracked draft manifest. It contains 25
+components: 14 contracts or libraries, 10 product services, and the separate
 acceptance-only `Agentweaver.FoundationProbe` service. The manifest has no image
 digests or release evidence, so it is not an accepted platform release.
 
@@ -22,7 +22,7 @@ digests or release evidence, so it is not an accepted platform release.
 | `Agentweaver.Providers` | Library | `1.1.0` |
 | `Agentweaver.SourceControl` | Library | `1.1.0` |
 | `Agentweaver.Orchestrator.Core` | Library | `1.2.0` |
-| `Agentweaver.Persistence.Postgres` | Library | `1.0.2` |
+| `Agentweaver.Persistence.Postgres` | Library | `1.1.1` |
 | `Agentweaver.Secrets.AzureKeyVault` | Library | `1.0.2` |
 | `Agentweaver.Identity` | Library | `1.4.0` |
 | `Agentweaver.AgentRuntime` | Library | `1.2.0` |
@@ -31,20 +31,21 @@ digests or release evidence, so it is not an accepted platform release.
 | `Agentweaver.Telemetry.AzureMonitor` | Library | `1.0.2` |
 | `Agentweaver.ObjectStore.AzureBlob` | Library | `1.0.2` |
 | `Agentweaver.Identity.Broker` | Service | `1.2.0` |
-| `Agentweaver.EventsAndSessions` | Service | `1.2.0` |
-| `Agentweaver.Gateway` | Service | `1.2.0` |
-| `Agentweaver.Mcp` | Service | `1.0.3` |
-| `Agentweaver.Web` | Service | `1.1.0` |
-| `Agentweaver.Orchestrator` | Service | `1.2.0` |
+| `Agentweaver.EventsAndSessions` | Service | `1.3.0` |
+| `Agentweaver.Gateway` | Service | `1.3.0` |
+| `Agentweaver.Mcp` | Service | `1.0.4` |
+| `Agentweaver.Web` | Service | `1.2.0` |
+| `Agentweaver.Orchestrator` | Service | `1.3.0` |
 | `Agentweaver.Environment` | Service | `1.2.0` |
 | `Agentweaver.Knowledge` | Service | `1.1.0` |
-| `Agentweaver.Projects.Config` | Service | `1.2.0` |
-| `Agentweaver.FoundationProbe` | Acceptance-only service | `0.0.3` |
+| `Agentweaver.Projects.Config` | Service | `1.3.0` |
+| `Agentweaver.FoundationProbe` | Acceptance-only service | `0.0.4` |
 | `Agentweaver.Providers.Storage.AzureFiles` | Library | `1.0.4` |
 | `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `1.1.4` |
+| `Agentweaver.Providers.Sessions.AgentSessions` | Library | `0.1.0` |
 
 The manifest pins project-reference compatibility but does not yet pin service
-images. Its compatibility table contains 53 direct dependency relationships.
+images. Its compatibility table contains 59 direct dependency relationships.
 The Foundation Probe is not a product service; `--platform-only` excludes it
 from product preparation and publication.
 

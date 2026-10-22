@@ -52,6 +52,12 @@ These records contain no credentials or option values. Follow
 a provider. See [Providers and models](../architecture/providers-models) for
 resolver limits.
 
+`SessionsCapabilities` in `Agentweaver.Abstractions` defines the shared
+capability identifiers for Sessions providers. The native PostgreSQL journal
+advertises `SessionsCapabilities.All`; other providers may advertise a smaller
+set, and a provider can be selected only when it satisfies the run's required
+capabilities.
+
 `ProviderMeterSourceSelection` maps an explicit source to one enabled Cost provider.
 `CostProviderResolutionRequest` requires an exact adapter version, options schema
 and capability set. `ResolveCost` returns a checked `CostProviderResolution`

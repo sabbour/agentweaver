@@ -40,4 +40,6 @@
   <Project Path="tests\Agentweaver.FoundationProbe.Tests\Agentweaver.FoundationProbe.Tests.csproj" />
   <Project Path="packages\Agentweaver.Providers.Storage.AzureFiles\Agentweaver.Providers.Storage.AzureFiles.csproj" />
   <Project Path="tests\Agentweaver.Providers.Storage.AzureFiles.Tests\Agentweaver.Providers.Storage.AzureFiles.Tests.csproj" />
+  <Project Path="packages\Agentweaver.Providers.Sessions.AgentSessions\Agentweaver.Providers.Sessions.AgentSessions.csproj" />
+  <Project Path="tests\Agentweaver.Providers.Sessions.AgentSessions.Tests\Agentweaver.Providers.Sessions.AgentSessions.Tests.csproj" />
 </Solution>

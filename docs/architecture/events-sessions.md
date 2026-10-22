@@ -27,6 +27,11 @@ uses the existing provider catalog/resolver and telemetry helper. The provider-n
 `ISessionsJournal` interface and `SessionSubscriptionRequest` contract live in
 `Agentweaver.Abstractions`; this service owns their PostgreSQL implementation.
 
+The host binds the native PostgreSQL journal as the default and requires the full
+`SessionsCapabilities.All` set. The shared capability identifiers live in
+`Agentweaver.Abstractions`; optional provider implementations may advertise fewer
+capabilities, but the current host does not route runs to a non-native journal.
+
 This source slice connects owner-validated addressed-message delivery to session
 turn-boundary requests. It does not implement the rest of the proposed platform:
 automatic AgentHost scheduling, a background delivery relay, gate approval decisions,

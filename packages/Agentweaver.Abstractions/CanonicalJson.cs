@@ -26,7 +26,7 @@ public sealed record CanonicalJsonLimits(int MaxBytes = 16 * 1024 * 1024, int Ma
 /// invalid UTF-8, and non-finite numbers instead of silently choosing one value.
 /// </summary>
 /// <remarks>
-/// Hashed records and AgentSuite normative JSON documents use these canonical bytes.
+/// Use these bytes when a content hash or signature must cover one exact JSON form.
 /// Object members sort by UTF-16 code units, strings escape only the characters RFC 8785 requires, and
 /// numbers use the ECMAScript shortest round-trip form.
 /// </remarks>

@@ -189,7 +189,7 @@ flowchart TB
 
 | Seam | Primary owner | Azure-first default | Later or additional adapters |
 | --- | --- | --- | --- |
-| Sessions | Events & Sessions | Native Postgres journal | agentsessions capture sidecar (P3) |
+| Sessions | Events & Sessions | Native Postgres journal | Optional AgentSessions provider (read-only, P2 proof of concept) |
 | Snapshots | Environment manager | None until gated Azure Blob-backed AKS pod snapshot/restore capability | Compatible sandbox-native snapshots |
 | Sandbox | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; Container Apps Sandboxes evaluation (P3) |
 | Storage | Environment manager | Azure Files | Elastic SAN deferred outside P2; filesystem providers for agents when ready |
@@ -378,7 +378,7 @@ This does not prove the unfinished P1 runtime, GitHub lifecycles, or integrated 
   Close parity against these explicit dispositions, pass API/UI/MCP harnesses, and cut over.
 - **P3 — After cutover.** Consider gated AKS pod snapshot/restore, OpenSandbox,
   Agent Substrate, [Container Apps Sandboxes](../design/container-apps-sandboxes-evaluation.md),
-  agentsessions, filesystem providers for agents,
+  AgentSessions write and capture support, filesystem providers for agents,
   agentgateway, and Agentweaver surfaces exposed
   as MCP Apps. None of these optional adapters blocks cutover.
 
@@ -424,13 +424,13 @@ the design contains the failure mode.
 
 | ID | Risk | Type | Resolution |
 | --- | --- | --- | --- |
-| R1 | agentsessions adds little while the Copilot SDK owns calls. | Decided | P3 capture-only mirror of the journal with hash verification and playback; no re-execution promise. Drop it if the native journal suffices. |
+| R1 | agentsessions adds little while the Copilot SDK owns calls. | Decided | AgentSessions is one optional Sessions provider implementation in `Agentweaver.Providers.Sessions.AgentSessions`. It verifies record hashes and serves read-only replay; no re-execution promise. The native PostgreSQL journal stays the default, and the platform runs without the provider. |
 | R2 | Filesystem providers for agents are pre-product. | Decided | Keep them off the 1.0 path; use Azure Files behind the volume contract. Elastic SAN is deferred outside P2. |
 | R3 | AKS pod snapshot/restore is pre-preview; Blob end-to-end, Kata virtual machine (VM) v2, node pinning, warm-pool restore, and latency are unproven. | Gated | Suspend works without snapshots. Adopt only after public preview, Azure Blob end-to-end success, warm-pool claim restore, and capture/restore within the AgentHost startup budget; switch to Kata v2 then. |
 | R4 | Pod snapshots exclude workspace volume data. | Mitigated | Record and validate storage generation separately in a consistency manifest. |
 | R5 | User-level BYOK expands the credential boundary. | Decided | Keep platform and project settings only in 1.0. |
 | R6 | AGT 5.0 policy language support lacks .NET parity. | Decided | Use the AGT .NET kernel with YAML rules as in 0.x; consider Rego/Cedar later without changing contracts. |
-| R7 | Optional upstream memory and session libraries are previews. | Decided | Native implementations remain defaults. Cosmos and Redis Memory providers ship in P2 behind conformance gates; agentsessions stays optional in P3. No preview library is mandatory. |
+| R7 | Optional upstream memory and session libraries are previews. | Decided | Native implementations remain defaults. Cosmos and Redis Memory providers ship in P2 behind conformance gates; AgentSessions is an optional Sessions provider, and the native journal stays the default. Its write and capture support remains P3 work. No preview library is mandatory. |
 | R8 | Agent Substrate has beta APIs, uncertain AKS viability, and no Blob snapshot store. | Gated | P3 conformance and an AKS proof of VM-level isolation; leave snapshots off until Azure Blob support. |
 | R9 | Messages cross service boundaries and may duplicate. | Decided | At-least-once outbox, idempotency keys, consumer deduplication, per-thread sequence numbers. |
 | R10 | Operator chat may need to spawn runs. | Decided | Permit spawn under run-start authorization; record the run as the chat's child. |

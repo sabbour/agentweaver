@@ -47,6 +47,13 @@ architecture plan, not in this enum or the resolver.
 Calling a single-provider resolver for another cardinality returns
 `UnsupportedCardinality`; it does not pick the first registration.
 
+Sessions is exclusive for each run. The native PostgreSQL journal is the default,
+and the optional `agentsessions.records` provider in
+`Agentweaver.Providers.Sessions.AgentSessions` is a second, read-only
+implementation. Both advertise the provider-neutral `SessionsCapabilities`
+names from `Agentweaver.Abstractions`. The resolver matches the adapter
+version exactly, so both report Sessions adapter contract `1.0.0`.
+
 ## Resolve and pin a resource
 
 Before resolving, load the enabled platform catalog and provide the accepted

@@ -318,11 +318,15 @@ the checkpoint store.
 | MAF workflow checkpoint | Current step, pending child work, gates, and the conversation-cache reference | Durable Orchestrator state; checkpoint payload may use Object Store, with identity and references in Postgres |
 | Consistency manifest | Pairing and generations that authorize resuming an environment and its workspace | Atomically committed control-plane record, owned by the Orchestrator |
 
-The native [Sessions seam](provider-seams.md#sessions) is exclusive and supplies ordered
-playback. An optional agentsessions adapter can mirror events, verify a hash chain, and
-play them back after cutover. It does not mediate Copilot model calls or make
-re-execution deterministic. If it adds no value beyond the native journal, it is not
-enabled ([R1](../decisions/0001-platform-architecture.md#risk-register)).
+The [Sessions provider](provider-seams.md#sessions) is exclusive for each run and supplies
+ordered playback. The native PostgreSQL journal is the default provider. AgentSessions is an
+optional Sessions provider implementation that can replay verified record exports through the
+same `ISessionsJournal` contract. The current Events & Sessions host cannot select it: the host
+binds the native journal directly and requests `Append` and `Fork`, which AgentSessions does not
+offer. Host-level selection requires provider-neutral journal routing and capability-aware
+requests. AgentSessions remains read-only and does not mediate Copilot model calls or make
+re-execution deterministic. The platform builds, tests, and runs with the package absent. See
+[Agent primitives and AgentSessions](agent-primitives.md#agentsessions-as-an-optional-sessions-provider).
 
 ### The Copilot conversation cache
 
@@ -849,15 +853,15 @@ A user action in a surface arrives as a typed message, not as an untracked UI co
 - **P2 — Parity and cutover:** suspend/resume with manifest, explicit Squad
   import/export, Canvas surface messages, Cosmos and Redis Memory providers, and the 0.x parity acceptance list are verified on an
   exact-SHA AKS deployment before cutover. VM snapshots are not required.
-- **P3 — After cutover:** consider a gated AKS guest-snapshot adapter and optional
-  agentsessions capture mirror. Cosmos and Redis are P2 Memory work, not Sessions
+- **P3 — After cutover:** consider a gated AKS guest-snapshot adapter and write or
+  capture support for the optional AgentSessions provider. Cosmos and Redis are P2 Memory work, not Sessions
   providers. None changes the authoritative PostgreSQL journal or
   requires rewriting knowledge into repository files.
 
 ## Related risks
 
-- [R1](../decisions/0001-platform-architecture.md#risk-register): agentsessions is a
-  capture-only, optional mirror, not a re-execution promise.
+- [R1](../decisions/0001-platform-architecture.md#risk-register): AgentSessions is one
+  optional Sessions provider, not a re-execution promise. The native journal stays the default.
 - [R3](../decisions/0001-platform-architecture.md#risk-register): guest snapshots are
   gated and not needed for suspend/resume at cutover.
 - [R4](../decisions/0001-platform-architecture.md#risk-register): the manifest separately

@@ -9,24 +9,6 @@ using Npgsql;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Names the event-journal features the native PostgreSQL Sessions adapter can provide.</summary>
-public static class SessionsCapabilities
-{
-    public const string Append = "sessions.events.append";
-    public const string Replay = "sessions.events.replay";
-    public const string Subscribe = "sessions.events.subscribe";
-    public const string ObjectReferences = "sessions.objects.reference";
-    public const string ToolCalls = "sessions.tool_calls";
-    public const string PolicyEvaluations = "sessions.policy.evaluations";
-    public const string AcceptedDecisions = "sessions.decisions.accepted";
-    public const string AcceptedEffects = "sessions.effects.accepted";
-    public const string Fork = "sessions.events.fork";
-
-        public static ImmutableHashSet<string> All { get; } = ImmutableHashSet.Create(
-        StringComparer.Ordinal, Append, Replay, Subscribe, ObjectReferences,
-            ToolCalls, PolicyEvaluations, AcceptedDecisions, AcceptedEffects, Fork);
-}
-
 /// <summary>Configures the PostgreSQL resource, schema, and polling limits for the Sessions adapter.</summary>
 /// <param name="ResourceId">Stable identity for the PostgreSQL Sessions resource used in provider bindings.</param>
 /// <param name="ExpectedDatabaseName">Database name that the live PostgreSQL connection must report.</param>

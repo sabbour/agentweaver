@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates and their provider adapters. The runtime library connects native SDK callbacks to authenticated Orchestrator receipts. Events fetches receipt references and commits immutable Cost accounting. Environment retains its canonical placement lease during internal lookup and denies public run-bound enrollment. The journal requires trusted Orchestrator receipts for PolicyEvaluation writes. This source structure does not prove deployment, paid model execution, or physical runtime recovery.",
+  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates and their provider adapters. Shared Sessions capabilities live in Abstractions; native PostgreSQL is the default, and AgentSessions remains optional. The runtime library connects native SDK callbacks to authenticated Orchestrator receipts. Events fetches receipt references and commits immutable Cost accounting. Environment retains its canonical placement lease during internal lookup and denies public run-bound enrollment. The journal requires trusted Orchestrator receipts for PolicyEvaluation writes. This source structure does not prove deployment, paid model execution, or physical runtime recovery.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -113,7 +113,7 @@
     {
       "id": "sessions-dependencies",
       "label": "Refs",
-      "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry",
+      "subLabel": "Abstractions; Sessions;\nPersistence.Postgres; Telemetry",
       "icon": "box",
       "fluentIcon": "package",
       "badge": {

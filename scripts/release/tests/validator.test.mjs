@@ -78,6 +78,10 @@ const projectReferences = new Map([
   ['Agentweaver.Providers.Storage.AzureFiles', [
     '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
   ]],
+  ['Agentweaver.Providers.Sessions.AgentSessions', [
+    '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+  ]],
   ['Agentweaver.Knowledge', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
@@ -173,7 +177,7 @@ test('the Orchestrator host is registered as a prepared service with all project
     .map(({ dependency, versions }) => [dependency, versions]), [
     ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0']],
     ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0']],
-    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0']],
+    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.3.0']],
     ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.1.1']],
     ['Agentweaver.Providers', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0']],
     ['Agentweaver.SourceControl', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0']],

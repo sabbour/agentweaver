@@ -47,6 +47,14 @@ of falling back to a new default. The service emits bounded pin evidence through
 existing telemetry helper without recording option values, credentials, or raw resource
 IDs. See the [journal service reference](events-sessions.md).
 
+The provider-neutral Sessions capability names, such as `sessions.events.replay` and
+`sessions.events.fork`, are in `SessionsCapabilities` in `Agentweaver.Abstractions`, so
+any Sessions provider can advertise them. The optional `agentsessions.records` provider in
+`Agentweaver.Providers.Sessions.AgentSessions` is a second Sessions implementation. It
+offers read-only replay of verified AgentSessions record exports. The host doesn't register or
+reference it. See
+[Agent primitives proof of concept](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-primitives.md#agentsessions-as-an-optional-sessions-provider).
+
 The authenticated Events run-binding route returns this actual consumer pin under existing exact-run read authority.
 Environment's current placement also exposes its successful consumer pin without option values or recovery metadata.
 Neither response converts accepted candidates into provisioned resources.
@@ -227,6 +235,7 @@ Unknown pricing remains `Unpriced`.
 
 Identity owns the Copilot connection and refresh lifecycle.
 Repository GitHub App credentials are a separate Identity connection.
+AgentHost mode selection remains a separate path.
 Platform/project model selection remains the documented scope. GitHub-user account linking
 can authenticate a deliberately selected Copilot binding; it does not add personal BYOK
 settings or personal model-provider preference or fallback.
