@@ -353,6 +353,7 @@ test('execution patches only Web and verifies every non-Web Deployment is preser
   const receipt = await runWebImageRollout(options, fixture.overrides);
 
   assert.equal(receipt.result, 'succeeded');
+  assert.equal(receipt.installation.status, 'partial');
   assert.equal(receipt.changed, true);
   assert.equal(receipt.readiness.status, 'passed');
   assert.deepEqual(receipt.webDeploymentRevision, { before: '1', after: '2' });

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
-import { bootstrapP0Namespace } from '../lib/namespace-bootstrap.mjs';
+import { bootstrapP0Namespace, withP0UserKubeconfig } from '../lib/namespace-bootstrap.mjs';
 
 const target = {
   resourceGroup: 'agentweaver',
@@ -52,6 +52,41 @@ function fakeKubernetes({
 function kubeconfigPath(calls) {
   return calls[0].args[calls[0].args.indexOf('--kubeconfig') + 1];
 }
+
+test('temporary user kubeconfig remains available until an asynchronous action settles', async () => {
+  let directory;
+  const result = await withP0UserKubeconfig(target, async baseArgs => {
+    directory = dirname(baseArgs[1]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(existsSync(directory), true);
+    return 'action complete';
+  }, {
+    execAz: () => ok(),
+    execKubelogin: fakeKubelogin(),
+    execKubectl: () => ok('yes\n'),
+    requiredPermissions: [],
+  });
+
+  assert.equal(result, 'action complete');
+  assert.equal(existsSync(directory), false);
+});
+
+test('asynchronous action failure still removes the temporary user kubeconfig', async () => {
+  let directory;
+  await assert.rejects(withP0UserKubeconfig(target, async baseArgs => {
+    directory = dirname(baseArgs[1]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(existsSync(directory), true);
+    throw new Error('async action failed');
+  }, {
+    execAz: () => ok(),
+    execKubelogin: fakeKubelogin(),
+    execKubectl: () => ok('yes\n'),
+    requiredPermissions: [],
+  }), /async action failed/);
+
+  assert.equal(existsSync(directory), false);
+});
 
 test('AKS bootstrap uses normal user credentials and applies then reads back only the P0 namespace', () => {
   const azureCalls = [];
