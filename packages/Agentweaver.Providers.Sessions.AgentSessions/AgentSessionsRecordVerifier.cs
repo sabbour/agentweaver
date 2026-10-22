@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentsessions.V1;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 
 namespace Agentweaver.Providers.Sessions.AgentSessions;
 
@@ -172,9 +173,12 @@ public static class AgentSessionsRecordVerifier
         if (document.Upstream.Commit != AgentSessionsPin.SourceCommit || document.Upstream.Contract != AgentSessionsPin.ContractVersion)
             return AgentSessionsVerification.Fail("unsupported_source",
                 $"Records come from {document.Upstream.Commit} ({document.Upstream.Contract}); this verifier implements {AgentSessionsPin.SourceCommit} ({AgentSessionsPin.ContractVersion}).", null, 0);
-        if (document.Records.Count == 0)
+        var records = document.Records;
+        if (records is null)
+            return AgentSessionsVerification.Fail("invalid_document", "Export records must be an array.", null, 0);
+        if (records.Count == 0)
             return AgentSessionsVerification.Fail("empty", "Export has no records.", null, 0);
-        if (document.Records.Count > MaxRecords)
+        if (records.Count > MaxRecords)
             return AgentSessionsVerification.Fail("too_large", $"Export exceeds {MaxRecords} records.", null, 0);
 
         long? forkSeq = null;
@@ -186,10 +190,12 @@ public static class AgentSessionsRecordVerifier
         }
 
         var previous = string.Empty;
-        for (var index = 0; index < document.Records.Count; index++)
+        for (var index = 0; index < records.Count; index++)
         {
-            var record = document.Records[index];
+            var record = records[index];
             var expectedSeq = index + 1L;
+            if (record is null)
+                return AgentSessionsVerification.Fail("invalid_document", "Export records must not contain null entries.", expectedSeq, index);
             if (!TryParseInt64(record.Seq, out var seq))
                 return AgentSessionsVerification.Fail("invalid_encoding", "Record seq is not a canonical decimal int64.", expectedSeq, index);
             if (seq != expectedSeq)
@@ -221,11 +227,11 @@ public static class AgentSessionsRecordVerifier
                 return AgentSessionsVerification.Fail("fork_marker", $"Seq {seq} is not the FORK marker for parent@{boundary}.", seq, index);
             previous = record.ContentHash;
         }
-        if (forkSeq is { } fork && fork >= document.Records.Count)
-            return AgentSessionsVerification.Fail("fork_marker", "Child export ends before its FORK marker.", null, document.Records.Count);
-        if (document.SourceHead.Seq != document.Records[^1].Seq || document.SourceHead.Hash != previous)
-            return AgentSessionsVerification.Fail("head_mismatch", "source_head metadata does not match the last exported record.", null, document.Records.Count);
-        return new(true, null, null, null, document.Records.Count, previous);
+        if (forkSeq is { } fork && fork >= records.Count)
+            return AgentSessionsVerification.Fail("fork_marker", "Child export ends before its FORK marker.", null, records.Count);
+        if (document.SourceHead.Seq != records[^1].Seq || document.SourceHead.Hash != previous)
+            return AgentSessionsVerification.Fail("head_mismatch", "source_head metadata does not match the last exported record.", null, records.Count);
+        return new(true, null, null, null, records.Count, previous);
     }
 
     /// <summary>
@@ -274,11 +280,11 @@ public static class AgentSessionsRecordVerifier
         try
         {
             ev = Event.Parser.ParseFrom(bytes, 0, written);
-            // Proto3 JSON omits unknown fields, so the content hash does not cover them. Compare with a parse
-            // that drops unknown fields at every depth and reject any difference, so extra bytes cannot hide
-            // behind a valid hash.
+            // Parsers retain ordinary unknown fields, but generated map collections discard unknown map-entry fields.
+            // Keep the size comparison and scan raw message bytes so neither kind can hide behind a valid hash.
             var known = DiscardUnknownParser.ParseFrom(bytes, 0, written);
-            if (known.CalculateSize() != ev.CalculateSize())
+            if (known.CalculateSize() != ev.CalculateSize() ||
+                ContainsUnknownFields(bytes.AsSpan(0, written).ToArray(), Event.Descriptor))
             {
                 code = "unknown_field";
                 error = "Event bytes contain fields that agentsessions.v1.Event does not define.";
@@ -291,6 +297,37 @@ public static class AgentSessionsRecordVerifier
             error = $"Event bytes are not a valid agentsessions.v1.Event: {exception.Message}";
             return false;
         }
+    }
+
+    private static bool ContainsUnknownFields(byte[] bytes, MessageDescriptor descriptor)
+    {
+        using var input = new CodedInputStream(bytes);
+        return ContainsUnknownFields(input, descriptor);
+    }
+
+    private static bool ContainsUnknownFields(CodedInputStream input, MessageDescriptor descriptor)
+    {
+        // Map entries have synthetic message descriptors, so scan their raw bytes before map parsing discards extras.
+        while (!input.IsAtEnd)
+        {
+            var tag = input.ReadTag();
+            if (tag == 0)
+                break;
+            var field = descriptor.FindFieldByNumber((int)(tag >> 3));
+            if (field is null)
+                return true;
+            if (field.FieldType == FieldType.Message && (tag & 7) == (uint)WireFormat.WireType.LengthDelimited)
+            {
+                var nested = input.ReadBytes().ToByteArray();
+                if (ContainsUnknownFields(nested, field.MessageType))
+                    return true;
+            }
+            else
+            {
+                input.SkipLastField();
+            }
+        }
+        return false;
     }
 
     private static bool TryParseInt64(string? text, out long value)

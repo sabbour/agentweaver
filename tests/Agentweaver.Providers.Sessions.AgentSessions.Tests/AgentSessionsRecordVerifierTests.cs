@@ -165,6 +165,44 @@ public sealed class AgentSessionsRecordVerifierTests
     }
 
     [Fact]
+    public void UnknownMapEntryFieldFailsEvenWithTheStoredHash()
+    {
+        var ev = new Event
+        {
+            Kind = EventKind.EventModelCall,
+            Model = new ModelCall { Model = "test", Params = { ["temperature"] = "0.2" } },
+        };
+        var entry = Encode(output =>
+        {
+            output.WriteTag(1, WireFormat.WireType.LengthDelimited);
+            output.WriteString("temperature");
+            output.WriteTag(2, WireFormat.WireType.LengthDelimited);
+            output.WriteString("0.2");
+            output.WriteTag(3, WireFormat.WireType.Varint);
+            output.WriteUInt64(1);
+        });
+        var model = Encode(output =>
+        {
+            output.WriteTag(ModelCall.ModelFieldNumber, WireFormat.WireType.LengthDelimited);
+            output.WriteString(ev.Model.Model);
+            output.WriteTag(ModelCall.ParamsFieldNumber, WireFormat.WireType.LengthDelimited);
+            output.WriteBytes(ByteString.CopyFrom(entry));
+        });
+        var eventBytes = Encode(output =>
+        {
+            output.WriteTag(Event.KindFieldNumber, WireFormat.WireType.Varint);
+            output.WriteEnum((int)ev.Kind);
+            output.WriteTag(Event.ModelFieldNumber, WireFormat.WireType.LengthDelimited);
+            output.WriteBytes(ByteString.CopyFrom(model));
+        });
+        var document = Single(ev, AgentSessionsRecordVerifier.ComputeContentHash("", 1, ev));
+        var record = document.Records[0] with { Event = Convert.ToBase64String(eventBytes) };
+        var result = AgentSessionsRecordVerifier.Verify(document with { Records = [record] });
+
+        Assert.Equal(("unknown_field", 1L), (result.Code, result.Seq));
+    }
+
+    [Fact]
     public void ReferenceFixturesHaveNoUnknownFields()
     {
         Assert.True(AgentSessionsRecordVerifier.VerifyFork(Load("parent.json"), Load("child.json")).Verified);
@@ -240,6 +278,15 @@ public sealed class AgentSessionsRecordVerifierTests
     }
 
     [Fact]
+    public void NullRecordInJsonDocumentReturnsInvalidDocument()
+    {
+        var parent = Load("parent.json");
+        var json = JsonSerializer.SerializeToUtf8Bytes(parent with { Records = [null!] });
+
+        Assert.Equal("invalid_document", AgentSessionsRecordVerifier.Verify(json).Code);
+    }
+
+    [Fact]
     public void TailTruncationVerifiesWithoutAnExternalAnchor()
     {
         // The chain is unkeyed: a consistently truncated export verifies. Only a separately held head detects it.
@@ -281,6 +328,15 @@ public sealed class AgentSessionsRecordVerifierTests
         null,
         new("1", hash),
         [new("1", "", hash, "1", Convert.ToBase64String(ev.ToByteArray()))]);
+
+    private static byte[] Encode(Action<CodedOutputStream> write)
+    {
+        using var stream = new MemoryStream();
+        using var output = new CodedOutputStream(stream);
+        write(output);
+        output.Flush();
+        return stream.ToArray();
+    }
 
     private static Event Decode(AgentSessionsExportRecord record) => Event.Parser.ParseFrom(Convert.FromBase64String(record.Event));
 
