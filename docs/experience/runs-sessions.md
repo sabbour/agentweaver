@@ -18,6 +18,10 @@ Open a run from **Sessions**, **Overview**, the project **Dashboard**, or
 the run silently. You don't type a run ID. If the silent sign-in fails, select
 **Sign in for this project and run**.
 
+**Sessions** lists only runs started by the signed-in caller, across the
+projects they can read. It uses `startedBy=me`, which matches both the
+configured identity issuer and the caller's subject.
+
 ## Start a new chat
 
 In the browser, select **New session** in the rail or on **Sessions**:
@@ -199,7 +203,7 @@ All versioned routes use the Gateway. The common prefix is
 | Operation | Method and path after the prefix | Owner in source |
 | --- | --- | --- |
 | Create run | `POST /` (empty suffix) | Orchestrator |
-| List runs | `GET /` (empty suffix) with optional `state`, `cursor`, and `pageSize` | Orchestrator |
+| List runs | `GET /` (empty suffix) with optional `state`, `startedBy`, `cursor`, and `pageSize` | Orchestrator |
 | Start run | `POST /{runId}/start` | Orchestrator |
 | Cancel run | `POST /{runId}/cancel` | Orchestrator |
 | Run snapshot | `GET /{runId}/coordination/status` | Orchestrator |

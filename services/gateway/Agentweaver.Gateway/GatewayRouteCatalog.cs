@@ -246,7 +246,7 @@ public static class GatewayRouteCatalog
         // Project-scoped run reads accept an unbound token; a run-bound token is narrowed to its run.
         Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
             "/api/projects/{projectId}/runs", "listProjectRuns", "List project runs",
-            ["state", "cursor", "pageSize"], forwardTenantSelector: true);
+            ["state", "startedBy", "cursor", "pageSize"], forwardTenantSelector: true);
         // Stored Source Control reads make no provider call. Issues come from backlog content that issue
         // sync stored. Pull requests come from records that runs wrote on create or reuse; a run-bound
         // token is narrowed to its run.

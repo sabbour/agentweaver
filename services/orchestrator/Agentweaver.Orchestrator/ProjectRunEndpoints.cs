@@ -137,7 +137,7 @@ public static partial class CoordinationEndpoints
 public static class ProjectRunEndpoints
 {
     private static readonly HashSet<string> ListQueryNames =
-        new(["state", "cursor", "pageSize"], StringComparer.Ordinal);
+        new(["state", "startedBy", "cursor", "pageSize"], StringComparer.Ordinal);
 
     /// <summary>
     /// Registers <c>GET /api/projects/{projectId}/runs</c>.
@@ -179,7 +179,8 @@ public static class ProjectRunEndpoints
     /// Lists the project's runs newest first after a fresh Projects read-authority check.
     /// </summary>
     /// <remarks>
-    /// An unbound or project-bound caller sees every run in the project. A run-bound caller sees only its run.
+    /// Without <c>startedBy</c>, an unbound or project-bound caller sees every run in the project.
+    /// <c>startedBy=me</c> filters by exact issuer and subject. A run-bound caller sees only its run.
     /// Unknown or repeated query parameters return 400.
     /// </remarks>
     private static Task<IResult> ListRunsAsync(
@@ -187,6 +188,7 @@ public static class ProjectRunEndpoints
         HttpContext context,
         ProjectsRunSelectionClient projects,
         ProjectRunReadStore store,
+        OrchestratorOptions options,
         CancellationToken cancellationToken) =>
         CoordinationEndpoints.ExecuteAsync(async () =>
         {
@@ -194,8 +196,15 @@ public static class ProjectRunEndpoints
             var query = ReadSingleValuedQuery(context.Request.Query, ListQueryNames);
             var states = ProjectRunReadStore.ParseStateFilter(query.GetValueOrDefault("state"));
             var pageSize = ParsePageSize(query.GetValueOrDefault("pageSize"));
+            var filterToCaller = ParseStartedByFilter(query.GetValueOrDefault("startedBy"));
             var authorization = await projects.ReadProjectReadAuthorityAsync(
                 context, projectId, cancellationToken).ConfigureAwait(false);
+            ProjectRunStartedBy? startedBy = null;
+            if (filterToCaller)
+            {
+                var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+                startedBy = new ProjectRunStartedBy(actor.Issuer, actor.Subject);
+            }
             var page = await store.ListAsync(
                 authorization.TenantId,
                 projectId,
@@ -203,7 +212,8 @@ public static class ProjectRunEndpoints
                 states,
                 query.GetValueOrDefault("cursor"),
                 pageSize,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                startedBy).ConfigureAwait(false);
             return Results.Ok(page);
         }, cancellationToken);
 
@@ -237,4 +247,13 @@ public static class ProjectRunEndpoints
             throw new CoordinationException("page_size_invalid", StatusCodes.Status400BadRequest);
         return pageSize;
     }
+
+    /// <summary>Parses the optional caller filter; the actor identity is resolved from the authenticated token.</summary>
+    /// <exception cref="CoordinationException">The value is not the supported <c>me</c> filter.</exception>
+    internal static bool ParseStartedByFilter(string? value) => value switch
+    {
+        null => false,
+        "me" => true,
+        _ => throw new CoordinationException("run_started_by_filter_invalid", StatusCodes.Status400BadRequest),
+    };
 }

@@ -52,6 +52,8 @@ export interface CrossProjectRunListData extends RunListData {
 export interface ProjectRunListOptions {
   /** States to include. Omit for every state. `open` and `terminal` are accepted. */
   states?: ProjectRunStateFilter[];
+  /** Includes only runs accepted by the authenticated caller. */
+  startedBy?: 'me';
   /** Rows per page, 1 to 100. */
   pageSize?: number;
 }
@@ -242,38 +244,57 @@ export function useProjectRunList(projectId: string, options: ProjectRunListOpti
   // start a new request.
   const statesKey = (options.states ?? []).join(',');
   const pageSize = options.pageSize ?? DEFAULT_RUN_PAGE_SIZE;
-  const key = projectId ? JSON.stringify([projectId, statesKey, pageSize]) : null;
+  const startedBy = options.startedBy;
+  const key = projectId ? JSON.stringify([projectId, statesKey, startedBy ?? null, pageSize]) : null;
   const projects = useMemo(() => (projectId ? [projectId] : []), [projectId]);
   const fetchPage = useCallback((id: string, cursor: string | null) => {
     const states = statesKey ? statesKey.split(',') as ProjectRunStateFilter[] : undefined;
-    // Send the cursor back unchanged with the same states and page size.
-    return apiCall((token, tenant) => gatewayClient.listProjectRuns(token, id, { states, cursor, pageSize }, tenant), null);
-  }, [apiCall, statesKey, pageSize]);
+    // Send the cursor back unchanged with the same filters and page size.
+    return apiCall((token, tenant) => gatewayClient.listProjectRuns(
+      token,
+      id,
+      {
+        ...(states ? { states } : {}),
+        ...(startedBy ? { startedBy } : {}),
+        cursor,
+        pageSize,
+      },
+      tenant,
+    ), null);
+  }, [apiCall, statesKey, startedBy, pageSize]);
   const projectName = useCallback((id: string) => id, []);
   return usePagedRunList(key, projects, null, fetchPage, projectName);
 }
 
 /**
  * Reads the newest runs of every project in `projects` and merges them newest
- * first. Load more reads the next page of each project that has one. Pass
- * null while the project list loads. Each new `projects` array reads again,
- * so refreshing the project list also refreshes the runs.
+ * first. `startedBy` can narrow the list to the authenticated caller. Load
+ * more reads the next page of each project that has one. Pass null while the
+ * project list loads. Each new `projects` array reads again, so refreshing the
+ * project list also refreshes the runs.
  */
-export function useCrossProjectRunList(projects: ProjectSummary[] | null, pageSize = 10): CrossProjectRunListData {
+export function useCrossProjectRunList(
+  projects: ProjectSummary[] | null, pageSize = 10, startedBy?: 'me',
+): CrossProjectRunListData {
   const { apiCall } = useAuth();
   // Join the IDs into a string so the ID array keeps its identity while the
   // same projects are listed.
   const idsKey = (projects ?? []).map((project) => project.projectId).join('\n');
   const ids = useMemo(() => (idsKey ? idsKey.split('\n') : []), [idsKey]);
-  const key = projects ? JSON.stringify([idsKey, pageSize]) : null;
+  const key = projects ? JSON.stringify([idsKey, pageSize, startedBy ?? null]) : null;
   const projectNames = useMemo(
     () => new Map((projects ?? []).map((project) => [project.projectId, project.name])) as ReadonlyMap<string, string>,
     [projects],
   );
   const fetchPage = useCallback(
     (projectId: string, cursor: string | null) =>
-      apiCall((token, tenant) => gatewayClient.listProjectRuns(token, projectId, { cursor, pageSize }, tenant), null),
-    [apiCall, pageSize],
+      apiCall((token, tenant) => gatewayClient.listProjectRuns(
+        token,
+        projectId,
+        { ...(startedBy ? { startedBy } : {}), cursor, pageSize },
+        tenant,
+      ), null),
+    [apiCall, startedBy, pageSize],
   );
   const projectName = useCallback((id: string) => projectNames.get(id) ?? id, [projectNames]);
   return { ...usePagedRunList(key, ids, projects, fetchPage, projectName), projectNames };

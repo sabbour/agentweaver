@@ -395,8 +395,8 @@ internal static partial class GatewayOpenApi
         else if (route.OperationId == "listProjectRuns")
         {
             responses["400"] = ProblemResponse(
-                "The owner rejected an unknown or repeated query key, unknown state, invalid cursor, " +
-                "or page size outside 1 through 100.");
+                "The owner rejected an unknown or repeated query key, unknown state or startedBy value, " +
+                "invalid cursor, or page size outside 1 through 100.");
         }
         // Both stored lists share the owner's query, authority, and Projects failure responses.
         else if (route.OperationId is "listProjectIssues" or "listProjectPullRequests")
@@ -504,7 +504,9 @@ else if (route.OperationId is
                 " This read requires api.read and fresh Projects readProjects or readRunSelection authority on " +
                 "the project, or tenant readProjects authority. A run-bound token sees only its own run. Runs are " +
                 "ordered by createdAt descending, then runId descending. The opaque cursor is valid only with " +
-                "the same project, state filter, and page size, and multiple pages are not a snapshot.";
+                "the same project, state filter, startedBy filter, and page size; when startedBy=me, it is also " +
+                "bound to the exact caller identity. Multiple pages are not a snapshot. startedBy=me matches both " +
+                "the configured issuer and subject.";
         }
         else if (route.OperationId == "listProjectIssues")
         {
@@ -762,6 +764,13 @@ else if (route.OperationId is
                 description = "Comma-separated run states, or the open and terminal aliases.",
                 pattern = "^(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal)" +
                     "(,(idle|active|blocked|completed|failed|indeterminate|cancelled|open|terminal))*$",
+            };
+        if (operationId == "listProjectRuns" && name == "startedBy")
+            return new
+            {
+                type = "string",
+                description = "Filter to runs started by the authenticated caller's exact issuer and subject.",
+                @enum = new[] { "me" },
             };
 
         if ((operationId is "removeMarketplaceSource" or "revokeProjectRoleAssignment" && name == "expectedRevision") ||
@@ -1419,9 +1428,12 @@ else if (route.OperationId is
 
         ["ProjectRunStartedBy"] = StrictObj(["issuer", "subject"], ("issuer", Str()), ("subject", Str())),
         ["ProjectRunSummary"] = StrictObj(
-            ["runId", "rootSessionId", "title", "goal", "state", "createdAt", "updatedAt", "completedAt", "startedBy"],
+            ["runId", "rootSessionId", "title", "goal", "workflowId", "state", "needsInputCount",
+                "createdAt", "updatedAt", "completedAt", "startedBy"],
             ("runId", Str()), ("rootSessionId", NullableStr()), ("title", NullableStr()), ("goal", NullableStr()),
+            ("workflowId", NullableStr()),
             ("state", Enum("idle", "active", "blocked", "completed", "failed", "indeterminate", "cancelled")),
+            ("needsInputCount", Int()),
             ("createdAt", Date()), ("updatedAt", Date()), ("completedAt", Nullable(Date())),
             ("startedBy", Ref("ProjectRunStartedBy"))),
         ["ProjectRunPage"] = StrictObj(["projectId", "items", "nextCursor"],

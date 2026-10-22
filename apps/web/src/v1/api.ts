@@ -1658,17 +1658,23 @@ export class AgentweaverGatewayClient {
 
   /**
    * Lists one page of the project's runs, newest first. Send `cursor` back
-   * unchanged with the same `states`; a null `nextCursor` marks the last page.
+   * unchanged with the same filters; a null `nextCursor` marks the last page.
    */
   async listProjectRuns(
     token: string,
     projectId: string,
-    options: { states?: ProjectRunStateFilter[]; cursor?: string | null; pageSize?: number } = {},
+    options: {
+      states?: ProjectRunStateFilter[];
+      startedBy?: 'me';
+      cursor?: string | null;
+      pageSize?: number;
+    } = {},
     tenantSelector?: string | null,
   ): Promise<ProjectRunPage> {
     // Add only the parameters that are set. The service rejects empty or repeated ones.
     const query = new URLSearchParams();
     if (options.states?.length) query.set('state', options.states.join(','));
+    if (options.startedBy) query.set('startedBy', options.startedBy);
     if (options.cursor) query.set('cursor', options.cursor);
     if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
     const suffix = query.toString();

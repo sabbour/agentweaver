@@ -19,10 +19,14 @@ describe('Gateway run, metrics, and notification routes', () => {
     );
 
     await client.listProjectRuns('token', 'p1');
-    await client.listProjectRuns('token', 'p1', { states: ['open', 'cancelled'], cursor: 'c1', pageSize: 10 });
+    await client.listProjectRuns('token', 'p1', {
+      states: ['open', 'cancelled'], startedBy: 'me', cursor: 'c1', pageSize: 10,
+    });
 
     expect(String(fetcher.mock.calls[0][0])).toBe(`${base}/projects/p1/runs`);
-    expect(String(fetcher.mock.calls[1][0])).toBe(`${base}/projects/p1/runs?state=open%2Ccancelled&cursor=c1&pageSize=10`);
+    expect(String(fetcher.mock.calls[1][0])).toBe(
+      `${base}/projects/p1/runs?state=open%2Ccancelled&startedBy=me&cursor=c1&pageSize=10`,
+    );
   });
 
   it('rejects a run page for a different project', async () => {

@@ -95,6 +95,8 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         Assert.Equal("idle", first.Items[0].State);
         Assert.Null(first.Items[0].Title);
         Assert.Null(first.Items[0].Goal);
+        Assert.Null(first.Items[0].WorkflowId);
+        Assert.Equal(0, first.Items[0].NeedsInputCount);
         Assert.Null(first.Items[0].CompletedAt);
         Assert.Equal(new ProjectRunStartedBy(_actor.Issuer, _actor.Subject), first.Items[0].StartedBy);
 
@@ -105,6 +107,27 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         var third = await _store.ListAsync("tenant-1", Project, null, [], second.NextCursor, 2, default);
         Assert.Equal([runs[0]], third.Items.Select(item => item.RunId));
         Assert.Null(third.NextCursor);
+    }
+
+    [Fact]
+    public async Task ListIncludesSavedRequestMetadataAndCountsPendingGates()
+    {
+        var time = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var interactive = await AcceptRunAsync("tenant-1", time);
+        var other = await AcceptRunAsync("tenant-1", time.AddMinutes(1));
+        await InsertProjectRunRequestAsync(interactive, "Review workflow", "Review the pull request", "wf-review");
+        await InsertGateAsync(interactive, "pending");
+        await InsertGateAsync(interactive, "pending");
+        await InsertGateAsync(interactive, "answered");
+        await InsertGateAsync(other, "pending");
+
+        var page = await _store.ListAsync("tenant-1", Project, null, [], null, 25, default);
+        var items = page.Items.ToDictionary(item => item.RunId);
+        Assert.Equal(("Review workflow", "Review the pull request", "wf-review", 2L),
+            (items[interactive].Title, items[interactive].Goal, items[interactive].WorkflowId,
+                items[interactive].NeedsInputCount));
+        Assert.Null(items[other].WorkflowId);
+        Assert.Equal(1L, items[other].NeedsInputCount);
     }
 
     [Fact]
@@ -154,6 +177,63 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
     }
 
     [Fact]
+    public async Task ListStartedByMeUsesIssuerAndSubjectAndBindsCursorToBoth()
+    {
+        var time = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var otherIssuerSameSubject = new CoordinationActor("https://other-identity.example/", _actor.Subject);
+        var sameIssuerOtherSubject = new CoordinationActor(_actor.Issuer, Guid.NewGuid().ToString("D"));
+        var mineOld = await AcceptRunAsync("tenant-1", time, _actor);
+        var otherIssuer = await AcceptRunAsync("tenant-1", time.AddMinutes(1), otherIssuerSameSubject);
+        var otherSubject = await AcceptRunAsync("tenant-1", time.AddMinutes(2), sameIssuerOtherSubject);
+        var mineNew = await AcceptRunAsync("tenant-1", time.AddMinutes(3), _actor);
+        var me = new ProjectRunStartedBy(_actor.Issuer, _actor.Subject);
+
+        var first = await _store.ListAsync("tenant-1", Project, null, [], null, 1, default, me);
+        Assert.Equal([mineNew], first.Items.Select(item => item.RunId));
+        Assert.NotNull(first.NextCursor);
+        var second = await _store.ListAsync("tenant-1", Project, null, [], first.NextCursor, 1, default, me);
+        Assert.Equal([mineOld], second.Items.Select(item => item.RunId));
+        Assert.Null(second.NextCursor);
+        await AssertCodeAsync("cursor_invalid", () => _store.ListAsync(
+            "tenant-1", Project, null, [], first.NextCursor, 1, default));
+        await AssertCodeAsync("cursor_invalid", () => _store.ListAsync(
+            "tenant-1", Project, null, [], first.NextCursor, 1, default,
+            new ProjectRunStartedBy(otherIssuerSameSubject.Issuer, otherIssuerSameSubject.Subject)));
+        await AssertCodeAsync("cursor_invalid", () => _store.ListAsync(
+            "tenant-1", Project, null, [], first.NextCursor, 1, default,
+            new ProjectRunStartedBy(sameIssuerOtherSubject.Issuer, sameIssuerOtherSubject.Subject)));
+
+        var unfiltered = await _store.ListAsync("tenant-1", Project, null, [], null, 25, default);
+        Assert.Equal([mineNew, otherSubject, otherIssuer, mineOld], unfiltered.Items.Select(item => item.RunId));
+        var ownBound = await _store.ListAsync("tenant-1", Project, mineOld, [], null, 1, default, me);
+        Assert.Equal([mineOld], ownBound.Items.Select(item => item.RunId));
+        Assert.Null(ownBound.NextCursor);
+        Assert.Empty((await _store.ListAsync("tenant-1", Project, otherSubject, [], null, 1, default, me)).Items);
+        Assert.Empty((await _store.ListAsync("tenant-2", Project, mineOld, [], null, 1, default, me)).Items);
+    }
+
+    [Fact]
+    public async Task CallerFilteredKeysetBreaksTimestampTiesAndCombinesStateFilter()
+    {
+        var time = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var runs = new List<string>();
+        for (var index = 0; index < 3; index++)
+            runs.Add(await AcceptRunAsync("tenant-1", time));
+        var blocked = await AcceptRunAsync("tenant-1", time);
+        await ExecuteAsync(
+            $"UPDATE \"{_schema}\".coordination_sessions SET turn_state = 'blocked' WHERE run_id = @run AND parent_session_id IS NULL",
+            blocked);
+        var expected = runs.OrderByDescending(run => run, StringComparer.Ordinal).ToArray();
+        var me = new ProjectRunStartedBy(_actor.Issuer, _actor.Subject);
+        var states = ProjectRunReadStore.ParseStateFilter("idle");
+        var first = await _store.ListAsync("tenant-1", Project, null, states, null, 2, default, me);
+        var second = await _store.ListAsync("tenant-1", Project, null, states, first.NextCursor, 2, default, me);
+        Assert.Equal(expected, first.Items.Concat(second.Items).Select(item => item.RunId));
+        Assert.NotNull(first.NextCursor);
+        Assert.Null(second.NextCursor);
+    }
+
+    [Fact]
     public async Task ListRejectsCursorFromAnotherQueryAndInvalidInput()
     {
         var time = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
@@ -185,6 +265,17 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
             Assert.Throws<CoordinationException>(() => ProjectRunReadStore.ParseStateFilter("done")).Code);
         Assert.Equal("run_state_filter_invalid",
             Assert.Throws<CoordinationException>(() => ProjectRunReadStore.ParseStateFilter("idle,")).Code);
+    }
+
+    [Fact]
+    public void StartedByFilterAcceptsOnlyMe()
+    {
+        Assert.False(ProjectRunEndpoints.ParseStartedByFilter(null));
+        Assert.True(ProjectRunEndpoints.ParseStartedByFilter("me"));
+        var exception = Assert.Throws<CoordinationException>(() =>
+            ProjectRunEndpoints.ParseStartedByFilter("someone-else"));
+        Assert.Equal("run_started_by_filter_invalid", exception.Code);
+        Assert.Equal(StatusCodes.Status400BadRequest, exception.StatusCode);
     }
 
     [Theory]
@@ -244,7 +335,9 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
     [InlineData("?pageSize=abc", "page_size_invalid")]
     [InlineData("?page=1", "query_invalid")]
     [InlineData("?state=idle&state=active", "query_invalid")]
+    [InlineData("?startedBy=me&startedBy=me", "query_invalid")]
     [InlineData("?state=done", "run_state_filter_invalid")]
+    [InlineData("?startedBy=someone-else", "run_started_by_filter_invalid")]
     public void QueryValidationRejectsUnknownRepeatedAndOutOfRangeValues(string query, string code)
     {
         var context = new DefaultHttpContext();
@@ -252,8 +345,9 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         var exception = Assert.Throws<CoordinationException>(() =>
         {
             var values = ProjectRunEndpoints.ReadSingleValuedQuery(
-                context.Request.Query, new(["state", "cursor", "pageSize"], StringComparer.Ordinal));
+                context.Request.Query, new(["state", "startedBy", "cursor", "pageSize"], StringComparer.Ordinal));
             _ = ProjectRunReadStore.ParseStateFilter(values.GetValueOrDefault("state"));
+            _ = ProjectRunEndpoints.ParseStartedByFilter(values.GetValueOrDefault("startedBy"));
             _ = ProjectRunEndpoints.ParsePageSize(values.GetValueOrDefault("pageSize"));
         });
         Assert.Equal(code, exception.Code);
@@ -277,8 +371,10 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         return context;
     }
 
-    private async Task<string> AcceptRunAsync(string tenant, DateTimeOffset createdAt)
+    private async Task<string> AcceptRunAsync(
+        string tenant, DateTimeOffset createdAt, CoordinationActor? actor = null)
     {
+        actor ??= _actor;
         var run = Guid.NewGuid().ToString("N");
         var snapshot = JsonSerializer.SerializeToElement(new
         {
@@ -287,9 +383,9 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         });
         var selection = new AuthorizedRunSelection(
             new(Project, run, 1, 1, 1, "context-1", snapshot),
-            new(1, _actor.Issuer, _actor.Subject, tenant, 1, Project, run,
+            new(1, actor.Issuer, actor.Subject, tenant, 1, Project, run,
                 [new("project", Project, [new("acceptRunSelection", 1)])]));
-        await new CoordinationOwnerStore(fixture.DataSource, _schema).AcceptRootAsync(_actor, selection, "root", default);
+        await new CoordinationOwnerStore(fixture.DataSource, _schema).AcceptRootAsync(actor, selection, "root", default);
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand(
             $"UPDATE \"{_schema}\".accepted_runs SET created_at = @created, updated_at = @created WHERE run_id = @run",
@@ -298,6 +394,53 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         command.Parameters.AddWithValue("run", run);
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
         return run;
+    }
+
+    private async Task InsertProjectRunRequestAsync(string run, string title, string firstMessage, string workflowId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".project_run_requests
+                (tenant_id, project_id, run_id, root_session_id, title, first_message, workflow_id,
+                    expected_project_config_revision, started_by_issuer, started_by_subject,
+                    idempotency_key_hash, request_fingerprint, state)
+            SELECT r.tenant_id, r.project_id, r.run_id, s.session_id, @title, @firstMessage, @workflow,
+                1, r.accepted_by_issuer, r.accepted_by_subject, repeat('a', 64), repeat('b', 64), 'started'
+            FROM "{_schema}".accepted_runs AS r
+            JOIN "{_schema}".coordination_sessions AS s
+                ON s.project_id = r.project_id AND s.run_id = r.run_id AND s.parent_session_id IS NULL
+            WHERE r.project_id = @project AND r.run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", run);
+        command.Parameters.AddWithValue("title", title);
+        command.Parameters.AddWithValue("firstMessage", firstMessage);
+        command.Parameters.AddWithValue("workflow", workflowId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private async Task InsertGateAsync(string run, string state)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($$"""
+            INSERT INTO "{{_schema}}".coordinator_gates
+                (project_id, run_id, session_id, request_id, gate_kind, gate_state, gate,
+                    allowed_choices, created_by_issuer, created_by_subject, execution_fence,
+                    state_version, idempotency_key, response)
+            SELECT @project, @run, s.session_id, @request, 'question', @state, '{}'::jsonb,
+                '[]'::jsonb, @issuer, @subject, 1, 1, @request,
+                CASE WHEN @state = 'pending' THEN NULL ELSE '{}'::jsonb END
+            FROM "{{_schema}}".coordination_sessions AS s
+            WHERE s.project_id = @project AND s.run_id = @run AND s.parent_session_id IS NULL
+            """, connection);
+        var requestId = Guid.NewGuid().ToString("N");
+        command.Parameters.AddWithValue("project", Project);
+        command.Parameters.AddWithValue("run", run);
+        command.Parameters.AddWithValue("request", requestId);
+        command.Parameters.AddWithValue("state", state);
+        command.Parameters.AddWithValue("issuer", _actor.Issuer);
+        command.Parameters.AddWithValue("subject", _actor.Subject);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
     private async Task ExecuteAsync(string sql, string run)

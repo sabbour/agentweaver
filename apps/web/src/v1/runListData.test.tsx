@@ -26,7 +26,9 @@ function summary(runId: string, overrides: Partial<ProjectRunSummary> = {}): Pro
     rootSessionId: null,
     title: null,
     goal: null,
+    workflowId: null,
     state: 'active',
+    needsInputCount: 0,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     completedAt: null,
@@ -174,5 +176,18 @@ describe('useCrossProjectRunList', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(mocks.listProjectRuns).not.toHaveBeenCalled();
     expect(result.current.items).toEqual([]);
+  });
+
+  it('passes the caller filter to every project page when requested', async () => {
+    const projects = [project('p1', 'Alpha'), project('p2', 'Beta')];
+    mocks.listProjectRuns.mockImplementation(async (_token: string, projectId: string) => page(projectId, []));
+    const { result } = renderHook(() => useCrossProjectRunList(projects, 10, 'me'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(mocks.listProjectRuns).toHaveBeenCalledWith(
+      'token', 'p1', { startedBy: 'me', cursor: null, pageSize: 10 }, 'tenant',
+    );
+    expect(mocks.listProjectRuns).toHaveBeenCalledWith(
+      'token', 'p2', { startedBy: 'me', cursor: null, pageSize: 10 }, 'tenant',
+    );
   });
 });

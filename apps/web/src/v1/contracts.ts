@@ -987,13 +987,15 @@ export interface ProjectRunStartedBy {
   subject: string;
 }
 
-/** One run in a project run list. Title and goal stay null until a start request stores them. */
+/** One run in a project run list. Older and non-interactive runs can lack saved request metadata. */
 export interface ProjectRunSummary {
   runId: string;
   rootSessionId: string | null;
   title: string | null;
   goal: string | null;
+  workflowId: string | null;
   state: ProjectRunState;
+  needsInputCount: number;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
