@@ -50,7 +50,7 @@ const mocks = vi.hoisted(() => ({
   getSessionTree: vi.fn(),
   getSessionStatus: vi.fn(),
   getDecisions: vi.fn(),
-  sendMessage: vi.fn(),
+  sendProjectRunMessage: vi.fn(),
   searchKnowledge: vi.fn(),
   createKnowledgeRecord: vi.fn(),
   updateKnowledgeRecord: vi.fn(),
@@ -107,7 +107,7 @@ vi.mock('./api', () => ({
     getSessionTree: mocks.getSessionTree,
     getSessionStatus: mocks.getSessionStatus,
     getDecisions: mocks.getDecisions,
-    sendMessage: mocks.sendMessage,
+    sendProjectRunMessage: mocks.sendProjectRunMessage,
     searchKnowledge: mocks.searchKnowledge,
     createKnowledgeRecord: mocks.createKnowledgeRecord,
     updateKnowledgeRecord: mocks.updateKnowledgeRecord,
@@ -512,7 +512,7 @@ describe('v1 web project scoping', () => {
     mocks.getSessionTree.mockReset();
     mocks.getSessionStatus.mockReset();
     mocks.getDecisions.mockReset();
-    mocks.sendMessage.mockReset();
+    mocks.sendProjectRunMessage.mockReset();
     mocks.searchKnowledge.mockReset();
     mocks.createKnowledgeRecord.mockReset();
     mocks.updateKnowledgeRecord.mockReset();
@@ -1452,36 +1452,72 @@ describe('v1 web project scoping', () => {
     expect(screen.queryByText(/different run/)).toBeNull();
   });
 
-  it('sends chat to the coordinator by default without a sender form', async () => {
+  it('sends user chat to the coordinator with only one active session', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     configureRunSnapshots('p1', 'r1');
-    const tree = sessionTreeSnapshot('p1', 'r1');
-    // Add a worker session s2 under the coordinator s1. The chat must still
-    // address the coordinator, with the worker as the sender.
-    mocks.getSessionTree.mockResolvedValue({
-      ...tree,
-      nodes: [...tree.nodes, {
-        ...tree.nodes[0],
-        identity: { projectId: 'p1', runId: 'r1', sessionId: 's2' },
-        kind: 'worker' as const,
-        parentSessionId: 's1',
-      }],
+    mocks.sendProjectRunMessage.mockResolvedValue({
+      ownerMessageId: 'm1',
+      messageId: 'events-m1',
+      threadId: 'thread-1',
+      threadSequence: 1,
+      projectId: 'p1',
+      runId: 'r1',
+      rootSessionId: 's1',
+      recipientSessionId: 's1',
+      status: 'accepted',
+      sender: { issuer: 'https://issuer.test', subject: 'user-1' },
     });
-    mocks.sendMessage.mockResolvedValue({ ownerMessageId: 'm1', status: 'accepted' });
     window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat');
     render(<App />);
 
     await screen.findByText('Message the coordinator');
-    // No From/To pickers: the user just types a message.
+    // A single coordinator session is enough; no session acts as a sender.
     expect(screen.queryByLabelText(/^From/)).toBeNull();
     expect(screen.queryByLabelText(/^To/)).toBeNull();
     fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Status?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalled());
-    // Arguments after the token: project, run, sender session, recipient session, text.
-    const [, projectId, runId, sender, recipient, text] = mocks.sendMessage.mock.calls[0];
-    expect([projectId, runId, sender, recipient, text]).toEqual(['p1', 'r1', 's2', 's1', 'Status?']);
+    await waitFor(() => expect(mocks.sendProjectRunMessage).toHaveBeenCalled());
+    const [, projectId, runId, request] = mocks.sendProjectRunMessage.mock.calls[0];
+    expect([projectId, runId, request]).toEqual(['p1', 'r1', { text: 'Status?' }]);
+  });
+
+  it('sends chat to an explicitly selected active run session', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const tree = sessionTreeSnapshot('p1', 'r1');
+    mocks.getSessionTree.mockResolvedValue({
+      ...tree,
+      nodes: [...tree.nodes, {
+        ...tree.nodes[0],
+        identity: { projectId: 'p1', runId: 'r1', sessionId: 's2' },
+        kind: 'childWork' as const,
+        parentSessionId: 's1',
+      }],
+    });
+    mocks.sendProjectRunMessage.mockResolvedValue({
+      ownerMessageId: 'm2',
+      messageId: 'events-m2',
+      threadId: 'thread-2',
+      threadSequence: 1,
+      projectId: 'p1',
+      runId: 'r1',
+      rootSessionId: 's1',
+      recipientSessionId: 's2',
+      status: 'accepted',
+      sender: { issuer: 'https://issuer.test', subject: 'user-1' },
+    });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat');
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Agent/ }));
+    await screen.findByText('Message the agent');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Status?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(mocks.sendProjectRunMessage).toHaveBeenCalled());
+    expect(mocks.sendProjectRunMessage.mock.calls[0].slice(1, 4))
+      .toEqual(['p1', 'r1', { text: 'Status?', targetSessionId: 's2' }]);
   });
 
   it('lists project runs in Orchestrations and opens one on Chat', async () => {

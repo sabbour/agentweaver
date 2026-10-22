@@ -35,6 +35,32 @@ export interface CancelProjectRunResponse {
   alreadyTerminal: boolean;
 }
 
+/** User text addressed to the coordinator unless an active target session is selected. */
+export interface ProjectRunMessageRequest {
+  text: string;
+  targetSessionId?: string;
+}
+
+/** Authenticated identity of the user who sent a run message. */
+export interface ProjectRunMessageSender {
+  issuer: string;
+  subject: string;
+}
+
+/** Stable admission receipt returned after the addressed-message journal accepts a run message. */
+export interface ProjectRunMessageReceipt {
+  ownerMessageId: string;
+  messageId: string;
+  threadId: string;
+  threadSequence: number;
+  projectId: string;
+  runId: string;
+  rootSessionId: string;
+  recipientSessionId: string;
+  status: 'accepted';
+  sender: ProjectRunMessageSender;
+}
+
 /** Problem details returned for failed Gateway requests. */
 export interface Problem {
   type?: string;

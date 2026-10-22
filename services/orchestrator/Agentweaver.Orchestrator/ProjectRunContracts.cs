@@ -27,3 +27,23 @@ public sealed record CancelProjectRunRequest(string? Reason = null);
 /// <summary>Stable receipt; terminal no-ops do not advance the fence or invent a cancellation timestamp.</summary>
 public sealed record CancelProjectRunResponse(
     string RunId, string State, DateTimeOffset? CancelledAt, bool AlreadyTerminal = false);
+
+/// <summary>Text submitted by an authenticated user to a running project coordinator.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ProjectRunMessageRequest(string Text, string? TargetSessionId = null);
+
+/// <summary>Identity of the authenticated user that submitted a run message.</summary>
+public sealed record ProjectRunMessageSender(string Issuer, string Subject);
+
+/// <summary>Stable Events admission receipt for a user message addressed within one run.</summary>
+public sealed record ProjectRunMessageReceipt(
+    Guid OwnerMessageId,
+    Guid MessageId,
+    Guid ThreadId,
+    long ThreadSequence,
+    string ProjectId,
+    string RunId,
+    string RootSessionId,
+    string RecipientSessionId,
+    string Status,
+    ProjectRunMessageSender Sender);

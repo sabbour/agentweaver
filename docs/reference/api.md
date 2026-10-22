@@ -486,13 +486,15 @@ Orchestrator role through
 | POST | `/` | Not bound to a run | Save the first message, mint `runId` and `rootSessionId`, and accept the run selection. Returns `201` with `awaiting_binding`. | Yes |
 | POST | `/{runId}/start` | Bound to the run | Accept the root session and deliver the saved first message once. Returns `200` with `started`. | Yes |
 | POST | `/{runId}/cancel` | Not bound to a run | Cancel any run as a current project Contributor, Owner, or tenant admin. Viewer receives `403`. Returns `200`, including terminal no-ops. | Yes |
+| POST | `/{runId}/messages` | Bound to the run | Send user text to the coordinator or an explicitly selected active session. Returns an Events admission receipt. | Yes |
 
-Create and cancel require exactly one `Idempotency-Key` header. A retry with
-the same key and body returns the original result. A retry with the same key
-and a different body returns `409 idempotency_conflict`. Start takes no body
-and no key; a repeated start returns the same result without sending the first
-message again. Cancel on a finished run returns `200` with `alreadyTerminal: true`
-and does not change state. Cancellation receipts are scoped to each caller.
+Create, cancel, and run messages require exactly one `Idempotency-Key` header.
+A retry with the same key and body returns the original result. A retry with
+the same key and a different body returns `409 idempotency_conflict`. Start
+takes no body and no key; a repeated start returns the same result without
+sending the first message again. Cancel on a finished run returns `200` with
+`alreadyTerminal: true` and does not change state. Cancellation receipts are
+scoped to each caller.
 Start has a 30-second deadline covering its request lock and downstream calls;
 a timeout returns `504 run_start_timeout`. Start after cancellation returns
 `409 run_terminal`.
@@ -501,6 +503,29 @@ The create request body has `firstMessage` (1–32,768 UTF-8 bytes),
 `expectedProjectConfigRevision`, and optional `title` and `workflowId`. The
 Gateway accepts create bodies up to 256 KiB. Responses never include the first
 message.
+
+### Run messages
+
+Native path: `POST /api/projects/{projectId}/runs/{runId}/messages`.
+Gateway path: `POST /api/v1/projects/{projectId}/runs/{runId}/messages`.
+
+The request body has `text` (1–32,768 UTF-8 bytes) and optional
+`targetSessionId`. With no target, the message goes to the run's coordinator
+session. An explicit target must be an active session in the same run. The
+Gateway accepts bodies up to 256 KiB.
+
+The caller needs `api.read`, `projects.orchestrator`, an owner-audience token
+bound to the exact project and run, and fresh Projects authority for the
+accepted run selection. The issuer and subject in the receipt come from that
+authenticated token; caller-supplied sender identities are rejected. An
+unbound token or a token bound to another project or run receives `403`.
+
+The `200` receipt includes the Orchestrator message ID, the Events journal
+message and thread IDs, thread sequence, target session, and authenticated
+sender identity. A retry with the same key and body returns the same receipt
+without adding a second journal message. Reusing a key with different text
+returns `409 idempotency_conflict`. The key reserved for first-message
+delivery (`{runId}:first`) cannot be used for a follow-up message.
 
 ### Run list
 

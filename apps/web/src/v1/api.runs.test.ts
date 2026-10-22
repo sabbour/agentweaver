@@ -63,6 +63,55 @@ describe('Gateway run, metrics, and notification routes', () => {
     expect(JSON.parse(String(cancelInit?.body))).toEqual({});
   });
 
+  it('sends user run messages with a required idempotency key and optional target', async () => {
+    const { fetcher, client } = clientReturning(
+      {
+        body: {
+          ownerMessageId: 'owner-1',
+          messageId: 'events-1',
+          threadId: 'thread-1',
+          threadSequence: 1,
+          projectId: 'p1',
+          runId: 'r1',
+          rootSessionId: 's1',
+          recipientSessionId: 's1',
+          status: 'accepted',
+          sender: { issuer: 'https://issuer.test', subject: 'user-1' },
+        },
+      },
+      {
+        body: {
+          ownerMessageId: 'owner-2',
+          messageId: 'events-2',
+          threadId: 'thread-2',
+          threadSequence: 1,
+          projectId: 'p1',
+          runId: 'r1',
+          rootSessionId: 's1',
+          recipientSessionId: 's2',
+          status: 'accepted',
+          sender: { issuer: 'https://issuer.test', subject: 'user-1' },
+        },
+      },
+    );
+
+    await client.sendProjectRunMessage('run-token', 'p1', 'r1', { text: 'Status?' }, 'message-1', 'tenant-1');
+    await client.sendProjectRunMessage(
+      'run-token', 'p1', 'r1', { text: 'Worker status?', targetSessionId: 's2' }, 'message-2',
+    );
+
+    const [defaultUrl, defaultInit] = fetcher.mock.calls[0];
+    expect(String(defaultUrl)).toBe(`${base}/projects/p1/runs/r1/messages`);
+    expect(defaultInit?.method).toBe('POST');
+    expect(new Headers(defaultInit?.headers).get('Idempotency-Key')).toBe('message-1');
+    expect(new Headers(defaultInit?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(JSON.parse(String(defaultInit?.body))).toEqual({ text: 'Status?' });
+
+    const [, targetInit] = fetcher.mock.calls[1];
+    expect(new Headers(targetInit?.headers).get('Idempotency-Key')).toBe('message-2');
+    expect(JSON.parse(String(targetInit?.body))).toEqual({ text: 'Worker status?', targetSessionId: 's2' });
+  });
+
   it('reads metrics by day and usage for a range, and checks the project', async () => {
     const { fetcher, client } = clientReturning(
       { body: { projectId: 'p1', series: [] } },

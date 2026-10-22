@@ -220,6 +220,16 @@ page, the client continues when you return. If a step fails, select **Try
 again**. Select **Dismiss** to drop the pending run from the page; the run
 stays listed in **Sessions**.
 
+### Send a message during a run
+
+The run's **Chat** tab sends your text as the signed-in user directly to the
+coordinator. It works when the coordinator is the only active session; no
+second session is needed as a sender. Select another active session in the run
+tree to target it instead. Each draft is scoped to its project, run, and target.
+If a send times out, retry the unchanged draft; the client reuses its
+idempotency key, so the addressed-message journal returns the same admission
+receipt without adding a duplicate.
+
 ### Stop a run
 
 While a run is open, the run page header shows **Stop run**. Select it, then

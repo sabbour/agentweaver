@@ -6,6 +6,8 @@ import type {
   AgentSuiteImportRequest,
   AgentSuiteImportResult,
   CancelProjectRunResponse,
+  ProjectRunMessageRequest,
+  ProjectRunMessageReceipt,
   CopilotAuthorizationCallback,
   CreateProjectRunRequest,
   CreateProjectRunResponse,
@@ -1750,6 +1752,28 @@ export class AgentweaverGatewayClient {
       {
         method: 'POST',
         body: JSON.stringify(reason ? { reason } : {}),
+        headers: { 'Idempotency-Key': idempotencyKey },
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Sends user text through the exact run-bound token and returns its journal admission receipt. */
+  sendProjectRunMessage(
+    token: string,
+    projectId: string,
+    runId: string,
+    request: ProjectRunMessageRequest,
+    idempotencyKey: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectRunMessageReceipt> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'messages')}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
         headers: { 'Idempotency-Key': idempotencyKey },
       },
       this.baseUrl,

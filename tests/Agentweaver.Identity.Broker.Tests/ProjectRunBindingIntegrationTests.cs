@@ -172,7 +172,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             browser, IdentityBrokerWebApplicationFactory.TestClientId,
             IdentityBrokerWebApplicationFactory.TestClientRedirectUri, query["code"].ToString(), boundVerifier);
         var boundToken = boundTokens.GetProperty("access_token").GetString()!;
-        var claims = new JwtSecurityTokenHandler().ReadJwtToken(boundToken).Claims;
+        var boundJwt = new JwtSecurityTokenHandler().ReadJwtToken(boundToken);
+        var claims = boundJwt.Claims;
+        var boundIssuer = boundJwt.Issuer;
         Assert.Equal(project.ProjectId, SingleClaim(claims, "project_id"));
         Assert.Equal(pending.RunId, SingleClaim(claims, "run_id"));
         Assert.Equal(BrokerRunBindingAuthority.ProjectsAuthorityKind,
@@ -187,11 +189,178 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal("started", result.State);
         Assert.Equal(pending.RootSessionId, result.RootSessionId);
 
+        var runMessagePath = $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/messages";
+        using (var missingKey = await SendRunMessageAsync(boundToken, runMessagePath, null, "Status?"))
+            Assert.Equal(HttpStatusCode.BadRequest, missingKey.StatusCode);
+        using (var unboundDenied = await SendRunMessageAsync(unboundToken, runMessagePath, "user-message-1", "Status?"))
+            Assert.Equal(HttpStatusCode.Forbidden, unboundDenied.StatusCode);
+        using (var wrongProject = await SendRunMessageAsync(
+            boundToken, $"/api/v1/projects/{project.ProjectId}-other/runs/{pending.RunId}/messages",
+            "wrong-project", "Status?"))
+            Assert.Equal(HttpStatusCode.Forbidden, wrongProject.StatusCode);
+        using (var wrongRun = await SendRunMessageAsync(
+            boundToken, $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}-other/messages",
+            "wrong-run", "Status?"))
+            Assert.Equal(HttpStatusCode.Forbidden, wrongRun.StatusCode);
+        using (var spoofedSender = new HttpRequestMessage(HttpMethod.Post, runMessagePath)
+        {
+            Content = new StringContent(
+                """{"text":"Status?","senderIssuer":"https://spoofed.test","senderSubject":"someone-else"}""",
+                System.Text.Encoding.UTF8,
+                "application/json"),
+        })
+        {
+            AddBearerAndTenant(spoofedSender, boundToken, TenantId);
+            spoofedSender.Headers.Add("Idempotency-Key", "spoofed-sender");
+            using var response = await gateway.Client.SendAsync(spoofedSender);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+        using (var genericSelfMessage = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{pending.RootSessionId}/messages")
+        {
+            Content = JsonContent.Create(new
+            {
+                recipientSessionId = pending.RootSessionId,
+                idempotencyKey = "generic-self",
+                deliveryMode = "immediate",
+                purpose = "steering",
+                kind = "text",
+                payload = new { text = "Status?" },
+            }),
+        })
+        {
+            AddBearerAndTenant(genericSelfMessage, boundToken, TenantId);
+            using var response = await gateway.Client.SendAsync(genericSelfMessage);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        }
+
+        await using var connection = await _nativeDataSource.OpenConnectionAsync();
+        await using (var activeSessionCountCommand = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{ownerSchema}".coordination_sessions
+            WHERE project_id = @project AND run_id = @run
+              AND lifecycle_state = 'active'
+            """, connection))
+        {
+            activeSessionCountCommand.Parameters.AddWithValue("project", project.ProjectId);
+            activeSessionCountCommand.Parameters.AddWithValue("run", pending.RunId);
+            var activeSessionCount = (long)(await activeSessionCountCommand.ExecuteScalarAsync())!;
+            Assert.Equal(1L, activeSessionCount);
+        }
+
+        using var userMessage = await SendRunMessageAsync(boundToken, runMessagePath, "user-message-1", "Status?");
+        Assert.Equal(HttpStatusCode.OK, userMessage.StatusCode);
+        var userReceipt = await userMessage.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(OrchestratorJsonOptions);
+        Assert.NotNull(userReceipt);
+        Assert.Equal(project.ProjectId, userReceipt.ProjectId);
+        Assert.Equal(pending.RunId, userReceipt.RunId);
+        Assert.Equal(pending.RootSessionId, userReceipt.RootSessionId);
+        Assert.Equal(pending.RootSessionId, userReceipt.RecipientSessionId);
+        Assert.Equal("accepted", userReceipt.Status);
+        Assert.Equal(boundIssuer, userReceipt.Sender.Issuer);
+        Assert.Equal(subject, userReceipt.Sender.Subject);
+        Assert.NotEqual(Guid.Empty, userReceipt.MessageId);
+        Assert.True(userReceipt.ThreadSequence > 0);
+
+        using var userMessageReplay = await SendRunMessageAsync(
+            boundToken, runMessagePath, "user-message-1", "Status?");
+        Assert.Equal(HttpStatusCode.OK, userMessageReplay.StatusCode);
+        var replayedUserReceipt =
+            await userMessageReplay.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(OrchestratorJsonOptions);
+        Assert.Equal(userReceipt, replayedUserReceipt);
+
+        using (var idempotencyConflict = await SendRunMessageAsync(
+            boundToken, runMessagePath, "user-message-1", "Different text"))
+            Assert.Equal(HttpStatusCode.Conflict, idempotencyConflict.StatusCode);
+
+        var messageTargetSessionId = $"message-target-{Guid.NewGuid():N}";
+        using (var registerTarget = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{pending.RootSessionId}/children")
+        {
+            Content = JsonContent.Create(new { sessionId = messageTargetSessionId }),
+        })
+        {
+            AddBearerAndTenant(registerTarget, boundToken, TenantId);
+            using var response = await gateway.Client.SendAsync(registerTarget);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+        using var explicitTargetMessage = await SendRunMessageAsync(
+            boundToken, runMessagePath, "user-message-2", "Worker status?", messageTargetSessionId);
+        Assert.Equal(HttpStatusCode.OK, explicitTargetMessage.StatusCode);
+        var explicitTargetReceipt =
+            await explicitTargetMessage.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(OrchestratorJsonOptions);
+        Assert.NotNull(explicitTargetReceipt);
+        Assert.Equal(pending.RootSessionId, explicitTargetReceipt.RootSessionId);
+        Assert.Equal(messageTargetSessionId, explicitTargetReceipt.RecipientSessionId);
+        Assert.Equal(userReceipt.Sender, explicitTargetReceipt.Sender);
+
+        using (var targetStatusRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/status"))
+        {
+            AddBearerAndTenant(targetStatusRequest, boundToken, TenantId);
+            using var targetStatusResponse = await orchestrator.SendAsync(targetStatusRequest);
+            Assert.Equal(HttpStatusCode.OK, targetStatusResponse.StatusCode);
+            var targetStatus =
+                await targetStatusResponse.Content.ReadFromJsonAsync<SessionStatusSnapshot>(OrchestratorJsonOptions);
+            Assert.NotNull(targetStatus);
+
+            using var turnBoundaryRequest = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/turn-boundary")
+            {
+                Content = JsonContent.Create(
+                    new TurnBoundaryRequest(targetStatus.ExecutionFence, targetStatus.StateVersion),
+                    options: OrchestratorJsonOptions),
+            };
+            AddBearerAndTenant(turnBoundaryRequest, boundToken, TenantId);
+            using var turnBoundaryResponse = await orchestrator.SendAsync(turnBoundaryRequest);
+            Assert.Equal(HttpStatusCode.OK, turnBoundaryResponse.StatusCode);
+            var turnBoundary =
+                await turnBoundaryResponse.Content.ReadFromJsonAsync<TurnBoundaryResult>(OrchestratorJsonOptions);
+            Assert.NotNull(turnBoundary);
+            var presentedMessage = Assert.IsType<AddressedMessageEnvelope>(turnBoundary.PresentedMessage);
+            Assert.Equal(explicitTargetReceipt.MessageId, presentedMessage.MessageId);
+            Assert.Equal(AddressedMessageStatus.Delivered, presentedMessage.Status);
+
+            using var replayAfterPresentation = await SendRunMessageAsync(
+                boundToken, runMessagePath, "user-message-2", "Worker status?", messageTargetSessionId);
+            Assert.Equal(HttpStatusCode.OK, replayAfterPresentation.StatusCode);
+            var presentedReplayReceipt =
+                await replayAfterPresentation.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(
+                    OrchestratorJsonOptions);
+            Assert.Equal(explicitTargetReceipt, presentedReplayReceipt);
+
+            using var acknowledgeRequest = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/messages/{presentedMessage.MessageId:D}/acknowledge")
+            {
+                Content = JsonContent.Create(
+                    new AddressedMessageClaimFenceRequest(presentedMessage.ClaimFence),
+                    options: OrchestratorJsonOptions),
+            };
+            AddBearerAndTenant(acknowledgeRequest, boundToken, TenantId);
+            using var acknowledgeResponse = await orchestrator.SendAsync(acknowledgeRequest);
+            Assert.Equal(HttpStatusCode.OK, acknowledgeResponse.StatusCode);
+            var acknowledgedMessage =
+                await acknowledgeResponse.Content.ReadFromJsonAsync<AddressedMessageEnvelope>(OrchestratorJsonOptions);
+            Assert.NotNull(acknowledgedMessage);
+            Assert.Equal(AddressedMessageStatus.Acknowledged, acknowledgedMessage.Status);
+
+            using var replayAfterAcknowledgment = await SendRunMessageAsync(
+                boundToken, runMessagePath, "user-message-2", "Worker status?", messageTargetSessionId);
+            Assert.Equal(HttpStatusCode.OK, replayAfterAcknowledgment.StatusCode);
+            var acknowledgmentReplayReceipt =
+                await replayAfterAcknowledgment.Content.ReadFromJsonAsync<ProjectRunMessageReceipt>(
+                    OrchestratorJsonOptions);
+            Assert.Equal(explicitTargetReceipt, acknowledgmentReplayReceipt);
+        }
+
         // Replay start and check the real Events journal, not a mocked owner receipt.
         using var replay = await SendAsync(gateway.Client, HttpMethod.Post,
             $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/start", boundToken, [TenantId]);
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
-        await using var connection = await _nativeDataSource.OpenConnectionAsync();
         await using var journal = new NpgsqlCommand($"""
             SELECT count(*) FROM "{eventsSchema}".addressed_messages
             WHERE project_id = @project AND sender_run_id = @run AND idempotency_key = @key
@@ -200,6 +369,71 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         journal.Parameters.AddWithValue("run", pending.RunId);
         journal.Parameters.AddWithValue("key", $"{pending.RunId}:first");
         Assert.Equal(1L, await journal.ExecuteScalarAsync());
+
+        await using (var userMessageJournal = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{eventsSchema}".addressed_messages
+            WHERE project_id = @project AND sender_run_id = @run AND idempotency_key = @key
+              AND sender_session_id = @root AND recipient_session_id = @root
+              AND sender_issuer = @issuer AND sender_identity_hash = @subjectHash
+              AND payload ->> 'text' = @text
+            """, connection))
+        {
+            userMessageJournal.Parameters.AddWithValue("project", project.ProjectId);
+            userMessageJournal.Parameters.AddWithValue("run", pending.RunId);
+            userMessageJournal.Parameters.AddWithValue("key", "user-message-1");
+            userMessageJournal.Parameters.AddWithValue("root", pending.RootSessionId);
+            userMessageJournal.Parameters.AddWithValue("issuer", boundIssuer);
+            userMessageJournal.Parameters.AddWithValue("subjectHash",
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(
+                        $"{boundIssuer}\0{subject}"))));
+            userMessageJournal.Parameters.AddWithValue("text", "Status?");
+            Assert.Equal(1L, await userMessageJournal.ExecuteScalarAsync());
+        }
+        await using (var acknowledgedTargetJournal = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{eventsSchema}".addressed_messages
+            WHERE project_id = @project AND sender_run_id = @run AND idempotency_key = @key
+              AND recipient_session_id = @recipient AND status = 'Acknowledged'
+            """, connection))
+        {
+            acknowledgedTargetJournal.Parameters.AddWithValue("project", project.ProjectId);
+            acknowledgedTargetJournal.Parameters.AddWithValue("run", pending.RunId);
+            acknowledgedTargetJournal.Parameters.AddWithValue("key", "user-message-2");
+            acknowledgedTargetJournal.Parameters.AddWithValue("recipient", messageTargetSessionId);
+            Assert.Equal(1L, await acknowledgedTargetJournal.ExecuteScalarAsync());
+        }
+        await using (var ownerMessage = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{ownerSchema}".coordination_messages
+            WHERE project_id = @project AND run_id = @run AND message_id = @message
+              AND writer_issuer = @issuer AND writer_subject = @subject
+            """, connection))
+        {
+            ownerMessage.Parameters.AddWithValue("project", project.ProjectId);
+            ownerMessage.Parameters.AddWithValue("run", pending.RunId);
+            ownerMessage.Parameters.AddWithValue("message", userReceipt.OwnerMessageId);
+            ownerMessage.Parameters.AddWithValue("issuer", boundIssuer);
+            ownerMessage.Parameters.AddWithValue("subject", subject);
+            Assert.Equal(1L, await ownerMessage.ExecuteScalarAsync());
+        }
+
+        using (var childSteering = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{pending.RunId}/coordination/sessions/{messageTargetSessionId}/messages")
+        {
+            Content = JsonContent.Create(new CoordinationMessageRequest(
+                pending.RootSessionId,
+                "child-to-root-steering",
+                AddressedMessageDeliveryMode.Immediate,
+                AddressedMessagePurpose.Steering,
+                AddressedMessageKind.Text,
+                System.Text.Json.JsonSerializer.SerializeToElement(new { text = "Worker status?" })),
+                options: OrchestratorJsonOptions),
+        })
+        {
+            AddBearerAndTenant(childSteering, boundToken, TenantId);
+            using var response = await orchestrator.SendAsync(childSteering);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
 
         // Project Contributors can cancel another actor's run without obtaining that actor's run-bound token.
         var contributorToken = await IssueTokenAsync(
@@ -256,6 +490,23 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             };
             AddBearerAndTenant(request, token, TenantId);
             request.Headers.Add("Idempotency-Key", key);
+            return await gateway.Client.SendAsync(request);
+        }
+
+        async Task<HttpResponseMessage> SendRunMessageAsync(
+            string token,
+            string path,
+            string? key,
+            string text,
+            string? targetSessionId = null)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, path)
+            {
+                Content = JsonContent.Create(new ProjectRunMessageRequest(text, targetSessionId)),
+            };
+            AddBearerAndTenant(request, token, TenantId);
+            if (key is not null)
+                request.Headers.Add("Idempotency-Key", key);
             return await gateway.Client.SendAsync(request);
         }
     }
