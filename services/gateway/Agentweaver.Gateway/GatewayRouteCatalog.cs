@@ -392,6 +392,9 @@ public static class GatewayRouteCatalog
         Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs/{runId}/cancel",
             "/api/projects/{projectId}/runs/{runId}/cancel", "cancelProjectRun", "Cancel a run",
             body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs/{runId}/messages",
+            "/api/projects/{projectId}/runs/{runId}/messages", "sendProjectRunMessage", "Send a message to a run",
+            body: true, maximumRequestBodyBytes: 256 * 1024, forwardTenantSelector: true);
 
         var coordination = "/projects/{projectId}/runs/{runId}/coordination";
         void Coordination(

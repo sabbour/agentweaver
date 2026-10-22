@@ -198,7 +198,8 @@ public static class AddressedMessageEndpoints
                     request.CoordinatorInstructions),
                 cancellationToken).ConfigureAwait(false);
             if (stored.Message.Status is not (AddressedMessageStatus.Accepted or
-                AddressedMessageStatus.Claimed or AddressedMessageStatus.Delivered))
+                AddressedMessageStatus.Claimed or AddressedMessageStatus.Delivered) &&
+                !(stored.IsDuplicate && stored.Message.Status == AddressedMessageStatus.Acknowledged))
                 throw new AddressedMessageException("message_not_admissible");
 
             var receipt = new MessageAdmissionReceipt(

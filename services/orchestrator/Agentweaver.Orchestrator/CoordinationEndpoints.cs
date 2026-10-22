@@ -24,6 +24,8 @@ public static partial class CoordinationEndpoints
             .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(256 * 1024));
         runs.MapPost("/{runId}/start", StartProjectRunAsync);
         runs.MapPost("/{runId}/cancel", CancelProjectRunAsync);
+        runs.MapPost("/{runId}/messages", SendProjectRunMessageAsync)
+            .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(256 * 1024));
         var coordination = app.MapGroup("/api/projects/{projectId}/runs/{runId}/coordination")
             .RequireAuthorization();
         coordination.MapPost("/root", AcceptRootAsync);
@@ -1530,6 +1532,73 @@ public static partial class CoordinationEndpoints
                 cancellationToken).ConfigureAwait(false);
             _ = await store.AcknowledgeOutboundAsync(delivery, cancellationToken).ConfigureAwait(false);
             return Results.Ok(result with { Status = "admitted" });
+        }, cancellationToken);
+
+    /// <summary>Sends authenticated user text to the coordinator or an explicitly selected active session.</summary>
+    private static Task<IResult> SendProjectRunMessageAsync(
+        string projectId,
+        string runId,
+        ProjectRunMessageRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        EventsAddressedMessageClient events,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            RequireProjectRunRequestShape(context);
+            context.Response.Headers.CacheControl = "no-store";
+            var idempotencyKey = RequireProjectRunIdempotencyKey(context);
+            CoordinationOwnerStore.ValidateProjectRunMessageRequest(request, runId, idempotencyKey);
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var rootSessionId = await store.ReadProjectRunRootSessionIdAsync(
+                projectId, runId, cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+
+            var recipientSessionId = request.TargetSessionId ?? rootSessionId;
+            var message = await store.SendMessageAsync(
+                actor,
+                new SessionIdentity(projectId, runId, rootSessionId),
+                new CoordinationMessageRequest(
+                    recipientSessionId,
+                    idempotencyKey,
+                    AddressedMessageDeliveryMode.Immediate,
+                    AddressedMessagePurpose.Steering,
+                    AddressedMessageKind.Text,
+                    JsonSerializer.SerializeToElement(new { text = request.Text })),
+                cancellationToken,
+                allowCoordinatorSelfDelivery: true).ConfigureAwait(false);
+            var delivery = await store.ClaimOutboundAsync(
+                actor, message.OwnerMessageId, cancellationToken).ConfigureAwait(false);
+            var outbound = await store.ReadOutboundMessageAsync(
+                message.OwnerMessageId, cancellationToken).ConfigureAwait(false);
+            // Events owns the durable receipt; its idempotent lookup recovers it after delivery has advanced,
+            // while a pending owner row still supports retry after a lost admission response.
+            var admission = await events.AdmitAsync(context, outbound, cancellationToken).ConfigureAwait(false);
+            await store.AdmitDeliveryAsync(
+                actor,
+                new DeliveryIngressRequest(message.OwnerMessageId, admission),
+                cancellationToken).ConfigureAwait(false);
+            if (delivery is not null)
+                _ = await store.AcknowledgeOutboundAsync(delivery, cancellationToken).ConfigureAwait(false);
+
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(new ProjectRunMessageReceipt(
+                message.OwnerMessageId,
+                admission.MessageId,
+                admission.ThreadId,
+                admission.ThreadSequence,
+                projectId,
+                runId,
+                rootSessionId,
+                recipientSessionId,
+                "accepted",
+                new ProjectRunMessageSender(actor.Issuer, actor.Subject)));
         }, cancellationToken);
 
     /// <summary>

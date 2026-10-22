@@ -151,6 +151,34 @@ public sealed class SessionsContractTests
     }
 
     [Fact]
+    public void RunUserTextMayBeAddressedToItsCoordinatorButOtherSelfMessagesRemainInvalid()
+    {
+        using var payload = JsonDocument.Parse("""{"text":"Status?"}""");
+        var coordinator = new SessionIdentity("project-1", "run-1", "session-1");
+        var draft = new AddressedMessageDraft(
+            coordinator,
+            coordinator,
+            "user-message-1",
+            AddressedMessageDeliveryMode.Immediate,
+            AddressedMessagePurpose.Steering,
+            AddressedMessageKind.Text,
+            payload.RootElement.Clone(),
+            SenderFence: 1,
+            RecipientFence: 1);
+
+        Assert.True(AddressedMessageValidation.IsRunUserMessage(draft));
+        var normalized = AddressedMessageValidation.ValidateAndNormalize(draft);
+        Assert.Equal("user-message-1", normalized.IdempotencyKey);
+        Assert.Equal("Status?", normalized.Payload.GetProperty("text").GetString());
+        Assert.Throws<ArgumentException>(() => AddressedMessageValidation.ValidateAndNormalize(
+            draft with { Purpose = AddressedMessagePurpose.Progress }));
+        Assert.False(AddressedMessageValidation.IsRunUserMessage(
+            draft with { IdempotencyKey = $"{coordinator.RunId}:first" }));
+        Assert.Throws<ArgumentException>(() => AddressedMessageValidation.ValidateAndNormalize(
+            draft with { ReplyToId = Guid.NewGuid() }));
+    }
+
+    [Fact]
     public void VersionedEventPayloadRoundTripsAsAProviderNeutralReference()
     {
         var input = new AppendSessionEvent(

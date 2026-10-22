@@ -104,6 +104,7 @@ internal static partial class GatewayOpenApi
             ["createProjectRun"] = C("CreateProjectRunRequest", "CreateProjectRunResponse", "201"),
             ["startProjectRun"] = C(null, "StartProjectRunResponse", "200"),
             ["cancelProjectRun"] = C("CancelProjectRunRequest", "CancelProjectRunResponse", "200"),
+            ["sendProjectRunMessage"] = C("ProjectRunMessageRequest", "ProjectRunMessageReceipt", "200"),
             ["proposeOutcome"] = C("ProposeCoordinatorOutcomeRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readRunStatus"] = C(null, "OwnerRunStatus", "200"),
             ["recoverRun"] = C("RecoverRunExecutionRequest", "RunExecutionTransitionResult", "200"),
@@ -257,6 +258,7 @@ internal static partial class GatewayOpenApi
         if (route.OperationId is
             "createProjectRun" or
             "cancelProjectRun" or
+            "sendProjectRunMessage" or
             "createChiefOfStaffPriority" or
             "createKnowledgeRecord" or
             "updateKnowledgeRecord" or
@@ -390,6 +392,15 @@ internal static partial class GatewayOpenApi
                 "The owner rejected an unknown or repeated query key, unknown state, invalid cursor, " +
                 "or page size outside 1 through 100.");
         }
+        else if (route.OperationId == "sendProjectRunMessage")
+        {
+            responses["400"] = ProblemResponse("The run message, query, or Idempotency-Key is invalid.");
+            responses["404"] = ProblemResponse("The run or requested recipient is unavailable.");
+            responses["409"] = ProblemResponse(
+                "The idempotency key conflicts, is reserved for first input, or the run selection changed.");
+            responses["413"] = ProblemResponse("The request exceeds 256 KiB.");
+            responses["503"] = ProblemResponse("The coordinator or addressed-message journal is unavailable.");
+        }
         // Both stored lists share the owner's query, authority, and Projects failure responses.
         else if (route.OperationId is "listProjectIssues" or "listProjectPullRequests")
         {
@@ -465,6 +476,15 @@ else if (route.OperationId is
         {
             description +=
                 " Returns only active assignments. A current tenant admin or a project Owner can read the list.";
+        }
+        else if (route.OperationId == "sendProjectRunMessage")
+        {
+            description +=
+                " Requires api.read, projects.orchestrator, and an exact run-bound owner token for this project " +
+                "and run, plus fresh accepted Projects run-selection authority. The authenticated issuer and " +
+                "subject are the sender; caller-supplied sender identities are not accepted. The optional " +
+                "targetSessionId defaults to the run coordinator. A required Idempotency-Key makes retries " +
+                "return the same Events journal admission receipt; reusing the key with different text returns 409.";
         }
         if (route.OperationId is "assignProjectRole" or "revokeProjectRoleAssignment")
         {
@@ -1471,6 +1491,19 @@ else if (route.OperationId is
         ["CancelProjectRunResponse"] = Obj(["runId", "state", "cancelledAt", "alreadyTerminal"],
             ("runId", Str()), ("state", Enum("cancelled", "completed", "failed", "indeterminate")),
             ("cancelledAt", NullableStr()), ("alreadyTerminal", Bool())),
+        ["ProjectRunMessageRequest"] = Obj(["text"],
+            ("text", new { type = "string", minLength = 1, maxLength = 32768 }),
+            ("targetSessionId", NullableStr())),
+        ["ProjectRunMessageSender"] = StrictObj(["issuer", "subject"],
+            ("issuer", Str()), ("subject", Str())),
+        ["ProjectRunMessageReceipt"] = StrictObj(
+            ["ownerMessageId", "messageId", "threadId", "threadSequence", "projectId", "runId",
+             "rootSessionId", "recipientSessionId", "status", "sender"],
+            ("ownerMessageId", Uuid()), ("messageId", Uuid()), ("threadId", Uuid()),
+            ("threadSequence", new { type = "integer", minimum = 1 }),
+            ("projectId", Str()), ("runId", Str()), ("rootSessionId", Str()),
+            ("recipientSessionId", Str()), ("status", Enum("accepted")),
+            ("sender", Ref("ProjectRunMessageSender"))),
         ["ProposeCoordinatorOutcomeRequest"] = Obj(["expectedStateVersion", "idempotencyKey", "requestId", "specification"],
             ("expectedStateVersion", Int()), ("idempotencyKey", Str()), ("requestId", Str()),
             ("specification", Ref("CoordinatorOutcomeSpecification"))),

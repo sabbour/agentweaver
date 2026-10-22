@@ -18,6 +18,8 @@ public sealed class GatewayProjectRunRegressionTests
         null, "StartProjectRunResponse")]
     [InlineData("/api/v1/projects/{projectId}/runs/{runId}/cancel", "cancelProjectRun", "200",
         "CancelProjectRunRequest", "CancelProjectRunResponse")]
+    [InlineData("/api/v1/projects/{projectId}/runs/{runId}/messages", "sendProjectRunMessage", "200",
+        "ProjectRunMessageRequest", "ProjectRunMessageReceipt")]
     public async Task ServedOpenApiDescribesInteractiveRunOperations(
         string path, string operationId, string status, string? requestSchema, string responseSchema)
     {
@@ -37,6 +39,10 @@ public sealed class GatewayProjectRunRegressionTests
         else
             Assert.Equal($"#/components/schemas/{requestSchema}", body.GetProperty("content")
                 .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        if (operationId is "createProjectRun" or "cancelProjectRun" or "sendProjectRunMessage")
+            Assert.Contains(operation.GetProperty("parameters").EnumerateArray(), parameter =>
+                parameter.GetProperty("name").GetString() == "Idempotency-Key" &&
+                parameter.GetProperty("required").GetBoolean());
         Assert.Equal($"#/components/schemas/{responseSchema}", operation.GetProperty("responses")
             .GetProperty(status).GetProperty("content").GetProperty("application/json")
             .GetProperty("schema").GetProperty("$ref").GetString());
@@ -71,6 +77,7 @@ public sealed class GatewayProjectRunRegressionTests
     [Theory]
     [InlineData("/api/v1/projects/p/runs", true)]
     [InlineData("/api/v1/projects/p/runs/r/cancel", true)]
+    [InlineData("/api/v1/projects/p/runs/r/messages", true)]
     [InlineData("/api/v1/projects/p/runs/r/start", false)]
     public async Task BrowserPreflightAllowsIdempotencyKeyOnlyForRetryableRunWrites(string path, bool allowed)
     {
@@ -79,7 +86,7 @@ public sealed class GatewayProjectRunRegressionTests
         preflight.Headers.TryAddWithoutValidation("Origin", "https://web.test");
         preflight.Headers.TryAddWithoutValidation("Access-Control-Request-Method", "POST");
         preflight.Headers.TryAddWithoutValidation(
-            "Access-Control-Request-Headers", "authorization,content-type,x-agentweaver-tenant");
+            "Access-Control-Request-Headers", "authorization,content-type,x-agentweaver-tenant,idempotency-key");
         using var response = await gateway.Client.SendAsync(preflight);
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         var headers = string.Join(",", response.Headers.GetValues("Access-Control-Allow-Headers"));
@@ -92,6 +99,15 @@ public sealed class GatewayProjectRunRegressionTests
         await using var gateway = await StartAsync();
         var endpoint = Assert.Single(gateway.Endpoints, endpoint =>
             endpoint.Metadata.GetMetadata<IEndpointNameMetadata>()?.EndpointName == "createProjectRun");
+        Assert.Equal(256 * 1024, endpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>()?.MaxRequestBodySize);
+    }
+
+    [Fact]
+    public async Task RunMessagesAllowTheBoundedUtf8BodyLimit()
+    {
+        await using var gateway = await StartAsync();
+        var endpoint = Assert.Single(gateway.Endpoints, endpoint =>
+            endpoint.Metadata.GetMetadata<IEndpointNameMetadata>()?.EndpointName == "sendProjectRunMessage");
         Assert.Equal(256 * 1024, endpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>()?.MaxRequestBodySize);
     }
 

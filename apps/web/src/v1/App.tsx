@@ -2086,7 +2086,6 @@ function ActivityView({
 /** One locally queued chat message awaiting a Gateway response. */
 interface PendingMessage {
   id: string;
-  from: string;
   to: string;
   text: string;
   status: string;
@@ -2094,9 +2093,8 @@ interface PendingMessage {
 
 /**
  * Renders run chat. Messages go to `targetSessionId`: the coordinator unless the user
- * selected another active session in the run tree. The v1 message API delivers between
- * sessions in a run, so the page sends through another active session (the coordinator
- * when it is not the recipient). Sent messages show on this page until it reloads.
+ * selected another active session in the run tree. The authenticated user is the sender;
+ * sent messages show on this page until it reloads.
  */
 function ChatView({
   projectId,
@@ -2118,28 +2116,26 @@ function ChatView({
   const activeNodes = useMemo(() => nodes.filter((node) => node.lifecycle === 'active'), [nodes]);
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
-  // Only active sessions can send or receive. The target may be missing when the
-  // selected session ended; then the panel explains that sending is unavailable.
   const target = activeNodes.find((node) => node.identity.sessionId === targetSessionId);
-  // The API needs a sender session that is not the recipient. Prefer the
-  // coordinator; otherwise use any other active session.
-  const sender = activeNodes.find((node) => node.kind === 'coordinator' && node !== target) ??
-    activeNodes.find((node) => node !== target);
   const targetName = target ? sessionName(target) : 'Coordinator';
   // Historical text comes from run-bound event references, not the local send receipt.
   const transcript = useTurnTranscript(journalEvents, projectId, runId, apiCall);
 
   const send = async (text: string, idempotencyKey: string) => {
-    if (!target || !sender) return;
+    if (!target) return;
     setNotice(null);
-    // Errors are not caught here. They reach the composer, which shows them and
-    // keeps the text. The composer also supplies the idempotency key, so a retry
-    // of the same message is not delivered twice.
-    const result = await apiCall((token, tenantSelector) => gatewayClient.sendMessage(
-      token, projectId, runId, sender.identity.sessionId, target.identity.sessionId, text, idempotencyKey, 'immediate', tenantSelector,
+    const result = await apiCall((token, tenantSelector) => gatewayClient.sendProjectRunMessage(
+      token,
+      projectId,
+      runId,
+      target.identity.sessionId === target.rootSessionId
+        ? { text }
+        : { text, targetSessionId: target.identity.sessionId },
+      idempotencyKey,
+      tenantSelector,
     ), { projectId, runId });
-    setPending((items) => [...items, { id: result.ownerMessageId, from: sender.identity.sessionId, to: targetName, text, status: result.status }]);
-    setNotice('Message sent. It shows in the activity list when the agent receives it.');
+    setPending((items) => [...items, { id: result.ownerMessageId, to: targetName, text, status: result.status }]);
+    setNotice('Message accepted by the addressed-message journal.');
   };
 
   return (
@@ -2149,11 +2145,15 @@ function ChatView({
       <Panel title="Activity" description="Events from this run, oldest first. Message text is not stored in the event list.">
         <JournalList events={journalEvents} />
       </Panel>
-      <Panel title={`Message the ${targetName.toLowerCase()}`} description="Choose another session in the run tree to message it instead.">
-        {!target || !sender ? (
-          <p className="v1-muted">You can send a message when the run has another active session.</p>
+      <Panel title={`Message the ${targetName.toLowerCase()}`} description="Your signed-in identity sends the message. By default it goes to the coordinator; choose an active session in the run tree to target it instead.">
+        {!target ? (
+          <p className="v1-muted">You can send a message when the selected run session is active.</p>
         ) : (
-          <NewChatComposer onSubmit={send} blocked={snapshotBusy} />
+          <NewChatComposer
+            onSubmit={send}
+            blocked={snapshotBusy}
+            draftScope={`${projectId}/${runId}/${target.identity.sessionId}`}
+          />
         )}
         {pending.length > 0 && (
           <ol className="v1-chat-list" aria-label="Messages sent from this page">

@@ -291,6 +291,23 @@ internal sealed partial class CoordinationOwnerStore
             CoordinationIdentity.ValidateIdentity(request.WorkflowId, "workflow_id");
     }
 
+    /// <summary>Validates a bounded run follow-up and prevents reuse of the persisted first-message key.</summary>
+    internal static void ValidateProjectRunMessageRequest(
+        ProjectRunMessageRequest request,
+        string runId,
+        string idempotencyKey)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.Text) ||
+            Encoding.UTF8.GetByteCount(request.Text) > 32_768)
+            throw new CoordinationException("run_message_invalid", StatusCodes.Status400BadRequest);
+        if (request.TargetSessionId is not null)
+            CoordinationIdentity.ValidateIdentity(request.TargetSessionId, nameof(request.TargetSessionId));
+        if (idempotencyKey == $"{runId}:first")
+            throw new CoordinationException(
+                "run_message_idempotency_key_reserved", StatusCodes.Status409Conflict);
+    }
+
     /// <summary>Uses the first 80 Unicode characters without splitting a surrogate pair.</summary>
     private static string DefaultRunTitle(string message) =>
         string.Concat(message.EnumerateRunes().Take(80).Select(rune => rune.ToString()));

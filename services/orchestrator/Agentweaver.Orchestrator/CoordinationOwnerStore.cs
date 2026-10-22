@@ -2743,8 +2743,11 @@ internal sealed partial class CoordinationOwnerStore
             outbound.Recipient.RunId != sender.RunId)
             throw new CoordinationException("owner_message_invalid", StatusCodes.Status400BadRequest);
 
-        // Root self-delivery is reserved for the durable first-message retry key.
-        if (outbound.Sender == outbound.Recipient && outbound.IdempotencyKey != $"{sender.RunId}:first")
+        var isRunUserSelfDelivery = outbound.Sender == outbound.Recipient &&
+            AddressedMessageValidation.IsRunUserMessage(ToAddressedMessageDraft(outbound));
+        if (outbound.Sender == outbound.Recipient &&
+            outbound.IdempotencyKey != $"{sender.RunId}:first" &&
+            !isRunUserSelfDelivery)
             throw new CoordinationException("first_message_invalid", StatusCodes.Status409Conflict);
 
         var persistedOutbound = await ReadOutboundMessageAsync(
@@ -2757,15 +2760,25 @@ internal sealed partial class CoordinationOwnerStore
         var run = await ReadAcceptedRunAsync(
             connection, transaction, sender.ProjectId, sender.RunId, forUpdate: false, cancellationToken)
             .ConfigureAwait(false);
+        if (isRunUserSelfDelivery)
+        {
+            var root = await ReadRootSessionAsync(
+                connection, transaction, sender.ProjectId, sender.RunId, forUpdate: false, cancellationToken)
+                .ConfigureAwait(false);
+            if (root is null || root.SessionId != sender.SessionId || root.LifecycleState != "active")
+                throw new CoordinationException("first_message_invalid", StatusCodes.Status409Conflict);
+        }
         var stored = await ReadMessageAsync(
             connection, transaction, outbound.OwnerMessageId, forUpdate: false, cancellationToken)
             .ConfigureAwait(false);
+        // Delivery progress must not prevent Events from returning the message's original idempotent receipt.
+        var isPresentedReplay = stored?.Status is "presented" or "acknowledged";
         if (stored is null || stored.ProjectId != sender.ProjectId || stored.RunId != sender.RunId ||
             stored.SenderSessionId != sender.SessionId ||
             stored.RecipientSessionId != outbound.Recipient.SessionId ||
             stored.ThreadId != outbound.ThreadId ||
             stored.WriterIssuer != actor.Issuer || stored.WriterSubject != actor.Subject ||
-            stored.Status is not ("pending" or "admitted"))
+            (stored.Status is not ("pending" or "admitted") && !isPresentedReplay))
             throw new CoordinationException("owner_message_unavailable", StatusCodes.Status409Conflict);
 
         var source = await ReadSessionAsync(connection, transaction, sender, forUpdate: false, cancellationToken)
@@ -2918,6 +2931,26 @@ internal sealed partial class CoordinationOwnerStore
         _outbox.AcknowledgeAsync(
             delivery.Event.Message.Id, delivery.LeaseToken, cancellationToken);
 
+    /// <summary>Reads the accepted run's registered coordinator session.</summary>
+    public async Task<string> ReadProjectRunRootSessionIdAsync(
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        CoordinationIdentity.ValidateIdentity(projectId, nameof(projectId));
+        CoordinationIdentity.ValidateIdentity(runId, nameof(runId));
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        _ = await ReadAcceptedRunAsync(
+            connection, transaction, projectId, runId, forUpdate: false, cancellationToken).ConfigureAwait(false);
+        var root = await ReadRootSessionAsync(
+            connection, transaction, projectId, runId, forUpdate: false, cancellationToken).ConfigureAwait(false);
+        if (root is null || root.SessionId != root.RootSessionId || root.NodeKind != "coordinator")
+            throw new CoordinationException("run_root_unavailable", StatusCodes.Status404NotFound);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return root.SessionId;
+    }
+
     /// <summary>
     /// Creates an owner-addressed message and outbox event after validating the bound route and request.
     /// </summary>
@@ -2926,7 +2959,8 @@ internal sealed partial class CoordinationOwnerStore
         CoordinationActor actor,
         SessionIdentity sender,
         CoordinationMessageRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowCoordinatorSelfDelivery = false)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(request);
@@ -2944,11 +2978,6 @@ internal sealed partial class CoordinationOwnerStore
         var target = await ReadSessionAsync(connection, transaction, recipient, forUpdate: true, cancellationToken)
             .ConfigureAwait(false);
         RequireCurrentActiveSession(target, run);
-        // Only durable interactive input may use the root as both its ingress and recipient.
-        if (sender == recipient)
-            await RequirePersistedFirstMessageAsync(connection, transaction, actor, run.TenantId,
-                sender, request, cancellationToken).ConfigureAwait(false);
-
         Guid? replyThreadId = null;
         if (request.ReplyToId is { } replyTo)
         {
@@ -2993,6 +3022,15 @@ internal sealed partial class CoordinationOwnerStore
         {
             throw new CoordinationException("addressed_message_invalid", StatusCodes.Status400BadRequest, exception);
         }
+
+        // Only the run-level user route may send plain text from the coordinator to itself.
+        if (sender == recipient &&
+            (!allowCoordinatorSelfDelivery ||
+             sender.SessionId != source.RootSessionId ||
+             !AddressedMessageValidation.IsRunUserMessage(draft)))
+            await RequirePersistedFirstMessageAsync(
+                connection, transaction, actor, run.TenantId, sender, request, cancellationToken)
+                .ConfigureAwait(false);
 
         var canonicalRequest = JsonSerializer.SerializeToElement(
             draft with { SenderFence = 0, RecipientFence = 0, ThreadId = request.ThreadId }, JsonOptions);
@@ -4763,6 +4801,24 @@ internal sealed partial class CoordinationOwnerStore
         receipt.MessageId != Guid.Empty &&
         receipt.ThreadSequence > 0 &&
         receipt.Claim is null;
+
+    private static AddressedMessageDraft ToAddressedMessageDraft(OwnerOutboundMessage outbound) =>
+        new(
+            outbound.Sender,
+            outbound.Recipient,
+            outbound.IdempotencyKey,
+            outbound.DeliveryMode,
+            outbound.Purpose,
+            outbound.Kind,
+            outbound.Payload,
+            outbound.SenderFence,
+            outbound.RecipientFence,
+            outbound.ThreadId,
+            outbound.ReplyToId,
+            outbound.RequestId,
+            outbound.ReplyCorrelationId,
+            outbound.UserQuote,
+            outbound.CoordinatorInstructions);
 
     /// <summary>
     /// Compares all immutable fields before accepting an outbound message supplied by a delivery worker.
