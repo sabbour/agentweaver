@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "a0856e97d2e7df43b9ee85cf29e120c862cf4f55",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "0c5407fdba263ed30db570e0a9773a6331856e43000fb3b9d66307cda2e2ed76",
+  "appliedAt": "2026-10-22T22:41:37.240Z",
+  "components": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "fromVersion": "1.3.0",
+      "toVersion": "1.4.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.3.1",
+      "toVersion": "1.3.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.3.0",
+      "toVersion": "1.4.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.2.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "1.3.0",
+      "toVersion": "1.4.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.3.0",
+      "toVersion": "1.4.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.2.1",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/model-choices-2132.md",
+      "archivedPath": ".changeset/archive/model-choices-2132.md",
+      "sha256": "3039fad2e12469525d0cf747b5e1ebd849d116bc84c1c028953f982fb86161ea"
+    },
+    {
+      "sourcePath": ".changeset/priority-pr-picker-unavailable.md",
+      "archivedPath": ".changeset/archive/priority-pr-picker-unavailable.md",
+      "sha256": "e68f6f2a1b104d98627c5949dc33604fc414e07b20feccf06515d0a9ec12522d"
+    },
+    {
+      "sourcePath": ".changeset/project-effective-role-display.md",
+      "archivedPath": ".changeset/archive/project-effective-role-display.md",
+      "sha256": "050f92ed1e2cc12312dce650318eb48085ea183051558033dc065af5f8753bcd"
+    },
+    {
+      "sourcePath": ".changeset/project-run-list-me-filter.md",
+      "archivedPath": ".changeset/archive/project-run-list-me-filter.md",
+      "sha256": "eb42f37e64b3b963de32302030d39daa1bdbdb5375ed904d9168c014d7765ba2"
+    },
+    {
+      "sourcePath": ".changeset/readiness-failure-reasons.md",
+      "archivedPath": ".changeset/archive/readiness-failure-reasons.md",
+      "sha256": "a107e10f7e1e414dc1cf90210aca9797a46d238b25882866602ad1f0c7d2fa1f"
+    },
+    {
+      "sourcePath": ".changeset/user-run-messages.md",
+      "archivedPath": ".changeset/archive/user-run-messages.md",
+      "sha256": "addbeb6c73654de71a82500da33fe37746bbd0d7d483ff31d9e44a9ace8d792d"
+    }
+  ]
+}
