@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "20cfec5a9f2ce02b982cbadd19d1a004c85323d8",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "5b7ede51cccf7417aa97b7e37883053f4ef906a70372649c935cf84729562694",
+  "appliedAt": "2026-10-22T12:15:08.488Z",
+  "components": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.3.0",
+      "toVersion": "1.3.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers.Sessions.AgentSessions",
+      "fromVersion": "0.1.0",
+      "toVersion": "0.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.2.1",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/a2-priority-browser-coverage.md",
+      "archivedPath": ".changeset/archive/a2-priority-browser-coverage.md",
+      "sha256": "8ebdc0388f580ff0944482c29cceb57cd13f4bd764d7ef49236ebbcc2fc9d63d"
+    },
+    {
+      "sourcePath": ".changeset/agentsessions-record-verifier-2113.md",
+      "archivedPath": ".changeset/archive/agentsessions-record-verifier-2113.md",
+      "sha256": "0fb0954ebe7a95993dbde7b11e3df95f8196f16576613502df0ef32f1242ab2b"
+    },
+    {
+      "sourcePath": ".changeset/web-gateway-overview.md",
+      "archivedPath": ".changeset/archive/web-gateway-overview.md",
+      "sha256": "b6c36e106d901fb65f0533a18d90295cabb7da04ff0f7653a1cf13c93b068dd5"
+    }
+  ]
+}

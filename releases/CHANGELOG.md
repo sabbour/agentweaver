@@ -2,6 +2,13 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-22T12:15:08.488Z — source `20cfec5a9f2ce02b982cbadd19d1a004c85323d8`
+
+- `Agentweaver.Abstractions`: 1.2.0 -> 1.3.0 (minor) — .changeset/agentsessions-record-verifier-2113.md
+- `Agentweaver.EventsAndSessions`: 1.3.0 -> 1.3.1 (patch) — .changeset/agentsessions-record-verifier-2113.md
+- `Agentweaver.Providers.Sessions.AgentSessions`: 0.1.0 -> 0.2.0 (minor) — .changeset/agentsessions-record-verifier-2113.md
+- `Agentweaver.Web`: 1.2.0 -> 1.2.1 (patch) — .changeset/a2-priority-browser-coverage.md, .changeset/web-gateway-overview.md
+
 ## 2026-10-22T04:20:20.545Z — source `bd16cc745d364248a8c4ab0beae7df23d6a10694`
 
 - `Agentweaver.Persistence.Postgres`: 1.1.0 -> 1.1.1 (patch) — .changeset/postgres-function-oid-2226.md
