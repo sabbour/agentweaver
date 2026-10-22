@@ -59,8 +59,14 @@ vi.mock('./pageParts', async () => {
   };
 });
 
-function project(projectId: string, name: string, updatedAt: string, state: ProjectSummary['state'] = 'active'): ProjectSummary {
-  return { projectId, name, state, revision: 1, configurationRevision: 1, createdAt: updatedAt, updatedAt };
+function project(
+  projectId: string,
+  name: string,
+  updatedAt: string,
+  state: ProjectSummary['state'] = 'active',
+  effectiveRoles: ProjectSummary['effectiveRoles'] = [],
+): ProjectSummary {
+  return { projectId, name, state, revision: 1, configurationRevision: 1, createdAt: updatedAt, updatedAt, effectiveRoles };
 }
 
 function renderPage(initialEntry = '/overview') {
@@ -74,10 +80,17 @@ describe('OverviewPage metrics', () => {
     // The page loads projects through apiCall; return the test list.
     mocks.apiCall.mockImplementation(async () => mocks.projects);
     mocks.projects = [
-      project('p1', 'Alpha', '2026-01-01T00:00:00Z'),
+      project('p1', 'Alpha', '2026-01-01T00:00:00Z', 'active', [
+        { resourceType: 'project', resourceId: 'p1', role: 'owner' },
+      ]),
       project('p2', 'Beta', '2026-02-01T00:00:00Z'),
       project('p3', 'Old', '2026-03-01T00:00:00Z', 'archived'),
     ];
+  });
+
+  it('shows the owner-confirmed role on a recent project tile', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Owner')).toBeTruthy());
   });
 
   it('shows metrics for the most recently updated active project and says they are per project', async () => {

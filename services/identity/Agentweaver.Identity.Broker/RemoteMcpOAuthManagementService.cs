@@ -1974,6 +1974,8 @@ internal sealed class RemoteMcpOAuthManagementService(
             projects, _projectsOwnerAddress,
             $"/api/projects/{Uri.EscapeDataString(projectId)}", actor, null, cancellationToken)
             .ConfigureAwait(false);
+        if (project.EffectiveRoles is null)
+            throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
         if (project.ProjectId != projectId || project.Revision <= 0 || project.State != "active" ||
             !actor.Bearer.IsUsable())
             throw Denied("remote_mcp_project_unavailable");
@@ -2332,5 +2334,4 @@ internal sealed class RemoteMcpOAuthManagementService(
         string? IdentityBindingReference,
         JsonElement? RegistryServer = null);
 
-    private sealed record ProjectSummaryProof(string ProjectId, long Revision, string State);
 }

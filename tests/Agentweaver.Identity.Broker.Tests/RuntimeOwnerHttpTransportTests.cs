@@ -12,6 +12,42 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class RuntimeOwnerHttpTransportTests
 {
     [Fact]
+    public async Task StrictProjectsOwnerSummaryProofAcceptsEffectiveRoleScopes()
+    {
+        var payload = new
+        {
+            projectId = "project-1",
+            name = "Project one",
+            state = "active",
+            revision = 1,
+            configurationRevision = 1,
+            createdAt = DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+            updatedAt = DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+            effectiveRoles = new[]
+            {
+                new { resourceType = "project", resourceId = "project-1", role = "owner" }
+            }
+        };
+        var handler = new RecordingHandler(request => Task.FromResult(Response(request, payload)));
+        using var client = new HttpClient(handler);
+
+        var summary = await RuntimeOwnerHttpTransport.SendAsync<ProjectSummaryProof>(
+            client,
+            new Uri("https://projects.test/"),
+            "/api/projects/project-1",
+            new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), "tenant-1"),
+            null,
+            default);
+
+        Assert.Equal("project-1", summary.ProjectId);
+        Assert.Equal("active", summary.State);
+        var role = Assert.Single(summary.EffectiveRoles!);
+        Assert.Equal("project", role.ResourceType);
+        Assert.Equal("project-1", role.ResourceId);
+        Assert.Equal("owner", role.Role);
+    }
+
+    [Fact]
     public async Task PendingVerifierForwardsOnlyTheProtectedActorAndExactTransientProof()
     {
         var expires = DateTimeOffset.UtcNow.AddMinutes(1);

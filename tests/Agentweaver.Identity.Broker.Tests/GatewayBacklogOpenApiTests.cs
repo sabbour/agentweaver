@@ -65,4 +65,38 @@ public sealed class GatewayBacklogOpenApiTests
         Assert.True(schemas.GetProperty("BacklogTaskSnapshot").GetProperty("properties")
             .TryGetProperty("repositoryIssue", out _));
     }
+
+    [Fact]
+    public async Task ProjectSummaryExposesScopedEffectiveRoles()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call an owner."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var paths = document.RootElement.GetProperty("paths");
+        Assert.Equal("listProjects",
+            paths.GetProperty("/api/v1/projects").GetProperty("get").GetProperty("operationId").GetString());
+        Assert.Equal("getProject",
+            paths.GetProperty("/api/v1/projects/{projectId}").GetProperty("get").GetProperty("operationId").GetString());
+
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        var summary = schemas.GetProperty("ProjectSummary");
+        Assert.Contains(summary.GetProperty("required").EnumerateArray(),
+            item => item.GetString() == "effectiveRoles");
+        Assert.Equal("#/components/schemas/EffectiveProjectRole",
+            summary.GetProperty("properties").GetProperty("effectiveRoles")
+                .GetProperty("items").GetProperty("$ref").GetString());
+
+        var effectiveRole = schemas.GetProperty("EffectiveProjectRole");
+        Assert.Equal(new[] { "resourceType", "resourceId", "role" },
+            effectiveRole.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal(new[] { "tenant", "project" },
+            effectiveRole.GetProperty("properties").GetProperty("resourceType")
+                .GetProperty("enum").EnumerateArray().Select(item => item.GetString()).ToArray());
+        Assert.Equal(new[] { "tenantAdmin", "owner", "contributor", "viewer", "orchestrator" },
+            effectiveRole.GetProperty("properties").GetProperty("role")
+                .GetProperty("enum").EnumerateArray().Select(item => item.GetString()).ToArray());
+    }
 }

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrokerConsentPrompt, EffectiveRunSelection } from './contracts';
+import type { BrokerConsentPrompt, EffectiveProjectRole, EffectiveRunSelection } from './contracts';
 
 const mocks = vi.hoisted(() => ({
   binding: null as { projectId: string; runId: string } | null,
@@ -236,7 +236,7 @@ function projectConfiguration(projectId: string, revision: number) {
   };
 }
 
-function projectSummary(projectId: string, name: string) {
+function projectSummary(projectId: string, name: string, effectiveRoles: EffectiveProjectRole[] = []) {
   return {
     projectId,
     name,
@@ -245,6 +245,7 @@ function projectSummary(projectId: string, name: string) {
     configurationRevision: 1,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
+    effectiveRoles,
   };
 }
 
@@ -486,8 +487,8 @@ describe('v1 web project scoping', () => {
     mocks.rejectKnowledgeProposal.mockReset();
     mocks.replayEvents.mockReset();
     mocks.replayEvents.mockResolvedValue({ events: [], hasMore: false, nextCursor: null });
-    // An unbound caller who can read and edit p1. Pages use this to decide
-    // which actions to offer, such as the "Can edit" badge.
+    // An unbound caller who can read and edit p1. Pages use this context to
+    // decide which actions to offer.
     mocks.getAuthorizationContext.mockReset().mockResolvedValue({
       contractVersion: 1,
       issuer: 'https://broker.test',
@@ -513,13 +514,15 @@ describe('v1 web project scoping', () => {
   });
 
   it('retains gallery tiles and opens project creation in a dialog', async () => {
-    mocks.listProjects.mockResolvedValue([projectSummary('p1', 'Fixture project')]);
+    mocks.listProjects.mockResolvedValue([projectSummary('p1', 'Fixture project', [
+      { resourceType: 'project', resourceId: 'p1', role: 'owner' },
+    ])]);
     window.history.replaceState({}, '', '/projects');
     render(<App />);
     const gallery = await screen.findByRole('list', { name: 'Projects' });
     expect(within(gallery).getByText('Fixture project')).toBeTruthy();
-    // The badge comes from the authorization context, which grants writeProjects on p1.
-    expect(await within(gallery).findByText('Can edit')).toBeTruthy();
+    // The role label comes directly from the Projects owner summary, not a permission set.
+    expect(await within(gallery).findByText('Owner')).toBeTruthy();
     // The create form is not inline on the page; it opens only in a dialog.
     expect(screen.queryByLabelText('Project name')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }));
@@ -573,10 +576,13 @@ describe('v1 web project scoping', () => {
   });
 
   it('uses the retained collapse control and hides unsupported navigation', async () => {
-    mocks.getProject.mockResolvedValue(projectSummary('p1', 'Fixture project'));
+    mocks.getProject.mockResolvedValue(projectSummary('p1', 'Fixture project', [
+      { resourceType: 'project', resourceId: 'p1', role: 'owner' },
+    ]));
     window.history.replaceState({}, '', '/projects/p1');
     render(<App />);
     await screen.findByText('Fixture project');
+    expect(await screen.findByText('Owner')).toBeTruthy();
     const nav = screen.getByRole('navigation', { name: 'Primary navigation' });
     expect(within(nav).getByRole('link', { name: 'Orchestrations' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Skills' })).toBeTruthy();

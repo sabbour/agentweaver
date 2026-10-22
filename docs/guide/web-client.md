@@ -128,8 +128,9 @@ Each item has **Dismiss**. Dismissing hides the item for you only. It does not
 answer or resolve the request.
 
 Choose **Projects** to open the project gallery. Each tile shows the project
-state, revision, and your access: **Can edit**, **Can view**, or **No access**.
-The client reads access from your current authorization context. Select
+state and revision, plus the current role names and exact tenant or project
+scopes returned by the Projects owner. These labels are informational and do
+not authorize actions. Select
 **Create project** to open the creation dialog. Enter a **Project name** and
 choose **Start from**: **Blank project** or **GitHub repository**. For a
 GitHub repository, enter `owner/name` or a `github.com` address. The client
@@ -363,6 +364,11 @@ replay. Live event SSE, Repo App account calls, PKCE/session calls, and
 unrelated APIs do not receive the selector. Owners recheck current authority
 for every protected operation. The context response is not a permission grant
 or a cached authorization decision.
+
+`ProjectSummary` responses also include `effectiveRoles` for the signed-in
+caller. The Web client displays those owner-confirmed role names and their
+tenant or project scope on project tiles and headers; it does not use them to
+authorize operations.
 
 ## Edit project settings and read history
 

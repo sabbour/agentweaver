@@ -1349,7 +1349,17 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             }
             if (request.Method == HttpMethod.Get && path == "/api/projects/project-1")
                 return Task.FromResult(Json(request,
-                    new { projectId = ProjectId, revision = 1, state = "active" }));
+                    new
+                    {
+                        projectId = ProjectId,
+                        name = "Project one",
+                        state = "active",
+                        revision = 1,
+                        configurationRevision = 1,
+                        createdAt = Now,
+                        updatedAt = Now,
+                        effectiveRoles = Array.Empty<object>()
+                    }));
             throw new Xunit.Sdk.XunitException($"Unexpected Projects request: {request.Method} {path}");
         }
 

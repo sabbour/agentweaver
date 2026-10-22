@@ -192,11 +192,3 @@ export function permissionsForProject(
   }
   return sources;
 }
-
-/** Short access label for headers and tiles: "Can edit", "Can view", or "No access". */
-export function accessSummary(permissions: PermissionSource[]): 'Can edit' | 'Can view' | 'No access' {
-  // Check the strongest permission first so an editor is not labelled as a viewer.
-  if (permissions.some((item) => item.permission === 'writeProjects')) return 'Can edit';
-  if (permissions.some((item) => item.permission === 'readProjects')) return 'Can view';
-  return 'No access';
-}
