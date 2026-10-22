@@ -39,7 +39,6 @@ import type {
   ConfirmProposalRequest,
   ConnectedRepository,
   ConnectProjectRepositoryRequest,
-  CreateProjectRoleAssignmentRequest,
   CoordinatorChildResponse,
   CreateProjectRepositoryRequest,
   CreateProjectRequest,
@@ -62,7 +61,6 @@ import type {
   PagedResult,
   PlatformDefaultCopilotConnection,
   Project,
-  ProjectAccessOverview,
   ProjectCopilotConnection,
   RepoAppConnectionStatus,
   RequestChangesResponse,
@@ -938,21 +936,6 @@ export class AgentweaverApiClient {
     return this.request<ConnectedRepository>('POST', `/projects/${encodeURIComponent(projectId)}/github/repository/connection`, req);
   }
 
-  /** Reads project access and role-assignment information for its owner. */
-  getProjectAccessOverview(projectId: string): Promise<ProjectAccessOverview> {
-    return this.request<ProjectAccessOverview>('GET', `/projects/${encodeURIComponent(projectId)}/access`);
-  }
-
-  /** Grants a project role to the submitted principal. */
-  createProjectRoleAssignment(projectId: string, req: CreateProjectRoleAssignmentRequest): Promise<void> {
-    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/role-assignments`, req);
-  }
-
-  /** Removes one project role assignment by its server-issued identifier. */
-  deleteProjectRoleAssignment(projectId: string, assignmentId: string): Promise<void> {
-    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/role-assignments/${encodeURIComponent(assignmentId)}`);
-  }
-
   // Catalog
   /** Reads the role catalog used when building a project team. */
   getRoles(): Promise<RoleDto[]> {
@@ -1325,7 +1308,7 @@ export class AgentweaverApiClient {
       form.append(field, file, file.name);
       if (rel) form.append(`path:${field}`, rel);
     });
-    const response = await fetch(`${this.baseUrl}/api/projects/${encodeURIComponent(projectId)}/skills/upload`, {
+    const response = await fetch(this.apiUrl(`/projects/${encodeURIComponent(projectId)}/skills/upload`), {
       method: 'POST',
       headers: this.authHeaders(),
       credentials: 'include',
@@ -1728,7 +1711,7 @@ export class AgentweaverApiClient {
       ...providerHeaders(providerKey),
     };
     const response = await fetch(
-      `${this.baseUrl}/api/runs/${encodeURIComponent(runId)}/review`,
+      this.apiUrl(`/runs/${encodeURIComponent(runId)}/review`),
       { method: 'POST', headers, credentials: 'include', body: JSON.stringify(body) },
     );
     const text = await response.text();
@@ -1753,7 +1736,7 @@ export class AgentweaverApiClient {
   async checkHealth(): Promise<boolean> {
     const headers = this.authHeaders();
     try {
-      const res = await fetch(`${this.baseUrl}/api/health`, { method: 'GET', headers, credentials: 'include' });
+      const res = await fetch(this.apiUrl('/health'), { method: 'GET', headers, credentials: 'include' });
       if (res.status !== 404) return res.ok;
     } catch {
       // /api/health unreachable; fall through to the root probe.
@@ -2164,8 +2147,11 @@ export class AgentweaverApiClient {
 
   /** Preserves absolute service URLs and prefixes relative paths with the API base path. */
   private apiUrl(pathOrUrl: string): string {
+    // Some retained callers supply an absolute callback URL; leave that untouched.
     if (/^[a-z][a-z\d+\-.]*:\/\//i.test(pathOrUrl)) return pathOrUrl;
     const path = pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
+    // A configured v1 base already includes the public API prefix; do not add the 0.x /api again.
+    if (this.baseUrl.endsWith('/api/v1')) return `${this.baseUrl}${path}`;
     const apiPath = path === '/api' || path.startsWith('/api/') ? path : `/api${path}`;
     return `${this.baseUrl}${apiPath}`;
   }

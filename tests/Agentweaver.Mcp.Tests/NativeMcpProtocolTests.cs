@@ -63,6 +63,33 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
         await _gatewayFactory.DisposeAsync();
     }
 
+    [Theory]
+    [InlineData("issue")]
+    [InlineData("pull_request")]
+    public async Task PriorityRepositoryIdentityTravelsThroughMcpAndGateway(string kind)
+    {
+        await InitializeProtocolAsync();
+        var repository = new { owner = "other", name = "repo" };
+        var body = new { expectedRevision = 1, kind, projectId = "project-a", number = 42, providerId = "github", repository };
+        _gatewayFactory.EnqueueOrchestratorResponse(HttpStatusCode.OK,
+            JsonSerializer.Serialize(new { priorityId = "priority-a", links = new[] { new { kind, number = 42, providerId = "github", repository } } }));
+        var result = await PostRpcAsync(new
+        {
+            jsonrpc = "2.0", id = 42, method = "tools/call",
+            @params = new { name = "agentweaver_addChiefOfStaffPriorityLink",
+                arguments = new { priorityId = "priority-a", body } }
+        });
+        // The native product tool forwards the selected identity unchanged; no provider call is added.
+        Assert.False(result.GetProperty("result").GetProperty("isError").GetBoolean(), JsonSerializer.Serialize(result));
+        var request = Assert.Single(_gatewayFactory.OrchestratorRequests);
+        Assert.Equal("/api/chief-of-staff/priorities/priority-a/links", request.PathAndQuery);
+        using var forwarded = JsonDocument.Parse(request.Body!);
+        Assert.Equal("github", forwarded.RootElement.GetProperty("providerId").GetString());
+        Assert.Equal("other", forwarded.RootElement.GetProperty("repository").GetProperty("owner").GetString());
+        Assert.Equal("repo", forwarded.RootElement.GetProperty("repository").GetProperty("name").GetString());
+        Assert.Contains("\"owner\":\"other\"", result.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString());
+    }
+
     [Fact]
     public async Task NativeToolsListAndCallsPreserveGatewayContracts()
     {
@@ -75,12 +102,46 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
             @params = new { },
         });
         var tools = list.GetProperty("result").GetProperty("tools");
+        // MCP advertises the same repository identity fields as the Gateway, without a second DTO.
+        var priorityLinkTool = Assert.Single(tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_addChiefOfStaffPriorityLink");
+        var linkFields = priorityLinkTool.GetProperty("inputSchema").GetProperty("properties")
+            .GetProperty("body").GetProperty("properties");
+        Assert.True(linkFields.TryGetProperty("providerId", out _));
+        var repositoryFields = linkFields.GetProperty("repository").GetProperty("anyOf")[0].GetProperty("properties");
+        Assert.True(repositoryFields.TryGetProperty("owner", out _));
+        Assert.True(repositoryFields.TryGetProperty("name", out _));
+        foreach (var operation in new[] { "readIssueSync", "configureIssueSync", "createIssueSyncGrant",
+            "readIssueSyncGrant", "revokeIssueSyncGrant", "listProjectIssues", "listProjectPullRequests" })
+        {
+            var tool = Assert.Single(tools.EnumerateArray(),
+                tool => tool.GetProperty("name").GetString() == "agentweaver_" + operation);
+            Assert.Contains(tool.GetProperty("inputSchema").GetProperty("required").EnumerateArray(),
+                field => field.GetString() == "projectId");
+        }
+
         var knowledgeTool = Assert.Single(
             tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_createKnowledgeRecord");
         Assert.DoesNotContain(
             tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_streamRunEvents");
+        // Project reporting tools inherit owner query schemas without requiring a run ID.
+        foreach (var operation in new[] { "readProjectMetrics", "readProjectUsage" })
+        {
+            var reporting = Assert.Single(tools.EnumerateArray(),
+                tool => tool.GetProperty("name").GetString() == "agentweaver_" + operation);
+            var schema = reporting.GetProperty("inputSchema");
+            Assert.Contains("projectId", schema.GetProperty("required").EnumerateArray()
+                .Select(value => value.GetString()));
+            Assert.False(schema.GetProperty("properties").TryGetProperty("runId", out _));
+            foreach (var name in new[] { "from", "to" })
+                Assert.True(schema.GetProperty("properties").GetProperty(name).TryGetProperty("pattern", out _));
+            if (operation == "readProjectMetrics")
+                Assert.Equal("day", schema.GetProperty("properties").GetProperty("bucket").GetProperty("enum")[0].GetString());
+            else
+                Assert.False(schema.GetProperty("properties").TryGetProperty("bucket", out _));
+        }
         var runtimeObservationTool = Assert.Single(
             tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_readRuntimeObservationV1");

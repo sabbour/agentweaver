@@ -20,9 +20,6 @@ vi.mock('../api/apiClient', () => ({
     getProject: vi.fn(),
     getServerInfo: vi.fn(),
     getSandboxPolicy: vi.fn(),
-    getProjectAccessOverview: vi.fn(),
-    createProjectRoleAssignment: vi.fn(),
-    deleteProjectRoleAssignment: vi.fn(),
     updateProjectProviderSettings: vi.fn(),
     updateProjectPreviewSettings: vi.fn(),
     updateSandboxPolicy: vi.fn(),
@@ -136,25 +133,6 @@ beforeEach(() => {
     allowed_repository_roots: ['C:/demo'],
     destructive_command_patterns: [],
   } as never);
-  vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
-    auth_mode: 'entra',
-    platform_roles: ['PlatformAdmin'],
-    platform_roles_source: 'entra',
-    current_user_project_role: 'Owner',
-    can_manage_role_assignments: true,
-    project_role_assignments: [
-      {
-        assignment_id: 'assign-1',
-        principal_id: 'person@contoso.com',
-        display_name: 'Ada Lovelace',
-        email: 'person@contoso.com',
-        role: 'Owner',
-        scope: 'Project:proj-1',
-      },
-    ],
-  } as never);
-  vi.mocked(apiClient.createProjectRoleAssignment).mockResolvedValue(undefined as never);
-  vi.mocked(apiClient.deleteProjectRoleAssignment).mockResolvedValue(undefined as never);
   vi.mocked(apiClient.getUnattendedReadiness).mockResolvedValue({
     status: 'not_ready',
     reason_code: 'copilot_binding_required',
@@ -203,7 +181,7 @@ describe('ProjectSettingsPage', () => {
     const rail = screen.getByRole('navigation', { name: 'Settings sections' });
     expect(rail).toBeDefined();
     expect(screen.getByRole('button', { name: /General/i })).toBeDefined();
-    expect(screen.getByRole('button', { name: /Access/i })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /^Access$/i })).toBeNull();
     expect(screen.getByRole('button', { name: /Sandbox policy/i })).toBeDefined();
     expect(screen.getByRole('button', { name: /Danger Zone/i })).toBeDefined();
   });
@@ -466,7 +444,6 @@ describe('ProjectSettingsPage', () => {
 
     await screen.findByText('Rename project');
     expect(screen.queryByRole('button', { name: /Webhooks/i })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
 
     expect(screen.queryByText('GitHub identity for this project')).toBeNull();
     expect(screen.queryByRole('button', { name: /Save GitHub identity/i })).toBeNull();
@@ -487,55 +464,13 @@ describe('ProjectSettingsPage', () => {
     expect(outcome.value).toBe('');
   });
 
-  it('shows project members on the Access section', async () => {
-    renderPage('proj-1');
-
-    await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
-
-    expect(await screen.findByText('Platform access')).toBeDefined();
-    expect(screen.getByText('Ada Lovelace')).toBeDefined();
-  });
-
-  it('links Entra access management when the access overview endpoint is unavailable', async () => {
-    vi.mocked(apiClient.getProjectAccessOverview).mockRejectedValue(new ApiError(404, 'Not Found') as never);
-    renderPage('proj-1');
-
-    await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
-
-    expect(await screen.findByText('Access management is handled in Microsoft Entra ID for this deployment.')).toBeDefined();
-    expect((await screen.findByRole('link', { name: 'Manage in Microsoft Entra ID' })).getAttribute('href'))
-      .toBe('https://entra.microsoft.com/tenant-1/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/AppRoles/appId/client-1/isMSAApp~/false');
-  });
-
-  it('uses the auth config mode as the authentication-mode fallback when access overview is unavailable', async () => {
-    vi.mocked(apiClient.getProjectAccessOverview).mockRejectedValue(new ApiError(404, 'Not Found') as never);
+  it('derives the authentication mode from the auth config', async () => {
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
 
     expect(await screen.findByText('Entra ID')).toBeDefined();
     expect(screen.queryByText(/^GitHub$/)).toBeNull();
-  });
-
-  it('adds a project member through Tank role-assignment contract', async () => {
-    renderPage('proj-1');
-
-    await screen.findByText('Rename project');
-    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
-
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Add member' }), { target: { value: 'grace@contoso.com' } });
-    fireEvent.change(screen.getByRole('textbox', { name: 'Display name (optional)' }), { target: { value: 'Grace Hopper' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'Contributor' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
-
-    await waitFor(() => expect(apiClient.createProjectRoleAssignment).toHaveBeenCalledWith('proj-1', {
-      principal_id: 'grace@contoso.com',
-      display_name: 'Grace Hopper',
-      email: 'grace@contoso.com',
-      role: 'Contributor',
-    }));
   });
 
   it('saves generation model overrides using Tank backend payload shape', async () => {

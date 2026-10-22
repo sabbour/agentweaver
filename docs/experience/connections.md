@@ -6,21 +6,22 @@ connecting one does not connect the other.
 
 ## Prerequisites
 
-- Sign in through the Identity Broker and open project settings.
+- Sign in through the Identity Broker and open **Project settings** >
+  **Connections**.
 - Allow the browser to open a tracked popup for GitHub authorization.
 - For GitHub Copilot, open the app over HTTPS and use a Gateway on the same
   origin as the web app.
 
 ## Connect GitHub Repo App
 
-1. Open `/projects/:projectId/settings`.
+1. Open `/projects/:projectId/settings?section=connections`.
 2. In **GitHub Repo App**, select **Connect GitHub Repo App** or
    **Reauthorize GitHub Repo App**.
 3. Complete GitHub authorization in the tracked popup.
 4. Wait for the app to reload connection status from the Identity Broker.
-5. In the project configuration document, set
-   `sourceControl.authMode` to `"githubApp"` and
-   `sourceControl.appConnectionId` to the matching Identity connection ID.
+5. In **Repository**, set **Sign-in method** to **GitHub App**. In
+   **Advanced**, set `sourceControl.appConnectionId` to the matching Identity
+   connection ID. Select **Save changes**.
 
 **Expected result:** The Broker reports the connection state. The app does not
 treat a popup callback by itself as proof of a connected account. Select
@@ -36,7 +37,7 @@ in legacy secret mode.
 
 ## Connect GitHub Copilot
 
-1. In project settings, select **Connect GitHub Copilot**.
+1. In **Project settings** > **Connections**, select **Connect GitHub Copilot**.
 2. Complete authorization in the tracked popup.
 3. Wait for the completion request and refreshed owner status.
 
@@ -54,7 +55,7 @@ connection state.
 **Prerequisites:** Open an existing run whose accepted configuration uses
 `githubApp` and names the Repo App connection you connected.
 
-1. Open the run's **Selection** tab.
+1. Open the run's **Changes** tab. It shows **GitHub App repository access**.
 2. If the connection matches, select **Load repositories**.
 3. Complete GitHub App installation or authorization if the panel requests it.
 4. Select the repository returned by the Identity Broker.
@@ -72,7 +73,7 @@ not prove that a runtime loaded or used the repository.
 - A popup callback is a notification. The app reloads status from the owner.
 - A blocked or closed popup, expired transaction, mismatched state, or failed
   owner response leaves an error or unverified state.
-- Leaving project settings or clearing the browser session cancels pending
+- Leaving project settings or signing out cancels pending
   Repo App work and closes its tracked popup.
 - The owner-reported connection state and revision determine what the panel
   displays.

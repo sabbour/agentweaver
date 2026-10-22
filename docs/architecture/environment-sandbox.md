@@ -7,8 +7,7 @@ resource. A generation fence is a version check that prevents stale operations
 from changing newer owner state. Environment checks the Workspace attachment
 and network policy before it reports dispatch readiness. This page describes
 source behavior; it is not a deployment record or evidence that a live
-Kubernetes cluster or AgentHost runtime was tested. See issue
-[#1852](https://github.com/sabbour/agentweaver/issues/1852) for the source work.
+Kubernetes cluster or AgentHost runtime was tested.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">
@@ -233,7 +232,9 @@ lookup is treated as proof that a run ended.
 
 ## Trusted suspend Workspace flush
 
-This source connects Environment to the trusted AgentHost flush operation for issue [#1930](https://github.com/sabbour/agentweaver/issues/1930).
+Before a sandbox suspends, Environment calls the trusted AgentHost flush operation.
+The flush makes AgentHost persist its Workspace data and native-turn cache, so a
+later resume starts from a verified data generation instead of losing work.
 It does not claim a complete deployed suspend/resume flow.
 
 Core calls authenticated `POST /internal/runtime/suspend/resolve` with its current suspend operation and Host session proof.

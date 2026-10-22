@@ -446,6 +446,7 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
   }
 
   assert.deepEqual(Object.keys(gateway.data).sort(), [
+    'Gateway__Owners__Environment',
     'Gateway__Owners__Events',
     'Gateway__Owners__IdentityBrokerAddress',
     'Gateway__Owners__Knowledge',
@@ -461,6 +462,7 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
   assert.equal(gateway.data.Gateway__Owners__Orchestrator, serviceAddress('orchestrator'));
   assert.equal(gateway.data.Gateway__Owners__Knowledge, serviceAddress('knowledge'));
   assert.equal(gateway.data.Gateway__Owners__Events, serviceAddress('events-and-sessions'));
+  assert.equal(gateway.data.Gateway__Owners__Environment, serviceAddress('environment'));
   assert.equal(gateway.data.Gateway__Owners__IdentityBrokerAddress,
     serviceAddress('identity-broker', 443));
   assert.equal(gateway.data.Gateway__WebOrigin, portalOrigin);

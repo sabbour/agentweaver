@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
@@ -13,13 +14,37 @@ public enum BacklogTaskState
 /// <summary>Stable project and task identity used by the project-scoped dependency graph.</summary>
 public sealed record BacklogTaskReference(string ProjectId, string TaskId);
 
+/// <summary>Open or closed work, independent of execution and archive state.</summary>
+public enum BacklogTaskLifecycle
+{
+    Open,
+    Closed
+}
+
+/// <summary>Provider-owned issue identity; repository names are compared without case.</summary>
+public sealed record BacklogRepositoryIssueLink(
+    string ProviderId,
+    SourceControlRepositoryIdentity Repository,
+    long IssueNumber);
+
+/// <summary>Project-owned task content replaced with optimistic revision checks.</summary>
+public sealed record BacklogTaskContent(
+    string Title,
+    string? Description = null,
+    BacklogTaskLifecycle Lifecycle = BacklogTaskLifecycle.Open,
+    BacklogRepositoryIssueLink? RepositoryIssue = null);
+
 /// <summary>Owner-projected task state and revision consumed by graph and readiness checks.</summary>
 public sealed record BacklogTaskSnapshot(
     BacklogTaskReference Reference,
     long Revision,
     BacklogTaskState State,
     bool IsArchived = false,
-    bool IsAutomationInvocationPending = false);
+    bool IsAutomationInvocationPending = false,
+    string Title = "",
+    string? Description = null,
+    BacklogTaskLifecycle Lifecycle = BacklogTaskLifecycle.Open,
+    BacklogRepositoryIssueLink? RepositoryIssue = null);
 
 /// <summary>Directed prerequisite relation: <see cref="Task"/> cannot proceed before <see cref="Prerequisite"/>.</summary>
 public sealed record BacklogDependencyEdge(
@@ -41,6 +66,8 @@ public enum BacklogIssueCode
     InvalidGraphRevision,
     InvalidTaskRevision,
     InvalidTaskState,
+    InvalidTaskContent,
+    DuplicateRepositoryIssue,
     InvalidTaskCollection,
     InvalidDependencyCollection,
     DuplicateTask,

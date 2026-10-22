@@ -216,12 +216,9 @@ Deployment, automatic scheduling, and cloud acceptance remain separate work.
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
 Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses
 core APIs for the same authorization path as web and CLI callers. MCP catalog and remote MCP
-requirements from [#1229](https://github.com/sabbour/agentweaver/issues/1229),
-[#1407](https://github.com/sabbour/agentweaver/issues/1407),
-[#1427](https://github.com/sabbour/agentweaver/issues/1427), and
-[#1428](https://github.com/sabbour/agentweaver/issues/1428) have owners in this split: catalog and
+requirements have owners in this split: catalog and
 outbound mediation at the Tool & MCP gateway, surface tools in the MCP server, and rendering in web.
-These issues are parity inputs, not an excuse to create a second UI.
+These requirements are parity inputs, not a reason to create a second UI.
 P1 frontend work retains most of the existing Agentweaver UI and adapts its API wiring; redesign
 requires an explicit user request.
 
@@ -237,8 +234,8 @@ requires an explicit user request.
 
 AgentHost startup emits the `scheduled`, `image ready`, `started`, `configured`, and `ready` phases
 with configured time budgets. It measures compressed pull bytes for the selected platform image
-and optimizes download time without a hard image-size ceiling, making
-[#1257](https://github.com/sabbour/agentweaver/issues/1257) visible instead of hiding it in one timeout.
+and optimizes download time without a hard image-size ceiling. Separate phases make
+slow image pulls visible instead of hiding them in one startup timeout.
 The Environment manager does not mark the environment
 ready before egress intent has been applied and verified. The selected
 [Sandbox](provider-seams.md#sandbox), [Storage](provider-seams.md#storage), and [Network
@@ -253,16 +250,14 @@ The unpublished CI image receipt measures compressed OCI bytes and runs the exac
 Neither source checks nor image checks prove live AKS placement.
 
 For image-backed applications, BuildKit produces isolated output, but only the trusted control plane
-publishes the approved image digest with registry credentials
-([#761](https://github.com/sabbour/agentweaver/issues/761)). No registry credential enters the run.
+publishes the approved image digest with registry credentials. No registry credential enters the run.
 The default registry is configuration rather than a provider seam.
 
 Cilium on AKS enforces the default network policy at Layer 3/4 with fully qualified domain name
 (FQDN) handling. That alone cannot
 make all public-address HTTPS egress FQDN-only. The platform's own Tool & MCP gateway is the cutover
 default for L7 model/MCP/A2A controls; an alternative gateway remains a P3 option. AGT decisions and
-record-before-transmit for outbound calls stay in core even when an L7 provider audits them
-([#1229](https://github.com/sabbour/agentweaver/issues/1229)). See [Network Policy
+record-before-transmit for outbound calls stay in core even when an L7 provider audits them. See [Network Policy
 enforcement](provider-seams.md#enforcement-and-readiness).
 
 ## Run lifecycle across services
@@ -357,10 +352,10 @@ backend invalidation. Hosts supply coherent snapshots with a new revision on
 every authority change; this library does not make those reads transactional or
 provide a durable authority.
 
-The [#1779 broker candidate](../../specs/1779-identity-broker.md) supplies native
+The [Identity broker](../../specs/identity-broker.md) supplies native
 .NET/OpenIddict authentication, owned PostgreSQL stores, authenticated consent,
 code/PKCE, permanent grants, resource audiences, and refresh-token handling.
-The #1783 P0 composition adds `POST /secrets/redeem`, which requires an
+The P0 broker composition adds `POST /secrets/redeem`, which requires an
 OpenIddict-validated bearer for the configured audience and exactly one `sub`,
 `project_id`, and `run_id` claim. Request data contains only a run-bound
 purpose and exact SecretRef; caller identity is never accepted from a body or
@@ -496,13 +491,11 @@ versioned rollout path before its old counterpart is retired.
 
 The 1.0 line builds release planning, changesets, and publication against independent service
 versions. It starts with standard Helm/Kustomize image handling and CI caching; custom delivery
-logic is added only where the delivery-simplification evidence in
-[#1429](https://github.com/sabbour/agentweaver/issues/1429) and
-[#1430](https://github.com/sabbour/agentweaver/issues/1430) warrants it. The release-plan equivalent
+logic is added only where measured delivery-simplification evidence warrants it. The release-plan equivalent
 checks the manifest and source alignment rather than copying the 0.x global-version workflow
 unchanged.
 
-The #1778 candidate provides dependency-free source-bound plan, apply, and pack commands.
+The release tooling provides dependency-free source-bound plan, apply, and pack commands.
 Component records select independent semver intent without manual version edits.
 Apply preserves project mirrors and explicit compatibility declarations.
 Every new dependency version requires a declaration backed by consumer compatibility evidence.
@@ -740,17 +733,15 @@ without data migration.
   server, Knowledge, Events & Sessions journal and message delivery, Source Control & Merge,
   Environment manager, AgentHost, and default Azure/AKS adapters, including the Copilot cost
   ledger. Instrument
-  AgentHost startup phases for [#1257](https://github.com/sabbour/agentweaver/issues/1257) and
-  reclaim sandboxes for [#1688](https://github.com/sabbour/agentweaver/issues/1688). At the end of
+  AgentHost startup phases to expose slow image pulls, and reclaim abandoned sandboxes. At the end of
   P1, start persona harnesses against exact-SHA AKS deployments.
 - **P2 — parity and cutover:** Complete suspend/resume, guardrails, the Tool & MCP gateway, MCP
-  catalog and remote MCP ([#1229](https://github.com/sabbour/agentweaver/issues/1229)), Azure BYOK
+  catalog and remote MCP, Azure BYOK
   pricing and budgets, Cosmos and Redis Memory providers, provider options,
-  image publication ([#761](https://github.com/sabbour/agentweaver/issues/761)),
+  image publication,
   built-in AKS Application Hosting, Canvas with A2UI and GitHub Canvas compatibility
   research and reverse engineering, applications and surfaces, release tooling informed by
-  [#1429](https://github.com/sabbour/agentweaver/issues/1429) and
-  [#1430](https://github.com/sabbour/agentweaver/issues/1430), the parity map, and all three
+  delivery-simplification evidence, the parity map, and all three
   harnesses before cutover. Elastic SAN and additional hosting adapters are outside this scope.
 - **P3 — after cutover:** Evaluate optional providers and data-plane alternatives, including an
   alternative L7 gateway and Container Apps Sandboxes, against the existing service contracts

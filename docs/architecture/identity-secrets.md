@@ -274,16 +274,16 @@ credential. A GitHub App installation token cannot authenticate the Copilot SDK.
 | Integration | Current source boundary | Missing work |
 | --- | --- | --- |
 | Core sign-in | Broker OIDC, OAuth, consent, refresh, and purpose-bound secret redemption exist. | These contracts do not supply either GitHub connection lifecycle. |
-| GitHub Copilot | Identity implements owner-bound account linking, PKCE/cookie callbacks, exact-version writes, refresh rotation, and current binding checks in source. The SDK consumes only the current user access token. | Deployed OAuth, writer permissions, and live entitlement remain outside [#1906](https://github.com/sabbour/agentweaver/issues/1906) source evidence. |
-| GitHub App | Identity owns the Repo App user connection, installation/repository selection, refresh, and run-bound exact-repository token mint used by Source Control. | Reachable settings UI and deployment are not included in this source slice; the relevant Web/MCP work remains [#1859](https://github.com/sabbour/agentweaver/issues/1859) and [#1908](https://github.com/sabbour/agentweaver/issues/1908). |
-| Web and MCP | Existing core routes and tools are implemented. | Reachable retained settings and real GitHub connection/repository routes: [#1859](https://github.com/sabbour/agentweaver/issues/1859) and [#1908](https://github.com/sabbour/agentweaver/issues/1908). |
+| GitHub Copilot | Identity implements owner-bound account linking, PKCE/cookie callbacks, exact-version writes, refresh rotation, and current binding checks in source. The SDK consumes only the current user access token. | Deployed OAuth, writer permissions, and live entitlement are not proven by source tests. |
+| GitHub App | Identity owns the Repo App user connection, installation/repository selection, refresh, and run-bound exact-repository token mint used by Source Control. | A reachable settings UI and deployment are not part of this source. The Web and MCP connection surfaces are still missing. |
+| Web and MCP | Existing core routes and tools are implemented. | Reachable retained settings and real GitHub connection and repository routes in Web and MCP. |
 
 The compatible 0.x Copilot flow binds browser state, PKCE, cookies, and a single-use
 callback to the current subject. Its refresh path serializes redemption, rotates
 refresh tokens, and uses version checks. Provider rejection can require reconnect;
 a transient failure must not fabricate that result.
 
-The #1907 source candidate implements that GitHub App producer inside Identity. User
+Identity implements the GitHub App producer in source. User
 authorization uses OAuth S256 PKCE, an owner-bound state and protected verifier, and a
 short-lived HttpOnly callback cookie. Installation setup uses its own owner-bound
 single-use callback. Identity discovers only installations and repositories visible to
@@ -335,7 +335,7 @@ not provide that authority.
 
 ### Minimum Copilot credential writer source scope
 
-The approved minimum source work in #1906 adds protected secret-version writes inside
+The approved minimum source work adds protected secret-version writes inside
 the existing Key Vault adapter and trusted Identity lifecycle. It returns opaque
 `SecretRef` metadata, not token values. Identity stores connection identity, credential
 kind, owner and revision, freshness, state, and the current secret-version reference.

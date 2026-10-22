@@ -5,6 +5,38 @@ This reference describes the non-secret ConfigMap keys in
 them. It covers the v1 source contract; it does not turn a source candidate
 into a deployed or selectable provider.
 
+## Optional periodic issue-sync service channels
+
+Issue sync is disabled as a host capability unless its explicit TLS profiles
+are configured. No checked-in runtime snapshot enables it. Orchestrator uses
+`Orchestrator:IssueSync:IdentityTls` (`LocalServiceName=Orchestrator`,
+`PeerServiceName=IdentityBroker`). Identity requires both
+`IdentityBroker:IssueSync:WorkerTls` (`IdentityBroker` to `Orchestrator`) and
+`IdentityBroker:IssueSync:ProjectsTls` (`IdentityBroker` to `Projects`), plus
+the existing `IdentityBroker:GitHubRepoApp` configuration. Projects uses
+`ProjectsConfig:IssueSync:IdentityTls` (`Projects` to `IdentityBroker`).
+
+Each profile uses the existing `RuntimeServiceTlsOptions` fields:
+`LocalServiceName`, `LocalServicePrincipalId`, `LocalCertificatePemPath`,
+`LocalPrivateKeyPemPath`, `LocalCertificateSha256`, `ListenerPort`,
+`PeerServiceName`, `PeerServicePrincipalId`, `PeerOwnerAddress`, and
+`PeerCertificateSha256Pins`. Certificate/key paths are absolute; principal
+IDs and peer certificates must be distinct, addresses HTTPS owner origins,
+and certificate digests SHA-256. Service clients trust the mounted
+`/var/run/service-backend-ca/ca.crt`, validate peer names and certificate
+pins, and never follow redirects.
+
+Identity's dedicated listener is `Kestrel:Endpoints:IssueSyncWorker:Url`;
+Projects' is `Kestrel:Endpoints:IssueSyncIdentity:Url`. Each must be HTTPS
+on the profile's own `ListenerPort`, not a public or another private listener.
+Client-only profiles do not create listeners. There is no bearer-token
+fallback or shared run-authority path.
+
+These are source configuration contracts, not permission to create
+certificates, grants or infrastructure. Per-project enable/disable, intervals
+and cycle limits are persisted through the
+[issue-sync API](api.md#periodic-issue-sync), not environment defaults.
+
 ## Configuration rules
 
 - The runtime ConfigMaps use environment-variable names with `__` between
@@ -189,6 +221,36 @@ grants without a manual `GRANT`. Rerunning an older migration image does not.
 The guarded operator bootstrap can also apply the canonical grant file after
 migration; it changes all listed table grants, not just history access.
 
+### P1 migration Job settings
+
+The [database maintenance runner](../guide/database-maintenance.md) runs the
+Orchestrator and Events & Sessions images with `--migrate` as Kubernetes Jobs.
+The Jobs in `deploy/k8s/migrations/p1-postgres` set these keys. `<Service>` is
+`Orchestrator` or `EventsAndSessions`.
+
+Events & Sessions validates its Sessions and Messaging options before it enters
+the migration branch. Its Job sets every option explicitly and keeps each value
+equal to the Events & Sessions runtime configuration; it does not rely on code
+defaults. Orchestrator enters its migration branch before loading normal runtime
+provider settings, so its Job needs the migration connection, identity, and
+grant-plan settings instead.
+
+| Key | Contract | Default and how to obtain it |
+| --- | --- | --- |
+| `ConnectionStrings__OrchestratorMigration`, `ConnectionStrings__EventsAndSessionsMigration` | Password-free connection string whose user is `agentweaver-id-p1-postgres-migration`, the schema owner after the ownership handover. | No default. The kustomization sets the server name. |
+| `<Service>__Migration__WorkloadIdentity__TenantId`, `__ClientId`, `__TokenFilePath` | Workload identity of the `p1-postgres-migration` ServiceAccount. | The runner sets the client ID from its identity deployment. The manifest holds a zero placeholder that is never applied. |
+| `<Service>__Migration__RuntimeRole` | Runtime role that receives the planned grants: `agentweaver-id-orchestrator` or `agentweaver-id-events-and-sessions`. Optional. | Set by the Job manifest. Without it, `--migrate` applies migrations only. |
+| `<Service>__Migration__PlanSha256` | SHA-256 of the reviewed plan embedded in the image. Required when the runtime role is set. | Set by the Job manifest. The run fails before it connects when the hash, role, schema, or compiled migration catalog differs from the plan. |
+
+With the runtime role set, a run applies only the grants the plan names, reads
+each grant back, and prints one `P1_POSTGRES_RUNTIME_GRANTS_VERIFIED` line with
+the service, schema, role, plan hash, and applied versions. The runner requires
+that line.
+
+The Events & Sessions Job also repeats the Sessions and Messaging settings from
+`events-and-sessions-runtime-config.json`. Keep its `Provider` and `Messaging`
+environment values identical to that file.
+
 ## Identity Broker settings
 
 The `identity-broker-runtime-config.json` map supplies the issuer, upstream
@@ -247,6 +309,7 @@ omits it. The Broker reconciles only these declared clients at startup.
 | `Gateway__Owners__Knowledge` | Required HTTPS service root for Knowledge. |
 | `Gateway__Owners__Events` | Required HTTPS service root for Events & Sessions. |
 | `Gateway__Owners__IdentityBrokerAddress` | Required HTTPS service root for Identity Broker. |
+| `Gateway__Owners__Environment` | Optional HTTPS service root for Environment. The Remote MCP connection directory route uses it. Without it, the route returns 503 `owner_not_configured`. |
 | `Gateway__WebOrigin` | Required exact HTTPS Web origin. It must not contain a path, wildcard, credentials, query, or fragment. |
 | `Gateway__OwnerRequestTimeoutSeconds` | Optional Gateway setting. Integer from `1` through `120`; default is `15`. |
 | `Gateway__BaseAddress` | Required HTTPS Gateway service root for the MCP host. |
@@ -334,10 +397,43 @@ TenantAdmin command. They are not part of the runtime ConfigMap:
 | `ProjectsConfig__Migration__AccessToken` | Optional short-lived PostgreSQL Entra access token. The explicit command supplies it as the connection password. Store it in a short-lived Secret or environment variable. Do not put it in arguments or logs. |
 | `ProjectsConfig__Migration__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Alternative explicit workload identity for migration. Configure these settings or `AccessToken`, not both. |
 
+### Runtime authority writes
+
+The runtime database principal can write project role assignments only
+through the project role-assignment API. The API enforces the boundary, not
+the database grant:
+
+- Only a current tenant admin can assign or revoke a project role. The
+  request needs an unbound token with the `api.read` and `projects.admin`
+  scopes. The service rechecks the caller's exact TenantAdmin assignment and
+  revision in the same serializable transaction as the change.
+- Each change writes one `authority_audit` row in the same transaction.
+- The runtime principal can't delete assignment or audit rows, can't change
+  who, what, or where an assignment applies, and can't write tenant
+  memberships or tenant-level roles.
+
+The runtime principal needs these grants, defined in
+[`infra/bicep/postgres-projectsconfig-runtime-grants.sql`](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/postgres-projectsconfig-runtime-grants.sql):
+
+| Grant | Purpose |
+| --- | --- |
+| `INSERT` on `projects_config.project_role_assignments` | Add a new active assignment. |
+| `UPDATE (state, revision, revoked_by, revoked_at)` on `projects_config.project_role_assignments` | Mark an assignment revoked at its expected revision. |
+| `INSERT` on `projects_config.authority_audit` | Record each assignment and revocation. |
+
+An operator applies these grants separately; deployment doesn't apply them.
+Until they're applied, assign and revoke requests return `503` with the
+`role_assignment_unavailable` problem code, and no authority row changes.
+Listing assignments needs only the existing read grants. At startup, the
+service accepts either no authority write grants or exactly this set. It
+fails closed on a partial set or any other write privilege on authority
+tables, including `DELETE`.
+
+### Privileged project setup
+
 The privileged project-setup command has a separate authority database
 contract. The runtime connection and identity are not substitutes. The
-runtime principal must not write authority tables or read setup-operation
-receipts.
+runtime principal must not read setup-operation receipts.
 
 | Setting | Contract |
 | --- | --- |
@@ -356,16 +452,15 @@ database targets, and password-bearing connections. The authority client
 must be separately approved and federated to the ServiceAccount; validation
 does not establish that its federation or database grants exist.
 
-The current P1 runner executes
-`--privileged-project-setup` in the attested Projects Config pod, so that
-process must receive the approved authority configuration before setup can
-work. Adding it requires a separately reviewed configuration, workload
-identity, and deployment decision. Do not grant authority writes to the
-runtime principal, reuse migration credentials, or change Broker trust as
-a workaround. Missing authority configuration fails before the command
-opens a database connection; it does not establish the historical state
-of an invocation. See [Diagnose an indeterminate P1 project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
-for the read-only reconciliation steps.
+The P1 runner no longer runs `--privileged-project-setup`. It creates the
+fixture project and its Owner and Orchestrator assignments through the
+public API with the signed-in setup token. The command remains available for
+operators. Don't reuse migration credentials or change Broker trust as a
+workaround for a missing authority configuration. Missing authority
+configuration fails before the command opens a database connection; it
+does not establish the historical state of an invocation. See
+[Diagnose an indeterminate P1 project setup](../guide/troubleshooting.md#diagnose-an-indeterminate-p1-project-setup)
+for the reconciliation steps.
 
 The provider catalog is supplied separately with the
 `ProjectsConfig__ProviderCatalog__` prefix. See
@@ -373,6 +468,30 @@ The provider catalog is supplied separately with the
 and its selection limits. The Knowledge Deployment imports the same immutable
 `projects-config-provider-catalog` ConfigMap under that prefix; it is not part
 of `knowledge-runtime-config`.
+
+## Platform component report settings
+
+`GET /api/platform/components` works without these settings, but Projects then
+reports every area that has a backend owner as `unknown` with reason
+`ownerUnavailable`. The current runtime maps don't include these settings.
+Adding them is a separate live configuration change. For the request flow, see
+[Platform components](../guide/platform-components.md).
+
+Projects & Config reads these optional settings:
+
+| Setting | Contract |
+| --- | --- |
+| `PlatformComponents__ServiceToken__TokenFile` | Absolute path of a projected service-account token whose audience is the private platform components audience. Projects reads the file on each owner call. |
+| `PlatformComponents__Owners__<owner>__BaseAddress` | HTTPS origin, with no path, of an owner service. `<owner>` is `eventsAndSessions`, `environment`, `knowledge`, `orchestrator`, or `identityBroker`. Projects trusts only the service backend CA mounted at `/var/run/service-backend-ca/ca.crt`. |
+
+Each owner service reads these optional settings. Set all three or none. When
+none is set, the owner doesn't map `GET /internal/platform/components`.
+
+| Setting | Contract |
+| --- | --- |
+| `PlatformComponents__ServiceAuthentication__Authority` | HTTPS issuer of the Projects service token. The owner reads its signing keys from OpenID Connect discovery. |
+| `PlatformComponents__ServiceAuthentication__Audience` | Private absolute HTTPS audience. It must differ from the owner's public token audience. |
+| `PlatformComponents__ServiceAuthentication__CallerSubject` | Exact `sub` claim of the Projects workload, for example `system:serviceaccount:<namespace>:<service-account>`. |
 
 ## Orchestrator settings
 
@@ -395,6 +514,58 @@ The `orchestrator-runtime-config.json` map contains:
 The policy document is YAML for the `agt.dotnet-yaml` adapter. The provider is
 platform-singleton; project configuration cannot replace it. A policy
 evaluation is not itself an action grant.
+
+## Guardrails settings
+
+The Orchestrator registers the Azure AI Content Safety Prompt Shields check
+only when the `Guardrails__PromptShields` section exists. Prompt Shields is the
+only supported Guardrails check in P2. It runs on model-turn user input.
+
+| Setting | Contract |
+| --- | --- |
+| `Guardrails__PromptShields__Endpoint` | Required HTTPS Content Safety resource endpoint, for example `https://<resource>.cognitiveservices.azure.com/`. |
+| `Guardrails__PromptShields__OptionsRevision` | Required revision matching the catalog registration. |
+| `Guardrails__PromptShields__ResourceId` | Required stable identifier for the Content Safety resource. |
+| `Guardrails__PromptShields__ResourceGeneration` | Required positive resource generation. Increase only after replacing the resource. |
+| `Guardrails__PromptShields__ProviderId` | Catalog provider ID. Defaults to `azure-prompt-shields`. |
+| `Guardrails__PromptShields__ApiVersion` | Content Safety API version. Defaults to `2024-09-01`. |
+| `Guardrails__PromptShields__RequestTimeoutSeconds` | Classifier request timeout from 1 to 60 seconds. Defaults to `10`. |
+
+The classifier authenticates with the Orchestrator workload identity and the
+`https://cognitiveservices.azure.com/.default` scope. It never reads an API
+key. Grant the Orchestrator managed identity the **Cognitive Services User**
+role on the Content Safety resource.
+
+The checks run only for runs whose accepted Projects snapshot has an ordered
+Guardrails selection. Add a Guardrails `azure-prompt-shields` registration with
+adapter version `1.0.0`, options schema version `1`, and the
+advertised capabilities `guardrails.prompt-injection.detect` and
+`guardrails.stage.user-input.content.text` to the Projects & Config provider
+catalog. Then add it to the catalog's ordered Guardrails selection. When a run
+selects Guardrails and the Orchestrator has no matching registration, model
+turns fail closed with `runtime_guardrails_unavailable`.
+
+Findings narrow the AGT decision; the classifier doesn't withhold content by
+itself. Add a rule under `rules:` in the platform policy document that denies
+`model.turn` when a finding exists. Give it a higher priority than the rule
+that allows `model.turn`:
+
+```yaml
+- name: deny-guardrails-findings
+  condition: "guardrails_finding_count > 0"
+  action: deny
+  priority: 200
+```
+
+The gate also provides the `guardrails_stage`, `guardrails_content_class`, and
+`guardrails_findings` context keys. `guardrails_findings` lists each finding as
+`code:Severity`, separated by semicolons. A detected attack has the code
+`prompt_shields.user_prompt_attack`.
+
+Apply Orchestrator migration 028 (`guardrails_evaluations`) with the explicit
+`--migrate` command before you enable the checks. The table stores one
+immutable evidence row per admitted operation. It holds digests, provider IDs,
+versions, finding codes, and the AGT outcome, and never the content.
 
 ## Events & Sessions settings
 

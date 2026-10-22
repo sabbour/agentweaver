@@ -55,9 +55,18 @@ const GROUPS = {
   },
   orchestrator: {
     SELECT: 'coordination_schema_migrations outbox_schema_migrations',
-    'SELECT,INSERT,UPDATE': 'accepted_runs coordination_sessions coordination_messages coordination_requests parent_notifications coordinator_gates executable_action_grants coordination_tree_commands coordination_idle_subscriptions coordination_execution_operations runtime_registration_heads source_control_merge_intents source_control_output_captures maf_execution_run_guards maf_execution_dispatches outbox_streams outbox_events backlog_projects backlog_tasks',
-    'SELECT,INSERT,DELETE': 'backlog_dependencies',
-    'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots',
+    // Migration 023 grants mutable requests and append-only cancellation receipts separately.
+    // Migration 024 grants private Chief of Staff rows; only Priority links are deleted.
+    // Migration 025 grants caller-specific dismissal receipts as append-only rows.
+    // Migration 026 adds backlog task columns only; 027 grants issue sync settings and receipts.
+    // Migration 028 grants the Guardrails evidence table insert-only, because evidence is append-only.
+    // Migration 029 grants spend_budget_reservations and spend_budget_accounting_cursors without DELETE;
+    // their guard triggers also reject deletes and allow only forward updates.
+    // Migration 030 grants append-only plan promotion and task origin rows.
+    // Migration 031 grants caller dismissals of promotion notices insert-only; a dismissal is never undone.
+    'SELECT,INSERT,UPDATE': 'accepted_runs coordination_sessions coordination_messages coordination_requests parent_notifications coordinator_gates executable_action_grants coordination_tree_commands coordination_idle_subscriptions coordination_execution_operations runtime_registration_heads source_control_merge_intents source_control_output_captures maf_execution_run_guards maf_execution_dispatches outbox_streams outbox_events backlog_projects backlog_tasks project_run_requests chief_of_staff_priority_lists chief_of_staff_priorities issue_sync_projects issue_sync_receipts spend_budget_reservations spend_budget_accounting_cursors',
+    'SELECT,INSERT,DELETE': 'backlog_dependencies chief_of_staff_priority_links',
+    'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots project_run_cancellations chief_of_staff_conversations user_notification_dismissals guardrails_evaluations backlog_plan_promotions backlog_task_origins user_notification_promotion_dismissals',
   },
 };
 
@@ -144,6 +153,13 @@ const FUNCTIONS = {
     'enforce_suspend_resume_operation_phase()',
     'reject_session_consistency_manifest_mutation()',
     'reject_row_lock_record_update()',
+    // Trigger function that keeps Guardrails evidence rows immutable.
+    'reject_guardrails_evaluation_mutation()',
+    // Spend budget trigger functions: reservations only move from outstanding to retired, cursors only
+    // move forward, rows cannot be deleted, and both tables reject TRUNCATE.
+    'guard_spend_budget_reservation_mutation()',
+    'guard_spend_budget_cursor_mutation()',
+    'reject_spend_budget_truncate()',
   ],
 };
 
@@ -188,7 +204,16 @@ export function buildP1PostgresPlan() {
     formatVersion: 1,
     target: { ...P1_POSTGRES_TARGET },
     services,
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21],
+    // 022 adds completed_at; 023 adds interactive requests and cancellation with the exact grants above.
+    // 024 adds private Chief of Staff conversations and Priorities; 025 adds caller dismissal receipts;
+    // 026 adds backlog task content columns and needs no new grants; 027 adds periodic issue sync settings and receipts.
+    // 028 adds the append-only guardrails_evaluations table. 029 adds the spend budget tables.
+    // 030 adds append-only plan promotion and task origin rows with SELECT,INSERT grants.
+    // 031 adds caller dismissals of promotion notices with SELECT,INSERT grants.
+    // 033 extends existing Priority link columns and indexes; no new grants or optional 032 apply.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33],
+    // Bind the separately approved Events reporting migration into the reviewed plan hash.
+    eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',
       'A separate approval permits the five SQL login mappings, schema initialization, and exact grants.',

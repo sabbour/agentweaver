@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/suite.schema.json",
+  "title": "AgentSuite manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mediaType", "name", "agents", "toolProviderCatalog", "compositions", "buildProfiles"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0-draft"},
+    "mediaType": {"const": "application/vnd.agentsuite.manifest.v1+json"},
+    "name": {"$ref": "#/$defs/id"},
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/ref"}
+    },
+    "toolProviderCatalog": {"$ref": "#/$defs/ref"},
+    "toolProviderCompositions": {
+      "description": "Descriptor-bound references to standalone ToolProvider Sandbox Image build inputs.",
+      "type": "array",
+      "items": {
+        "description": "One exact ToolProvider composition for a provider version and platform.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "platform", "path", "descriptor"],
+        "properties": {
+          "id": {
+            "description": "ToolProvider identifier selected by the referenced composition.",
+            "$ref": "#/$defs/id"
+          },
+          "version": {
+            "description": "Exact ToolProvider version selected by the referenced composition.",
+            "$ref": "#/$defs/version"
+          },
+          "platform": {
+            "description": "Exact platform selected by the referenced composition.",
+            "$ref": "#/$defs/platform"
+          },
+          "path": {
+            "description": "Relative content path of the ToolProvider composition manifest.",
+            "$ref": "#/$defs/path"
+          },
+          "descriptor": {
+            "description": "OCI-compatible content descriptor for the ToolProvider composition manifest.",
+            "$ref": "#/$defs/descriptor"
+          }
+        }
+      }
+    },
+    "compositions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["agent", "platform", "path", "descriptor"],
+        "properties": {
+          "agent": {"$ref": "#/$defs/id"},
+          "runtimeProfile": {"$ref": "#/$defs/id"},
+          "platform": {"$ref": "#/$defs/platform"},
+          "path": {"$ref": "#/$defs/path"},
+          "descriptor": {"$ref": "#/$defs/descriptor"}
+        }
+      }
+    },
+    "buildProfiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/ref"}
+    },
+    "runtimeProfiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/ref"}
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"}
+    },
+    "extensions": {"$ref": "#/$defs/extensions"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"},
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "path": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^/\\\\][^\\\\]*$"},
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture"],
+      "properties": {
+        "os": {"const": "linux"},
+        "architecture": {"enum": ["amd64", "arm64"]},
+        "variant": false
+      }
+    },
+    "descriptor": {
+      "description": "OCI-compatible content descriptor: the mediaType, digest, and size of the exact referenced bytes, plus optional descriptive annotations.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mediaType", "digest", "size"],
+      "properties": {
+        "mediaType": {"type": "string", "minLength": 1},
+        "digest": {"$ref": "#/$defs/digest"},
+        "size": {"type": "integer", "minimum": 0},
+        "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "descriptor"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "version": {"type": "string"},
+        "path": {"$ref": "#/$defs/path"},
+        "descriptor": {"$ref": "#/$defs/descriptor"}
+      }
+    },
+    "extensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "critical"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+          "critical": {"type": "boolean"},
+          "digest": {"$ref": "#/$defs/digest"}
+        }
+      }
+    }
+  }
+}

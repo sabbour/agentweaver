@@ -115,6 +115,12 @@ Startup requires the migration and each enabled, unconditional update trigger.
 It rejects missing, disabled, conditional, column-limited, or wrong-function triggers.
 The migration does not change foreign-key deletion rules or rewrite earlier migration records.
 
+Migration `029_spend_budget_exposure.sql` adds `spend_budget_reservations` and
+`spend_budget_accounting_cursors` for scoped spend budgets. They hold dispatch exposure and
+the highest observed Events accounting cursor, not spend amounts. The runtime role needs
+`SELECT`, `INSERT`, and `UPDATE` on both tables. See
+[Scoped spend budgets and dispatch exposure](./provider-seams.md#scoped-spend-budgets-and-dispatch-exposure).
+
 Accepted WorkPlan revisions increment a persisted attempt count.
 The owner enforces the accepted `maxRevisionAttempts` limit before accepting another revision.
 A zero limit permits no revisions.
@@ -752,11 +758,9 @@ scheduling rules:
 | Publish action and surface panel | Platform publish gate and typed surface action; no second publication state machine |
 
 The [status snapshot](sessions-and-coordination.md#session-tree-and-status) carries the
-run-state and recovery-effects acceptance from
-[#1402](https://github.com/sabbour/agentweaver/issues/1402).
+run-state and recovery-effects acceptance for session status.
 The [message primitive](sessions-and-coordination.md#one-coordination-message) retains
-tracked acknowledgment and correlated replies from
-[#1406](https://github.com/sabbour/agentweaver/issues/1406), but only gate transitions
+tracked acknowledgment and correlated replies, but only gate transitions
 approve work. User surface actions arrive as typed messages; the application and
 surface model is specified in [Applications and surfaces](applications-and-surfaces.md).
 
@@ -784,8 +788,7 @@ Ephemeral harness subagents do not become nodes in the session tree.
   checkpoints, run limits, child-work joins, journal, gates, and the session tree.
   Start persona harnesses against exact-SHA AKS deployments at the end of P1 and continue them through cutover.
 - **P2 — Parity and cutover:** close the
-  [#1405](https://github.com/sabbour/agentweaver/issues/1405) behavior-guarantee
-  list, complete application `live`/`preview`/`published` stages and the publish
+  0.x behavior-guarantee list, complete application `live`/`preview`/`published` stages and the publish
   gate, enforce budgets and all required surface actions through the separate Canvas
   boundary, and pass API, UI, and MCP
   harnesses on an exact-SHA AKS deployment.

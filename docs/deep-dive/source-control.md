@@ -89,6 +89,12 @@ method. GitHub's confirmation supplies the merge commit. Workflow approval and
 repository serialization remain owner responsibilities; green checks alone
 do not create approval.
 
+When a run creates or reuses a pull request, the Orchestrator records the
+number, URL, provider title, state, head and base, run, and disposition. The
+record is written only after optional migration 032 is applied; before that,
+the write is skipped and the create or reuse result is unchanged. The project
+pull request list reads these records and makes no provider call.
+
 ## Admit webhooks through the owner path
 
 `GitHubWebhookSignatureVerifier.VerifyRawBody` verifies the `sha256=` keyed

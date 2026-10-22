@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/eval-case.schema.json",
+  "title": "AgentSuite authored evaluation case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mediaType", "id", "input", "assertions"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0-draft"},
+    "mediaType": {"const": "application/vnd.agentsuite.eval.case.v1+json"},
+    "id": {"$ref": "#/$defs/id"},
+    "input": {"type": "string", "pattern": "\\S"},
+    "runs": {"type": "integer", "minimum": 1},
+    "minPasses": {"type": "integer", "minimum": 1},
+    "assertions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {"$ref": "#/$defs/assertion"}
+    }
+  },
+  "dependentRequired": {
+    "minPasses": ["runs"]
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"},
+    "line": {"type": "string", "pattern": "\\S", "not": {"pattern": "[\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]"}},
+    "judgeIdentity": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[ -~]*[!-~][ -~]*$"},
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "type": {"type": "string"},
+        "critical": {"type": "boolean"},
+        "value": {"type": "string"},
+        "pattern": {"type": "string", "pattern": "\\S", "maxLength": 1024},
+        "tool": {"$ref": "#/$defs/line"},
+        "rubric": {"type": "string", "pattern": "\\S", "maxLength": 4096, "not": {"pattern": "[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f]"}},
+        "minScore": {"type": "integer", "minimum": 0, "maximum": 100},
+        "judgeModel": {"$ref": "#/$defs/judgeIdentity"},
+        "judgeVersion": {"$ref": "#/$defs/judgeIdentity"}
+      },
+      "oneOf": [
+        {
+          "required": ["value"],
+          "properties": {
+            "type": {"enum": ["contains", "notContains"]},
+            "value": {"$ref": "#/$defs/line"},
+            "pattern": false, "tool": false, "rubric": false, "minScore": false, "judgeModel": false, "judgeVersion": false
+          }
+        },
+        {
+          "required": ["pattern"],
+          "properties": {
+            "type": {"const": "regex"},
+            "value": false, "tool": false, "rubric": false, "minScore": false, "judgeModel": false, "judgeVersion": false
+          }
+        },
+        {
+          "required": ["tool"],
+          "properties": {
+            "type": {"enum": ["toolCalled", "toolNotCalled"]},
+            "value": false, "pattern": false, "rubric": false, "minScore": false, "judgeModel": false, "judgeVersion": false
+          }
+        },
+        {
+          "required": ["rubric", "minScore", "judgeModel", "judgeVersion"],
+          "properties": {
+            "type": {"const": "llmJudge"},
+            "value": false, "pattern": false, "tool": false
+          }
+        },
+        {
+          "required": ["critical", "value"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$",
+              "not": {"enum": ["contains", "notContains", "regex", "toolCalled", "toolNotCalled", "llmJudge"]}
+            },
+            "critical": {"const": false},
+            "value": {"type": "string", "pattern": "\\S"},
+            "pattern": false, "tool": false, "rubric": false, "minScore": false, "judgeModel": false, "judgeVersion": false
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,4 +1,6 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Abstractions;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Projects.Config;
 
@@ -84,6 +86,25 @@ public static class ProjectConfigEndpoints
             return Results.Ok(ProjectCastingCatalog.Roles);
         }).WithName("ListProjectCastingRoles");
 
+        // Blueprint routes are not project-scoped: any signed-in user can browse and check blueprints.
+        // Neither route changes state; applying a blueprint goes through the project casting proposal route.
+        var blueprints = app.MapGroup("/api/blueprints").RequireAuthorization();
+        blueprints.MapGet("/", (HttpContext context) =>
+        {
+            // Availability can change between releases, so clients must not cache the list.
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(ProjectBlueprintCatalog.List());
+        }).WithName("ListBlueprints");
+
+        blueprints.MapPost("/validate", (ValidateBlueprintRequest request, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            // A missing blueprint is a bad request; an invalid blueprint is a 200 with Valid = false and its errors.
+            return request.Blueprint is null
+                ? ToProblem(ProjectConfigException.Invalid("invalid_blueprint_request", "A blueprint is required."))
+                : Results.Ok(ProjectBlueprintCatalog.Validate(request.Blueprint));
+        }).WithName("ValidateBlueprint");
+
         var projects = app.MapGroup("/api/projects").RequireAuthorization();
 
         projects.MapPost("/", async (
@@ -168,6 +189,89 @@ public static class ProjectConfigEndpoints
                     request.Name,
                     request.State,
                     cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapGet("/{projectId}/role-assignments", async (
+            string projectId,
+            HttpContext context,
+            ProjectRoleAssignmentService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_request", "This operation does not accept query parameters.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.ListAsync(caller, projectId, cancellationToken)
+                    .ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapPost("/{projectId}/role-assignments", async (
+            string projectId,
+            AssignProjectRoleRequest request,
+            HttpContext context,
+            ProjectRoleAssignmentService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_request", "This operation does not accept query parameters.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var assignment = await service.AssignAsync(caller, projectId, request, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Created(
+                    $"/api/projects/{assignment.ProjectId}/role-assignments/{assignment.AssignmentId:D}",
+                    assignment);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapDelete("/{projectId}/role-assignments/{assignmentId:guid}", async (
+            string projectId,
+            Guid assignmentId,
+            HttpContext context,
+            ProjectRoleAssignmentService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Keys.Any(key => key != "expectedRevision") ||
+                    context.Request.Query["expectedRevision"].Count != 1 ||
+                    !long.TryParse(
+                        context.Request.Query["expectedRevision"].ToString(),
+                        System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var expectedRevision))
+                    throw ProjectConfigException.Invalid(
+                        "invalid_expected_revision", "One expectedRevision query parameter is required.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.RevokeAsync(
+                    caller, projectId, assignmentId, expectedRevision, cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
             {
@@ -297,6 +401,38 @@ public static class ProjectConfigEndpoints
             }
             catch (ProjectConfigException exception)
             {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapPost("/{projectId}/casting/proposals/blueprint", async (
+            string projectId,
+            CreateBlueprintProjectCastingProposalRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                // The service checks casting write permission and the expected revision; this only creates a
+                // pending proposal, and nothing changes until it is confirmed.
+                var result = await service.CreateBlueprintCastingProposalAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    request.ExpectedConfigurationRevision,
+                    request.BlueprintId,
+                    request.Blueprint,
+                    cancellationToken).ConfigureAwait(false);
+                // Point Location at the new proposal; the body also carries the unresolved skill bindings.
+                return Results.Created(
+                    $"/api/projects/{projectId}/casting/proposals/{result.Proposal.ProposalId}",
+                    result);
+            }
+            catch (ProjectConfigException exception)
+            {
+                // Map known service failures to their problem responses.
                 return ToProblem(exception);
             }
         });
@@ -452,6 +588,7 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        // Match the public Gateway bound before binding a transfer payload.
         projects.MapPost("/{projectId}/casting/import", async (
             string projectId,
             ImportProjectCastingTransferRequest request,
@@ -471,6 +608,127 @@ public static class ProjectConfigEndpoints
                 return Results.Created(
                     $"/api/projects/{projectId}/casting/proposals/{proposal.ProposalId}",
                     proposal);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
+
+        // Validates an AgentSuite archive and stages its agents as one casting proposal. The 24 MiB request
+        // limit fits a 16 MiB archive after base64 encoding (about 21.3 MiB) plus the JSON fields around it.
+        projects.MapPost("/{projectId}/agentsuite-imports", async (
+            string projectId,
+            ImportProjectAgentSuiteRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                // Import results include proposal data, so proxies and browsers must not cache them.
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                // The object store is optional in this service. Without it there is nowhere to keep blobs: 503.
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                var result = await service.ImportAgentSuiteAsync(
+                    caller, projectId, request, store, cancellationToken).ConfigureAwait(false);
+                // No proposal means every agent already exists unchanged: 200. Otherwise 201 with the proposal URL.
+                return result.Proposal is null
+                    ? Results.Ok(result)
+                    : Results.Created(
+                        $"/api/projects/{projectId}/casting/proposals/{result.Proposal.ProposalId}",
+                        result);
+            }
+            catch (AgentSuiteImportRejectedException exception)
+            {
+                // Invalid archive: 422 with every validation error line, so the author can fix them all at once.
+                return Results.Problem(
+                    title: "agentsuite_invalid",
+                    detail: exception.Message,
+                    statusCode: StatusCodes.Status422UnprocessableEntity,
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["code"] = exception.Code,
+                        ["errors"] = exception.Errors,
+                    });
+            }
+            catch (ProjectConfigException exception)
+            {
+                // Authorization, stale revision, conflict and storage errors keep their own status code.
+                return ToProblem(exception);
+            }
+        }).WithMetadata(new RequestSizeLimitAttribute(24 * 1024 * 1024));
+
+        // Read-only: returns the stored import record. The service checks the caller's read role.
+        projects.MapGet("/{projectId}/agentsuite-imports/{sourceIdentity}", async (
+            string projectId,
+            string sourceIdentity,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                return Results.Ok(await service.GetAgentSuiteImportAsync(
+                    caller, projectId, sourceIdentity, store, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        // Read-only: returns the policy bound to one imported agent. Reading it never enforces it.
+        projects.MapGet("/{projectId}/agentsuite-agents/{effectiveAgentId}/policy", async (
+            string projectId,
+            string effectiveAgentId,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                return Results.Ok(await service.GetAgentSuiteAgentPolicyAsync(
+                    caller, projectId, effectiveAgentId, store, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        // This owner-only helper applies the existing Orchestrator role gate without exposing platform defaults.
+        projects.MapPut("/{projectId}/runs/{runId}/interactive-selection", async (
+            string projectId,
+            string runId,
+            InteractiveRunSelectionRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                return Results.Ok(await service.AcceptInteractiveRunSelectionAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId, runId, request, cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
             {
@@ -501,7 +759,35 @@ public static class ProjectConfigEndpoints
             }
         });
 
-        projects.MapGet("/{projectId}/runs/{runId}/selection", async (
+        // Cancellation reads use fresh project-access roles without granting Orchestrator admission.
+        foreach (var forCancellation in new[] { false, true })
+            projects.MapGet(forCancellation
+                ? "/{projectId}/runs/{runId}/cancellation-selection"
+                : "/{projectId}/runs/{runId}/selection", async (
+                string projectId,
+                string runId,
+                HttpContext context,
+                ProjectsConfigService service,
+                ProjectAuthorizationOwner authorizationOwner,
+                CancellationToken cancellationToken) =>
+            {
+                try
+                {
+                    context.Response.Headers.CacheControl = "no-store";
+                    var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Ok(await service.GetRunSelectionAsync(
+                        caller, projectId, runId, cancellationToken, forCancellation).ConfigureAwait(false));
+                }
+                catch (ProjectConfigException exception)
+                {
+                    return ToProblem(exception);
+                }
+            });
+
+        // Returns the current project-scope spend budgets for one accepted run. Orchestrator calls this before
+        // each new dispatch.
+        projects.MapGet("/{projectId}/runs/{runId}/spend-budgets", async (
             string projectId,
             string runId,
             HttpContext context,
@@ -511,12 +797,14 @@ public static class ProjectConfigEndpoints
         {
             try
             {
+                // Budgets can change at any time, so no cache may keep an older answer.
                 context.Response.Headers.CacheControl = "no-store";
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
-                return Results.Ok(await service.GetRunSelectionAsync(
+                return Results.Ok(await service.GetCurrentProjectSpendBudgetsAsync(
                     caller, projectId, runId, cancellationToken).ConfigureAwait(false));
             }
+            // Map known configuration errors, such as 403, 404, and 409, to problem responses.
             catch (ProjectConfigException exception)
             {
                 return ToProblem(exception);
@@ -561,6 +849,28 @@ public static class ProjectConfigEndpoints
                 return ToProblem(exception);
             }
         });
+
+        // Reports active platform components for TenantAdmin or PlatformAdmin callers.
+        app.MapGet("/api/platform/components", async (
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            [Microsoft.AspNetCore.Mvc.FromServices] PlatformComponentCollector collector,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                await service.EnsurePlatformComponentReaderAsync(caller, cancellationToken).ConfigureAwait(false);
+                return Results.Ok(await collector.CollectAsync(cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).RequireAuthorization();
 
         if (enableBrokerRunBinding)
         {
@@ -607,6 +917,13 @@ public static class ProjectConfigEndpoints
             detail: exception.Message,
             statusCode: exception.StatusCode,
             extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+
+    // Retained AgentSuite blobs need the optional object store (ProjectsConfig:SkillContent:ContainerUri).
+    // 503 tells the caller this is a deployment setting, not a problem with the request.
+    private static ProjectConfigException AgentSuiteStoreUnavailable() =>
+        new("agentsuite_store_unavailable",
+            "AgentSuite import needs object storage. Configure ProjectsConfig:SkillContent:ContainerUri.",
+            StatusCodes.Status503ServiceUnavailable);
 
     /// <summary>Resolves the bearer principal and optional tenant selector through the Projects authority owner.</summary>
     private static Task<ProjectAuthorizationContext> ResolveCallerAsync(

@@ -731,19 +731,26 @@
       "agentweaver.abstractions": {
         "type": "Project"
       },
+      "agentweaver.identity": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[1.2.0, )"
+        }
+      },
       "agentweaver.objectstore.azureblob": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
           "Azure.Storage.Blobs": "[12.26.0, )"
         }
       },
       "agentweaver.projects.config": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )",
-          "Agentweaver.ObjectStore.AzureBlob": "[0.0.0, )",
-          "Agentweaver.Providers": "[0.0.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
+          "Agentweaver.Identity": "[1.4.0, )",
+          "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
+          "Agentweaver.Providers": "[1.1.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
           "Microsoft.EntityFrameworkCore": "[10.0.12, )",
@@ -754,7 +761,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Abstractions": "[1.2.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
         }

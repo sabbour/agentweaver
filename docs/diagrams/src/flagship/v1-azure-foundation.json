@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "Azure resource and evidence dependencies",
-  "alt": "Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. Identity runtime-table permissions are separate source definitions, not live bootstrap evidence. No live deployment or P0 completion is claimed.",
+  "alt": "Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. The separate P1 migration Jobs use their migration identity; the Events & Sessions Job mirrors its runtime Sessions and Messaging settings because the host validates them before migration. Identity runtime-table permissions are separate source definitions, not live bootstrap evidence. No live deployment or P0 completion is claimed.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [],
@@ -105,7 +105,7 @@
     },
     {
       "id": "native-receipt",
-      "label": "Native #1784 receipt",
+      "label": "Probe receipt",
       "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof",
       "icon": "document",
       "fluentIcon": "document",
@@ -152,7 +152,7 @@
       { "id": "monitor", "type": "card", "position": { "x": 860, "y": 1000 }, "data": { "label": "Azure Monitor", "subLabel": "Fresh AppDependencies/AppRequests query after Job completion" } },
       { "id": "probe-identity", "type": "card", "position": { "x": 80, "y": 540 }, "data": { "label": "Foundation Probe identity", "subLabel": "Dedicated user-assigned managed identity" } },
       { "id": "job", "type": "card", "position": { "x": 500, "y": 770 }, "data": { "label": "Foundation Probe Job", "subLabel": "One completed Job; pod UID/owner, namespace, SA, projected ID, success" } },
-      { "id": "native-receipt", "type": "card", "position": { "x": 80, "y": 770 }, "data": { "label": "Native #1784 receipt", "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof" } },
+      { "id": "native-receipt", "type": "card", "position": { "x": 80, "y": 770 }, "data": { "label": "Probe receipt", "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof" } },
       { "id": "image-receipt", "type": "card", "position": { "x": 80, "y": 1000 }, "data": { "label": "CI image receipt", "subLabel": "Source SHA/tree-bound registry manifest digest" } },
       { "id": "acceptance-consumer", "type": "card", "position": { "x": 500, "y": 1000 }, "data": { "label": "External evidence gate", "subLabel": "Complete evidence => deployedAcceptance; otherwise blocked" } },
       { "id": "egress", "type": "card", "position": { "x": 860, "y": 1230 }, "data": { "label": "Probe egress policy", "subLabel": "Overlay-scoped NetworkPolicy" } }

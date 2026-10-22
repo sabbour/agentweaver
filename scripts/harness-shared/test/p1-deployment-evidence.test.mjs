@@ -81,8 +81,8 @@ function digest(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
-function imageMetadata(name, treeLabel) {
-  const labels = { 'org.opencontainers.image.revision': sourceSha };
+function imageMetadata(name, treeLabel, revision = sourceSha) {
+  const labels = { 'org.opencontainers.image.revision': revision };
   if (treeLabel !== undefined) labels['io.agentweaver.source-tree'] = treeLabel;
   const config = Buffer.from(JSON.stringify({
     os: 'linux',
@@ -100,7 +100,7 @@ function imageMetadata(name, treeLabel) {
 }
 
 /** Build deterministic live objects and registry bytes for exact service-source readback tests. */
-function fixture({ webTreeLabel = sourceTree, omitWebTreeLabel = false, gatewayIndex = false, gatewayRuntimeDigest } = {}) {
+function fixture({ webTreeLabel = sourceTree, omitWebTreeLabel = false, gatewayIndex = false, gatewayRuntimeDigest, reused = {} } = {}) {
   const items = [{
     apiVersion: 'v1',
     kind: 'ConfigMap',
@@ -111,8 +111,9 @@ function fixture({ webTreeLabel = sourceTree, omitWebTreeLabel = false, gatewayI
   const registryBodies = new Map();
   let gatewayChildDigest = null;
   for (const name of serviceNames) {
-    const metadata = imageMetadata(name,
-      name === 'web' ? (omitWebTreeLabel ? undefined : webTreeLabel) : sourceTree);
+    const metadata = reused[name]
+      ? imageMetadata(name, reused[name].sourceTree, reused[name].sourceSha)
+      : imageMetadata(name, name === 'web' ? (omitWebTreeLabel ? undefined : webTreeLabel) : sourceTree);
     const repository = `sabbour/agentweaver/${name}`;
     let registryManifest = metadata.manifest;
     let registryDigest = metadata.manifestDigest;
@@ -222,6 +223,7 @@ function fixture({ webTreeLabel = sourceTree, omitWebTreeLabel = false, gatewayI
       id: `Agentweaver.${name}`,
       name,
       image,
+      ...(reused[name] ? { reusedFrom: reused[name] } : {}),
     });
   }
   const hostMetadata = imageMetadata('agenthost', sourceTree);
@@ -873,6 +875,48 @@ test('records native service UIDs and verifies pod imageIDs plus registry source
   assert.ok(imageRequests.length >= 18);
   assert.ok(imageRequests.every(call =>
     new Headers(call.options.headers).get('authorization') === `Bearer ${registryToken}`));
+});
+
+test('verifies a reused image against the labels of the commit that built it', async () => {
+  const buildSha = 'e'.repeat(40);
+  const buildTree = 'f'.repeat(40);
+  const observe = data => observeP1ServiceDeployments({
+    context, namespace, sourceSha, sourceTree, images: data.images, providerCatalog,
+    readObjects: async () => data.items,
+    fetchImpl: createRegistryFetch(data.registryBodies, []),
+    now: () => '2026-10-13T00:00:00.000Z',
+  });
+  const data = fixture({ reused: { gateway: { sourceSha: buildSha, sourceTree: buildTree } } });
+  const result = await observe(data);
+  assert.equal(result.status, 'passed');
+  const gateway = result.services.find(item => item.componentId === 'Agentweaver.gateway');
+  assert.equal(gateway.pods[0].registry.sourceSha, buildSha);
+  assert.equal(gateway.pods[0].registry.sourceTree, buildTree);
+  assert.equal(result.services.find(item => item.componentId === 'Agentweaver.web').pods[0].registry.sourceSha, sourceSha);
+
+  const unclaimed = fixture({ reused: { gateway: { sourceSha: buildSha, sourceTree: buildTree } } });
+  delete unclaimed.images.find(image => image.name === 'gateway').reusedFrom;
+  await assert.rejects(observe(unclaimed));
+});
+
+test('accepts a release publication that reuses an image tagged by its original build source', () => {
+  const buildSha = 'e'.repeat(40);
+  const fixtureData = releasePublicationFixture();
+  const id = fixtureData.publication.planned.find(entry => entry.id !== 'Agentweaver.AgentHost').id;
+  const component = fixtureData.manifest.components.find(entry => entry.id === id);
+  const reused = { sourceSha: buildSha, sourceTree: 'f'.repeat(40), inputFingerprint: `sha256:${'1'.repeat(64)}`, receiptSourceSha: buildSha };
+  const plan = fixtureData.publication.planned.find(entry => entry.id === id);
+  plan.destination = `ghcr.io/sabbour/${componentImageRepository(id)}:${componentImageTag(component.version, buildSha)}`;
+  plan.reused = reused;
+  fixtureData.publication.published.find(entry => entry.id === id).reused = structuredClone(reused);
+  const images = validateP1PublicationReceipt(fixtureData.publication, fixtureData.manifest, sourceSha, sourceTree);
+  assert.deepEqual(images.find(image => image.id === id).reusedFrom, { sourceSha: buildSha, sourceTree: reused.sourceTree });
+
+  const sourceTag = structuredClone(fixtureData.publication);
+  sourceTag.planned.find(entry => entry.id === id).destination =
+    `ghcr.io/sabbour/${componentImageRepository(id)}:${componentImageTag(component.version, sourceSha)}`;
+  assert.throws(() => validateP1PublicationReceipt(sourceTag, fixtureData.manifest, sourceSha, sourceTree),
+    /release manifest disagree/);
 });
 
 test('fails explicitly when anonymous GHCR token exchange fails or omits its token', async () => {

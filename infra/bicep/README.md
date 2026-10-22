@@ -47,7 +47,7 @@ The Blob zone is shared with the dedicated storage Private Endpoint.
 Private Logs queries require an approved VNet-connected Job, VM, or VPN and
 correct private DNS. An ARM query cannot use Private Link.
 The default-deny Kubernetes base does not provide exporter egress.
-The #1784 Job overlay owns explicit egress and executable runtime proof.
+The foundation probe Job overlay owns explicit egress and executable runtime proof.
 
 ## Local compilation
 
@@ -84,7 +84,7 @@ but does not query existing credentials to distinguish creates from updates.
 
 ## Identity and PostgreSQL
 
-The `foundation-probe` UAMI and ServiceAccount are reserved for the #1784
+The `foundation-probe` UAMI and ServiceAccount are reserved for the foundation probe
 acceptance-only Job. Identity is the product host; Relay is a persistence
 library and release is a CLI. The identity module defines separate
 `identity-broker` runtime and `identity-broker-migration` UAMIs and federated
@@ -124,7 +124,7 @@ The Identity host uses native asynchronous Npgsql password-provider callbacks
 with its explicit `WorkloadIdentityCredential` for each new physical
 connection. Startup verifies the schema and migration state but never applies
 migrations or provisions database roles. The
-[infrastructure specification](../../docs/specs/1777-azure-p0-infrastructure.md)
+[infrastructure specification](../../docs/specs/azure-p0-infrastructure.md)
 records the full acceptance boundary. No live database or Azure operation is
 part of these definitions.
 
@@ -133,10 +133,31 @@ Storage Blob Data Contributor only on the private `session-material` container.
 It does not grant that identity access to the storage account or other
 containers.
 
+`p1-postgres-migration-identity.bicep` defines the P1 migration identity,
+`agentweaver-id-p1-postgres-migration`, and one federated credential for the
+`agentweaver:p1-postgres-migration` ServiceAccount. It assigns no Azure role.
+Its parameters are `namePrefix`, `tags`, and the 40-character `sourceSha`. The
+[database maintenance runner](../../docs/guide/database-maintenance.md) deploys
+it to the existing resource group. A rerun changes nothing.
+
+`db-maintenance-ci-identity.bicep` defines the identity that the database
+maintenance workflow signs in as, `agentweaver-id-db-maintenance`. Its only
+federated credential trusts GitHub Actions jobs that use the
+`v1-db-maintenance` environment. It assigns Reader on the resource group, AKS
+Cluster User on the cluster, and no custom Azure role. The setup script applies
+a Kubernetes Role and RoleBinding only in the `agentweaver` namespace. The Role
+allows the maintenance Jobs, pod logs, ConfigMaps, Leases, ServiceAccounts,
+Cilium network policies, and the `orchestrator` and `events-and-sessions`
+Deployments used by the runner. The identity cannot deploy Azure resources,
+assign roles, or connect to PostgreSQL. Its parameters are `namePrefix`,
+`tags`, `sourceSha`, `githubRepository`, and `githubEnvironment`.
+`npm run db:maintenance:setup` deploys the identity and checks the Azure
+assignments, then applies and reads back the Kubernetes authorization.
+
 Projects & Config applies migrations as its schema owner. After migration
 `20261009021400_AddCastingAuthorityLockFunction` is applied, an approved
-operator can grant the runtime role only `EXECUTE` on the exact casting
-authority-lock function:
+operator can grant the runtime role `EXECUTE` on the exact casting
+authority-lock function and the project role-assignment write set:
 
 ```powershell
 psql "$PROJECTS_CONFIG_DATABASE_URL" `
@@ -144,9 +165,18 @@ psql "$PROJECTS_CONFIG_DATABASE_URL" `
   -f infra\bicep\postgres-projectsconfig-runtime-grants.sql
 ```
 
-This file does not grant access to data tables. Keep
-`tenant_memberships` and `project_role_assignments` SELECT-only for runtime;
-do not add UPDATE privileges to enable row locking. The function is owned by
-the migration/schema owner, returns authorization status only, and is not
-executable by `PUBLIC`. The SQL file is an operator definition, not an
-automatic grant or deployment.
+The file defines these data-table grants for the project role-assignment API:
+
+- `INSERT` on `projects_config.project_role_assignments`.
+- `UPDATE (state, revision, revoked_by, revoked_at)` on
+  `projects_config.project_role_assignments`.
+- `INSERT` on `projects_config.authority_audit`.
+
+It grants no `DELETE` and no write access to `tenant_memberships`. The API
+allows these writes only for a current TenantAdmin and audits each change in
+the same transaction. Don't add other privileges to enable row locking. The
+function is owned by the migration/schema owner, returns authorization status
+only, and is not executable by `PUBLIC`. The SQL file is an operator
+definition, not an automatic grant or deployment. Each live grant needs a
+separate approval. See
+[Runtime authority writes](../../docs/reference/runtime-configuration.md#runtime-authority-writes).

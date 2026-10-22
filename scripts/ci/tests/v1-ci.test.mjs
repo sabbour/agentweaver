@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { classify } from '../v1-changes.mjs';
-import { brokerShardCount, partitionMethods, testMatrix, verifyTrx } from '../v1-test-plan.mjs';
+import { brokerShardCount, loadBrokerWeights, measureWeights, partitionMethods, testMatrix, verifyTrx } from '../v1-test-plan.mjs';
 import { suites } from '../../coverage/dotnet.mjs';
 
 const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
@@ -19,7 +19,8 @@ test('metadata-only and unrelated workflows skip expensive validation; unknown i
 
 test('source, lockfile, Docker, browser and harness changes select all dependent validation', () => {
   for (const path of ['services/gateway/File.cs', 'tests/Broker/Test.cs', 'Directory.Build.props',
-    'global.json', 'NuGet.Config', 'packages/Library/packages.lock.json', 'deploy/k8s/test.yaml']) {
+    'global.json', 'NuGet.Config', 'packages/Library/packages.lock.json',
+    'tools/P1PostgresInitializer/packages.lock.json', 'deploy/k8s/test.yaml']) {
     const result = classify([path]);
     assert.equal(result.dotnet, true, path);
     assert.equal(result.web, true, path);
@@ -53,6 +54,42 @@ test('discovered methods and theory cases are partitioned once, deterministicall
   assert.ok(partitions.every((partition) => partition.length > 0));
   assert.throws(() => partitionMethods('No tests found'), /no Agentweaver/);
   assert.throws(() => partitionMethods('    Agentweaver.Tests.One.Test'), /empty Broker shard/);
+});
+
+test('measured weights spread slow Broker methods across shards and keep every method exactly once', () => {
+  const heavy = Array.from({ length: 8 }, (_, index) => `Agentweaver.Broker.Tests.Slow.Method${index}`);
+  const light = Array.from({ length: 40 }, (_, index) => `Agentweaver.Broker.Tests.Fast.Method${index}`);
+  const discovery = [...heavy, ...light].map((name) => `    ${name}`).join('\n');
+  const weights = { defaultSeconds: 0.2, methods: Object.fromEntries(heavy.map((name) => [name, 50])) };
+  const partitions = partitionMethods(discovery, weights);
+  assert.deepEqual(partitionMethods(discovery, weights), partitions);
+  assert.deepEqual(partitions.flat().sort(), [...heavy, ...light].sort());
+  assert.ok(partitions.every((partition) => partition.filter((name) => heavy.includes(name)).length === 2));
+  const loads = partitions.map((partition) => partition.reduce((sum, name) => sum + (weights.methods[name] ?? 0.2), 0));
+  assert.ok(Math.max(...loads) - Math.min(...loads) <= 0.2 + 1e-9);
+});
+
+test('weights are measured per method from TRX receipts with theory cases summed', () => {
+  const trx = (id, className, name, duration) =>
+    `<UnitTest name="${name}" storage="x.dll" id="${id}"><Execution id="e${id}" /><TestMethod codeBase="x.dll" className="${className}" name="${name}" /></UnitTest>` +
+    `<UnitTestResult executionId="e${id}" testId="${id}" testName="${name}(case)" duration="${duration}" outcome="Passed" />`;
+  const weights = measureWeights([
+    trx('a', 'Agentweaver.T.C', 'Slow', '00:00:30.0000000') + trx('b', 'Agentweaver.T.C', 'Slow', '00:01:00.5000000'),
+    trx('c', 'Agentweaver.T.C', 'Fast', '00:00:00.3000000'),
+  ], { source: 'unit' });
+  assert.deepEqual(weights, { source: 'unit', defaultSeconds: 0.3, methods: { 'Agentweaver.T.C.Slow': 90.5 } });
+  assert.throws(() => measureWeights(['']), /no test results/);
+});
+
+test('committed Broker weights are recorded, positive and scoped to Broker tests', () => {
+  const weights = loadBrokerWeights();
+  assert.match(weights.source, /run \d+/);
+  assert.ok(weights.defaultSeconds > 0);
+  assert.ok(Object.keys(weights.methods).length > 0);
+  for (const [method, seconds] of Object.entries(weights.methods)) {
+    assert.match(method, /^Agentweaver\.Identity\.Broker\.Tests\./);
+    assert.ok(Number.isFinite(seconds) && seconds > 0, method);
+  }
 });
 
 test('TRX receipts reject zero execution, missing counters and failures while preserving explicit opt-in skips', () => {
@@ -89,6 +126,17 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.ok(jobs.node.steps.some((step) => step.with?.name === 'v1-web-dist'));
   assert.ok(jobs.node.steps.some((step) => step.run?.includes('dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --locked-mode')));
   assert.ok(jobs.node.steps.some((step) => step.run?.includes('dotnet restore apps/web/host/Agentweaver.Web.Host.csproj --locked-mode')));
+  // Earlier release validation failures must not skip prerequisites for tests that still execute.
+  const prerequisiteCondition = "${{ !cancelled() && needs.changes.outputs.node == 'true' }}";
+  for (const prerequisite of jobs.node.steps.filter((step) =>
+    step.uses === 'actions/setup-dotnet@v4' ||
+    step.name === 'Cache NuGet packages for executable tooling fixtures' ||
+    step.name === 'Restore dependencies required by Linux collector and Web image contracts' ||
+    step.name === 'Verify locked P1 PostgreSQL initializer dependencies' ||
+    step.uses === 'actions/download-artifact@v4' ||
+    step.name === 'Preload pinned ASP.NET runtime image for release validator')) {
+    assert.equal(prerequisite.if, prerequisiteCondition);
+  }
   assert.match(workflow, /org.opencontainers.image.revision/);
   assert.match(workflow, /io.agentweaver.source-tree/);
   assert.ok(jobs.dotnet.steps.some((step) => step.run?.includes('install --with-deps chromium')));
@@ -98,6 +146,23 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.match(jobs.coverage.if, /inputs.collect_coverage == true/);
   assert.doesNotMatch(workflow, /github.event_name != 'pull_request'/);
   assert.ok(jobs.coverage.steps.some((step) => step.run === 'node scripts/coverage/dotnet.mjs --combine'));
+});
+
+test('initializer lock verification runs in the release contract job for dependency and version changes', async () => {
+  const { parse } = await import('yaml');
+  const step = parse(workflow).jobs.node.steps.find((entry) =>
+    entry.name === 'Verify locked P1 PostgreSQL initializer dependencies');
+  assert.equal(step.run, 'dotnet restore tools/P1PostgresInitializer/P1PostgresInitializer.csproj --locked-mode');
+  assert.equal(step.if, "${{ !cancelled() && needs.changes.outputs.node == 'true' }}");
+  for (const path of [
+    'tools/P1PostgresInitializer/packages.lock.json',
+    'tools/P1PostgresInitializer/P1PostgresInitializer.csproj',
+    'packages/Agentweaver.Abstractions/Agentweaver.Abstractions.csproj',
+    'packages/Agentweaver.Identity/Agentweaver.Identity.csproj',
+    'services/events-and-sessions/Agentweaver.EventsAndSessions/Agentweaver.EventsAndSessions.csproj',
+  ]) {
+    assert.equal(classify([path]).node, true, path);
+  }
 });
 
 test('installed web dependencies are cached only on an exact lockfile and Node.js key', async () => {

@@ -76,9 +76,10 @@ journeys call the corresponding discovered Gateway-derived MCP tool.
 The shared CLI creates and verifies an invocation-owned project, grants,
 selection, and sessions before it supplies those receipts to the selected
 surface. It rejects caller-supplied `ownerFences` and `fixtureScope` claims.
-Cleanup revokes setup grants and archives the project only when no run
-selection was accepted; otherwise it reports `retainedPending` and preserves
-the active grants. The runner does not invoke an Orchestrator dispatch method.
+It uses the public Projects API with the signed-in setup token. Cleanup
+revokes the Orchestrator assignment, archives the project, and then revokes
+the Owner assignment. A failure after a mutating request is sent is
+indeterminate and is not retried. The runner does not invoke an Orchestrator dispatch method.
 
 Supply the same `executionIntent: "execute"` manifest and four
 `deploymentEvidence` paths documented by the API harness. `fixturePlan`

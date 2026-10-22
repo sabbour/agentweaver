@@ -3,9 +3,7 @@
 Use this article to distinguish local source checks from checks against an
 approved Azure deployment. Bicep compilation and Kubernetes rendering validate
 the checked-in configuration; neither proves that Azure resources or services
-are deployed. Deployment and smoke acceptance are tracked separately in
-[issue #1812](https://github.com/sabbour/agentweaver/issues/1812) and
-[issue #1814](https://github.com/sabbour/agentweaver/issues/1814).
+are deployed. Deployment and smoke acceptance are separate, approved operations.
 
 ## Prerequisites
 
@@ -56,6 +54,7 @@ Run these commands from the repository root:
    ```powershell
    kubectl kustomize deploy\k8s\base
    kubectl kustomize deploy\k8s\migrations\identity-broker
+   kubectl kustomize deploy\k8s\migrations\p1-postgres
    kubectl kustomize deploy\k8s\acceptance\foundation-probe
    ```
 
@@ -63,6 +62,10 @@ The commands must complete without validation errors. They do not contact
 Azure, apply SQL, create identities, execute an operator bootstrap, or prove a
 running service. Confirm the migration egress policy renders the approved
 PostgreSQL FQDN and TCP 5432 rule without a `CHANGEME` host.
+
+The P1 overlay contains the Orchestrator and Events & Sessions migration Jobs.
+The Events & Sessions Job repeats its runtime Sessions and Messaging settings
+because the host validates them before it enters `--migrate`.
 
 The Identity runtime-table compatibility tests use disposable PostgreSQL
 principals. They check the source-defined grants for compare-and-swap updates
