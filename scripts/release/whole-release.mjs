@@ -9,6 +9,11 @@ import path from 'node:path';
 import { AgentweaverClient } from '../api-harness/lib/client.mjs';
 import { createBrokerAuthProvider } from '../harness-shared/broker-auth.mjs';
 import {
+  authorizeP1InBrowser, getValidatedP1BrokerTokenActorId, P1_RUN_SCOPES,
+  registeredPortalRedirectUri, withFreshP1BrowserContext,
+} from '../harness-shared/p1-signin.mjs';
+import { validateNetworkTarget } from '../harness-shared/target-guard.mjs';
+import {
   canonicalJson, deploymentInventory, imageDigest, planDeploymentInventory,
   verifyDeploymentPreservation, verifyDeploymentReady,
 } from './image-rollout-common.mjs';
@@ -245,32 +250,273 @@ export async function checkSchemaCompatibility({ services, kubectl, deps, root, 
   return checks;
 }
 
+const REQUIRED_RUN_SCOPES = P1_RUN_SCOPES.filter(scope =>
+  !['openid', 'profile', 'email', 'offline_access'].includes(scope));
+
+function requireHttpsRoot(value, description) {
+  let target;
+  try {
+    target = validateNetworkTarget(value, { exactPath: '/' });
+  } catch {
+    wholeReleaseFail(`${description} must be an absolute HTTPS origin.`);
+  }
+  if (target.protocol !== 'https:') wholeReleaseFail(`${description} must use HTTPS.`);
+  return target;
+}
+
+function decodeWebRuntimeSettings(script) {
+  // Treat the generated assignment as data; never evaluate JavaScript from the live Web endpoint.
+  const assignment = /^window\.__AGENTWEAVER_CONFIG_BASE64__ = (\{[\s\S]*\});\s*$/.exec(script);
+  if (!assignment) wholeReleaseFail('live Web runtime configuration is not a serialized settings object.');
+  const encoded = parseJson(assignment[1], 'live Web runtime configuration');
+  if (!isRecord(encoded)) wholeReleaseFail('live Web runtime configuration is not an object.');
+  const settings = {};
+  for (const name of ['GATEWAY_URL', 'IDENTITY_BROKER_URL', 'IDENTITY_BROKER_ISSUER']) {
+    const value = encoded[name];
+    if (value === undefined) continue;
+    if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+      wholeReleaseFail(`live Web ${name} setting is not valid base64.`);
+    }
+    if (!value) continue;
+    const bytes = Buffer.from(value, 'base64');
+    if (bytes.toString('base64') !== value) wholeReleaseFail(`live Web ${name} setting is not valid base64.`);
+    try {
+      settings[name] = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      wholeReleaseFail(`live Web ${name} setting is not valid UTF-8.`);
+    }
+  }
+  return settings;
+}
+
+async function readLiveWebRuntimeSettings(webOrigin, fetchImpl) {
+  let response;
+  try {
+    response = await fetchImpl(new URL('/env-config.js', webOrigin), {
+      method: 'GET',
+      headers: { Accept: 'application/javascript' },
+      cache: 'no-store',
+      redirect: 'error',
+    });
+  } catch {
+    wholeReleaseFail('could not read the live Web runtime configuration.');
+  }
+  if (response.status !== 200) wholeReleaseFail(`live Web runtime configuration returned HTTP ${response.status}.`);
+  let script;
+  try {
+    script = await response.text();
+  } catch {
+    wholeReleaseFail('live Web runtime configuration could not be read.');
+  }
+  return decodeWebRuntimeSettings(script);
+}
+
+/**
+ * Resolve the smoke target from the live P0 Gateway and Web configuration.
+ * Manual values remain explicit overrides for the existing release command.
+ */
+export async function resolveWholeReleaseSmokeEnvironment({
+  gatewayRuntimeConfig, options, fetchImpl = globalThis.fetch,
+}) {
+  if (!isRecord(gatewayRuntimeConfig)) wholeReleaseFail('live Gateway runtime configuration is missing.');
+  const webOrigin = requireHttpsRoot(gatewayRuntimeConfig.Gateway__WebOrigin, 'live Web origin');
+  const runtimeIssuer = requireHttpsRoot(gatewayRuntimeConfig.Identity__Issuer, 'live Gateway issuer');
+  const runtimeAudience = gatewayRuntimeConfig.Identity__Audience;
+  if ((typeof runtimeAudience !== 'string' || !runtimeAudience.trim()) && !options.audience) {
+    wholeReleaseFail('live Gateway audience is missing.');
+  }
+
+  const webSettings = await readLiveWebRuntimeSettings(webOrigin, fetchImpl);
+  const configuredIssuer = webSettings.IDENTITY_BROKER_ISSUER || webSettings.IDENTITY_BROKER_URL;
+  let webIssuer;
+  if (configuredIssuer) {
+    webIssuer = requireHttpsRoot(configuredIssuer, 'live Web Identity Broker issuer');
+    if (webIssuer.href !== runtimeIssuer.href) {
+      wholeReleaseFail('live Web and Gateway Identity Broker issuers do not match.');
+    }
+    if (new URL(registeredPortalRedirectUri(webIssuer.href)).origin !== webOrigin.origin) {
+      wholeReleaseFail('live Web origin does not match the registered Identity Broker callback.');
+    }
+  } else if (!options.issuer) {
+    wholeReleaseFail('live Web Identity Broker issuer is missing.');
+  }
+
+  let discoveredGatewayOrigin;
+  if (webSettings.GATEWAY_URL) {
+    let gatewayTarget;
+    try {
+      if (webSettings.GATEWAY_URL.includes('\\')) throw new Error();
+      gatewayTarget = validateNetworkTarget(new URL(webSettings.GATEWAY_URL, webOrigin));
+    } catch {
+      wholeReleaseFail('live Web Gateway URL is invalid.');
+    }
+    if (gatewayTarget.protocol !== 'https:' || gatewayTarget.username || gatewayTarget.password
+      || gatewayTarget.search || gatewayTarget.hash
+      || gatewayTarget.pathname.replace(/\/+$/, '') !== '/api/v1'
+      || gatewayTarget.origin !== webOrigin.origin) {
+      wholeReleaseFail('live Web Gateway URL must be the same-origin HTTPS /api/v1 route.');
+    }
+    discoveredGatewayOrigin = gatewayTarget.origin;
+  } else if (!options.gatewayUrl) {
+    wholeReleaseFail('live Web Gateway URL is missing.');
+  }
+
+  return {
+    gatewayUrl: options.gatewayUrl
+      ? requireHttpsRoot(options.gatewayUrl, 'Gateway URL override').origin
+      : discoveredGatewayOrigin,
+    issuer: options.issuer
+      ? requireHttpsRoot(options.issuer, 'Identity Broker issuer override').href
+      : webIssuer.href,
+    audience: options.audience ?? runtimeAudience,
+    webOrigin: webOrigin.origin,
+  };
+}
+
+function requireAuthorizationContext(value, { issuer, actorId, tenantId }) {
+  const expectedKeys = [
+    'contractVersion', 'issuer', 'actorId', 'tenantId', 'membershipRevision',
+    'boundProjectId', 'boundRunId', 'effectiveAuthority',
+  ];
+  const keysMatch = isRecord(value)
+    && Object.keys(value).length === expectedKeys.length
+    && expectedKeys.every(key => Object.hasOwn(value, key));
+  if (!keysMatch || value.contractVersion !== 1
+    || value.issuer !== issuer || value.actorId !== actorId
+    || typeof value.tenantId !== 'string' || !value.tenantId.trim()
+    || !Number.isSafeInteger(value.membershipRevision) || value.membershipRevision < 1
+    || value.boundProjectId !== null || value.boundRunId !== null
+    || !Array.isArray(value.effectiveAuthority)
+    || (tenantId !== undefined && value.tenantId !== tenantId)) {
+    wholeReleaseFail('Gateway returned an invalid authorization context for the signed-in actor.');
+  }
+  return value.tenantId;
+}
+
+function selectSmokeProject(projects, requestedProjectId) {
+  if (!Array.isArray(projects)) wholeReleaseFail('Gateway project list is not an array.');
+  const active = projects.filter(project => isRecord(project)
+    && typeof project.projectId === 'string' && project.projectId.trim()
+    && project.state === 'active');
+  const ids = active.map(project => project.projectId);
+  if (new Set(ids).size !== ids.length) wholeReleaseFail('Gateway project list contains duplicate active project IDs.');
+  if (requestedProjectId) {
+    if (!active.some(project => project.projectId === requestedProjectId)) {
+      wholeReleaseFail('the requested smoke project is not an active project for the signed-in actor.');
+    }
+    return requestedProjectId;
+  }
+  active.sort((left, right) => left.projectId.localeCompare(right.projectId));
+  if (!active.length) wholeReleaseFail('the signed-in actor has no active project for Gateway smoke checks.');
+  return active[0].projectId;
+}
+
+/**
+ * Establish a P1 run-scope identity and discover an authorized project before any image is patched.
+ */
+export async function prepareGatewaySmokeContext({
+  gatewayRuntimeConfig,
+  options,
+  fetchImpl = globalThis.fetch,
+  env = process.env,
+  signal,
+  loadChromium = async () => (await import('playwright')).chromium,
+  withBrowserContext = withFreshP1BrowserContext,
+  authorize = authorizeP1InBrowser,
+  io = console,
+}) {
+  const environment = await resolveWholeReleaseSmokeEnvironment({
+    gatewayRuntimeConfig, options, fetchImpl,
+  });
+  let token = env[options.gatewayTokenEnv ?? 'AGENTWEAVER_GATEWAY_TOKEN'];
+  if (!token) {
+    const chromium = await loadChromium();
+    // The shared helper creates and deletes a fresh profile; it can use browser SSO without copying user data.
+    token = await withBrowserContext({ chromium, signal }, context => authorize({
+      context,
+      environment: { issuer: environment.issuer, audience: environment.audience },
+      actorId: options.actorId,
+      scopes: P1_RUN_SCOPES,
+      signal,
+      io,
+    }));
+  }
+  const actorId = getValidatedP1BrokerTokenActorId(token, {
+    issuer: environment.issuer,
+    audience: environment.audience,
+    actorId: options.actorId,
+    requiredScopes: REQUIRED_RUN_SCOPES,
+  });
+  // Tenant membership is confirmed by the live Projects owner, not inferred from Broker token claims.
+  const contextUrl = new URL('/api/v1/authorization/context', environment.gatewayUrl);
+  const contextHeaders = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+  if (options.tenantId) contextHeaders['X-Agentweaver-Tenant'] = options.tenantId;
+  let contextResponse;
+  try {
+    contextResponse = await fetchImpl(contextUrl, {
+      method: 'GET',
+      headers: contextHeaders,
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    wholeReleaseFail('the signed-in actor authorization context could not be read from Gateway.');
+  }
+  if (contextResponse.status !== 200) {
+    wholeReleaseFail(`Gateway authorization context returned HTTP ${contextResponse.status}.`);
+  }
+  let authorizationContext;
+  try {
+    authorizationContext = await contextResponse.json();
+  } catch {
+    wholeReleaseFail('Gateway authorization context is not valid JSON.');
+  }
+  const tenantId = requireAuthorizationContext(authorizationContext, {
+    issuer: environment.issuer, actorId, tenantId: options.tenantId,
+  });
+  const authProvider = createBrokerAuthProvider({
+    target: new URL(environment.gatewayUrl), token, issuer: environment.issuer,
+    audience: environment.audience, actorId,
+  });
+  const client = new AgentweaverClient({
+    baseUrl: environment.gatewayUrl, authProvider, tenantId, fetchImpl,
+  });
+  await client.discover();
+  const projectCall = await client.invoke('listProjects');
+  if (projectCall.status < 200 || projectCall.status >= 300) {
+    wholeReleaseFail(`listProjects returned HTTP ${projectCall.status}.`);
+  }
+  const projectId = selectSmokeProject(projectCall.transientResponseBody, options.projectId);
+  return { client, projectId };
+}
+
 /**
  * Use the existing authenticated Gateway client for non-mutating route smoke
  * checks. Every operation is discovered from the live OpenAPI document.
  */
-export async function runGatewaySmokeChecks({
-  gatewayUrl, tenantId, token, issuer, audience, actorId, projectId, fetchImpl,
-}) {
-  if (![gatewayUrl, tenantId, token, issuer, audience, actorId, projectId].every(value =>
-    typeof value === 'string' && value.length > 0)) {
-    wholeReleaseFail('authenticated Gateway smoke check inputs are incomplete.');
+export async function runGatewaySmokeChecks({ client, projectId }) {
+  if (!client || typeof projectId !== 'string' || !projectId) {
+    wholeReleaseFail('authenticated Gateway smoke check context is incomplete.');
   }
-  const target = new URL(gatewayUrl);
-  const authProvider = createBrokerAuthProvider({
-    target, token, issuer, audience, actorId,
-  });
-  const client = new AgentweaverClient({
-    baseUrl: gatewayUrl, authProvider, tenantId, fetchImpl,
-  });
+  // Fresh discovery and Projects reads ensure the receipt describes the newly deployed images.
   await client.discover();
+  const checks = [];
+  const projectCall = await client.invoke('listProjects');
+  if (projectCall.status < 200 || projectCall.status >= 300) {
+    wholeReleaseFail(`listProjects returned HTTP ${projectCall.status}.`);
+  }
+  selectSmokeProject(projectCall.transientResponseBody, projectId);
+  checks.push({ operationId: 'listProjects', status: projectCall.status, path: projectCall.path });
   const calls = [
-    ['listProjects', {}],
     ['listChiefOfStaffPriorities', {}],
     ['listProjectRuns', { pathParameters: { projectId } }],
     ['readProjectMetrics', { pathParameters: { projectId } }],
   ];
-  const checks = [];
   // These discovered Gateway operations are read-only smoke checks, not deployment mutations.
   for (const [operationId, input] of calls) {
     if (!client.operations.has(operationId)) wholeReleaseFail(`Gateway does not advertise ${operationId}.`);

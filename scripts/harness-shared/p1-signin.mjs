@@ -99,6 +99,18 @@ function tokenScopes(claim) {
   return [];
 }
 
+function readP1BrokerTokenClaims(token) {
+  try {
+    const segments = token.split('.');
+    if (typeof token !== 'string' || segments.length !== 3) throw new Error();
+    const claims = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8'));
+    if (!claims || typeof claims !== 'object' || Array.isArray(claims)) throw new Error();
+    return claims;
+  } catch {
+    throw new Error('The Identity Broker returned an invalid access token.');
+  }
+}
+
 /** Validate only the Broker claims required to bind this token to its intended sign-in. */
 export function validateP1BrokerToken(token, {
   issuer,
@@ -109,17 +121,13 @@ export function validateP1BrokerToken(token, {
   requiredScopes = [],
   now = Date.now,
 } = {}) {
-  let claims;
-  try {
-    const segments = token.split('.');
-    if (typeof token !== 'string' || segments.length !== 3) throw new Error();
-    claims = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8'));
-  } catch {
-    throw new Error('The Identity Broker returned an invalid access token.');
-  }
+  const claims = readP1BrokerTokenClaims(token);
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   const scopes = tokenScopes(claims.scope);
-  if (claims.iss !== issuer || claims.sub !== actorId || !audiences.includes(audience)
+  const subjectMatches = actorId === undefined
+    ? typeof claims.sub === 'string' && claims.sub.length > 0 && claims.sub.trim() === claims.sub
+    : claims.sub === actorId;
+  if (claims.iss !== issuer || !subjectMatches || !audiences.includes(audience)
     || !Number.isFinite(claims.exp) || claims.exp * 1000 <= now()
     || requiredScopes.some(scope => !scopes.includes(scope))
     || (projectId !== undefined && claims.project_id !== projectId)
@@ -128,6 +136,19 @@ export function validateP1BrokerToken(token, {
     throw new Error('The Identity Broker token does not match the selected actor, authority, and run.');
   }
   return token;
+}
+
+/** Validate a token's claims, then return its subject when the caller has no prior actor ID. */
+export function getValidatedP1BrokerTokenActorId(token, requirements = {}) {
+  const actorId = readP1BrokerTokenClaims(token).sub;
+  if (typeof actorId !== 'string' || !actorId || actorId.trim() !== actorId) {
+    throw new Error('The Identity Broker token does not match the selected actor, authority, and run.');
+  }
+  validateP1BrokerToken(token, {
+    ...requirements,
+    actorId: requirements.actorId ?? actorId,
+  });
+  return actorId;
 }
 
 /** Own and always remove one empty Chrome user-data directory around a browser session. */

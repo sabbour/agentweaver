@@ -207,6 +207,20 @@ waits for each rollout, checks Deployment readiness, checks every Pod image ID,
 and waits up to two minutes for terminating or older-ReplicaSet Pods to disappear
 before checking the final Pod inventory. It then runs authenticated Gateway
 smoke checks for Projects, Priorities, project runs, and project metrics.
+Execute mode reads the deployed Gateway settings and the Web `/env-config.js`
+file to find the Gateway route, Identity Broker issuer, and audience. If
+`AGENTWEAVER_GATEWAY_TOKEN` is not set, it opens a fresh temporary Chrome
+profile and uses the P1 sign-in flow with run scopes. The browser may reuse
+available SSO; the command does not copy a browser profile or type credentials.
+Complete any sign-in or consent prompt in the browser. The command validates
+the token, reads the signed-in actor's authorization context to select a tenant,
+and chooses an active project from that actor's project list. The existing
+Gateway, tenant, token environment variable, issuer, audience, actor, and project
+flags are optional overrides.
+
+The token stays in memory and is not written to the receipt. If the live
+settings, sign-in, authorization context, or project list cannot be verified,
+the command stops before changing Deployments and writes a partial receipt.
 The command writes one receipt with status `deployed` only when every check
 passes. Any failed service or check writes a `partial` receipt and exits
 non-zero.
