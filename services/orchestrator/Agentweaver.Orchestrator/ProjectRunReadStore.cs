@@ -18,9 +18,11 @@ public sealed record ProjectRunStartedBy(string Issuer, string Subject);
 /// </summary>
 /// <param name="RunId">The run identifier.</param>
 /// <param name="RootSessionId">The root coordinator session, or null before a root session is accepted.</param>
-/// <param name="Title">The display title recorded when the run was started, or null when none is stored.</param>
-/// <param name="Goal">The first message recorded when the run was started, or null when none is stored.</param>
+/// <param name="Title">The display title saved with the run request, or null when no request is stored.</param>
+/// <param name="Goal">The first message saved with the run request, or null when no request is stored.</param>
+/// <param name="WorkflowId">The workflow selected when the run was created, or null when none was selected.</param>
 /// <param name="State">The derived run state. See <see cref="ProjectRunReadStore"/> for the derivation.</param>
+/// <param name="NeedsInputCount">The number of durable pending decision gates in the run.</param>
 /// <param name="CreatedAt">When the run was accepted.</param>
 /// <param name="UpdatedAt">When run-level owner state last changed. Ordinary turns do not change it.</param>
 /// <param name="CompletedAt">When the run reached a terminal state, or null.</param>
@@ -30,7 +32,9 @@ public sealed record ProjectRunSummary(
     string? RootSessionId,
     string? Title,
     string? Goal,
+    string? WorkflowId,
     string State,
+    long NeedsInputCount,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     DateTimeOffset? CompletedAt,
@@ -61,7 +65,7 @@ public sealed class ProjectRunReadStore
     /// <summary>The largest accepted page size.</summary>
     public const int MaximumPageSize = 100;
 
-    private const int CursorVersion = 1;
+    private const int CursorVersion = 2;
     private const string CursorOrder = "createdAt-desc,runId-desc";
 
     /// <summary>Every derived run state, in documentation order.</summary>
@@ -80,6 +84,8 @@ public sealed class ProjectRunReadStore
     private readonly NpgsqlDataSource _dataSource;
     private readonly string _runs;
     private readonly string _sessions;
+    private readonly string _requests;
+    private readonly string _gates;
 
     /// <summary>The canonical derived state shared by run lists and project metrics.</summary>
     private const string DerivedStateSql = """
@@ -103,6 +109,8 @@ public sealed class ProjectRunReadStore
         _dataSource = dataSource;
         _runs = $"\"{schema}\".accepted_runs";
         _sessions = $"\"{schema}\".coordination_sessions";
+        _requests = $"\"{schema}\".project_run_requests";
+        _gates = $"\"{schema}\".coordinator_gates";
     }
 
     /// <summary>
@@ -140,6 +148,7 @@ public sealed class ProjectRunReadStore
     /// <param name="cursor">The opaque cursor from a previous page, or null for the first page.</param>
     /// <param name="pageSize">The page size, from 1 to <see cref="MaximumPageSize"/>.</param>
     /// <param name="cancellationToken">Cancels the database read.</param>
+    /// <param name="startedBy">When set, filters to this exact issuer and subject and binds the cursor to them.</param>
     /// <remarks>
     /// The state is derived per row, so the filter can't use an index. The keyset index bounds an
     /// unfiltered page to <paramref name="pageSize"/> + 1 rows; a selective state filter can read every
@@ -153,29 +162,44 @@ public sealed class ProjectRunReadStore
         ImmutableArray<string> states,
         string? cursor,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ProjectRunStartedBy? startedBy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tenantId);
         CoordinationIdentity.ValidateIdentity(projectId, "project_id");
         if (pageSize is < 1 or > MaximumPageSize)
             throw new CoordinationException("page_size_invalid", StatusCodes.Status400BadRequest);
         var filter = string.Join(',', states);
-        var after = cursor is null ? null : DecodeCursor(projectId, pageSize, filter, cursor);
+        var after = cursor is null ? null : DecodeCursor(projectId, pageSize, filter, startedBy, cursor);
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand($"""
-            SELECT run_id, root_session_id, state, created_at, updated_at, completed_at,
+            SELECT run_id, root_session_id, title, goal, workflow_id, state, needs_input_count,
+                created_at, updated_at, completed_at,
                 accepted_by_issuer, accepted_by_subject
             FROM (
-                SELECT r.run_id, root.session_id AS root_session_id, r.created_at, r.updated_at,
+                SELECT r.run_id, root.session_id AS root_session_id, run_request.title,
+                    run_request.first_message AS goal, run_request.workflow_id,
+                    pending_gates.needs_input_count, r.created_at, r.updated_at,
                     r.completed_at, r.accepted_by_issuer, r.accepted_by_subject,
                     {DerivedStateSql} AS state
                 FROM {_runs} AS r
                 LEFT JOIN {_sessions} AS root
                     ON root.project_id = r.project_id AND root.run_id = r.run_id
                     AND root.parent_session_id IS NULL
+                LEFT JOIN {_requests} AS run_request
+                    ON run_request.tenant_id = r.tenant_id AND run_request.project_id = r.project_id
+                    AND run_request.run_id = r.run_id
+                LEFT JOIN LATERAL (
+                    SELECT count(*) AS needs_input_count
+                    FROM {_gates} AS gate
+                    WHERE gate.project_id = r.project_id AND gate.run_id = r.run_id
+                        AND gate.gate_state = 'pending'
+                ) AS pending_gates ON true
                 WHERE r.tenant_id = @tenant AND r.project_id = @project
                     AND (@run::varchar IS NULL OR r.run_id = @run)
+                    AND (@startedByIssuer::varchar IS NULL OR
+                        (r.accepted_by_issuer = @startedByIssuer AND r.accepted_by_subject = @startedBySubject))
                     AND (@afterCreated::timestamptz IS NULL
                         OR (r.created_at, r.run_id) < (@afterCreated, @afterRun::varchar))
             ) AS runs
@@ -186,6 +210,10 @@ public sealed class ProjectRunReadStore
         command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, tenantId);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, (object?)boundRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "startedByIssuer", NpgsqlDbType.Varchar, (object?)startedBy?.Issuer ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "startedBySubject", NpgsqlDbType.Varchar, (object?)startedBy?.Subject ?? DBNull.Value);
         command.Parameters.AddWithValue(
             "afterCreated", NpgsqlDbType.TimestampTz, (object?)after?.CreatedAt ?? DBNull.Value);
         command.Parameters.AddWithValue("afterRun", NpgsqlDbType.Varchar, (object?)after?.RunId ?? DBNull.Value);
@@ -206,13 +234,15 @@ public sealed class ProjectRunReadStore
                 items.Add(new ProjectRunSummary(
                     reader.GetString(0),
                     reader.IsDBNull(1) ? null : reader.GetString(1),
-                    null,
-                    null,
-                    reader.GetString(2),
-                    reader.GetFieldValue<DateTimeOffset>(3),
-                    reader.GetFieldValue<DateTimeOffset>(4),
-                    reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5),
-                    new ProjectRunStartedBy(reader.GetString(6), reader.GetString(7))));
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetString(5),
+                    reader.GetInt64(6),
+                    reader.GetFieldValue<DateTimeOffset>(7),
+                    reader.GetFieldValue<DateTimeOffset>(8),
+                    reader.IsDBNull(9) ? null : reader.GetFieldValue<DateTimeOffset>(9),
+                    new ProjectRunStartedBy(reader.GetString(10), reader.GetString(11))));
             }
         }
         var last = items.Count > 0 ? items[^1] : null;
@@ -221,7 +251,8 @@ public sealed class ProjectRunReadStore
             items.ToImmutable(),
             hasMore && last is not null
                 ? EncodeCursor(new RunListCursor(
-                    CursorVersion, CursorOrder, projectId, pageSize, filter, last.CreatedAt, last.RunId))
+                    CursorVersion, CursorOrder, projectId, pageSize, filter,
+                    startedBy?.Issuer, startedBy?.Subject, last.CreatedAt, last.RunId))
                 : null);
     }
 
@@ -297,10 +328,11 @@ public sealed class ProjectRunReadStore
     }
 
     /// <summary>
-    /// Decodes a cursor and rejects it unless it was issued for the same project, page size, and state filter.
+    /// Decodes a cursor and rejects it unless it was issued for the same project, page size, filters, and caller.
     /// </summary>
     /// <exception cref="CoordinationException">The cursor is malformed or belongs to another query.</exception>
-    private static RunListCursor DecodeCursor(string projectId, int pageSize, string filter, string value)
+    private static RunListCursor DecodeCursor(
+        string projectId, int pageSize, string filter, ProjectRunStartedBy? startedBy, string value)
     {
         if (value.Length is 0 or > 2048)
             throw InvalidCursor();
@@ -321,6 +353,8 @@ public sealed class ProjectRunReadStore
                 cursor.ProjectId != projectId ||
                 cursor.PageSize != pageSize ||
                 cursor.States != filter ||
+                cursor.StartedByIssuer != startedBy?.Issuer ||
+                cursor.StartedBySubject != startedBy?.Subject ||
                 string.IsNullOrEmpty(cursor.RunId))
                 throw InvalidCursor();
             CoordinationIdentity.ValidateIdentity(cursor.RunId, "run_id");
@@ -348,6 +382,8 @@ public sealed class ProjectRunReadStore
         string ProjectId,
         int PageSize,
         string States,
+        string? StartedByIssuer,
+        string? StartedBySubject,
         DateTimeOffset CreatedAt,
         string RunId);
 }

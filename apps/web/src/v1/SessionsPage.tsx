@@ -1,6 +1,6 @@
 /**
- * Top-level Sessions page in the 0.x layout: a list of runs across every
- * project the user can see, newest first. The service lists runs per project,
+ * Top-level Sessions page: a list of the caller's runs across every project
+ * they can see, newest first. The service lists runs per project,
  * so the page reads the project list and then each project's newest runs.
  */
 import { Button, MessageBar, MessageBarBody, makeStyles, tokens } from '@fluentui/react-components';
@@ -34,7 +34,7 @@ export function SessionsPage() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [projectsError, setProjectsError] = useState<unknown>(null);
-  const runs = useCrossProjectRunList(projects, SESSIONS_PAGE_SIZE);
+  const runs = useCrossProjectRunList(projects, SESSIONS_PAGE_SIZE, 'me');
 
   // Loads the project list with the unbound token. A new list also makes the
   // run list read again, so this is the whole refresh. On failure the last
@@ -65,7 +65,7 @@ export function SessionsPage() {
     <div className={styles.root}>
       <PageHeading
         title="Sessions"
-        description="Runs across your projects, newest first. Open one to continue."
+        description="Your runs across projects, newest first. Open one to continue."
         actions={<>
           <Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => { void loadProjects(); conversations.reload(); }}>Refresh</Button>
           {/* 0.x primary action: start a new chat on the New session page. */}
