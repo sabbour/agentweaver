@@ -32,6 +32,11 @@ The HTTP serializer uses camel-case enum names. For example, envelope `kind`
 is `toolCall`, while `payload.kind` is `tool_call`. Outbox event-type strings
 use the C# enum spelling shown below, not the HTTP spelling.
 
+Provider selection uses the shared `SessionsCapabilities` identifiers in
+`Agentweaver.Abstractions`. The current Events & Sessions host binds the native
+PostgreSQL journal as its default and does not route runs to the optional
+AgentSessions implementation.
+
 ## Event kinds
 
 All fields listed here are inside `payload`, after the discriminator.

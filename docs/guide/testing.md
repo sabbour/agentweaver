@@ -67,10 +67,15 @@ dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj -
 dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Knowledge.Tests\Agentweaver.Knowledge.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Mcp.Tests\Agentweaver.Mcp.Tests.csproj --no-build --no-restore --configuration Release
+dotnet test tests\Agentweaver.Providers.Sessions.AgentSessions.Tests\Agentweaver.Providers.Sessions.AgentSessions.Tests.csproj --no-build --no-restore --configuration Release
+dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~SessionsProviderAbsenceTests
 ```
 
 These project suites use test-owned fixtures. Some include disposable
 PostgreSQL; none of these commands publishes packages or deploys a service.
+The AgentSessions suite checks export verification and replay behavior. The
+absence test confirms that the native provider stays the default and the
+platform works without the optional AgentSessions package.
 The coverage runner used in CI saves TRX results, Cobertura coverage, and
 source identity alongside the test output. Match a result to the exact source
 SHA, pull request head, workflow run, and attempt. A compiled test or a green
