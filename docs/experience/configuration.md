@@ -24,8 +24,8 @@ adds a new configuration revision. The same page also has
 | **General** | Rename the project. Read its ID, state, and created and updated times. |
 | **Access** | Read your permissions in this project. Manage members when the service allows it. See [Manage members](#manage-members). |
 | **Repository** | Set the repository owner and name, and the **Sign-in method**: **Not set**, **GitHub App**, or **Stored secret**. |
-| **Models** | Set **Model defaults** and **Models by task**. |
-| **Platform components** | Change the implementations the project chose for each platform component. Enter one implementation ID, or a comma-separated list in priority order. If the project has no choices, platform defaults apply. |
+| **Models** | Set **Model defaults** and **Models by task** using the owner's current model and reasoning choices when available. |
+| **Platform components** | Read the provider choices selected by the platform. Projects cannot override non-model platform components. |
 | **Run limits** | Set model turns, tool calls, child sessions, child sessions at once, run time in seconds, and prompt tokens. Leave a field empty to use the platform limit. |
 | **Connections** | Connect the GitHub Repo App, GitHub Copilot, and remote MCP servers. See [connections](./connections.md). |
 | **History** | Enter a **Configuration revision** number and select **View revision** to read an earlier revision. History is read-only. |
@@ -40,10 +40,28 @@ changes**, and **Reload**. The app submits the revision it loaded as
 **Expected result:** The page shows **Configuration revision N saved. Runs that
 already started keep their settings.**
 
-Model references and provider IDs are opaque identifiers. Use IDs already in
-the project or returned by owner APIs. Enter secret references, not credential
-values. The form doesn't provide a provider or model catalog picker. For
-provider selection and configuration guidance, see the
+Model references, provider IDs, and credential references are opaque
+identifiers. Enter secret references, not credential values. The owner-backed
+choices are a current, tenant- and project-scoped view for configuration; they
+do not provision or validate upstream resources. A model reference is checked
+against the active runtime binding when a run starts. Accepted run selections
+are immutable, so a settings change does not change a run that has already
+started.
+
+If the platform runtime is not configured, or the choices request is
+unavailable, the page reports that state and permits the existing model
+reference to be entered. It does not silently replace a saved model or
+reasoning effort. Current platform choices do not make an upstream model
+available, provision credentials, or guarantee that a run can start.
+
+Only model configuration can be overridden at project level. Provider
+selections for other platform components come from platform configuration and
+are displayed read-only. Legacy project provider-override values remain in
+stored configuration, are labeled as ignored, and do not affect new run
+selections. Saving an unchanged legacy value preserves it; changing a
+non-empty legacy provider override is rejected. An explicit empty value can
+clear one. This behavior does not migrate or delete existing values
+automatically. For provider configuration guidance, see the
 [provider configuration guide](../guide/configure-providers.md).
 
 ### Change the default model
@@ -88,9 +106,11 @@ changes before you assign a skill.
 | State | Result |
 | --- | --- |
 | Loading | The form waits for the owner revision. |
+| Choices unavailable | The form reports the unavailable state and keeps model reference entry available; it does not substitute another choice. |
 | Invalid JSON or a nonobject value in **Advanced** | The app displays an error and does not send a write. |
 | Stale `expectedRevision` | The owner returns a conflict. Reload, review your changes against the current document, and save again. |
 | Invalid provider, model, or configuration | The owner's validation response remains visible. |
+| Changed non-empty legacy provider overrides | The owner rejects the write; restore the stored value or explicitly clear it. |
 | Saved | The app displays the returned revision and accepted document. |
 | Unknown `section` value | The page opens **General**. |
 
@@ -102,12 +122,15 @@ settings, see the [runtime configuration reference](../reference/runtime-configu
 | Operation | Gateway request |
 | --- | --- |
 | Load or reload | `GET /api/v1/projects/{projectId}/configuration` |
+| Load model and platform provider choices | `GET /api/v1/projects/{projectId}/configuration/choices` |
 | Save changes | `PUT /api/v1/projects/{projectId}/configuration` with `expectedRevision` and `configuration` |
 
-Both requests go to Projects & Config with the current bearer token. The app
-includes the tenant selector only when its current authorization context
-confirms one. The Projects & Config implementation is a source candidate; these
-paths are not evidence of a deployed API. See
+These requests go to Projects & Config with the current bearer token. The
+choices request uses the current project read authorization, accepts no query
+parameters, and returns `Cache-Control: no-store`. The app includes the tenant
+selector only when its current authorization context confirms one. The
+Projects & Config implementation is a source candidate; these paths are not
+evidence of a deployed API. See
 [Projects & Config](../architecture/projects-config.md) for document and
 selection rules, and [contracts](../reference/contracts.md) for configuration
 contracts.

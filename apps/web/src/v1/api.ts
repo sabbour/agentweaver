@@ -63,6 +63,7 @@ import type {
   OwnerRunStatus,
   ProjectAuthorizationContextResponse,
   ProjectConfiguration,
+  ProjectConfigurationChoices,
   ProjectRole,
   ProjectRoleAssignmentList,
   ProjectRoleAssignmentView,
@@ -395,6 +396,21 @@ export class AgentweaverGatewayClient {
       token,
       // Without `revision` the server returns the latest configuration; with it, that exact saved version.
       `/projects/${encodeSegments(projectId)}/configuration${revision === undefined ? '' : `?revision=${revision}`}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads current-tenant model choices and platform provider selections for one project. */
+  getProjectConfigurationChoices(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectConfigurationChoices> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'configuration', 'choices')}`,
       {},
       this.baseUrl,
       tenantSelector,

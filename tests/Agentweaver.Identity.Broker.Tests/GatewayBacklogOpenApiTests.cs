@@ -1,6 +1,9 @@
+extern alias GatewayHost;
+
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+using GatewayHost::Agentweaver.Gateway;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
 
@@ -98,5 +101,58 @@ public sealed class GatewayBacklogOpenApiTests
         Assert.Equal(new[] { "tenantAdmin", "owner", "contributor", "viewer", "orchestrator" },
             effectiveRole.GetProperty("properties").GetProperty("role")
                 .GetProperty("enum").EnumerateArray().Select(item => item.GetString()).ToArray());
+    }
+
+    [Fact]
+    public async Task ProjectConfigurationChoicesRouteAndSchemaMatchTheOwnerContract()
+    {
+        var route = Assert.Single(
+            GatewayRouteCatalog.Routes,
+            candidate => candidate.OperationId == "getProjectConfigurationChoices");
+        Assert.Equal("GET", route.Method);
+        Assert.Equal(GatewayOwner.Projects, route.Owner);
+        Assert.Equal(
+            "/api/v1/projects/{projectId}/configuration/choices",
+            route.PublicPath);
+        Assert.Equal(
+            "/api/projects/{projectId}/configuration/choices",
+            route.OwnerPath);
+        Assert.Empty(route.QueryParameters);
+        Assert.True(route.ForwardTenantSelector);
+        Assert.False(route.HasJsonBody);
+
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call an owner."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var operation = document.RootElement.GetProperty("paths")
+            .GetProperty("/api/v1/projects/{projectId}/configuration/choices")
+            .GetProperty("get");
+        Assert.Equal("getProjectConfigurationChoices", operation.GetProperty("operationId").GetString());
+        Assert.Contains(operation.GetProperty("parameters").EnumerateArray(), parameter =>
+            parameter.GetProperty("name").GetString() == "X-Agentweaver-Tenant");
+        Assert.Equal(
+            "#/components/schemas/ProjectConfigurationChoices",
+            operation.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Contains(operation.GetProperty("responses").GetProperty("200")
+            .GetProperty("headers").EnumerateObject(), header => header.Name == "Cache-Control");
+        Assert.Contains("must not include query parameters",
+            operation.GetProperty("responses").GetProperty("400").GetProperty("description").GetString()!,
+            StringComparison.OrdinalIgnoreCase);
+
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        Assert.Contains("platform_runtime_unconfigured",
+            schemas.GetProperty("ProjectModelChoices").GetProperty("properties")
+                .GetProperty("unavailableReason").GetProperty("anyOf")[0].GetProperty("enum")
+                .EnumerateArray().Select(item => item.GetString()));
+        var projectConfiguration = schemas.GetProperty("ProjectConfiguration").GetProperty("properties");
+        Assert.Contains("run selection ignores stored overrides",
+            projectConfiguration.GetProperty("providerOverrides").GetProperty("description").GetString());
+        Assert.Contains("run selection ignores stored overrides",
+            projectConfiguration.GetProperty("orderedProviderOverrides").GetProperty("description").GetString());
     }
 }

@@ -27,9 +27,9 @@ public sealed partial class ProjectsConfigService
         {
             var ids = new List<string>();
             if (providerCatalog.TryGetDefault(seam, out var defaultId) && defaultId is not null)
-                ids.Add(project.ProviderOverrides.SingleOrDefault(item => item.Seam == seam)?.ProviderId ?? defaultId);
+                ids.Add(defaultId);
             if (providerCatalog.TryGetOrdered(seam, out var ordered))
-                ids.AddRange(project.OrderedProviderOverrides.SingleOrDefault(item => item.Seam == seam)?.ProviderIds ?? ordered);
+                ids.AddRange(ordered);
             if (seam == ProviderSeam.NetworkPolicy)
                 foreach (var layer in Enum.GetValues<NetworkPolicyLayer>())
                     if (providerCatalog.TryGetLayer(layer, out var layerId) && layerId is not null)

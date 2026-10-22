@@ -1,6 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrokerConsentPrompt, EffectiveProjectRole, EffectiveRunSelection } from './contracts';
+import type {
+  BrokerConsentPrompt,
+  EffectiveProjectRole,
+  EffectiveRunSelection,
+  ProjectConfigurationChoices,
+} from './contracts';
 
 const mocks = vi.hoisted(() => ({
   binding: null as { projectId: string; runId: string } | null,
@@ -15,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   getProjectUsage: vi.fn(),
   getProject: vi.fn(),
   getProjectConfiguration: vi.fn(),
+  getProjectConfigurationChoices: vi.fn(),
   updateProjectConfiguration: vi.fn(),
   listMarketplaceSources: vi.fn(),
   createMarketplaceSource: vi.fn(),
@@ -79,6 +85,7 @@ vi.mock('./api', () => ({
     getProjectUsage: mocks.getProjectUsage,
     getProject: mocks.getProject,
     getProjectConfiguration: mocks.getProjectConfiguration,
+    getProjectConfigurationChoices: mocks.getProjectConfigurationChoices,
     updateProjectConfiguration: mocks.updateProjectConfiguration,
     listMarketplaceSources: mocks.listMarketplaceSources,
     createMarketplaceSource: mocks.createMarketplaceSource,
@@ -232,6 +239,33 @@ function projectConfiguration(projectId: string, revision: number) {
       blueprintWorkflowReferences: [],
       skills: [],
       runLimits: {},
+    },
+  };
+}
+
+function projectConfigurationChoices(projectId: string): ProjectConfigurationChoices {
+  return {
+    projectId,
+    projectConfigurationRevision: 1,
+    platformRuntimeRevision: 1,
+    models: {
+      state: 'available',
+      unavailableReason: null,
+      runtimeEligibility: 'verifiedAtRunStart',
+      reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+      defaultReasoningEffort: 'high',
+      choices: [{ reference: 'owner-model', sources: ['platformDefault'] }],
+    },
+    providers: {
+      projectOverridesSupported: false,
+      seams: [{
+        seam: 'sandbox',
+        cardinality: 'exclusive',
+        state: 'selected',
+        unavailableReason: null,
+        providerIds: ['sandbox-platform'],
+      }],
+      ignoredProjectOverrides: [],
     },
   };
 }
@@ -435,6 +469,9 @@ describe('v1 web project scoping', () => {
     mocks.revokeProjectSkillRevision.mockReset();
     mocks.getProject.mockReset().mockImplementation(async (_token: string, projectId: string) => projectSummary(projectId, 'Fixture project'));
     mocks.getProjectConfiguration.mockReset().mockImplementation(async (_token: string, projectId: string) => projectConfiguration(projectId, 1));
+    mocks.getProjectConfigurationChoices.mockReset().mockImplementation(
+      async (_token: string, projectId: string) => projectConfigurationChoices(projectId),
+    );
     mocks.updateProjectConfiguration.mockReset();
     mocks.listMarketplaceSources.mockReset().mockResolvedValue([]);
     mocks.createMarketplaceSource.mockReset();
@@ -1788,6 +1825,23 @@ describe('v1 web project scoping', () => {
     // Danger zone carries a visible Risk badge so it is not opened by accident.
     const danger = within(rail).getByRole('link', { name: /Danger zone/ });
     expect(within(danger).getByText('Risk')).toBeTruthy();
+  });
+
+  it('loads owner-backed configuration choices alongside the current project settings', async () => {
+    const current = projectConfiguration('p1', 1);
+    mocks.getProjectConfiguration.mockResolvedValue({
+      ...current,
+      configuration: { ...current.configuration, modelSelection: { reference: 'owner-model' } },
+    });
+    window.history.replaceState({}, '', '/projects/p1/settings?section=models');
+    render(<App />);
+
+    const modelSelect = await screen.findByLabelText('Default model reference');
+    expect(modelSelect.tagName).toBe('SELECT');
+    expect(await within(modelSelect).findByRole('option', { name: 'owner-model' })).toBeTruthy();
+    await waitFor(() => expect(mocks.getProjectConfigurationChoices).toHaveBeenCalledWith(
+      'broker-token', 'p1', 'tenant-1',
+    ));
   });
 
   it('does not show or save an old project configuration after navigation', async () => {

@@ -41,6 +41,42 @@ public sealed record VersionedProjectConfiguration(
     string UpdatedByActorId,
     DateTimeOffset CreatedAt);
 
+/// <summary>Read-only eligibility choices for model references and platform-selected provider components.</summary>
+public sealed record ProjectConfigurationChoices(
+    string ProjectId,
+    long ProjectConfigurationRevision,
+    long PlatformRuntimeRevision,
+    ProjectModelChoices Models,
+    ProjectProviderChoices Providers);
+
+/// <summary>Model references and reasoning choices that may be selected for future runs.</summary>
+public sealed record ProjectModelChoices(
+    string State,
+    string? UnavailableReason,
+    string RuntimeEligibility,
+    ImmutableArray<string> ReasoningEfforts,
+    string DefaultReasoningEffort,
+    ImmutableArray<ProjectModelReferenceChoice> Choices);
+
+/// <summary>A model reference and the owner-held configuration sources that contain it.</summary>
+public sealed record ProjectModelReferenceChoice(
+    string Reference,
+    ImmutableArray<string> Sources);
+
+/// <summary>Platform provider selections and project overrides that are retained but ignored.</summary>
+public sealed record ProjectProviderChoices(
+    bool ProjectOverridesSupported,
+    ImmutableArray<ProjectProviderSeamChoice> Seams,
+    ImmutableArray<string> IgnoredProjectOverrides);
+
+/// <summary>Selected provider IDs for one platform seam, including explicit upstream availability.</summary>
+public sealed record ProjectProviderSeamChoice(
+    string Seam,
+    string Cardinality,
+    string State,
+    string? UnavailableReason,
+    ImmutableArray<string> ProviderIds);
+
 /// <summary>Current platform runtime defaults, or an empty revision-zero head before the first configuration.</summary>
 public sealed record VersionedPlatformRuntimeDefaults(
     long Revision,
@@ -94,6 +130,37 @@ public sealed partial class ProjectsConfigService
         this.providerCatalog = providerCatalog;
         this.timeProvider = timeProvider;
         this.dbContextFactory = dbContextFactory;
+    }
+
+    /// <summary>
+    /// Reads current-tenant project model references and platform provider selections for display and selection.
+    /// These choices describe eligibility only: they provision nothing and never alter accepted immutable run pins.
+    /// </summary>
+    public async Task<ProjectConfigurationChoices> GetProjectConfigurationChoicesAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        var project = await FindProjectAsync(
+            caller, projectId, ProjectAccess.Read, cancellationToken).ConfigureAwait(false);
+        var configurationRevision = await db.ProjectConfigurationRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(
+                item => item.ProjectId == project.ProjectId && item.Revision == project.ConfigurationRevision,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw ProjectConfigException.NotFound();
+        var configuration = Deserialize<ProjectConfiguration>(configurationRevision.ConfigurationJson);
+        var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
+        var platform = await ReadPlatformDefaultsAsync(platformHead, cancellationToken).ConfigureAwait(false);
+        var modelChoices = BuildModelChoices(configuration, platform);
+
+        return new ProjectConfigurationChoices(
+            project.ProjectId,
+            configurationRevision.Revision,
+            platform.Revision,
+            modelChoices,
+            BuildProviderChoices(configuration));
     }
 
     /// <summary>Loads a project after checking current read or write authority for marketplace operations.</summary>
@@ -424,6 +491,8 @@ public sealed partial class ProjectsConfigService
             .ConfigureAwait(false)
             ?? throw ProjectConfigException.NotFound();
         var previous = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+        ArgumentNullException.ThrowIfNull(configuration);
+        RequireNoNewProviderOverrides(previous, configuration);
         var normalized = await SkillContentService.ValidateConfigurationAsync(
             db, project.ProjectId, previous, configuration, cancellationToken).ConfigureAwait(false);
         if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
@@ -597,7 +666,7 @@ public sealed partial class ProjectsConfigService
             request = request with { Context = CreateInteractiveRunContext(projectConfiguration, defaults) };
 
         var modelSelections = ResolveModelSelections(projectConfiguration, defaults, request.Context);
-        var providers = ResolveProviders(projectConfiguration, request.Context);
+        var providers = ResolveProviders(request.Context);
         var egress = ProjectConfigurationValidator.ResolveEgress(
             defaults.EgressBaseline,
             projectConfiguration.EgressNarrowing,
@@ -1199,9 +1268,7 @@ public sealed partial class ProjectsConfigService
         ImmutableArray<ModelTaskSelectionReference> TaskSelections);
 
     /// <summary>Resolves provider candidates by seam cardinality and preserves all selected candidate/version metadata.</summary>
-    private ImmutableArray<EffectiveProviderSelection> ResolveProviders(
-        ProjectConfiguration project,
-        RunSelectionContext context)
+    private ImmutableArray<EffectiveProviderSelection> ResolveProviders(RunSelectionContext context)
     {
         var resolver = new ProviderResolver(providerCatalog);
         var selections = ImmutableArray.CreateBuilder<EffectiveProviderSelection>();
@@ -1220,11 +1287,9 @@ public sealed partial class ProjectsConfigService
                 case ProviderCardinality.Exclusive:
                 case ProviderCardinality.PlatformSingleton:
                 {
-                    var providerOverride = project.ProviderOverrides
-                        .SingleOrDefault(item => item.Seam == requirement.Seam)?.ProviderId;
                     var result = resolver.Resolve(new ProviderResolutionRequest(
                         requirement.Seam,
-                        providerOverride,
+                        null,
                         version,
                         requirement.RequiredOptionsSchemaVersion,
                         requirement.RequiredCapabilities));
@@ -1235,11 +1300,9 @@ public sealed partial class ProjectsConfigService
                 }
                 case ProviderCardinality.OrderedComposite:
                 {
-                    var projectIds = project.OrderedProviderOverrides
-                        .SingleOrDefault(item => item.Seam == requirement.Seam)?.ProviderIds;
                     var result = resolver.ResolveOrdered(new OrderedProviderResolutionRequest(
                         requirement.Seam,
-                        projectIds,
+                        null,
                         version,
                         requirement.RequiredOptionsSchemaVersion,
                         requirement.RequiredCapabilities));
@@ -1494,6 +1557,158 @@ public sealed partial class ProjectsConfigService
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical, JsonOptions);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    private static ProjectModelChoices BuildModelChoices(
+        ProjectConfiguration project,
+        VersionedPlatformRuntimeDefaults platform)
+    {
+        var references = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        void Add(string? reference, string source)
+        {
+            if (string.IsNullOrWhiteSpace(reference))
+                return;
+            if (!references.TryGetValue(reference, out var sources))
+            {
+                sources = new HashSet<string>(StringComparer.Ordinal);
+                references.Add(reference, sources);
+            }
+            sources.Add(source);
+        }
+
+        if (platform.Defaults is { } defaults)
+        {
+            Add(defaults.ModelSelection?.Reference, "platformDefault");
+            foreach (var item in defaults.ModelTaskDefaults)
+                Add(item.Selection.Reference, "platformTask");
+            foreach (var item in defaults.ModelRoleDefaults)
+                Add(item.Selection.Reference, "platformRole");
+            foreach (var item in defaults.ModelAgentDefaults)
+                Add(item.Selection.Reference, "platformAgent");
+        }
+
+        Add(project.ModelSelection?.Reference, "projectSaved");
+        foreach (var item in project.ModelTaskOverrides)
+            Add(item.Selection.Reference, "projectSaved");
+        foreach (var item in project.ModelRoleOverrides)
+            Add(item.Selection.Reference, "projectSaved");
+        foreach (var item in project.ModelAgentOverrides)
+            Add(item.Selection.Reference, "projectSaved");
+
+        string[] sourceOrder = ["platformDefault", "platformTask", "platformRole", "platformAgent", "projectSaved"];
+        var choices = references.OrderBy(item => item.Key, StringComparer.Ordinal)
+            .Select(item => new ProjectModelReferenceChoice(
+                item.Key,
+                sourceOrder.Where(item.Value.Contains).ToImmutableArray()))
+            .ToImmutableArray();
+        var available = platform.Revision > 0 && platform.Defaults is not null;
+        return new ProjectModelChoices(
+            available ? "available" : "unavailable",
+            available ? null : "platform_runtime_unconfigured",
+            "verifiedAtRunStart",
+            ["low", "medium", "high", "xhigh"],
+            "high",
+            choices);
+    }
+
+    private ProjectProviderChoices BuildProviderChoices(ProjectConfiguration project)
+    {
+        var seams = ImmutableArray.CreateBuilder<ProjectProviderSeamChoice>();
+        foreach (var seam in Enum.GetValues<ProviderSeam>())
+        {
+            var providerIds = GetPlatformProviderIds(seam);
+            if (providerIds.IsEmpty)
+                continue;
+
+            string? unavailableReason = null;
+            foreach (var id in providerIds)
+            {
+                if (!providerCatalog.TryGetProvider(id, out var registration) || registration is null)
+                {
+                    unavailableReason = "provider_not_registered";
+                    break;
+                }
+                if (!registration.Enabled)
+                {
+                    unavailableReason = "provider_disabled";
+                    break;
+                }
+            }
+
+            seams.Add(new ProjectProviderSeamChoice(
+                ToWireLabel(seam),
+                ToWireLabel(ProviderSeams.Cardinality(seam)),
+                unavailableReason is null ? "selected" : "unavailable",
+                unavailableReason,
+                providerIds));
+        }
+
+        var ignoredOverrides = project.ProviderOverrides.Select(item => ToWireLabel(item.Seam))
+            .Concat(project.OrderedProviderOverrides.Select(item => ToWireLabel(item.Seam)))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(item => item, StringComparer.Ordinal)
+            .ToImmutableArray();
+        return new ProjectProviderChoices(false, seams.ToImmutable(), ignoredOverrides);
+    }
+
+    private ImmutableArray<string> GetPlatformProviderIds(ProviderSeam seam)
+    {
+        var providerIds = ImmutableArray.CreateBuilder<string>();
+        if (providerCatalog.TryGetDefault(seam, out var defaultId) && defaultId is not null)
+            providerIds.Add(defaultId);
+        if (providerCatalog.TryGetOrdered(seam, out var ordered))
+            providerIds.AddRange(ordered);
+        if (seam == ProviderSeam.NetworkPolicy)
+            foreach (var layer in Enum.GetValues<NetworkPolicyLayer>())
+                if (providerCatalog.TryGetLayer(layer, out var layerId) && layerId is not null)
+                    providerIds.Add(layerId);
+        if (seam == ProviderSeam.Cost)
+            providerIds.AddRange(providerCatalog.MeterSourceSelections.Select(item => item.ProviderId));
+        return providerIds.ToImmutable();
+    }
+
+    private static string ToWireLabel<TEnum>(TEnum value) where TEnum : struct, Enum =>
+        JsonNamingPolicy.CamelCase.ConvertName(value.ToString());
+
+    /// <summary>
+    /// Rejects project provider overrides. Legacy stored overrides may be resubmitted unchanged so other
+    /// edits still save; they are kept but ignored by run selection.
+    /// </summary>
+    internal static void RequireNoNewProviderOverrides(ProjectConfiguration previous, ProjectConfiguration configuration)
+    {
+        if ((!configuration.ProviderOverrides.IsDefaultOrEmpty &&
+                !SameProviderOverrides(configuration.ProviderOverrides, previous.ProviderOverrides)) ||
+            (!configuration.OrderedProviderOverrides.IsDefaultOrEmpty &&
+                !SameOrderedProviderOverrides(configuration.OrderedProviderOverrides, previous.OrderedProviderOverrides)))
+            throw ProjectConfigException.Invalid(
+                "project_provider_override_unsupported",
+                "Platform components other than models are selected by the platform and cannot be overridden by a project.");
+    }
+
+    private static bool SameProviderOverrides(
+        ImmutableArray<ProjectProviderOverride> incoming,
+        ImmutableArray<ProjectProviderOverride> previous) =>
+        !previous.IsDefault &&
+        incoming.Length == previous.Length &&
+        incoming.All(item => item is not null) &&
+        incoming.SequenceEqual(previous);
+
+    private static bool SameOrderedProviderOverrides(
+        ImmutableArray<ProjectOrderedProviderOverride> incoming,
+        ImmutableArray<ProjectOrderedProviderOverride> previous)
+    {
+        if (previous.IsDefault || incoming.Length != previous.Length)
+            return false;
+        for (var index = 0; index < incoming.Length; index++)
+        {
+            var current = incoming[index];
+            var prior = previous[index];
+            if (current is null || prior is null || current.ProviderIds.IsDefault || prior.ProviderIds.IsDefault ||
+                current.Seam != prior.Seam ||
+                !current.ProviderIds.SequenceEqual(prior.ProviderIds, StringComparer.Ordinal))
+                return false;
+        }
+        return true;
     }
 
     private sealed record LegacyEgressFingerprint(string Host, int Port, EgressProtocol Protocol);

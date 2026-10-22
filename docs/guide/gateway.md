@@ -90,6 +90,31 @@ owner response, and returns it with `Cache-Control: no-store`. Treat the
 response as current display context, not a grant. Owners recheck authorization
 for each protected operation.
 
+## Read project configuration choices
+
+Use
+`GET /api/v1/projects/{projectId}/configuration/choices` to read the current
+model references, supported reasoning efforts, and platform provider choices
+for project settings and run selection. The route forwards the bearer token
+and optional tenant selector to Projects & Config. The owner checks current
+project read authority and tenant/project scope. The request accepts no query
+parameters, and the Gateway returns the owner response with
+`Cache-Control: no-store`.
+
+The response is an eligibility and selection view, not a provisioning result.
+It does not fetch credentials, create resources, make a live model call, or
+guarantee that an upstream provider is available. Model references are checked
+against the runtime binding when a run starts. Accepted run selections remain
+immutable; a later project setting change does not rewrite an active run's
+selection.
+
+Projects can override model configuration only. Provider choices for
+non-model platform components are selected by platform configuration and are
+read-only in project settings. Historical project provider-override values
+remain loadable and are ignored for new provider resolution; they are not
+silently migrated or substituted. The owner reports unavailable catalog or
+runtime states explicitly rather than choosing a different provider.
+
 ## Read project and Skill data
 
 The Gateway forwards Skills and marketplace operations to Projects & Config.

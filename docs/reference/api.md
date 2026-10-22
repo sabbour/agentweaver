@@ -257,6 +257,7 @@ authorization cache, or a grant.
 | POST | `/{projectId}/role-assignments` | Admin; unbound token, TenantAdmin | Assign a project role to a tenant member. | Yes |
 | DELETE | `/{projectId}/role-assignments/{assignmentId:guid}` | Admin; unbound token, TenantAdmin | Revoke an assignment at `expectedRevision`. | Yes |
 | GET | `/{projectId}/configuration` | Read | Read current or requested `revision`. | Yes |
+| GET | `/{projectId}/configuration/choices` | Read | Read current project-scoped model and platform provider choices. No query parameters; `no-store`. | Yes |
 | PUT | `/{projectId}/configuration` | Admin | Append validated configuration. | Yes |
 | POST | `/{projectId}/casting/proposals` | Admin | Stage a complete configuration draft for review. | Yes |
 | POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | Yes |

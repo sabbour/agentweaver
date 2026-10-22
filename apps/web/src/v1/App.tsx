@@ -80,6 +80,7 @@ import type {
   KnowledgeRecordRevision,
   KnowledgeRecordTransferBundle,
   ProjectConfiguration,
+  ProjectConfigurationChoices,
   ProjectSummary,
   SessionEventEnvelope,
   SessionStatusSnapshot,
@@ -624,6 +625,8 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
   // sections). An empty ID tells the hook to skip the request on other views.
   const project = useProjectSummary(view === 'settings' ? projectId : '');
   const [versioned, setVersioned] = useState<VersionedProjectConfiguration | null>(null);
+  const [configurationChoices, setConfigurationChoices] = useState<ProjectConfigurationChoices | null>(null);
+  const [configurationChoicesError, setConfigurationChoicesError] = useState(false);
   // Two views of the same unsaved edit:
   // - `editor` is the raw JSON text in the Advanced section.
   // - `configurationDraft` is the parsed object that the form sections edit.
@@ -652,15 +655,32 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     setErrorScope(null);
     setNotice(null);
     setNoticeScope(null);
+    setConfigurationChoices(null);
+    setConfigurationChoicesError(false);
     try {
-      const result = await apiCall(
-        (token, tenantSelector) => gatewayClient.getProjectConfiguration(token, projectId, tenantSelector),
-        null,
-      );
+      const [result, choiceResult] = await Promise.all([
+        apiCall(
+          (token, tenantSelector) => gatewayClient.getProjectConfiguration(token, projectId, tenantSelector),
+          null,
+        ),
+        view === 'settings'
+          ? apiCall(
+            (token, tenantSelector) =>
+              gatewayClient.getProjectConfigurationChoices(token, projectId, tenantSelector),
+            null,
+          ).then(
+            (value) => ({ value, failed: false }),
+            () => ({ value: null, failed: true }),
+          )
+          : Promise.resolve({ value: null, failed: false }),
+      ]);
       if (activeScope.current !== scope || loadGeneration.current !== generation) return;
       if (result.projectId !== projectId)
         throw new Error('The server returned configuration for a different project.');
       setVersioned(result);
+      const scopedChoices = choiceResult.value?.projectId === projectId ? choiceResult.value : null;
+      setConfigurationChoices(scopedChoices);
+      setConfigurationChoicesError(view === 'settings' && (choiceResult.failed || !scopedChoices));
       setEditor(JSON.stringify(result.configuration, null, 2));
       // Start the form draft from the loaded document, so it matches the JSON text.
       setConfigurationDraft(result.configuration);
@@ -675,7 +695,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       if (activeScope.current === scope && loadGeneration.current === generation)
         setLoading(false);
     }
-  }, [apiCall, projectId, requestScope]);
+  }, [apiCall, projectId, requestScope, view]);
 
   useEffect(() => {
     activeScope.current = requestScope;
@@ -974,8 +994,10 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
           {CONFIGURATION_SECTIONS.has(section) && (currentLoading ? <Loading /> : currentConfiguration && fieldProps && (
             <form className="v1-form" onSubmit={(event) => void save(event)}>
               {section === 'repository' && <RepositoryFields {...fieldProps} />}
-              {section === 'models' && <ConfigurationFields {...fieldProps} part="models" savedSelection={currentConfiguration.configuration.modelSelection} />}
-              {section === 'components' && <ConfigurationFields {...fieldProps} part="components" savedSelection={currentConfiguration.configuration.modelSelection} />}
+              {section === 'models' && <ConfigurationFields {...fieldProps} part="models" savedSelection={currentConfiguration.configuration.modelSelection}
+                choices={configurationChoices} choicesError={configurationChoicesError} />}
+              {section === 'components' && <ConfigurationFields {...fieldProps} part="components" savedSelection={currentConfiguration.configuration.modelSelection}
+                choices={configurationChoices} choicesError={configurationChoicesError} />}
               {section === 'limits' && <RunLimitsFields {...fieldProps} />}
               {section === 'advanced' && (
                 <PageSection title="Advanced" description="Edit the full configuration as JSON. Keep every field to preserve other settings and saved references. Do not enter passwords or tokens.">

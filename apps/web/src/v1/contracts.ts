@@ -1488,6 +1488,35 @@ export interface VersionedProjectConfiguration {
   createdAt: string;
 }
 
+/** Read-only choices describing model eligibility and platform-selected provider seams. */
+export interface ProjectConfigurationChoices {
+  projectId: string;
+  projectConfigurationRevision: number;
+  platformRuntimeRevision: number;
+  models: {
+    state: 'available' | 'unavailable';
+    unavailableReason: 'platform_runtime_unconfigured' | null;
+    runtimeEligibility: 'verifiedAtRunStart';
+    reasoningEfforts: ReasoningEffort[];
+    defaultReasoningEffort: ReasoningEffort;
+    choices: Array<{
+      reference: string;
+      sources: Array<'platformDefault' | 'platformTask' | 'platformRole' | 'platformAgent' | 'projectSaved'>;
+    }>;
+  };
+  providers: {
+    projectOverridesSupported: false;
+    seams: Array<{
+      seam: string;
+      cardinality: string;
+      state: 'selected' | 'unavailable';
+      unavailableReason: 'provider_not_registered' | 'provider_disabled' | null;
+      providerIds: string[];
+    }>;
+    ignoredProjectOverrides: string[];
+  };
+}
+
 /** Provider metadata considered when resolving an effective seam selection. */
 export interface ProviderCandidate {
   seam: string;

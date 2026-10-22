@@ -156,9 +156,12 @@ public sealed partial class ProjectsConfigService
                 .ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
             var current = Deserialize<ProjectConfiguration>(currentConfiguration.ConfigurationJson);
+            var draft = createDraft(current);
+            ArgumentNullException.ThrowIfNull(draft);
+            RequireNoNewProviderOverrides(current, draft);
             var normalized = ProjectConfigurationValidator.ValidateTransition(
                 current,
-                createDraft(current));
+                draft);
             await EnsureCastingProjectNarrowingAsync(context, normalized, token).ConfigureAwait(false);
             return await AddCastingProposalAsync(
                 context, caller, project, normalized, transferProvenance, token).ConfigureAwait(false);
@@ -241,8 +244,11 @@ public sealed partial class ProjectsConfigService
                     token)
                 .ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
+            var currentConfiguration = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+            ArgumentNullException.ThrowIfNull(draft);
+            RequireNoNewProviderOverrides(currentConfiguration, draft);
             var normalized = ProjectConfigurationValidator.ValidateTransition(
-                Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson),
+                currentConfiguration,
                 draft);
             await EnsureCastingProjectNarrowingAsync(context, normalized, token).ConfigureAwait(false);
 
@@ -300,9 +306,13 @@ public sealed partial class ProjectsConfigService
                     token)
                 .ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
+            var currentConfiguration = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+            var proposedConfiguration = Deserialize<ProjectConfiguration>(proposal.DraftJson);
+            // Also covers proposals drafted before project provider overrides were rejected.
+            RequireNoNewProviderOverrides(currentConfiguration, proposedConfiguration);
             var configuration = ProjectConfigurationValidator.ValidateTransition(
-                Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson),
-                Deserialize<ProjectConfiguration>(proposal.DraftJson));
+                currentConfiguration,
+                proposedConfiguration);
             await EnsureCastingProjectNarrowingAsync(context, configuration, token).ConfigureAwait(false);
             var now = timeProvider.GetUtcNow();
             var nextRevision = checked(project.ConfigurationRevision + 1);

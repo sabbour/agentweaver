@@ -49,8 +49,12 @@ do not bootstrap membership.
 
 Project metadata, project configuration, and platform runtime defaults have
 separate revision histories. Configuration contains typed model references,
-provider overrides, charters, casting, workflow references, skill pins, egress
-narrowing, run limits, and optional Source Control settings.
+legacy provider-override fields, charters, casting, workflow references, skill
+pins, egress narrowing, run limits, and optional Source Control settings.
+Current project-level selection is available for model configuration only.
+Provider choices for other platform components are resolved from platform
+configuration; legacy project provider-override values remain loadable but are
+ignored for new selections.
 
 When you update a revision, supply the expected current revision. The service
 appends a new revision and advances the head. If another writer wins first,
@@ -70,7 +74,7 @@ context.
 3. It selects the project model or platform default and checks that the
    reference is available in the supplied context.
 4. `ProviderResolver` resolves candidates from the enabled platform catalog.
-   Project choices cannot bypass catalog override permissions.
+   Project-supplied provider override fields do not participate in resolution.
 5. Egress requirements must fit the platform baseline and project narrowing.
    Project run limits cannot widen platform limits.
 6. The service writes the immutable effective selection and request fingerprint,
