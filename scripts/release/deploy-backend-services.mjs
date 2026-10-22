@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { withP0UserKubeconfig } from '../azure/lib/namespace-bootstrap.mjs';
 import { run, redact } from '../azure/lib/exec.mjs';
 import {
-  canonicalJson, deploymentInventory, imageDigest, planDeploymentInventory,
+  canonicalJson, deploymentInventory, deploymentPodDrainReason, imageDigest, planDeploymentInventory,
+  waitForDeploymentPods,
   verifyDeploymentPreservation, verifyDeploymentReady, writeRolloutReceipt,
 } from './image-rollout-common.mjs';
 import { selectPublishedComponentImage } from './publication-image.mjs';
@@ -123,6 +124,7 @@ function gitOutput(exec, root, args, action) {
 }
 
 function requireAncestor(exec, root, sourceSha, target, description) {
+  // An image source is eligible only when its exact commit belongs to current v1 history.
   const result = exec('git', ['merge-base', '--is-ancestor', sourceSha, target], { cwd: root, check: false });
   if (result.status !== 0) fail(`${description} ${sourceSha} is not an ancestor of ${target}.`);
 }
@@ -210,7 +212,7 @@ function verifyBackendPods(items, services, after, fail) {
       fail(`${service.deployment} has no uniquely identified Deployment-owned ReplicaSets.`);
     }
 
-    // Follow Pod -> ReplicaSet -> Deployment ownership instead of trusting a broad label selector.
+    // Follow Pod -> ReplicaSet -> Deployment UIDs instead of trusting labels another workload could share.
     const ownedPods = pods.filter(pod =>
       Array.isArray(pod.metadata?.ownerReferences) && pod.metadata.ownerReferences.some(owner =>
         owner.kind === 'ReplicaSet' && replicaSetUids.has(owner.uid)));
@@ -219,6 +221,7 @@ function verifyBackendPods(items, services, after, fail) {
     }
     const selector = deployment.spec.selector.matchLabels;
     const podReceipts = ownedPods.map(pod => {
+      // A counted Pod must be live, Running, selected by this Deployment, and ready before its image is checked.
       if (!matchesSelector(pod.metadata.labels, selector) || pod.metadata.deletionTimestamp ||
           pod.status?.phase !== 'Running') {
         fail(`${service.deployment} Pod ${pod.metadata.name ?? '(unnamed)'} is not an active selected Pod.`);
@@ -325,6 +328,7 @@ export async function runBackendImageRollout(options, overrides = {}) {
     if (status.trim().length > 0) fail('the source checkout must be clean.');
     const head = git('rev-parse', 'HEAD').trim();
     if (!SHA.test(head)) fail('the deployment-tool checkout HEAD is not a full Git commit SHA.');
+    // Refresh v1 before checking that both this tool and the publication source are on its history.
     const fetch = deps.exec('git', ['fetch', '--quiet', 'origin', 'v1'], { cwd: root, check: false });
     if (fetch.status !== 0) fail('could not refresh origin/v1 before source verification.');
     requireAncestor(deps.exec, root, head, 'origin/v1', 'deployment-tool source');
@@ -364,10 +368,10 @@ export async function runBackendImageRollout(options, overrides = {}) {
       version: image.version,
     }));
 
-    const action = baseArgs => {
-      const kubectl = args => deps.exec('kubectl', [
+    const action = async baseArgs => {
+      const kubectl = (args, settings = {}) => deps.exec('kubectl', [
         ...baseArgs, '--namespace', NAMESPACE, ...args,
-      ], { cwd: root, check: false });
+      ], { cwd: root, check: false, ...settings });
       const inventory = () => deploymentInventory(
         (args, settings) => deps.exec('kubectl', [...baseArgs, ...args], settings),
         NAMESPACE, root, fail,
@@ -394,6 +398,7 @@ export async function runBackendImageRollout(options, overrides = {}) {
         }
 
         executionStarted = true;
+        // Patch only planned images first; then wait for every changed Deployment in the readiness pass.
         for (const service of services) {
           if (!service.changed) continue;
           const resourceVersion = service.deploymentObject.metadata?.resourceVersion;
@@ -456,8 +461,15 @@ export async function runBackendImageRollout(options, overrides = {}) {
         };
 
         receipt.pods = { status: 'waiting', services: [] };
-        const podObjects = parseKubernetesObjects(
-          kubectl(['get', 'replicasets,pods', '--output', 'json']), fail,
+        const podObjects = await waitForDeploymentPods(
+          timeout => parseKubernetesObjects(
+            kubectl(['get', 'replicasets,pods', '--output', 'json'], { timeout }), fail,
+          ),
+          items => deploymentPodDrainReason(items, services, after, fail),
+          {
+            label: 'backend-service', timeoutMs: deps.podDrainTimeoutMs,
+            intervalMs: deps.podDrainPollIntervalMs, now: deps.nowMs, sleep: deps.sleep,
+          },
         );
         receipt.pods = {
           status: 'passed',

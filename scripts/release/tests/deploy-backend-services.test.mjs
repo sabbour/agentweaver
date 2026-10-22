@@ -123,7 +123,9 @@ function makePublication() {
   };
 }
 
-function makePodsAndReplicaSets(deployments, badImageIDs = new Map()) {
+function makePodsAndReplicaSets(deployments, badImageIDs = new Map(), {
+  oldReplicaSetPod = false, terminatingOldReplicaSetPod = false,
+} = {}) {
   const items = [];
   for (const deployment of deployments) {
     const name = deployment.metadata.name;
@@ -136,6 +138,10 @@ function makePodsAndReplicaSets(deployments, badImageIDs = new Map()) {
         name: `${name}-rs`,
         namespace: 'agentweaver',
         uid: replicaSetUid,
+        annotations: {
+          'deployment.kubernetes.io/revision':
+            deployment.metadata.annotations['deployment.kubernetes.io/revision'],
+        },
         ownerReferences: [{
           apiVersion: 'apps/v1',
           kind: 'Deployment',
@@ -172,6 +178,47 @@ function makePodsAndReplicaSets(deployments, badImageIDs = new Map()) {
       },
     });
   }
+  if (oldReplicaSetPod || terminatingOldReplicaSetPod) {
+    const deployment = deployments.find(item => item.metadata.name === 'gateway');
+    const service = services.find(item => item.deployment === 'gateway');
+    const replicaSetUid = 'old-replicaset-gateway';
+    items.push({
+      apiVersion: 'apps/v1',
+      kind: 'ReplicaSet',
+      metadata: {
+        name: 'gateway-old-rs',
+        namespace: 'agentweaver',
+        uid: replicaSetUid,
+        annotations: { 'deployment.kubernetes.io/revision': '1' },
+        ownerReferences: [{
+          apiVersion: 'apps/v1', kind: 'Deployment', name: 'gateway',
+          uid: deployment.metadata.uid, controller: true,
+        }],
+      },
+    });
+    items.push({
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: {
+        name: 'gateway-old-pod',
+        namespace: 'agentweaver',
+        ...((oldReplicaSetPod || terminatingOldReplicaSetPod)
+          ? { deletionTimestamp: '2026-10-22T10:00:00Z' } : {}),
+        ownerReferences: [{
+          apiVersion: 'apps/v1', kind: 'ReplicaSet', name: 'gateway-old-rs',
+          uid: replicaSetUid, controller: true,
+        }],
+      },
+      spec: { containers: [{ name: service.container, image: deployment.spec.template.spec.containers[0].image }] },
+      status: {
+        phase: 'Running',
+        containerStatuses: [{
+          name: service.container, ready: true,
+          imageID: deployment.spec.template.spec.containers[0].image,
+        }],
+      },
+    });
+  }
   return items;
 }
 
@@ -183,6 +230,8 @@ function makeFixture({
   badImageIDs = new Map(),
   publicationOverrides,
   inventoryKind = 'List',
+  oldReplicaSetPod,
+  terminatingOldReplicaSetPodOnce,
 } = {}) {
   const { manifest, publication, imageSources } = makePublication();
   if (missingPublicationComponent) {
@@ -199,6 +248,8 @@ function makeFixture({
   const calls = [];
   const written = [];
   const kubeconfigCalls = [];
+  const clock = { now: 0 };
+  let podInventoryReads = 0;
   const options = parseBackendRolloutArgs([
     '--publication', 'publication.json',
     '--subscription-id', 'p0-subscription',
@@ -260,12 +311,18 @@ function makeFixture({
     }
     if (action === 'rollout') return { status: 0, stdout: 'deployment successfully rolled out', stderr: '' };
     if (action === 'get' && args[5] === 'replicasets,pods') {
+      const terminatingOldReplicaSetPod = terminatingOldReplicaSetPodOnce && podInventoryReads === 0;
+      const items = makePodsAndReplicaSets(state, badImageIDs, {
+        oldReplicaSetPod: oldReplicaSetPod || terminatingOldReplicaSetPod,
+        terminatingOldReplicaSetPod,
+      });
+      podInventoryReads += 1;
       return {
         status: 0,
         stdout: JSON.stringify({
           apiVersion: 'v1',
           kind: 'List',
-          items: makePodsAndReplicaSets(state, badImageIDs),
+          items,
         }),
         stderr: '',
       };
@@ -279,6 +336,7 @@ function makeFixture({
     options,
     state,
     publication,
+    podReadCount: () => podInventoryReads,
     overrides: {
       root: process.cwd(),
       exec,
@@ -294,6 +352,8 @@ function makeFixture({
       },
       writeReceipt: (file, receipt) => written.push({ file, receipt: structuredClone(receipt) }),
       now: () => new Date('2026-10-22T10:00:00.000Z'),
+      nowMs: () => clock.now, sleep: async milliseconds => { clock.now += milliseconds; },
+      podDrainTimeoutMs: 4, podDrainPollIntervalMs: 2,
       newRunId: () => 'offline-test',
       log: () => {},
     },
@@ -393,6 +453,30 @@ test('execution patches only the six selected images and verifies readiness and 
   ]);
   assert.equal(fixture.calls.some(call => call.command === 'kubectl' &&
     ['apply', 'set', 'delete', 'create'].includes(call.args[4])), false);
+});
+
+test('backend rollout waits for a terminating old ReplicaSet Pod to disappear', async () => {
+  const fixture = makeFixture({ terminatingOldReplicaSetPodOnce: true });
+  const receipt = await runBackendImageRollout({ ...fixture.options, execute: true }, fixture.overrides);
+
+  assert.equal(receipt.result, 'succeeded');
+  assert.equal(receipt.pods.status, 'passed');
+  assert.equal(fixture.podReadCount(), 2);
+  assert.deepEqual(fixture.calls
+    .filter(call => call.command === 'kubectl' && call.args.includes('replicasets,pods'))
+    .map(call => call.settings.timeout), [4, 2]);
+});
+
+test('backend rollout times out with a partial receipt while a terminating old Pod remains', async () => {
+  const fixture = makeFixture({ oldReplicaSetPod: true });
+  await assert.rejects(
+    runBackendImageRollout({ ...fixture.options, execute: true }, fixture.overrides),
+    /Timed out waiting for backend-service Pods to settle/,
+  );
+
+  assert.equal(fixture.written[0].receipt.result, 'failed');
+  assert.equal(fixture.written[0].receipt.pods.status, 'failed');
+  assert.match(fixture.written[0].receipt.error, /Timed out waiting for backend-service Pods to settle/);
 });
 
 test('a Pod image ID that is not a verified published digest fails and records the result', async () => {

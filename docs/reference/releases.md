@@ -204,7 +204,8 @@ start maintenance until the whole-release command has finished.
 Run the same command with `--execute` only after reviewing the plan. Execute
 mode patches only the named application containers, in a fixed safe order. It
 waits for each rollout, checks Deployment readiness, checks every Pod image ID,
-and rejects Pods from an older ReplicaSet. It then runs authenticated Gateway
+and waits up to two minutes for terminating or older-ReplicaSet Pods to disappear
+before checking the final Pod inventory. It then runs authenticated Gateway
 smoke checks for Projects, Priorities, project runs, and project metrics.
 The command writes one receipt with status `deployed` only when every check
 passes. Any failed service or check writes a `partial` receipt and exits
@@ -240,7 +241,8 @@ command with `--execute`. The command uses resource-version-guarded JSON
 patches to change only the six selected application container images. It waits
 for each Deployment rollout, checks that other Deployment settings and images
 did not change, and verifies the image ID of every selected Pod against the
-registry-verified publication digest. It writes a receipt with the source,
+registry-verified publication digest. Before verification, it waits up to two
+minutes for terminating or older-ReplicaSet Pods to disappear. It writes a receipt with the source,
 target, before and after images, readiness, and Pod image IDs. This path does
 not install resources or run database migrations, resets, or schema changes.
 

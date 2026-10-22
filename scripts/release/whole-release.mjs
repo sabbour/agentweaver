@@ -54,6 +54,7 @@ function parseJson(text, name) {
 }
 
 function requireAncestor(exec, root, sourceSha, target, description) {
+  // Git ancestry prevents a valid-looking receipt from selecting an image outside the v1 release history.
   const result = exec('git', ['merge-base', '--is-ancestor', sourceSha, target], { cwd: root, check: false });
   if (result.status !== 0) wholeReleaseFail(`${description} ${sourceSha} is not an ancestor of ${target}.`);
 }
@@ -100,6 +101,7 @@ export function resolveWholeReleaseImages(publication, manifest, previousPublica
     if (!sourcePublication) {
       wholeReleaseFail(`${service.deployment} is absent from the publication and has no previous receipt.`);
     }
+    // Only an unchanged manifest version can reuse an omitted image from the previous publication.
     const sourceManifest = currentHasImage ? manifest : manifestForPrevious(previous, service, exec, root);
     if (!currentHasImage) {
       const previousComponents = sourceManifest.components?.filter(component =>
@@ -132,6 +134,7 @@ function manifestForPrevious(previous, service, exec, root) {
 export async function verifyWholeReleaseImages(images, verifyImage) {
   const verified = [];
   for (const image of images) {
+    // The registry independently proves the published digest and source metadata before cluster access.
     const registry = await verifyImage(image.image);
     if (!registry || !IMAGE_DIGEST.test(registry.digest ?? '') ||
         !(registry.acceptedDigests instanceof Set) || !registry.acceptedDigests.has(image.digest) ||

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { parseWholeReleaseArgs, runWholeRelease } from '../deploy-whole-release.mjs';
 import { componentImageRepository } from '../pack.mjs';
+import { waitForDeploymentPods } from '../image-rollout-common.mjs';
 import {
   resolveWholeReleaseImages, WHOLE_RELEASE_SERVICES, writeWholeReleaseReceipt,
 } from '../whole-release.mjs';
@@ -37,7 +38,10 @@ function makeDeployment(service, image) {
   };
 }
 
-function makeFixture({ failDeployment, unknownDeployment, maintenanceLock, oldReplicaSetPod } = {}) {
+function makeFixture({
+  failDeployment, unknownDeployment, maintenanceLock, oldReplicaSetPod,
+  terminatingOldReplicaSetPodOnce,
+} = {}) {
   const manifest = {
     stage: 'draft',
     components: WHOLE_RELEASE_SERVICES.map((service, index) => ({
@@ -75,8 +79,10 @@ function makeFixture({ failDeployment, unknownDeployment, maintenanceLock, oldRe
     `ghcr.io/sabbour/unknown@${digest(1)}`));
   const calls = [];
   const written = [];
-  const exec = (command, args) => {
-    calls.push({ command, args });
+  const clock = { now: 0 };
+  let podInventoryReads = 0;
+  const exec = (command, args, settings = {}) => {
+    calls.push({ command, args, settings });
     if (command === 'git') {
       if (args[0] === 'status' || args[0] === 'fetch' || args[0] === 'merge-base') return { status: 0, stdout: '', stderr: '' };
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { status: 0, stdout: `${headSha}\n`, stderr: '' };
@@ -115,6 +121,10 @@ function makeFixture({ failDeployment, unknownDeployment, maintenanceLock, oldRe
         return [
           { apiVersion: 'apps/v1', kind: 'ReplicaSet', metadata: {
             name: `${service.deployment}-rs`, namespace: 'agentweaver', uid,
+            annotations: {
+              'deployment.kubernetes.io/revision':
+                deployment.metadata.annotations['deployment.kubernetes.io/revision'],
+            },
             ownerReferences: [{ kind: 'Deployment', name: service.deployment, uid: deployment.metadata.uid }],
           } },
           { apiVersion: 'v1', kind: 'Pod', metadata: {
@@ -127,17 +137,22 @@ function makeFixture({ failDeployment, unknownDeployment, maintenanceLock, oldRe
           }] } },
         ];
       });
-      if (oldReplicaSetPod) {
+      const includeOldPod = oldReplicaSetPod ||
+        (terminatingOldReplicaSetPodOnce && podInventoryReads === 0);
+      if (includeOldPod) {
         const service = WHOLE_RELEASE_SERVICES[0];
         const deployment = state.find(item => item.metadata.name === service.deployment);
         const oldUid = `old-rs-${service.deployment}`;
         items.push(
           { apiVersion: 'apps/v1', kind: 'ReplicaSet', metadata: {
             name: `${service.deployment}-old-rs`, namespace: 'agentweaver', uid: oldUid,
+            annotations: { 'deployment.kubernetes.io/revision': '1' },
             ownerReferences: [{ kind: 'Deployment', name: service.deployment, uid: deployment.metadata.uid }],
           } },
           { apiVersion: 'v1', kind: 'Pod', metadata: {
             name: `${service.deployment}-old-pod`, namespace: 'agentweaver',
+            ...((oldReplicaSetPod || terminatingOldReplicaSetPodOnce)
+              ? { deletionTimestamp: '2026-10-22T10:00:00Z' } : {}),
             ownerReferences: [{ kind: 'ReplicaSet', uid: oldUid }],
           }, spec: { containers: [{ name: service.container, image: deployment.spec.template.spec.containers[0].image }] },
           status: { phase: 'Running', containerStatuses: [{
@@ -146,6 +161,7 @@ function makeFixture({ failDeployment, unknownDeployment, maintenanceLock, oldRe
           }] } },
         );
       }
+      podInventoryReads += 1;
       return { status: 0, stdout: JSON.stringify({ kind: 'List', items }), stderr: '' };
     }
     throw new Error(`unexpected kubectl ${args.join(' ')}`);
@@ -169,7 +185,10 @@ function makeFixture({ failDeployment, unknownDeployment, maintenanceLock, oldRe
       ],
       writeReceipt: (file, receipt) => written.push({ file, receipt: structuredClone(receipt) }),
       now: () => new Date('2026-10-22T10:00:00.000Z'), newRunId: () => 'whole-test', log: () => {},
+      nowMs: () => clock.now, sleep: async milliseconds => { clock.now += milliseconds; },
+      podDrainTimeoutMs: 4, podDrainPollIntervalMs: 2,
     },
+    podReadCount: () => podInventoryReads,
   };
 }
 
@@ -204,6 +223,37 @@ test('a complete rollout writes deployed only after readiness, Pod, and Gateway 
   assert.equal(world.written[0].receipt.status, 'deployed');
   assert.equal(world.calls.filter(call => call.command === 'kubectl' && call.args.includes('patch')).length,
     WHOLE_RELEASE_SERVICES.length);
+});
+
+test('whole-release waits for a terminating old ReplicaSet Pod to disappear before strict verification', async () => {
+  const world = makeFixture({ terminatingOldReplicaSetPodOnce: true });
+  const receipt = await runWholeRelease({ ...world.options, execute: true }, world.overrides);
+
+  assert.equal(receipt.result, 'succeeded');
+  assert.equal(receipt.pods.status, 'passed');
+  assert.equal(world.podReadCount(), 2);
+  assert.deepEqual(world.calls
+    .filter(call => call.command === 'kubectl' && call.args.includes('replicasets,pods'))
+    .map(call => call.settings.timeout), [4, 2]);
+});
+
+test('Pod settling rejects an inventory that returns clean after its deadline', async () => {
+  let now = 0;
+  let readTimeout;
+  let checkedInventory = false;
+  await assert.rejects(waitForDeploymentPods(timeout => {
+    readTimeout = timeout;
+    now = 120_001;
+    return [];
+  }, () => {
+    checkedInventory = true;
+    return null;
+  }, {
+    label: 'test', timeoutMs: 120_000, intervalMs: 2_000,
+    now: () => now, sleep: async () => {},
+  }), /Timed out waiting for test Pods to settle/);
+  assert.equal(readTimeout, 120_000);
+  assert.equal(checkedInventory, false);
 });
 
 test('a service planned but omitted from the current publication cannot fall back to a previous image', () => {
@@ -318,13 +368,14 @@ test('an active database maintenance run blocks whole-release planning and rollo
   assert.equal(world.calls.some(call => call.command === 'kubectl' && call.args.includes('patch')), false);
 });
 
-test('Pods left from an older ReplicaSet produce a partial whole-release receipt', async () => {
+test('terminating old ReplicaSet Pods that never clear time out with a partial receipt', async () => {
   const world = makeFixture({ oldReplicaSetPod: true });
   await assert.rejects(runWholeRelease({ ...world.options, execute: true }, world.overrides),
-    /has 2 Pods; expected 1/);
+    /Timed out waiting for whole-release Pods to settle/);
   assert.equal(world.written[0].receipt.status, 'partial');
   assert.equal(world.written[0].receipt.pods.status, 'failed');
   assert.equal(world.written[0].receipt.smoke.status, 'not-run');
+  assert.equal(world.written[0].receipt.error.includes('Timed out waiting for whole-release Pods to settle'), true);
 });
 
 test('custom receipt directories also create the whole-release last-receipt directory', () => {

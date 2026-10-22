@@ -164,6 +164,105 @@ export function verifyDeploymentReady(deployment, replicas, label, fail) {
   return { generation, observedGeneration, replicas, readyReplicas: status.readyReplicas };
 }
 
+export function deploymentPodDrainReason(items, services, after, fail) {
+  const replicaSets = items.filter(item => item.kind === 'ReplicaSet');
+  const pods = items.filter(item => item.kind === 'Pod');
+  for (const service of services) {
+    const deployment = after.byName.get(service.deployment);
+    const deploymentUid = deployment?.metadata?.uid;
+    const revision = deployment?.metadata?.annotations?.['deployment.kubernetes.io/revision'];
+    if (typeof deploymentUid !== 'string' || typeof revision !== 'string' || !/^[1-9]\d*$/.test(revision)) {
+      fail(`${service.deployment} has no stable Deployment identity or revision for Pod settling.`);
+    }
+
+    // Match the Deployment by both name and UID so Pods from a replaced workload cannot look current.
+    const ownedReplicaSets = replicaSets.filter(replicaSet =>
+      replicaSet.metadata?.ownerReferences?.some(owner =>
+        owner.kind === 'Deployment' && owner.name === service.deployment && owner.uid === deploymentUid));
+    const replicaSetUids = ownedReplicaSets.map(replicaSet => replicaSet.metadata?.uid);
+    if (replicaSetUids.some(uid => typeof uid !== 'string' || uid.length === 0) ||
+        new Set(replicaSetUids).size !== replicaSetUids.length) {
+      fail(`${service.deployment} has a ReplicaSet with a missing or duplicate UID.`);
+    }
+    const currentReplicaSets = ownedReplicaSets.filter(replicaSet =>
+      replicaSet.metadata?.annotations?.['deployment.kubernetes.io/revision'] === revision);
+    if (currentReplicaSets.length > 1) {
+      fail(`${service.deployment} has multiple ReplicaSets for revision ${revision}.`);
+    }
+    if (currentReplicaSets.length === 0) {
+      return `${service.deployment} ReplicaSet revision ${revision} is not visible yet`;
+    }
+
+    const currentReplicaSetUid = currentReplicaSets[0].metadata.uid;
+    const ownedReplicaSetUids = new Set(replicaSetUids);
+    const ownedPods = pods.filter(pod =>
+      pod.metadata?.ownerReferences?.some(owner =>
+        owner.kind === 'ReplicaSet' && ownedReplicaSetUids.has(owner.uid)));
+    // Wait out rollout overlap and deletion grace periods before the strict image/count verifier runs.
+    for (const pod of ownedPods) {
+      const podReplicaSetOwners = pod.metadata?.ownerReferences?.filter(owner =>
+        owner.kind === 'ReplicaSet' && ownedReplicaSetUids.has(owner.uid)) ?? [];
+      if (podReplicaSetOwners.length !== 1) {
+        fail(`${service.deployment} Pod ${pod.metadata?.name ?? '(unnamed)'} has ambiguous ReplicaSet ownership.`);
+      }
+      if (podReplicaSetOwners[0].uid !== currentReplicaSetUid) {
+        return `${service.deployment} still has a Pod owned by an older ReplicaSet`;
+      }
+    }
+    if (ownedPods.some(pod => pod.metadata?.deletionTimestamp)) {
+      return `${service.deployment} still has a terminating Pod`;
+    }
+    if (ownedPods.length !== service.replicas) {
+      return `${service.deployment} has ${ownedPods.length} current-revision Pods; expected ${service.replicas}`;
+    }
+  }
+  return null;
+}
+
+export async function waitForDeploymentPods(readInventory, getPendingReason, {
+  label, timeoutMs = 120_000, intervalMs = 2_000, now = Date.now,
+  sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+} = {}) {
+  if (typeof label !== 'string' || label.length === 0 ||
+      !Number.isFinite(timeoutMs) || timeoutMs < 0 ||
+      !Number.isFinite(intervalMs) || intervalMs <= 0 ||
+      typeof now !== 'function' || typeof sleep !== 'function') {
+    throw new Error('Pod settling requires a label, nonnegative timeout, positive interval, clock, and sleep function.');
+  }
+  const deadline = now() + timeoutMs;
+  let lastPendingReason = 'the Pod inventory has not settled';
+  while (true) {
+    const remainingBeforeReadMs = deadline - now();
+    if (remainingBeforeReadMs <= 0) {
+      throw new Error(`Timed out waiting for ${label} Pods to settle: ${lastPendingReason}.`);
+    }
+    let items;
+    try {
+      // Bound the synchronous kubectl call too; otherwise a stalled API could outlive the overall deadline.
+      items = readInventory(remainingBeforeReadMs);
+    } catch (error) {
+      if (now() >= deadline || error?.code === 'ETIMEDOUT' ||
+          /ETIMEDOUT|timed out/i.test(error instanceof Error ? error.message : String(error))) {
+        throw new Error(`Timed out waiting for ${label} Pods to settle: ${lastPendingReason}.`, { cause: error });
+      }
+      throw error;
+    }
+    if (now() >= deadline) {
+      throw new Error(`Timed out waiting for ${label} Pods to settle: ${lastPendingReason}.`);
+    }
+    const pendingReason = getPendingReason(items);
+    if (pendingReason === null) return items;
+    lastPendingReason = pendingReason;
+
+    // Deployment readiness can precede deletion of old Pods, so re-read until the strict inventory is settled.
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      throw new Error(`Timed out waiting for ${label} Pods to settle: ${pendingReason}.`);
+    }
+    await sleep(Math.min(intervalMs, remainingMs));
+  }
+}
+
 export function writeRolloutReceipt(file, receipt) {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx' });

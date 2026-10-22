@@ -10,6 +10,7 @@ function isRecord(value) {
 }
 
 function requireAncestor(exec, root, sourceSha, target, description, fail) {
+  // A source-bound digest must come from the publication's Git history, not just a receipt field.
   const result = exec('git', ['merge-base', '--is-ancestor', sourceSha, target], { cwd: root, check: false });
   if (result.status !== 0) fail(`${description} ${sourceSha} is not an ancestor of ${target}.`);
 }
@@ -64,6 +65,7 @@ export function selectPublishedComponentImage(publication, manifest, componentId
   let imageSourceSha = publication.sourceSha;
   let imageSourceTree;
   if (plan.reused !== undefined || result.reused !== undefined) {
+    // A reused image keeps its original build source; both receipt halves must agree on that provenance.
     const reused = plan.reused;
     if (publication.requiredPackageIds === undefined ||
         !isRecord(reused) || !isDeepStrictEqual(result.reused, reused) ||

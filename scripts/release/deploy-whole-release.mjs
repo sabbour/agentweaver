@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { withP0UserKubeconfig } from '../azure/lib/namespace-bootstrap.mjs';
 import { run, redact } from '../azure/lib/exec.mjs';
 import {
-  deploymentInventory,
+  deploymentInventory, deploymentPodDrainReason, waitForDeploymentPods,
 } from './image-rollout-common.mjs';
 import {
   WHOLE_RELEASE_RECEIPT_DIRECTORY, compareWholeReleaseState, checkSchemaCompatibility,
@@ -140,6 +140,7 @@ function requireNoMaintenanceLock(kubectl) {
     const lease = parseJson(result.stdout, 'database maintenance lock');
     wholeReleaseFail(`db:maintenance lock is held by ${lease.spec?.holderIdentity ?? 'an unknown run'}.`);
   }
+  // NotFound is the only failure that proves no maintenance lease is present.
   if (!/NotFound/i.test(result.stderr ?? '')) {
     wholeReleaseFail(`could not verify the db:maintenance lock: ${(result.stderr ?? '').trim()}`);
   }
@@ -154,6 +155,7 @@ function verifyPods(items, services) {
         owner.kind === 'Deployment' && owner.name === service.deployment &&
         owner.uid === service.deploymentObject.metadata.uid));
     const rsUids = new Set(ownedReplicaSets.map(item => item.metadata?.uid).filter(Boolean));
+    // Follow ReplicaSet UIDs so a Pod with a coincidental label cannot satisfy this Deployment's check.
     const ownedPods = pods.filter(item =>
       item.metadata?.ownerReferences?.some(owner => owner.kind === 'ReplicaSet' && rsUids.has(owner.uid)));
     if (ownedPods.length !== service.replicas) {
@@ -165,6 +167,7 @@ function verifyPods(items, services) {
       const imageId = status[0]?.imageID;
       const expectedRepository = service.image.slice(0, service.image.lastIndexOf('@'));
       const match = /^(?:docker-pullable:\/\/)?(.+)@(sha256:[a-f0-9]{64})$/.exec(imageId ?? '');
+      // A counted Pod must be live, Running, Ready, on the target image, and report a verified registry digest.
       if (pod.metadata?.deletionTimestamp || pod.status?.phase !== 'Running' ||
           container.length !== 1 || container[0].image !== service.image ||
           status.length !== 1 || status[0].ready !== true ||
@@ -213,6 +216,7 @@ export async function runWholeRelease(options, overrides = {}) {
     }
     const head = gitOutput(deps.exec, root, ['rev-parse', 'HEAD'], 'Git HEAD').trim();
     if (!SHA.test(head)) wholeReleaseFail('the deployment-tool checkout HEAD is not a full Git commit SHA.');
+    // Refresh and bind both the deployment tool and publication source to the approved v1 line.
     const fetch = deps.exec('git', ['fetch', '--quiet', 'origin', 'v1'], { cwd: root, check: false });
     if (fetch.status !== 0) wholeReleaseFail('could not refresh origin/v1 before source verification.');
     if (deps.exec('git', ['merge-base', '--is-ancestor', head, 'origin/v1'], { cwd: root, check: false }).status !== 0) {
@@ -243,8 +247,9 @@ export async function runWholeRelease(options, overrides = {}) {
     }));
 
     const action = async baseArgs => {
-      const kubectl = args => deps.exec('kubectl', [...baseArgs, '--namespace', NAMESPACE, ...args],
-        { cwd: root, check: false });
+      const kubectl = (args, settings = {}) => deps.exec('kubectl', [
+        ...baseArgs, '--namespace', NAMESPACE, ...args,
+      ], { cwd: root, check: false, ...settings });
       requireNoMaintenanceLock(kubectl);
       const inventory = () => deploymentInventory(
         (args, settings) => deps.exec('kubectl', [...baseArgs, ...args], settings),
@@ -267,6 +272,7 @@ export async function runWholeRelease(options, overrides = {}) {
 
       executionStarted = true;
       const updates = wholeReleaseUpdates(services);
+      // Preserve the reviewed dependency order; edge services move only after their prerequisites.
       for (const deployment of SAFE_ROLLOUT_ORDER) {
         const service = services.find(item => item.deployment === deployment);
         if (!service?.changed) continue;
@@ -293,8 +299,17 @@ export async function runWholeRelease(options, overrides = {}) {
         before, after, services, updates, wholeReleaseFail),
       };
       receipt.pods = { status: 'waiting', services: [] };
-      receipt.pods.services = verifyPods(parseKubernetesObjects(
-        kubectl(['get', 'replicasets,pods', '--output', 'json'])), services);
+      const podInventory = await waitForDeploymentPods(
+        timeout => parseKubernetesObjects(
+          kubectl(['get', 'replicasets,pods', '--output', 'json'], { timeout }),
+        ),
+        items => deploymentPodDrainReason(items, services, after, wholeReleaseFail),
+        {
+          label: 'whole-release', timeoutMs: deps.podDrainTimeoutMs,
+          intervalMs: deps.podDrainPollIntervalMs, now: deps.nowMs, sleep: deps.sleep,
+        },
+      );
+      receipt.pods.services = verifyPods(podInventory, services);
       receipt.pods.status = 'passed';
       receipt.smoke = { status: 'waiting', checks: [] };
       receipt.smoke.checks = await deps.smoke({
@@ -304,6 +319,7 @@ export async function runWholeRelease(options, overrides = {}) {
         fetchImpl: deps.fetchImpl,
       });
       receipt.smoke.status = 'passed';
+      // Only all-passing readback, Pod, and Gateway checks justify a deployed receipt.
       receipt.status = 'deployed';
       receipt.installation = { status: 'deployed' };
       receipt.result = 'succeeded';
@@ -325,6 +341,7 @@ export async function runWholeRelease(options, overrides = {}) {
     });
   } catch (error) {
     primaryError = error;
+    // Any failed execute remains partial, even when some Deployments already reached their target.
     receipt.status = 'partial';
     receipt.installation = { status: 'partial' };
     receipt.result = 'failed';

@@ -490,9 +490,10 @@ the intended image for every installed service, using a previous publication
 receipt for unchanged images, then compares every live Deployment before any
 write. Dry run is read-only. Execute mode updates only the selected
 application containers, waits for readiness, verifies every Pod image ID and
-ReplicaSet, and runs authenticated Gateway checks for Projects, Priorities,
-project runs, and project metrics. Database migrations remain a separate
-`db:maintenance` operation.
+ReplicaSet, and waits up to two minutes for terminating or older-ReplicaSet
+Pods to disappear before final verification. It then runs authenticated Gateway
+checks for Projects, Priorities, project runs, and project metrics. Database
+migrations remain a separate `db:maintenance` operation.
 
 ```powershell
 npm run release:deploy-whole -- `
