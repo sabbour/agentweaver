@@ -174,8 +174,8 @@ type, function source/owner, and runtime EXECUTE restriction. Its role stage
 checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
-Its source catalog includes 30 Core migration versions (1 through 16 and 18
-through 31), with version 17 excluded, and nine Events versions. The initializer
+Its source catalog includes 31 Core migration versions (1 through 16, 18
+through 31, and 33), with versions 17 and 32 excluded, and nine Events versions. The initializer
 compares that catalog with each migrator's compiled version list.
 It retains 110 tables, eight row-lock columns, and 33 exact function signatures.
 The Environment runtime bootstrap profile replacement store requires a separate

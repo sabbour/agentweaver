@@ -12,3 +12,4 @@ Without the new migration settings, `--migrate` behaves as before.
 The Foundation Probe image build now copies the embedded plan file that its Postgres package needs.
 A new setup command creates the database maintenance workflow identity, its namespace-scoped Kubernetes role, and the GitHub environment, and runs the one-time schema ownership handover.
 The database maintenance runner compares the schema range each running and target service image accepts, then deploys before or after the migrations, or runs a planned readiness gap that deploys the matching images in the same run and only rolls forward.
+The pinned plan includes Core 033 while excluding 017 and 032. The new owner accepts schema 031 before 033, so the runner deploys it first when the recorded schema proves compatibility. Every target digest is checked, including unchanged or not-yet-deployed images.

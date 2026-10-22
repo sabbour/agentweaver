@@ -8,8 +8,8 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "899871e2030bf1b887a337868561ee3754b723e57169565b0981930ddd979fd1";
-    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 14)];
+    private const string ReviewedPlanSha256 = "ff069555878416f3c4111eb70973c41f0d0eb9e907425ccc72c7270208aa3fbc";
+    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 14), 33];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 9)];
 
     [Fact]
@@ -27,6 +27,7 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Equal(CoreVersions, core.Versions);
         Assert.DoesNotContain(17, core.Versions);
         Assert.DoesNotContain(32, core.Versions);
+        Assert.Contains(33, core.Versions);
         Assert.NotEmpty(core.Tables);
 
         var events = PlannedRuntimeGrants.Load(
@@ -47,7 +48,7 @@ public sealed class PlannedRuntimeGrantsTests
     [Theory]
     [InlineData("")]
     [InlineData("not-a-hash")]
-    [InlineData("899871E2030BF1B887A337868561EE3754B723E57169565B0981930DDD979FD1")]
+    [InlineData("FF069555878416F3C4111EB70973C41F0D0EB9E907425CCC72C7270208AA3FBC")]
     public void RejectsMissingOrMalformedExpectedHash(string expected)
     {
         Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(

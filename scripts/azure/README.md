@@ -236,8 +236,8 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 31.
-These are 30 registered versions; version 17 remains excluded.
+The source catalog requires Core versions 1 through 16, 18 through 31, and 33.
+These are 31 registered versions; versions 17 and 32 remain excluded.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,

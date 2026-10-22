@@ -25,8 +25,8 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   postgresHost: 'agentweaver-pg.postgres.database.azure.com',
   registry: 'ghcr.io/sabbour',
 });
-/** The reviewed plan: Core 1-16 and 18-31, Events 1-9. Migration 032 is not part of it. */
-export const REVIEWED_PLAN_SHA256 = '899871e2030bf1b887a337868561ee3754b723e57169565b0981930ddd979fd1';
+/** The reviewed plan: Core 1-16, 18-31 and 33, Events 1-9. Migration 032 is not part of it. */
+export const REVIEWED_PLAN_SHA256 = 'ff069555878416f3c4111eb70973c41f0d0eb9e907425ccc72c7270208aa3fbc';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';
@@ -247,9 +247,10 @@ function checkAppImages(kubectl, options) {
  * highest applied migration of that service. The readiness check rejects any version outside its
  * `NOT IN (...)` list, so the highest listed version is the most the image accepts. It also
  * requires each version it checks with `WHERE version = N)`, except versions it also accepts as
- * absent (`= 0`), such as the optional Orchestrator 032. The highest required version is the
- * least the image accepts. Returns undefined when the source does not have that shape, so an
- * unexpected file never produces a guessed range.
+ * absent (`= 0`), such as Orchestrator 032 and the rollout-compatible 033. An image can accept
+ * 033 as optional at startup while its default migration catalog still applies 033. The highest
+ * required version is the least the image accepts. Returns undefined when the source does not
+ * have that shape, so an unexpected file never produces a guessed range.
  */
 export function schemaRangeFromSource(source, component) {
   const owner = OWNER_SOURCES[component];
@@ -309,9 +310,9 @@ export async function readImageSchemaRange({ image, component, readImage, exec, 
  * - gap: neither image accepts the other's schema. The service is unready from the migration
  *   until its target image is ready. This is a planned readiness gap, not an error.
  * An image whose range is unknown accepts nothing as far as this function knows. The runner
- * never passes an unknown range for a target image (see runDbMaintenance), so in practice only
- * a running image can be unknown. The current schema comes from the state ConfigMap; when it was
- * never recorded, deploy-first is not chosen.
+ * never passes an unknown range for a target image (see runDbMaintenance), even when it already
+ * runs that digest. Only a running image can be unknown. The current schema comes from the state
+ * ConfigMap; when it was never recorded, deploy-first is not chosen.
  */
 export function planServiceOrder({ appImages, ranges, targetSchema, currentSchema }) {
   const within = (range, version) => range !== undefined && version !== undefined &&
@@ -321,7 +322,7 @@ export function planServiceOrder({ appImages, ranges, targetSchema, currentSchem
     const current = currentSchema[app.deployment];
     const targetSupports = ranges[app.expected];
     // A target image that rejects the plan's own schema was built from other source: wrong digest.
-    if (app.status === 'mismatch' && !within(targetSupports, target))
+    if (!within(targetSupports, target))
       throw new Error(`${app.deployment} image ${app.expected} accepts schema ` +
         `${targetSupports ? `${targetSupports.minSchema}-${targetSupports.maxSchema}` : 'unknown'}, ` +
         `not ${target} from the reviewed plan. Pass the digest built from the reviewed source.`);
@@ -632,17 +633,18 @@ export async function runDbMaintenance(options, overrides = {}) {
         throw new Error(`Deployment ${absent.map(app => app.deployment).join(', ')} does not exist. ` +
           'Install the services with the release deploy path first.');
     } else if (!options.prepareOnly) {
-      // Read the accepted schema range of every image involved in a change, from the image's own
-      // source label. Services already on the target image need no range. A target image must
-      // have a known range: an unreadable label or source stops the run, because guessing could
+      // Read the accepted schema range of every target image from the image's own source label.
+      // Matching digests still need this gate: an unchanged image can reject a newer schema.
+      // A target image must have a known range: an unreadable label or source stops the run, because guessing could
       // pick an order that leaves a service unready. A running image may be unknown (for example
       // a tag or a foreign registry); then nothing is assumed about it.
       const ranges = {};
-      for (const app of receipt.appImages.filter(entry => entry.status === 'mismatch')) {
+      for (const app of receipt.appImages) {
         const targetRange = await deps.imageSchemaRange(app.expected, app.component);
         if (targetRange.unknown)
           throw new Error(`Could not read the schema range of ${app.deployment} image ${app.expected}: ${targetRange.unknown}.`);
         ranges[app.expected] = { minSchema: targetRange.minSchema, maxSchema: targetRange.maxSchema };
+        if (!app.running || app.running === app.expected) continue;
         const runningRange = await deps.imageSchemaRange(app.running, app.component);
         if (runningRange.unknown) log(`Schema range of running ${app.deployment} image is unknown: ${runningRange.unknown}.`);
         else ranges[app.running] = { minSchema: runningRange.minSchema, maxSchema: runningRange.maxSchema };

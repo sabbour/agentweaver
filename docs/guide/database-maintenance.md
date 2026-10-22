@@ -9,11 +9,11 @@ tunnel, or a one-off command.
 The runner applies these migrations, in this order:
 
 1. Identity Broker EF Core migrations, when you pass a Broker digest.
-2. Orchestrator (Core) migrations 1 to 16 and 18 to 31.
+2. Orchestrator (Core) migrations 1 to 16, 18 to 31, and 33.
 3. Events & Sessions migrations 1 to 9.
 
-The reviewed plan fixes these versions by hash. Core migration 032 is not in the
-plan. An image that would apply it fails before it connects.
+The reviewed plan fixes these versions by hash. Core migrations 017 and 032 are
+not in the plan. An image that would apply them fails before it connects.
 
 ## What one run does
 
@@ -25,7 +25,7 @@ plan. An image that would apply it fails before it connects.
 | Cluster access | Checks the Azure account, gets a private kubeconfig for `agentweaver-aks`, and checks Kubernetes permissions. | Uses a temporary file that is always removed. |
 | Broker egress check | Compares the live Broker migration egress policy with the repository and reports any DNS name that differs. | Read-only. |
 | Setup check | Reads the migration identity, its federated credential, and the recorded handover. A workload identity that would need either one stops here and names the setup command. | Read-only. |
-| Service image check | Reads the images the Orchestrator and Events & Sessions Deployments run. | Read-only. |
+| Service image check | Reads the running and target images' schema ranges and chooses deployment order. Checks target compatibility even when the digest is unchanged. | Read-only. |
 | Lock | Creates the Lease `p1-db-maintenance-lock`. A second run fails here. | Released at the end of every run. |
 | Migration identity | Uses the existing identity when it and its federated credential match. Otherwise a run signed in as the PostgreSQL Entra administrator deploys `infra/bicep/p1-postgres-migration-identity.bicep`. | The deployment is declarative. |
 | ServiceAccount and egress | Applies `p1-postgres-migration` and its egress policy with server-side apply. | Server-side apply. |
@@ -168,7 +168,7 @@ The runner reads each image's accepted range from the image itself. There is
 no list to update when you publish an image. A schema version is the highest
 applied migration of that service.
 
-For each image that would change, the runner:
+For every target image and each different running image, the runner:
 
 1. Reads the image's `org.opencontainers.image.revision` label from the
    registry. Every published service image has this label. It holds the commit
@@ -178,15 +178,24 @@ For each image that would change, the runner:
 3. Reads the range from the readiness check in that source. The highest
    version the check requires is the lowest accepted version. The highest
    version it allows is the highest accepted version. For example, the current
-   Orchestrator image accepts 31 to 32, because migration 032 is optional.
+   Orchestrator image accepts 31 to 33. It accepts the complete schema before
+   and after migration 033, and migration 032 remains optional.
 
 If the runner cannot read the range of a new image, the run stops before any
 change. If the new image does not accept the target schema of the reviewed
-plan, the digest was built from other source, and the run also stops. If it
+plan, the digest was built from other source, and the run also stops. This check
+also applies when the Deployment already runs that digest or does not exist. If it
 cannot read the range of a running image, for example a tag or an image from
 another registry, it assumes nothing about that image, so the run takes the
 planned-gap path. The runner records each schema version in its state after a
 run, and uses it to decide whether a new image accepts the current schema.
+
+For the Core 031 to 033 upgrade, the old owner accepts only 31 to 32. The new
+owner accepts 31 to 33, so it can become ready before 033 is applied. When the
+state records schema 31, `--deploy-apps` deploys the new owner first, waits for
+readiness, then applies 033. If no schema version is recorded, the runner
+cannot prove that order is safe and uses a planned readiness gap instead.
+Both paths keep 017 and 032 out of the migration plan.
 
 ### Planned readiness gap
 
