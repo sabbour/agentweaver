@@ -173,6 +173,23 @@ settings, and provider-catalog source. The
 values. Secrets, private keys, certificates, CA data, database grants and
 migrations, and Gateway placement remain operator-managed.
 
+### Web-only image rollout
+
+`release:deploy-web` reads the tracked `releases/foundation.json` manifest from
+the publication source commit. The manifest remains a draft and supplies the
+`Agentweaver.Web` version; it does not supply a published image digest. The
+publication receipt must contain exactly one planned and one published Web
+image for that version, with matching archive hashes. The published entry's
+digest-pinned image reference supplies the digest to verify and deploy.
+
+For a reused image, the planned and published entries must carry the same
+provenance. The original build commit and source tree determine the immutable
+tag and the OCI labels checked in the registry. The deployment tool checkout,
+publication source, and original build commit must all be in the current
+`origin/v1` history. The command then uses a resource-version-guarded patch on
+only the Web container and records readiness and before/after state in its
+receipt.
+
 Run the deployment command without `--execute` first. The default is a
 read-only dry run:
 
