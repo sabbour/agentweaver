@@ -39,7 +39,6 @@ import type {
   ConfirmProposalRequest,
   ConnectedRepository,
   ConnectProjectRepositoryRequest,
-  CreateProjectRoleAssignmentRequest,
   CoordinatorChildResponse,
   CreateProjectRepositoryRequest,
   CreateProjectRequest,
@@ -62,7 +61,6 @@ import type {
   PagedResult,
   PlatformDefaultCopilotConnection,
   Project,
-  ProjectAccessOverview,
   ProjectCopilotConnection,
   RepoAppConnectionStatus,
   RequestChangesResponse,
@@ -936,21 +934,6 @@ export class AgentweaverApiClient {
   /** Connects an existing GitHub repository to a project. */
   connectProjectRepository(projectId: string, req: ConnectProjectRepositoryRequest): Promise<ConnectedRepository> {
     return this.request<ConnectedRepository>('POST', `/projects/${encodeURIComponent(projectId)}/github/repository/connection`, req);
-  }
-
-  /** Reads project access and role-assignment information for its owner. */
-  getProjectAccessOverview(projectId: string): Promise<ProjectAccessOverview> {
-    return this.request<ProjectAccessOverview>('GET', `/projects/${encodeURIComponent(projectId)}/access`);
-  }
-
-  /** Grants a project role to the submitted principal. */
-  createProjectRoleAssignment(projectId: string, req: CreateProjectRoleAssignmentRequest): Promise<void> {
-    return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/role-assignments`, req);
-  }
-
-  /** Removes one project role assignment by its server-issued identifier. */
-  deleteProjectRoleAssignment(projectId: string, assignmentId: string): Promise<void> {
-    return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/role-assignments/${encodeURIComponent(assignmentId)}`);
   }
 
   // Catalog

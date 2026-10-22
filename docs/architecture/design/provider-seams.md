@@ -273,6 +273,10 @@ The defaults below describe the cutover path. A later provider is an extension p
 cutover. The owner names the service responsible for the adapter lifecycle; core enforcement can involve
 other services.
 
+To see which implementation is active in each area of a running deployment, use the
+[platform components report](../../guide/platform-components.md). A test in
+`tests/Agentweaver.Providers.Tests` keeps the area list of that report in sync with this table.
+
 | Seam | Purpose | Owning service | Azure/default adapter in 1.0 | Later adapters | Cardinality |
 | --- | --- | --- | --- | --- | --- |
 | Sessions | Journal, playback, and optional capture | Events & Sessions | Native Postgres journal | Optional AgentSessions provider (read-only replay of verified record exports) | Exclusive authority per run |
@@ -693,17 +697,57 @@ and tool results. Later ordered checks can add Microsoft Purview DLP, Llama Guar
 Guardrails. Projects can select or reorder only platform-enabled checks. The ordered result, versions, and
 failures are journaled; classifier transport and credentials remain outside prompt content.
 
-The Orchestrator Core `GuardrailsContentGate` source is a typed, fail-closed candidate for this contract.
-It consumes an owner-produced ordered stage/content pin, runs checks in that exact order, sends bounded
-finding codes to the existing AGT provider, records redacted provider/version metadata through an injected
-journal contract, and rechecks owner authority after classifier and journal waits. It hashes the exact
-immutable classifier input with SHA-256 and includes that digest beside the owner snapshot digest in
-authority checks and evidence. Its declared default capabilities are limited to text at the user-input
-and tool-result stages; model input/output, MCP discovery, structured results, and non-text content require
-an exact capability on every check in the accepted stage pin. No production Prompt Shields transport,
-trusted journal writer, current-authority adapter, or MAF gate is wired in this source candidate, so it
-does not prove runtime content protection. Permission metadata and MCP annotations are provenance only
-and never grant tool authority.
+The Orchestrator Core `GuardrailsContentGate` is the fail-closed gate for this contract. It consumes an
+owner-produced ordered stage/content pin, runs checks in that exact order, sends bounded finding codes to
+the existing AGT provider, records redacted provider/version metadata through the evidence journal, and
+rechecks owner authority after classifier and journal waits. It hashes the exact immutable classifier
+input with SHA-256 and includes that digest beside the owner snapshot digest in authority checks and
+evidence. Its declared default capabilities are limited to text at the user-input and tool-result stages;
+model input/output, MCP discovery, structured results, and non-text content require an exact capability
+on every check in the accepted stage pin. Permission metadata and MCP annotations are provenance only and
+never grant tool authority.
+
+### P2 runtime gate for model-turn user input
+
+In P2, the Orchestrator runs the ordered Guardrails checks on model-turn user input during runtime action
+admission (`/internal/runtime/actions/authorize`):
+
+1. The Orchestrator reads the ordered Guardrails selection that Projects recorded in the accepted run
+   snapshot. When the snapshot has no Guardrails selection, admission is unchanged and the runtime never
+   sends prompt text.
+2. When checks apply, plain admission returns HTTP 428 with `runtime_guardrails_content_required` before
+   it issues a grant. The runtime then calls `/internal/runtime/actions/authorize-content` with the exact
+   UTF-8 text whose SHA-256 digest is the request input hash. The limit is 256 KiB of text.
+3. `GuardrailsStagePlanResolver` binds the accepted checks to the registered classifiers for the
+   `UserInput` stage and `Text` content class. A reordered, added, disabled, stale, or unregistered check
+   fails closed.
+4. After the grant is issued and before the policy receipt is written, `GuardrailsContentGate` runs each
+   check in order. `PromptShieldsClassifier` calls Azure AI Content Safety `text:shieldPrompt` with the
+   Orchestrator workload identity. A detected attack becomes the `prompt_shields.user_prompt_attack`
+   finding.
+5. The gate sends the findings to AGT as the `guardrails_stage`, `guardrails_content_class`,
+   `guardrails_finding_count`, and `guardrails_findings` context keys. AGT makes the final decision.
+6. The Orchestrator appends one immutable evidence row per operation to the `guardrails_evaluations`
+   table (Orchestrator migration 028). The row holds digests, provider IDs, versions, finding codes, and
+   the AGT outcome. It never holds the content. Classifier timeouts and unavailable classifiers aren't
+   recorded, so a retry can reach the final decision.
+
+A withheld turn has no policy receipt, so the runtime can't verify or perform it. Classifier timeouts and
+unavailable classifiers, journals, or owners return HTTP 503 and fail closed. Tool-approval denial and
+concurrency behavior are unchanged: tool actions never carry content, and a 428 for an action without
+content fails with `runtime_guardrails_content_unsupported`.
+
+Prompt Shields is the only supported P2 check. The gate doesn't check tool results or MCP results yet.
+Those checks run at the `ToolResult` stage after the Tool & MCP gateway returns remote results to the
+Orchestrator. For configuration, see
+[Guardrails settings](../../reference/runtime-configuration.md#guardrails-settings).
+
+AgentSuite policy documents and per-agent policy bindings are the interoperable policy format. The
+Projects & Config AgentSuite import is the only loader. It
+retains each policy and binds it to the effective agent ID and policy digest. Importing or persisting a
+policy doesn't prove that the runner enforces it. The AgentSuite v2 policy carries only a network egress
+allow-list, which Guardrails doesn't enforce. A bound agent keeps the `policy_not_enforced` blocker until
+an owner that advertises `network/egress-allow/v1` accepts the binding.
 
 ## Network Policy
 
@@ -799,11 +843,17 @@ The standalone Azure BYOK cost adapter accepts an explicitly configured, version
 Azure Retail Prices card with model-scoped standard input/output token rates and a
 declared currency. It does not fetch live prices or quote BYOK work. Missing token
 counts, unsupported cache categories, unknown models, and changed bindings remain
-`unpriced`, not zero-cost. Its receipt-consumer integration must also verify trusted
-Azure provider and deployment facts bound to the accepted runtime model pin; until
-that source contract is admitted, Events must keep BYOK usage unpriced. Provisioned
-throughput remains `unpriced` until trusted resource- and time-window-level usage
-share supplies its denominator. Other meter sources provide their own pricing.
+`unpriced`, not zero-cost. Events verifies trusted Azure provider and deployment
+facts bound to the accepted runtime model pin and rejects any Azure BYOK claim
+that fails the check. Only usage that also carries its dispatch message ID passes
+`RequireTrustedAzureByok` and can be priced. Azure pricing is off until the
+`EventsAndSessions:Cost:Azure` section supplies an explicit, versioned rate card;
+until then admitted Azure BYOK usage stays `unpriced`. Other BYOK providers stay
+`unpriced`. Provisioned throughput stays `unpriced` per event; a report-only
+allocator splits a fixed period charge by token share with exact largest-remainder
+rounding and never changes ledger rows. Events also serves represented-spend
+evidence: per-bucket run and period totals, dispatch witnesses, and a monotonic
+accounting cursor from one ledger snapshot. Other meter sources provide their own pricing.
 Sandbox compute cost is a later meter source, not part of the 1.0 model-cost
 contract.
 
@@ -840,6 +890,106 @@ flowchart LR
         A --> T
         T --> B["Workflow budget limits"]
         T --> R["Optional bill reconciliation"]
+    end
+```
+
+#### Scoped spend budgets and dispatch exposure
+
+`runLimits.spendBudgets` defines budget buckets. Each bucket is one meter source and unit, such as
+`copilot.nano_aiu` in `AIC` or `byok.tokens` in `USD`, at one scope:
+
+- **Run** budgets limit the run's total.
+- **Agent** budgets limit one agent's total in the run.
+- **Project** budgets limit the project's total for an explicit period with an inclusive start and an
+  exclusive end.
+
+A project can add budgets. It can only narrow a platform budget that has the same `BudgetId`: the same
+bucket and period, lower or equal limits, and a reserve that is at least the platform reserve. The
+accepted run selection pins run and agent budgets. Orchestrator reads project budgets from Projects for
+each dispatch, so a tightened project budget applies to the next dispatch of every run.
+
+Events is the only usage ledger. Orchestrator stores no spend amounts. Migration
+`029_spend_budget_exposure.sql` adds two tables to the Orchestrator schema:
+
+- `spend_budget_reservations` holds one reservation of `ReservePerDispatch` per admitted dispatch and
+  bucket. A reservation is `outstanding` until Events accounts for the dispatch, and then it becomes
+  `retired`. Triggers reject deletes, truncates, and every other change.
+- `spend_budget_accounting_cursors` holds the highest Events accounting cursor that admission observed for
+  each project and meter source. Triggers reject decreases and deletes.
+
+Admission runs in the native dispatch preparation transaction, before the AgentHost sends anything. For
+each applicable bucket, Orchestrator:
+
+1. Takes a transaction-scoped advisory lock for the bucket, so concurrent dispatches for the same bucket
+   are admitted one at a time.
+1. Reads Events spend evidence for the bucket, including witnesses for up to 64 outstanding dispatches.
+1. Rejects evidence whose cursor is lower than the stored cursor.
+1. Retires a reservation only when its dispatch completed and Events witnesses every source receipt in the
+   dispatch completion manifest. Partial receipts don't retire exposure.
+1. Admits the dispatch only when committed spend, the reserves of outstanding dispatches, and the new
+   reserve stay within the hard limit. An outstanding reservation counts its full reserve even when
+   Events already holds some of its receipts.
+1. Stores the reservation and the cursor in the same transaction as the dispatch.
+
+Reservations count as exposure, so dispatches that start before their usage reaches Events can't exceed
+the hard limit together. A retry of the same dispatch reserves once.
+
+The design makes these choices:
+
+- **Full reserve until retirement.** Events can hold some receipts of a dispatch before it holds all of
+  them. Counting a partial priced amount instead of the full reserve could undercount, so a reservation
+  keeps its full reserve until every receipt is witnessed.
+- **Forward-only cursor.** Two Events reads can return out of order. If an older read were accepted
+  after a newer read retired a reservation, the older total wouldn't include that dispatch's spend and
+  capacity would reopen. Rejecting a lower cursor prevents this.
+- **Bucket identity without revision or limits.** Editing a budget's limits, revision, or period end
+  keeps the same bucket, so reservations from before the edit still count against the new limit.
+- **Bounded witnesses.** One Events read witnesses at most 64 dispatches. A hard bucket with more
+  outstanding reservations can't prove which ones are accounted for, so admission denies the dispatch
+  instead of guessing.
+- **Sorted lock order.** A dispatch can match several buckets. Orchestrator locks them in bucket-key order,
+  so two dispatches that share buckets can't deadlock.
+- **One transaction.** Admission, reservations, cursor, notifications, and the dispatch row commit
+  together. If any step fails, including an outbox write or an owner authority check, the transaction
+  rolls back and nothing is reserved or sent.
+
+A denial records the `orchestrator.run.spend_budget_dispatch_denied` outbox event, stores no
+reservation, and stops the dispatch before send. Dispatch preparation then fails with the error code, the
+same way it fails for a Copilot hard credit limit, so no new turn starts. The first time
+committed spend reaches a soft limit, Orchestrator records one
+`orchestrator.run.spend_budget_soft_limit_reached` outbox event per bucket and period.
+
+Hard budgets fail closed. Soft-only budgets never block, and they send no notification when evidence is
+unavailable.
+
+| Error code | Cause |
+| --- | --- |
+| `runtime_spend_budget_exhausted` | Committed spend plus exposure would exceed the hard limit. |
+| `runtime_spend_evidence_unavailable` | Events evidence for a hard budget can't be read or validated. |
+| `runtime_spend_evidence_stale` | Events evidence is older than evidence that admission already observed. |
+| `runtime_spend_budget_pricing_missing` | The bucket of a hard budget contains unpriced usage. |
+| `runtime_spend_budget_period_uncovered` | No configured period of a hard project budget contains the current time. |
+| `runtime_spend_budget_exposure_unbounded` | A hard budget has more than 64 outstanding dispatches. |
+| `runtime_spend_budget_reservation_conflict` | A retried dispatch doesn't match its stored reservation. |
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant P as Projects
+    participant E as Events
+    participant H as AgentHost
+    O->>P: Read current project budgets
+    O->>O: Lock bucket
+    O->>E: Read spend evidence and outstanding witnesses
+    E-->>O: Totals, witnesses, cursor
+    O->>O: Check cursor, retire accounted reservations
+    alt Committed spend plus exposure within hard limit
+        O->>O: Store reservation and cursor
+        O-->>H: Dispatch prepared
+        H->>E: Usage receipts after send
+    else Over hard limit or evidence unusable
+        O->>O: Record denial outbox event
+        O-->>H: Denied before send
     end
 ```
 

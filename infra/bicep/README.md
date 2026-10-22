@@ -133,6 +133,27 @@ Storage Blob Data Contributor only on the private `session-material` container.
 It does not grant that identity access to the storage account or other
 containers.
 
+`p1-postgres-migration-identity.bicep` defines the P1 migration identity,
+`agentweaver-id-p1-postgres-migration`, and one federated credential for the
+`agentweaver:p1-postgres-migration` ServiceAccount. It assigns no Azure role.
+Its parameters are `namePrefix`, `tags`, and the 40-character `sourceSha`. The
+[database maintenance runner](../../docs/guide/database-maintenance.md) deploys
+it to the existing resource group. A rerun changes nothing.
+
+`db-maintenance-ci-identity.bicep` defines the identity that the database
+maintenance workflow signs in as, `agentweaver-id-db-maintenance`. Its only
+federated credential trusts GitHub Actions jobs that use the
+`v1-db-maintenance` environment. It assigns Reader on the resource group, AKS
+Cluster User on the cluster, and no custom Azure role. The setup script applies
+a Kubernetes Role and RoleBinding only in the `agentweaver` namespace. The Role
+allows the maintenance Jobs, pod logs, ConfigMaps, Leases, ServiceAccounts,
+Cilium network policies, and the `orchestrator` and `events-and-sessions`
+Deployments used by the runner. The identity cannot deploy Azure resources,
+assign roles, or connect to PostgreSQL. Its parameters are `namePrefix`,
+`tags`, `sourceSha`, `githubRepository`, and `githubEnvironment`.
+`npm run db:maintenance:setup` deploys the identity and checks the Azure
+assignments, then applies and reads back the Kubernetes authorization.
+
 Projects & Config applies migrations as its schema owner. After migration
 `20261009021400_AddCastingAuthorityLockFunction` is applied, an approved
 operator can grant the runtime role `EXECUTE` on the exact casting

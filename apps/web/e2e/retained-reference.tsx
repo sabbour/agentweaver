@@ -1,0 +1,34 @@
+/**
+ * Test-only page that renders the real retained 0.x file components with the
+ * same output fixture as the artifact journey, for side-by-side screenshots.
+ */
+import { FluentProvider } from '@fluentui/react-components';
+import { createRoot } from 'react-dom/client';
+import { useState } from 'react';
+import { FilesTabPanel } from '../src/components/ArtifactBrowser';
+import { FileViewer } from '../src/components/FileViewer';
+import { agentweaverLightTheme } from '../src/theme';
+import { capturedPath, capturedText } from '../src/v1/__fixtures__/outputCapture';
+
+/** Returns the fixture file for any path, since the reference shows one file only. */
+const getContent = async () => ({ path: capturedPath, content: capturedText, is_binary: false, language: null });
+/** Two-column file tree and viewer, sized like the file browser in the new app. */
+export default function Reference() {
+  // No file is open at first, like the new app; the test clicks the file.
+  const [path, setPath] = useState<string | null>(null);
+  return <FluentProvider theme={agentweaverLightTheme}>
+    <style>{`
+      body { margin: 0; }
+      .reference { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr); min-height: 340px; box-sizing: border-box; border: 1px solid #e0e0e0; }
+      .files { padding: 8px; overflow: auto; }
+      .viewer { display: flex; min-width: 0; min-height: 300px; max-height: 600px; overflow: auto; }
+      @media(max-width: 640px) { .reference { grid-template-columns: minmax(0, 1fr); } }
+    `}</style>
+    <section className="reference" aria-label="0.x retained file browser">
+      <div className="files"><FilesTabPanel workspaceFiles={[{ path: capturedPath, is_folder: false, status: null }]}
+        workspaceLoading={false} workspaceError={null} selectedPath={path} onFileClick={setPath} /></div>
+      <div className="viewer"><FileViewer runId="r-1" filePath={path} getContent={getContent} /></div>
+    </section>
+  </FluentProvider>;
+}
+createRoot(document.getElementById('root')!).render(<Reference />);

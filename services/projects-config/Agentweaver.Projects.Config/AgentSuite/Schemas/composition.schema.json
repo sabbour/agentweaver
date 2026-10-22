@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suite.agent-primitives.dev/schema/v0.5/composition.schema.json",
+  "title": "AgentSuite composition manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mediaType", "agent", "platform", "buildProfile", "toolProviders"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0-draft"},
+    "mediaType": {"const": "application/vnd.agentsuite.composition.v1+json"},
+    "agent": {"$ref": "#/$defs/id"},
+    "platform": {"$ref": "#/$defs/platform"},
+    "buildProfile": {"$ref": "#/$defs/id"},
+    "runtimeProfile": {"$ref": "#/$defs/id"},
+    "toolProviders": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/resolvedToolProvider"}
+    }
+  },
+  "$defs": {
+    "resolvedToolProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "manifestDigest", "variantDigest", "executionMode"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "version": {"$ref": "#/$defs/version"},
+        "manifestDigest": {"$ref": "#/$defs/digest"},
+        "variantDigest": {"$ref": "#/$defs/digest"},
+        "executionMode": {"const": "shared-sandbox"}
+      }
+    },
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"},
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture"],
+      "properties": {
+        "os": {"const": "linux"},
+        "architecture": {"enum": ["amd64", "arm64"]}
+      }
+    }
+  }
+}

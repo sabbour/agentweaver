@@ -1,5 +1,6 @@
 import { Button, MessageBar, MessageBarBody, MessageBarTitle, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ENTRA_AUTHORIZE_URL } from '../config';
+import type { ReactNode } from 'react';
 
 /**
  * Entra sign-in screen for unauthenticated users. It explains server-side OAuth
@@ -97,7 +98,6 @@ export interface SignInPageProps {
  * actionable copy; it does not retry authentication automatically.
  */
 export function SignInPage({ sessionError = null }: SignInPageProps) {
-  const styles = useStyles();
 
   const params = new URLSearchParams(window.location.search);
   const authError = params.get('auth') === 'error' ? (() => {
@@ -113,6 +113,31 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
         return 'Authentication could not be completed. Start a new sign-in.';
     }
   })() : null;
+  // The 0.x page sends the user to the server-side Entra sign-in route. The
+  // shared view below only draws the card.
+  return (
+    <SignInView
+      heading="Sign in with Microsoft Entra ID"
+      sessionError={sessionError}
+      action={<Button appearance="primary" onClick={() => { window.location.href = ENTRA_AUTHORIZE_URL; }}>Sign in with Microsoft Entra ID</Button>}
+      error={authError}
+    />
+  );
+}
+
+/**
+ * Retains the sign-in presentation while each product line owns authorization.
+ * The caller supplies the heading, the sign-in button (`action`), and any error
+ * text. The view starts no sign-in flow by itself.
+ */
+export function SignInView({ heading, sessionError, action, error, note }: {
+  heading: string;
+  sessionError?: string | null;
+  action: ReactNode;
+  error?: string | null;
+  note?: ReactNode;
+}) {
+  const styles = useStyles();
   return (
     <div className={styles.page}>
       <div className={styles.card}>
@@ -131,32 +156,20 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
         )}
 
         <div>
-          <Text as="h1" className={styles.heading}>Sign in with Microsoft Entra ID</Text>
+          <Text as="h1" className={styles.heading}>{heading}</Text>
           <Text as="p" className={styles.subheading}>
             Run governed teams of AI agents on your organization&apos;s infrastructure.
           </Text>
         </div>
 
-        <div className={styles.checklist}>
-          <Text className={styles.checklistItem}>
-            Describe the work, then review the proposed team, workflow, and approval gates.
-          </Text>
-          <Text className={styles.note}>
-            Authorize the Repo App or Copilot App when a project needs its respective GitHub capability.
-          </Text>
-        </div>
-
         <div className={styles.actions}>
-          <Button
-            appearance="primary"
-            onClick={() => { window.location.href = ENTRA_AUTHORIZE_URL; }}
-          >
-            Sign in with Microsoft Entra ID
-          </Button>
-          {authError && (
-            <Text role="alert" className={styles.error}>{authError}</Text>
+          {action}
+          {/* role="alert" makes screen readers announce a sign-in failure. */}
+          {error && (
+            <Text role="alert" className={styles.error}>{error}</Text>
           )}
         </div>
+        {note && <Text as="p" className={styles.note}>{note}</Text>}
       </div>
     </div>
   );

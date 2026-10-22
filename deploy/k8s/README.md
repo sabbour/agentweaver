@@ -83,6 +83,7 @@ database readiness, identity federation, TLS trust, or external permissions.
 | `provider-catalogs/` | Source-bound Projects & Config provider catalog snapshot and ConfigMap manifest. |
 | `profiles/` | Optional runtime profiles, including the incomplete AgentHost profile. |
 | `migrations/identity-broker/` | Separate Identity Broker migration ServiceAccount and one-shot Job. |
+| `migrations/p1-postgres/` | P1 migration ServiceAccount, its egress policy, and the Orchestrator and Events & Sessions migration Job templates. Only the [database maintenance runner](../../docs/guide/database-maintenance.md) applies them, with pinned images and the real client ID. |
 | `routing/identity-broker/` | Portal Web HTTPRoute and Cilium ingress policies included by the root bundle. |
 | `acceptance/foundation-probe/` | Supplemental acceptance probe resources. |
 | `kustomization.yaml` | Root product bundle. |

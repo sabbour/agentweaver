@@ -1,6 +1,6 @@
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { authConfigModeToAuthMode, buildEntraAdminLink } from '../api/entraAdminLink';
+import { authConfigModeToAuthMode } from '../api/entraAdminLink';
 import { formatApiErrorMessage } from '../api/errors';
 import { ProjectModelProviderSettings } from '../components/ProjectModelProviderSettings';
 import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
@@ -14,23 +14,20 @@ import {
   Field,
   Input,
   MessageBar,
-  MessageBarActions,
   MessageBarBody,
-  Select,
   Spinner,
   Switch,
   makeStyles,
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import { Branch24Regular, Delete24Regular, People24Regular, Settings24Regular, Shield24Regular, Wrench24Regular } from '@fluentui/react-icons';
+import { Branch24Regular, Delete24Regular, Settings24Regular, Shield24Regular, Wrench24Regular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type {
   AuthConfigResponse,
   AutomationActivationStatus,
   Project,
-  ProjectAccessOverview,
   SandboxPolicy,
   UnattendedReadiness,
   UpdateProjectProviderSettingsRequest,
@@ -49,15 +46,15 @@ import {
 
 /**
  * Project configuration hub. It keeps route-deep-linked sections in sync with
- * provider models, access assignments, repository readiness, automation controls,
+ * provider models, repository readiness, automation controls,
  * sandbox policy, previews, rename, and deletion APIs.
  */
-// Spec settings-subnav — project Settings restructured into a left in-page rail +
-// right content pane. Only sections with a real Agentweaver backend are shipped
-// (Principle VII): General, Sandbox policy, Danger Zone. The rail is
-// data-driven so more sections can be appended as their backends land.
+// Project Settings uses a section rail on the left and the selected section's
+// content on the right. Only sections with a working backend are shown. The
+// rail is built from the SECTIONS list, so new sections can be added as their
+// backends become available.
 /** Route keys for the settings sections available to this project's origin. */
-type SectionId = 'general' | 'access' | 'repository' | 'unattended' | 'sandbox' | 'danger';
+type SectionId = 'general' | 'repository' | 'unattended' | 'sandbox' | 'danger';
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
 
@@ -179,12 +176,6 @@ const SECTIONS: SectionDef[] = [
     icon: <Settings24Regular />,
   },
   {
-    id: 'access',
-    label: 'Access',
-    description: 'Manage project membership.',
-    icon: <People24Regular />,
-  },
-  {
     id: 'repository',
     label: 'Repository',
     description: 'Connect or create the GitHub repository for this project.',
@@ -214,7 +205,6 @@ const SECTIONS: SectionDef[] = [
 /** Type guard for valid deep-linked section query values. */
 function isSectionId(value: string | null): value is SectionId {
   return value === 'general'
-    || value === 'access'
     || value === 'repository'
     || value === 'unattended'
     || value === 'sandbox'
@@ -348,39 +338,6 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2,
     fontSize: tokens.fontSizeBase300,
   },
-  badgeRow: {
-    display: 'flex',
-    gap: tokens.spacingHorizontalXS,
-    flexWrap: 'wrap',
-  },
-  roleList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-  },
-  roleRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    padding: tokens.spacingHorizontalM,
-    backgroundColor: tokens.colorNeutralBackground1,
-    flexWrap: 'wrap',
-  },
-  roleIdentity: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXXS,
-    minWidth: 0,
-  },
-  roleActions: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    flexWrap: 'wrap',
-  },
 });
 
 export function ProjectSettingsPage() {
@@ -416,7 +373,7 @@ export function ProjectSettingsPage() {
 
   const [connectRepoOpen, setConnectRepoOpen] = useState(false);
 
-  // The page loads core project data first and ancillary access/readiness data
+  // The page loads core project data first and ancillary readiness data
   // independently so optional APIs cannot block general project settings.
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
@@ -458,19 +415,7 @@ export function ProjectSettingsPage() {
   const [previewApprovalError, setPreviewApprovalError] = useState<string | null>(null);
   const [previewApprovalSuccess, setPreviewApprovalSuccess] = useState(false);
 
-  // Entra access management.
-  const [accessOverview, setAccessOverview] = useState<ProjectAccessOverview | null>(null);
-  const [accessLoading, setAccessLoading] = useState(true);
-  const [accessError, setAccessError] = useState<string | null>(null);
-  const [accessOverviewUnavailable, setAccessOverviewUnavailable] = useState(false);
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
-  const [principalId, setPrincipalId] = useState('');
-  const [principalDisplayName, setPrincipalDisplayName] = useState('');
-  const [projectRole, setProjectRole] = useState('Viewer');
-  const [savingRoleAssignment, setSavingRoleAssignment] = useState(false);
-  const [roleAssignmentError, setRoleAssignmentError] = useState<string | null>(null);
-  const [roleAssignmentSuccess, setRoleAssignmentSuccess] = useState<string | null>(null);
-  const [roleActionKey, setRoleActionKey] = useState<string | null>(null);
   const [unattendedReadiness, setUnattendedReadiness] = useState<UnattendedReadiness | null>(null);
   const [unattendedLoading, setUnattendedLoading] = useState(true);
   const [unattendedError, setUnattendedError] = useState<string | null>(null);
@@ -530,35 +475,6 @@ export function ProjectSettingsPage() {
       });
     return () => { cancelled = true; };
   }, []);
-
-  /** Loads project roles; a 404 is shown as unsupported rather than a generic failure. */
-  const refreshAccessOverview = useCallback(async () => {
-    if (!projectId) return;
-    setAccessLoading(true);
-    setAccessError(null);
-    setAccessOverviewUnavailable(false);
-    try {
-      // Assumption for Tank's authz rollout: a single access snapshot endpoint returns
-      // the current auth mode, platform-role view, and project role assignments.
-      const overview = await apiClient.getProjectAccessOverview(projectId);
-      setAccessOverview(overview);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        setAccessOverviewUnavailable(true);
-      } else {
-        setAccessError(formatError(err));
-      }
-      setAccessOverview(null);
-    } finally {
-      setAccessLoading(false);
-    }
-  }, [projectId]);
-
-  // Resolve membership after the route's project is known.
-  useEffect(() => {
-    if (!projectId) return;
-    queueMicrotask(() => { void refreshAccessOverview(); });
-  }, [projectId, refreshAccessOverview]);
 
   /** Reloads model and repository prerequisites for unattended work. */
   const refreshUnattendedReadiness = useCallback(async () => {
@@ -834,48 +750,6 @@ export function ProjectSettingsPage() {
     }
   };
 
-  /** Adds a project role assignment and reloads the authoritative access overview. */
-  const handleAddRoleAssignment = async () => {
-    if (!projectId || !principalId.trim()) return;
-    setSavingRoleAssignment(true);
-    setRoleAssignmentError(null);
-    setRoleAssignmentSuccess(null);
-    try {
-      await apiClient.createProjectRoleAssignment(projectId, {
-        principal_id: principalId.trim(),
-        display_name: principalDisplayName.trim() || null,
-        email: principalId.includes('@') ? principalId.trim() : null,
-        role: projectRole,
-      });
-      setPrincipalId('');
-      setPrincipalDisplayName('');
-      setProjectRole('Viewer');
-      setRoleAssignmentSuccess('Project member saved.');
-      await refreshAccessOverview();
-    } catch (err) {
-      setRoleAssignmentError(formatError(err));
-    } finally {
-      setSavingRoleAssignment(false);
-    }
-  };
-
-  /** Removes one assignment and reloads membership state after server success. */
-  const handleDeleteRoleAssignment = async (assignmentId: string) => {
-    if (!projectId) return;
-    setRoleActionKey(assignmentId);
-    setRoleAssignmentError(null);
-    setRoleAssignmentSuccess(null);
-    try {
-      await apiClient.deleteProjectRoleAssignment(projectId, assignmentId);
-      setRoleAssignmentSuccess('Project member removed.');
-      await refreshAccessOverview();
-    } catch (err) {
-      setRoleAssignmentError(formatError(err));
-    } finally {
-      setRoleActionKey(null);
-    }
-  };
-
   if (!projectId) return null;
 
   const visibleSections = SECTIONS.filter((s) => s.id !== 'repository' || project?.origin === 'blank');
@@ -883,16 +757,12 @@ export function ProjectSettingsPage() {
     ? activeSection
     : 'unattended';
   const activeDef = visibleSections.find((s) => s.id === displayedSection) ?? visibleSections[0];
-  const fallbackAuthMode = authConfigModeToAuthMode(authConfig?.mode);
-  const resolvedAuthMode = accessOverview?.auth_mode ?? fallbackAuthMode;
+  // The sign-in mode comes only from the deployment's auth config. This page no
+  // longer reads a per-project access overview, so there is no project-level value.
+  const resolvedAuthMode = authConfigModeToAuthMode(authConfig?.mode);
   const authModeLabel = resolvedAuthMode ? AUTH_MODE_LABELS[resolvedAuthMode] : 'GitHub';
-  const entraAdminLink = buildEntraAdminLink(authConfig?.entra);
-  const accessStatusMessage = accessOverviewUnavailable
-    ? resolvedAuthMode === 'entra'
-      ? 'Access management is handled in Microsoft Entra ID for this deployment.'
-      : 'Access management is not available on this deployment yet.'
-    : accessError;
-  const projectRoleSummary = accessOverview?.current_user_project_role ?? (project?.owner ? `Owner (${project.owner})` : 'Unspecified');
+  // Without the access overview, the project owner is the only role information available.
+  const projectRoleSummary = project?.owner ? `Owner (${project.owner})` : 'Unspecified';
 
   return (
     <PageContainer>
@@ -1094,153 +964,6 @@ export function ProjectSettingsPage() {
                     <MessageBar intent="success"><MessageBarBody>Generation model settings saved.</MessageBarBody></MessageBar>
                   )}
                 </div>
-              </div>
-            )}
-
-            {displayedSection === 'access' && (
-              <div className={styles.section}>
-                {accessLoading && <Spinner label="Loading access settings" size="extra-tiny" />}
-                {accessStatusMessage && (
-                  <MessageBar intent="warning">
-                    <MessageBarBody>{accessStatusMessage}</MessageBarBody>
-                    {accessOverviewUnavailable && resolvedAuthMode === 'entra' && entraAdminLink && (
-                      <MessageBarActions>
-                        <Button
-                          as="a"
-                          href={entraAdminLink.href}
-                          target="_blank"
-                          rel="noreferrer"
-                          size="small"
-                        >
-                          {entraAdminLink.label}
-                        </Button>
-                      </MessageBarActions>
-                    )}
-                  </MessageBar>
-                )}
-                {accessOverview && (
-                  <>
-                    <div className={styles.subBlock}>
-                      <TitleText>Platform access</TitleText>
-                      {accessOverview.auth_mode === 'entra' ? (
-                        <>
-                          <Body as="p" tone="muted">
-                            Platform roles are assigned in Microsoft Entra ID. Agentweaver shows them here for
-                            context, but changes must be made in Entra rather than in this project.
-                          </Body>
-                          <div className={styles.badgeRow}>
-                            {accessOverview.platform_roles.length > 0 ? (
-                              accessOverview.platform_roles.map((role) => (
-                                <Badge key={role} appearance="filled">{role}</Badge>
-                              ))
-                            ) : (
-                              <Label as="span" className={styles.emptyNote}>No Entra platform roles are assigned.</Label>
-                            )}
-                          </div>
-                        </>
-                      ) : (
-                        <MessageBar intent="info">
-                          <MessageBarBody>
-                            This deployment uses GitHub authentication. Project access continues to follow the
-                            current GitHub-based ownership model, so Entra platform-role mapping is inactive here.
-                          </MessageBarBody>
-                        </MessageBar>
-                      )}
-                    </div>
-
-                    <div className={styles.subBlock}>
-                      <TitleText>Project members</TitleText>
-                      {accessOverview.auth_mode === 'entra' ? (
-                        <>
-                          <Body as="p" tone="muted">
-                            Owners, contributors, and viewers are stored in Agentweaver for this project. These roles control Agentweaver actions only; GitHub repository access still depends on the authorization granted through the Repo App.
-                          </Body>
-                          <div className={styles.roleList}>
-                            {accessOverview.project_role_assignments.length === 0 ? (
-                              <Label as="span" className={styles.emptyNote}>No project role assignments yet.</Label>
-                            ) : (
-                              accessOverview.project_role_assignments.map((assignment) => (
-                                <div key={assignment.assignment_id} className={styles.roleRow}>
-                                  <div className={styles.roleIdentity}>
-                                    <TitleText>{assignment.display_name ?? assignment.email ?? assignment.principal_id}</TitleText>
-                                    <Body tone="muted">
-                                      {assignment.email ?? assignment.principal_id}
-                                    </Body>
-                                    <div className={styles.badgeRow}>
-                                      <Badge appearance="filled">{assignment.role}</Badge>
-                                      <Badge appearance="outline">{assignment.scope}</Badge>
-                                    </div>
-                                  </div>
-                                  {accessOverview.can_manage_role_assignments && (
-                                    <div className={styles.roleActions}>
-                                      <Button
-                                        appearance="subtle"
-                                        disabled={roleActionKey !== null}
-                                        onClick={() => void handleDeleteRoleAssignment(assignment.assignment_id)}
-                                      >
-                                        {roleActionKey === assignment.assignment_id ? 'Removing' : 'Remove'}
-                                      </Button>
-                                    </div>
-                                  )}
-                                </div>
-                              ))
-                            )}
-                          </div>
-
-                          <Field
-                            label="Add member"
-                            hint="Enter the Entra object ID or email of the person who should receive access."
-                          >
-                            <Input
-                              value={principalId}
-                              placeholder="person@contoso.com"
-                              onChange={(_, data) => setPrincipalId(data.value)}
-                            />
-                          </Field>
-                          <Field
-                            label="Display name (optional)"
-                            hint="Stored for readability until Tank's directory lookup lands."
-                          >
-                            <Input
-                              value={principalDisplayName}
-                              placeholder="Ada Lovelace"
-                              onChange={(_, data) => setPrincipalDisplayName(data.value)}
-                            />
-                          </Field>
-                          <Field label="Role">
-                            <Select value={projectRole} onChange={(_, data) => setProjectRole(data.value)}>
-                              <option value="Owner">Owner</option>
-                              <option value="Contributor">Contributor</option>
-                              <option value="Viewer">Viewer</option>
-                            </Select>
-                          </Field>
-                          <div className={styles.formActions}>
-                            <Button
-                              appearance="primary"
-                              disabled={!accessOverview.can_manage_role_assignments || savingRoleAssignment || !principalId.trim()}
-                              onClick={() => void handleAddRoleAssignment()}
-                            >
-                              {savingRoleAssignment ? 'Saving' : 'Add member'}
-                            </Button>
-                            {savingRoleAssignment && <Spinner size="extra-tiny" aria-hidden="true" />}
-                          </div>
-                        </>
-                      ) : (
-                        <Body as="p" tone="muted">
-                          In GitHub mode, the project continues to rely on the existing single-owner model.
-                          Project role assignments are only used in Entra ID mode.
-                        </Body>
-                      )}
-                      {roleAssignmentError && (
-                        <MessageBar intent="error"><MessageBarBody>{roleAssignmentError}</MessageBarBody></MessageBar>
-                      )}
-                      {roleAssignmentSuccess && (
-                        <MessageBar intent="success"><MessageBarBody>{roleAssignmentSuccess}</MessageBarBody></MessageBar>
-                      )}
-                    </div>
-
-                  </>
-                )}
               </div>
             )}
 

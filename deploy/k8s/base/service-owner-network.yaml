@@ -65,6 +65,15 @@ spec:
         - ports:
             - port: "8443"
               protocol: TCP
+    # The Remote MCP connection directory route is owned by Environment.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: environment
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

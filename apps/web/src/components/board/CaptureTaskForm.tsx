@@ -30,6 +30,13 @@ const useStyles = makeStyles({
 export interface CaptureTaskFormProps {
   projectId: string;
   onCaptured: () => void | Promise<void>;
+  /**
+   * Optional submit handler for callers that own their own API client. When it is
+   * set, the form calls it with the trimmed title instead of the built-in client.
+   */
+  capture?: (title: string) => Promise<void>;
+  /** Disables the form while the caller can't accept a capture, for example during a board reload. */
+  disabled?: boolean;
 }
 
 // Capture a task into Backlog (FR-001/002). Empty/whitespace titles are rejected
@@ -39,7 +46,7 @@ export interface CaptureTaskFormProps {
  * Local state holds the draft and submit feedback; props identify the project and report success
  * or dismissal to the parent.
  */
-export function CaptureTaskForm({ projectId, onCaptured }: CaptureTaskFormProps) {
+export function CaptureTaskForm({ projectId, onCaptured, capture, disabled = false }: CaptureTaskFormProps) {
   const styles = useStyles();
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
@@ -53,7 +60,10 @@ export function CaptureTaskForm({ projectId, onCaptured }: CaptureTaskFormProps)
     setBusy(true);
     setError(null);
     try {
-      await apiClient.captureBacklogTask(projectId, { title: title.trim() });
+      // An injected handler owns the request, its revision checks and its errors.
+      // Without one, keep the original board client call.
+      if (capture) await capture(title.trim());
+      else await apiClient.captureBacklogTask(projectId, { title: title.trim() });
       setTitle('');
       await onCaptured();
     } catch (e) {
@@ -70,7 +80,7 @@ export function CaptureTaskForm({ projectId, onCaptured }: CaptureTaskFormProps)
         value={title}
         placeholder="Capture a task into Backlog"
         aria-label="New task title"
-        disabled={busy}
+        disabled={busy || disabled}
         rows={3}
         resize="none"
         onChange={(_, v) => { setTitle(v.value); if (error) setError(null); }}
@@ -78,7 +88,7 @@ export function CaptureTaskForm({ projectId, onCaptured }: CaptureTaskFormProps)
       />
       {error && <Text className={styles.error}>{error}</Text>}
       <div className={styles.actions}>
-        <Button appearance="primary" icon={<AddRegular />} disabled={busy || !title.trim()} onClick={() => void submit()}>
+        <Button appearance="primary" icon={<AddRegular />} disabled={busy || disabled || !title.trim()} onClick={() => void submit()}>
           Add
         </Button>
       </div>

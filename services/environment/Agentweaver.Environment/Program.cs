@@ -8,6 +8,7 @@ using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Identity;
+using Agentweaver.Providers;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Azure.Core;
@@ -93,6 +94,10 @@ builder.Services.AddScoped<
     EnvironmentRuntimeBootstrapProfileReplacementStore>();
 builder.Services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
 builder.Services.AddScoped<RemoteMcpConnectionStore>();
+// The trusted transport registers the production discovery source; without it discovery fails with 503.
+Microsoft.Extensions.DependencyInjection.Extensions.ServiceCollectionDescriptorExtensions
+    .TryAddSingleton<IRemoteMcpDiscoverySource, UnavailableRemoteMcpDiscoverySource>(builder.Services);
+builder.Services.AddScoped<RemoteMcpDiscoveryService>();
 builder.AddRemoteMcpTrustedServiceTls();
 var remoteMcpCurrentCallVerificationEnabled =
     builder.AddRemoteMcpCurrentCallVerification(authorityUri.AbsoluteUri);
@@ -190,6 +195,26 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.MapInboundClaims = false;
     });
 builder.Services.AddAuthorization();
+var platformComponentAuthentication =
+    PlatformComponentServiceAuthenticationOptions.ReadOptional(builder.Configuration, audience);
+builder.Services.AddPlatformComponentServiceAuthentication(platformComponentAuthentication);
+// The report catalog mirrors the registrations this owner already validates for Sandbox,
+// Storage, and the L3/L4 Network Policy layer. It is used only for platform component reports.
+var platformComponentCatalogResult = ProviderCatalog.Create(
+    [
+        AgentSandboxProviderMetadata.CreateRegistration(sandboxOptions),
+        AzureFilesCsiProviderMetadata.CreateRegistration(azureFilesOptions),
+        ciliumOptions.CreateRegistration(),
+    ],
+    [
+        new ProviderSelection(ProviderSeam.Sandbox, AgentSandboxProviderMetadata.ProviderId),
+        new ProviderSelection(ProviderSeam.Storage, AzureFilesCsiProviderMetadata.ProviderId),
+    ],
+    [],
+    layerSelections: [new ProviderLayerSelection(NetworkPolicyLayer.L3L4, CiliumEgressPolicyAdapter.ProviderId)]);
+if (!platformComponentCatalogResult.IsSuccess)
+    throw new InvalidOperationException("The Environment platform component catalog is invalid.");
+var platformComponentCatalog = platformComponentCatalogResult.Value!;
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.UnmappedMemberHandling =
@@ -230,6 +255,29 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapEnvironmentEndpoints();
+// Snapshots have no selected implementation, and Application Hosting has none in this release.
+app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
+    PlatformComponentCatalogReporter.CreateOwnerReportAsync(
+        PlatformComponentOwners.Environment,
+        async token =>
+        {
+            await EnvironmentMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions, token);
+            await EnvironmentMigrator.VerifyRuntimeAuthorityAsync(dataSource, token);
+            return true;
+        },
+        (readiness, observedAt) =>
+        [
+            PlatformComponentCatalogReporter.DescribeArea(platformComponentCatalog, ProviderSeam.Snapshots, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(platformComponentCatalog, ProviderSeam.Sandbox, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(platformComponentCatalog, ProviderSeam.Storage, readiness, observedAt),
+            PlatformComponentCatalogReporter.DescribeArea(platformComponentCatalog, ProviderSeam.NetworkPolicy, readiness, observedAt),
+            PlatformComponentReportBuilder.Empty(
+                PlatformComponentAreaIds.ApplicationHosting,
+                PlatformComponentReadiness.NotAvailable,
+                PlatformComponentReasons.NotImplemented),
+        ],
+        services.GetRequiredService<TimeProvider>(),
+        ct));
 app.MapRemoteMcpConnectionEndpoints();
 if (remoteMcpCurrentCallVerificationEnabled)
     app.MapRemoteMcpCurrentCallVerification();

@@ -16,6 +16,15 @@ public static class GatewayEndpoints
             .AllowAnonymous();
         endpoints.MapGet("/health/ready", () => Results.Ok(new { status = "ready" }))
             .AllowAnonymous();
+        // Public download of the operator agent definition. Users save it into their
+        // own repository, so it needs no sign-in. It is excluded from the OpenAPI
+        // document because the MCP host turns OpenAPI operations into tools, and a
+        // file download must not become an MCP tool.
+        endpoints.MapGet(
+                "/agents/agentweaver.agent.md",
+                () => Results.Text(AgentDefinitionTemplate.Content, "text/markdown; charset=utf-8"))
+            .AllowAnonymous()
+            .ExcludeFromDescription();
         endpoints.MapGet(
                 "/openapi/v1.json",
                 () => Results.Json(GatewayOpenApi.CreateDocument(), GatewayOpenApi.JsonOptions))
@@ -214,6 +223,19 @@ public static class GatewayEndpoints
                 CancellationToken cancellationToken) =>
                 owner.ProxyIdentityBrokerApiAsync(
                     context, "POST", $"/internal/connections/remote-mcp/{connectionId:D}/refresh",
+                    hasJsonBody: true,
+                    forwardTenantSelector: true,
+                    forwardCookieName: null,
+                    cookieErrorCode: "remote_mcp_callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        remoteMcpConnections.MapPost(
+            "/{connectionId:guid}/validity",
+            (Guid connectionId, HttpContext context, GatewayOwnerClient owner,
+                CancellationToken cancellationToken) =>
+                // Forward the bearer, tenant selector, and JSON body to Identity, which makes the decision.
+                // No cookie is forwarded, so the cookie error code is never used on this route.
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", $"/internal/connections/remote-mcp/{connectionId:D}/validity",
                     hasJsonBody: true,
                     forwardTenantSelector: true,
                     forwardCookieName: null,

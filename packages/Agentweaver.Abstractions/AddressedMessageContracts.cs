@@ -214,7 +214,7 @@ public static class AddressedMessageValidation
         if (draft.Sender.ProjectId != draft.Recipient.ProjectId)
             throw new ArgumentException("Addressed messages cannot cross project boundaries.", nameof(draft));
         if (draft.Sender.SessionId == draft.Recipient.SessionId &&
-            draft.Sender.RunId == draft.Recipient.RunId)
+            draft.Sender.RunId == draft.Recipient.RunId && !IsInteractiveFirstMessage(draft))
             throw new ArgumentException("A message must target a different session.", nameof(draft));
         if (!Enum.IsDefined(draft.DeliveryMode) ||
             !Enum.IsDefined(draft.Purpose) ||
@@ -226,7 +226,7 @@ public static class AddressedMessageValidation
         var idempotencyKey = draft.IdempotencyKey?.Trim();
         if (!IsText(idempotencyKey, MaximumIdempotencyKeyLength) ||
             draft.Payload.ValueKind != JsonValueKind.Object ||
-            draft.Payload.GetRawText().Length > MaximumPayloadLength ||
+            draft.Payload.GetRawText().Length > (IsInteractiveFirstMessage(draft) ? 200_000 : MaximumPayloadLength) ||
             !OptionalText(draft.RequestId, 128) ||
             !OptionalText(draft.ReplyCorrelationId, 128) ||
             !OptionalText(draft.UserQuote, MaximumTextLength) ||
@@ -248,6 +248,16 @@ public static class AddressedMessageValidation
             ReplyCorrelationId = NormalizeOptionalText(draft.ReplyCorrelationId)
         };
     }
+
+    /// <summary>Recognizes owner-proven first input; the Orchestrator additionally checks its persisted request.</summary>
+    public static bool IsInteractiveFirstMessage(AddressedMessageDraft draft) =>
+        draft.Sender == draft.Recipient &&
+        draft.Kind == AddressedMessageKind.Text &&
+        draft.Purpose == AddressedMessagePurpose.Steering &&
+        draft.DeliveryMode == AddressedMessageDeliveryMode.Immediate &&
+        draft.IdempotencyKey == $"{draft.Sender.RunId}:first" &&
+        draft.ReplyToId is null && draft.RequestId is null && draft.ReplyCorrelationId is null &&
+        draft.UserQuote is null && draft.CoordinatorInstructions is null;
 
     /// <summary>Checks optional text against the same control-character and length rules as required text.</summary>
     private static bool OptionalText(string? value, int maximumLength) =>

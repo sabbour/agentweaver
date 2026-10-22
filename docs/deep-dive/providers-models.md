@@ -75,6 +75,12 @@ to the selected resource. A pin records provider identity, options revision,
 resource generation, and negotiated capabilities; it is not an authorization
 decision.
 
+A Source Control pull request result also carries the provider title when the
+provider returns one. After a run creates or reuses a pull request, the
+Orchestrator records it for the project pull request list. Recording begins
+only when the optional, code-only migration 032 is applied, and the title
+doesn't change merge-intent hashes.
+
 Network pinning also requires the confirmed applied-intent generation. Cost
 pinning preserves the exact meter mapping. Ordered pinning preserves the chain
 order. Each owner persists its actual pin; Projects & Config persists accepted
@@ -122,5 +128,6 @@ pin in place. A backend failure does not authorize fallback.
 - [Provider and model contracts](../architecture/providers-models.md)
 - [Provider seam design](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/provider-seams.md)
 - [Contracts and configuration](../reference/contracts.md)
+- [Platform components](../guide/platform-components.md)
 - [Projects and configuration](./projects-config.md)
 - [Agent runtime](./agent-runtime.md)

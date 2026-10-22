@@ -9,6 +9,8 @@ ARG PROBE_INFRASTRUCTURE_HASH
 
 COPY Directory.Build.props ./
 COPY packages/ packages/
+# Persistence.Postgres embeds the reviewed P1 plan from this path.
+COPY scripts/azure/lib/p1-postgres-plan.json scripts/azure/lib/
 COPY tools/Agentweaver.FoundationProbe/ tools/Agentweaver.FoundationProbe/
 RUN dotnet restore tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj --locked-mode
 RUN dotnet publish tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj \

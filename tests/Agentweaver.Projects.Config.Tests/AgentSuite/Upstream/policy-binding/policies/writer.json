@@ -1,0 +1,1 @@
+{"network":{"egressAllow":[{"address":"10.0.0.2","port":80,"protocol":"TCP"},{"address":"9.0.0.1","port":443,"protocol":"TCP"}]},"requiredCapabilities":["network/egress-allow/v1"],"version":"agentsuite.policy/v2"}
