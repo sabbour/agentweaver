@@ -2980,6 +2980,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT, INSERT, UPDATE ON projects_config.project_casting_proposals TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT ON projects_config.casting_generation_requests TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT ON projects_config.tenant_memberships, projects_config.project_role_assignments TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT ON projects_config.authority_audit TO \"{roleName}\"");
