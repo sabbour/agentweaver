@@ -69,6 +69,29 @@ public sealed partial class ProjectsConfigPostgresTests
                 owner, project.ProjectId, edited.ProposalId, "agent-a", edited.DraftRevision,
                 "docs-writer", new string('x', 121), CancellationToken.None));
         Assert.Equal("invalid_custom_role_title", invalidTitle.Code);
+        foreach (var controlCharacterTitle in new[] { "Staff\0Writer", "Staff\nWriter", "Staff Writer\n" })
+        {
+            var invalidControlTitle = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.UpdateCastingProposalMemberRoleAsync(
+                    owner, project.ProjectId, edited.ProposalId, "agent-a", edited.DraftRevision,
+                    "docs-writer", controlCharacterTitle, CancellationToken.None));
+            Assert.Equal("invalid_custom_role_title", invalidControlTitle.Code);
+
+            var invalidConfiguration = initial.Configuration with
+            {
+                AgentCharters =
+                [
+                    Assert.Single(initial.Configuration.AgentCharters) with
+                    {
+                        CustomRoleTitle = controlCharacterTitle,
+                    },
+                ],
+            };
+            var invalidFullWrite = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.UpdateProjectConfigurationAsync(
+                    owner, project.ProjectId, initial.Revision, invalidConfiguration, CancellationToken.None));
+            Assert.Equal("invalid_configuration", invalidFullWrite.Code);
+        }
         var staleEdit = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.UpdateCastingProposalMemberRoleAsync(
                 owner, project.ProjectId, edited.ProposalId, "agent-a", rejectedProposal.DraftRevision,
@@ -103,8 +126,12 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal("docs-writer", titleOnlyCharter.Role);
         Assert.Equal("Customized charter", titleOnlyCharter.Charter);
         Assert.Equal("Updated title", titleOnlyCharter.CustomRoleTitle);
+        var clearedTitleEdit = await service.UpdateCastingProposalMemberRoleAsync(
+            owner, project.ProjectId, titleOnlyEdit.ProposalId, "agent-a", titleOnlyEdit.DraftRevision,
+            "docs-writer", "   ", CancellationToken.None);
+        Assert.Null(Assert.Single(clearedTitleEdit.Draft.AgentCharters).CustomRoleTitle);
         _ = await service.RejectCastingProposalAsync(
-            owner, project.ProjectId, titleOnlyProposal.ProposalId, titleOnlyEdit.DraftRevision, CancellationToken.None);
+            owner, project.ProjectId, titleOnlyProposal.ProposalId, clearedTitleEdit.DraftRevision, CancellationToken.None);
 
         var confirmProposal = await service.CreateCastingProposalAsync(
             owner,

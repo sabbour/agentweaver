@@ -314,7 +314,8 @@ Catalog reads require an authenticated bearer.
    `PATCH /proposals/{proposalId}/members/{agentId}/role` with
    `expectedDraftRevision`, `roleId`, and optional `customRoleTitle`. This
    updates only the pending draft; the catalog role ID remains separate from
-   its display title.
+   its display title. A blank title is stored as `null`. Other titles are
+   limited to 120 characters and cannot contain control characters.
 5. Send `POST /proposals/{proposalId}/confirm` or `/reject` with
    `expectedDraftRevision`. Confirmation appends a configuration revision;
    rejection leaves configuration unchanged.

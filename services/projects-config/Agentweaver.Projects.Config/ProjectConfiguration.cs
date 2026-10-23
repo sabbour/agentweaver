@@ -313,7 +313,11 @@ public static class ProjectConfigurationValidator
             ValidateText(item.Charter, 20000, "agentCharters.charter");
             // The display override is separate from the catalog role identifier.
             if (item.CustomRoleTitle is { } customRoleTitle)
+            {
                 ValidateText(customRoleTitle, 120, "agentCharters.customRoleTitle");
+                if (customRoleTitle.Any(char.IsControl))
+                    throw Invalid("'agentCharters.customRoleTitle' cannot contain control characters.");
+            }
         }
 
         if (configuration.Casting.Any(item => item is null))

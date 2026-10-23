@@ -322,11 +322,14 @@ public sealed partial class ProjectsConfigService
             throw ProjectConfigException.Invalid(
                 "reserved_casting_role",
                 $"Reserved orchestration role '{role.Id}' cannot be cast.");
+        var hasControlCharacters = !string.IsNullOrWhiteSpace(customRoleTitle) &&
+            customRoleTitle.Any(char.IsControl);
         var normalizedTitle = string.IsNullOrWhiteSpace(customRoleTitle) ? null : customRoleTitle.Trim();
-        if (normalizedTitle is { Length: > 120 })
+        // Validate one-line display text before it reaches proposal JSON or persistence.
+        if (hasControlCharacters || normalizedTitle is { Length: > 120 })
             throw ProjectConfigException.Invalid(
                 "invalid_custom_role_title",
-                "A custom role title must be at most 120 characters.");
+                "A custom role title must be at most 120 characters and cannot contain control characters.");
 
         return ExecuteCastingProposalTransactionAsync(async (context, token) =>
         {
