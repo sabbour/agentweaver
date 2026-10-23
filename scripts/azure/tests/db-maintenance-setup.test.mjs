@@ -169,7 +169,7 @@ test('namespace Role grants only maintenance verbs and binds the workflow object
     { apiGroups: [''], resources: ['serviceaccounts'], verbs: ['create', 'get', 'patch'] },
     { apiGroups: ['coordination.k8s.io'], resources: ['leases'], verbs: ['create', 'delete', 'get'] },
     { apiGroups: ['cilium.io'], resources: ['ciliumnetworkpolicies'], verbs: ['create', 'get', 'patch'] },
-    { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['orchestrator', 'events-and-sessions'],
+    { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['environment', 'orchestrator', 'events-and-sessions'],
       verbs: ['get', 'list', 'patch', 'watch'] },
   ]);
   assert.deepEqual(binding.subjects, [{

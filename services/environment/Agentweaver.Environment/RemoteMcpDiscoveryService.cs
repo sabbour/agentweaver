@@ -66,9 +66,9 @@ public sealed class RemoteMcpDiscoveryService(
     IRemoteMcpDiscoverySource source)
 {
     /// <summary>The only MCP protocol version that the pinned transport profile accepts.</summary>
-    public const string RequiredProtocolVersion = "2025-06-18";
+    public const string RequiredProtocolVersion = RemoteMcpTransportAdapterOptions.CurrentProtocolVersion;
     /// <summary>Maximum tools/list pages read in one discovery.</summary>
-    public const int MaximumToolsListPages = 16;
+    public const int MaximumToolsListPages = RemoteMcpTransportAdapterOptions.CurrentMaximumToolsListPages;
 
     /// <summary>Reads one bounded Registry server page for browsing. It does not change any connection.</summary>
     internal async Task<RemoteMcpRegistryServerPage> ReadRegistryPageAsync(
@@ -101,13 +101,17 @@ public sealed class RemoteMcpDiscoveryService(
         string endpointUri,
         string? resourceUri,
         RemoteMcpAuthenticationMode authenticationMode,
+        RemoteMcpTransportProfile transportProfile,
         string? registryServerName,
         string? registryExactVersion,
         CancellationToken cancellationToken)
     {
+        // Resolve the profile before authority or network work so unsupported adapters fail closed.
+        var transportOptions = RemoteMcpTransportAdapterOptions.ForProfile(transportProfile);
         // No Registry selection: the caller supplied the endpoint directly, so there is nothing to resolve.
         if (registryServerName is null && registryExactVersion is null)
-            return new(displayName, endpointUri, resourceUri, authenticationMode);
+            return new(displayName, endpointUri, resourceUri, authenticationMode, TransportProfile: transportProfile,
+                TransportAdapterOptions: transportOptions);
         // A Registry selection needs both parts. A name without a version would let the Registry pick one.
         if (string.IsNullOrWhiteSpace(registryServerName) || string.IsNullOrWhiteSpace(registryExactVersion))
             throw new ArgumentException("Registry selection requires both a server name and an exact version.");
@@ -124,7 +128,14 @@ public sealed class RemoteMcpDiscoveryService(
         // Registry's canonical form of it. The draft stores that canonical endpoint, not the raw input.
         var selection = ParseRegistry(() => RemoteMcpMetadataParser.ParseRegistryServerVersion(
             bytes, registryServerName, registryExactVersion, endpointUri));
-        return new(displayName, selection.SelectedEndpointUri, resourceUri, authenticationMode, selection.Server);
+        return new(
+            displayName,
+            selection.SelectedEndpointUri,
+            resourceUri,
+            authenticationMode,
+            selection.Server,
+            transportProfile,
+            transportOptions);
     }
 
     /// <summary>
@@ -215,7 +226,7 @@ public sealed class RemoteMcpDiscoveryService(
         // limits bound the work even when the remote server misbehaves.
         for (var page = 0; ; page++)
         {
-            if (page == MaximumToolsListPages)
+            if (page == configuration.TransportAdapterOptions.MaximumToolsListPages)
                 throw DiscoveryInvalid("The remote server returned more tools/list pages than the limit.");
             RemoteMcpToolsListResponse response;
             try
@@ -235,9 +246,14 @@ public sealed class RemoteMcpDiscoveryService(
             }
 
             ArgumentNullException.ThrowIfNull(response);
+            if (response.Body.Length > configuration.TransportAdapterOptions.MaximumResponseBytes)
+                throw DiscoveryInvalid("The remote server returned a tools/list page larger than the configured limit.");
             // The catalog is pinned for one protocol version. A server that negotiates another version
             // could describe tools differently, so the result isn't accepted.
-            if (!string.Equals(response.NegotiatedProtocolVersion, RequiredProtocolVersion, StringComparison.Ordinal))
+            if (!string.Equals(
+                response.NegotiatedProtocolVersion,
+                configuration.TransportAdapterOptions.ProtocolVersion,
+                StringComparison.Ordinal))
                 throw DiscoveryInvalid("The remote server negotiated an unsupported MCP protocol version.");
             // Every page must come through the same applied network policy. The catalog records one
             // policy, so a change between pages means the pages can't be trusted as one catalog.

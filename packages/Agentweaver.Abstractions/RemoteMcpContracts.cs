@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Text.Json.Serialization;
 using System.Text;
 
 namespace Agentweaver.Abstractions;
@@ -24,6 +25,106 @@ public enum RemoteMcpAuthenticationMode
 public enum RemoteMcpTransportProfile
 {
     StreamableHttp20250618
+}
+
+/// <summary>Credential-free, versioned settings for the one supported Remote MCP transport adapter.</summary>
+public sealed record RemoteMcpTransportAdapterOptions
+{
+    public const string CurrentAdapterId = "streamable-http";
+    public const string CurrentAdapterVersion = "1.0.0";
+    public const int CurrentOptionsSchemaVersion = 1;
+    public const string CurrentOptionsRevision = "streamable-http-2025-06-18-v1";
+    public const string CurrentProtocolVersion = "2025-06-18";
+    public const int CurrentRequestTimeoutSeconds = 30;
+    public const int CurrentMaximumResponseBytes = 1024 * 1024;
+    public const int CurrentMaximumToolsListPages = 16;
+
+    /// <summary>Creates the fixed Streamable HTTP adapter option snapshot and its stable digest.</summary>
+    public RemoteMcpTransportAdapterOptions(
+        string adapterId,
+        string adapterVersion,
+        int optionsSchemaVersion,
+        string optionsRevision,
+        string protocolVersion,
+        int requestTimeoutSeconds,
+        int maximumResponseBytes,
+        int maximumToolsListPages)
+    {
+        // The first P2 adapter deliberately has one approved option set. Rejecting alternate values
+        // here prevents an unknown schema or credential-bearing extension from reaching the catalog.
+        if (adapterId != CurrentAdapterId ||
+            adapterVersion != CurrentAdapterVersion ||
+            optionsSchemaVersion != CurrentOptionsSchemaVersion ||
+            optionsRevision != CurrentOptionsRevision ||
+            protocolVersion != CurrentProtocolVersion ||
+            requestTimeoutSeconds != CurrentRequestTimeoutSeconds ||
+            maximumResponseBytes != CurrentMaximumResponseBytes ||
+            maximumToolsListPages != CurrentMaximumToolsListPages)
+            throw new ArgumentException("Only the current credential-free Streamable HTTP adapter options are supported.");
+
+        AdapterId = adapterId;
+        AdapterVersion = adapterVersion;
+        OptionsSchemaVersion = optionsSchemaVersion;
+        OptionsRevision = optionsRevision;
+        ProtocolVersion = protocolVersion;
+        RequestTimeoutSeconds = requestTimeoutSeconds;
+        MaximumResponseBytes = maximumResponseBytes;
+        MaximumToolsListPages = maximumToolsListPages;
+        OptionsSha256 = ComputeSha256();
+    }
+
+    public string AdapterId { get; }
+    public string AdapterVersion { get; }
+    public int OptionsSchemaVersion { get; }
+    public string OptionsRevision { get; }
+    public string ProtocolVersion { get; }
+    public int RequestTimeoutSeconds { get; }
+    public int MaximumResponseBytes { get; }
+    public int MaximumToolsListPages { get; }
+    public string OptionsSha256 { get; }
+
+    /// <summary>Returns the approved option snapshot or fails closed for an unsupported profile.</summary>
+    public static RemoteMcpTransportAdapterOptions ForProfile(RemoteMcpTransportProfile profile) =>
+        profile switch
+        {
+            RemoteMcpTransportProfile.StreamableHttp20250618 => new(
+                CurrentAdapterId,
+                CurrentAdapterVersion,
+                CurrentOptionsSchemaVersion,
+                CurrentOptionsRevision,
+                CurrentProtocolVersion,
+                CurrentRequestTimeoutSeconds,
+                CurrentMaximumResponseBytes,
+                CurrentMaximumToolsListPages),
+            _ => throw new ArgumentOutOfRangeException(nameof(profile), "The Remote MCP transport profile is unsupported.")
+        };
+
+    /// <summary>Checks that the stored option snapshot belongs to the selected transport profile.</summary>
+    public void ValidateFor(RemoteMcpTransportProfile profile)
+    {
+        // A transport profile is the immutable selector already covered by the configuration digest;
+        // this guard keeps a persisted adapter snapshot from being paired with another profile.
+        if (profile != RemoteMcpTransportProfile.StreamableHttp20250618 ||
+            OptionsSha256 != ComputeSha256())
+            throw new ArgumentException("The transport adapter options do not match the selected profile.", nameof(profile));
+    }
+
+    private string ComputeSha256()
+    {
+        // NUL separators make the fixed field sequence unambiguous while keeping this options digest
+        // independent from the legacy connection digest, which is preserved for existing revisions.
+        var material = string.Join(
+            '\0',
+            AdapterId,
+            AdapterVersion,
+            OptionsSchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            OptionsRevision,
+            ProtocolVersion,
+            RequestTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            MaximumResponseBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            MaximumToolsListPages.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return RemoteMcpDigest.Sha256(Encoding.UTF8.GetBytes(material));
+    }
 }
 
 /// <summary>Project-scoped identity of a Remote MCP connection.</summary>
@@ -86,9 +187,7 @@ public sealed record RemoteMcpRegistryServerPin
 /// </summary>
 public sealed record RemoteMcpConnectionConfiguration
 {
-    /// <summary>Creates and hashes a canonical connection configuration.</summary>
-    /// <exception cref="ArgumentException">A URI, display name, identity reference, or OAuth resource is invalid.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The revision or enum value is outside its supported range.</exception>
+    /// <summary>Creates a canonical configuration with the original constructor signature.</summary>
     public RemoteMcpConnectionConfiguration(
         RemoteMcpConnectionReference connection,
         long configurationRevision,
@@ -99,12 +198,47 @@ public sealed record RemoteMcpConnectionConfiguration
         string? identityBindingReference,
         RemoteMcpTransportProfile transportProfile,
         RemoteMcpRegistryServerPin? registryServer = null)
+        : this(
+            connection,
+            configurationRevision,
+            displayName,
+            endpointUri,
+            resourceUri,
+            authenticationMode,
+            identityBindingReference,
+            transportProfile,
+            registryServer,
+            null)
+    {
+    }
+
+    /// <summary>Creates and hashes a canonical connection configuration with an explicit adapter snapshot.</summary>
+    /// <remarks>
+    /// Both trailing arguments are required to keep calls to the original nine-parameter constructor unambiguous.
+    /// Pass <see langword="null"/> for either value when no registry pin or explicit adapter snapshot is supplied.
+    /// </remarks>
+    /// <exception cref="ArgumentException">A URI, display name, identity reference, or OAuth resource is invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The revision or enum value is outside its supported range.</exception>
+    [JsonConstructor]
+    public RemoteMcpConnectionConfiguration(
+        RemoteMcpConnectionReference connection,
+        long configurationRevision,
+        string displayName,
+        string endpointUri,
+        string? resourceUri,
+        RemoteMcpAuthenticationMode authenticationMode,
+        string? identityBindingReference,
+        RemoteMcpTransportProfile transportProfile,
+        RemoteMcpRegistryServerPin? registryServer,
+        RemoteMcpTransportAdapterOptions? transportAdapterOptions)
     {
         Connection = connection ?? throw new ArgumentNullException(nameof(connection));
         if (configurationRevision < 1)
             throw new ArgumentOutOfRangeException(nameof(configurationRevision));
-        if (!Enum.IsDefined(authenticationMode) || !Enum.IsDefined(transportProfile))
+        if (!Enum.IsDefined(authenticationMode))
             throw new ArgumentOutOfRangeException(nameof(authenticationMode));
+        if (!Enum.IsDefined(transportProfile))
+            throw new ArgumentOutOfRangeException(nameof(transportProfile));
 
         ConfigurationRevision = configurationRevision;
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -127,7 +261,11 @@ public sealed record RemoteMcpConnectionConfiguration
         AuthenticationMode = authenticationMode;
         IdentityBindingReference = identityBindingReference;
         TransportProfile = transportProfile;
+        TransportAdapterOptions = transportAdapterOptions ?? RemoteMcpTransportAdapterOptions.ForProfile(transportProfile);
+        TransportAdapterOptions.ValidateFor(transportProfile);
         RegistryServer = registryServer;
+        // Keep the established configuration digest stable: the versioned profile string is already
+        // included below, and it maps to exactly one validated adapter option snapshot.
         ConfigurationSha256 = RemoteMcpDigest.Sha256(Encoding.UTF8.GetBytes(string.Join(
             '\0',
             connection.ProjectId,
@@ -153,6 +291,7 @@ public sealed record RemoteMcpConnectionConfiguration
     /// <summary>Opaque identity-owner reference; it is not a bearer token or credential value.</summary>
     public string? IdentityBindingReference { get; }
     public RemoteMcpTransportProfile TransportProfile { get; }
+    public RemoteMcpTransportAdapterOptions TransportAdapterOptions { get; }
     public RemoteMcpRegistryServerPin? RegistryServer { get; }
     /// <summary>Lowercase SHA-256 digest of the canonical configuration fields and revision.</summary>
     public string ConfigurationSha256 { get; }

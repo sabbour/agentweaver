@@ -231,6 +231,55 @@ Rejection records only the proposal transition. It does not write configuration
 or run state. Accepted run selections continue to refer to their immutable
 configuration revision.
 
+### Formulate and Analyze generation
+
+Formulate and Analyze create a generation request and an ordinary pending
+casting proposal bound to the current configuration revision. The request
+records its mode, run ID, actor-scoped idempotency key, request digest, proposal
+ID, and lifecycle state. It does not store model credentials. The model call
+runs in AgentHost with that run's Identity credential; Projects & Config owns
+the proposal and never receives the credential.
+
+Generation uses the existing accepted project-run lifecycle rather than a
+separate scheduler or model-execution path. The Gateway creates or accepts that
+run with the caller's project authorization; the run-bound Identity session
+starts it, and its ID remains the generation request's immutable result binding.
+
+Generation completion must match the request's run ID and current configuration
+revision. It validates and replaces only the proposal's charters and cast, then
+marks the request complete in the same database transaction. Until the user
+confirms, neither generation start nor completion appends a live configuration
+revision. A rejected proposal cancels unfinished generation. A stale completion
+leaves the proposal review state and live configuration unchanged; the owner
+reports the request as stale. Confirmation uses the same current-authority and
+revision checks as other casting proposals.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant Orchestrator
+    participant AgentHost
+    participant Identity
+    participant Projects as Projects & Config
+    participant DB as PostgreSQL
+    Client->>Gateway: Formulate or Analyze (expected revision, idempotency key)
+    Gateway->>Orchestrator: Create or accept a normal project run
+    Orchestrator->>Projects: Start generation request (run ID, request digest)
+    Projects->>DB: Check current write authority and revision; store pending proposal
+    Client->>Identity: Obtain the run-bound session for the returned run ID
+    Client->>Orchestrator: Start the accepted run with generation input
+    Orchestrator->>AgentHost: Dispatch through the accepted run
+    AgentHost->>Identity: Redeem the run-bound model credential
+    Identity-->>AgentHost: Run-scoped credential
+    AgentHost-->>Orchestrator: Proposed charters and cast
+    Orchestrator->>Projects: Complete request (same run ID, generated roster)
+    Projects->>DB: Recheck authority and revision; update proposal only
+    Client->>Gateway: Poll proposal for review
+    Client->>Gateway: Confirm proposal (expected draft revision)
+    Projects->>DB: Append live configuration only after confirmation
+```
+
 Charter/casting transfer is a separate explicit owner operation. Export
 identifies the source project and configuration revision. It includes a format
 version and content digest. Import checks that format and digest. It validates

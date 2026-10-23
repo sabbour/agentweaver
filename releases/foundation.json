@@ -744,6 +744,20 @@
     },
     {
       "consumer": "Agentweaver.Environment",
+      "dependency": "Agentweaver.Persistence.Postgres",
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0",
+        "1.0.1",
+        "1.0.2",
+        "1.1.0",
+        "1.1.1",
+        "1.2.0"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Environment",
       "dependency": "Agentweaver.Providers",
       "versions": [
         "0.0.0",
