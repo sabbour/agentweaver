@@ -172,6 +172,10 @@ test('runtime and Probe inputs are separately default-off and plans never invoke
         }
         return result;
       },
+      preflightIdentityBrokerRegistration() { return {
+        callbackUri: 'https://agentweaver.test.eastus2.aksapp.io/signin-oidc',
+        registrationReady: true, mutationExecuted: false,
+      }; },
       initializeIdentityBrokerState() { steps.push('state'); },
       alignIdentityBrokerHostname() { steps.push('alignment'); },
       initializeIdentityPostgres(config) {
@@ -217,6 +221,10 @@ test('runtime phase cannot reuse the earlier initial PostgreSQL bootstrap receip
       brokerImage: 'ghcr.io/sabbour/agentweaver.identity.broker@sha256:' + 'a'.repeat(64),
     }, {
       sourceResolver: () => source, execAz: fakeAzure(),
+      preflightIdentityBrokerRegistration() { return {
+        callbackUri: 'https://agentweaver.test.eastus2.aksapp.io/signin-oidc',
+        registrationReady: true, mutationExecuted: false,
+      }; },
       initializeIdentityPostgres(config) {
         assert.equal(config.runtimePrincipalObjectId,
           deploymentOutputs.identityBrokerRuntimeIdentity.value.principalObjectId);
@@ -275,6 +283,15 @@ test('Identity routing is default-off with explicit placement, policy, and publi
     initializeIdentityRouting: () => { throw new Error('dry-run certificate mutation'); },
   });
   assert.equal(certificatePlan.identityRoutingPlan.certificatesOnly, true);
+  const confirmedCertificatePlan = await deploy({
+    ...fixture, ...routing, identityRoutingCertificatesOnly: true, registerBrokerCallback: true,
+    confirmBrokerCallback: 'https://agentweaver.test.aksapp.io/signin-oidc',
+  }, {
+    sourceResolver: () => source, execAz: () => { throw new Error('dry-run registration write'); },
+    initializeIdentityRouting: () => { throw new Error('dry-run certificate mutation'); },
+  });
+  assert.equal(confirmedCertificatePlan.identityRoutingPlan.appRegistrationMutationRequested, true);
+  assert.equal(confirmedCertificatePlan.identityRoutingPlan.appRegistrationMutation, false);
   await assert.rejects(deploy({
     ...fixture, identityRoutingCertificatesOnly: true,
   }), /require the separate --bootstrap-identity-routing option/);
@@ -289,6 +306,12 @@ test('guarded routing runs without namespace bootstrap, PostgreSQL, or applicati
     gatewaySecurityPolicy: 'baseline', upstreamClientId: ids.subscriptionId };
   const result = await deploy({ ...fixture, ...routing, execute: true }, {
     sourceResolver: () => source, execAz: fakeAzure(),
+    preflightIdentityBrokerRegistration(config) {
+      steps.push('preflight');
+      assert.equal(config.upstreamClientId, routing.upstreamClientId);
+      return { callbackUri: 'https://agentweaver.test.eastus2.aksapp.io/signin-oidc',
+        registrationReady: true, mutationExecuted: false };
+    },
     initializeIdentityPostgres: () => { throw new Error('unexpected migration/bootstrap'); },
     initializeIdentityRouting: config => {
       steps.push('routing');
@@ -300,10 +323,14 @@ test('guarded routing runs without namespace bootstrap, PostgreSQL, or applicati
       return { routingConfigured: true, runtimeVerified: false };
     },
   });
-  assert.deepEqual(steps, ['routing']);
+  assert.deepEqual(steps, ['preflight', 'routing']);
   assert.equal(result.receipt.identityRouting.runtimeVerified, false);
   await assert.rejects(deploy({ ...fixture, ...routing, execute: true }, {
     sourceResolver: () => source, execAz: fakeAzure(),
+    preflightIdentityBrokerRegistration() { return {
+      callbackUri: 'https://agentweaver.test.eastus2.aksapp.io/signin-oidc',
+      registrationReady: true, mutationExecuted: false,
+    }; },
     initializeIdentityRouting: () => { throw new Error('Gateway not Programmed'); },
   }), /Identity routing bootstrap failed: Gateway not Programmed/);
 });
@@ -311,16 +338,41 @@ test('guarded routing runs without namespace bootstrap, PostgreSQL, or applicati
 test('certificate-only routing stage is passed only through the guarded identity-routing operation', async () => {
   const routing = { bootstrapIdentityRouting: true, identityRoutingCertificatesOnly: true,
     gatewayNamespace: 'agentweaver-gateway', gatewaySecurityPolicy: 'baseline',
-    upstreamClientId: ids.subscriptionId };
+    upstreamClientId: ids.subscriptionId, registerBrokerCallback: true,
+    confirmBrokerCallback: 'https://agentweaver.test.eastus2.aksapp.io/signin-oidc' };
   const result = await deploy({ ...fixture, ...routing, execute: true }, {
     sourceResolver: () => source, execAz: fakeAzure(),
+    preflightIdentityBrokerRegistration(config) {
+      assert.equal(config.registerBrokerCallback, true);
+      assert.equal(config.confirmBrokerCallback, routing.confirmBrokerCallback);
+      return {
+      callbackUri: 'https://agentweaver.test.eastus2.aksapp.io/signin-oidc',
+      registrationReady: true, mutationExecuted: true,
+      };
+    },
     initializeIdentityRouting(config) {
       assert.equal(config.identityRoutingCertificatesOnly, true);
+      assert.equal(config.registerBrokerCallback, true);
       return { certificatesConfigured: true, routingConfigured: false, runtimeVerified: false };
     },
   });
   assert.equal(result.receipt.identityRouting.certificatesConfigured, true);
   assert.equal(result.receipt.identityRouting.routingConfigured, false);
+});
+
+test('Broker preflight failure stops before what-if and infrastructure mutation', async () => {
+  const calls = [];
+  const routing = { bootstrapIdentityRouting: true, gatewayNamespace: 'agentweaver-gateway',
+    gatewaySecurityPolicy: 'baseline', upstreamClientId: ids.subscriptionId };
+  await assert.rejects(deploy({ ...fixture, ...routing, execute: true }, {
+    sourceResolver: () => source,
+    execAz: fakeAzure({}, calls),
+    preflightIdentityBrokerRegistration() {
+      throw new Error('The exact Entra application is not ready');
+    },
+  }), /The exact Entra application is not ready/);
+  assert.ok(!calls.some(args => args.slice(0, 3).join(' ') === 'deployment group what-if'));
+  assert.ok(!calls.some(args => args.slice(0, 3).join(' ') === 'deployment group create'));
 });
 
 test('deployment checks the approved account and resource group before what-if and create', async () => {

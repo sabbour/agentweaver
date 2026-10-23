@@ -8,7 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
 import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
-import { alignExistingP0BrokerHostname, assertIdentityRoutingPlacement, bootstrapIdentityRouting } from './lib/identity-broker-routing.mjs';
+import {
+  alignExistingP0BrokerHostname, assertIdentityRoutingPlacement, bootstrapIdentityRouting,
+  preflightPublicBrokerRegistration,
+} from './lib/identity-broker-routing.mjs';
 import { bootstrapIdentityBrokerState } from './lib/identity-broker-state.mjs';
 import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime } from './lib/identity-broker-runtime.mjs';
 import { bootstrapFoundationProbeInputs } from './lib/foundation-probe-inputs.mjs';
@@ -54,6 +57,7 @@ export async function deploy(config, {
   initializeIdentityBrokerState = bootstrapIdentityBrokerState,
   alignIdentityBrokerHostname = alignExistingP0BrokerHostname,
   initializeIdentityBrokerRuntime = bootstrapIdentityBrokerRuntime,
+  preflightIdentityBrokerRegistration = preflightPublicBrokerRegistration,
   initializeFoundationProbeInputs = bootstrapFoundationProbeInputs,
 } = {}) {
   assertDedicatedTarget(config.resourceGroup);
@@ -69,9 +73,8 @@ export async function deploy(config, {
     if (!GUID_PATTERN.test(config.upstreamClientId ?? '')) {
       throw new Error('Identity routing requires the exact upstream public application client ID.');
     }
-    if (config.identityRoutingCertificatesOnly &&
-        (config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback)) {
-      throw new Error('Certificate-only identity routing cannot verify Broker readiness or change the public application.');
+    if (config.identityRoutingCertificatesOnly && config.verifyBrokerReadiness) {
+      throw new Error('Certificate-only identity routing cannot verify Broker readiness.');
     }
     if (config.registerBrokerCallback && !config.confirmBrokerCallback) {
       throw new Error('Callback registration requires --confirm-identity-broker-callback with the exact route-derived URI.');
@@ -112,6 +115,17 @@ export async function deploy(config, {
   const { execAz: boundAz, group } = guardAzureTarget({ ...config, ...source }, execAz);
   if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
     throw new Error('Source parameter ownership differs from the actual target.');
+  }
+  if (config.bootstrapIdentityRouting || config.bootstrapIdentityBrokerRuntime) {
+    // Validate the selected registration before what-if/create; any app write still requires explicit confirmation.
+    const preflight = await preflightIdentityBrokerRegistration({
+      ...config, clusterName: `${config.resourceGroup}-aks`,
+    }, { execAz: boundAz });
+    summary.identityBrokerRegistrationPreflight = {
+      callbackUri: preflight.callbackUri,
+      registrationReady: preflight.registrationReady,
+      mutationExecuted: preflight.mutationExecuted,
+    };
   }
   const existingIdentityPostgres = (config.bootstrapIdentityPostgres || config.bootstrapFoundationProbePostgres ||
     config.bootstrapIdentityBrokerRuntime) && source.scope === 'aks-only'
