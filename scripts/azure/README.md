@@ -178,55 +178,19 @@ This command is an operator procedure, not a command run by local source checks
 or by merging a pull request. The template requires the storage account and
 identity to exist before deployment.
 
-### P1 PostgreSQL initializer status
+### P1 PostgreSQL initialization and migration plan
 
-The approved database is already initialized. The operator record shows that
-`--continue-after-projects-config` completed on 2026-10-15 and reached its final
-stage, `continuation_all_runtime_grants_committed`. That run used source
-`c24d0000fe5fc6163e4f38594c39dff782d3a46d`, Core merge
-`b9ff7debcb00417d64e00200a5e583d0e141583d`, and plan hash
+The recorded continuation receipt uses plan hash
 `a056bf074940b858b7eb05c78c7e96e2e6663d5b7ea291d99997eaccbbf073c8`.
+This hash identifies a historical plan. It does not prove that the live
+database matches that plan or the current migration catalog. Use `--inspect`
+to read the live migration versions, ownership, grants, and planned relations.
+Use `--apply-pending-migrations` only for separately approved updates, as
+described in [Applying later approved migrations](#applying-later-approved-migrations).
 
-That plan is older than the current migration catalog. Treat it as the
-starting state only: it does not show that any later migration ran. To see the
-live versions, use `--inspect`. To add later approved versions, use
-`--apply-pending-migrations`, described in
-[Applying later approved migrations](#applying-later-approved-migrations).
-Never run `--initialize` against this database, because it requires an empty
-target.
-
-The attempts below preceded that run and are kept as history.
-Earlier initializer attempts did not complete successfully against the approved database.
-An earlier attempt from source `8476c16337fa015031124196d57979159eca1958`
-stopped during live preflight after recording `fresh_target_checked`, before
-role creation. A separate attempt from source
-`76b09104af7a6f5d3cd2b15cc888183c816f7cd2` failed with SQLSTATE `42501`
-during a role command. The retained initializer record does not identify the
-failed SQL statement or establish whether that transaction rolled back; do not
-infer either from `fresh_target_checked`.
-
-A later approved catalog-only reconciliation used source
-`76b09104af7a6f5d3cd2b15cc888183c816f7cd2`, candidate checkout
-`9d6d1856349ece9e07df0d372e0dde494891c26c`, and plan hash
-`e87a97295be2b6df1f792596ccacac7f84f89b5735d60ac440e52b1e066d0134`.
-Both database reads were read-only and rolled back. At the time of that
-snapshot, the five planned workload roles, their object-ID mappings and
-operator memberships, and their five schemas were absent. The existing
-`identity_broker` schema remained owned by the migration role with three
-zero-argument, non-definer PL/pgSQL functions retaining `PUBLIC EXECUTE`.
-This records the later catalog state; it does not prove the failed initializer
-transaction rolled back, successful initialization, or deployment.
-
-The reader and transport fixes were temporary: a disposable database exposed an
-unaliased catalog-column error (SQLSTATE `42703`), corrected in the temporary
-reader; the first executed helper preflight stopped before creating resources
-because the kubeconfig's `kubelogin` command was missing from that process's
-`PATH`.
-Adding the already verified executable directory to the helper's child-only
-`PATH` enabled the later read. No global `PATH` or cluster-permission change was
-made; these reader and tool fixes were temporary and not product-source changes.
-The successful helper's Pod, ConfigMap, port-forward, and Relay output were
-removed.
+Never run `--initialize` against an existing database. That mode requires an
+empty target. A failed receipt also does not prove that a database transaction
+rolled back. Inspect the live database before retrying any database operation.
 
 Initialization requires `--initialize` with full source and Core merge SHAs,
 the exact source plan hash, and a new receipt path under that source copy's
@@ -286,13 +250,11 @@ its hash against the approved deployment before initialization; unresolved
 markers are rejected before credential requests.
 The Environment runtime bootstrap profile replacement store receives exactly
 `SELECT, INSERT` on `environment.runtime_bootstrap_profile_replacements`. It
-receives no `UPDATE`, `DELETE`, or default privileges. The preceding catalog
-snapshot records that this grant was absent at the time of that read.
-It includes 29 exact function signatures, with runtime EXECUTE only for casting authority.
-The read-only catalog snapshot above records the point-in-time catalog state; it
-does not establish successful initialization or deployment.
+receives no `UPDATE`, `DELETE`, or default privileges. The source catalog lists
+29 exact function signatures and grants runtime `EXECUTE` only to the casting
+authority.
 The five new update guards reject changes with SQLSTATE `55000`.
-The three older history guards retain `P0001` and their update, delete, and truncate protections.
+Three history guards use SQLSTATE `P0001` and block updates, deletes, and truncates.
 
 ### Continuing from a verified Projects-only prefix
 
@@ -927,9 +889,8 @@ runtime identity or deployment proof. The initializer reads back its planned
 roles and grants before commit; perform a separate read-only catalog check
 before treating the setup as ready.
 
-The P1 initializer source proposal section above records earlier failed
-attempts and a point-in-time catalog snapshot. Those records do not establish
-the result of a later operator initialization.
+For the plan and migration requirements used by this command, see
+[P1 PostgreSQL initialization and migration plan](#p1-postgresql-initialization-and-migration-plan).
 
 The TCP proxy accepts `--key-vault <host>` only when the host exactly matches
 the URI configured by `IdentityBroker__SecretRedemption__VaultUri`. The URI

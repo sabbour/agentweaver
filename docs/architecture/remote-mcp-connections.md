@@ -117,6 +117,8 @@ old catalog.
 
 Discovery calls `IRemoteMcpDiscoverySource`. The default `UnavailableRemoteMcpDiscoverySource` returns 503 `remote_mcp_discovery_transport_unavailable` and sends no network request. A trusted transport source replaces it when one is registered. Discovery output is a candidate for review. It does not accept a tool for use.
 
+Trusted L7 mediation and enforced network policy are deferred. The default source remains unavailable until a trusted transport is registered. Connection and catalog records do not prove live discovery or authorize a remote tool call.
+
 A repeated discovery request with the same idempotency key returns the first result. Discovery reuses the existing `SaveDiscovery` idempotency operation, so it needs no new migration or grant.
 
 ## Pin and execution limits
