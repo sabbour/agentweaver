@@ -76,7 +76,8 @@ internal sealed partial class CoordinationOwnerStore
             var admission = await readAdmission(cancellationToken).ConfigureAwait(false);
             var observed = ValidateRunAdmission(admission, selection);
             var hard = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(scope.Snapshot).CopilotHardCreditLimit;
-            if (hard is { } limit && observed >= limit)
+            // Admission may complete at the exact cap; the next model dispatch is denied at its owner boundary.
+            if (hard is { } limit && observed > limit)
                 throw new CoordinationException(
                     "runtime_cost_budget_exhausted", StatusCodes.Status409Conflict);
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
@@ -161,9 +162,18 @@ internal sealed partial class CoordinationOwnerStore
         try
         {
             var scope = selection.Selection;
-            return RuntimeRunAdmissionContract.ValidateReceipt(admission,
+            var observed = RuntimeRunAdmissionContract.ValidateReceipt(admission,
                 new(1, RuntimeRunAdmissionContract.SelectionHash(scope.Snapshot)),
                 selection.Authorization.TenantId, scope.ProjectId, scope.RunId, scope.Snapshot);
+            var hardCreditLimit = CoordinatorWorkflowCatalog
+                .ReadRuntimeBudgetLimits(scope.Snapshot).CopilotHardCreditLimit;
+            // A hard cap cannot treat unknown pricing or prior unpriced usage as free at run start.
+            if (hardCreditLimit is not null &&
+                (admission.Quote.Disposition == CostDisposition.Unpriced ||
+                 !admission.CopilotTotals.IsFullyPriced))
+                throw new CoordinationException(
+                    "runtime_cost_budget_pricing_missing", StatusCodes.Status409Conflict);
+            return observed;
         }
         catch (RuntimeAuthorizationException exception)
         {

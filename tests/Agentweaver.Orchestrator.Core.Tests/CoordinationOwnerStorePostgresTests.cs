@@ -97,31 +97,70 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData("missing")]
-    [InlineData("unpriced")]
-    [InlineData("boundary")]
-    [InlineData("revoked")]
-    public async Task RejectedCappedAdmissionLeavesNoRootRunOrAdmissionOutbox(string fault)
+    [InlineData(0)]
+    [InlineData(10)]
+    public async Task PricedAdmissionAtHardLimitDefersDenialToDispatch(decimal hardLimit)
     {
-        var run = "rejected-" + Guid.NewGuid().ToString("N");
+        var run = "at-limit-" + Guid.NewGuid().ToString("N");
         var selection = _selection with
         {
             Selection = _selection.Selection with
             {
-                RunId = run, Snapshot = CoordinatorRunAdmissionTests.Selection(_root.ProjectId, run)
+                RunId = run, Snapshot = CoordinatorRunAdmissionTests.Selection(_root.ProjectId, run, hardLimit)
             },
             Authorization = _selection.Authorization with { BoundRunId = run }
         };
-        var receipt = CoordinatorRunAdmissionTests.Receipt(selection, fault == "boundary" ? 10 : 0);
-        if (fault == "unpriced")
-            receipt = receipt with { CostBinding = null };
+        // Exact-boundary admission starts the run; the runtime's dispatch guard denies the next model turn.
+        var admission = CoordinatorRunAdmissionTests.Receipt(selection, hardLimit);
+        var accepted = await _store.AcceptRootAsync(_actor, selection, "at-limit-root", CancellationToken.None,
+            _ => Task.FromResult(admission), _ => Task.CompletedTask);
+
+        var restarted = new CoordinationOwnerStore(_fixture.DataSource, _schema);
+        var stored = await restarted.ReadRunAdmissionAsync(_actor, selection, CancellationToken.None);
+        Assert.Equal(admission.AcceptedSelectionHash, stored!.AcceptedSelectionHash);
+        Assert.Equal(admission.ModelBindingPin, stored.ModelBindingPin);
+        Assert.Equal(admission.CopilotTotals.Events, stored.CopilotTotals.Events);
+        Assert.Equal(accepted, await restarted.AcceptRootAsync(_actor, selection, "at-limit-root",
+            CancellationToken.None, _ => throw new InvalidOperationException("An accepted run must not be repriced."),
+            _ => Task.CompletedTask));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("unpriced-quote")]
+    [InlineData("unpriced-usage")]
+    [InlineData("unpriced-zero-limit")]
+    [InlineData("over-limit")]
+    [InlineData("revoked")]
+    public async Task RejectedCappedAdmissionLeavesNoRootRunOrAdmissionOutbox(string fault)
+    {
+        var run = "rejected-" + Guid.NewGuid().ToString("N");
+        var hardLimit = fault == "unpriced-zero-limit" ? 0m : 10m;
+        var selection = _selection with
+        {
+            Selection = _selection.Selection with
+            {
+                RunId = run, Snapshot = CoordinatorRunAdmissionTests.Selection(_root.ProjectId, run, hardLimit)
+            },
+            Authorization = _selection.Authorization with { BoundRunId = run }
+        };
+        // Explicit Unpriced evidence is valid input; the configured hard cap makes admission reject it.
+        var receipt = fault switch
+        {
+            "unpriced-quote" or "unpriced-zero-limit" =>
+                CoordinatorRunAdmissionTests.UnpricedReceipt(selection),
+            "unpriced-usage" => CoordinatorRunAdmissionTests.UnpricedUsageReceipt(selection),
+            _ => CoordinatorRunAdmissionTests.Receipt(selection, fault == "over-limit" ? 11 : 0)
+        };
         var checks = 0;
-        await Assert.ThrowsAsync<CoordinationException>(() => _store.AcceptRootAsync(
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() => _store.AcceptRootAsync(
             _actor, selection, "rejected-root", CancellationToken.None,
             fault == "missing" ? null : _ => Task.FromResult(receipt),
             _ => fault == "revoked" && ++checks == 2
                 ? Task.FromException(new CoordinationException("run_selection_permission_denied", 403))
                 : Task.CompletedTask));
+        if (fault.StartsWith("unpriced", StringComparison.Ordinal))
+            Assert.Equal("runtime_cost_budget_pricing_missing", failure.Code);
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             SELECT (SELECT count(*) FROM "{_schema}".accepted_runs WHERE run_id = @run),
