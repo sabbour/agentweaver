@@ -136,6 +136,11 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `readProjectBacklog` | Read project backlog tasks and dependencies. |
 | `captureBacklogTask` | Capture project backlog work. |
 | `editBacklogTaskContent` | Replace backlog task content and lifecycle. |
+| `setProjectBacklogTaskState` | Queue or return an unclaimed task. |
+| `archiveProjectBacklogTask` | Archive an unclaimed task. |
+| `addProjectBacklogDependency` | Add a prerequisite to a task. |
+| `removeProjectBacklogDependency` | Remove a task prerequisite. |
+| `claimBacklogTask` | Atomically claim eligible work for an accepted run with an idempotency key. |
 
 ### Skills and marketplace
 

@@ -79,26 +79,33 @@ and the metrics.
 
 ## Use the project Board
 
-**Prerequisites:** Permission to view the project. Capturing and editing tasks
-need permission to change the project.
+**Prerequisites:** Permission to view the project. Capturing, editing,
+queueing, archiving, and changing prerequisites need permission to change the
+project.
 
 1. Select **Board** in the project rail, or open `/projects/:projectId/board`.
    A backlog promotion notification opens the same page.
 2. Read the tasks in their columns:
    - **Backlog**: captured tasks that are not queued yet.
-   - **Ready**: tasks queued and waiting to be claimed.
+   - **Ready**: tasks queued for an eligible run to claim.
    - **Active**: tasks that a run has claimed.
    - **Done**: tasks whose lifecycle is closed.
 3. To add a task, enter a title under **Intake** and select **Add**.
-4. To change a task, select its edit button, change **Title** or
+4. To change task content, select its edit button, change **Title** or
    **Description**, and select **Save**.
+5. Use **Mark Ready** or **Move to Backlog** to change queue state. Add or
+   remove prerequisites on an unclaimed task, or select **Archive** to hide it
+   from the board.
 
 Each card shows the title, description, prerequisites by title, and the
 linked repository issue as `owner/name#number` with **Open** or **Closed**.
 **Automation running** marks a task that an automation is changing. You
-can't edit that task until the automation finishes. Archived tasks are not
-shown. The summary strip shows queued, active, and done counts and jumps to
-a column. Use the zoom controls or Ctrl and the scroll wheel to zoom.
+can't edit that task or change its prerequisites until the automation
+finishes. Archived tasks are not shown. Ready records queue intent, not
+execution eligibility: a run checks current prerequisite execution and output
+evidence when it claims work. The summary strip shows queued, active, and done
+counts and jumps to a column. Use the zoom controls or Ctrl and the scroll
+wheel to zoom.
 
 **Start task** is the floating button at the top of every project page. It
 opens **Start a task**. Enter a title and select **Add**. The app adds the
@@ -106,15 +113,15 @@ task to the project's Backlog and opens the Board, which confirms the new
 task. Start task does not start a run. To start a run, use **New session**.
 
 Each write sends the backlog revision the app last read. If another change
-was saved first, a capture reads the backlog again and retries once. An edit
-reloads the Board and asks you to try again.
+was saved first, a capture reads the backlog again and retries once. Other
+revision conflicts reload the Board and ask you to try again.
 
 **Expected result:** The new task appears in **Backlog**. A saved edit shows
 **Task saved.**
 
-Moving tasks between columns is not available yet, and cards can't be
-dragged. The Board also has no archive, reorder, or dependency controls,
-and no **Human Review** or **Problems** columns.
+Cards can't be dragged between columns. The Board has no bulk-ready or
+reorder controls, and no **Human Review** or **Problems** columns. Board
+actions change project backlog state; they do not start a run.
 
 ## Open an existing run
 
@@ -170,6 +177,10 @@ are source candidates; the route list does not confirm deployment.
 | Read the backlog | `GET /api/v1/projects/{projectId}/backlog` | Orchestrator | Returns the backlog graph: revision, tasks, and dependencies. |
 | Capture a task | `POST /api/v1/projects/{projectId}/backlog/tasks` | Orchestrator | Adds a task to Backlog with a client-chosen task ID and the expected graph revision. |
 | Edit a task | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/content` | Orchestrator | Replaces the title and description with the expected graph and task revisions. |
+| Change queue state | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/state` | Orchestrator | Moves an unclaimed open task between Backlog and Ready. |
+| Archive a task | `POST /api/v1/projects/{projectId}/backlog/tasks/{taskId}/archive` | Orchestrator | Archives a task at the expected graph and task revisions. |
+| Add or remove a prerequisite | `PUT` or `DELETE /api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Orchestrator | Changes a prerequisite edge with the expected graph revision. |
+| Claim eligible work | `POST /api/v1/projects/{projectId}/runs/{runId}/backlog/tasks/{taskId}/claim` | Orchestrator | Atomically binds one task to the accepted run and checks current prerequisite evidence. |
 | List synced issues | `GET /api/v1/projects/{projectId}/source-control/issues` | Orchestrator | Returns repository issues synced to backlog tasks. The Board reads every page with `state=all`. |
 
 The app includes the tenant selector only when its current authorization

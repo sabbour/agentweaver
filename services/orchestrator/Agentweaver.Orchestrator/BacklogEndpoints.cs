@@ -21,6 +21,14 @@ public static partial class CoordinationEndpoints
         projectBacklog.MapGet("/", ReadProjectBacklogAsync);
         projectBacklog.MapPost("/tasks", CaptureProjectBacklogTaskAsync);
         projectBacklog.MapPut("/tasks/{taskId}/content", EditProjectBacklogTaskAsync);
+        projectBacklog.MapPut("/tasks/{taskId}/state", SetProjectBacklogTaskStateAsync);
+        projectBacklog.MapPost("/tasks/{taskId}/archive", ArchiveProjectBacklogTaskAsync);
+        projectBacklog.MapPut(
+            "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
+            AddProjectBacklogDependencyAsync);
+        projectBacklog.MapDelete(
+            "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
+            RemoveProjectBacklogDependencyAsync);
         var backlog = app.MapGroup("/api/projects/{projectId}/runs/{runId}/backlog")
             .RequireAuthorization();
         backlog.MapGet("/", ReadBacklogAsync);
@@ -63,6 +71,44 @@ public static partial class CoordinationEndpoints
             async (revalidate, ct) => BacklogResult(await backlog.SetTaskContentAsync(
                 new BacklogTaskReference(projectId, taskId), request.Content,
                 request.ExpectedGraphRevision, request.ExpectedTaskRevision, ct, revalidate).ConfigureAwait(false)));
+
+    /// <summary>Changes task queue state under current project authority and revision checks.</summary>
+    private static Task<IResult> SetProjectBacklogTaskStateAsync(
+        string projectId, string taskId, SetBacklogTaskStateRequest request, HttpContext context,
+        ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
+            async (revalidate, ct) => BacklogResult(await backlog.SetTaskStateAsync(
+                new BacklogTaskReference(projectId, taskId), request.State,
+                request.ExpectedGraphRevision, request.ExpectedTaskRevision, ct, revalidate).ConfigureAwait(false)));
+
+    /// <summary>Archives a task under current project authority and revision checks.</summary>
+    private static Task<IResult> ArchiveProjectBacklogTaskAsync(
+        string projectId, string taskId, BacklogTaskRevisionRequest request, HttpContext context,
+        ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
+            async (revalidate, ct) => BacklogResult(await backlog.ArchiveTaskAsync(
+                new BacklogTaskReference(projectId, taskId),
+                request.ExpectedGraphRevision, request.ExpectedTaskRevision, ct, revalidate).ConfigureAwait(false)));
+
+    /// <summary>Adds a prerequisite edge under current project authority and graph revision checks.</summary>
+    private static Task<IResult> AddProjectBacklogDependencyAsync(
+        string projectId, string taskId, string prerequisiteTaskId, BacklogGraphRevisionRequest request,
+        HttpContext context, ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
+            async (revalidate, ct) => BacklogResult(await backlog.AddDependencyAsync(
+                new BacklogTaskReference(projectId, taskId),
+                new BacklogTaskReference(projectId, prerequisiteTaskId),
+                request.ExpectedGraphRevision, ct, revalidate).ConfigureAwait(false)));
+
+    /// <summary>Removes a prerequisite edge under current project authority and graph revision checks.</summary>
+    private static Task<IResult> RemoveProjectBacklogDependencyAsync(
+        string projectId, string taskId, string prerequisiteTaskId, [FromBody] BacklogGraphRevisionRequest request,
+        HttpContext context, ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
+            async (revalidate, ct) => BacklogResult(await backlog.RemoveDependencyAsync(
+                new BacklogTaskReference(projectId, taskId),
+                new BacklogTaskReference(projectId, prerequisiteTaskId),
+                request.ExpectedGraphRevision, ct, revalidate).ConfigureAwait(false)));
 
     /// <summary>Reads recorded plan promotions for a project, oldest first.</summary>
     private static Task<IResult> ReadProjectBacklogPromotionsAsync(
@@ -164,6 +210,7 @@ public static partial class CoordinationEndpoints
     internal static bool BacklogProjectAuthorityIsUnchanged(
         ProjectsAuthorizationContext before, ProjectsAuthorizationContext after, string projectId, bool write)
     {
+        // Ignore unrelated grants so changes elsewhere do not invalidate this project operation.
         static IEnumerable<(string, string, long)> Grants(
             ProjectsAuthorizationContext authority, string project, string permission) =>
             authority.EffectiveAuthority.Where(item =>
@@ -231,14 +278,15 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         BacklogOwnerStore backlog) =>
         ExecuteBacklogOperationAsync(projectId, runId, context, options, projects,
-            async (_, _, _, cancellationToken) =>
+            async (_, _, revalidate, cancellationToken) =>
             {
                 var result = await backlog.SetTaskStateAsync(
                     new BacklogTaskReference(projectId, taskId),
                     request.State,
                     request.ExpectedGraphRevision,
                     request.ExpectedTaskRevision,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    revalidate).ConfigureAwait(false);
                 return BacklogResult(result);
             });
 
@@ -255,13 +303,14 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         BacklogOwnerStore backlog) =>
         ExecuteBacklogOperationAsync(projectId, runId, context, options, projects,
-            async (_, _, _, cancellationToken) =>
+            async (_, _, revalidate, cancellationToken) =>
             {
                 var result = await backlog.ArchiveTaskAsync(
                     new BacklogTaskReference(projectId, taskId),
                     request.ExpectedGraphRevision,
                     request.ExpectedTaskRevision,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    revalidate).ConfigureAwait(false);
                 return BacklogResult(result);
             });
 
@@ -279,13 +328,14 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         BacklogOwnerStore backlog) =>
         ExecuteBacklogOperationAsync(projectId, runId, context, options, projects,
-            async (_, _, _, cancellationToken) =>
+            async (_, _, revalidate, cancellationToken) =>
             {
                 var result = await backlog.AddDependencyAsync(
                     new BacklogTaskReference(projectId, taskId),
                     new BacklogTaskReference(projectId, prerequisiteTaskId),
                     request.ExpectedGraphRevision,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    revalidate).ConfigureAwait(false);
                 return BacklogResult(result);
             });
 
@@ -303,13 +353,14 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         BacklogOwnerStore backlog) =>
         ExecuteBacklogOperationAsync(projectId, runId, context, options, projects,
-            async (_, _, _, cancellationToken) =>
+            async (_, _, revalidate, cancellationToken) =>
             {
                 var result = await backlog.RemoveDependencyAsync(
                     new BacklogTaskReference(projectId, taskId),
                     new BacklogTaskReference(projectId, prerequisiteTaskId),
                     request.ExpectedGraphRevision,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    revalidate).ConfigureAwait(false);
                 return BacklogResult(result);
             });
 

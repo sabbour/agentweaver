@@ -545,6 +545,28 @@ public static class GatewayRouteCatalog
             "/api" + projectBacklog + "/tasks/{taskId}/content",
             "editBacklogTaskContent", "Replace backlog task content and lifecycle",
             body: true, forwardTenantSelector: true);
+        Add("PUT", GatewayOwner.Orchestrator, projectBacklog + "/tasks/{taskId}/state",
+            "/api" + projectBacklog + "/tasks/{taskId}/state",
+            "setProjectBacklogTaskState", "Queue or return a project backlog task", body: true,
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, projectBacklog + "/tasks/{taskId}/archive",
+            "/api" + projectBacklog + "/tasks/{taskId}/archive",
+            "archiveProjectBacklogTask", "Archive a project backlog task", body: true,
+            forwardTenantSelector: true);
+        Add("PUT", GatewayOwner.Orchestrator,
+            projectBacklog + "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
+            "/api" + projectBacklog + "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
+            "addProjectBacklogDependency", "Add a project backlog prerequisite", body: true,
+            forwardTenantSelector: true);
+        Add("DELETE", GatewayOwner.Orchestrator,
+            projectBacklog + "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
+            "/api" + projectBacklog + "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
+            "removeProjectBacklogDependency", "Remove a project backlog prerequisite", body: true,
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, run + "/backlog/tasks/{taskId}/claim",
+            "/api" + run + "/backlog/tasks/{taskId}/claim",
+            "claimBacklogTask", "Atomically claim an eligible backlog task for this run", body: true,
+            forwardTenantSelector: true);
         Add("GET", GatewayOwner.Events, run + "/events",
             "/internal" + run + "/events",
             "replayRunEvents", "Replay committed run events", ["cursor", "limit"],

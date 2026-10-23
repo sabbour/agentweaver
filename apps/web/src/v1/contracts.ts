@@ -1170,6 +1170,44 @@ export interface EditBacklogTaskContentRequest {
   expectedTaskRevision: number;
 }
 
+/** Changes an unclaimed task's queue state with optimistic graph and task revisions. */
+export interface SetBacklogTaskStateRequest {
+  state: 'backlog' | 'ready';
+  expectedGraphRevision: number;
+  expectedTaskRevision: number;
+}
+
+/** Archives one unclaimed task at the graph and task revisions the caller read. */
+export interface BacklogTaskRevisionRequest {
+  expectedGraphRevision: number;
+  expectedTaskRevision: number;
+}
+
+/** Adds or removes one prerequisite edge at the graph revision the caller read. */
+export interface BacklogGraphRevisionRequest {
+  expectedGraphRevision: number;
+}
+
+/** Claims eligible work for one already accepted run. Reuse the same key for retries. */
+export interface ClaimBacklogTaskRequest {
+  expectedGraphRevision: number;
+  expectedTaskRevision: number;
+  idempotencyKey: string;
+}
+
+/** Durable receipt for a task claim and its accepted run binding. */
+export interface BacklogTaskClaimReceipt {
+  task: BacklogTaskReference;
+  taskRevision: number;
+  claimId: string;
+  phase: 'preparing' | 'confirmed';
+  runId: string;
+  rootSessionId: string;
+  selectionHash: string;
+  executionFence: number;
+  decisionStateVersion: number;
+}
+
 /** One reason a backlog write was rejected. `code` is a camelCase issue name such as `staleGraphRevision`. */
 export interface BacklogIssue {
   code: string;
