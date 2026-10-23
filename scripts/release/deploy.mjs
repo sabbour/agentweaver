@@ -127,6 +127,11 @@ const INCOMPLETE_CONFIG_MAPS = new Set([...INCOMPLETE_RUNTIME_CONFIG_MAPS, 'agen
 const REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS = new Set([
   'agenthost-runtime-v1',
   'projects-config-runtime-config',
+  'gateway-runtime-config',
+]);
+const IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS = new Map([
+  ['projects-config-runtime-config', ['projects-config']],
+  ['gateway-runtime-config', ['gateway']],
 ]);
 /** Upstream AgentSandbox release asset pinned to its source commit and content digest. */
 export const AGENT_SANDBOX_RELEASE = Object.freeze({
@@ -337,13 +342,23 @@ function projectRuntimeConfigMap(resource) {
 
 function findImmutableRuntimeConfigMapReplacements(installationManifest, namespace, { root, run }) {
   const replacements = [];
+  const unapprovedChanges = [];
+  const desiredMaps = installationManifest.items.filter((resource) =>
+    resource.kind === 'ConfigMap' && resource.immutable === true);
+
   for (const name of REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS) {
-    const desired = installationManifest.items.find((resource) =>
-      resource.kind === 'ConfigMap' && resource.metadata?.name === name);
-    if (!desired || desired.immutable !== true || desired.metadata?.namespace !== namespace) {
+    const desired = desiredMaps.find((resource) => resource.metadata?.name === name);
+    if (!desired || desired.metadata?.namespace !== namespace) {
       fail(`source bundle must include immutable ConfigMap/${name} in namespace ${namespace}`);
     }
+  }
 
+  // Inspect every rendered immutable ConfigMap so dry-run cannot miss an unapproved replacement.
+  for (const desired of desiredMaps) {
+    const name = desired.metadata?.name;
+    if (typeof name !== 'string' || desired.metadata?.namespace !== namespace) {
+      fail(`source bundle contains an immutable ConfigMap outside namespace ${namespace}`);
+    }
     const currentName = run('kubectl', [
       'get', 'configmap', name, '--namespace', namespace, '--ignore-not-found', '--output=name',
     ], { cwd: root });
@@ -365,11 +380,26 @@ function findImmutableRuntimeConfigMapReplacements(installationManifest, namespa
       fail(`live ConfigMap/${name} does not match its explicitly managed namespace and name`);
     }
     const desiredProjection = projectRuntimeConfigMap(desired);
-    if (current.immutable === true &&
-        (current.dataDigest !== desiredProjection.dataDigest ||
-         current.binaryDataDigest !== desiredProjection.binaryDataDigest)) {
-      replacements.push(desired);
+    if (current.immutable !== true ||
+        (current.dataDigest === desiredProjection.dataDigest &&
+         current.binaryDataDigest === desiredProjection.binaryDataDigest)) continue;
+    if (!REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS.has(name)) {
+      unapprovedChanges.push(name);
+      continue;
     }
+    replacements.push(desired);
+  }
+  if (unapprovedChanges.length > 0) {
+    const changedNames = [
+      ...replacements.map((resource) => resource.metadata.name),
+      ...unapprovedChanges,
+    ];
+    fail(
+      `changed immutable ConfigMaps: ${changedNames.join(', ')}. ` +
+        `Not eligible for guarded pre-acceptance replacement: ${unapprovedChanges.join(', ')}. ` +
+        'Follow the reviewed maintenance procedure in ' +
+        'docs/reference/runtime-configuration.md#update-an-immutable-configmap.',
+    );
   }
   return replacements;
 }
@@ -2847,6 +2877,15 @@ export async function deployRelease(options = {}, dependencies = {}) {
         ], { cwd: root, input: JSON.stringify(configMap) });
       }
       run('kubectl', ['apply', '-k', kustomizeSource.path], { cwd: root });
+      for (const configMap of immutableRuntimeConfigMapReplacements) {
+        // Applying a ConfigMap alone does not change the pod template; explicitly roll its static consumers.
+        for (const deployment of
+          IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS.get(configMap.metadata.name) ?? []) {
+          run('kubectl', [
+            'rollout', 'restart', `deployment/${deployment}`, '--namespace', parsed.target.namespace,
+          ], { cwd: root });
+        }
+      }
       checkpoint = {
         ...checkpoint,
         updatedAt: new Date().toISOString(),
