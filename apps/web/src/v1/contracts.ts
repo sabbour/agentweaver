@@ -1960,6 +1960,20 @@ export interface KnowledgeRecordPage {
   pageSize: number;
 }
 
+/** Record with the run binding used to authorize history reads, not record provenance. */
+export interface ProjectKnowledgeRecord {
+  accessRunId: string;
+  record: KnowledgeRecord;
+}
+
+/** Page of private Knowledge records discovered across the accessible project runs. */
+export interface ProjectKnowledgeRecordPage {
+  items: ProjectKnowledgeRecord[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+}
+
 /** Immutable snapshot of one knowledge-record revision and its provenance. */
 export interface KnowledgeRecordRevision {
   recordId: string;

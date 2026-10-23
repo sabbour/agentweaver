@@ -50,9 +50,12 @@ const mocks = vi.hoisted(() => ({
   beginRepoAppInstallationSetup: vi.fn(),
   getSessionTree: vi.fn(),
   getSessionStatus: vi.fn(),
+  getProjectRunHistorySessions: vi.fn(),
+  replayProjectRunHistoryEvents: vi.fn(),
   getDecisions: vi.fn(),
   sendProjectRunMessage: vi.fn(),
   searchKnowledge: vi.fn(),
+  searchProjectKnowledge: vi.fn(),
   createKnowledgeRecord: vi.fn(),
   updateKnowledgeRecord: vi.fn(),
   readKnowledgeRevisions: vi.fn(),
@@ -107,9 +110,12 @@ vi.mock('./api', () => ({
     readRunOutputCaptureDiff: mocks.readRunOutputCaptureDiff,
     getSessionTree: mocks.getSessionTree,
     getSessionStatus: mocks.getSessionStatus,
+    getProjectRunHistorySessions: mocks.getProjectRunHistorySessions,
+    replayProjectRunHistoryEvents: mocks.replayProjectRunHistoryEvents,
     getDecisions: mocks.getDecisions,
     sendProjectRunMessage: mocks.sendProjectRunMessage,
     searchKnowledge: mocks.searchKnowledge,
+    searchProjectKnowledge: mocks.searchProjectKnowledge,
     createKnowledgeRecord: mocks.createKnowledgeRecord,
     updateKnowledgeRecord: mocks.updateKnowledgeRecord,
     readKnowledgeRevisions: mocks.readKnowledgeRevisions,
@@ -186,7 +192,7 @@ vi.mock('./AuthContext', () => {
     apiCall: mocks.apiCall,
     authorize: async () => {},
     // Silent sign-in for a run binding. Tests control whether it succeeds.
-    ensureSession: (binding: unknown) => mocks.ensureSession(binding),
+    ensureSession: (binding: unknown, activate?: boolean) => mocks.ensureSession(binding, activate),
     signOut: () => {},
     authorizationContext: { tenantId: 'tenant-1' },
     busy: false,
@@ -516,9 +522,14 @@ describe('v1 web project scoping', () => {
     mocks.beginRepoAppInstallationSetup.mockReset();
     mocks.getSessionTree.mockReset();
     mocks.getSessionStatus.mockReset();
+    mocks.getProjectRunHistorySessions.mockReset();
+    mocks.replayProjectRunHistoryEvents.mockReset().mockResolvedValue({
+      events: [], hasMore: false, nextCursor: null,
+    });
     mocks.getDecisions.mockReset();
     mocks.sendProjectRunMessage.mockReset();
     mocks.searchKnowledge.mockReset();
+    mocks.searchProjectKnowledge.mockReset();
     mocks.createKnowledgeRecord.mockReset();
     mocks.updateKnowledgeRecord.mockReset();
     mocks.readKnowledgeRevisions.mockReset();
@@ -1419,7 +1430,7 @@ describe('v1 web project scoping', () => {
     render(<App />);
 
     expect(await screen.findByText('Opening this run…')).toBeTruthy();
-    expect(mocks.ensureSession).toHaveBeenCalledWith({ projectId: 'p1', runId: 'r1' });
+    expect(mocks.ensureSession).toHaveBeenCalledWith({ projectId: 'p1', runId: 'r1' }, undefined);
     // No sign-in button while the silent attempt may still succeed.
     expect(screen.queryByRole('button', { name: 'Sign in for this project and run' })).toBeNull();
     expect(screen.getByRole('heading', { level: 1, name: 'Orchestration' })).toBeTruthy();
@@ -1458,6 +1469,38 @@ describe('v1 web project scoping', () => {
     // The happy path shows no alerts and no "different run" binding warning.
     expect(screen.queryAllByRole('alert')).toHaveLength(0);
     expect(screen.queryByText(/different run/)).toBeNull();
+  });
+
+  it('shows addressed-message routing details in a run activity journal', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    mocks.replayEvents.mockResolvedValue({
+      events: [{
+        schemaVersion: 1,
+        eventVersion: 1,
+        eventId: 'message-event',
+        identity: { projectId: 'p1', runId: 'r1', sessionId: 'agent-a' },
+        position: 1,
+        occurredAt: '2026-01-01T00:00:00Z',
+        kind: 'addressedMessage',
+        payload: {
+          kind: 'addressedMessage',
+          messageId: 'message-1',
+          sender: { projectId: 'p1', runId: 'r1', sessionId: 'agent-a' },
+          recipient: { projectId: 'p1', runId: 'r1', sessionId: 'agent-b' },
+          threadSequence: 3,
+          purpose: 'handoff',
+        },
+        objectReferences: [],
+      }],
+      hasMore: false,
+      nextCursor: null,
+    });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=activity');
+    render(<App />);
+
+    expect(await screen.findByText(/Addressed-message receipt message-1/)).toBeTruthy();
+    expect(screen.getByText(/agent-a → agent-b · thread 3 · handoff/)).toBeTruthy();
   });
 
   it('sends user chat to the coordinator with only one active session', async () => {
@@ -2185,6 +2228,216 @@ describe('v1 web project scoping', () => {
       expect.objectContaining({ page: 2, pageSize: 50 }),
       'tenant-1',
     );
+  });
+
+  it('discovers records across a project without run or agent selection and reads their history', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    const record = { ...knowledgeRecord('project-record', 'p1', 'agent-b'), sourceRunId: 'origin-run' };
+    mocks.searchProjectKnowledge.mockResolvedValue(knowledgePage([
+      { accessRunId: 'run-b', record },
+    ]));
+    mocks.listProjectRuns.mockResolvedValue({
+      projectId: 'p1',
+      items: [{
+        runId: 'work-run',
+        rootSessionId: 'coordinator',
+        title: 'Recent work',
+        goal: null,
+        workflowId: null,
+        state: 'completed',
+        needsInputCount: 0,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        completedAt: '2026-01-01T00:01:00Z',
+        startedBy: { issuer: 'https://broker.test', subject: 'user-1' },
+      }],
+      nextCursor: null,
+    });
+    mocks.readKnowledgeRevisions.mockResolvedValue(knowledgePage([
+      knowledgeRevision('project-record', 1, 'Earlier content'),
+    ]));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'project-record' });
+    expect(mocks.ensureSession).toHaveBeenCalledWith(null, false);
+    expect(mocks.searchProjectKnowledge).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      expect.objectContaining({ page: 1, pageSize: 50 }),
+      'tenant-1',
+    );
+    expect(screen.getByRole('link', { name: 'run-b' }).getAttribute('href'))
+      .toBe('/projects/p1/runs/run-b');
+    expect(screen.getByText(/Source run origin-run/)).toBeTruthy();
+    expect(screen.getByText(/Access run/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Session tree' }).getAttribute('href'))
+      .toBe('/projects/p1/runs/work-run/history?view=sessions');
+    expect(screen.getByRole('link', { name: 'Activity' }).getAttribute('href'))
+      .toBe('/projects/p1/runs/work-run/history?view=activity');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View revision history' }));
+
+    await screen.findByText('Earlier content');
+    expect(mocks.readKnowledgeRevisions).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      'run-b',
+      'agent-b',
+      'project-record',
+      expect.objectContaining({ page: 1, pageSize: 25 }),
+      'tenant-1',
+    );
+  });
+
+  it('opens project run history with project-read routes instead of run-owner snapshots', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.getProjectRunHistorySessions.mockResolvedValue({
+      rootSessionId: 'root-1',
+      nodes: [{
+        identity: { projectId: 'p1', runId: 'work-run', sessionId: 'root-1' },
+        rootSessionId: 'root-1',
+        kind: 'coordinator',
+        detached: false,
+        lifecycle: 'completed',
+        executionFence: 1,
+        logicalTurnOrdinal: 1,
+        stateVersion: 1,
+        createdAt: '2026-01-01T00:00:00Z',
+      }],
+    });
+    mocks.replayProjectRunHistoryEvents.mockResolvedValue({
+      events: [{
+        schemaVersion: 1,
+        eventVersion: 1,
+        eventId: 'event-1',
+        identity: { projectId: 'p1', runId: 'work-run', sessionId: 'root-1' },
+        position: 1,
+        occurredAt: '2026-01-01T00:01:00Z',
+        kind: 'addressedMessage',
+        payload: {},
+        objectReferences: [],
+      }],
+      nextCursor: null,
+      hasMore: false,
+    });
+    window.history.replaceState({}, '', '/projects/p1/runs/work-run/history?view=sessions');
+
+    render(<App />);
+
+    await screen.findByText('root-1');
+    expect(mocks.ensureSession).toHaveBeenCalledWith(null, false);
+    expect(mocks.getProjectRunHistorySessions).toHaveBeenCalledWith(
+      'broker-token', 'p1', 'work-run', 'tenant-1',
+    );
+    expect(mocks.getRunStatus).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    expect(await screen.findByText('Position 1')).toBeTruthy();
+    expect(mocks.replayProjectRunHistoryEvents).toHaveBeenCalledWith(
+      'broker-token', 'p1', 'work-run', null, 100, 'tenant-1',
+    );
+  });
+
+  it('uses the shared pager for project-wide discovery', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.searchProjectKnowledge.mockResolvedValue({
+      ...knowledgePage([
+        { accessRunId: 'run-a', record: knowledgeRecord('page-record', 'p1', 'agent-a') },
+      ]),
+      totalCount: 51,
+    });
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+    render(<App />);
+
+    const pager = await screen.findByRole('navigation', { name: 'Pagination' });
+    fireEvent.click(within(pager).getByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(mocks.searchProjectKnowledge).toHaveBeenLastCalledWith(
+      'broker-token',
+      'p1',
+      expect.objectContaining({ page: 2, pageSize: 50 }),
+      'tenant-1',
+    ));
+    expect(await screen.findByText(/Page 2 of 2/)).toBeTruthy();
+  });
+
+  it('moves to the last valid page when a refresh shrinks project-wide results', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.searchProjectKnowledge
+      .mockResolvedValueOnce({
+        ...knowledgePage([
+          { accessRunId: 'run-a', record: knowledgeRecord('first-page-record', 'p1', 'agent-a') },
+        ]),
+        totalCount: 51,
+      })
+      .mockResolvedValueOnce({
+        ...knowledgePage([
+          { accessRunId: 'run-b', record: knowledgeRecord('second-page-record', 'p1', 'agent-b') },
+        ]),
+        page: 2,
+        totalCount: 51,
+      })
+      .mockResolvedValueOnce({
+        ...knowledgePage([]),
+        page: 2,
+        totalCount: 3,
+      })
+      .mockResolvedValueOnce(knowledgePage([
+        { accessRunId: 'run-a', record: knowledgeRecord('refreshed-record', 'p1', 'agent-a') },
+      ]));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+    render(<App />);
+
+    const pager = await screen.findByRole('navigation', { name: 'Pagination' });
+    await screen.findByRole('heading', { name: 'first-page-record' });
+    fireEvent.click(within(pager).getByRole('button', { name: 'Next' }));
+    await screen.findByRole('heading', { name: 'second-page-record' });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await screen.findByRole('heading', { name: 'refreshed-record' });
+    expect(mocks.searchProjectKnowledge).toHaveBeenLastCalledWith(
+      'broker-token',
+      'p1',
+      expect.objectContaining({ page: 1, pageSize: 50 }),
+      'tenant-1',
+    );
+  });
+
+  it('shows empty, failed, and denied project-wide search states', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.searchProjectKnowledge
+      .mockResolvedValueOnce(knowledgePage([]))
+      .mockRejectedValueOnce(new Error('Search unavailable'))
+      .mockRejectedValueOnce(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+    render(<App />);
+
+    expect(await screen.findByText('No project-wide records match this search.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText(/Search unavailable/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText(/Forbidden|403/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Sign in for project-wide search' })).toBeNull();
+  });
+
+  it('reloads project-wide search results', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.searchProjectKnowledge.mockResolvedValue(knowledgePage([
+      { accessRunId: 'run-a', record: knowledgeRecord('before-refresh', 'p1', 'agent-a') },
+    ]));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'before-refresh' });
+    mocks.searchProjectKnowledge.mockResolvedValue(knowledgePage([
+      { accessRunId: 'run-b', record: knowledgeRecord('after-refresh', 'p1', 'agent-b') },
+    ]));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await screen.findByRole('heading', { name: 'after-refresh' });
+    expect(screen.queryByRole('heading', { name: 'before-refresh' })).toBeNull();
   });
 
   it('limits Knowledge creation to supported kinds and importance values', async () => {

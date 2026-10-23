@@ -97,7 +97,7 @@ lifetime. Scopes do not replace current roles, owner state, or immutable binding
 | Selection | `api.read` and `projects.orchestrator`, current project Orchestrator assignment, and matching project/run binding. |
 | Coordination | Exact project/run bearer with `api.read` and `projects.orchestrator`, matching owner audience, and a current accepted Projects selection. |
 | Journal | Authenticated signed project/run scope, current Sessions provider binding, and owner-authorized journal access. Writes also require the appropriate owner admission. |
-| Private Knowledge | Selection authority plus current `AccessPrivateKnowledge` permission and accepted run Memory selection. The permission comes from Projects, not record content. |
+| Private Knowledge | Current `AccessPrivateKnowledge` permission plus `ReadRunSelection` authority. Run-scoped routes use the accepted run Memory selection; project-wide search requires an unbound token and uses only existing run-provider bindings. The permission comes from Projects, not record content. |
 | Runtime | Authenticated bearer plus exact current runtime registration, placement, purpose, proof, or receipt required by that operation. These are not ordinary user write APIs. |
 | Environment read | Bearer plus current `ReadProjects` authority and matching tenant/project/run binding. |
 | Environment write | Bearer plus current `WriteProjects` authority, matching owner binding, and operation-specific fences. Operations that read accepted selections also require `ReadRunSelection`. Projects does not grant `WriteProjects` to run-bound callers. |
@@ -569,6 +569,16 @@ Each item includes the selected `workflowId` and `needsInputCount`, the count of
 durable pending decision gates. Saved run requests supply `title` and `goal`;
 they can be `null` for older or non-interactive runs without a saved request.
 
+### Project run session history
+
+| Method | Native path | Auth | Purpose | Gateway path |
+| --- | --- | --- | --- | --- |
+| GET | `/api/projects/{projectId}/runs/{runId}/history/sessions` | Read | Read a run's session tree. | `/api/v1/projects/{projectId}/runs/{runId}/history/sessions` |
+
+This read uses fresh project authority, so an authorized project reader does
+not need to be the actor who accepted the run. A run-bound token remains limited
+to its bound run. The Gateway route returns `Cache-Control: no-store`.
+
 ### Project issue and pull request lists
 
 These reads return Agentweaver's stored data. They make no source control
@@ -1017,6 +1027,21 @@ native SDK session or an available provider.
 ## Knowledge
 
 Source: `services/knowledge/Agentweaver.Knowledge/KnowledgeEndpoints.cs`.
+
+Project-wide native prefix: `/api/projects/{projectId}/knowledge`.
+Project-wide Gateway prefix: `/api/v1/projects/{projectId}/knowledge`.
+Project-wide search requires an unbound Broker token with current project
+`AccessPrivateKnowledge` and direct project `ReadRunSelection`. It searches all
+agents through existing provider bindings and does not create a new binding.
+Run-bound tokens are rejected. Results are globally ordered across provider
+resources before paging. Each item includes `accessRunId`, the run binding used
+to authorize revision-history reads; `record.sourceRunId` is separate record
+provenance.
+
+| Method | Suffix | Auth | Purpose |
+| --- | --- | --- | --- |
+| GET | `/records` | Private Knowledge and direct project `ReadRunSelection` | Search all agents across existing run-provider bindings by `kind`, `q`, `includeInactive`, `page`, and `pageSize`. Each result includes the access run for history reads; record provenance is separate. |
+
 Native prefix: `/api/projects/{projectId}/runs/{runId}/agents/{agentId}`.
 Gateway prefix: `/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}`.
 Every route in this table is in the Gateway catalog.
@@ -1066,6 +1091,7 @@ All routes require Journal authority and exact project/run claims.
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | GET | `/internal/projects/{projectId}/runs/{runId}/events` | Journal | Replay committed run journal. | `/api/v1/projects/{projectId}/runs/{runId}/events` |
+| GET | `/internal/projects/{projectId}/runs/{runId}/project-history/events` | Read | Read run activity with current project read authority and tenant ownership checks. | `/api/v1/projects/{projectId}/runs/{runId}/history/events` |
 | GET | `/internal/projects/{projectId}/runs/{runId}/events/live` | Journal | Native NDJSON stream. | No; Gateway SSE uses replay instead |
 | GET | `/internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` | Exact bound `ReadRunSelection` authority and current provider | Read immutable Sessions pin. | No |
 | GET | No native SSE route | Exact run bearer and current Gateway/owner access checks | SSE over committed replay pages. | `/api/v1/projects/{projectId}/runs/{runId}/events/live` |

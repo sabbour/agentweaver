@@ -124,6 +124,10 @@ delivery with a project-partitioned Cosmos container when registered and configu
 See [Knowledge and Memory](knowledge-memory.md) for the service and its integration
 limits.
 
+Project-wide search uses the same selected Memory provider through existing
+run-provider bindings. The provider query filters by project and searches all
+agents; discovery does not create or change a run binding.
+
 Native PostgreSQL remains the default. Cosmos negotiation validates the existing
 container identity, `/projectId` partition key, required search composite index, and
 non-expiring default TTL; it does not provision resources.

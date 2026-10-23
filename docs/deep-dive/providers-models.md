@@ -75,6 +75,10 @@ to the selected resource. A pin records provider identity, options revision,
 resource generation, and negotiated capabilities; it is not an authorization
 decision.
 
+For `KnowledgeRecordQuery`, a null agent ID means project-wide search across
+all agents. Each Memory provider still filters by project, so this query does
+not widen results across projects or change the run's exclusive provider pin.
+
 A Source Control pull request result also carries the provider title when the
 provider returns one. After a run creates or reuses a pull request, the
 Orchestrator records it for the project pull request list. Recording begins

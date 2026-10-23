@@ -278,7 +278,8 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
             .Where(document => document.DocumentType == RecordDocumentType && document.Record is not null)
             .Select(document => document.Record!)
             .Where(record =>
-                string.Equals(record.AgentId, query.AgentId, StringComparison.Ordinal) &&
+                (query.AgentId is null ||
+                 string.Equals(record.AgentId, query.AgentId, StringComparison.Ordinal)) &&
                 (query.Kind is null || record.Kind == query.Kind) &&
                 (query.IncludeInactive || record.State == KnowledgeRecordState.Active) &&
                 (text is null || Matches(record, text)))

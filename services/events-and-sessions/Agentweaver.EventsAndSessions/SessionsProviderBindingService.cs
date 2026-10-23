@@ -105,6 +105,19 @@ public sealed class SessionsProviderBindingService : ISessionsProviderBinder
         if (binding.ProjectId != runScope.ProjectId || binding.RunId != runScope.RunId)
             throw new SessionAccessDeniedException("The pinned provider belongs to a different project or run.");
 
+        await VerifyPinnedCoreAsync(binding, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Verifies the exact saved provider pin for a project-authorized history read.</summary>
+    internal Task VerifyPinnedForProjectReadAsync(
+        SessionProviderBinding binding,
+        CancellationToken cancellationToken = default) =>
+        VerifyPinnedCoreAsync(binding, cancellationToken);
+
+    private async Task VerifyPinnedCoreAsync(
+        SessionProviderBinding binding,
+        CancellationToken cancellationToken)
+    {
         if (!_catalog.TryGetProvider(binding.ProviderId, out var registration) ||
             registration is null ||
             registration.Descriptor.Seam != ProviderSeam.Sessions)
@@ -134,13 +147,13 @@ public sealed class SessionsProviderBindingService : ISessionsProviderBinder
             _options,
             _dataSource,
             binding.ResourceId,
-            runScope.RunId,
+            binding.RunId,
             cancellationToken);
         if (!result.IsSuccess || result.Value is null)
             throw new SessionPinnedProviderUnavailableException(
                 "The exact pinned Sessions provider, options, or resource is no longer available.");
 
-        var current = ToContractBinding(runScope.ProjectId, result.Value);
+        var current = ToContractBinding(binding.ProjectId, result.Value);
         if (!binding.Matches(current))
             throw new SessionPinnedProviderUnavailableException(
                 "The exact pinned Sessions provider binding has changed.");

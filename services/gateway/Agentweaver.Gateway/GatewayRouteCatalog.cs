@@ -250,6 +250,10 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
             "/api/projects/{projectId}/runs", "listProjectRuns", "List project runs",
             ["state", "startedBy", "cursor", "pageSize"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/runs/{runId}/history/sessions",
+            "/api/projects/{projectId}/runs/{runId}/history/sessions",
+            "getProjectRunHistorySessions", "Read project-authorized run session history",
+            forwardTenantSelector: true);
         // Stored Source Control reads make no provider call. Issues come from backlog content that issue
         // sync stored. Pull requests come from records that runs wrote on create or reuse; a run-bound
         // token is narrowed to its run.
@@ -535,6 +539,14 @@ public static class GatewayRouteCatalog
         Knowledge("GET", "/context", "compileKnowledgeContext", "Compile Knowledge context",
             ["q", "maxItems", "maxTokens"]);
 
+        Add("GET", GatewayOwner.Knowledge,
+            "/projects/{projectId}/knowledge/records",
+            "/api/projects/{projectId}/knowledge/records",
+            "searchProjectKnowledge",
+            "Search project Knowledge records",
+            ["kind", "q", "includeInactive", "page", "pageSize"],
+            forwardTenantSelector: true);
+
         var run = "/projects/{projectId}/runs/{runId}";
         var projectBacklog = "/projects/{projectId}/backlog";
         Add("GET", GatewayOwner.Orchestrator, projectBacklog, "/api" + projectBacklog + "/",
@@ -570,6 +582,10 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Events, run + "/events",
             "/internal" + run + "/events",
             "replayRunEvents", "Replay committed run events", ["cursor", "limit"],
+            forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Events, run + "/history/events",
+            "/internal" + run + "/project-history/events",
+            "replayProjectRunHistoryEvents", "Read project-authorized run activity", ["cursor", "limit"],
             forwardTenantSelector: true);
         Add("GET", GatewayOwner.Events, run + "/events/live",
             "/internal" + run + "/events",

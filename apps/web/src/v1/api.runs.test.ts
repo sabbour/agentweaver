@@ -35,6 +35,23 @@ describe('Gateway run, metrics, and notification routes', () => {
     await expect(client.listProjectRuns('token', 'p1')).rejects.toMatchObject({ status: 502, code: 'owner_contract_invalid' });
   });
 
+  it('reads project-authorized run session and activity history', async () => {
+    const { fetcher, client } = clientReturning(
+      { body: { rootSessionId: 'root-1', nodes: [] } },
+      { body: { events: [], nextCursor: 'cursor-1', hasMore: true } },
+    );
+
+    await client.getProjectRunHistorySessions('token', 'p1', 'r1', 'tenant-1');
+    await client.replayProjectRunHistoryEvents('token', 'p1', 'r1', 'cursor 1', 25, 'tenant-1');
+
+    expect(String(fetcher.mock.calls[0][0])).toBe(`${base}/projects/p1/runs/r1/history/sessions`);
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(String(fetcher.mock.calls[1][0])).toBe(
+      `${base}/projects/p1/runs/r1/history/events?limit=25&cursor=cursor+1`,
+    );
+    expect(new Headers(fetcher.mock.calls[1][1]?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+  });
+
   it('sends create and cancel with an idempotency key and start without a body', async () => {
     const { fetcher, client } = clientReturning(
       { status: 201, body: { runId: 'r1', rootSessionId: 's1', state: 'awaiting_binding', binding: {} } },

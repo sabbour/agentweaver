@@ -30,6 +30,7 @@ import { PageSection } from '../components/ui/PageSection';
 import { Tile, TileGrid } from '../components/ui/TileGrid';
 import { AppDialog } from '../components/ui/AppDialog';
 import { EmptyState } from '../components/ui/States';
+import { Pager } from '../copilot-fluent-system';
 import { SignInView } from '../pages/SignInPage';
 import { RetainedShell as Shell } from './RetainedShell';
 import { iconForRole, workflowNodeTypes } from '../components/WorkflowGraphPanel';
@@ -79,6 +80,7 @@ import type {
   KnowledgeRecord,
   KnowledgeRecordRevision,
   KnowledgeRecordTransferBundle,
+  ProjectKnowledgeRecord,
   ProjectConfiguration,
   ProjectConfigurationChoices,
   ProjectSummary,
@@ -1092,7 +1094,303 @@ function assertKnowledgeTransferBundleScope(
     throw new Error('Knowledge transfer bundle contains records or revisions outside its exact scope.');
 }
 
-/** Lists, edits, versions, and transfers knowledge records within a selected project agent. */
+/** Discovers project-wide records and manages records within a selected run and agent. */
+function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
+  const { apiCall, authorize, ensureSession } = useAuth();
+  const [draftQuery, setDraftQuery] = useState('');
+  const [query, setQuery] = useState('');
+  const [kind, setKind] = useState('');
+  const [includeInactive, setIncludeInactive] = useState(true);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const historyPageSize = 25;
+  const [records, setRecords] = useState<ProjectKnowledgeRecord[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [needsSignIn, setNeedsSignIn] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [recordsScope, setRecordsScope] = useState<string | null>(null);
+  const [expandedRecordKey, setExpandedRecordKey] = useState<string | null>(null);
+  const [historyItems, setHistoryItems] = useState<KnowledgeRecordRevision[]>([]);
+  const [historyTotalCount, setHistoryTotalCount] = useState(0);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyScope, setHistoryScope] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<unknown>(null);
+  const requestScope = JSON.stringify([projectId, query, kind, includeInactive, page, pageSize]);
+  const activeScope = useRef(requestScope);
+  const activeHistoryScope = useRef<string | null>(null);
+  // The service supports at most 100 pages, so keep the shared pager inside that window.
+  const maxVisibleRecords = pageSize * 100;
+  const pageCount = Math.max(1, Math.ceil(Math.min(totalCount, maxVisibleRecords) / pageSize));
+  const currentRecords = recordsScope === requestScope ? records : [];
+  const currentError = recordsScope === requestScope ? error : null;
+
+  const load = useCallback(async () => {
+    const scope = requestScope;
+    activeScope.current = scope;
+    activeHistoryScope.current = null;
+    setExpandedRecordKey(null);
+    setHistoryScope(null);
+    setLoading(true);
+    setError(null);
+    setRecords([]);
+    setTotalCount(0);
+    setRecordsScope(null);
+    try {
+      // Keep a project-wide token separate from the current run token; the owner rejects run-bound authority here.
+      if (!await ensureSession(null, false)) {
+        if (activeScope.current === scope) {
+          setNeedsSignIn(true);
+          setRecordsScope(scope);
+        }
+        return;
+      }
+      setNeedsSignIn(false);
+      const resultPage = await apiCall(
+        (token, tenantSelector) => gatewayClient.searchProjectKnowledge(token, projectId, {
+          query,
+          kind: kind || undefined,
+          includeInactive,
+          page,
+          pageSize,
+        }, tenantSelector),
+        null,
+      );
+      if (activeScope.current !== scope) return;
+      if (resultPage.items.some((item) =>
+        item.record.projectId !== projectId ||
+        !item.accessRunId ||
+        !item.record.agentId ||
+        !item.record.recordId))
+        throw new Error('Knowledge returned records outside the requested project scope.');
+      const lastPage = Math.max(1, Math.ceil(Math.min(resultPage.totalCount, maxVisibleRecords) / pageSize));
+      if (page > lastPage) {
+        // A refresh can shrink the result set while the reader is on a later page.
+        setPage(lastPage);
+        return;
+      }
+      setRecords(resultPage.items);
+      setTotalCount(resultPage.totalCount);
+      setRecordsScope(scope);
+    } catch (reason) {
+      if (activeScope.current !== scope) return;
+      setError(reason);
+      setNeedsSignIn(errorCode(reason) === 'unauthorized');
+      setRecords([]);
+      setTotalCount(0);
+      setRecordsScope(scope);
+    } finally {
+      if (activeScope.current === scope) setLoading(false);
+    }
+  }, [apiCall, ensureSession, includeInactive, kind, maxVisibleRecords, page, pageSize, projectId, query, requestScope]);
+
+  useEffect(() => {
+    activeScope.current = requestScope;
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load, requestScope]);
+
+  const loadHistory = async (item: ProjectKnowledgeRecord, requestedPage = 1) => {
+    const key = JSON.stringify([item.accessRunId, item.record.recordId]);
+    const scope = JSON.stringify([requestScope, key, requestedPage]);
+    activeHistoryScope.current = scope;
+    setExpandedRecordKey(key);
+    setHistoryItems([]);
+    setHistoryTotalCount(0);
+    setHistoryPage(requestedPage);
+    setHistoryScope(null);
+    setHistoryError(null);
+    setHistoryLoading(true);
+    try {
+      // The access run comes from the provider binding returned with the record, never from user-entered IDs.
+      if (!await ensureSession(null, false)) {
+        setNeedsSignIn(true);
+        throw new Error('Sign in to read this record history.');
+      }
+      const resultPage = await apiCall((token, tenantSelector) => gatewayClient.readKnowledgeRevisions(
+        token,
+        projectId,
+        item.accessRunId,
+        item.record.agentId,
+        item.record.recordId,
+        { page: requestedPage, pageSize: historyPageSize },
+        tenantSelector,
+      ), null);
+      if (activeScope.current !== requestScope || activeHistoryScope.current !== scope) return;
+      if (resultPage.items.some((revision) => revision.recordId !== item.record.recordId))
+        throw new Error('Knowledge returned revisions outside the requested record scope.');
+      setHistoryItems(resultPage.items);
+      setHistoryTotalCount(resultPage.totalCount);
+      setHistoryScope(scope);
+    } catch (reason) {
+      if (activeScope.current !== requestScope || activeHistoryScope.current !== scope) return;
+      setNeedsSignIn(errorCode(reason) === 'unauthorized');
+      setHistoryError(reason);
+      setHistoryScope(scope);
+    } finally {
+      if (activeScope.current === requestScope && activeHistoryScope.current === scope)
+        setHistoryLoading(false);
+    }
+  };
+
+  const search = (event: FormEvent) => {
+    event.preventDefault();
+    setPage(1);
+    setQuery(draftQuery);
+  };
+
+  return (
+    <Panel
+      title="Project-wide search"
+      description="Find records across accessible runs and agents. Choose a run and agent below to manage records."
+      actions={<Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => void load()}>Refresh</Button>}
+    >
+      <form className="v1-form v1-inline-form" onSubmit={search}>
+        <Field label="Search text">
+          <Input value={draftQuery} onChange={(_, data) => setDraftQuery(data.value)} />
+        </Field>
+        <Field label="Kind">
+          <select className="v1-select" aria-label="Project Knowledge kind" value={kind}
+            onChange={(event) => { setPage(1); setKind(event.target.value); }}>
+            <option value="">All kinds</option>
+            <option value="memory">Memories</option>
+            <option value="decision">Decisions</option>
+            <option value="proposal">Proposals</option>
+            <option value="sessionContext">Session context</option>
+          </select>
+        </Field>
+        <label className="v1-checkbox">
+          <input type="checkbox" checked={includeInactive}
+            onChange={(event) => { setPage(1); setIncludeInactive(event.target.checked); }} />
+          Include inactive records
+        </label>
+        <Button appearance="primary" type="submit">Search project memories</Button>
+      </form>
+      {needsSignIn && (
+        <div className="v1-scope-action">
+          <p className="v1-muted">Sign in without a run binding to search project-wide Knowledge.</p>
+          <Button appearance="primary" onClick={() => void authorize(null).then(() => load())}>
+            Sign in for project-wide search
+          </Button>
+        </div>
+      )}
+      {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
+      {currentError == null && recordsScope === requestScope && (
+        <>
+          <p className="v1-muted">
+            {totalCount} record(s){totalCount > pageSize ? ` · Page ${page} of ${Math.min(100, pageCount)}` : ''}.
+            {totalCount > maxVisibleRecords
+              ? ` Showing the first ${maxVisibleRecords.toLocaleString()} matches. Increase page size or refine the search.`
+              : ''}
+          </p>
+          {totalCount > pageSize && (
+            <Pager
+              page={page}
+              pageSize={pageSize}
+              totalItems={Math.min(totalCount, maxVisibleRecords)}
+              pageSizeOptions={[10, 25, 50]}
+              onPageChange={(nextPage) => setPage(Math.min(100, nextPage))}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+            />
+          )}
+        </>
+      )}
+      {loading || recordsScope !== requestScope ? <Loading /> : currentError != null ? null : currentRecords.length === 0 ? (
+        <p className="v1-muted">No project-wide records match this search.</p>
+      ) : (
+        <div className="v1-record-list">
+          {currentRecords.map((item) => {
+            const record = item.record;
+            const key = JSON.stringify([item.accessRunId, record.recordId]);
+            const isExpanded = expandedRecordKey === key;
+            const expectedHistoryScope = JSON.stringify([requestScope, key, historyPage]);
+            return (
+              <article className="v1-record" key={key}>
+                <div className="v1-record-title">
+                  <div>
+                    <h3>{record.title || record.type}</h3>
+                    <p className="v1-muted">
+                      {record.kind} · {record.type} · agent {record.agentId} · {record.state} · trust: {record.trustState}
+                      {record.sourceRunId && <> · Source run {record.sourceRunId}</>}
+                    </p>
+                  </div>
+                  <Badge appearance="tint" color={record.state === 'active' ? 'success' : record.state === 'pending' ? 'warning' : 'subtle'}>
+                    {record.state}
+                  </Badge>
+                </div>
+                <p className="v1-record-content">{record.content}</p>
+                {record.rationale && <p className="v1-muted">Rationale: {record.rationale}</p>}
+                {record.tags.length > 0 && <p className="v1-muted">Tags: {record.tags.join(', ')}</p>}
+                <p className="v1-muted">
+                  Updated <time dateTime={record.updatedAt}>{new Date(record.updatedAt).toLocaleString()}</time>
+                  {' · '}Access run <Link to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.accessRunId)}`}>
+                    {item.accessRunId}
+                  </Link>
+                </p>
+                <Button appearance="secondary" onClick={() => {
+                  if (isExpanded) {
+                    activeHistoryScope.current = null;
+                    setExpandedRecordKey(null);
+                  } else {
+                    void loadHistory(item);
+                  }
+                }}>
+                  {isExpanded ? 'Hide revision history' : 'View revision history'}
+                </Button>
+                {isExpanded && (
+                  <section aria-label={`Revision history for ${record.title || record.type}`}>
+                    <h4>Revision history</h4>
+                    {historyError != null && <ErrorNotice code={errorCode(historyError)}>{errorMessage(historyError)}</ErrorNotice>}
+                    {historyLoading || historyScope !== expectedHistoryScope ? <Loading /> : historyError != null ? null : (
+                      <>
+                        <p className="v1-muted">
+                          {historyTotalCount} revision(s) · Page {historyPage} of {Math.max(1, Math.ceil(historyTotalCount / historyPageSize))}
+                        </p>
+                        <div className="v1-actions">
+                          <Button appearance="secondary" disabled={historyLoading || historyPage <= 1}
+                            onClick={() => void loadHistory(item, Math.max(1, historyPage - 1))}>
+                            Previous revisions
+                          </Button>
+                          <Button appearance="secondary"
+                            disabled={historyLoading || historyPage >= Math.max(1, Math.ceil(historyTotalCount / historyPageSize))}
+                            onClick={() => void loadHistory(item, historyPage + 1)}>
+                            Next revisions
+                          </Button>
+                        </div>
+                        {historyItems.length === 0 ? <p className="v1-muted">No revisions were returned.</p> : (
+                          <div className="v1-record-list">
+                            {historyItems.map((revision) => (
+                              <article className="v1-record" key={revision.revisionId}>
+                                <div className="v1-record-title">
+                                  <div>
+                                    <h5>Revision {revision.revision} · {revision.changeKind || revision.state}</h5>
+                                    <p className="v1-muted">{revision.createdAt}</p>
+                                  </div>
+                                  <Badge appearance="tint" color={revision.state === 'active' ? 'success' : 'subtle'}>
+                                    {revision.state}
+                                  </Badge>
+                                </div>
+                                <p className="v1-record-content">{revision.content}</p>
+                                {revision.rationale && <p className="v1-muted">Rationale: {revision.rationale}</p>}
+                                {revision.reason && <p className="v1-muted">Change reason: {revision.reason}</p>}
+                              </article>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </section>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function KnowledgePage() {
   const { projectId = '' } = useParams();
   const { session, apiCall, authorize, ensureSession } = useAuth();
@@ -1648,9 +1946,10 @@ function KnowledgePage() {
 
   return (
     <>
-      <PageHeading title="Memories" description="What your agents remember and decide. Choose a run and an agent to see their records." page="Memories" />
+      <PageHeading title="Memories" description="Search project-wide or choose a run and agent to manage records." page="Memories" />
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="info"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
+      <ProjectKnowledgeDiscovery projectId={projectId} />
       <Panel title="Show memories for">
         {projectRuns.error != null && <ErrorNotice code={errorCode(projectRuns.error)}>{runListErrorMessage(projectRuns.error)}</ErrorNotice>}
         {/* Wait for the run list before saying there are no runs. */}
@@ -1941,6 +2240,40 @@ function KnowledgePage() {
           </Panel>
         </>
       )}
+      {projectRuns.items.length > 0 && (
+        <Panel title="Recent project runs" description="Browse project work history without entering run or session IDs.">
+          <div className="v1-record-list">
+            {projectRuns.items.map((item) => (
+              <article className="v1-record" key={item.runId}>
+                <div className="v1-record-title">
+                  <div>
+                    <h3>{item.label}</h3>
+                    <p className="v1-muted">{runState(item.executionState).label} · {item.runId}</p>
+                  </div>
+                  <Link className="v1-link-button"
+                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}`}>
+                    Open run
+                  </Link>
+                </div>
+                <div className="v1-actions">
+                  <Link className="v1-link-button"
+                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}/history?view=sessions`}>
+                    Session tree
+                  </Link>
+                  <Link className="v1-link-button"
+                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}/history?view=activity`}>
+                    Activity
+                  </Link>
+                </div>
+              </article>
+            ))}
+          </div>
+          <p className="v1-muted">
+            Session tree shows a run's sessions. Activity shows addressed-message receipts and their routing details, not message text.
+            Private conversations on Sessions are separate from project work history.
+          </p>
+        </Panel>
+      )}
     </>
   );
 }
@@ -2011,6 +2344,13 @@ function createTopology(
 }
 
 /** Produces a compact activity label for a Broker journal event. */
+function eventSessionLabel(value: unknown): string {
+  if (typeof value !== 'object' || value === null ||
+    !('sessionId' in value) || typeof value.sessionId !== 'string')
+    return 'unknown session';
+  return value.sessionId;
+}
+
 function eventSummary(event: SessionEventEnvelope): string {
   const payload = event.payload;
   if (event.kind === 'turn') {
@@ -2029,8 +2369,12 @@ function eventSummary(event: SessionEventEnvelope): string {
   }
   if (event.kind === 'addressedMessage') {
     const id = typeof payload.messageId === 'string' ? payload.messageId : 'message reference';
+    const sender = eventSessionLabel(payload.sender);
+    const recipient = eventSessionLabel(payload.recipient);
+    const sequence = typeof payload.threadSequence === 'number' ? ` · thread ${payload.threadSequence}` : '';
+    const purpose = typeof payload.purpose === 'string' ? ` · ${payload.purpose}` : '';
     const status = typeof payload.status === 'string' ? ` · owner journal status ${payload.status}` : '';
-    return `Addressed-message receipt ${id}${status}; receipt is not proof of delivery, task completion, or approval.`;
+    return `Addressed-message receipt ${id} · ${sender} → ${recipient}${sequence}${purpose}${status}; receipt is not proof of delivery, task completion, or approval.`;
   }
   if (event.kind === 'policyEvaluation') {
     const outcome = typeof payload.outcome === 'string' ? payload.outcome : 'unknown';
@@ -3112,6 +3456,188 @@ function RunTree({ tree, statuses, selectedSession, onSelect }: {
   );
 }
 
+/** Reads one run's tree or event journal with project-read authority, not the accepting run actor. */
+function ProjectRunHistoryPage() {
+  const { projectId = '', runId = '' } = useParams();
+  const { apiCall, authorize, ensureSession } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedView = searchParams.get('view');
+  const view = requestedView === 'activity' ? 'activity' : 'sessions';
+  const [tree, setTree] = useState<SessionTreeSnapshot | null>(null);
+  const [events, setEvents] = useState<SessionEventEnvelope[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [selectedSession, setSelectedSession] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadedKey, setLoadedKey] = useState('');
+  const [needsSignIn, setNeedsSignIn] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const requestGeneration = useRef(0);
+  const historyKey = JSON.stringify([projectId, runId, view]);
+
+  useEffect(() => {
+    if (requestedView === 'sessions' || requestedView === 'activity') return;
+    const normalized = new URLSearchParams(searchParams);
+    normalized.set('view', 'sessions');
+    setSearchParams(normalized, { replace: true });
+  }, [requestedView, searchParams, setSearchParams]);
+
+  const fetchHistory = useCallback(async (cursor: string | null) => {
+    if (!await ensureSession(null, false)) return null;
+    if (view === 'sessions') {
+      const result = await apiCall((token, tenantSelector) =>
+        gatewayClient.getProjectRunHistorySessions(
+          token, projectId, runId, tenantSelector), null);
+      // Reject cross-run data even if a project-scoped endpoint returns a broader result.
+      if (!Array.isArray(result.nodes) ||
+          result.nodes.some((node) =>
+            node.identity.projectId !== projectId || node.identity.runId !== runId) ||
+          !result.nodes.some((node) => node.identity.sessionId === result.rootSessionId))
+        throw new Error('The service returned a session tree for a different run.');
+      return { kind: 'sessions' as const, result };
+    }
+    const page = await apiCall((token, tenantSelector) =>
+      gatewayClient.replayProjectRunHistoryEvents(
+        token, projectId, runId, cursor, 100, tenantSelector), null);
+    // Reject cross-run data even if a project-scoped endpoint returns a broader result.
+    if (!Array.isArray(page.events) ||
+        page.events.some((event) =>
+          event.identity.projectId !== projectId || event.identity.runId !== runId))
+      throw new Error('The service returned activity for a different run.');
+    return { kind: 'activity' as const, page };
+  }, [apiCall, ensureSession, projectId, runId, view]);
+
+  const applyHistory = useCallback((
+    history: Awaited<ReturnType<typeof fetchHistory>>,
+    cursor: string | null,
+  ) => {
+    if (history === null) {
+      setNeedsSignIn(true);
+      return;
+    }
+    setNeedsSignIn(false);
+    if (history.kind === 'sessions') {
+      setTree(history.result);
+      setSelectedSession(history.result.rootSessionId);
+    } else {
+      setEvents((current) => {
+        if (cursor === null) return history.page.events;
+        // Keep replay pages disjoint when the same event arrives on adjacent cursors.
+        const unique = new Map(current.concat(history.page.events).map((event) => [event.eventId, event]));
+        return [...unique.values()];
+      });
+      setNextCursor(history.page.nextCursor ?? null);
+      setHasMore(history.page.hasMore);
+    }
+  }, []);
+
+  const load = useCallback(async (cursor: string | null = null) => {
+    const generation = ++requestGeneration.current;
+    setLoading(true);
+    setError(null);
+    if (cursor === null) {
+      setTree(null);
+      setEvents([]);
+      setNextCursor(null);
+      setHasMore(false);
+    }
+    try {
+      const history = await fetchHistory(cursor);
+      // A response from an earlier run or tab must not replace the current history.
+      if (generation !== requestGeneration.current) return;
+      applyHistory(history, cursor);
+      if (cursor === null) setLoadedKey(historyKey);
+    } catch (caught) {
+      if (generation === requestGeneration.current) {
+        setError(caught);
+        if (cursor === null) setLoadedKey(historyKey);
+      }
+    } finally {
+      if (generation === requestGeneration.current) setLoading(false);
+    }
+  }, [applyHistory, fetchHistory, historyKey]);
+
+  useEffect(() => {
+    const generation = ++requestGeneration.current;
+    let active = true;
+    void fetchHistory(null).then((history) => {
+      if (!active || generation !== requestGeneration.current) return;
+      applyHistory(history, null);
+      setError(null);
+      setLoadedKey(historyKey);
+    }).catch((caught: unknown) => {
+      if (!active || generation !== requestGeneration.current) return;
+      setError(caught);
+      setLoadedKey(historyKey);
+    }).finally(() => {
+      if (active && generation === requestGeneration.current) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [applyHistory, fetchHistory, historyKey]);
+
+  const isLoading = loading || loadedKey !== historyKey;
+  const selectedNode = tree?.nodes.find((node) => node.identity.sessionId === selectedSession) ?? null;
+  const setView = (nextView: string) => {
+    const normalized = new URLSearchParams(searchParams);
+    normalized.set('view', nextView);
+    setSearchParams(normalized);
+  };
+
+  return (
+    <div className="v1-stack">
+      <PageHeading title="Run history" description="Project-authorized sessions and activity for this run." page="Memories" />
+      <Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/memories`}>Back to Memories</Link>
+      <TabList
+        selectedValue={view}
+        onTabSelect={(_, data) => setView(String(data.value))}
+        aria-label="Run history"
+      >
+        <Tab value="sessions">Session tree</Tab>
+        <Tab value="activity">Activity</Tab>
+      </TabList>
+      {needsSignIn && (
+        <Panel title="Sign in for project history">
+          <Button appearance="primary" onClick={() => void authorize(null).then(() => load(null))}>
+            Sign in
+          </Button>
+        </Panel>
+      )}
+      {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
+      {needsSignIn ? null : isLoading ? <Loading label="Loading run history" /> : view === 'sessions' ? (
+        <div className="v1-run-body">
+          <RunTree tree={tree} statuses={{}} selectedSession={selectedSession} onSelect={setSelectedSession} />
+          <section className="v1-run-pane" aria-label="Selected session">
+            <Panel title={selectedNode ? sessionName(selectedNode) : 'Session'}>
+              {selectedNode ? (
+                <dl className="v1-detail-list">
+                  <div><dt>Lifecycle</dt><dd>{selectedNode.lifecycle}</dd></div>
+                  <div><dt>Created</dt><dd>{new Date(selectedNode.createdAt).toLocaleString()}</dd></div>
+                  {selectedNode.parentSessionId && (
+                    <div><dt>Parent</dt><dd>{selectedNode.parentSessionId}</dd></div>
+                  )}
+                </dl>
+              ) : <p className="v1-muted">No session history is available.</p>}
+            </Panel>
+          </section>
+        </div>
+      ) : (
+        <Panel title="Activity" description="Committed events, oldest first. Message text is not included.">
+          <JournalList events={events} />
+          {hasMore && (
+            <Button
+              appearance="secondary"
+              disabled={isLoading}
+              onClick={() => void load(nextCursor)}
+            >
+              Load more
+            </Button>
+          )}
+        </Panel>
+      )}
+    </div>
+  );
+}
+
 /** Adapts the coordinator session tree into the shared interactive React Flow canvas. */
 function ReactFlowView({
   nodes,
@@ -3331,6 +3857,7 @@ function AuthenticatedRoutes() {
       <Route path="/projects/:projectId/board" element={<Shell><BoardPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations" element={<Shell><OrchestrationsPage /></Shell>} />
       <Route path="/projects/:projectId/sessions" element={<Navigate to="/sessions" replace />} />
+      <Route path="/projects/:projectId/runs/:runId/history" element={<Shell><ProjectRunHistoryPage /></Shell>} />
       <Route path="/projects/:projectId/runs/:runId" element={<Shell><RunPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunRedirect />} />
       {/* 0.x operations pages. Each shows the parts current reads support and names what is missing. */}

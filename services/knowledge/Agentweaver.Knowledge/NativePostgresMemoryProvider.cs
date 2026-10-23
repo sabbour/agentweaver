@@ -127,7 +127,9 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         {
             ArgumentNullException.ThrowIfNull(query);
             ValidateIdentifier(query.ProjectId, nameof(query.ProjectId));
-            ValidateIdentifier(query.AgentId, nameof(query.AgentId));
+            // Project-wide discovery leaves AgentId null; callers cannot use an empty agent as a wildcard.
+            if (query.AgentId is not null)
+                ValidateIdentifier(query.AgentId, nameof(query.AgentId));
             if (query.Page < 1 || query.PageSize is < 1 or > 100)
                 throw new KnowledgeApiException(
                     "invalid_page",
@@ -142,7 +144,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                     StatusCodes.Status400BadRequest);
             var kind = query.Kind?.ToString();
             var filter = """
-                project_id = @project AND agent_id = @agent
+                project_id = @project AND (@agent IS NULL OR agent_id = @agent)
                 AND (@kind IS NULL OR kind = @kind)
                 AND (@include_inactive OR state = 'Active')
                 AND (@query IS NULL OR strpos(
@@ -1738,7 +1740,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         string? text)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, query.ProjectId);
-        command.Parameters.AddWithValue("agent", NpgsqlDbType.Varchar, query.AgentId);
+        AddNullable(command, "agent", NpgsqlDbType.Varchar, query.AgentId);
         AddNullable(command, "kind", NpgsqlDbType.Varchar, kind);
         command.Parameters.AddWithValue("include_inactive", NpgsqlDbType.Boolean, query.IncludeInactive);
         AddNullable(command, "query", NpgsqlDbType.Text, text);

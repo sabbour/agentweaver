@@ -36,7 +36,8 @@ and the authorization checks behind Agentweaver scopes.
 5. [Start a session](./runs-sessions.md#start-a-new-chat) with **New session**,
    or open a run from **Sessions** or a project's **Orchestrations**.
 6. [Inspect sessions and respond to requests](./runs-sessions.md).
-7. [Review memories](./knowledge.md) for a run and an agent.
+7. [Discover memories](./knowledge.md) across a project, then manage records
+   for a selected run and agent.
 
 You don't type a run ID. The run lists read the service run list, newest
 first, and load more rows with **Load more**.
@@ -105,10 +106,12 @@ save.
 
 ## Access follows the operation
 
-Project navigation and configuration use the current Broker session. Run and
-Knowledge views request a token bound to the exact project and run. The app
-reads current tenant context from `GET /api/v1/authorization/context`; it does
-not infer a tenant from an ID in the browser URL.
+Project navigation and configuration use the current Broker session.
+Project-wide Knowledge search requests a token that is not bound to a run.
+Run-specific Knowledge changes request a token bound to the exact project and
+run. The app reads current tenant context from
+`GET /api/v1/authorization/context`; it does not infer a tenant from an ID in
+the browser URL.
 
 Creating a project does not make you its owner. A tenant administrator grants
 project access. In **Project settings > Access**, a tenant administrator can

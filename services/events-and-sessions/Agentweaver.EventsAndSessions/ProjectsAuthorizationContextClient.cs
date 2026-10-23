@@ -53,6 +53,13 @@ public interface IProjectsAuthorizationContextClient
     Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
         HttpContext context,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches fresh authority for a project-scoped read without widening a run-bound caller.</summary>
+    Task<ProjectsAuthorizationContextResponse> GetProjectReadAsync(
+        HttpContext context,
+        string projectId,
+        string ownerAudience,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>Calls the Projects owner without redirects and validates its uncached authorization contract.</summary>
@@ -93,7 +100,77 @@ public sealed class ProjectsAuthorizationContextClient(
                      authority.ResourceType == "tenant" && authority.ResourceId == current.TenantId &&
                         permission.Permission == "readProjects"))))
             throw new ProjectsAuthorizationContextException("project_read_permission_denied", HttpStatusCode.Forbidden);
+        if (current.EffectiveAuthority.Any(authority =>
+                authority.ResourceType == "tenant" && authority.ResourceId == current.TenantId &&
+                !authority.Permissions.IsDefault && authority.Permissions.Any(permission =>
+                    permission.RoleRevision > 0 && permission.Permission == "readProjects")))
+            await RequireProjectInTenantAsync(context, projectId, current.TenantId, cancellationToken)
+                .ConfigureAwait(false);
         return current;
+    }
+
+    private async Task RequireProjectInTenantAsync(
+        HttpContext context,
+        string projectId,
+        string tenantId,
+        CancellationToken cancellationToken)
+    {
+        // Tenant-wide read permission is not proof that the requested project belongs to this tenant.
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(RequireOwnerUri(options), $"/api/projects/{Uri.EscapeDataString(projectId)}"));
+        request.Headers.Authorization = RequireBearer(context);
+        request.Headers.TryAddWithoutValidation(TenantSelectorHeader, tenantId);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new ProjectsAuthorizationContextException(
+                "projects_authorization_unavailable", HttpStatusCode.BadGateway, exception);
+        }
+
+        using (response)
+        {
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+                throw new ProjectsAuthorizationContextException(
+                    "project_read_permission_denied", HttpStatusCode.Forbidden);
+            if (response.StatusCode != HttpStatusCode.OK)
+                throw new ProjectsAuthorizationContextException(
+                    response.StatusCode is >= HttpStatusCode.MultipleChoices and < HttpStatusCode.BadRequest
+                        ? "projects_authorization_redirect_rejected"
+                        : "projects_authorization_unavailable",
+                    HttpStatusCode.BadGateway);
+            if (response.Headers.CacheControl?.NoStore != true)
+                throw new ProjectsAuthorizationContextException(
+                    "projects_authorization_cache_policy_invalid", HttpStatusCode.BadGateway);
+
+            try
+            {
+                using var document = await JsonDocument.ParseAsync(
+                    await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false),
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                    !document.RootElement.TryGetProperty("projectId", out var project) ||
+                    project.ValueKind != JsonValueKind.String ||
+                    !string.Equals(project.GetString(), projectId, StringComparison.Ordinal))
+                    throw new ProjectsAuthorizationContextException(
+                        "projects_authorization_contract_invalid", HttpStatusCode.BadGateway);
+            }
+            catch (JsonException exception)
+            {
+                throw new ProjectsAuthorizationContextException(
+                    "projects_authorization_contract_invalid", HttpStatusCode.BadGateway, exception);
+            }
+        }
     }
 
     /// <summary>Validates the uncached Projects response against either exact run scope or optional read bindings.</summary>
