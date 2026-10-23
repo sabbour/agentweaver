@@ -1117,9 +1117,19 @@ catalog-source merge commit `b002620bd8cb53a971b6d5b082d6ab43dbf11fb7` as
 contains the hosted model-binding settings for reasoning, coding,
 `gpt-6.1-sol`, and `gpt-6-luna`. The AgentHost runtime snapshot also changes
 to this receipt's image digest and pull-byte measurement. The bootstrap
-replaces `projects-config-runtime-config` or `agenthost-runtime-v1` only when
-the dry run reports that the rendered data differs from the live map. No other
-ConfigMap is replaced.
+compares every rendered immutable ConfigMap with the live object and reports
+changed maps. It can replace `projects-config-runtime-config`,
+`agenthost-runtime-v1`, or `gateway-runtime-config` only when the live data
+differs from the rendered data. A changed immutable map outside that allowlist
+fails the dry run and requires the reviewed maintenance procedure. The
+bootstrap restarts the `projects-config` and `gateway` Deployments when their
+runtime maps are replaced. AgentHost settings are read by Sandbox Pods, not a
+long-lived Deployment; recreate any affected Sandbox through its owning
+Environment lifecycle before relying on changed AgentHost settings.
+`environment-cilium-config` and `projects-config-provider-catalog` are never
+replaced. Pending Deployment restarts are checkpointed before cluster writes.
+If an apply or restart fails, rerun the command with `--resume`; it retries
+unfinished rollouts even when the ConfigMap data now matches.
 
 Download `publication.json` from the exact source-bound publication artifact
 to `artifacts/release/publish/publication.json`. Continuation receipts and

@@ -127,7 +127,15 @@ const INCOMPLETE_CONFIG_MAPS = new Set([...INCOMPLETE_RUNTIME_CONFIG_MAPS, 'agen
 const REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS = new Set([
   'agenthost-runtime-v1',
   'projects-config-runtime-config',
+  'gateway-runtime-config',
 ]);
+const IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS = new Map([
+  ['projects-config-runtime-config', ['projects-config']],
+  ['gateway-runtime-config', ['gateway']],
+]);
+const IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENT_NAMES = new Set(
+  [...IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS.values()].flat(),
+);
 /** Upstream AgentSandbox release asset pinned to its source commit and content digest. */
 export const AGENT_SANDBOX_RELEASE = Object.freeze({
   version: 'v1.0.7',
@@ -337,13 +345,23 @@ function projectRuntimeConfigMap(resource) {
 
 function findImmutableRuntimeConfigMapReplacements(installationManifest, namespace, { root, run }) {
   const replacements = [];
+  const unapprovedChanges = [];
+  const desiredMaps = installationManifest.items.filter((resource) =>
+    resource.kind === 'ConfigMap' && resource.immutable === true);
+
   for (const name of REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS) {
-    const desired = installationManifest.items.find((resource) =>
-      resource.kind === 'ConfigMap' && resource.metadata?.name === name);
-    if (!desired || desired.immutable !== true || desired.metadata?.namespace !== namespace) {
+    const desired = desiredMaps.find((resource) => resource.metadata?.name === name);
+    if (!desired || desired.metadata?.namespace !== namespace) {
       fail(`source bundle must include immutable ConfigMap/${name} in namespace ${namespace}`);
     }
+  }
 
+  // Inspect every rendered immutable ConfigMap so dry-run cannot miss an unapproved replacement.
+  for (const desired of desiredMaps) {
+    const name = desired.metadata?.name;
+    if (typeof name !== 'string' || desired.metadata?.namespace !== namespace) {
+      fail(`source bundle contains an immutable ConfigMap outside namespace ${namespace}`);
+    }
     const currentName = run('kubectl', [
       'get', 'configmap', name, '--namespace', namespace, '--ignore-not-found', '--output=name',
     ], { cwd: root });
@@ -365,11 +383,26 @@ function findImmutableRuntimeConfigMapReplacements(installationManifest, namespa
       fail(`live ConfigMap/${name} does not match its explicitly managed namespace and name`);
     }
     const desiredProjection = projectRuntimeConfigMap(desired);
-    if (current.immutable === true &&
-        (current.dataDigest !== desiredProjection.dataDigest ||
-         current.binaryDataDigest !== desiredProjection.binaryDataDigest)) {
-      replacements.push(desired);
+    if (current.immutable !== true ||
+        (current.dataDigest === desiredProjection.dataDigest &&
+         current.binaryDataDigest === desiredProjection.binaryDataDigest)) continue;
+    if (!REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS.has(name)) {
+      unapprovedChanges.push(name);
+      continue;
     }
+    replacements.push(desired);
+  }
+  if (unapprovedChanges.length > 0) {
+    const changedNames = [
+      ...replacements.map((resource) => resource.metadata.name),
+      ...unapprovedChanges,
+    ];
+    fail(
+      `changed immutable ConfigMaps: ${changedNames.join(', ')}. ` +
+        `Not eligible for guarded pre-acceptance replacement: ${unapprovedChanges.join(', ')}. ` +
+        'Follow the reviewed maintenance procedure in ' +
+        'docs/reference/runtime-configuration.md#update-an-immutable-configmap.',
+    );
   }
   return replacements;
 }
@@ -1616,6 +1649,22 @@ function loadCheckpoint(key, identity, io) {
     if (error.code === 'ENOENT') return null;
     fail(`cannot read or parse deployment checkpoint ${file}: ${error.message}`);
   }
+  const pendingRollouts = value?.pendingRuntimeConfigMapRollouts;
+  const pendingApplyFlagValid = value?.preAcceptanceApplyPending === undefined ||
+    typeof value.preAcceptanceApplyPending === 'boolean';
+  const pendingRolloutStateValid = pendingRollouts === undefined
+    ? value?.preAcceptanceApplyPending !== true
+    : Array.isArray(pendingRollouts) &&
+      new Set(pendingRollouts).size === pendingRollouts.length &&
+      pendingRollouts.every((name) =>
+        typeof name === 'string' && IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENT_NAMES.has(name)) &&
+      (pendingRollouts.length === 0 || value.preAcceptanceApplyPending === true) &&
+      (value.preAcceptanceApplyPending !== true || identity.resultType === 'pre-acceptance');
+  // Only pre-acceptance checkpoints with validated pending writes may resume before apply completes.
+  const resumablePreAcceptanceApply = identity.resultType === 'pre-acceptance' &&
+    value?.preAcceptanceApplyPending === true &&
+    pendingApplyFlagValid &&
+    pendingRolloutStateValid;
   if (value?.version !== CHECKPOINT_VERSION || value.key !== key ||
       value.releaseTag !== identity.releaseTag || value.sourceSha !== identity.sourceSha ||
       JSON.stringify(value.target) !== JSON.stringify(identity.target) ||
@@ -1623,7 +1672,8 @@ function loadCheckpoint(key, identity, io) {
       value.runtimeManifestSha256 !== identity.runtimeManifestSha256 ||
       value.publicationSha256 !== identity.publicationSha256 ||
       identity.resultType !== undefined && value.resultType !== identity.resultType ||
-      value.stages?.apply?.completed !== true) {
+      !pendingApplyFlagValid || !pendingRolloutStateValid ||
+      value.stages?.apply?.completed !== true && !resumablePreAcceptanceApply) {
     fail(`deployment checkpoint ${file} is invalid; use --restart after inspecting it`);
   }
   return value;
@@ -2829,9 +2879,29 @@ export async function deployRelease(options = {}, dependencies = {}) {
         stages: {},
       };
     }
+    let pendingRuntimeConfigMapRollouts = [...new Set([
+      ...(checkpoint.pendingRuntimeConfigMapRollouts ?? []),
+      ...(parsed.preAcceptance
+        ? immutableRuntimeConfigMapReplacements.flatMap((configMap) =>
+          IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS.get(configMap.metadata.name) ?? [])
+        : []),
+    ])];
     const applied = checkpoint.stages.apply?.completed === true &&
-      immutableRuntimeConfigMapReplacements.length === 0;
+      immutableRuntimeConfigMapReplacements.length === 0 &&
+      pendingRuntimeConfigMapRollouts.length === 0 &&
+      checkpoint.preAcceptanceApplyPending !== true;
     if (!applied) {
+      if (parsed.preAcceptance) {
+        // Save consumers before writes: replacement removes the drift that would otherwise trigger their restart on resume.
+        checkpoint = {
+          ...checkpoint,
+          updatedAt: new Date().toISOString(),
+          preAcceptanceApplyPending: true,
+          pendingRuntimeConfigMapRollouts,
+          stages: { ...checkpoint.stages, apply: { completed: false } },
+        };
+        saveCheckpoint(key, checkpoint, checkpointIo);
+      }
       // Install CRDs before product workloads that depend on the Sandbox API.
       run('kubectl', ['apply', '--filename', '-'], {
         cwd: root,
@@ -2847,9 +2917,29 @@ export async function deployRelease(options = {}, dependencies = {}) {
         ], { cwd: root, input: JSON.stringify(configMap) });
       }
       run('kubectl', ['apply', '-k', kustomizeSource.path], { cwd: root });
+      for (const deployment of pendingRuntimeConfigMapRollouts) {
+        // Keep each successful restart cleared so a resumed run retries only unfinished consumers.
+        run('kubectl', [
+          'rollout', 'restart', `deployment/${deployment}`, '--namespace', parsed.target.namespace,
+        ], { cwd: root });
+        pendingRuntimeConfigMapRollouts = pendingRuntimeConfigMapRollouts.filter(
+          (pendingDeployment) => pendingDeployment !== deployment,
+        );
+        if (parsed.preAcceptance) {
+          checkpoint = {
+            ...checkpoint,
+            updatedAt: new Date().toISOString(),
+            pendingRuntimeConfigMapRollouts,
+          };
+          saveCheckpoint(key, checkpoint, checkpointIo);
+        }
+      }
       checkpoint = {
         ...checkpoint,
         updatedAt: new Date().toISOString(),
+        ...(parsed.preAcceptance
+          ? { preAcceptanceApplyPending: false, pendingRuntimeConfigMapRollouts: [] }
+          : {}),
         stages: { ...checkpoint.stages, apply: { completed: true, completedAt: new Date().toISOString() } },
       };
       saveCheckpoint(key, checkpoint, checkpointIo);

@@ -168,10 +168,17 @@ required runtime configuration and TLS already present.
 The v1.0.5 GitHub Release and tag are already published at source
 `edae14b469548b8409b0eef651504691e0216a1e`. Do not create another release or
 tag after the bootstrap-pins pull request merges. Its separate
-`release:deploy-bootstrap` pre-acceptance path can replace only changed
-`agenthost-runtime-v1` and `projects-config-runtime-config` ConfigMaps after
-preflighting the rest of the bundle; it never replaces other ConfigMaps and
-does not complete release acceptance. See the
+`release:deploy-bootstrap` pre-acceptance path compares every rendered
+immutable ConfigMap with its live object and blocks changed maps outside its
+allowlist during dry-run. It can replace only changed
+`agenthost-runtime-v1`, `projects-config-runtime-config`, and
+`gateway-runtime-config` ConfigMaps after preflighting the rest of the bundle.
+It restarts the `projects-config` and `gateway` Deployments when their runtime
+maps are replaced. It never replaces `environment-cilium-config` or
+`projects-config-provider-catalog`. Pending restarts are checkpointed and
+retried by `--resume` after a partial failure, even when ConfigMap drift is
+gone. This path does not complete release acceptance.
+See the
 [v1.0.5 release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v105-pre-acceptance-bootstrap)
 for the source-bound publication receipt and pinned images.
 

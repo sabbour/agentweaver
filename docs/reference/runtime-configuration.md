@@ -137,24 +137,37 @@ remove the `immutable` setting to bypass the replacement process.
 ### Guarded pre-acceptance ConfigMap patch upgrades
 
 The source-bound `release:deploy-bootstrap` flow has a narrowly scoped
-replacement path for `agenthost-runtime-v1` and
-`projects-config-runtime-config`. AgentHost's immutable `appsettings.json`
-includes the receipt-verified image digest and measured image size. The
-Projects & Config map contains the approved privileged-setup identity values.
-Both maps can change between patch releases.
+replacement path for `agenthost-runtime-v1`,
+`projects-config-runtime-config`, and `gateway-runtime-config`. AgentHost's
+immutable `appsettings.json` includes the receipt-verified image digest and
+measured image size. The Projects & Config map contains the approved
+privileged-setup identity values. The Gateway map contains its owner service
+addresses. These maps can change between patch releases.
 
-The command compares each live map's data with the source-rendered map. When an
-existing immutable map differs, `--dry-run` reports its name. With `--execute`,
-the command validates the rest of the rendered bundle, checks namespace-scoped
-ConfigMap create and name-scoped delete permissions for each changed map,
-force-replaces only those maps from the source-rendered objects, and then
-applies the bundle. Unchanged data follows the normal apply path.
+The command compares every rendered immutable ConfigMap with the same-named
+live map. When a changed map is eligible for guarded replacement,
+`--dry-run` reports its name. It fails with a maintenance-procedure link if
+any other immutable map differs, before server-side preflight can report an
+immutable-field error. With `--execute`, the command validates the rest of the
+rendered bundle, checks namespace-scoped ConfigMap create and name-scoped
+delete permissions for each eligible changed map, force-replaces only those
+maps from the source-rendered objects, and then applies the bundle. Unchanged
+data follows the normal apply path.
 
-This exception is limited to `agenthost-runtime-v1` and
-`projects-config-runtime-config`. It does not replace
-`environment-cilium-config`, `projects-config-provider-catalog`, or any other
-ConfigMap. Other immutable runtime maps still require the reviewed maintenance
-procedure above.
+This exception is limited to `agenthost-runtime-v1`,
+`projects-config-runtime-config`, and `gateway-runtime-config`. It never
+replaces `environment-cilium-config` or
+`projects-config-provider-catalog`. Other changed immutable maps require the
+reviewed maintenance procedure above. After replacement, the bootstrap
+restarts the `gateway` Deployment for its runtime map and the `projects-config`
+Deployment for its runtime map; live verification waits for the rollouts.
+Before cluster writes, it checkpoints required Deployment restarts. If an apply
+or restart fails, rerun the command with `--resume`; it retries unfinished
+rollouts even when the ConfigMap data now matches and no longer shows drift.
+AgentHost settings are used by Sandbox Pods rather than a long-lived
+Deployment. Recreating the ConfigMap does not restart existing Sandbox Pods;
+recreate an affected Sandbox through its owning Environment lifecycle before
+relying on changed AgentHost settings.
 
 `events-and-sessions-runtime-config` is mutable in the checked-in profile.
 Apply its reviewed data with the bundle, then restart the Events & Sessions

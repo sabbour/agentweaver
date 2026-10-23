@@ -328,12 +328,18 @@ mount to generated AgentHost Pods.
 `release:deploy-bootstrap` is a separate pre-acceptance path. It requires the
 exact draft manifest and source-bound publication evidence for the requested
 version; some partial-publication cases also require their immutable completion
-proof. For patch upgrades, it can report and replace only changed immutable
-`agenthost-runtime-v1` and `projects-config-runtime-config` ConfigMaps after
-preflighting the rest of the bundle; unchanged data follows the normal apply
-path. It never replaces `environment-cilium-config`,
-`projects-config-provider-catalog`, or any other ConfigMap. Its dry run does
-not create release-acceptance evidence. The [v1.0.5 GitHub Release and
+proof. For patch upgrades, it compares every rendered immutable ConfigMap with
+its live object, reports changed maps, and blocks dry runs when a changed map is
+outside the guarded allowlist. It can replace only changed immutable
+`agenthost-runtime-v1`, `projects-config-runtime-config`, and
+`gateway-runtime-config` ConfigMaps after preflighting the rest of the bundle;
+unchanged data follows the normal apply path. It restarts the `projects-config`
+and `gateway` Deployments when their runtime maps are replaced. It never
+replaces `environment-cilium-config` or
+`projects-config-provider-catalog`. It checkpoints pending Deployment
+restarts; after a partial failure, `--resume` retries unfinished rollouts even
+when the replaced ConfigMap no longer differs. Its dry run does not create
+release-acceptance evidence. The [v1.0.5 GitHub Release and
 tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.5) are already
 published. Its bootstrap is bound to source
 `edae14b469548b8409b0eef651504691e0216a1e`, tree

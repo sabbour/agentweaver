@@ -396,17 +396,20 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    the Web Service on port 8080. The preflight inventories all routes and
    rejects extra or mismatched routing resources. Do not apply the root
    bundle directly with `kubectl`; the release command is the guarded
-   workload apply. For patch upgrades, it compares the live immutable
-   `agenthost-runtime-v1` and `projects-config-runtime-config` data with the
-   rendered ConfigMaps. If either differs, the command preflights the rest of
-   the bundle, checks namespace-scoped create and name-scoped delete
-   permissions, replaces only the changed map from the source-rendered object,
-   and then applies the bundle. Unchanged data follows the normal apply path.
-   A read-only dry-run reports which exact replacement is needed. This path
-   never replaces `environment-cilium-config`,
-   `projects-config-provider-catalog`, or any other ConfigMap. See
+   workload apply. For patch upgrades, it compares every rendered immutable
+   ConfigMap with the live object. A read-only dry-run reports changed maps
+   that are eligible for guarded replacement and fails if any other immutable
+   map differs. For eligible changes, the command preflights the rest of the
+   bundle, checks namespace-scoped create and name-scoped delete permissions,
+   replaces only the changed map from the source-rendered object, and then
+   applies the bundle. It restarts the `projects-config` and `gateway`
+   Deployments when their runtime maps are replaced. Unchanged data follows
+   the normal apply path. This path never replaces `environment-cilium-config`
+   or `projects-config-provider-catalog`. See
    [runtime configuration](../reference/runtime-configuration.md#guarded-pre-acceptance-configmap-patch-upgrades)
-   for the scope and behavior.
+   for the scope and behavior. If an apply or restart fails, rerun with
+   `--resume` to finish checkpointed rollouts even when the replaced ConfigMap
+   no longer differs.
 
    ```powershell
    npm run release:deploy-bootstrap -- v1.0.7 `
@@ -466,9 +469,13 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    and compressed pull size `322214685` bytes. The rendered
    `projects-config-runtime-config` includes all nine model-binding settings.
    The AgentHost runtime ConfigMap's digest and pull-byte values also change
-   to match the receipt; replace it only if the dry run reports that it differs.
-   Use the reviewed provider-catalog ConfigMap and source commit shown in the
-   command; do not rebuild or substitute image tags. See
+   to match the receipt. The Gateway runtime ConfigMap adds the optional
+   `Gateway__Owners__Environment` HTTPS service root; the guarded bootstrap
+   replaces it when its live immutable data differs and restarts the Gateway
+   Deployment. The dry run compares every rendered immutable ConfigMap and
+   stops if a changed map is outside the guarded allowlist. Use the reviewed
+   provider-catalog ConfigMap and source commit shown in the command; do not
+   rebuild or substitute image tags. See
    [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v107-pre-acceptance-bootstrap)
    for all image digests and the full admission contract.
 
