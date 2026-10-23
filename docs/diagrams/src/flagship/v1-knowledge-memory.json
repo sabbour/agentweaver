@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Knowledge accepted project facts",
-  "alt": "Project-wide Knowledge search requires an unbound project token, checks current authority and existing run-provider pins, and searches all agents without creating pins. Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and delivery intent together through the selected Memory provider: native PostgreSQL by default or an existing Cosmos container or Redis primary. Current relay requests include project/run scope and Events reads from the pinned provider; the original three-field N-1 request uses the legacy unscoped native PostgreSQL receipt route. Partial scope is rejected and scoped reads never fall back. Events appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. The Knowledge run pin and Sessions journal remain in PostgreSQL. Separate record update, archive, supersession, restore, approval, and versioned transfer operations preserve immutable history; imported records return Active with Pending trust.",
+  "alt": "Project-wide Knowledge search requires an unbound project token, checks current authority and existing run-provider pins, searches all agents without creating pins, and orders results globally before paging. Each result's accessRunId names the existing run binding used for history authorization; record sourceRunId is separate provenance. Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and delivery intent together through the selected Memory provider: native PostgreSQL by default or an existing Cosmos container or Redis primary. Current relay requests include project/run scope and Events reads from the pinned provider; the original three-field N-1 request uses the legacy unscoped native PostgreSQL receipt route. Partial scope is rejected and scoped reads never fall back. Events appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. The Knowledge run pin and Sessions journal remain in PostgreSQL. Separate record update, archive, supersession, restore, approval, and versioned transfer operations preserve immutable history; imported records return Active with Pending trust.",
   "autonumber": true,
   "participants": [
     {
@@ -74,7 +74,7 @@
     {
       "type": "note",
       "over": ["knowledge", "database"],
-      "label": "Project search uses an unbound token with AccessPrivateKnowledge and ReadRunSelection; it checks existing pins and searches all agents without creating pins."
+      "label": "Project search merges existing pins in one global order before paging."
     },
     {
       "type": "message",

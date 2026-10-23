@@ -79,7 +79,8 @@ public sealed record MemoryContextCompilation(
     ImmutableArray<string> OmissionCauses,
     ImmutableArray<KnowledgeRevisionReference> RevisionReferences);
 
-/// <summary>A Knowledge record discovered through one existing project-run provider binding.</summary>
+/// <summary>A Knowledge record and the run binding used to authorize access to its history.</summary>
+/// <param name="AccessRunId">The authorizing run, not the record's source run.</param>
 public sealed record ProjectKnowledgeRecord(string AccessRunId, KnowledgeRecord Record);
 
 /// <summary>A globally ordered page of private Knowledge records discovered across accessible project runs.</summary>

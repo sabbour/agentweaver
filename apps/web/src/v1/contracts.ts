@@ -1922,7 +1922,7 @@ export interface KnowledgeRecordPage {
   pageSize: number;
 }
 
-/** Record with the existing run binding used for its authorized history reads. */
+/** Record with the run binding used to authorize history reads, not record provenance. */
 export interface ProjectKnowledgeRecord {
   accessRunId: string;
   record: KnowledgeRecord;

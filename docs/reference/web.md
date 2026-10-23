@@ -78,7 +78,7 @@ data hooks are not mounted.
 | `/projects/:projectId/team` | `ProjectConfigurationPage` on its Agents section. |
 | `/projects/:projectId/orchestrations` | `OrchestrationsPage`. |
 | `/projects/:projectId/board` | `BoardPage`. Each navigation reloads the backlog, so backlog promotion links and **Start task** show current tasks. |
-| `/projects/:projectId/knowledge`, `/projects/:projectId/memories` | `KnowledgePage`; project-wide discovery works across accessible runs and agents, while `runId` and `agentId` query values prefill scoped record management. |
+| `/projects/:projectId/knowledge`, `/projects/:projectId/memories` | `KnowledgePage`; project-wide discovery globally pages records across accessible provider resources. Each project run links to its Session tree and Activity journal; `runId` and `agentId` query values prefill scoped record management. |
 | `/projects/:projectId/team/:agentName/memory` | Redirect to Memories with `agentId` prefilled. |
 | `/settings` | Account settings: clear the session and manage the Repo App account. |
 | `/sessions` | `SessionsPage`. |

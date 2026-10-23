@@ -2,4 +2,4 @@
 "Agentweaver.Web": patch
 ---
 
-Show project-wide Knowledge search and history in the Memories page.
+Show globally paged project-wide Knowledge search, distinct source and access runs, record history, and direct project run-history navigation.

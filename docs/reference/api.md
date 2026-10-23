@@ -986,11 +986,14 @@ Project-wide Gateway prefix: `/api/v1/projects/{projectId}/knowledge`.
 Project-wide search requires an unbound Broker token with current project
 `AccessPrivateKnowledge` and direct project `ReadRunSelection`. It searches all
 agents through existing provider bindings and does not create a new binding.
-Run-bound tokens are rejected.
+Run-bound tokens are rejected. Results are globally ordered across provider
+resources before paging. Each item includes `accessRunId`, the run binding used
+to authorize revision-history reads; `record.sourceRunId` is separate record
+provenance.
 
 | Method | Suffix | Auth | Purpose |
 | --- | --- | --- | --- |
-| GET | `/records` | Private Knowledge and direct project `ReadRunSelection` | Search all agents across existing run-provider bindings by `kind`, `q`, `includeInactive`, `page`, and `pageSize`. |
+| GET | `/records` | Private Knowledge and direct project `ReadRunSelection` | Search all agents across existing run-provider bindings by `kind`, `q`, `includeInactive`, `page`, and `pageSize`. Each result includes the access run for history reads; record provenance is separate. |
 
 Native prefix: `/api/projects/{projectId}/runs/{runId}/agents/{agentId}`.
 Gateway prefix: `/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}`.

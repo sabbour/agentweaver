@@ -69,8 +69,9 @@ existing run-provider bindings, resolves each without creating a pin, groups
 bindings that share the same provider resource, and searches all agents in each
 resource. It rechecks authority and bindings before returning results; an
 inaccessible or unavailable binding fails the request. Each result identifies an
-existing source run so the app can read its revision history through the
-run-scoped route.
+access run: the existing run binding that authorizes revision-history reads.
+The record's `sourceRunId`, when present, remains separate provenance. Results
+from all resources are globally ordered before the requested page is selected.
 
 The data paths preserve project and agent/run scope. Scoped search filters by
 project and agent before counting or returning records; project-wide search filters

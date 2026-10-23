@@ -30,6 +30,7 @@ import { PageSection } from '../components/ui/PageSection';
 import { Tile, TileGrid } from '../components/ui/TileGrid';
 import { AppDialog } from '../components/ui/AppDialog';
 import { EmptyState } from '../components/ui/States';
+import { Pager } from '../copilot-fluent-system';
 import { SignInView } from '../pages/SignInPage';
 import { RetainedShell as Shell } from './RetainedShell';
 import { iconForRole, workflowNodeTypes } from '../components/WorkflowGraphPanel';
@@ -1101,7 +1102,8 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
   const [kind, setKind] = useState('');
   const [includeInactive, setIncludeInactive] = useState(true);
   const [page, setPage] = useState(1);
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(50);
+  const historyPageSize = 25;
   const [records, setRecords] = useState<ProjectKnowledgeRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -1115,10 +1117,12 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
   const [historyScope, setHistoryScope] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<unknown>(null);
-  const requestScope = JSON.stringify([projectId, query, kind, includeInactive, page]);
+  const requestScope = JSON.stringify([projectId, query, kind, includeInactive, page, pageSize]);
   const activeScope = useRef(requestScope);
   const activeHistoryScope = useRef<string | null>(null);
-  const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
+  // The service supports at most 100 pages, so keep the shared pager inside that window.
+  const maxVisibleRecords = pageSize * 100;
+  const pageCount = Math.max(1, Math.ceil(Math.min(totalCount, maxVisibleRecords) / pageSize));
   const currentRecords = recordsScope === requestScope ? records : [];
   const currentError = recordsScope === requestScope ? error : null;
 
@@ -1160,6 +1164,12 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
         !item.record.agentId ||
         !item.record.recordId))
         throw new Error('Knowledge returned records outside the requested project scope.');
+      const lastPage = Math.max(1, Math.ceil(Math.min(resultPage.totalCount, maxVisibleRecords) / pageSize));
+      if (page > lastPage) {
+        // A refresh can shrink the result set while the reader is on a later page.
+        setPage(lastPage);
+        return;
+      }
       setRecords(resultPage.items);
       setTotalCount(resultPage.totalCount);
       setRecordsScope(scope);
@@ -1173,7 +1183,7 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
     } finally {
       if (activeScope.current === scope) setLoading(false);
     }
-  }, [apiCall, ensureSession, includeInactive, kind, page, pageSize, projectId, query, requestScope]);
+  }, [apiCall, ensureSession, includeInactive, kind, maxVisibleRecords, page, pageSize, projectId, query, requestScope]);
 
   useEffect(() => {
     activeScope.current = requestScope;
@@ -1193,7 +1203,7 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
     setHistoryError(null);
     setHistoryLoading(true);
     try {
-      // The exact source run comes from the provider binding returned with the record, never from user-entered IDs.
+      // The access run comes from the provider binding returned with the record, never from user-entered IDs.
       if (!await ensureSession(null, false)) {
         setNeedsSignIn(true);
         throw new Error('Sign in to read this record history.');
@@ -1204,7 +1214,7 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
         item.accessRunId,
         item.record.agentId,
         item.record.recordId,
-        { page: requestedPage, pageSize },
+        { page: requestedPage, pageSize: historyPageSize },
         tenantSelector,
       ), null);
       if (activeScope.current !== requestScope || activeHistoryScope.current !== scope) return;
@@ -1269,19 +1279,21 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
       {currentError == null && recordsScope === requestScope && (
         <>
           <p className="v1-muted">
-            {totalCount} record(s) · Page {page} of {Math.min(100, pageCount)}.
-            {totalCount > 5000 ? ' Showing the first 5,000 matches; refine the search for older records.' : ''}
+            {totalCount} record(s){totalCount > pageSize ? ` · Page ${page} of ${Math.min(100, pageCount)}` : ''}.
+            {totalCount > maxVisibleRecords
+              ? ` Showing the first ${maxVisibleRecords.toLocaleString()} matches. Increase page size or refine the search.`
+              : ''}
           </p>
-          <div className="v1-actions">
-            <Button appearance="secondary" aria-label="Previous project-wide page" disabled={loading || page <= 1}
-              onClick={() => setPage((current) => Math.max(1, current - 1))}>
-              Previous page
-            </Button>
-            <Button appearance="secondary" aria-label="Next project-wide page" disabled={loading || page >= Math.min(100, pageCount)}
-              onClick={() => setPage((current) => Math.min(100, current + 1))}>
-              Next page
-            </Button>
-          </div>
+          {totalCount > pageSize && (
+            <Pager
+              page={page}
+              pageSize={pageSize}
+              totalItems={Math.min(totalCount, maxVisibleRecords)}
+              pageSizeOptions={[10, 25, 50]}
+              onPageChange={(nextPage) => setPage(Math.min(100, nextPage))}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+            />
+          )}
         </>
       )}
       {loading || recordsScope !== requestScope ? <Loading /> : currentError != null ? null : currentRecords.length === 0 ? (
@@ -1298,7 +1310,10 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
                 <div className="v1-record-title">
                   <div>
                     <h3>{record.title || record.type}</h3>
-                    <p className="v1-muted">{record.kind} · {record.type} · agent {record.agentId} · {record.state} · trust: {record.trustState}</p>
+                    <p className="v1-muted">
+                      {record.kind} · {record.type} · agent {record.agentId} · {record.state} · trust: {record.trustState}
+                      {record.sourceRunId && <> · Source run {record.sourceRunId}</>}
+                    </p>
                   </div>
                   <Badge appearance="tint" color={record.state === 'active' ? 'success' : record.state === 'pending' ? 'warning' : 'subtle'}>
                     {record.state}
@@ -1309,7 +1324,7 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
                 {record.tags.length > 0 && <p className="v1-muted">Tags: {record.tags.join(', ')}</p>}
                 <p className="v1-muted">
                   Updated <time dateTime={record.updatedAt}>{new Date(record.updatedAt).toLocaleString()}</time>
-                  {' · '}Source run <Link to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.accessRunId)}`}>
+                  {' · '}Access run <Link to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.accessRunId)}`}>
                     {item.accessRunId}
                   </Link>
                 </p>
@@ -1330,7 +1345,7 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
                     {historyLoading || historyScope !== expectedHistoryScope ? <Loading /> : historyError != null ? null : (
                       <>
                         <p className="v1-muted">
-                          {historyTotalCount} revision(s) · Page {historyPage} of {Math.max(1, Math.ceil(historyTotalCount / pageSize))}
+                          {historyTotalCount} revision(s) · Page {historyPage} of {Math.max(1, Math.ceil(historyTotalCount / historyPageSize))}
                         </p>
                         <div className="v1-actions">
                           <Button appearance="secondary" disabled={historyLoading || historyPage <= 1}
@@ -1338,7 +1353,7 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
                             Previous revisions
                           </Button>
                           <Button appearance="secondary"
-                            disabled={historyLoading || historyPage >= Math.max(1, Math.ceil(historyTotalCount / pageSize))}
+                            disabled={historyLoading || historyPage >= Math.max(1, Math.ceil(historyTotalCount / historyPageSize))}
                             onClick={() => void loadHistory(item, historyPage + 1)}>
                             Next revisions
                           </Button>
@@ -2226,7 +2241,7 @@ function KnowledgePage() {
         </>
       )}
       {projectRuns.items.length > 0 && (
-        <Panel title="Recent project runs" description="Open a run to inspect its session tree and activity.">
+        <Panel title="Recent project runs" description="Browse project work history without entering run or session IDs.">
           <div className="v1-record-list">
             {projectRuns.items.map((item) => (
               <article className="v1-record" key={item.runId}>
@@ -2240,11 +2255,22 @@ function KnowledgePage() {
                     Open run
                   </Link>
                 </div>
+                <div className="v1-actions">
+                  <Link className="v1-link-button"
+                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}?view=topology`}>
+                    Session tree
+                  </Link>
+                  <Link className="v1-link-button"
+                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}?view=activity`}>
+                    Activity
+                  </Link>
+                </div>
               </article>
             ))}
           </div>
           <p className="v1-muted">
-            Project-wide session and addressed-message history is not available yet. Runs open the existing session tree.
+            Session tree shows a run's sessions. Activity shows addressed-message receipts and their routing details, not message text.
+            Private conversations on Sessions are separate from project work history.
           </p>
         </Panel>
       )}
@@ -2318,6 +2344,13 @@ function createTopology(
 }
 
 /** Produces a compact activity label for a Broker journal event. */
+function eventSessionLabel(value: unknown): string {
+  if (typeof value !== 'object' || value === null ||
+    !('sessionId' in value) || typeof value.sessionId !== 'string')
+    return 'unknown session';
+  return value.sessionId;
+}
+
 function eventSummary(event: SessionEventEnvelope): string {
   const payload = event.payload;
   if (event.kind === 'turn') {
@@ -2336,8 +2369,12 @@ function eventSummary(event: SessionEventEnvelope): string {
   }
   if (event.kind === 'addressedMessage') {
     const id = typeof payload.messageId === 'string' ? payload.messageId : 'message reference';
+    const sender = eventSessionLabel(payload.sender);
+    const recipient = eventSessionLabel(payload.recipient);
+    const sequence = typeof payload.threadSequence === 'number' ? ` · thread ${payload.threadSequence}` : '';
+    const purpose = typeof payload.purpose === 'string' ? ` · ${payload.purpose}` : '';
     const status = typeof payload.status === 'string' ? ` · owner journal status ${payload.status}` : '';
-    return `Addressed-message receipt ${id}${status}; receipt is not proof of delivery, task completion, or approval.`;
+    return `Addressed-message receipt ${id} · ${sender} → ${recipient}${sequence}${purpose}${status}; receipt is not proof of delivery, task completion, or approval.`;
   }
   if (event.kind === 'policyEvaluation') {
     const outcome = typeof payload.outcome === 'string' ? payload.outcome : 'unknown';

@@ -25,28 +25,45 @@ service availability.
 3. Choose a kind, enter search text, and select **Search project memories**.
    **Include inactive records** is selected by default; clear it to omit
    historical states.
-4. Use **Previous page** and **Next page** to read more results. Select
+4. Use the page controls to read more results or change the page size. Select
    **Refresh** to read the results again.
 5. Select **View revision history** to inspect a record's revisions. Its
-   source run is shown with a link to the run.
+   access run is shown with a link to the run. When recorded, the source run
+   appears separately as record provenance.
 6. To create or change records, use the run and agent controls below the
    project-wide results. The list contains up to 100 of the project's newest
    runs and the agents in project configuration.
 
-Search returns up to 50 records per page and supports up to 100 pages. It
-searches all agents through existing provider bindings; it does not create a
-provider binding for a run. If there are more than 5,000 matches, refine the
-search to find older results.
+Search returns 50 records per page by default; the page size can be changed to
+10, 25, or 50. It supports up to 100 pages at the selected size, searches all
+agents through existing provider bindings, merges results into one global
+order before paging, and does not create a provider binding for a run. Increase
+the page size or refine the search to find older results beyond the current
+100-page window.
 
 The page accepts `runId` and `agentId` query parameters for scoped
 management. The **Memories for this session** link in **Topology** and the
 **View memories** link on **Agents** fill them in. Each result shows kind,
 type, revision, lifecycle state, trust state, content, rationale, tags, and
-source run.
+source run when recorded. The **Access run** link is the provider binding
+used for history reads; it is not record provenance.
 
 **Expected result:** Project-wide discovery shows records the current project
 authority can read, regardless of agent. The owner checks current project
 access and each existing run binding before returning results.
+
+## Browse project work history
+
+The **Recent project runs** panel is the reachable project-work-history entry
+point. Its newest 100 runs have direct **Session tree** and **Activity** links,
+so users can browse project sessions and addressed-message receipts without
+entering run or session IDs. **Session tree** lists the sessions for that run.
+**Activity** shows its committed event journal, including addressed-message
+receipts and routing details. The journal does not include message text;
+delivery and acknowledgment remain owned by the message service.
+
+The **Sessions** page lists runs across projects and private conversations.
+Private conversation history is separate from project work-focus history.
 
 ## Create and review records
 
@@ -106,11 +123,10 @@ overwritten.
   change.
 - The browser rejects records and mutation responses outside the selected
   project and agent.
-- Project-wide session history and addressed-message history are not available
-  in v1. The exact missing Gateway routes are
-  `GET /api/v1/projects/{projectId}/sessions` and
-  `GET /api/v1/projects/{projectId}/agent-messages`. The **Recent project
-  runs** panel links to the existing per-run session tree instead.
+- v1 does not expose a single cross-run session or addressed-message feed.
+  The **Recent project runs** panel provides the run-scoped entry point instead;
+  private conversation history remains separate from project work-focus
+  history.
 
 ## Requests
 

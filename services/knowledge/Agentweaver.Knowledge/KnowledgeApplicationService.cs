@@ -142,8 +142,6 @@ public sealed class KnowledgeApplicationService(
 
             totalCount += sourceTotalCount;
             results.AddRange(sourceRecords
-                .Skip(offset)
-                .Take(pageSize)
                 .Select(record => new ProjectKnowledgeRecord(source.RunId, record)));
         }
 
@@ -159,11 +157,14 @@ public sealed class KnowledgeApplicationService(
         if (totalCount > int.MaxValue)
             throw new KnowledgeProviderUnavailableException(
                 "The project-wide Knowledge result count exceeds the supported response range.");
+        // Merge every source window before paging so each page is one global ordered slice.
         var items = results
             .OrderByDescending(item => item.Record.UpdatedAt)
             .ThenBy(item => item.Record.RecordId)
             .ThenBy(item => item.Record.AgentId, StringComparer.Ordinal)
             .ThenBy(item => item.AccessRunId, StringComparer.Ordinal)
+            .Skip(offset)
+            .Take(pageSize)
             .ToImmutableArray();
         return new ProjectKnowledgeRecordPage(items, (int)totalCount, page, pageSize);
     }

@@ -46,6 +46,11 @@ Direct reads return the same not-found result
 for a different requested agent as for an absent record. Revision reads first
 verify that the record and agent match.
 
+Project-wide results from distinct provider resources use one stable global
+order before paging. Each result's `accessRunId` identifies the existing run
+binding that authorizes its history read. The record's `sourceRunId`, when
+present, remains separate provenance.
+
 ## Keep record history append-only
 
 Updates use an expected revision and idempotency key. Edits, archive,

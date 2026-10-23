@@ -81,7 +81,8 @@ platform works without the optional AgentSessions package.
 
 Run the Knowledge service suite to check authorization, existing provider
 bindings, and all-agent search across the native PostgreSQL, Cosmos, and Redis
-providers. Run the Web suite to check the project-wide search, source-run links,
+providers, including global paging across distinct provider resources. Run the
+Web suite to check the project-wide search, access-run links, record provenance,
 and revision history alongside the run-scoped record workflows:
 
 ```powershell

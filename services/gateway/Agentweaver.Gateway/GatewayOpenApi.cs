@@ -1910,7 +1910,12 @@ else if (route.OperationId is
         ["KnowledgeRecordPage"] = StrictObj(["items", "totalCount", "page", "pageSize"],
             ("items", Arr(Ref("KnowledgeRecord"))), ("totalCount", Int()), ("page", Int()), ("pageSize", Int())),
         ["ProjectKnowledgeRecord"] = StrictObj(["accessRunId", "record"],
-            ("accessRunId", Str()), ("record", Ref("KnowledgeRecord"))),
+            ("accessRunId", new
+            {
+                type = "string",
+                description = "Existing run binding that authorizes history reads; not record provenance."
+            }),
+            ("record", Ref("KnowledgeRecord"))),
         ["ProjectKnowledgeRecordPage"] = StrictObj(["items", "totalCount", "page", "pageSize"],
             ("items", Arr(Ref("ProjectKnowledgeRecord"))), ("totalCount", Int()),
             ("page", Int()), ("pageSize", Int())),

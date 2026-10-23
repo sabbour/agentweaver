@@ -177,6 +177,8 @@ public sealed class KnowledgeProviderBindingService(
             .ConfigureAwait(false);
         var snapshotNegotiation = negotiation with
         {
+            // Narrow capabilities without changing the shared resource identity.
+            Resource = negotiation.Resource,
             Capabilities = negotiation.Capabilities
                 .Where(advertised.Contains)
                 .ToImmutableHashSet(StringComparer.Ordinal)
