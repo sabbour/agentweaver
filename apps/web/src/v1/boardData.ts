@@ -9,7 +9,9 @@ import { GatewayError, gatewayClient } from './api';
 import { useAuth } from './AuthContext';
 import type {
   BacklogGraph,
+  BacklogTaskRevisionRequest,
   BacklogTaskSnapshot,
+  BacklogTaskState,
   ProjectIssuePage,
   ProjectIssueSummary,
 } from './contracts';
@@ -35,7 +37,7 @@ export const BOARD_COLUMNS: ReadonlyArray<Omit<BoardColumn, 'tasks'>> = [
 ];
 
 /** Plain copy shown where 0.x let users drag tasks between columns. */
-export const MOVE_UNAVAILABLE_COPY = 'Moving tasks between columns is not available yet.';
+export const MOVE_UNAVAILABLE_COPY = 'Drag and drop is unavailable; use task actions to change the queue.';
 
 /** Issue pages read per board load. 100 issues per page keeps one load to at most 1000 issues. */
 const ISSUE_PAGE_SIZE = 100;
@@ -113,7 +115,7 @@ export function isStaleRevision(error: unknown): boolean {
  * the action. 409 explains the common conflicts. Other failures keep the
  * status and message, which helps when someone reports a problem.
  */
-export function boardErrorMessage(error: unknown, action: 'read' | 'capture' | 'edit'): string {
+export function boardErrorMessage(error: unknown, action: 'read' | 'capture' | 'edit' | 'mutate'): string {
   if (error instanceof GatewayError && error.status === 403) {
     return action === 'read'
       ? "You don't have permission to view this project's board."
@@ -122,13 +124,15 @@ export function boardErrorMessage(error: unknown, action: 'read' | 'capture' | '
   if (error instanceof GatewayError && error.status === 409) {
     const codes = backlogIssueCodes(error);
     if (codes.includes('tasknoteditable'))
-      return 'This task can no longer be edited. It may be archived or waiting for an automation.';
+      return action === 'edit'
+        ? 'This task can no longer be edited. It may be archived or waiting for an automation.'
+        : 'This task can no longer be changed. It may be archived, claimed, closed, or waiting for an automation.';
     if (codes.includes('duplicaterepositoryissue'))
       return 'Another task already tracks that repository issue.';
     if (isStaleRevision(error))
       return 'The board changed while you were working. It has been reloaded; try again.';
   }
-  if (error instanceof GatewayError && error.status === 404 && action === 'edit')
+  if (error instanceof GatewayError && error.status === 404 && (action === 'edit' || action === 'mutate'))
     return 'This task no longer exists. The board has been reloaded.';
   return errorMessage(error);
 }
@@ -293,4 +297,59 @@ export function editTaskContent(
     expectedGraphRevision: graph.revision,
     expectedTaskRevision: task.revision,
   }, tenant), null);
+}
+
+/** Moves an unclaimed task between Backlog and Ready using both observed revisions. */
+export function setTaskState(
+  apiCall: ApiCall,
+  graph: BacklogGraph,
+  task: BacklogTaskSnapshot,
+  state: Exclude<BacklogTaskState, 'claimed'>,
+): Promise<BacklogGraph> {
+  return apiCall((token, tenant) => gatewayClient.setProjectBacklogTaskState(
+    token, graph.projectId, task.reference.taskId, {
+      state,
+      expectedGraphRevision: graph.revision,
+      expectedTaskRevision: task.revision,
+    }, tenant), null);
+}
+
+/** Archives one task using both observed revisions. */
+export function archiveTask(
+  apiCall: ApiCall,
+  graph: BacklogGraph,
+  task: BacklogTaskSnapshot,
+): Promise<BacklogGraph> {
+  const request: BacklogTaskRevisionRequest = {
+    expectedGraphRevision: graph.revision,
+    expectedTaskRevision: task.revision,
+  };
+  return apiCall((token, tenant) => gatewayClient.archiveProjectBacklogTask(
+    token, graph.projectId, task.reference.taskId, request, tenant), null);
+}
+
+/** Adds a prerequisite edge at the graph revision the user read. */
+export function addPrerequisite(
+  apiCall: ApiCall,
+  graph: BacklogGraph,
+  task: BacklogTaskSnapshot,
+  prerequisiteTaskId: string,
+): Promise<BacklogGraph> {
+  return apiCall((token, tenant) => gatewayClient.addProjectBacklogDependency(
+    token, graph.projectId, task.reference.taskId, prerequisiteTaskId, {
+      expectedGraphRevision: graph.revision,
+    }, tenant), null);
+}
+
+/** Removes a prerequisite edge at the graph revision the user read. */
+export function removePrerequisite(
+  apiCall: ApiCall,
+  graph: BacklogGraph,
+  task: BacklogTaskSnapshot,
+  prerequisiteTaskId: string,
+): Promise<BacklogGraph> {
+  return apiCall((token, tenant) => gatewayClient.removeProjectBacklogDependency(
+    token, graph.projectId, task.reference.taskId, prerequisiteTaskId, {
+      expectedGraphRevision: graph.revision,
+    }, tenant), null);
 }

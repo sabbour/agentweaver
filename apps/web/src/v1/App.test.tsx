@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   binding: null as { projectId: string; runId: string } | null,
   consent: null as BrokerConsentPrompt | null,
   authProvider: vi.fn(),
+  apiCall: vi.fn(),
   ensureSession: vi.fn(),
   tenantSelector: 'tenant-1',
   completeRemoteMcpOAuthCallback: vi.fn(),
@@ -188,8 +189,7 @@ vi.mock('./AuthContext', () => {
       expiresAt: Date.now() + 60_000,
       binding: null,
     },
-    apiCall: <T,>(operation: (token: string, tenantSelector: string | null) => Promise<T>) =>
-      operation('broker-token', mocks.tenantSelector),
+    apiCall: mocks.apiCall,
     authorize: async () => {},
     // Silent sign-in for a run binding. Tests control whether it succeeds.
     ensureSession: (binding: unknown, activate?: boolean) => mocks.ensureSession(binding, activate),
@@ -452,6 +452,11 @@ describe('v1 web project scoping', () => {
     window.name = '';
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ = undefined;
     mocks.authProvider.mockClear();
+    // Match AuthContext's stable callback; the Board restarts reads when this reference changes.
+    mocks.apiCall.mockReset().mockImplementation(
+      (operation: (token: string, tenantSelector: string | null) => Promise<unknown>) =>
+        operation('broker-token', mocks.tenantSelector),
+    );
     mocks.ensureSession.mockReset();
     // By default the silent run sign-in fails, so tests see the manual sign-in path unless they say otherwise.
     mocks.ensureSession.mockResolvedValue(false);
@@ -725,7 +730,10 @@ describe('v1 web project scoping', () => {
 
     await waitFor(() => expect(mocks.captureBacklogTask).toHaveBeenCalledWith(
       'broker-token', 'p1', expect.objectContaining({ content: { title: 'Write release notes' }, expectedGraphRevision: 3 }), 'tenant-1'));
-    expect(await within(screen.getByTestId('column-backlog')).findByText('Write release notes')).toBeTruthy();
+    expect(await within(screen.getByTestId('column-backlog')).findByText(
+      'Write release notes',
+      { selector: 'span' },
+    )).toBeTruthy();
     expect(window.location.pathname).toBe('/projects/p1/board');
   });
 

@@ -143,9 +143,15 @@ readiness. The evaluator does not make snapshots current; its owner must re-read
 recheck them after waits. Required output proof is accepted only as an owner-supplied
 verified reference; Core neither creates nor verifies it.
 
-The Orchestrator owner candidate persists these tasks and dependencies and exposes
-run-scoped routes under `/api/projects/{projectId}/runs/{runId}/backlog` for graph
-reads, task creation/state/archive, dependency edits, and claims.
+The Orchestrator owner candidate persists these tasks and dependencies. Project
+scoped routes expose graph reads, capture/content edits, queue state, archive,
+and dependency edits under `/api/projects/{projectId}/backlog`; project writes
+recheck current authority after taking the graph lock and before commit. The
+run-scoped route under `/api/projects/{projectId}/runs/{runId}/backlog` claims
+eligible work against the accepted run selection and current prerequisite
+evidence. Its durable task claim, accepted root, initial decision, and outbox
+intent share one Orchestrator transaction. The Gateway publishes the project
+backlog operations and claim route through strict versioned contracts.
 The owner migrator applies the packaged 016 backlog resource during initialization.
 It also adds this resource to existing version-19 and version-20 schemas that lack it.
 Graph edits use table permissions, not schema ownership or migration-history writes.

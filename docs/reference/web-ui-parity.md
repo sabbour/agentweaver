@@ -114,7 +114,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Settings > Models | Default model, reasoning effort, credential, and per-task models. | Model catalog (behavior limit). |
 | Settings > Danger zone | Archive and restore. | Project delete. |
 | Platform settings | All 16 platform component areas with owner, readiness, and implementations. | BYOK providers, platform-default Copilot status, account AI access. |
-| Board | **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, and title and description edits. | Task state, position, archive, dependencies, send all to Ready, task edit and delete, backlog settings, decompose, and the Human Review and Problems columns. |
+| Board | **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, title and description edits, queue state, archive, and prerequisite controls. | Drag and reorder, send all to Ready, task delete, backlog settings, decompose, and the Human Review and Problems columns. |
 | Flow | Project task notifications, **Needs input** including dismissed gates, **Task stages**, and **Open**, **Working**, and **Done** run groups. | The live agent graph for the project and current provider-side PR state per run. |
 | Workflows | **Saved workflow references**: the default workflow and the workflow for each blueprint, from project configuration. | Workflow catalog, YAML, edit, run, generate, sync, default, and per-task override. |
 | Workspace | **Repository** from configuration, **Pull requests** that runs opened or reused, and **Issues** synced into the backlog. | Branches, the file tree, and file content. |
@@ -138,16 +138,13 @@ addresses show **Page not found**. `/console` opens `/assistant`, and
 
 ## Endpoint gaps
 
-Each row is one 0.x endpoint group that has no v1 route. The v1 column is the
-route a v1 service would need to serve. None of these routes is in the Gateway
-route catalog today. The web client does not work around them.
+Each row is one 0.x endpoint group that still has no v1 route. The v1 column is
+the route a v1 service would need to serve. These routes are not in the Gateway
+catalog, and the web client does not work around them.
 
 | Gap | 0.x endpoint | Missing v1 method and path | Plan |
 | --- | --- | --- | --- |
-| Board task state | `POST /api/projects/{p}/backlog/tasks/{id}/ready`, `POST …/backlog` | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/state` with `{ state, expectedGraphRevision, expectedTaskRevision }` | Expose the run-scoped task state operation at project scope; enable drag between columns. |
 | Board task position | `POST /api/projects/{p}/backlog/reorder` | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/position` | Add a position operation with the graph revision; enable reorder in a column. |
-| Board task archive | `POST /api/projects/{p}/backlog/tasks/{id}/archive` | `POST /api/v1/projects/{projectId}/backlog/tasks/{taskId}/archive` | Expose archive at project scope; add the card menu item. |
-| Board task dependencies | `PATCH /api/projects/{p}/backlog/tasks/{id}` with dependencies | `PUT` and `DELETE /api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Expose dependency edits at project scope; add them to the card editor. |
 | Send all to Ready | `POST /api/projects/{p}/backlog/ready-all` | `POST /api/v1/projects/{projectId}/backlog/ready-all` | Add a batch state change with one graph revision; add the Backlog column action. |
 | Board columns and stages | `GET /api/projects/{p}/board`, `GET /api/projects/{p}/workflow-stages` | `GET /api/v1/projects/{projectId}/board` | Return Human Review and Problems placement with the backlog; show both columns. |
 | Task delete | `DELETE /api/projects/{p}/backlog/tasks/{id}` | `DELETE /api/v1/projects/{projectId}/backlog/tasks/{taskId}` | Add delete with the task revision; add the card menu item. |

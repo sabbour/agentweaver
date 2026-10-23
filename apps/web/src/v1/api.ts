@@ -25,6 +25,11 @@ import type {
   BacklogGraph,
   CaptureBacklogTaskRequest,
   EditBacklogTaskContentRequest,
+  SetBacklogTaskStateRequest,
+  BacklogTaskRevisionRequest,
+  BacklogGraphRevisionRequest,
+  ClaimBacklogTaskRequest,
+  BacklogTaskClaimReceipt,
   ProjectIssuePage,
   ProjectIssueStateFilter,
   ProjectMetrics,
@@ -1915,6 +1920,98 @@ export class AgentweaverGatewayClient {
       tenantSelector,
     );
     return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Sets an unclaimed task's state using both revisions read from the board. */
+  async setProjectBacklogTaskState(
+    token: string,
+    projectId: string,
+    taskId: string,
+    request: SetBacklogTaskStateRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'state')}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Archives one unclaimed task at the graph and task revisions read from the board. */
+  async archiveProjectBacklogTask(
+    token: string,
+    projectId: string,
+    taskId: string,
+    request: BacklogTaskRevisionRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'archive')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Adds a prerequisite edge using the graph revision read from the board. */
+  async addProjectBacklogDependency(
+    token: string,
+    projectId: string,
+    taskId: string,
+    prerequisiteTaskId: string,
+    request: BacklogGraphRevisionRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'dependencies', prerequisiteTaskId)}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Removes a prerequisite edge using the graph revision read from the board. */
+  async removeProjectBacklogDependency(
+    token: string,
+    projectId: string,
+    taskId: string,
+    prerequisiteTaskId: string,
+    request: BacklogGraphRevisionRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'dependencies', prerequisiteTaskId)}`,
+      { method: 'DELETE', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Claims eligible work for an accepted run. Reuse the same idempotency key on retry. */
+  async claimBacklogTask(
+    token: string,
+    projectId: string,
+    runId: string,
+    taskId: string,
+    request: ClaimBacklogTaskRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogTaskClaimReceipt> {
+    return this.request<BacklogTaskClaimReceipt>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'backlog', 'tasks', taskId, 'claim')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
   /**

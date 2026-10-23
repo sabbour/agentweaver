@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GatewayError } from './api';
@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   listProjectIssues: vi.fn(),
   captureBacklogTask: vi.fn(),
   editBacklogTaskContent: vi.fn(),
+  setProjectBacklogTaskState: vi.fn(),
+  archiveProjectBacklogTask: vi.fn(),
+  addProjectBacklogDependency: vi.fn(),
+  removeProjectBacklogDependency: vi.fn(),
   getAuthorizationContext: vi.fn(),
   getProject: vi.fn(),
   apiCall: vi.fn(),
@@ -26,6 +30,10 @@ vi.mock('./api', async (importOriginal) => ({
     listProjectIssues: mocks.listProjectIssues,
     captureBacklogTask: mocks.captureBacklogTask,
     editBacklogTaskContent: mocks.editBacklogTaskContent,
+    setProjectBacklogTaskState: mocks.setProjectBacklogTaskState,
+    archiveProjectBacklogTask: mocks.archiveProjectBacklogTask,
+    addProjectBacklogDependency: mocks.addProjectBacklogDependency,
+    removeProjectBacklogDependency: mocks.removeProjectBacklogDependency,
     getAuthorizationContext: mocks.getAuthorizationContext,
     getProject: mocks.getProject,
   },
@@ -85,6 +93,10 @@ beforeEach(() => {
   mocks.listProjectIssues.mockReset().mockResolvedValue({ projectId: 'p1', items: [], nextCursor: null });
   mocks.captureBacklogTask.mockReset();
   mocks.editBacklogTaskContent.mockReset();
+  mocks.setProjectBacklogTaskState.mockReset();
+  mocks.archiveProjectBacklogTask.mockReset();
+  mocks.addProjectBacklogDependency.mockReset();
+  mocks.removeProjectBacklogDependency.mockReset();
   mocks.getAuthorizationContext.mockReset().mockResolvedValue(context(['readProjects', 'writeProjects']));
   mocks.getProject.mockReset().mockResolvedValue({ projectId: 'p1', name: 'Alpha', effectiveRoles: [] });
 });
@@ -118,9 +130,10 @@ describe('BoardPage', () => {
     expect(within(screen.getByTestId('column-done')).getByText('Old work')).toBeTruthy();
     expect(screen.queryByText('Archived work')).toBeNull();
     expect(screen.getByTestId('count-backlog').textContent).toBe('1');
-    // Moves have no service operation, so nothing is draggable and the board says so.
-    expect(screen.getByTestId('board-move-unavailable').textContent).toBe('Moving tasks between columns is not available yet.');
+    // Queue actions are available on cards; drag and drop remains unavailable.
+    expect(screen.getByTestId('board-move-unavailable').textContent).toBe('Drag and drop is unavailable; use task actions to change the queue.');
     expect(document.querySelector('[draggable="true"]')).toBeNull();
+    expect(within(screen.getByTestId('task-card-t3')).queryByRole('button', { name: 'Mark Ready' })).toBeNull();
     expect(mocks.listProjectIssues).toHaveBeenCalledWith('token', 'p1', { state: 'all', cursor: null, pageSize: 100 }, 'tenant-1');
   });
 
@@ -233,6 +246,89 @@ describe('BoardPage', () => {
       expectedGraphRevision: 5,
       expectedTaskRevision: 3,
     }, 'tenant-1');
+  });
+
+  it('changes queue state, manages prerequisites, and archives with observed revisions', async () => {
+    const first = task('t1', 'First task');
+    const second = task('t2', 'Second task');
+    mocks.readProjectBacklog.mockResolvedValue(graph([first, second], 5));
+    mocks.setProjectBacklogTaskState.mockResolvedValue(graph([{ ...first, revision: 2, state: 'ready' }, second], 6));
+    mocks.addProjectBacklogDependency.mockResolvedValue(graph(
+      [{ ...first, revision: 2, state: 'ready' }, second],
+      7,
+      [{ task: first.reference, prerequisite: second.reference }],
+    ));
+    mocks.removeProjectBacklogDependency.mockResolvedValue(graph(
+      [{ ...first, revision: 2, state: 'ready' }, second],
+      8,
+    ));
+    mocks.archiveProjectBacklogTask.mockResolvedValue(graph(
+      [{ ...first, revision: 3, state: 'ready', isArchived: true }, second],
+      9,
+    ));
+    renderBoard();
+
+    const card = await screen.findByTestId('task-card-t1');
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: 'Mark Ready' }));
+      await mocks.setProjectBacklogTaskState.mock.results[0]?.value;
+    });
+    expect(mocks.setProjectBacklogTaskState).toHaveBeenCalledOnce();
+    expect(await within(await screen.findByTestId('task-card-t1')).findByRole('button', { name: 'Move to Backlog' })).toBeTruthy();
+    expect(mocks.setProjectBacklogTaskState).toHaveBeenCalledWith('token', 'p1', 't1', {
+      state: 'ready',
+      expectedGraphRevision: 5,
+      expectedTaskRevision: 1,
+    }, 'tenant-1');
+
+    const readyCard = screen.getByTestId('task-card-t1');
+    fireEvent.change(within(readyCard).getByRole('combobox', { name: 'Add prerequisite' }), { target: { value: 't2' } });
+    fireEvent.click(within(readyCard).getByRole('button', { name: 'Add' }));
+    expect(await within(await screen.findByTestId('task-card-t1')).findByText('Needs Second task')).toBeTruthy();
+    expect(mocks.addProjectBacklogDependency).toHaveBeenCalledWith('token', 'p1', 't1', 't2', {
+      expectedGraphRevision: 6,
+    }, 'tenant-1');
+
+    fireEvent.click(within(screen.getByTestId('task-card-t1')).getByRole('button', {
+      name: 'Remove prerequisite Second task from First task',
+    }));
+    await waitFor(() => expect(mocks.removeProjectBacklogDependency).toHaveBeenCalledWith(
+      'token', 'p1', 't1', 't2', { expectedGraphRevision: 7 }, 'tenant-1',
+    ));
+    expect(await screen.findByText('Prerequisite removed.')).toBeTruthy();
+
+    fireEvent.click(within(screen.getByTestId('task-card-t1')).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(mocks.archiveProjectBacklogTask).toHaveBeenCalledWith('token', 'p1', 't1', {
+      expectedGraphRevision: 8,
+      expectedTaskRevision: 2,
+    }, 'tenant-1'));
+    expect(await screen.findByText('Task archived.')).toBeTruthy();
+    expect(screen.queryByTestId('task-card-t1')).toBeNull();
+  });
+
+  it('hides prerequisite edits for claimed tasks and pending prerequisites', async () => {
+    mocks.readProjectBacklog.mockResolvedValue(graph([
+      task('t1', 'Claimed task', { state: 'claimed' }),
+      task('t2', 'Existing prerequisite'),
+      task('t3', 'Pending prerequisite', { isAutomationInvocationPending: true }),
+      task('t4', 'Available prerequisite'),
+      task('t5', 'Editable task', { state: 'ready' }),
+    ], 5, [{
+      task: { projectId: 'p1', taskId: 't1' },
+      prerequisite: { projectId: 'p1', taskId: 't2' },
+    }]));
+    renderBoard();
+
+    const claimedCard = await screen.findByTestId('task-card-t1');
+    expect(within(claimedCard).getByText('Needs Existing prerequisite')).toBeTruthy();
+    expect(within(claimedCard).queryByRole('button', {
+      name: 'Remove prerequisite Existing prerequisite from Claimed task',
+    })).toBeNull();
+
+    const editableCard = screen.getByTestId('task-card-t5');
+    const select = within(editableCard).getByRole('combobox', { name: 'Add prerequisite' });
+    expect(within(select).queryByRole('option', { name: 'Pending prerequisite' })).toBeNull();
+    expect(within(select).getByRole('option', { name: 'Available prerequisite' })).toBeTruthy();
   });
 
   it('reloads the board when an edit conflicts', async () => {

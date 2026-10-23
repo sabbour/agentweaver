@@ -121,6 +121,7 @@ internal sealed class BacklogOwnerStore
         if (!graph.IsSuccess)
             return RollbackFailure<BacklogDependencyGraph>(transaction, graph.Issues);
 
+        // Recheck after the graph lock so a revoked writer cannot save over a wait.
         if (revalidateCurrentAuthority is not null)
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         var edit = content is null
@@ -137,6 +138,7 @@ internal sealed class BacklogOwnerStore
                 edit.Value.Graph.Tasks.Single(item => item.Reference.TaskId == task.TaskId), cancellationToken)
                 .ConfigureAwait(false);
         }
+        // Check again just before commit because authority may change during the write.
         if (revalidateCurrentAuthority is not null)
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -161,6 +163,7 @@ internal sealed class BacklogOwnerStore
             connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
         if (!graph.IsSuccess)
             return await RollbackFailureAsync<BacklogDependencyGraph>(transaction, graph.Issues).ConfigureAwait(false);
+        // Recheck after the graph lock so a revoked writer cannot save over a wait.
         if (revalidateCurrentAuthority is not null)
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         var edit = graph.Value!.SetTaskContent(task, content, expectedGraphRevision, expectedTaskRevision);
@@ -173,6 +176,7 @@ internal sealed class BacklogOwnerStore
             await UpdateTaskAsync(connection, transaction, edit.Value.Graph, task.TaskId, cancellationToken)
                 .ConfigureAwait(false);
         }
+        // Check again just before commit because authority may change during the write.
         if (revalidateCurrentAuthority is not null)
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -186,8 +190,10 @@ internal sealed class BacklogOwnerStore
         BacklogTaskReference task,
         BacklogTaskReference prerequisite,
         long expectedGraphRevision,
-        CancellationToken cancellationToken) =>
-        MutateDependencyAsync(task, prerequisite, expectedGraphRevision, add: true, cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null) =>
+        MutateDependencyAsync(
+            task, prerequisite, expectedGraphRevision, add: true, cancellationToken, revalidateCurrentAuthority);
 
     /// <summary>
     /// Removes a dependency after the core graph validates the edge and expected revision.
@@ -196,8 +202,10 @@ internal sealed class BacklogOwnerStore
         BacklogTaskReference task,
         BacklogTaskReference prerequisite,
         long expectedGraphRevision,
-        CancellationToken cancellationToken) =>
-        MutateDependencyAsync(task, prerequisite, expectedGraphRevision, add: false, cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null) =>
+        MutateDependencyAsync(
+            task, prerequisite, expectedGraphRevision, add: false, cancellationToken, revalidateCurrentAuthority);
 
     /// <summary>
     /// Updates a task state using graph and task revisions, persisting only a validated change.
@@ -207,7 +215,8 @@ internal sealed class BacklogOwnerStore
         BacklogTaskState state,
         long expectedGraphRevision,
         long expectedTaskRevision,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         var taskValidation = ValidateTaskReference(task);
         if (!taskValidation.IsSuccess)
@@ -220,6 +229,9 @@ internal sealed class BacklogOwnerStore
             return await RollbackFailureAsync<BacklogDependencyGraph>(
                 transaction, graph.Issues).ConfigureAwait(false);
 
+        // Recheck after locking so a writer revoked during lock wait cannot change the queue state.
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         var edit = graph.Value!.SetTaskState(
             task, state, expectedGraphRevision, expectedTaskRevision);
         if (!edit.IsSuccess)
@@ -232,6 +244,9 @@ internal sealed class BacklogOwnerStore
             await UpdateTaskAsync(connection, transaction, edit.Value.Graph, task.TaskId, cancellationToken)
                 .ConfigureAwait(false);
         }
+        // Check again just before commit because authority may change during the write.
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
     }
@@ -243,7 +258,8 @@ internal sealed class BacklogOwnerStore
         BacklogTaskReference task,
         long expectedGraphRevision,
         long expectedTaskRevision,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
@@ -253,6 +269,9 @@ internal sealed class BacklogOwnerStore
             return await RollbackFailureAsync<BacklogDependencyGraph>(
                 transaction, graph.Issues).ConfigureAwait(false);
 
+        // Recheck after locking so a writer revoked during lock wait cannot archive the task.
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         var edit = graph.Value!.ArchiveTask(task, expectedGraphRevision, expectedTaskRevision);
         if (!edit.IsSuccess)
             return await RollbackFailureAsync<BacklogDependencyGraph>(
@@ -264,6 +283,9 @@ internal sealed class BacklogOwnerStore
             await UpdateTaskAsync(connection, transaction, edit.Value.Graph, task.TaskId, cancellationToken)
                 .ConfigureAwait(false);
         }
+        // Check again just before commit because authority may change during the write.
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
     }
@@ -1007,7 +1029,8 @@ internal sealed class BacklogOwnerStore
         BacklogTaskReference prerequisite,
         long expectedGraphRevision,
         bool add,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority)
     {
         var taskValidation = ValidateTaskReference(task);
         if (!taskValidation.IsSuccess)
@@ -1020,6 +1043,9 @@ internal sealed class BacklogOwnerStore
             return await RollbackFailureAsync<BacklogDependencyGraph>(
                 transaction, graph.Issues).ConfigureAwait(false);
 
+        // Recheck after locking so a writer revoked during lock wait cannot edit dependencies.
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         var edit = add
             ? graph.Value!.AddDependency(task, prerequisite, expectedGraphRevision)
             : graph.Value!.RemoveDependency(task, prerequisite, expectedGraphRevision);
@@ -1033,6 +1059,9 @@ internal sealed class BacklogOwnerStore
             await PersistDependencyAsync(
                 connection, transaction, task, prerequisite, add, cancellationToken).ConfigureAwait(false);
         }
+        // Check again just before commit because authority may change during the write.
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
     }
