@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AgentweaverGatewayClient, GatewayError } from './api';
 import {
-  castableRoles, castingError, draftMembers, draftWithMember, draftWithoutMember, isConflict, reviewPath, roleCharter,
+  castableRoles, castingError, draftMembers, draftWithMember, draftWithRole, draftWithRoles, draftWithoutMember, isConflict, reviewPath, roleCharter,
 } from './castingData';
 import type { ProjectCastingRoleDefinition, ProjectCastingTransfer, ProjectConfiguration } from './contracts';
 
@@ -39,6 +39,25 @@ describe('casting helpers', () => {
     expect(once.skills).toEqual(config().skills);
     const empty = draftWithMember(config({ agentCharters: [], casting: [] }), role('tester'));
     expect(empty.casting).toEqual([{ agentId: 'tester', role: 'tester', order: 0 }]);
+  });
+
+  it('adds several roles without replacing the existing team', () => {
+    const augmented = draftWithRoles(config(), [role('lead', 'Second lead'), role('tester')]);
+    expect(augmented.casting).toEqual([
+      { agentId: 'lead', role: 'lead', order: 0 },
+      { agentId: 'lead-2', role: 'lead', order: 1 },
+      { agentId: 'tester', role: 'tester', order: 2 },
+    ]);
+    expect(augmented.agentCharters[0]).toEqual(config().agentCharters[0]);
+    expect(augmented.skills).toEqual(config().skills);
+  });
+
+  it('changes a team member role in both the charter and casting draft', () => {
+    const changed = draftWithRole(config(), 'lead', 'editor');
+    expect(changed.agentCharters[0].role).toBe('editor');
+    expect(changed.casting[0].role).toBe('editor');
+    expect(changed.skills).toEqual(config().skills);
+    expect(() => draftWithRole(config(), 'missing', 'editor')).toThrow('This agent is not in the current team.');
   });
 
   it('lists members in team order and removes one', () => {

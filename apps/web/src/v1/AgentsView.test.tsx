@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +24,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.listCastingProposals.mockResolvedValue([]);
   api.listCatalogRoles.mockResolvedValue([]);
+  api.createCastingDraftProposal.mockResolvedValue({ proposalId: 'pr-9' });
 });
 
 function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfiguration {
@@ -122,6 +123,39 @@ describe('AgentsView', () => {
     // Disabled skills are not listed, even when they apply to every agent.
     expect(within(drawer).queryByText('off')).toBeNull();
     expect(within(drawer).getByRole('link', { name: 'View memories' }).getAttribute('href')).toBe('/projects/p1/memories?agentId=a2');
+  });
+
+  it('stages a re-role proposal from the current team member details', async () => {
+    api.listCatalogRoles.mockResolvedValue([
+      { id: 'frontend-engineer', title: 'Frontend Engineer', summary: '', responsibilities: [], boundaries: [] },
+    ]);
+    renderView();
+    fireEvent.click(screen.getByText('Ada'));
+    const drawer = await screen.findByRole('dialog');
+    fireEvent.change(within(drawer).getByRole('combobox', { name: 'New team role' }), { target: { value: 'frontend-engineer' } });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Re-role' }));
+    await waitFor(() => expect(api.createCastingDraftProposal).toHaveBeenCalledOnce());
+    const [, projectId, request] = api.createCastingDraftProposal.mock.calls[0];
+    expect(projectId).toBe('p1');
+    expect(request.expectedConfigurationRevision).toBe(4);
+    expect(request.draft.agentCharters[0].role).toBe('frontend-engineer');
+    expect(request.draft.casting[0].role).toBe('frontend-engineer');
+  });
+
+  it('stages a removal proposal without changing the displayed team', async () => {
+    const current = config({
+      agentCharters: [{ agentId: 'a1', name: 'Ada', role: 'Lead', charter: 'Lead the work.' }],
+      casting: [{ agentId: 'a1', role: 'Lead', order: 1 }],
+    });
+    renderView({ configuration: current });
+    fireEvent.click(screen.getByText('Ada'));
+    const drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Remove from team' }));
+    await waitFor(() => expect(api.createCastingDraftProposal).toHaveBeenCalledOnce());
+    const [, , request] = api.createCastingDraftProposal.mock.calls[0];
+    expect(request.draft.casting).toEqual([]);
+    expect(request.draft.agentCharters).toEqual([]);
+    expect(within(drawer).getByText('In the team as Lead, position 1')).toBeTruthy();
   });
 
   it('saves only the selected agent charter', async () => {

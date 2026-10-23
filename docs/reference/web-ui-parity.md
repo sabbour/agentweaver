@@ -104,8 +104,8 @@ Each row says what works and what is still missing. The missing parts link to
 | Run Approvals | Shared decision view that rereads each gate before acting. | Nothing. |
 | Run Changes | GitHub App repository access for the run, and **Produced files**: saved file sets, newest first, with **Browse files**, the 0.x file viewer, **Show changes** with the 0.x diff viewer, **Refresh**, and **Load older file sets**. | Nothing. |
 | Run settings | Model, revisions, and implementations for each platform component. | Nothing. |
-| Agents | Metrics row, filter, tiles, drawer with Overview and Charter, **Cast team**, **Add member**, **Sync**, and **Pending team proposals**. | Nothing. |
-| Cast a team | Template or role picks, review with member removal, then confirm or reject. | Casting universes and the AI Formulate and Analyze modes. |
+| Agents | Metrics row, filter, tiles, drawer with Overview and Charter, proposal-based **Remove from team** and **Re-role**, **Cast team**, **Add member**, **Sync**, and **Pending team proposals**. | Optional custom role title during Re-role. |
+| Cast a team | Template or role picks, **Augment** or **Recast** when a team exists, review with member removal, then confirm or reject. | Casting universes and the AI Formulate and Analyze modes. |
 | Skills | Stat strip, **Add skill**, **Import skill** with folder, files, or ZIP upload, **Browse marketplaces** with **Suggested marketplaces**, marketplace sources, browse, preview, import, **Catalog** with **Remove skill**, and **Assignments**. | Nothing. |
 | Memories | Run and agent pickers, kind tabs, search, revisions, and transfer. | The project-wide count strip (project memory). |
 | Settings > General | Rename with the project revision. | Nothing. |
@@ -188,6 +188,7 @@ route catalog today. The web client does not work around them.
 | Project memory | `GET /api/projects/{p}/memory`, `GET /api/projects/{p}/agents/{a}/memory` | `GET /api/v1/projects/{projectId}/knowledge/records` | Knowledge reads are run- and agent-scoped today. Add a project search; show the Memories count strip. |
 | Casting universes | `GET /api/projects/{p}/casting/universes` | `GET /api/v1/projects/{projectId}/casting/universes` | Return name universes; add the Universe picker. |
 | AI casting modes | `POST /api/projects/{p}/casting/proposals` with mode `formulate` or `analyze` | `POST /api/v1/projects/{projectId}/casting/proposals/formulate` and `/analyze` | Run a model to propose a team; add both modes to Cast a team. |
+| Custom role title | `PATCH /api/projects/{p}/team/members/{name}` with `custom_role_title` | `PATCH /api/v1/projects/{projectId}/casting/proposals/{proposalId}/members/{agentId}/role` with `expectedDraftRevision`, `roleId`, and `customRoleTitle` | Keep the catalog role ID and user-facing role title as separate values in the reviewed proposal. |
 | Project delete | `DELETE /api/projects/{p}?confirm=true` | `DELETE /api/v1/projects/{projectId}` | Delete an archived project with its revision; add it to Danger zone. |
 
 ## Behavior limits

@@ -61,6 +61,34 @@ export function draftWithMember(configuration: ProjectConfiguration, role: Proje
   };
 }
 
+/** Adds the selected catalog roles to the current team without replacing its members. */
+export function draftWithRoles(
+  configuration: ProjectConfiguration,
+  roles: ProjectCastingRoleDefinition[],
+): ProjectConfiguration {
+  // Reuse the single-member path so IDs and team order stay consistent for every added role.
+  return roles.reduce((draft, role) => draftWithMember(draft, role), configuration);
+}
+
+/** Returns a copy with one cast member's charter and roster role changed together. */
+export function draftWithRole(
+  configuration: ProjectConfiguration,
+  agentId: string,
+  roleId: string,
+): ProjectConfiguration {
+  // The owner requires the charter and casting role to match exactly.
+  if (!configuration.agentCharters.some((item) => item.agentId === agentId) ||
+      !configuration.casting.some((item) => item.agentId === agentId))
+    throw new Error('This agent is not in the current team.');
+  return {
+    ...configuration,
+    agentCharters: configuration.agentCharters.map((item) =>
+      item.agentId === agentId ? { ...item, role: roleId } : item),
+    casting: configuration.casting.map((item) =>
+      item.agentId === agentId ? { ...item, role: roleId } : item),
+  };
+}
+
 /** One member of a draft team: its charter joined with its casting entry. */
 export interface DraftMember {
   agentId: string;
