@@ -336,7 +336,9 @@ outside the guarded allowlist. It can replace only changed immutable
 unchanged data follows the normal apply path. It restarts the `projects-config`
 and `gateway` Deployments when their runtime maps are replaced. It never
 replaces `environment-cilium-config` or
-`projects-config-provider-catalog`. Its dry run does not create
+`projects-config-provider-catalog`. It checkpoints pending Deployment
+restarts; after a partial failure, `--resume` retries unfinished rollouts even
+when the replaced ConfigMap no longer differs. Its dry run does not create
 release-acceptance evidence. The [v1.0.5 GitHub Release and
 tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.5) are already
 published. Its bootstrap is bound to source

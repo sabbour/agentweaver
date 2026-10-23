@@ -1501,6 +1501,87 @@ test('pre-acceptance execute replaces the changed Gateway ConfigMap and restarts
   assert.equal(calls.filter(({ operation }) => operation === 'replace').length, 1);
 });
 
+test('pre-acceptance resume retries a failed Gateway restart after replacement removed the drift', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const desired = renderedGatewayRuntimeConfigMap(dependencies.root);
+  const existing = structuredClone(desired);
+  delete existing.data['Gateway__Owners__Environment'];
+  const currentByName = new Map([['gateway-runtime-config', existing]]);
+  const calls = [];
+  const events = [];
+  const originalRun = dependencies.run;
+  let restartAttempts = 0;
+  dependencies.run = (file, args, options = {}) => {
+    if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
+      const name = args[2];
+      const current = currentByName.get(name);
+      if (!current) return '';
+      return args.includes('--output=name')
+        ? `configmap/${name}`
+        : JSON.stringify(options.projectJson(current));
+    }
+    if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') return 'yes';
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) return '';
+    if (file === 'kubectl' && args[0] === 'replace') {
+      events.push('replace');
+      calls.push({ operation: 'replace' });
+      currentByName.set('gateway-runtime-config', JSON.parse(options.input));
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+        !args.some((arg) => arg.startsWith('--dry-run='))) {
+      calls.push({ operation: 'apply' });
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'rollout' && args[1] === 'restart') {
+      calls.push({ operation: 'restart', args });
+      restartAttempts++;
+      if (restartAttempts === 1) throw new Error('injected Gateway restart failure');
+      return '';
+    }
+    return originalRun(file, args, options);
+  };
+  let checkpoint;
+  Object.assign(dependencies, {
+    checkpointDirectory: path.join(root, 'gateway-config-restart-resume-checkpoint-fixture'),
+    checkpointMkdir: () => undefined,
+    checkpointWriteFile: (_file, text) => {
+      events.push('checkpoint');
+      checkpoint = text;
+    },
+    checkpointReadFile: () => checkpoint,
+    checkpointRm: () => undefined,
+    verifyLive: async () => undefined,
+  });
+
+  await assert.rejects(
+    deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies),
+    /injected Gateway restart failure/,
+  );
+
+  const interrupted = JSON.parse(checkpoint);
+  assert.equal(interrupted.preAcceptanceApplyPending, true);
+  assert.deepEqual(interrupted.pendingRuntimeConfigMapRollouts, ['gateway']);
+  assert.ok(events.indexOf('checkpoint') < events.indexOf('replace'));
+  assert.deepEqual(currentByName.get('gateway-runtime-config'), desired);
+
+  calls.length = 0;
+  const resumed = await deployRelease({
+    argv: [...bootstrapArgsFor(), '--execute', '--resume'],
+  }, dependencies);
+
+  assert.deepEqual(resumed.immutableRuntimeConfigMapReplacements, []);
+  assert.deepEqual(calls.map(({ operation }) => operation), ['apply', 'restart']);
+  assert.deepEqual(calls.find(({ operation }) => operation === 'restart').args, [
+    'rollout', 'restart', 'deployment/gateway', '--namespace', target.namespace,
+  ]);
+  const completed = JSON.parse(checkpoint);
+  assert.equal(completed.stages.apply.completed, true);
+  assert.equal(completed.preAcceptanceApplyPending, false);
+  assert.deepEqual(completed.pendingRuntimeConfigMapRollouts, []);
+});
+
 test('pre-acceptance dry-run blocks changed immutable ConfigMaps outside the replacement allowlist', async () => {
   for (const name of ['environment-cilium-config', 'projects-config-provider-catalog']) {
     const fixture = bootstrapFixture();

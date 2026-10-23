@@ -175,7 +175,9 @@ allowlist during dry-run. It can replace only changed
 `gateway-runtime-config` ConfigMaps after preflighting the rest of the bundle.
 It restarts the `projects-config` and `gateway` Deployments when their runtime
 maps are replaced. It never replaces `environment-cilium-config` or
-`projects-config-provider-catalog` and does not complete release acceptance.
+`projects-config-provider-catalog`. Pending restarts are checkpointed and
+retried by `--resume` after a partial failure, even when ConfigMap drift is
+gone. This path does not complete release acceptance.
 See the
 [v1.0.5 release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v105-pre-acceptance-bootstrap)
 for the source-bound publication receipt and pinned images.

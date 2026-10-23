@@ -407,7 +407,9 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    the normal apply path. This path never replaces `environment-cilium-config`
    or `projects-config-provider-catalog`. See
    [runtime configuration](../reference/runtime-configuration.md#guarded-pre-acceptance-configmap-patch-upgrades)
-   for the scope and behavior.
+   for the scope and behavior. If an apply or restart fails, rerun with
+   `--resume` to finish checkpointed rollouts even when the replaced ConfigMap
+   no longer differs.
 
    ```powershell
    npm run release:deploy-bootstrap -- v1.0.7 `

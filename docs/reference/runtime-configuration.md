@@ -161,6 +161,9 @@ replaces `environment-cilium-config` or
 reviewed maintenance procedure above. After replacement, the bootstrap
 restarts the `gateway` Deployment for its runtime map and the `projects-config`
 Deployment for its runtime map; live verification waits for the rollouts.
+Before cluster writes, it checkpoints required Deployment restarts. If an apply
+or restart fails, rerun the command with `--resume`; it retries unfinished
+rollouts even when the ConfigMap data now matches and no longer shows drift.
 AgentHost settings are used by Sandbox Pods rather than a long-lived
 Deployment. Recreating the ConfigMap does not restart existing Sandbox Pods;
 recreate an affected Sandbox through its owning Environment lifecycle before

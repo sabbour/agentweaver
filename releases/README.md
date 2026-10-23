@@ -1127,7 +1127,9 @@ runtime maps are replaced. AgentHost settings are read by Sandbox Pods, not a
 long-lived Deployment; recreate any affected Sandbox through its owning
 Environment lifecycle before relying on changed AgentHost settings.
 `environment-cilium-config` and `projects-config-provider-catalog` are never
-replaced.
+replaced. Pending Deployment restarts are checkpointed before cluster writes.
+If an apply or restart fails, rerun the command with `--resume`; it retries
+unfinished rollouts even when the ConfigMap data now matches.
 
 Download `publication.json` from the exact source-bound publication artifact
 to `artifacts/release/publish/publication.json`. Continuation receipts and
