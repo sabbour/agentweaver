@@ -1039,6 +1039,11 @@ public sealed class GatewayOwnerClient(
                 StatusCodes.Status503ServiceUnavailable,
                 "application/problem+json",
                 ProblemBody("owner_not_configured", StatusCodes.Status503ServiceUnavailable));
+        if (owner == GatewayOwner.AgentHost && options.AgentHostOwnerBaseAddress is null)
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status503ServiceUnavailable,
+                "application/problem+json",
+                ProblemBody("owner_not_configured", StatusCodes.Status503ServiceUnavailable));
         return new(options.GetOwnerBaseAddress(owner), pathAndQuery);
     }
 

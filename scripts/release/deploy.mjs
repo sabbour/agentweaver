@@ -1105,6 +1105,10 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
         'Environment__Sandbox__AgentSandbox__ContainerImage',
         'Environment__Sandbox__AgentSandbox__ContainerImagePlatform',
         'Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes',
+        ...(name === 'identity-broker' ? [
+          'Kestrel__Endpoints__Https__Url',
+          'Kestrel__Endpoints__HostedModelCatalogCredentialUse__Url',
+        ] : []),
         ...providerAdapterVersionNames,
         ...providerRevisionNames,
       ].includes(env.name)) {
@@ -1116,16 +1120,30 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
         fail(`${name} cannot mount host paths, CSI devices, or unreviewed network filesystems`);
       }
     }
+    const environment = container.env ?? [];
     const web = name === 'web';
+    const hostedCatalogListenerConfigured = name === 'identity-broker' &&
+      (environment.some(({ name: envName }) => [
+        'Kestrel__Endpoints__Https__Url',
+        'Kestrel__Endpoints__HostedModelCatalogCredentialUse__Url',
+      ].includes(envName)) ||
+        container.ports?.some(({ name: port }) => port === 'hosted-catalog'));
+    // Older immutable releases have only the main listener; validate the isolated listener when present.
+    const expectedPorts = web
+      ? [{ name: 'http', containerPort: 8080, protocol: 'TCP' }]
+      : hostedCatalogListenerConfigured
+        ? [
+          { name: 'https', containerPort: 8443, protocol: 'TCP' },
+          { name: 'hosted-catalog', containerPort: 8444, protocol: 'TCP' },
+        ]
+        : [{ name: 'https', containerPort: 8443, protocol: 'TCP' }];
     const portName = web ? 'http' : 'https';
     const portNumber = web ? 8080 : 8443;
     const scheme = web ? 'HTTP' : 'HTTPS';
-    if (!Array.isArray(container.ports) || container.ports.length !== 1 ||
-        container.ports[0].name !== portName || container.ports[0].containerPort !== portNumber ||
-        container.ports[0].protocol !== 'TCP') {
+    if (!Array.isArray(container.ports) ||
+        !isDeepStrictEqual(container.ports, expectedPorts)) {
       fail(`${name} must expose only its source-declared ${scheme} application port`);
     }
-    const environment = container.env ?? [];
     const getEnvValue = (key) => {
       const matches = environment.filter((entry) => entry.name === key);
       if (matches.length !== 1 || typeof matches[0].value !== 'string') return undefined;
@@ -1138,6 +1156,11 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
     }
     if (getEnvValue('ASPNETCORE_URLS') !== `${web ? 'http' : 'https'}://+:${portNumber}`) {
       fail(`${name} must explicitly configure its ${scheme} listener`);
+    }
+    if (hostedCatalogListenerConfigured &&
+        (getEnvValue('Kestrel__Endpoints__Https__Url') !== 'https://+:8443' ||
+          getEnvValue('Kestrel__Endpoints__HostedModelCatalogCredentialUse__Url') !== 'https://+:8444')) {
+      fail('Identity Broker must explicitly configure its isolated hosted catalog listener');
     }
     if (web) {
       if (environment.some((entry) => entry.name === 'ASPNETCORE_Kestrel__Certificates__Default__Path' ||
@@ -1231,6 +1254,17 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
         fail(`${name} requires its source-owned ${scheme} ${expectedPath} ${probeName}`);
       }
     }
+    const expectedServicePorts = hostedCatalogListenerConfigured
+      ? [
+        { name: 'https', port: 443, targetPort: 'https', protocol: 'TCP' },
+        { name: 'hosted-catalog', port: 8444, targetPort: 'hosted-catalog', protocol: 'TCP' },
+      ]
+      : [{
+        name: portName,
+        port: name === 'identity-broker' ? 443 : portNumber,
+        targetPort: portName,
+        protocol: 'TCP',
+      }];
     if (service.spec?.type !== 'ClusterIP' ||
         service.metadata?.labels?.['app.kubernetes.io/name'] !== name ||
         service.metadata?.labels?.['agentweaver.io/service'] !== name ||
@@ -1238,10 +1272,7 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
         deployment.spec?.selector?.matchLabels?.['app.kubernetes.io/name'] !== name ||
         deployment.spec?.template?.metadata?.labels?.['app.kubernetes.io/name'] !== name ||
         !Array.isArray(service.spec?.ports) ||
-        service.spec.ports.length !== 1 ||
-        service.spec.ports[0].port !== (name === 'identity-broker' ? 443 : portNumber) ||
-        service.spec.ports[0].targetPort !== portName ||
-        service.spec.ports[0].protocol !== 'TCP') {
+        !isDeepStrictEqual(service.spec.ports, expectedServicePorts)) {
       fail(`${name} Service must remain private ClusterIP ${scheme}`);
     }
     for (const forbidden of ['hostNetwork', 'hostPID', 'hostIPC', 'hostAliases']) {

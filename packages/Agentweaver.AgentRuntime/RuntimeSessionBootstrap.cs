@@ -1,5 +1,9 @@
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using System.Net;
+using System.Net.Http;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.AgentRuntime;
 
@@ -18,7 +22,9 @@ public sealed class RuntimeSessionBootstrap(
     RuntimeSessionMaterialHttpClient? material = null,
     RuntimeActionHttpClient? actions = null,
     Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null,
-    RuntimeMcpServerEndpoint? capturedMcpServer = null)
+    RuntimeMcpServerEndpoint? capturedMcpServer = null,
+    RuntimeHostedModelReasoningCatalogHttpClient? hostedReasoningCatalog = null,
+    ILogger? logger = null)
 {
     /// <summary>
     /// Creates a session only while owner registration, credentials, model binding, skills,
@@ -159,6 +165,47 @@ public sealed class RuntimeSessionBootstrap(
                     actions.RequireAsync(request, RequireSourceAuthorityAsync, token),
                 capturedMcpServer,
                 journalFallback);
+            if (session.VerifiedHostedReasoningEfforts is { } supportedEfforts &&
+                session.VerifiedHostedReasoningCatalogAt is { } verifiedAt &&
+                registration.Binding.ModelConnectionId is { } connectionId &&
+                registration.Binding.ModelSelectionReference is { } reference &&
+                hostedReasoningCatalog is not null)
+            {
+                // The publication is a UI capability hint; the live check above remains the authority for this run.
+                await RequireSourceAuthorityAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    var status = await hostedReasoningCatalog.PublishAsync(
+                        registration.Binding.ProjectId,
+                        new HostedModelReasoningCatalogPublicationV1(
+                            sessions.ModelBindingsRevision, reference, connectionId, supportedEfforts, verifiedAt),
+                        cancellationToken).ConfigureAwait(false);
+                    if (status is not (HttpStatusCode.OK or HttpStatusCode.Created or HttpStatusCode.NoContent))
+                        (logger ?? NullLogger.Instance).LogWarning(
+                            "AgentHost could not publish verified hosted reasoning levels; run-start verification remains authoritative. Projects & Config returned {StatusCode}.",
+                            (int)status);
+                }
+                catch (HttpRequestException exception)
+                {
+                    (logger ?? NullLogger.Instance).LogWarning(
+                        exception,
+                        "AgentHost could not publish verified hosted reasoning levels; run-start verification remains authoritative.");
+                }
+                catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    (logger ?? NullLogger.Instance).LogWarning(
+                        exception,
+                        "AgentHost timed out publishing verified hosted reasoning levels; run-start verification remains authoritative.");
+                }
+                catch (RuntimeAuthorizationException exception)
+                    when (exception.Code == "runtime_owner_response_contract_invalid")
+                {
+                    (logger ?? NullLogger.Instance).LogWarning(
+                        exception,
+                        "Projects & Config did not honor the hosted catalog response contract; run-start verification remains authoritative.");
+                }
+                await RequireSourceAuthorityAsync(cancellationToken).ConfigureAwait(false);
+            }
             if (resumeBootstrap is not null &&
                 session.RecoveryMode is not (RuntimeSessionRecoveryMode.NativeCache or RuntimeSessionRecoveryMode.JournalRebuild))
                 throw new RuntimeAuthorizationException("runtime_resume_cache_unavailable");

@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Threading.Channels;
 using Agentweaver.Abstractions;
@@ -12,7 +13,7 @@ namespace Agentweaver.AgentRuntime;
 /// Resolves an accepted model binding and creates a native Copilot SDK session with
 /// approved tools, skills, filesystem, and optional recovery state.
 /// </summary>
-public sealed class RuntimeCopilotSessionFactory
+public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningCatalogSource
 {
     private readonly RuntimeConnection _connection;
     private readonly string _baseDirectory;
@@ -20,9 +21,17 @@ public sealed class RuntimeCopilotSessionFactory
     private readonly TimeSpan _abortDrainTimeout;
     private readonly string _workingDirectory;
     private readonly string? _expectedRuntimeVersion;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>The absolute workspace directory exposed to the SDK session.</summary>
     public string WorkingDirectory => _workingDirectory;
+
+    /// <summary>The model-binding revision that scopes hosted capability publications.</summary>
+    public string ModelBindingsRevision => _modelBindings.ConfigurationRevision;
+
+    /// <inheritdoc />
+    public ImmutableArray<string> EnabledHostedModelReferences =>
+        _modelBindings.EnabledHostedModelReferences;
 
     /// <summary>Creates a factory using the supplied legacy model-binding map.</summary>
     public RuntimeCopilotSessionFactory(
@@ -31,10 +40,11 @@ public sealed class RuntimeCopilotSessionFactory
         IReadOnlyDictionary<string, RuntimeModelBinding> approvedModelBindings,
         TimeSpan? abortDrainTimeout = null,
         string? workingDirectory = null,
-        string? expectedRuntimeVersion = null)
+        string? expectedRuntimeVersion = null,
+        TimeProvider? timeProvider = null)
         : this(approvedConnection, baseDirectory,
             new RuntimeModelBindingsResolver("legacy-unversioned", approvedModelBindings),
-            abortDrainTimeout, workingDirectory, expectedRuntimeVersion)
+            abortDrainTimeout, workingDirectory, expectedRuntimeVersion, timeProvider)
     {
     }
 
@@ -45,7 +55,8 @@ public sealed class RuntimeCopilotSessionFactory
         RuntimeModelBindingsResolver approvedModelBindings,
         TimeSpan? abortDrainTimeout = null,
         string? workingDirectory = null,
-        string? expectedRuntimeVersion = null)
+        string? expectedRuntimeVersion = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(approvedConnection);
         ArgumentNullException.ThrowIfNull(approvedModelBindings);
@@ -69,10 +80,46 @@ public sealed class RuntimeCopilotSessionFactory
         if (expectedRuntimeVersion is not null)
             RuntimeContractValidation.ValidateIdentifier(expectedRuntimeVersion);
         _expectedRuntimeVersion = expectedRuntimeVersion;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _modelBindings = approvedModelBindings;
         _abortDrainTimeout = abortDrainTimeout ?? TimeSpan.FromSeconds(30);
         if (_abortDrainTimeout <= TimeSpan.Zero || _abortDrainTimeout > TimeSpan.FromMinutes(5))
             throw new ArgumentOutOfRangeException(nameof(abortDrainTimeout));
+    }
+
+    /// <summary>Reads the live SDK catalog and reports exact levels by enabled model reference.</summary>
+    public async Task<ImmutableDictionary<string, HostedModelReasoningModelV1>> ReadAsync(
+        SecretCredential credential,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+        if (!credential.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_sdk_credential_unavailable");
+        var token = credential.GetValue();
+        if (!token.StartsWith("ghu_", StringComparison.Ordinal) || token.Any(char.IsWhiteSpace))
+            throw new RuntimeAuthorizationException("runtime_copilot_access_token_invalid");
+
+        await using var client = CreateClient();
+        await client.StartAsync(cancellationToken);
+#pragma warning disable GHCP001 // The pinned SDK marks its live model catalog RPC as experimental.
+        var catalog = await client.Rpc.Models.ListAsync(
+            selectionId: null, gitHubToken: token, cancellationToken: cancellationToken);
+        var result = ImmutableDictionary.CreateBuilder<string, HostedModelReasoningModelV1>(
+            StringComparer.Ordinal);
+        foreach (var reference in EnabledHostedModelReferences)
+        {
+            var model = _modelBindings.Resolve(reference, ModelSourceMode.HostedCopilot);
+            // Refuse ambiguous SDK IDs rather than attributing one model's levels to another reference.
+            var matches = catalog.Models.Where(item => item.Id == model.ModelId).Take(2).ToArray();
+            result.Add(reference, matches.Length != 1 ||
+                matches[0].Policy?.State != GitHub.Copilot.Rpc.ModelPolicyState.Enabled
+                    ? new("unavailable", "model_not_available", [])
+                    : new("available", null, ResolveHostedReasoningEfforts(
+                        matches[0].Capabilities?.Supports?.ReasoningEffort,
+                        matches[0].SupportedReasoningEfforts)));
+        }
+#pragma warning restore GHCP001
+        return result.ToImmutable();
     }
 
     /// <summary>
@@ -115,23 +162,7 @@ public sealed class RuntimeCopilotSessionFactory
         if (model.SourceMode == ModelSourceMode.HostedCopilot &&
             (!token.StartsWith("ghu_", StringComparison.Ordinal) || token.Any(char.IsWhiteSpace)))
             throw new RuntimeAuthorizationException("runtime_copilot_access_token_invalid");
-        var client = new CopilotClient(new CopilotClientOptions
-        {
-            Mode = CopilotClientMode.Empty,
-            Connection = _connection,
-            BaseDirectory = _baseDirectory,
-#pragma warning disable GHCP001 // Session filesystem RPC options are pinned to SDK 1.0.18.
-            SessionFs = new SessionFsConfig
-            {
-                InitialWorkingDirectory = "/workspace",
-                SessionStatePath = "state",
-                Conventions = GitHub.Copilot.Rpc.SessionFsSetProviderConventions.Posix,
-                Capabilities = new GitHub.Copilot.Rpc.SessionFsSetProviderCapabilities { Sqlite = false }
-            },
-#pragma warning restore GHCP001
-            Logger = NullLogger.Instance,
-            LogLevel = CopilotLogLevel.None
-        });
+        var client = CreateClient();
         CopilotSession? session = null;
         var usage = Channel.CreateBounded<RuntimeCopilotUsageItem>(
             new BoundedChannelOptions(256)
@@ -157,6 +188,8 @@ public sealed class RuntimeCopilotSessionFactory
             string catalogHash;
             decimal? multiplier = null;
             long? supportedPromptTokens = model.PromptCapacityTokens;
+            ImmutableArray<string>? verifiedHostedReasoningEfforts = null;
+            DateTimeOffset? verifiedHostedReasoningCatalogAt = null;
 #pragma warning disable GHCP001 // The pinned SDK marks its RPC policy and permission types as experimental.
             if (model.SourceMode == ModelSourceMode.HostedCopilot)
             {
@@ -169,6 +202,11 @@ public sealed class RuntimeCopilotSessionFactory
                     matches[0].Capabilities?.Supports?.ReasoningEffort,
                     matches[0].SupportedReasoningEfforts,
                     reasoningEffort);
+                // Publish only the contract's canonical levels and retain when the SDK catalog was observed.
+                verifiedHostedReasoningEfforts = ResolveHostedReasoningEfforts(
+                    matches[0].Capabilities?.Supports?.ReasoningEffort,
+                    matches[0].SupportedReasoningEfforts);
+                verifiedHostedReasoningCatalogAt = _timeProvider.GetUtcNow();
                 catalogHash = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(catalog));
                 multiplier = RuntimeCopilotSession.NullableDecimal(matches[0].Billing?.Multiplier);
                 var limits = matches[0].Capabilities?.Limits;
@@ -389,7 +427,8 @@ public sealed class RuntimeCopilotSessionFactory
                 : null;
             return new RuntimeCopilotSession(client, session, facts, usage, promptCapacityObserver, turns,
                 nativeFiles, recoveryMode, recoveryReason, recovery?.JournalRebuild,
-                consumedNativeCacheAcknowledgment, journalEvidence, _abortDrainTimeout);
+                consumedNativeCacheAcknowledgment, journalEvidence, _abortDrainTimeout,
+                verifiedHostedReasoningEfforts, verifiedHostedReasoningCatalogAt);
         }
         catch
         {
@@ -421,5 +460,37 @@ public sealed class RuntimeCopilotSessionFactory
             supportedEfforts is null ||
             !supportedEfforts.Contains(requestedEffort, StringComparer.Ordinal))
             throw new RuntimeAuthorizationException("runtime_reasoning_effort_unsupported");
+    }
+
+    private CopilotClient CreateClient() => new(new CopilotClientOptions
+    {
+        Mode = CopilotClientMode.Empty,
+        Connection = _connection,
+        BaseDirectory = _baseDirectory,
+#pragma warning disable GHCP001 // Session filesystem RPC options are pinned to SDK 1.0.18.
+        SessionFs = new SessionFsConfig
+        {
+            InitialWorkingDirectory = "/workspace",
+            SessionStatePath = "state",
+            Conventions = GitHub.Copilot.Rpc.SessionFsSetProviderConventions.Posix,
+            Capabilities = new GitHub.Copilot.Rpc.SessionFsSetProviderCapabilities { Sqlite = false }
+        },
+#pragma warning restore GHCP001
+        Logger = NullLogger.Instance,
+        LogLevel = CopilotLogLevel.None
+    });
+
+    internal static ImmutableArray<string> ResolveHostedReasoningEfforts(
+        bool? modelSupportsReasoningEffort,
+        IEnumerable<string>? supportedEfforts)
+    {
+        if (modelSupportsReasoningEffort is not true || supportedEfforts is null)
+            return [];
+
+        // Keep the published vocabulary aligned with the values accepted by project configuration.
+        var supported = supportedEfforts.ToHashSet(StringComparer.Ordinal);
+        return new[] { "low", "medium", "high", "xhigh" }
+            .Where(supported.Contains)
+            .ToImmutableArray();
     }
 }

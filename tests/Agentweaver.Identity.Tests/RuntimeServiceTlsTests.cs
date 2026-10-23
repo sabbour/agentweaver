@@ -153,6 +153,51 @@ public sealed class RuntimeServiceTlsTests
     }
 
     [Fact]
+    public void PinnedClientCertificateUsesMountedRootInsteadOfSystemTrust()
+    {
+        using var rootKey = RSA.Create(2048);
+        using var otherRootKey = RSA.Create(2048);
+        using var clientKey = RSA.Create(2048);
+        using var foreignClientKey = RSA.Create(2048);
+        using var root = CreateRoot(rootKey, "Agentweaver client test CA");
+        using var otherRoot = CreateRoot(otherRootKey, "Untrusted client test CA");
+        using var client = CreateLeaf(root, clientKey, "agenthost.internal", ClientAuthenticationOid);
+        using var foreignClient = CreateLeaf(
+            otherRoot, foreignClientKey, "agenthost.internal", ClientAuthenticationOid);
+        var directory = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", ".test-certificates", Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(directory);
+        var caFile = Path.Combine(directory, "ca.crt");
+
+        try
+        {
+            File.WriteAllText(caFile, root.ExportCertificatePem());
+            using var peerChain = new X509Chain();
+            var pin = Convert.ToHexString(SHA256.HashData(client.RawData));
+            var errors = SslPolicyErrors.RemoteCertificateChainErrors;
+
+            Assert.True(RuntimeServiceTlsIdentity.ValidatePinnedClientCertificate(
+                client, peerChain, errors, [pin], caFile, DateTimeOffset.UtcNow,
+                X509RevocationMode.NoCheck));
+            Assert.True(RuntimeServiceTlsIdentity.IsPinnedClientCertificateLeaf(
+                client, [pin], DateTimeOffset.UtcNow));
+            Assert.False(RuntimeServiceTlsIdentity.IsPinnedClientCertificateLeaf(
+                client, [new string('0', 64)], DateTimeOffset.UtcNow));
+            Assert.False(RuntimeServiceTlsIdentity.ValidatePinnedClientCertificate(
+                client, peerChain, errors, [new string('0', 64)], caFile, DateTimeOffset.UtcNow,
+                X509RevocationMode.NoCheck));
+            Assert.False(RuntimeServiceTlsIdentity.ValidatePinnedClientCertificate(
+                foreignClient, peerChain, errors,
+                [Convert.ToHexString(SHA256.HashData(foreignClient.RawData))], caFile,
+                DateTimeOffset.UtcNow, X509RevocationMode.NoCheck));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task BoundedOwnerResponseRejectsAnExtraByteEvenWithoutAContentLength()
     {
         using var client = new HttpClient(new ResponseHandler(

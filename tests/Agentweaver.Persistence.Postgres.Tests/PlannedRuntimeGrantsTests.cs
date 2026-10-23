@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Agentweaver.Persistence.Postgres;
 using Xunit;
 
@@ -8,7 +9,7 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "855ab94d16386e5f1e086d501b9a70e1f64254da4d154cdb70e150dda31a7d89";
+    private const string ReviewedPlanSha256 = "c27bc525b1549ccc6716f74b1a5c15993321cf3d6fe9711fb1eaf80fd2287a90";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 15), 33];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 9)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 11)];
@@ -17,7 +18,7 @@ public sealed class PlannedRuntimeGrantsTests
     public void EmbeddedPlanIsTheReviewedPlan()
     {
         var bytes = PlannedRuntimeGrants.ReadEmbeddedPlan();
-        Assert.Equal(ReviewedPlanSha256, Sha256(bytes));
+        Assert.Equal(ReviewedPlanSha256, CanonicalSha256(bytes));
     }
 
     [Fact]
@@ -46,9 +47,16 @@ public sealed class PlannedRuntimeGrantsTests
     }
 
     [Fact]
-    public void RejectsAnyPlanByteChange()
+    public void CanonicalPlanHashIgnoresWhitespaceAndRejectsContentChanges()
     {
-        var changed = PlannedRuntimeGrants.ReadEmbeddedPlan().Concat(Encoding.UTF8.GetBytes(" ")).ToArray();
+        var bytes = PlannedRuntimeGrants.ReadEmbeddedPlan();
+        var formatted = bytes.Concat(Encoding.UTF8.GetBytes(" \n")).ToArray();
+        var plan = PlannedRuntimeGrants.Select(
+            formatted, "orchestrator", "orchestrator", "agentweaver-id-orchestrator", ReviewedPlanSha256, CoreVersions);
+        Assert.Equal("orchestrator", plan.Service);
+
+        var changed = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(bytes)
+            .Replace("agentweaver-id-orchestrator", "agentweaver-id-attacker", StringComparison.Ordinal));
         var error = Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Select(
             changed, "orchestrator", "orchestrator", "agentweaver-id-orchestrator", ReviewedPlanSha256, CoreVersions));
         Assert.Contains("hash", error.Message);
@@ -105,5 +113,10 @@ public sealed class PlannedRuntimeGrantsTests
     public void QuotesIdentifiers() =>
         Assert.Equal("\"a\"\"b\"", PlannedRuntimeGrants.Quote("a\"b"));
 
-    private static string Sha256(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    private static string CanonicalSha256(byte[] bytes)
+    {
+        using var document = JsonDocument.Parse(bytes);
+        var canonical = JsonSerializer.SerializeToUtf8Bytes(document.RootElement);
+        return Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
+    }
 }

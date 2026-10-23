@@ -95,6 +95,8 @@ There is no separate Chief of Staff notification store or bell. See
 | `assignProjectRole` | Assign a project role through owner authorization. |
 | `revokeProjectRoleAssignment` | Revoke a project role assignment. |
 | `getProjectConfiguration` | Read current or retained configuration. |
+| `getProjectConfigurationChoices` | Read available project model and provider choices. |
+| `getHostedModelReasoningCatalog` | Read live hosted reasoning levels and availability. |
 | `updateProjectConfiguration` | Append a configuration revision. |
 | `getAuthorizationContext` | Read current tenant and effective authority. |
 | `getPlatformRuntimeDefaults` | Read platform defaults. |

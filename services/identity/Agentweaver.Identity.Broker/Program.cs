@@ -330,6 +330,7 @@ if (identityOptions.RemoteMcpOAuth is { } remoteMcpOAuthOptions)
 if (builder.Configuration.GetSection(RemoteMcpCredentialUseComposition.SectionName).Exists() &&
     identityOptions.RemoteMcpOAuth is null)
     throw new InvalidOperationException("Remote MCP credential use requires configured Remote MCP OAuth.");
+builder.AddHostedModelCatalogCredentialUseTls();
 if (builder.AddRemoteMcpCredentialUseTls())
     builder.Services.AddHttpClient<RemoteMcpCurrentCallVerificationClient>(client =>
         client.Timeout = TimeSpan.FromSeconds(15))

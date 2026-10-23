@@ -12,6 +12,7 @@ public enum GatewayOwner
     Events,
     IdentityBroker,
     Environment,
+    AgentHost,
 }
 
 /// <summary>Describes one versioned public route and how the Gateway proxies its request.</summary>
@@ -142,6 +143,11 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}/configuration/choices",
             "/api/projects/{projectId}/configuration/choices",
             "getProjectConfigurationChoices", "Read eligible model and platform component choices",
+            forwardTenantSelector: true);
+        Add("GET", GatewayOwner.AgentHost,
+            "/projects/{projectId}/configuration/hosted-model-reasoning-catalog",
+            "/runtime/v1/projects/{projectId}/hosted-model-reasoning-catalog",
+            "getHostedModelReasoningCatalog", "Read live hosted model reasoning choices",
             forwardTenantSelector: true);
         // Casting remains owner-authorized; revisions travel in bodies, not idempotency headers.
         var casting = "/projects/{projectId}/casting";

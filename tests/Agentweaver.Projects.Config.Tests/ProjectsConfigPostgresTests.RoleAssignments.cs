@@ -285,6 +285,8 @@ public sealed partial class ProjectsConfigPostgresTests
             await OwnerSqlAsync($"GRANT USAGE ON SCHEMA projects_config TO \"{roleName}\"");
             await OwnerSqlAsync(
                 $"GRANT SELECT ON projects_config.tenant_memberships, projects_config.project_role_assignments, projects_config.authority_audit TO \"{roleName}\"");
+            await OwnerSqlAsync(
+                $"GRANT SELECT, INSERT, UPDATE ON projects_config.hosted_model_reasoning_catalog TO \"{roleName}\"");
             await OwnerSqlAsync($"""
                 GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(
                     uuid, text, text, text, bigint, text, boolean) TO "{roleName}"

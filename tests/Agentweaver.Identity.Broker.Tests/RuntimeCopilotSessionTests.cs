@@ -8,6 +8,44 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeCopilotSessionTests
 {
+    [Fact]
+    public async Task HostedReasoningCatalogUsesLiveSdkEffortsAndKeysThemByModelReference()
+    {
+        await using var external = new ControlledCopilotRuntime
+        {
+            SupportedReasoningEfforts = ["xhigh", "low", "medium"]
+        };
+        var factory = Factory(external);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var credential = SdkCredential();
+
+        var catalog = await factory.ReadAsync(credential, timeout.Token);
+        credential.Invalidate();
+
+        var model = Assert.IsType<HostedModelReasoningModelV1>(catalog["accepted-model-reference"]);
+        Assert.Equal("available", model.State);
+        Assert.Equal(["low", "medium", "xhigh"], model.ReasoningEfforts.ToArray());
+        Assert.Single(external.Requests, request => request.Method == "models.list");
+        Assert.DoesNotContain(external.Requests, request => request.Method.StartsWith("session.", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task HostedReasoningCatalogMarksAReferenceUnavailableWhenTheLiveModelIsMissing()
+    {
+        await using var external = new ControlledCopilotRuntime { ModelId = "different-model" };
+        var factory = Factory(external);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var credential = SdkCredential();
+
+        var catalog = await factory.ReadAsync(credential, timeout.Token);
+        credential.Invalidate();
+
+        var model = Assert.IsType<HostedModelReasoningModelV1>(catalog["accepted-model-reference"]);
+        Assert.Equal("unavailable", model.State);
+        Assert.Equal("model_not_available", model.UnavailableReason);
+        Assert.Empty(model.ReasoningEfforts);
+    }
+
     [Theory]
     [InlineData(20000, 16000, 16000)]
     [InlineData(20000, 20000, 20000)]
@@ -72,7 +110,8 @@ public sealed class RuntimeCopilotSessionTests
         await using var external = new ControlledCopilotRuntime
         {
             ExpectedReasoningEffort = "low",
-            EffectiveReasoningEffort = "low"
+            EffectiveReasoningEffort = "low",
+            SupportedReasoningEfforts = ["high", "low"]
         };
         var models = new RuntimeModelBindingsResolver("model-bindings-v1",
             new Dictionary<string, RuntimeModelBinding>
@@ -97,6 +136,8 @@ public sealed class RuntimeCopilotSessionTests
             _ => Task.CompletedTask, timeout.Token);
 
         Assert.Equal("low", session.Facts.ReasoningEffort);
+        Assert.True(session.VerifiedHostedReasoningEfforts.HasValue);
+        Assert.Equal(["low", "high"], session.VerifiedHostedReasoningEfforts.Value.ToArray());
         Assert.Equal(registration.Binding.ModelBindingPin, session.Facts.ModelBindingPin);
         Assert.Equal(registration.Binding.ModelBindingPin, session.Facts.ResolvedModelBindingPin);
         var create = Assert.Single(external.Requests, request => request.Method == "session.create");

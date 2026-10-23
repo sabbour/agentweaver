@@ -44,8 +44,9 @@ public static class IssueSyncServiceTransport
                 endpoints.GetChildren().Any(endpoint => endpoint.Key != key &&
                     Uri.TryCreate(endpoint["Url"], UriKind.Absolute, out var other) && other.Port == options.ListenerPort))
                 throw new InvalidOperationException("Issue sync requires a dedicated configured HTTPS listener.");
-            builder.WebHost.ConfigureKestrel(server =>
-                server.Configure(builder.Configuration.GetSection("Kestrel")).Endpoint(key, endpoint =>
+            // Keep every private listener on the host's single Kestrel endpoint loader.
+            KestrelEndpointComposition.AddEndpoint(builder, (loader, server) =>
+                loader.Endpoint(key, endpoint =>
                 {
                     var identity = server.ApplicationServices.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(key);
                     endpoint.HttpsOptions.ServerCertificate = identity.Certificate;

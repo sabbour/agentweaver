@@ -179,6 +179,7 @@ if (brokerRunBindingAudience is not null)
 BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is not null);
 var issueSyncIdentity = Agentweaver.Identity.IssueSyncServiceTransport.AddChannel(builder,
     IssueSyncAuthorityEndpoints.Channel, "ProjectsConfig:IssueSync:IdentityTls", "Projects", "IdentityBroker", true);
+HostedModelCatalogPublicationTls.Configure(builder);
 
 builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(authorityUri.AbsoluteUri));
 builder.Services.AddScoped<ProjectAuthorizationOwner>();

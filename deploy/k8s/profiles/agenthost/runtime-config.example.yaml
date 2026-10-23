@@ -24,6 +24,7 @@ data:
         "OrchestratorAddress": "https://orchestrator.agentweaver.svc.cluster.local:8443/",
         "EnvironmentAddress": "https://environment.agentweaver.svc.cluster.local:8443/",
         "EventsAddress": "https://events-and-sessions.agentweaver.svc.cluster.local:8443/",
+        "ProjectsConfigAddress": "https://projects-config.agentweaver.svc.cluster.local:8443/",
         "Image": {
           "Digest": "sha256:2e58619206f8ea1eab7810b0943dc2efbbb4bb1ed6b8e348a2348fb6d6a6f557",
           "Platform": "linux/amd64",

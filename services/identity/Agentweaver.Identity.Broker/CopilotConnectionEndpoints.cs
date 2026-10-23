@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Secrets.AzureKeyVault;
@@ -22,6 +23,16 @@ public sealed record CompleteCopilotConnectionRequest(string State, string? Code
 /// <summary>Revision-guarded request to refresh or revoke one Copilot connection.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChangeCopilotConnectionRequest(Guid ConnectionId, long ExpectedRevision);
+
+/// <summary>Requests a short-lived hosted Copilot credential for one readable project.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record CopilotModelCatalogCredentialRequest(string ProjectId);
+
+/// <summary>Hosted Copilot access token returned only to an authenticated AgentHost caller.</summary>
+public sealed record CopilotModelCatalogCredentialResponse(string AccessToken, DateTimeOffset ExpiresAt)
+{
+    public override string ToString() => nameof(CopilotModelCatalogCredentialResponse) + " [REDACTED]";
+}
 
 /// <summary>
 /// Maps authenticated internal routes for beginning, completing, reading and changing
@@ -55,6 +66,17 @@ public static class CopilotConnectionEndpoints
             ExecuteAsync(context, (authority, actor, issuer, actorId) =>
                 authority.RevokeAsync(actor, issuer, actorId, input.ConnectionId,
                     input.ExpectedRevision, context.RequestAborted)));
+        routes.MapPost("/{connectionId:guid}/model-catalog-credential",
+            (HttpContext context, Guid connectionId) =>
+                ExecuteAsync(context, async (authority, actor, issuer, actorId) =>
+                {
+                    // Check the service identity before reading the body on the shared listener.
+                    HostedModelCatalogCredentialUseComposition.RequireAgentHost(context);
+                    var input = await ReadModelCatalogCredentialRequestAsync(context).ConfigureAwait(false);
+                    return await authority.ReadModelCatalogCredentialAsync(
+                        actor, issuer, actorId, connectionId, input.ProjectId, context.RequestAborted)
+                        .ConfigureAwait(false);
+                }));
         routes.MapGet("/{connectionId:guid}", (HttpContext context, Guid connectionId) =>
             ExecuteAsync(context, (authority, actor, issuer, actorId) =>
                 authority.ReadStatusAsync(actor, issuer, actorId, connectionId, context.RequestAborted)));
@@ -126,4 +148,23 @@ public static class CopilotConnectionEndpoints
 
     private static Task ErrorAsync(HttpContext context, string code, int status) =>
         Results.Json(new { error = code }, statusCode: status).ExecuteAsync(context);
+
+    private static async Task<CopilotModelCatalogCredentialRequest> ReadModelCatalogCredentialRequestAsync(
+        HttpContext context)
+    {
+        try
+        {
+            return await context.Request.ReadFromJsonAsync<CopilotModelCatalogCredentialRequest>(
+                context.RequestAborted).ConfigureAwait(false)
+                ?? throw new ArgumentException("The model catalog request body is required.");
+        }
+        catch (JsonException error)
+        {
+            throw new ArgumentException("The model catalog request body is invalid.", error);
+        }
+        catch (InvalidOperationException error)
+        {
+            throw new ArgumentException("The model catalog request content type is invalid.", error);
+        }
+    }
 }

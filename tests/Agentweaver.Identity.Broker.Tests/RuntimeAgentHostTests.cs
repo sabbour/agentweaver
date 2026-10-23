@@ -25,6 +25,67 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class RuntimeAgentHostTests
 {
     [Fact]
+    public async Task AgentHostReadsLiveHostedLevelsWithoutReturningTheCredential()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var catalog = await fixture.Host.ReadHostedModelReasoningCatalogAsync(
+            fixture.Registration.Binding.ProjectId, fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Registration.Binding.ProjectId, catalog.ProjectId);
+        Assert.Equal(1, catalog.ProjectConfigurationRevision);
+        Assert.Equal("legacy-unversioned", catalog.BindingsRevision);
+        Assert.Equal("available", catalog.State);
+        var model = Assert.Single(catalog.Models);
+        Assert.Equal("accepted-model-reference", model.Key);
+        Assert.Equal(["low", "medium", "high", "xhigh"], model.Value.ReasoningEfforts.ToArray());
+        Assert.Single(fixture.HostedCatalogCredentialRequests);
+        Assert.DoesNotContain(fixture.Sdk.SdkCredential, JsonSerializer.Serialize(catalog));
+    }
+
+    [Fact]
+    public async Task AgentHostRejectsLiveLevelsWhenPlatformModelDefaultsChangeDuringTheSdkRead()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var selectedConnection = fixture.PlatformDefaultConnectionId;
+        fixture.Registration = fixture.Registration with
+        {
+            Binding = fixture.Registration.Binding with { ModelConnectionId = null }
+        };
+        fixture.Sdk.BeforeModelCatalogResponse = _ =>
+        {
+            fixture.PlatformDefaultsRevision++;
+            fixture.PlatformDefaultConnectionId = Guid.NewGuid();
+            return Task.CompletedTask;
+        };
+
+        var catalog = await fixture.Host.ReadHostedModelReasoningCatalogAsync(
+            fixture.Registration.Binding.ProjectId, fixture.Actor, timeout.Token);
+
+        Assert.Equal("unavailable", catalog.State);
+        Assert.Equal("platform_defaults_changed", catalog.UnavailableReason);
+        Assert.Equal(selectedConnection, Assert.Single(fixture.HostedCatalogCredentialRequests));
+        Assert.Equal("platform_defaults_changed",
+            Assert.Single(catalog.Models).Value.UnavailableReason);
+    }
+
+    [Fact]
+    public async Task AgentHostReportsHostedLevelsUnavailableWithoutTheIdentityServiceChannel()
+    {
+        await using var fixture = new HostFixture(hostedCatalogIdentityAvailable: false);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var catalog = await fixture.Host.ReadHostedModelReasoningCatalogAsync(
+            fixture.Registration.Binding.ProjectId, fixture.Actor, timeout.Token);
+
+        Assert.Equal("unavailable", Assert.Single(catalog.Models).Value.State);
+        Assert.Equal("hosted_connection_unavailable", Assert.Single(catalog.Models).Value.UnavailableReason);
+        Assert.Empty(fixture.HostedCatalogCredentialRequests);
+    }
+
+    [Fact]
     public async Task OrdinarySessionCacheWritesCannotBypassTheGuardedSuspendPath()
     {
         await using var fixture = new HostFixture(workflowBound: true);
@@ -2383,6 +2444,9 @@ public sealed class RuntimeAgentHostTests
         private readonly ConcurrentDictionary<
             (Guid DispatchId, RuntimeCreditLimitDenialStage Stage), RuntimeNativeTurnNoSendReceipt>
             _nativeNoSendRecords = new();
+        public ConcurrentQueue<Guid> HostedCatalogCredentialRequests { get; } = new();
+        public Guid PlatformDefaultConnectionId { get; set; } = Guid.NewGuid();
+        public long PlatformDefaultsRevision { get; set; } = 1;
         public HostFixture(
             ModelSourceMode sourceMode = ModelSourceMode.HostedCopilot,
             decimal? hardCreditLimit = null,
@@ -2391,7 +2455,8 @@ public sealed class RuntimeAgentHostTests
             int? maxPromptTokens = null,
             bool workflowBound = false,
             string sessionId = "session",
-            long executionFence = 1)
+            long executionFence = 1,
+            bool hostedCatalogIdentityAvailable = true)
         {
             Time = new() { Now = DateTimeOffset.UtcNow };
             Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
@@ -2481,9 +2546,16 @@ public sealed class RuntimeAgentHostTests
                 new(120, 120, 120, 120, 120, 600), factory.WorkingDirectory);
             _http = new(new Handler(SendOwnerAsync));
             Host = new(new(b.ConfigureEndpoint, new("https://broker.test/"), new("https://orchestrator.test/"),
-                    new("https://environment.test/"), new("https://events.test/"), Image, 8),
+                    new("https://environment.test/"), new("https://events.test/"),
+                    new("https://projects-config.test/"), Image, 8),
                 _http, new RuntimeRegistrationHttpClient(_http, new("https://orchestrator.test/")), factory, Time,
-                static (_, request, _) => Task.FromResult(CreateWorkspaceFlushReceipt(request)));
+                static (_, request, _) => Task.FromResult(CreateWorkspaceFlushReceipt(request)),
+                hostedCatalogCredentialHttp: hostedCatalogIdentityAvailable
+                    ? new HttpClient(new Handler(SendOwnerAsync))
+                    : null,
+                hostedCatalogCredentialAddress: hostedCatalogIdentityAvailable
+                    ? new Uri("https://identity-broker.test:9444/")
+                    : null);
             Configure = new(1, Registration, Guid.NewGuid(), Guid.NewGuid(), JsonSerializer.SerializeToElement(new { }));
         }
         public TestClock Time { get; }
@@ -2826,6 +2898,66 @@ public sealed class RuntimeAgentHostTests
                 request.Headers.GetValues("X-Agentweaver-Tenant").Single() != "tenant")
                 return Response(request, new { }, HttpStatusCode.Forbidden);
             var path = request.RequestUri!.AbsolutePath;
+            if (path == "/api/projects/project/configuration")
+                return Response(request, new
+                {
+                    projectId = "project",
+                    revision = 1,
+                    configuration = new
+                    {
+                        modelSelection = new { connectionId = Registration.Binding.ModelConnectionId }
+                    }
+                });
+            if (path == "/api/projects/project/configuration/choices")
+                return Response(request, new
+                {
+                    projectId = "project",
+                    projectConfigurationRevision = 1,
+                    platformRuntimeRevision = PlatformDefaultsRevision,
+                    models = new
+                    {
+                        state = "available",
+                        bindingsRevision = "legacy-unversioned",
+                        choices = new[]
+                        {
+                            new { reference = "accepted-model-reference", sourceMode = "hostedCopilot" }
+                        }
+                    }
+                });
+            if (path == "/api/platform/runtime-defaults/")
+                return Response(request, new
+                {
+                    revision = PlatformDefaultsRevision,
+                    defaults = new
+                    {
+                        modelSelection = new { connectionId = PlatformDefaultConnectionId }
+                    }
+                });
+            if (path == "/api/projects/project/configuration/hosted-model-reasoning-catalog")
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                Assert.True(request.Headers.CacheControl?.NoStore);
+                var publication = await ReadAsync<HostedModelReasoningCatalogPublicationV1>(request, token);
+                Assert.Equal("accepted-model-reference", publication.Reference);
+                Assert.DoesNotContain(Sdk.SdkCredential, JsonSerializer.Serialize(publication));
+                return Response(request, new { published = true });
+            }
+            if (path.StartsWith(
+                    "/internal/connections/copilot-user/", StringComparison.Ordinal) &&
+                path.EndsWith("/model-catalog-credential", StringComparison.Ordinal))
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                Assert.True(request.Headers.CacheControl?.NoStore);
+                var body = await ReadAsync<JsonElement>(request, token);
+                Assert.Equal("project", body.GetProperty("projectId").GetString());
+                HostedCatalogCredentialRequests.Enqueue(
+                    Guid.Parse(request.RequestUri!.Segments[^2].TrimEnd('/')));
+                return Response(request, new
+                {
+                    accessToken = Sdk.SdkCredential,
+                    expiresAt = Time.GetUtcNow().AddMinutes(2)
+                });
+            }
             if (path.StartsWith("/internal/runtime/registrations/", StringComparison.Ordinal))
             {
                 if (path.EndsWith("/skills", StringComparison.Ordinal))

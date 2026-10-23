@@ -64,6 +64,15 @@ hostname checks, the configured peer leaf pin, server-authentication purpose,
 the client certificate, and online revocation checks. Public issuer discovery
 and external HTTPS providers continue to use normal system trust.
 
+Projects & Config accepts hosted catalog publication only when the request
+carries both the caller's bearer and AgentHost's client certificate. Its
+optional `ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256`
+setting pins the AgentHost leaf; the listener validates its chain against the
+mounted backend CA, client-auth purpose, validity, and revocation. AgentHost
+sends its existing service certificate only on the publication client. Without
+the pin, publication is denied; a project reader's bearer alone cannot publish
+values.
+
 When run binding is configured, Broker requires
 `ProjectsTrustBundleSha256`, the SHA-256 of the exact raw UTF-8 PEM bytes at
 `/var/run/service-backend-ca/ca.crt`. This path is fixed; the host accepts no
@@ -191,6 +200,34 @@ Environment's inverse profile is
 pins Identity's owner address and has a 15-second timeout. The same native
 peer gate can protect a future read-only Environment verification route for
 Identity; this source does not map that route.
+
+Hosted model catalog credential reads use a separate
+`IdentityBroker:HostedModelCatalogCredentialUse:Tls` profile and the
+`HostedModelCatalogCredentialUse` HTTPS listener on port 8444. The peer is
+`AgentHost`; the corresponding client profile is
+`AgentHost:HostedModelCatalogCredentialUse:IdentityTls`. Both services pin
+the other service's certificate and use distinct service principals. The
+AgentHost certificate must have client-auth and server-auth purposes; Identity
+requires a client-auth certificate from that exact AgentHost profile.
+The Identity listener certificate is mounted from the optional
+`identity-broker-agenthost-tls` Secret at
+`/var/run/identity-broker-agenthost-tls`; its address is
+`https://identity-broker.agentweaver.svc.cluster.local:8444/`. AgentHost uses
+its mounted `/run/agenthost-tls` certificate and the service backend CA at
+`/var/run/service-backend-ca/ca.crt`.
+
+Only `POST /internal/connections/copilot-user/{connectionId}/model-catalog-credential`
+uses this channel. The route checks mTLS before reading the request or
+redeeming a connection credential, then applies the current caller, tenant,
+project, connection, and freshness checks. The caller's bearer token alone is
+not enough. Identity returns the short-lived user access token only to
+AgentHost; Gateway and browser routes do not proxy this response. When the
+profile is absent the listener cannot authorize credential use, and incomplete
+or shared-port configuration prevents startup.
+The Identity listener validates AgentHost's client certificate against the
+mounted backend CA before enforcing its configured leaf pin. Issue Sync,
+hosted catalog, and Remote MCP listeners load the shared Kestrel endpoint
+configuration once, then apply their separate certificate and mTLS settings.
 
 Only Environment has the separately configured Orchestrator verifier client.
 Identity has no Orchestrator client. Current call and applied-network
