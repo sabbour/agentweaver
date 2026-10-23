@@ -420,7 +420,7 @@ internal static partial class GatewayOpenApi
                 "The token lacks api.read or names another project, or the caller lacks current Projects " +
                 "read authority. The response contains no items.");
             responses["502"] = ProblemResponse("The Projects owner returned an invalid or failed authority response.");
-            // Only the pull request list depends on optional migration 032. Document its 503 so
+            // The pull request list depends on migration 032. Document its rollout-time 503 so
             // clients don't treat "not available" as an empty list.
             if (route.OperationId == "listProjectPullRequests")
                 responses["503"] = ProblemResponse(

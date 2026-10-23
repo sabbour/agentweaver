@@ -195,7 +195,7 @@ test('grant markers must match the reviewed plan exactly', () => {
   assert.match(verifyGrantsMarker(`noise\n${goodLogs.orchestrator}\n`, expected), /versions=1,2/);
   assert.throws(() => verifyGrantsMarker('migrated\n', expected), /0 grant markers/);
   assert.throws(() => verifyGrantsMarker(`${goodLogs.orchestrator}\n${goodLogs.orchestrator}`, expected), /2 grant markers/);
-  assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', [...plan.coreVersions, 32]), expected),
+  assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', [...plan.coreVersions, 34]), expected),
     /differs from the reviewed plan/);
   assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', plan.coreVersions.slice(0, -1)), expected),
     /differs from the reviewed plan/);
@@ -204,10 +204,10 @@ test('grant markers must match the reviewed plan exactly', () => {
   assert.throws(() => verifyGrantsMarker(goodLogs['events-and-sessions'], expected), /does not match/);
 });
 
-test('the reviewed plan excludes 032 and matches the pinned hash', () => {
+test('the reviewed plan includes 032 and matches the pinned hash', () => {
   assert.equal(p1PostgresPlanHash(), REVIEWED_PLAN_SHA256);
   assert.ok(!plan.coreVersions.includes(17));
-  assert.ok(!plan.coreVersions.includes(32));
+  assert.ok(plan.coreVersions.includes(32));
   assert.equal(Math.max(...plan.coreVersions), 33);
   assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
 });
@@ -387,7 +387,7 @@ test('a failed Job still removes Jobs, releases the lock, and writes a failed re
 });
 
 test('a ledger past the reviewed plan fails the run', async () => {
-  const fake = world({ logs: { ...goodLogs, orchestrator: marker('orchestrator', 'orchestrator', [...plan.coreVersions, 32]) },
+  const fake = world({ logs: { ...goodLogs, orchestrator: marker('orchestrator', 'orchestrator', [...plan.coreVersions, 34]) },
     state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } } });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
@@ -771,7 +771,7 @@ test('pinned owner readiness shapes derive 31-32 before repository identity and 
   assert.ok(oldRange.maxSchema < 33);
   assert.deepEqual(plan.coreVersions, compatibility.applyByDefault);
   assert.ok(!plan.coreVersions.includes(17));
-  assert.ok(!plan.coreVersions.includes(32));
+  assert.ok(plan.coreVersions.includes(32));
 });
 
 test('old-to-new owner upgrade deploys before Core 033 when schema 031 is recorded, otherwise plans a gap', async () => {

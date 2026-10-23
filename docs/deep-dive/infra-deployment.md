@@ -61,12 +61,13 @@ from its runtime map because the host validates them before it enters
 `--migrate`. The Orchestrator migration branch runs before normal provider
 settings are loaded.
 
-Orchestrator migration 032, which adds Source Control pull request records,
-is optional and code-only. The default migrator, startup verification, and the
-P1 initializer don't apply it, and the owner starts and serves its routes
-without it. The project pull request list returns
-`503 pull_request_records_unavailable` until a separately approved step applies
-032 and its grants. See the [Azure tooling notes](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md).
+Orchestrator migration 032 adds Source Control pull request records. The
+reviewed P1 database plan includes the migration and its exact runtime table
+grant, and the maintenance Job applies and records it with the other planned
+migrations. Startup accepts a complete pre-032 schema during rollout, so the
+project pull request list returns `503 pull_request_records_unavailable` until
+the Job applies the plan. See the
+[Azure tooling notes](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md).
 
 ## Understand the Azure foundation
 
