@@ -714,8 +714,10 @@ from the Sessions journal.
 
 Cutover requires a closed parity map and green API, UI, and MCP persona harnesses against one
 exact-SHA AKS deployment. Tag the final 0.x release on `dev` and keep `release/0.x` for patches.
-Preserve both histories without a force push ([R21](../decisions/0001-platform-architecture.md#risk-register)).
-Start 1.0 with a fresh installation. There is no data migration.
+Preserve both histories without a force push: merge old `dev` into `v1` with
+`git merge --allow-unrelated-histories -s ours` to keep the `v1` tree, then fast-forward `dev` to
+`v1` ([R21](../decisions/0001-platform-architecture.md#risk-register)). Start 1.0 with a fresh
+installation. There is no data migration.
 
 ## Alternatives considered
 
