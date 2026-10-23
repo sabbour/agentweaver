@@ -100,6 +100,8 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
     <option value={effort}>{`${REASONING_LABELS[effort]} (saved; not listed for this model)`}</option>
   );
   const defaultReference = configuration.modelSelection?.reference;
+  const platformDefaultReference = choices?.models.savedReferences
+    .find((saved) => saved.sources.includes('platformDefault'))?.reference;
   const defaultEfforts = effortsFor(defaultReference);
   /** Changes the default model and decides what happens to its credential pin. */
   const setModelReference = (reference: string) => {
@@ -233,8 +235,8 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
       <PageSection title="Models by task" description="Leave a field empty to inherit its default. Owner-listed references are eligible choices; the runtime checks availability when a run starts.">
         {TASKS.map(({ value, label }) => {
           const selected = configuration.modelTaskOverrides?.find((item) => item.taskKind === value)?.selection;
-          // A task without its own model inherits the project default model, so its levels follow that model.
-          const taskReference = selected?.reference ?? defaultReference;
+          // Resolve the whole inheritance chain before looking up hosted reasoning levels.
+          const taskReference = selected?.reference ?? defaultReference ?? platformDefaultReference;
           const taskEfforts = effortsFor(taskReference);
           return <div className="v1-inline-form" key={value}>
             <Field label={`${label} model`}>

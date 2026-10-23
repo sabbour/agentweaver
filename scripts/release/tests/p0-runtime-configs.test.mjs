@@ -825,6 +825,22 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
     'orchestrator.agentweaver.svc.cluster.local',
   ]);
 
+  const gateway = getPolicy('gateway-owner-network');
+  const gatewayAgentHostEgress = gateway.spec.egress.find(rule => rule.toEndpoints
+    ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'agenthost'));
+  assert.deepEqual(endpoints(gatewayAgentHostEgress), ['agenthost']);
+  assert.deepEqual(ports(gatewayAgentHostEgress), [{ port: '8443', protocol: 'TCP' }]);
+  const agentHost = getPolicy('agenthost-environment-ingress');
+  const gatewayAgentHostIngress = agentHost.spec.ingress.find(rule => rule.fromEndpoints
+    ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'gateway'));
+  assert.deepEqual(gatewayAgentHostIngress.fromEndpoints, [{
+    matchLabels: {
+      'k8s:io.kubernetes.pod.namespace': namespace,
+      'agentweaver.io/workload': 'gateway',
+    },
+  }]);
+  assert.deepEqual(ports(gatewayAgentHostIngress), [{ port: '8443', protocol: 'TCP' }]);
+
   const projects = getPolicy('projects-config-network');
   const projectsIssuerGateway = projects.spec.egress.find(rule => rule.toEndpoints
     ?.some(endpoint => endpoint.matchLabels['k8s:io.kubernetes.pod.namespace'] === 'agentweaver-gateway'));

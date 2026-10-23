@@ -100,6 +100,17 @@ if (hostedCatalogTlsSection.Exists())
 }
 builder.Services.AddHttpClient("runtime-owners", client => client.Timeout = TimeSpan.FromSeconds(20))
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+builder.Services.AddHttpClient("hosted-model-catalog-publication", client =>
+        client.Timeout = TimeSpan.FromSeconds(20))
+    .ConfigurePrimaryHttpMessageHandler(services =>
+    {
+        // Present AgentHost's certificate only on the catalog publication request.
+        var handler = RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler();
+        var identity = services.GetRequiredService<RuntimeServiceTlsIdentity>();
+        handler.ClientCertificateOptions = ClientCertificateOption.Manual;
+        handler.ClientCertificates.Add(identity.Certificate);
+        return handler;
+    });
 builder.Services.AddSingleton(services =>
 {
     var http = services.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-owners");
@@ -112,7 +123,10 @@ builder.Services.AddSingleton(services =>
         services.GetRequiredService<TimeProvider>(),
         services.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RuntimeAgentHost>>(),
         hostedCatalogCredentialHttp: hostedCatalogCredentialHttp,
-        hostedCatalogCredentialAddress: hostedCatalogTls?.PeerOwnerAddress);
+        hostedCatalogCredentialAddress: hostedCatalogTls?.PeerOwnerAddress,
+        hostedCatalogPublicationHttp: hostedCatalogTls is null
+            ? null
+            : services.GetRequiredService<IHttpClientFactory>().CreateClient("hosted-model-catalog-publication"));
 });
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>

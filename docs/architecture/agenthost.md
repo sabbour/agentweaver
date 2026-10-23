@@ -209,7 +209,9 @@ Projects & Config stores the values for the same actor, project, connection,
 and binding revision, returns them for at most 24 hours, and rejects an older
 verification that arrives after a newer one. Publication is best-effort:
 failure does not block session creation, and every run still uses AgentHost's
-live SDK check as the authority.
+live SDK check as the authority. The write uses the caller's bearer for current
+project authority and AgentHost's pinned client certificate for service
+identity; an ordinary project reader cannot publish catalog values.
 
 Settings can also request the current hosted levels without waiting for a run.
 AgentHost reads the current project configuration and model choices, then asks

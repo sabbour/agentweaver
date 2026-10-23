@@ -50,20 +50,33 @@ internal sealed class HostedModelCatalogCredentialTlsTestSupport : IDisposable
 
     public void Configure(Dictionary<string, string?> settings)
     {
-        var prefix = HostedModelCatalogCredentialUseComposition.SectionName + ":Tls:";
+        Configure(settings,
+            HostedModelCatalogCredentialUseComposition.SectionName + ":Tls:",
+            HostedModelCatalogCredentialUseComposition.ListenerName,
+            ListenerPort,
+            Options.PeerServiceName!);
+    }
+
+    public void Configure(
+        Dictionary<string, string?> settings,
+        string prefix,
+        string listenerName,
+        int listenerPort,
+        string peerServiceName)
+    {
         settings[prefix + nameof(Options.LocalServiceName)] = Options.LocalServiceName;
         settings[prefix + nameof(Options.LocalServicePrincipalId)] = Options.LocalServicePrincipalId;
         settings[prefix + nameof(Options.LocalCertificatePemPath)] = CertificatePath;
         settings[prefix + nameof(Options.LocalPrivateKeyPemPath)] = KeyPath;
         settings[prefix + nameof(Options.LocalCertificateSha256)] = Options.LocalCertificateSha256;
-        settings[prefix + nameof(Options.ListenerPort)] = ListenerPort.ToString();
-        settings[prefix + nameof(Options.PeerServiceName)] = Options.PeerServiceName;
-        settings[prefix + nameof(Options.PeerServicePrincipalId)] = Options.PeerServicePrincipalId;
-        settings[prefix + nameof(Options.PeerOwnerAddress)] = Options.PeerOwnerAddress;
+        settings[prefix + nameof(Options.ListenerPort)] = listenerPort.ToString();
+        settings[prefix + nameof(Options.PeerServiceName)] = peerServiceName;
+        settings[prefix + nameof(Options.PeerServicePrincipalId)] = "33333333-3333-3333-3333-333333333333";
+        settings[prefix + nameof(Options.PeerOwnerAddress)] =
+            $"https://{peerServiceName.ToLowerInvariant()}.example:{listenerPort}/";
         settings[prefix + nameof(Options.PeerCertificateSha256Pins) + ":0"] =
             Options.PeerCertificateSha256Pins![0];
-        settings["Kestrel:Endpoints:" + HostedModelCatalogCredentialUseComposition.ListenerName + ":Url"] =
-            $"https://localhost:{ListenerPort}/";
+        settings[$"Kestrel:Endpoints:{listenerName}:Url"] = $"https://127.0.0.1:{listenerPort}/";
     }
 
     public IStartupFilter CreateStartupFilter() => new TlsStartupFilter(this);

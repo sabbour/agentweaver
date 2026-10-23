@@ -56,6 +56,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private readonly RuntimeAgentHostOptions _options;
     private readonly HttpClient _http;
     private readonly HttpClient? _hostedCatalogCredentialHttp;
+    private readonly HttpClient? _hostedCatalogPublicationHttp;
     private readonly Uri? _hostedCatalogCredentialAddress;
     private readonly IRuntimeRegistrationOwner _owner;
     private readonly RuntimeCopilotSessionFactory _sessions;
@@ -101,10 +102,11 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         ILogger? logger = null,
         IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null,
         HttpClient? hostedCatalogCredentialHttp = null,
-        Uri? hostedCatalogCredentialAddress = null)
+        Uri? hostedCatalogCredentialAddress = null,
+        HttpClient? hostedCatalogPublicationHttp = null)
         : this(options, http, owner, sessions, timeProvider,
             MountedWorkspaceFlush.FlushAndCreateReceiptAsync, logger, hostedModelReasoningCatalog,
-            hostedCatalogCredentialHttp, hostedCatalogCredentialAddress)
+            hostedCatalogCredentialHttp, hostedCatalogCredentialAddress, hostedCatalogPublicationHttp)
     {
     }
 
@@ -119,13 +121,15 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         ILogger? logger = null,
         IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null,
         HttpClient? hostedCatalogCredentialHttp = null,
-        Uri? hostedCatalogCredentialAddress = null)
+        Uri? hostedCatalogCredentialAddress = null,
+        HttpClient? hostedCatalogPublicationHttp = null)
     {
         _options = options.Validate();
         _http = http;
         if ((hostedCatalogCredentialHttp is null) != (hostedCatalogCredentialAddress is null))
             throw new ArgumentException("The hosted catalog credential client and owner address must be configured together.");
         _hostedCatalogCredentialHttp = hostedCatalogCredentialHttp;
+        _hostedCatalogPublicationHttp = hostedCatalogPublicationHttp;
         _hostedCatalogCredentialAddress = hostedCatalogCredentialAddress is null
             ? null : RuntimeOwnerHttpTransport.RequireOwnerAddress(hostedCatalogCredentialAddress);
         _owner = owner;
@@ -568,7 +572,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                         await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, cancellation)
                             .ConfigureAwait(false);
                 }, capturedMcpServer: capturedMcpServer.Endpoint,
-                hostedReasoningCatalog: new(_http, _options.ProjectsConfigAddress, retained),
+                hostedReasoningCatalog: new(
+                    _hostedCatalogPublicationHttp ?? _http, _options.ProjectsConfigAddress, retained),
                 logger: _logger);
             _session = await receiver.ConfigureAsync(
                 bootstrap, configurationBytes, request.ConsumeOperationId, request.ExchangeOperationId,

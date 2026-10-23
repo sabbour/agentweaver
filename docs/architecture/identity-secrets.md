@@ -64,6 +64,15 @@ hostname checks, the configured peer leaf pin, server-authentication purpose,
 the client certificate, and online revocation checks. Public issuer discovery
 and external HTTPS providers continue to use normal system trust.
 
+Projects & Config accepts hosted catalog publication only when the request
+carries both the caller's bearer and AgentHost's client certificate. Its
+optional `ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256`
+setting pins the AgentHost leaf; the listener validates its chain against the
+mounted backend CA, client-auth purpose, validity, and revocation. AgentHost
+sends its existing service certificate only on the publication client. Without
+the pin, publication is denied; a project reader's bearer alone cannot publish
+values.
+
 When run binding is configured, Broker requires
 `ProjectsTrustBundleSha256`, the SHA-256 of the exact raw UTF-8 PEM bytes at
 `/var/run/service-backend-ca/ca.crt`. This path is fixed; the host accepts no
@@ -215,6 +224,10 @@ not enough. Identity returns the short-lived user access token only to
 AgentHost; Gateway and browser routes do not proxy this response. When the
 profile is absent the listener cannot authorize credential use, and incomplete
 or shared-port configuration prevents startup.
+The Identity listener validates AgentHost's client certificate against the
+mounted backend CA before enforcing its configured leaf pin. Issue Sync,
+hosted catalog, and Remote MCP listeners load the shared Kestrel endpoint
+configuration once, then apply their separate certificate and mTLS settings.
 
 Only Environment has the separately configured Orchestrator verifier client.
 Identity has no Orchestrator client. Current call and applied-network

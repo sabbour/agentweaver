@@ -259,6 +259,9 @@ make all public-address HTTPS egress FQDN-only. The platform's own Tool & MCP ga
 default for L7 model/MCP/A2A controls; an alternative gateway remains a P3 option. AGT decisions and
 record-before-transmit for outbound calls stay in core even when an L7 provider audits them. See [Network Policy
 enforcement](provider-seams.md#enforcement-and-readiness).
+The owner network policies allow Gateway-to-AgentHost HTTPS on port 8443 and
+the matching AgentHost ingress only; the hosted catalog route keeps the
+caller's bearer and AgentHost's pinned client certificate as separate checks.
 
 ## Run lifecycle across services
 

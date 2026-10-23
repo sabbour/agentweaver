@@ -103,7 +103,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/projects/{projectId}/configuration?revision={n}` | Read the current or a retained configuration revision. |
 | `PUT /api/projects/{projectId}/configuration` | Append a configuration revision with an expected configuration revision. |
 | `GET /api/projects/{projectId}/configuration/choices` | Read current model eligibility and platform provider choices for settings. |
-| `POST /api/projects/{projectId}/configuration/hosted-model-reasoning-catalog` | Store hosted reasoning levels verified by AgentHost for the caller's current project binding. |
+| `POST /api/projects/{projectId}/configuration/hosted-model-reasoning-catalog` | Store hosted reasoning levels verified by AgentHost for the caller's current project binding. Requires both the caller's project authority and AgentHost's pinned mTLS identity. |
 | `GET /api/projects/{projectId}/casting/universes` | List supported universe names after checking project read access. |
 | `GET /api/casting/templates` | List the built-in scenario templates available to seed a reviewed team proposal. |
 | `GET /api/catalog/roles` | List the role definitions available to scenario and manual team proposals. |

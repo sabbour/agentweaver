@@ -37,6 +37,23 @@ certificates, grants or infrastructure. Per-project enable/disable, intervals
 and cycle limits are persisted through the
 [issue-sync API](api.md#periodic-issue-sync), not environment defaults.
 
+## Hosted model catalog publication
+
+Projects & Config can require AgentHost's pinned client certificate on
+`POST /api/projects/{projectId}/configuration/hosted-model-reasoning-catalog`.
+Set `ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256`
+to the AgentHost leaf certificate SHA-256 used by the Identity TLS profile.
+The request must also include the
+caller's ordinary project bearer; neither credential substitutes for the
+other. Projects validates client certificates against the mounted
+`/var/run/service-backend-ca/ca.crt`, with client-auth purpose, validity,
+revocation, and the exact leaf pin. If this setting is absent, catalog
+publication is denied.
+
+AgentHost uses its mounted service certificate for this direct owner request.
+Gateway-to-AgentHost and AgentHost-from-Gateway traffic is limited to HTTPS
+port 8443 by the corresponding Cilium policies.
+
 ## Configuration rules
 
 - The runtime ConfigMaps use environment-variable names with `__` between

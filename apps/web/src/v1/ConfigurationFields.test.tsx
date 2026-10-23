@@ -168,6 +168,38 @@ describe('readable project configuration', () => {
     expect(screen.queryByText('Live reasoning levels are unavailable.')).toBeNull();
   });
 
+  it('uses the platform default model for tasks that inherit both defaults', () => {
+    const configuration: ProjectConfiguration = {
+      ...fixture(), modelSelection: null, modelTaskOverrides: [],
+    };
+    const choices = ownerChoices();
+    choices.models.choices.push({
+      reference: 'platform-hosted',
+      sourceMode: 'hostedCopilot',
+      reasoningEffortSource: 'verifiedAtRunStart',
+      reasoningEfforts: [],
+    });
+    choices.models.savedReferences.push({ reference: 'platform-hosted', sources: ['platformDefault'] });
+    const hostedReasoningCatalog: HostedModelReasoningCatalogV1 = {
+      contractVersion: 1,
+      projectId: 'project-1',
+      projectConfigurationRevision: 4,
+      bindingsRevision: 'models-r7',
+      state: 'available',
+      unavailableReason: null,
+      models: {
+        'platform-hosted': { state: 'available', unavailableReason: null, reasoningEfforts: ['medium', 'high'] },
+      },
+    };
+
+    render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={choices}
+      hostedReasoningCatalog={hostedReasoningCatalog} part="models" />);
+    const taskEffort = screen.getByLabelText('Code writing reasoning effort') as HTMLSelectElement;
+    expect(Array.from(taskEffort.options).map((option) => option.textContent))
+      .toEqual(['Use default', 'Medium', 'High']);
+    expect(screen.getAllByText('Levels come from AgentHost.').length).toBeGreaterThan(0);
+  });
+
   it('restores the full saved hosted binding after clearing to the platform default', () => {
     const configuration: ProjectConfiguration = {
       ...fixture(),

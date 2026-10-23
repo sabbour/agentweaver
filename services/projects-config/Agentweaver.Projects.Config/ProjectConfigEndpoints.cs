@@ -342,6 +342,10 @@ public static class ProjectConfigEndpoints
                 if (context.Request.Query.Count != 0)
                     throw ProjectConfigException.Invalid(
                         "invalid_query", "This endpoint does not accept query parameters.");
+                // The caller bearer authorizes project access; the pinned certificate proves AgentHost published it.
+                if (context.RequestServices.GetService<HostedModelCatalogPublicationTls>() is not { } publicationTls ||
+                    !publicationTls.IsAgentHost(context))
+                    return Results.Forbid();
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
                 caller.RequireResourceBinding(projectId);
