@@ -55,6 +55,106 @@ public sealed class MafExecutionDispatchTests
     }
 
     [Fact]
+    public void CastingGenerationHostRequestUsesTheRequestIdAsItsReplayKey()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var registration = CreateRuntimeRegistration(now);
+        var readiness = CreateReadiness(registration, now);
+        var request = new ExecuteCastingGenerationRequest(Guid.NewGuid(), "Generate a team proposal.");
+
+        var hostRequest = CastingGenerationExecutionContract.CreateHostRequest(
+            request, registration, readiness, new ManualTimeProvider(now));
+
+        Assert.Equal(request.RequestId, hostRequest.Message.MessageId);
+        Assert.Equal(RuntimeContractValidation.NativeSessionId(registration.Binding), hostRequest.Message.ContextId);
+        Assert.Equal(AddressedMessageDeliveryMode.Immediate, hostRequest.Message.Metadata.DeliveryMode);
+        Assert.Equal("user", hostRequest.Message.Role);
+        Assert.Equal(request.Prompt, hostRequest.Message.Parts.Single().Text);
+    }
+
+    [Fact]
+    public void CastingGenerationRejectsWorkflowChildRegistrations()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var registration = CreateRuntimeRegistration(now);
+        registration = registration with
+        {
+            Binding = registration.Binding with { WorkflowStepId = "child-step" }
+        };
+        var readiness = CreateReadiness(registration, now);
+        var failure = Assert.Throws<CoordinationException>(() =>
+            CastingGenerationExecutionContract.CreateHostRequest(
+                new(Guid.NewGuid(), "Generate a team proposal."),
+                registration,
+                readiness,
+                new ManualTimeProvider(now)));
+
+        Assert.Equal("casting_generation_root_registration_invalid", failure.Code);
+    }
+
+    [Fact]
+    public void CastingGenerationOutputRequiresTheAcceptedNativeSession()
+    {
+        var valid = new RuntimeA2AResponse(
+            "message", Guid.NewGuid(), "native-session", "agent", [new("text", "Generated proposal.")]);
+        Assert.Equal("Generated proposal.",
+            CastingGenerationExecutionContract.ReadOutput(valid, "native-session"));
+
+        var failure = Assert.Throws<CoordinationException>(() =>
+            CastingGenerationExecutionContract.ReadOutput(
+                valid with { ContextId = "foreign-session" }, "native-session"));
+        Assert.Equal("casting_generation_host_response_invalid", failure.Code);
+    }
+
+    [Fact]
+    public void CastingGenerationRequiresTheActiveAcceptedRootAndCurrentRegistration()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var registration = CreateRuntimeRegistration(now);
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                EnvironmentCurrentFencingGeneration = 1,
+                EnvironmentProviderFencingGeneration = 1,
+                ModelSelectionReference = "model:selected",
+                ModelSourceMode = ModelSourceMode.HostedCopilot
+            }
+        };
+        var identity = new SessionIdentity(
+            registration.Binding.ProjectId, registration.Binding.RunId, registration.Binding.SessionId);
+        var root = new SessionTreeNode(
+            identity, null, identity.SessionId, CoordinationSessionKind.Coordinator, false,
+            CoordinationLifecycleState.Active, registration.Binding.ExecutionFence, 0, 1, now, null);
+        var tree = new SessionTreeSnapshot(identity.SessionId, [root]);
+        var status = new SessionStatusSnapshot(
+            identity, null, identity.SessionId, CoordinationSessionKind.Coordinator, false,
+            CoordinationActivityState.Busy, null, CoordinationLifecycleState.Active,
+            registration.Binding.ExecutionFence, 1, [],
+            "available", "", new(CoordinationInterruptionIntentState.None, null, null),
+            new("running", 1, null, null));
+        var timeProvider = new ManualTimeProvider(now);
+
+        CastingGenerationExecutionContract.RequireAcceptedRoot(
+            identity.ProjectId, identity.RunId, identity.SessionId, tree, status);
+        CastingGenerationExecutionContract.RequireCurrentRegistration(
+            registration, identity.ProjectId, identity.RunId, identity.SessionId,
+            registration.Binding.ExecutionFence, registration.Binding.AcceptedSelectionHash, timeProvider);
+
+        var invalidRoot = Assert.Throws<CoordinationException>(() =>
+            CastingGenerationExecutionContract.RequireAcceptedRoot(
+                identity.ProjectId, identity.RunId, identity.SessionId, tree,
+                status with { RunExecution = new("completed", 2, null, null) }));
+        Assert.Equal("casting_generation_run_unavailable", invalidRoot.Code);
+
+        var staleRegistration = Assert.Throws<CoordinationException>(() =>
+            CastingGenerationExecutionContract.RequireCurrentRegistration(
+                registration, identity.ProjectId, identity.RunId, identity.SessionId,
+                registration.Binding.ExecutionFence, new string('b', 64), timeProvider));
+        Assert.Equal("casting_generation_registration_stale", staleRegistration.Code);
+    }
+
+    [Fact]
     public void NativePreparationBindsTheCurrentPlatformIntentWithoutPredictingNativeIds()
     {
         var (root, checkpoint, intent, registration, source, message) = CreateNativePreparation();

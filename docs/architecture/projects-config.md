@@ -245,6 +245,16 @@ separate scheduler or model-execution path. The Gateway creates or accepts that
 run with the caller's project authorization; the run-bound Identity session
 starts it, and its ID remains the generation request's immutable result binding.
 
+Orchestrator accepts `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/casting-generation`
+only for the active coordinator root of that accepted run. It checks the
+accepted selection, current registration, and host readiness, then sends one
+immediate AgentHost turn with the generation request ID as its stable message
+ID. Before returning `{ requestId, runId, output }`, it checks that the run
+selection and registration are still current. Orchestrator does not persist the
+proposal result; the Gateway completes the request through Projects & Config.
+AgentHost obtains the model credential from Identity using the run-bound
+registration, so it never passes through Orchestrator or Projects.
+
 Generation completion must match the request's run ID and current configuration
 revision. It validates and replaces only the proposal's charters and cast, then
 marks the request complete in the same database transaction. Until the user
@@ -265,15 +275,17 @@ sequenceDiagram
     participant DB as PostgreSQL
     Client->>Gateway: Formulate or Analyze (expected revision, idempotency key)
     Gateway->>Orchestrator: Create or accept a normal project run
-    Orchestrator->>Projects: Start generation request (run ID, request digest)
+    Orchestrator-->>Gateway: Accepted run ID and root session
+    Gateway->>Projects: Start generation request (run ID, request digest)
     Projects->>DB: Check current write authority and revision; store pending proposal
-    Client->>Identity: Obtain the run-bound session for the returned run ID
-    Client->>Orchestrator: Start the accepted run with generation input
-    Orchestrator->>AgentHost: Dispatch through the accepted run
+    Gateway->>Orchestrator: Execute generation (request ID, prompt)
+    Orchestrator->>Orchestrator: Recheck accepted root and current registration
+    Orchestrator->>AgentHost: Immediate turn (message ID = request ID)
     AgentHost->>Identity: Redeem the run-bound model credential
     Identity-->>AgentHost: Run-scoped credential
     AgentHost-->>Orchestrator: Proposed charters and cast
-    Orchestrator->>Projects: Complete request (same run ID, generated roster)
+    Orchestrator-->>Gateway: Result bound to request ID and run ID
+    Gateway->>Projects: Complete request (same run ID, generated roster)
     Projects->>DB: Recheck authority and revision; update proposal only
     Client->>Gateway: Poll proposal for review
     Client->>Gateway: Confirm proposal (expected draft revision)
