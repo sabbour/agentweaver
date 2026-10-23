@@ -3,8 +3,9 @@
 `Agentweaver.Gateway` is the .NET HTTP entry point for the browser, CLI, and
 first-party MCP clients. It exposes a finite, versioned API and delegates
 requests to Projects & Config, Orchestrator, Knowledge, Events, and the
-Identity Broker. It is not an arbitrary upstream proxy: callers cannot choose
-owner URLs or supply owner identity headers.
+Identity Broker. An optional per-Sandbox AgentHost owner serves live hosted
+reasoning choices. It is not an arbitrary upstream proxy: callers cannot
+choose owner URLs or supply owner identity headers.
 
 This article describes the checked-in v1 host. Source code and Kubernetes
 manifests do not establish that the Gateway, its owners, or a public endpoint
@@ -61,6 +62,7 @@ Set the following configuration before you start the host:
 | `Gateway:Owners:Events` | HTTPS service root for Events. |
 | `Gateway:Owners:IdentityBrokerAddress` | HTTPS service root for the Identity Broker. |
 | `Gateway:Owners:Environment` | Optional HTTPS service root for Environment. Without it, Environment routes return 503 `owner_not_configured`. |
+| `Gateway:Owners:AgentHost` | Optional HTTPS service root for AgentHost. Without it, live hosted reasoning catalog requests return 503 `owner_not_configured`. |
 | `Gateway:WebOrigin` | The Web application's exact HTTPS origin, for example `https://portal.<managed-domain>`. |
 | `Gateway:OwnerRequestTimeoutSeconds` | Finite timeout from 1 through 120 seconds. The default is 15 seconds. |
 
@@ -144,6 +146,26 @@ on the new revision, reported as ignored, and not used for new provider
 resolution; they are not silently migrated or deleted. The owner reports
 unavailable catalog or runtime states explicitly rather than choosing a
 different provider.
+
+## Read live hosted reasoning levels
+
+Use
+`GET /api/v1/projects/{projectId}/configuration/hosted-model-reasoning-catalog`
+to read current hosted reasoning levels for the enabled model references.
+Gateway forwards the bearer and tenant selector to the optional AgentHost
+owner. AgentHost checks the current project configuration and choices, obtains
+the caller-owned hosted connection through Identity, and reads the live SDK
+catalog. Identity returns the short-lived token only to AgentHost; Gateway,
+Projects & Config, and the browser never receive it.
+
+The response maps results by model reference and includes the project
+configuration revision and model-binding revision. A missing connection,
+unavailable SDK list, or missing model is reported with an explicit
+`unavailable` state. The route has no query parameters and returns
+`Cache-Control: no-store`. If the AgentHost owner is not configured, Gateway
+returns `503 owner_not_configured`. Settings do not substitute a fixed list
+when live hosted levels are unavailable, and AgentHost still verifies the
+selected effort when a run starts.
 
 ## Read project and Skill data
 

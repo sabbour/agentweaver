@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.Extensions.Logging;
@@ -56,6 +57,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private readonly HttpClient _http;
     private readonly IRuntimeRegistrationOwner _owner;
     private readonly RuntimeCopilotSessionFactory _sessions;
+    private readonly IRuntimeHostedModelReasoningCatalogSource _hostedModelReasoningCatalog;
     private readonly ILogger _logger;
     private readonly Func<string, WorkspaceVolumeFlushRequest, CancellationToken,
         Task<WorkspaceVolumeFlushReceipt>> _flushWorkspace;
@@ -94,9 +96,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         IRuntimeRegistrationOwner owner,
         RuntimeCopilotSessionFactory sessions,
         TimeProvider timeProvider,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null)
         : this(options, http, owner, sessions, timeProvider,
-            MountedWorkspaceFlush.FlushAndCreateReceiptAsync, logger)
+            MountedWorkspaceFlush.FlushAndCreateReceiptAsync, logger, hostedModelReasoningCatalog)
     {
     }
 
@@ -108,12 +111,14 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         RuntimeCopilotSessionFactory sessions,
         TimeProvider timeProvider,
         Func<string, WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushReceipt>> flushWorkspace,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null)
     {
         _options = options.Validate();
         _http = http;
         _owner = owner;
         _sessions = sessions;
+        _hostedModelReasoningCatalog = hostedModelReasoningCatalog ?? sessions;
         _logger = logger ?? NullLogger.Instance;
         _flushWorkspace = flushWorkspace ?? throw new ArgumentNullException(nameof(flushWorkspace));
         _time = timeProvider;
@@ -122,6 +127,334 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
 
     /// <summary>The configured HTTPS audience for bootstrap and activation requests.</summary>
     public Uri ConfigureEndpoint => _options.ConfigureEndpoint;
+
+    /// <summary>Reads current hosted model reasoning levels for a project without returning its Copilot credential.</summary>
+    public async Task<HostedModelReasoningCatalogV1> ReadHostedModelReasoningCatalogAsync(
+        string projectId,
+        RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.ValidateIdentifier(projectId);
+        if (!actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_actor_invalid");
+
+        var configuration = await ReadHostedCatalogProjectConfigurationAsync(
+            projectId, actor, cancellationToken).ConfigureAwait(false);
+        if (!IsValidHostedCatalogConfiguration(configuration, projectId))
+            throw new RuntimeAuthorizationException("runtime_owner_response_contract_invalid");
+        var choices = await ReadHostedCatalogProjectChoicesAsync(
+            projectId, actor, cancellationToken).ConfigureAwait(false);
+        if (!IsValidHostedCatalogChoices(choices, projectId))
+            throw new RuntimeAuthorizationException("runtime_owner_response_contract_invalid");
+
+        var hostedChoices = choices.Models.Choices
+            .Where(choice => choice.SourceMode == "hostedCopilot")
+            .ToArray();
+        var references = hostedChoices.Select(choice => choice.Reference)
+            .Distinct(StringComparer.Ordinal)
+            .ToImmutableArray();
+        if (references.Length != hostedChoices.Length)
+            throw new RuntimeAuthorizationException("runtime_owner_response_contract_invalid");
+        if (choices.Models.State != "available")
+            return UnavailableCatalog(projectId, configuration.Revision,
+                "model_bindings_unavailable", "model_bindings_unavailable", references);
+        if (configuration.Revision != choices.ProjectConfigurationRevision)
+            return UnavailableCatalog(projectId, choices.ProjectConfigurationRevision,
+                "project_configuration_changed", "project_configuration_changed", references);
+        if (choices.Models.BindingsRevision != _sessions.ModelBindingsRevision)
+            return UnavailableCatalog(projectId, configuration.Revision,
+                "binding_revision_mismatch", "binding_revision_mismatch", references);
+
+        if (references.IsEmpty)
+            return AvailableCatalog(projectId, configuration.Revision, ImmutableDictionary<string,
+                HostedModelReasoningModelV1>.Empty.WithComparers(StringComparer.Ordinal));
+
+        var configuredReferences = _hostedModelReasoningCatalog.EnabledHostedModelReferences
+            .ToHashSet(StringComparer.Ordinal);
+        if (references.Any(reference => !configuredReferences.Contains(reference)))
+        {
+            var mismatched = UnavailableModels(references, "binding_revision_mismatch");
+            return new(1, projectId, configuration.Revision, _sessions.ModelBindingsRevision,
+                "unavailable", "binding_revision_mismatch", mismatched);
+        }
+
+        var connectionId = configuration.Configuration.ModelSelection?.ConnectionId;
+        HostedCatalogPlatformDefaultsRead? selectedPlatformDefaults = null;
+        if (connectionId is null)
+        {
+            try
+            {
+                selectedPlatformDefaults = await ReadHostedCatalogPlatformDefaultsAsync(
+                    actor, cancellationToken).ConfigureAwait(false);
+            }
+            catch (RuntimeAuthorizationException failure)
+                when (failure.Code is "runtime_owner_denied" or "runtime_owner_unavailable")
+            {
+                return AvailableCatalog(projectId, configuration.Revision,
+                    UnavailableModels(references, "platform_defaults_unavailable"));
+            }
+            catch (HttpRequestException)
+            {
+                return AvailableCatalog(projectId, configuration.Revision,
+                    UnavailableModels(references, "platform_defaults_unavailable"));
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return AvailableCatalog(projectId, configuration.Revision,
+                    UnavailableModels(references, "platform_defaults_unavailable"));
+            }
+            if (selectedPlatformDefaults is null ||
+                !IsValidHostedCatalogPlatformDefaults(selectedPlatformDefaults) ||
+                selectedPlatformDefaults.Revision != choices.PlatformRuntimeRevision)
+                return UnavailableCatalog(projectId, configuration.Revision,
+                    "platform_defaults_changed", "platform_defaults_changed", references);
+            connectionId = selectedPlatformDefaults.Defaults?.ModelSelection?.ConnectionId;
+        }
+        if (connectionId is null)
+            return AvailableCatalog(projectId, configuration.Revision,
+                UnavailableModels(references, "hosted_connection_unavailable"));
+        if (connectionId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_owner_response_contract_invalid");
+
+        CopilotModelCatalogCredentialRead credentialReceipt;
+        try
+        {
+            credentialReceipt = await RuntimeOwnerHttpTransport.SendAsync<CopilotModelCatalogCredentialRead>(
+                _http, _options.BrokerAddress,
+                $"/internal/connections/copilot-user/{connectionId.Value:D}/model-catalog-credential",
+                actor, new { projectId }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException failure)
+            when (failure.Code is "runtime_owner_denied" or "runtime_owner_unavailable")
+        {
+            return AvailableCatalog(projectId, configuration.Revision,
+                UnavailableModels(references, "hosted_connection_unavailable"));
+        }
+        catch (HttpRequestException)
+        {
+            return AvailableCatalog(projectId, configuration.Revision,
+                UnavailableModels(references, "hosted_connection_unavailable"));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return AvailableCatalog(projectId, configuration.Revision,
+                UnavailableModels(references, "hosted_connection_unavailable"));
+        }
+
+        var credentialExpiry = new[]
+            { credentialReceipt.ExpiresAt, actor.Bearer.ExpiresAt }.Min();
+        if (string.IsNullOrWhiteSpace(credentialReceipt.AccessToken) ||
+            !credentialReceipt.AccessToken.StartsWith("ghu_", StringComparison.Ordinal) ||
+            credentialReceipt.AccessToken.Any(char.IsWhiteSpace) ||
+            credentialExpiry <= _time.GetUtcNow())
+            return AvailableCatalog(projectId, configuration.Revision,
+                UnavailableModels(references, "hosted_connection_unavailable"));
+
+        var hostedCredential = new SecretCredential(
+            credentialReceipt.AccessToken, credentialExpiry, _time);
+        ImmutableDictionary<string, HostedModelReasoningModelV1> levels;
+        try
+        {
+            levels = await _hostedModelReasoningCatalog.ReadAsync(
+                hostedCredential, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException &&
+            !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "AgentHost could not read the live hosted reasoning catalog for project {ProjectId}; failure type {FailureType}.",
+                projectId, failure.GetType().Name);
+            levels = UnavailableModels(references, "sdk_catalog_unavailable");
+        }
+        finally
+        {
+            hostedCredential.Invalidate();
+        }
+
+        var currentConfiguration = await ReadHostedCatalogProjectConfigurationAsync(
+            projectId, actor, cancellationToken).ConfigureAwait(false);
+        var currentChoices = await ReadHostedCatalogProjectChoicesAsync(
+            projectId, actor, cancellationToken).ConfigureAwait(false);
+        if (!IsValidHostedCatalogConfiguration(currentConfiguration, projectId) ||
+            !IsValidHostedCatalogChoices(currentChoices, projectId))
+            throw new RuntimeAuthorizationException("runtime_owner_response_contract_invalid");
+        if (currentConfiguration.Revision != configuration.Revision ||
+            currentChoices.ProjectConfigurationRevision != choices.ProjectConfigurationRevision ||
+            currentChoices.Models.BindingsRevision != choices.Models.BindingsRevision)
+            return UnavailableCatalog(projectId, currentChoices.ProjectConfigurationRevision,
+                "project_configuration_changed", "project_configuration_changed", references);
+
+        if (selectedPlatformDefaults is not null)
+        {
+            HostedCatalogPlatformDefaultsRead currentPlatformDefaults;
+            try
+            {
+                currentPlatformDefaults = await ReadHostedCatalogPlatformDefaultsAsync(
+                    actor, cancellationToken).ConfigureAwait(false);
+            }
+            catch (RuntimeAuthorizationException failure)
+                when (failure.Code is "runtime_owner_denied" or "runtime_owner_unavailable")
+            {
+                return UnavailableCatalog(projectId, currentConfiguration.Revision,
+                    "platform_defaults_unavailable", "platform_defaults_unavailable", references);
+            }
+            catch (HttpRequestException)
+            {
+                return UnavailableCatalog(projectId, currentConfiguration.Revision,
+                    "platform_defaults_unavailable", "platform_defaults_unavailable", references);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return UnavailableCatalog(projectId, currentConfiguration.Revision,
+                    "platform_defaults_unavailable", "platform_defaults_unavailable", references);
+            }
+
+            // The platform connection can change while the SDK responds; never publish levels for a stale default.
+            if (!IsValidHostedCatalogPlatformDefaults(currentPlatformDefaults) ||
+                currentPlatformDefaults.Revision != selectedPlatformDefaults.Revision ||
+                currentChoices.PlatformRuntimeRevision != currentPlatformDefaults.Revision ||
+                currentPlatformDefaults.Defaults?.ModelSelection?.ConnectionId != connectionId)
+                return UnavailableCatalog(projectId, currentConfiguration.Revision,
+                    "platform_defaults_changed", "platform_defaults_changed", references);
+        }
+
+        if (levels is null)
+            return AvailableCatalog(projectId, configuration.Revision,
+                UnavailableModels(references, "sdk_catalog_unavailable"));
+
+        var exactLevels = ImmutableDictionary.CreateBuilder<string, HostedModelReasoningModelV1>(
+            StringComparer.Ordinal);
+        foreach (var reference in references)
+        {
+            // A reference not returned by the live reader is unavailable, never an invitation to use a fixed list.
+            exactLevels[reference] = levels.TryGetValue(reference, out var model)
+                && model is not null && IsValidHostedModelReasoningModel(model)
+                ? model
+                : new("unavailable", "model_not_available", []);
+        }
+        return AvailableCatalog(projectId, configuration.Revision, exactLevels.ToImmutable());
+    }
+
+    private static bool IsValidHostedCatalogConfiguration(
+        HostedCatalogProjectConfigurationRead response,
+        string projectId) =>
+        response.ProjectId == projectId &&
+        response.Revision > 0 &&
+        response.Configuration is not null;
+
+    private static bool IsValidHostedCatalogChoices(
+        HostedCatalogProjectChoicesRead response,
+        string projectId) =>
+        response.ProjectId == projectId &&
+        response.ProjectConfigurationRevision > 0 &&
+        response.PlatformRuntimeRevision >= 0 &&
+        response.Models is not null &&
+        response.Models.State is "available" or "unavailable" &&
+        (response.Models.State != "available" || !string.IsNullOrWhiteSpace(response.Models.BindingsRevision)) &&
+        !response.Models.Choices.IsDefault &&
+        response.Models.Choices.All(choice =>
+            choice is not null &&
+            !string.IsNullOrWhiteSpace(choice.Reference) &&
+            choice.SourceMode is "hostedCopilot" or "byok");
+
+    private static bool IsValidHostedCatalogPlatformDefaults(HostedCatalogPlatformDefaultsRead response) =>
+        response.Revision >= 0 &&
+        ((response.Revision == 0) == (response.Defaults is null)) &&
+        response.Defaults?.ModelSelection?.ConnectionId != Guid.Empty;
+
+    private static bool IsValidHostedModelReasoningModel(HostedModelReasoningModelV1 model) =>
+        model.State is "available" or "unavailable" &&
+        !model.ReasoningEfforts.IsDefault &&
+        (model.State == "available"
+            ? model.UnavailableReason is null
+            : !string.IsNullOrWhiteSpace(model.UnavailableReason) && model.ReasoningEfforts.IsEmpty);
+
+    private Task<HostedCatalogProjectConfigurationRead> ReadHostedCatalogProjectConfigurationAsync(
+        string projectId, RuntimeActorAuthorization actor, CancellationToken cancellationToken) =>
+        RuntimeOwnerHttpTransport.SendAsync<HostedCatalogProjectConfigurationRead>(
+            _http, _options.ProjectsConfigAddress,
+            $"/api/projects/{Uri.EscapeDataString(projectId)}/configuration",
+            actor, null, cancellationToken);
+
+    private Task<HostedCatalogProjectChoicesRead> ReadHostedCatalogProjectChoicesAsync(
+        string projectId, RuntimeActorAuthorization actor, CancellationToken cancellationToken) =>
+        RuntimeOwnerHttpTransport.SendAsync<HostedCatalogProjectChoicesRead>(
+            _http, _options.ProjectsConfigAddress,
+            $"/api/projects/{Uri.EscapeDataString(projectId)}/configuration/choices",
+            actor, null, cancellationToken);
+
+    private Task<HostedCatalogPlatformDefaultsRead> ReadHostedCatalogPlatformDefaultsAsync(
+        RuntimeActorAuthorization actor, CancellationToken cancellationToken) =>
+        RuntimeOwnerHttpTransport.SendAsync<HostedCatalogPlatformDefaultsRead>(
+            _http, _options.ProjectsConfigAddress, "/api/platform/runtime-defaults/",
+            actor, null, cancellationToken);
+
+    private HostedModelReasoningCatalogV1 AvailableCatalog(
+        string projectId,
+        long projectConfigurationRevision,
+        ImmutableDictionary<string, HostedModelReasoningModelV1> models) =>
+        new(1, projectId, projectConfigurationRevision, _sessions.ModelBindingsRevision,
+            "available", null, models);
+
+    private HostedModelReasoningCatalogV1 UnavailableCatalog(
+        string projectId,
+        long projectConfigurationRevision,
+        string unavailableReason,
+        string modelUnavailableReason,
+        ImmutableArray<string> references) =>
+        new(1, projectId, projectConfigurationRevision, _sessions.ModelBindingsRevision,
+            "unavailable", unavailableReason, UnavailableModels(references, modelUnavailableReason));
+
+    private static ImmutableDictionary<string, HostedModelReasoningModelV1> UnavailableModels(
+        IEnumerable<string> references,
+        string reason)
+    {
+        var models = ImmutableDictionary.CreateBuilder<string, HostedModelReasoningModelV1>(
+            StringComparer.Ordinal);
+        foreach (var reference in references)
+            models[reference] = new("unavailable", reason, []);
+        return models.ToImmutable();
+    }
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
+    private sealed record HostedCatalogProjectConfigurationRead(
+        string ProjectId,
+        long Revision,
+        HostedCatalogProjectConfiguration Configuration);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
+    private sealed record HostedCatalogProjectConfiguration(
+        HostedCatalogProjectModelSelection? ModelSelection);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
+    private sealed record HostedCatalogProjectModelSelection(Guid? ConnectionId);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
+    private sealed record HostedCatalogProjectChoicesRead(
+        string ProjectId,
+        long ProjectConfigurationRevision,
+        long PlatformRuntimeRevision,
+        HostedCatalogModels Models);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
+    private sealed record HostedCatalogModels(
+        string State,
+        string? BindingsRevision,
+        ImmutableArray<HostedCatalogModelChoice> Choices);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
+    private sealed record HostedCatalogModelChoice(string Reference, string SourceMode);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
+    private sealed record HostedCatalogPlatformDefaultsRead(
+        long Revision,
+        HostedCatalogPlatformDefaults? Defaults);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
+    private sealed record HostedCatalogPlatformDefaults(HostedCatalogProjectModelSelection? ModelSelection);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Skip)]
+    private sealed record CopilotModelCatalogCredentialRead(string AccessToken, DateTimeOffset ExpiresAt);
 
     /// <summary>Accepts a matching bootstrap delivery and stores its configuration for activation.</summary>
     public async Task<RuntimeBootstrapDeliveryReceipt> ReceiveAsync(

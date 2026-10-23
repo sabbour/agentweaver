@@ -25,6 +25,53 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class RuntimeAgentHostTests
 {
     [Fact]
+    public async Task AgentHostReadsLiveHostedLevelsWithoutReturningTheCredential()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var catalog = await fixture.Host.ReadHostedModelReasoningCatalogAsync(
+            fixture.Registration.Binding.ProjectId, fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Registration.Binding.ProjectId, catalog.ProjectId);
+        Assert.Equal(1, catalog.ProjectConfigurationRevision);
+        Assert.Equal("legacy-unversioned", catalog.BindingsRevision);
+        Assert.Equal("available", catalog.State);
+        var model = Assert.Single(catalog.Models);
+        Assert.Equal("accepted-model-reference", model.Key);
+        Assert.Equal(["low", "medium", "high", "xhigh"], model.Value.ReasoningEfforts.ToArray());
+        Assert.Single(fixture.HostedCatalogCredentialRequests);
+        Assert.DoesNotContain(fixture.Sdk.SdkCredential, JsonSerializer.Serialize(catalog));
+    }
+
+    [Fact]
+    public async Task AgentHostRejectsLiveLevelsWhenPlatformModelDefaultsChangeDuringTheSdkRead()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var selectedConnection = fixture.PlatformDefaultConnectionId;
+        fixture.Registration = fixture.Registration with
+        {
+            Binding = fixture.Registration.Binding with { ModelConnectionId = null }
+        };
+        fixture.Sdk.BeforeModelCatalogResponse = _ =>
+        {
+            fixture.PlatformDefaultsRevision++;
+            fixture.PlatformDefaultConnectionId = Guid.NewGuid();
+            return Task.CompletedTask;
+        };
+
+        var catalog = await fixture.Host.ReadHostedModelReasoningCatalogAsync(
+            fixture.Registration.Binding.ProjectId, fixture.Actor, timeout.Token);
+
+        Assert.Equal("unavailable", catalog.State);
+        Assert.Equal("platform_defaults_changed", catalog.UnavailableReason);
+        Assert.Equal(selectedConnection, Assert.Single(fixture.HostedCatalogCredentialRequests));
+        Assert.Equal("platform_defaults_changed",
+            Assert.Single(catalog.Models).Value.UnavailableReason);
+    }
+
+    [Fact]
     public async Task OrdinarySessionCacheWritesCannotBypassTheGuardedSuspendPath()
     {
         await using var fixture = new HostFixture(workflowBound: true);
@@ -2383,6 +2430,9 @@ public sealed class RuntimeAgentHostTests
         private readonly ConcurrentDictionary<
             (Guid DispatchId, RuntimeCreditLimitDenialStage Stage), RuntimeNativeTurnNoSendReceipt>
             _nativeNoSendRecords = new();
+        public ConcurrentQueue<Guid> HostedCatalogCredentialRequests { get; } = new();
+        public Guid PlatformDefaultConnectionId { get; set; } = Guid.NewGuid();
+        public long PlatformDefaultsRevision { get; set; } = 1;
         public HostFixture(
             ModelSourceMode sourceMode = ModelSourceMode.HostedCopilot,
             decimal? hardCreditLimit = null,
@@ -2827,6 +2877,66 @@ public sealed class RuntimeAgentHostTests
                 request.Headers.GetValues("X-Agentweaver-Tenant").Single() != "tenant")
                 return Response(request, new { }, HttpStatusCode.Forbidden);
             var path = request.RequestUri!.AbsolutePath;
+            if (path == "/api/projects/project/configuration")
+                return Response(request, new
+                {
+                    projectId = "project",
+                    revision = 1,
+                    configuration = new
+                    {
+                        modelSelection = new { connectionId = Registration.Binding.ModelConnectionId }
+                    }
+                });
+            if (path == "/api/projects/project/configuration/choices")
+                return Response(request, new
+                {
+                    projectId = "project",
+                    projectConfigurationRevision = 1,
+                    platformRuntimeRevision = PlatformDefaultsRevision,
+                    models = new
+                    {
+                        state = "available",
+                        bindingsRevision = "legacy-unversioned",
+                        choices = new[]
+                        {
+                            new { reference = "accepted-model-reference", sourceMode = "hostedCopilot" }
+                        }
+                    }
+                });
+            if (path == "/api/platform/runtime-defaults/")
+                return Response(request, new
+                {
+                    revision = PlatformDefaultsRevision,
+                    defaults = new
+                    {
+                        modelSelection = new { connectionId = PlatformDefaultConnectionId }
+                    }
+                });
+            if (path == "/api/projects/project/configuration/hosted-model-reasoning-catalog")
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                Assert.True(request.Headers.CacheControl?.NoStore);
+                var publication = await ReadAsync<HostedModelReasoningCatalogPublicationV1>(request, token);
+                Assert.Equal("accepted-model-reference", publication.Reference);
+                Assert.DoesNotContain(Sdk.SdkCredential, JsonSerializer.Serialize(publication));
+                return Response(request, new { published = true });
+            }
+            if (path.StartsWith(
+                    "/internal/connections/copilot-user/", StringComparison.Ordinal) &&
+                path.EndsWith("/model-catalog-credential", StringComparison.Ordinal))
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                Assert.True(request.Headers.CacheControl?.NoStore);
+                var body = await ReadAsync<JsonElement>(request, token);
+                Assert.Equal("project", body.GetProperty("projectId").GetString());
+                HostedCatalogCredentialRequests.Enqueue(
+                    Guid.Parse(request.RequestUri!.Segments[^2].TrimEnd('/')));
+                return Response(request, new
+                {
+                    accessToken = Sdk.SdkCredential,
+                    expiresAt = Time.GetUtcNow().AddMinutes(2)
+                });
+            }
             if (path.StartsWith("/internal/runtime/registrations/", StringComparison.Ordinal))
             {
                 if (path.EndsWith("/skills", StringComparison.Ordinal))

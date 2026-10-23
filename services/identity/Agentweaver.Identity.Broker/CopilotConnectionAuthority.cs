@@ -165,6 +165,75 @@ public sealed class CopilotConnectionAuthority(
         return Receipt(current);
     }
 
+    /// <summary>Returns a connected user's short-lived access token to AgentHost for a live model catalog read.</summary>
+    public async Task<CopilotModelCatalogCredentialResponse> ReadModelCatalogCredentialAsync(
+        RuntimeActorAuthorization actor, string issuer, string actorId,
+        Guid connectionId, string projectId, CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.ValidateIdentifier(projectId);
+        var row = await ReadAsync(connectionId, cancellationToken);
+        RequireOwner(row, issuer, actorId);
+        await RequireReadProjectAuthorityAsync(
+            actor, issuer, actorId, projectId, row, cancellationToken);
+        if (row.Scope is not (ProjectAuthorityResourceType.Project or ProjectAuthorityResourceType.Platform) ||
+            row.Scope == ProjectAuthorityResourceType.Project && row.ScopeId != projectId ||
+            row.Scope == ProjectAuthorityResourceType.Platform && row.ScopeId != "default" ||
+            row.State != CopilotConnectionState.Connected ||
+            row.CredentialKind != RuntimeModelCredentialKind.GitHubUserAccess ||
+            row.FreshUntil <= time.GetUtcNow() ||
+            row.SecretId is null || row.SecretVersion is null)
+            throw Denied("copilot_connection_model_catalog_unavailable");
+
+        SecretCredential? envelope = null;
+        try
+        {
+            // Identity redeems the stored secret so only AgentHost receives the short-lived SDK credential.
+            envelope = await secrets.RedeemAsync(new SecretRedemptionRequest(
+                new SecretRef(row.SecretId, row.SecretVersion),
+                "copilot-connection-model-catalog",
+                connectionId.ToString("D")), cancellationToken);
+            using var document = JsonDocument.Parse(envelope.GetValue());
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                root.EnumerateObject().Select(property => property.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count() != root.EnumerateObject().Count())
+                throw Denied("copilot_connection_model_catalog_unavailable");
+            var stored = root.Deserialize<CopilotUserCredential>(Json);
+            if (stored?.Status != "signed-in" ||
+                string.IsNullOrWhiteSpace(stored.AccessToken) ||
+                !stored.AccessToken.StartsWith("ghu_", StringComparison.Ordinal) ||
+                stored.AccessToken.Any(char.IsWhiteSpace) ||
+                stored.ExpiresAt <= time.GetUtcNow() ||
+                stored.ExpiresAt > row.FreshUntil)
+                throw Denied("copilot_connection_model_catalog_unavailable");
+
+            // Recheck state and authority after secret access to reject a concurrent disconnect or role change.
+            var current = await ReadAsync(connectionId, cancellationToken);
+            if (current.Revision != row.Revision ||
+                current.State != CopilotConnectionState.Connected ||
+                current.SecretId != row.SecretId || current.SecretVersion != row.SecretVersion ||
+                current.FreshUntil != row.FreshUntil)
+                throw Denied("copilot_connection_model_catalog_unavailable");
+            await RequireReadProjectAuthorityAsync(
+                actor, issuer, actorId, projectId, current, cancellationToken);
+            if (!actor.Bearer.IsUsable())
+                throw Denied("copilot_connection_actor_expired");
+
+            var expiresAt = new[] { stored.ExpiresAt, row.FreshUntil, actor.Bearer.ExpiresAt }.Min();
+            if (expiresAt <= time.GetUtcNow())
+                throw Denied("copilot_connection_model_catalog_unavailable");
+            return new(stored.AccessToken, expiresAt);
+        }
+        catch (JsonException)
+        {
+            throw Denied("copilot_connection_model_catalog_unavailable");
+        }
+        finally
+        {
+            envelope?.Invalidate();
+        }
+    }
+
     /// <summary>
     /// Refreshes a connected credential only at the caller's expected revision. A refresh
     /// whose upstream outcome is uncertain is never blindly replayed; the stored state
@@ -407,6 +476,51 @@ public sealed class CopilotConnectionAuthority(
             if (project.ProjectId != scopeId || project.Revision <= 0 || project.State != "active")
                 throw Denied("copilot_connection_project_unavailable");
         }
+        return context;
+    }
+
+    private async Task<ProjectAuthorizationContextResponse> RequireReadProjectAuthorityAsync(
+        RuntimeActorAuthorization actor, string issuer, string actorId, string projectId,
+        CopilotConnectionRecord connection, CancellationToken cancellationToken)
+    {
+        if (!actor.Bearer.IsUsable() ||
+            connection.TenantId.Length == 0 ||
+            actor.TenantSelector is not null && actor.TenantSelector != connection.TenantId)
+            throw Denied("copilot_connection_owner_denied");
+        var context = await RuntimeOwnerHttpTransport.SendAsync<ProjectAuthorizationContextResponse>(
+            projects, options.ProjectsOwnerAddress, "/api/authorization/context", actor, null, cancellationToken);
+        var canReadProject = context.EffectiveAuthority.Any(resource =>
+            resource.Permissions.Any(permission =>
+                permission.Permission == ProjectAuthorizationPermission.ReadProjects &&
+                permission.RoleRevision > 0 &&
+                (resource.ResourceType == ProjectAuthorityResourceType.Project &&
+                    resource.ResourceId == projectId ||
+                 resource.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                    resource.ResourceId == connection.TenantId)));
+        var canReadPlatform = connection.Scope != ProjectAuthorityResourceType.Platform ||
+            context.EffectiveAuthority.Any(resource =>
+                resource.ResourceType == ProjectAuthorityResourceType.Platform &&
+                resource.ResourceId == "default" &&
+                resource.Permissions.Any(permission =>
+                    permission.Permission == ProjectAuthorizationPermission.ReadPlatformRuntimeDefaults &&
+                    permission.RoleRevision > 0));
+        if (context.ContractVersion != ProjectAuthorizationContextContract.CurrentVersion ||
+            context.Issuer != issuer || context.ActorId != actorId ||
+            context.MembershipRevision <= 0 || context.EffectiveAuthority.IsDefault ||
+            context.BoundProjectId is not null || context.BoundRunId is not null ||
+            context.TenantId != connection.TenantId ||
+            actor.TenantSelector is not null && actor.TenantSelector != context.TenantId ||
+            !canReadProject || !canReadPlatform || !actor.Bearer.IsUsable())
+            throw Denied("copilot_connection_owner_denied");
+
+        var project = await RuntimeOwnerHttpTransport.SendAsync<ProjectSummaryProof>(
+            projects, options.ProjectsOwnerAddress, $"/api/projects/{Uri.EscapeDataString(projectId)}",
+            actor, null, cancellationToken);
+        if (project.EffectiveRoles is null)
+            throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
+        if (project.ProjectId != projectId || project.State != "active" || project.Revision <= 0 ||
+            !actor.Bearer.IsUsable())
+            throw Denied("copilot_connection_project_unavailable");
         return context;
     }
 

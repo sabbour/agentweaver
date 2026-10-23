@@ -74,6 +74,13 @@ public sealed class RuntimeModelBindingsResolver
     /// <summary>Stable digest of normalized models, prompt capacities, and supported reasoning efforts.</summary>
     public string ConfigurationHash { get; }
 
+    /// <summary>Enabled hosted model references from this immutable binding snapshot.</summary>
+    public ImmutableArray<string> EnabledHostedModelReferences => _bindings
+        .Where(item => item.Value.Enabled && item.Value.SourceMode == ModelSourceMode.HostedCopilot)
+        .Select(item => item.Key)
+        .Order(StringComparer.Ordinal)
+        .ToImmutableArray();
+
     /// <summary>Returns an enabled binding only when its source mode and optional accepted pin match.</summary>
     /// <exception cref="RuntimeAuthorizationException">The model is missing, disabled, or differs from its pin.</exception>
     public RuntimeModelBinding Resolve(

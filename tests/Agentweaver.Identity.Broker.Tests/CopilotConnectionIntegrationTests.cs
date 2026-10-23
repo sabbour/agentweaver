@@ -42,6 +42,24 @@ public sealed class CopilotConnectionConfigurationTests
 
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
+    private static async Task<HttpResponseMessage> SendJsonWithTenantAsync<T>(
+        HttpClient client,
+        HttpMethod method,
+        string path,
+        string bearer,
+        T body,
+        string tenantId)
+    {
+        using var request = new HttpRequestMessage(method, path)
+        {
+            Content = JsonContent.Create(body)
+        };
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.Add("X-Agentweaver-Tenant", tenantId);
+        return await client.SendAsync(request);
+    }
+
     private async Task<CopilotConnectionReceipt> LinkRuntimeCopilotConnectionAsync(
         ProjectsConfigResourceServer projects, string ownerToken, ControlledCopilotConnection transport,
         ProjectAuthorityResourceType connectionScope = ProjectAuthorityResourceType.Platform, string scopeId = "default")
@@ -177,6 +195,41 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var transport = new ControlledCopilotConnection();
         var linked = await LinkRuntimeCopilotConnectionAsync(
             projects, ownerToken, transport, ProjectAuthorityResourceType.Project, project.ProjectId);
+        await using (var credentialFactory = new IdentityBrokerWebApplicationFactory(
+            _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                transport.ConfigureSettings(settings);
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                transport.ConfigureServices(services, projects.CreateHandler);
+            }))
+        {
+            using var credentialBroker = credentialFactory.CreateClient(new()
+            {
+                BaseAddress = new Uri("https://broker.test/"), AllowAutoRedirect = false
+            });
+            using var credentialResponse = await SendJsonWithTenantAsync(
+                credentialBroker, HttpMethod.Post,
+                $"/internal/connections/copilot-user/{linked.ConnectionId:D}/model-catalog-credential",
+                ownerToken, new { projectId = project.ProjectId }, TenantId);
+            await AssertStatusAsync(credentialResponse, HttpStatusCode.OK);
+            Assert.True(credentialResponse.Headers.CacheControl?.NoStore);
+            var credential = await credentialResponse.Content
+                .ReadFromJsonAsync<CopilotModelCatalogCredentialResponse>(CoordinationJsonOptions);
+            Assert.NotNull(credential);
+            Assert.Equal(ControlledCopilotConnection.UserAccessToken, credential.AccessToken);
+            Assert.True(credential.ExpiresAt > DateTimeOffset.UtcNow);
+            Assert.DoesNotContain(credential.AccessToken, string.Join('\n', credentialFactory.LogMessages));
+            using var foreignProject = await SendJsonWithTenantAsync(
+                credentialBroker, HttpMethod.Post,
+                $"/internal/connections/copilot-user/{linked.ConnectionId:D}/model-catalog-credential",
+                ownerToken, new { projectId = "another-project" }, TenantId);
+            await AssertStatusAsync(foreignProject, HttpStatusCode.Forbidden);
+        }
         var rotated = await RefreshRuntimeCopilotConnectionAsync(projects, ownerToken, transport, linked);
         await using var factory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,

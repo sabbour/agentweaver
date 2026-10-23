@@ -47,6 +47,10 @@ public static class RuntimeAgentHostEndpoints
             (HttpContext context, RuntimeResumeBootstrapRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.ReadResumeBootstrapStateAsync(request, actor, token))).RequireAuthorization();
+        endpoints.MapGet("/runtime/v1/projects/{projectId}/hosted-model-reasoning-catalog",
+            (string projectId, HttpContext context, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.ReadHostedModelReasoningCatalogAsync(projectId, actor, token))).RequireAuthorization();
         endpoints.MapPost("/runtime/v1/refresh",
             (HttpContext context, RuntimeHostRefreshRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
@@ -122,7 +126,9 @@ public static class RuntimeAgentHostEndpoints
         {
             var statusCode = failure.Code is
                 "runtime_fixed_credit_guard_unavailable" or "runtime_fixed_credit_no_send_unavailable" or
-                "runtime_usage_source_unavailable"
+                "runtime_usage_source_unavailable" or "runtime_owner_unavailable" or
+                "runtime_owner_timeout" or "runtime_owner_contract_invalid" or
+                "runtime_owner_response_contract_invalid"
                 ? StatusCodes.Status503ServiceUnavailable
                 : StatusCodes.Status403Forbidden;
             return failure.FixedCreditGuard is { } fixedCreditGuard

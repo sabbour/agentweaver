@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   getProject: vi.fn(),
   getProjectConfiguration: vi.fn(),
   getProjectConfigurationChoices: vi.fn(),
+  getHostedModelReasoningCatalog: vi.fn(),
   updateProjectConfiguration: vi.fn(),
   listMarketplaceSources: vi.fn(),
   createMarketplaceSource: vi.fn(),
@@ -86,6 +87,7 @@ vi.mock('./api', () => ({
     getProject: mocks.getProject,
     getProjectConfiguration: mocks.getProjectConfiguration,
     getProjectConfigurationChoices: mocks.getProjectConfigurationChoices,
+    getHostedModelReasoningCatalog: mocks.getHostedModelReasoningCatalog,
     updateProjectConfiguration: mocks.updateProjectConfiguration,
     listMarketplaceSources: mocks.listMarketplaceSources,
     createMarketplaceSource: mocks.createMarketplaceSource,
@@ -472,6 +474,17 @@ describe('v1 web project scoping', () => {
     mocks.getProjectConfiguration.mockReset().mockImplementation(async (_token: string, projectId: string) => projectConfiguration(projectId, 1));
     mocks.getProjectConfigurationChoices.mockReset().mockImplementation(
       async (_token: string, projectId: string) => projectConfigurationChoices(projectId),
+    );
+    mocks.getHostedModelReasoningCatalog.mockReset().mockImplementation(
+      async (_token: string, projectId: string) => ({
+        contractVersion: 1 as const,
+        projectId,
+        projectConfigurationRevision: 1,
+        bindingsRevision: 'model-bindings-r1',
+        state: 'unavailable' as const,
+        unavailableReason: 'model_bindings_unavailable',
+        models: {},
+      }),
     );
     mocks.updateProjectConfiguration.mockReset();
     mocks.listMarketplaceSources.mockReset().mockResolvedValue([]);
@@ -1885,6 +1898,9 @@ describe('v1 web project scoping', () => {
     expect(modelInput.tagName).toBe('INPUT');
     expect(modelInput.value).toBe('owner-model');
     await waitFor(() => expect(mocks.getProjectConfigurationChoices).toHaveBeenCalledWith(
+      'broker-token', 'p1', 'tenant-1',
+    ));
+    await waitFor(() => expect(mocks.getHostedModelReasoningCatalog).toHaveBeenCalledWith(
       'broker-token', 'p1', 'tenant-1',
     ));
   });

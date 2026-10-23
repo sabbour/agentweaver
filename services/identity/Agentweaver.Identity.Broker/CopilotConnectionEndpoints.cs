@@ -23,6 +23,16 @@ public sealed record CompleteCopilotConnectionRequest(string State, string? Code
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChangeCopilotConnectionRequest(Guid ConnectionId, long ExpectedRevision);
 
+/// <summary>Requests a short-lived hosted Copilot credential for one readable project.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record CopilotModelCatalogCredentialRequest(string ProjectId);
+
+/// <summary>Hosted Copilot access token returned only to an authenticated AgentHost caller.</summary>
+public sealed record CopilotModelCatalogCredentialResponse(string AccessToken, DateTimeOffset ExpiresAt)
+{
+    public override string ToString() => nameof(CopilotModelCatalogCredentialResponse) + " [REDACTED]";
+}
+
 /// <summary>
 /// Maps authenticated internal routes for beginning, completing, reading and changing
 /// user Copilot connections. The callback cookie is HTTP-only and scoped to the browser
@@ -55,6 +65,11 @@ public static class CopilotConnectionEndpoints
             ExecuteAsync(context, (authority, actor, issuer, actorId) =>
                 authority.RevokeAsync(actor, issuer, actorId, input.ConnectionId,
                     input.ExpectedRevision, context.RequestAborted)));
+        routes.MapPost("/{connectionId:guid}/model-catalog-credential",
+            (HttpContext context, Guid connectionId, CopilotModelCatalogCredentialRequest input) =>
+                ExecuteAsync(context, (authority, actor, issuer, actorId) =>
+                    authority.ReadModelCatalogCredentialAsync(
+                        actor, issuer, actorId, connectionId, input.ProjectId, context.RequestAborted)));
         routes.MapGet("/{connectionId:guid}", (HttpContext context, Guid connectionId) =>
             ExecuteAsync(context, (authority, actor, issuer, actorId) =>
                 authority.ReadStatusAsync(actor, issuer, actorId, connectionId, context.RequestAborted)));

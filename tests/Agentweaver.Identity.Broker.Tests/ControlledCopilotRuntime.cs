@@ -47,6 +47,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public string[] SupportedReasoningEfforts { get; set; } = ["low", "medium", "high", "xhigh"];
     public string ExpectedReasoningEffort { get; set; } = "high";
     public string? EffectiveReasoningEffort { get; set; }
+    public Func<CancellationToken, Task>? BeforeModelCatalogResponse { get; set; }
     public bool IncompleteNativeEventRange { get; set; }
     public Action? BeforeEffectiveModelResponse { get; set; }
     public Func<CancellationToken, Task>? BeforeStatusResponse { get; set; }
@@ -277,6 +278,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                         case "models.list":
                             Assert.False(Byok);
                             Assert.Equal(SdkCredential, parameters.GetProperty("gitHubToken").GetString());
+                            if (BeforeModelCatalogResponse is not null)
+                                await BeforeModelCatalogResponse(_stop.Token);
                             result = new
                             {
                                 models = new[]

@@ -1281,6 +1281,7 @@ audience and matching request scheme/authority, then exact runtime proof checks.
 | POST | `configure.AbsolutePath + "/activate"` | Runtime | Configure native session. |
 | POST | `configure.AbsolutePath + "/resume-state"` | Runtime | Read private resume bootstrap state. |
 | POST | `/runtime/v1/refresh` | Runtime | Refresh host session proof. |
+| GET | `/runtime/v1/projects/{projectId}/hosted-model-reasoning-catalog` | Authenticated project caller | Read live hosted levels by model reference with project and binding revisions; `no-store`. |
 | POST | `/runtime/v1/turns/fixed-credit-denials/read` | Runtime | Read fixed-credit guard evidence. |
 | POST | `/runtime/v1/turns/denials/read` | Runtime | Read native denial evidence. |
 | GET | `/runtime/v1/readiness` | Runtime | Read current authenticated readiness. |

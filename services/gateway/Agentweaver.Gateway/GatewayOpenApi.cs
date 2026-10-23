@@ -34,6 +34,7 @@ internal static partial class GatewayOpenApi
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
             ["updateProjectConfiguration"] = C("UpdateProjectConfigurationRequest", "VersionedProjectConfiguration", "200"),
             ["getProjectConfigurationChoices"] = C(null, "ProjectConfigurationChoices", "200"),
+            ["getHostedModelReasoningCatalog"] = C(null, "HostedModelReasoningCatalogV1", "200"),
             // Casting contracts mirror Projects, including draft and configuration revision fences.
             ["createProjectCastingProposal"] = C("CreateProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
             ["createScenarioProjectCastingProposal"] = C("CreateScenarioProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
@@ -313,14 +314,20 @@ internal static partial class GatewayOpenApi
                         status == "202"
                             ? "Accepted by the owner; this does not mean the requested work is complete."
                             : "Owner response; returned by the owning service.",
-                        (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices") && status == "200"
+                        (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices" or
+                            "getHostedModelReasoningCatalog") && status == "200"
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
                                 ["Cache-Control"] = new
                                 {
-                                    description = route.OperationId == "getProjectConfigurationChoices"
-                                        ? "Project configuration choice responses are not cacheable."
-                                        : "Runtime evidence responses are not cacheable.",
+                                    description = route.OperationId switch
+                                    {
+                                        "getProjectConfigurationChoices" =>
+                                            "Project configuration choice responses are not cacheable.",
+                                        "getHostedModelReasoningCatalog" =>
+                                            "Hosted reasoning catalog responses are not cacheable.",
+                                        _ => "Runtime evidence responses are not cacheable.",
+                                    },
                                     schema = new { type = "string", example = "no-store" },
                                 },
                             }
@@ -364,6 +371,10 @@ internal static partial class GatewayOpenApi
         {
             responses["400"] = ProblemResponse("The request must not include query parameters.");
             responses["404"] = ProblemResponse("The owner did not find an accessible project.");
+        }
+        else if (route.OperationId == "getHostedModelReasoningCatalog")
+        {
+            responses["503"] = ProblemResponse("AgentHost is not configured or is unavailable.");
         }
         else if (route.OperationId == "importProjectAgentSuite")
         {
@@ -947,6 +958,21 @@ else if (route.OperationId is
             ["projectId", "projectConfigurationRevision", "platformRuntimeRevision", "models", "providers"],
             ("projectId", Str()), ("projectConfigurationRevision", Int()), ("platformRuntimeRevision", Int()),
             ("models", Ref("ProjectModelChoices")), ("providers", Ref("ProjectProviderChoices"))),
+        ["HostedModelReasoningCatalogV1"] = Obj(
+            ["contractVersion", "projectId", "projectConfigurationRevision", "bindingsRevision", "state",
+                "unavailableReason", "models"],
+            ("contractVersion", Int()), ("projectId", Str()), ("projectConfigurationRevision", Int()),
+            ("bindingsRevision", Str()), ("state", Enum("available", "unavailable")),
+            ("unavailableReason", NullableStr()),
+            ("models", new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["additionalProperties"] = Ref("HostedModelReasoningModelV1"),
+            })),
+        ["HostedModelReasoningModelV1"] = Obj(
+            ["state", "unavailableReason", "reasoningEfforts"],
+            ("state", Enum("available", "unavailable")), ("unavailableReason", NullableStr()),
+            ("reasoningEfforts", Arr(Enum("low", "medium", "high", "xhigh")))),
         ["ProjectModelChoices"] = Obj(
             ["state", "unavailableReason", "runtimeEligibility", "bindingsRevision", "defaultReasoningEffort", "choices", "savedReferences"],
             ("state", Enum("available", "unavailable")),

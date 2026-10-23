@@ -288,6 +288,7 @@ public static class ProjectConfigEndpoints
             ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             try
             {
                 return Results.Ok(await service.GetProjectConfigurationAsync(
@@ -896,6 +897,7 @@ public static class ProjectConfigEndpoints
             ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             try
             {
                 return Results.Ok(await service.GetPlatformRuntimeDefaultsAsync(

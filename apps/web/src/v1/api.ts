@@ -67,6 +67,7 @@ import type {
   ProjectAuthorizationContextResponse,
   ProjectConfiguration,
   ProjectConfigurationChoices,
+  HostedModelReasoningCatalogV1,
   ProjectRole,
   ProjectRoleAssignmentList,
   ProjectRoleAssignmentView,
@@ -423,6 +424,21 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'configuration', 'choices')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads current reasoning levels from AgentHost's live hosted model catalog. */
+  getHostedModelReasoningCatalog(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<HostedModelReasoningCatalogV1> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'configuration', 'hosted-model-reasoning-catalog')}`,
       {},
       this.baseUrl,
       tenantSelector,

@@ -13,7 +13,7 @@ namespace Agentweaver.AgentRuntime;
 /// Resolves an accepted model binding and creates a native Copilot SDK session with
 /// approved tools, skills, filesystem, and optional recovery state.
 /// </summary>
-public sealed class RuntimeCopilotSessionFactory
+public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningCatalogSource
 {
     private readonly RuntimeConnection _connection;
     private readonly string _baseDirectory;
@@ -28,6 +28,10 @@ public sealed class RuntimeCopilotSessionFactory
 
     /// <summary>The model-binding revision that scopes hosted capability publications.</summary>
     public string ModelBindingsRevision => _modelBindings.ConfigurationRevision;
+
+    /// <inheritdoc />
+    public ImmutableArray<string> EnabledHostedModelReferences =>
+        _modelBindings.EnabledHostedModelReferences;
 
     /// <summary>Creates a factory using the supplied legacy model-binding map.</summary>
     public RuntimeCopilotSessionFactory(
@@ -83,6 +87,41 @@ public sealed class RuntimeCopilotSessionFactory
             throw new ArgumentOutOfRangeException(nameof(abortDrainTimeout));
     }
 
+    /// <summary>Reads the live SDK catalog and reports exact levels by enabled model reference.</summary>
+    public async Task<ImmutableDictionary<string, HostedModelReasoningModelV1>> ReadAsync(
+        SecretCredential credential,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+        if (!credential.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_sdk_credential_unavailable");
+        var token = credential.GetValue();
+        if (!token.StartsWith("ghu_", StringComparison.Ordinal) || token.Any(char.IsWhiteSpace))
+            throw new RuntimeAuthorizationException("runtime_copilot_access_token_invalid");
+
+        await using var client = CreateClient();
+        await client.StartAsync(cancellationToken);
+#pragma warning disable GHCP001 // The pinned SDK marks its live model catalog RPC as experimental.
+        var catalog = await client.Rpc.Models.ListAsync(
+            selectionId: null, gitHubToken: token, cancellationToken: cancellationToken);
+        var result = ImmutableDictionary.CreateBuilder<string, HostedModelReasoningModelV1>(
+            StringComparer.Ordinal);
+        foreach (var reference in EnabledHostedModelReferences)
+        {
+            var model = _modelBindings.Resolve(reference, ModelSourceMode.HostedCopilot);
+            // Refuse ambiguous SDK IDs rather than attributing one model's levels to another reference.
+            var matches = catalog.Models.Where(item => item.Id == model.ModelId).Take(2).ToArray();
+            result.Add(reference, matches.Length != 1 ||
+                matches[0].Policy?.State != GitHub.Copilot.Rpc.ModelPolicyState.Enabled
+                    ? new("unavailable", "model_not_available", [])
+                    : new("available", null, ResolveHostedReasoningEfforts(
+                        matches[0].Capabilities?.Supports?.ReasoningEffort,
+                        matches[0].SupportedReasoningEfforts)));
+        }
+#pragma warning restore GHCP001
+        return result.ToImmutable();
+    }
+
     /// <summary>
     /// Starts the pinned SDK, verifies its effective model, applies accepted limits and tools,
     /// and restores a compatible native cache or journal context when supplied.
@@ -123,23 +162,7 @@ public sealed class RuntimeCopilotSessionFactory
         if (model.SourceMode == ModelSourceMode.HostedCopilot &&
             (!token.StartsWith("ghu_", StringComparison.Ordinal) || token.Any(char.IsWhiteSpace)))
             throw new RuntimeAuthorizationException("runtime_copilot_access_token_invalid");
-        var client = new CopilotClient(new CopilotClientOptions
-        {
-            Mode = CopilotClientMode.Empty,
-            Connection = _connection,
-            BaseDirectory = _baseDirectory,
-#pragma warning disable GHCP001 // Session filesystem RPC options are pinned to SDK 1.0.18.
-            SessionFs = new SessionFsConfig
-            {
-                InitialWorkingDirectory = "/workspace",
-                SessionStatePath = "state",
-                Conventions = GitHub.Copilot.Rpc.SessionFsSetProviderConventions.Posix,
-                Capabilities = new GitHub.Copilot.Rpc.SessionFsSetProviderCapabilities { Sqlite = false }
-            },
-#pragma warning restore GHCP001
-            Logger = NullLogger.Instance,
-            LogLevel = CopilotLogLevel.None
-        });
+        var client = CreateClient();
         CopilotSession? session = null;
         var usage = Channel.CreateBounded<RuntimeCopilotUsageItem>(
             new BoundedChannelOptions(256)
@@ -439,7 +462,25 @@ public sealed class RuntimeCopilotSessionFactory
             throw new RuntimeAuthorizationException("runtime_reasoning_effort_unsupported");
     }
 
-    private static ImmutableArray<string> ResolveHostedReasoningEfforts(
+    private CopilotClient CreateClient() => new(new CopilotClientOptions
+    {
+        Mode = CopilotClientMode.Empty,
+        Connection = _connection,
+        BaseDirectory = _baseDirectory,
+#pragma warning disable GHCP001 // Session filesystem RPC options are pinned to SDK 1.0.18.
+        SessionFs = new SessionFsConfig
+        {
+            InitialWorkingDirectory = "/workspace",
+            SessionStatePath = "state",
+            Conventions = GitHub.Copilot.Rpc.SessionFsSetProviderConventions.Posix,
+            Capabilities = new GitHub.Copilot.Rpc.SessionFsSetProviderCapabilities { Sqlite = false }
+        },
+#pragma warning restore GHCP001
+        Logger = NullLogger.Instance,
+        LogLevel = CopilotLogLevel.None
+    });
+
+    internal static ImmutableArray<string> ResolveHostedReasoningEfforts(
         bool? modelSupportsReasoningEffort,
         IEnumerable<string>? supportedEfforts)
     {

@@ -94,6 +94,7 @@ sequenceDiagram
 | `POST /runtime/v1/configure` | Authenticated delivery of the pending, purpose-bound configure nonce. No model session starts on delivery alone. |
 | `POST /runtime/v1/configure/activate` | Contract version 1, exact registration, consume/exchange operation IDs, and the delivered configuration bytes. Exact replay returns the existing session. Changed bytes or bindings deny. |
 | `POST /runtime/v1/refresh` | Exact session proof and an operation ID. Rotation rechecks current Identity and owner authority. Exact replay does not rotate again. |
+| `GET /runtime/v1/projects/{projectId}/hosted-model-reasoning-catalog` | Reads live supported reasoning levels for the project's enabled hosted model references. Identity checks the caller's connection and project read authority; the hosted token is returned only to AgentHost. The response is keyed by model reference and includes the project and binding revisions plus explicit unavailable states. |
 | `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after the host revalidates the caller, registration, session, Observe grant, and readiness evidence. Ordinary configuration includes the source-derived recovery mode and its bound cache or journal evidence. It does not configure the SDK or send a turn. |
 | `POST /runtime/v1/a2a/message:send` | One `user` message with one `text` part, a GUID message ID, native context ID, exact runtime proof, and `immediate` or `enqueue` delivery. |
 | `GET /runtime/v1/readiness` | Authenticated current readiness receipt. Checks the caller, exact HTTPS configure audience, registration, source authority, and current placement. Does not start a turn or rotate a grant. |
@@ -201,6 +202,40 @@ and binding revision, returns them for at most 24 hours, and rejects an older
 verification that arrives after a newer one. Publication is best-effort:
 failure does not block session creation, and every run still uses AgentHost's
 live SDK check as the authority.
+
+Settings can also request the current hosted levels without waiting for a run.
+AgentHost reads the current project configuration and model choices, then asks
+Identity for the caller-owned connection credential. Identity checks current
+project read authority, tenant scope, connection ownership, and connection
+freshness. AgentHost passes the short-lived token only to the pinned Copilot
+SDK client; it is not returned through Gateway, Projects & Config, or the
+browser. The result maps exact SDK model IDs back to enabled model references,
+includes the project configuration and model-binding revisions, and marks a
+missing connection, unavailable SDK list, or missing model as unavailable.
+AgentHost rereads the project configuration and choices after the SDK call so
+stale revisions do not produce selectable levels. The Gateway response is
+`Cache-Control: no-store`. If the live read is unavailable, settings show no
+invented hosted effort list; run-start validation remains authoritative.
+
+```mermaid
+sequenceDiagram
+    participant W as Settings
+    participant G as Gateway
+    participant H as AgentHost
+    participant P as Projects & Config
+    participant I as Identity
+    participant S as Copilot SDK
+    W->>G: GET hosted reasoning catalog with user bearer and tenant selector
+    G->>H: Forward bearer and selector; no-store
+    H->>P: Read project configuration and model choices
+    H->>I: Read caller-owned hosted connection credential
+    I-->>H: Short-lived user access token
+    H->>S: Read the live SDK model list
+    S-->>H: Model IDs and supported reasoning levels
+    H->>P: Recheck project configuration and model-binding revisions
+    H-->>G: Reference-keyed levels or explicit unavailable states
+    G-->>W: No-store catalog response; no credential
+```
 Legacy unpinned factory callers retain their existing API; they do not provide versioned admission proof.
 For configured hosted credit limits, coordination root acceptance and backlog claim
 now require a real Events run-admission receipt before their transaction writes the root.

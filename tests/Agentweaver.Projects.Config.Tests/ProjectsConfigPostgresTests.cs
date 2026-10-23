@@ -3074,6 +3074,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 $"GRANT SELECT ON projects_config.tenant_memberships, projects_config.project_role_assignments TO \"{roleName}\"");
             await ExecuteOwnerSqlAsync(
                 $"GRANT SELECT ON projects_config.authority_audit TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT, UPDATE ON projects_config.hosted_model_reasoning_catalog TO \"{roleName}\"");
 
             var runtimeConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
             {
@@ -3116,6 +3118,11 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                    AND NOT has_table_privilege(@role, 'projects_config.authority_audit', 'UPDATE')
                    AND NOT has_table_privilege(@role, 'projects_config.authority_audit', 'DELETE')
                    AND NOT has_table_privilege(@role, 'projects_config.authority_audit', 'TRUNCATE')
+                   AND has_table_privilege(@role, 'projects_config.hosted_model_reasoning_catalog', 'SELECT')
+                   AND has_table_privilege(@role, 'projects_config.hosted_model_reasoning_catalog', 'INSERT')
+                   AND has_table_privilege(@role, 'projects_config.hosted_model_reasoning_catalog', 'UPDATE')
+                   AND NOT has_table_privilege(@role, 'projects_config.hosted_model_reasoning_catalog', 'DELETE')
+                   AND NOT has_table_privilege(@role, 'projects_config.hosted_model_reasoning_catalog', 'TRUNCATE')
                    AND NOT has_table_privilege(@role, 'projects_config.project_setup_operations', 'SELECT')
                    AND NOT has_table_privilege(@role, 'projects_config.project_setup_operations', 'INSERT')
                    AND NOT has_table_privilege(@role, 'projects_config.project_setup_operations', 'UPDATE')
