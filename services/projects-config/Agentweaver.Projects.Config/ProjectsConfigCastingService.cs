@@ -298,6 +298,107 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    /// <summary>Changes one member's role in a pending proposal without writing live project configuration.</summary>
+    public Task<ProjectCastingProposal> UpdateCastingProposalMemberRoleAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        Guid proposalId,
+        string agentId,
+        long expectedDraftRevision,
+        string roleId,
+        string? customRoleTitle,
+        CancellationToken cancellationToken)
+    {
+        RequireCastingWrite(caller, projectId);
+        ValidateCastingProposalId(proposalId);
+        ValidateExpectedDraftRevision(expectedDraftRevision);
+
+        // Keep role selection limited to the current castable catalog; the title is display metadata only.
+        var role = ProjectCastingCatalog.Roles.FirstOrDefault(item =>
+            string.Equals(item.Id, roleId, StringComparison.Ordinal));
+        if (role is null)
+            throw ProjectConfigException.Invalid("unknown_casting_role", $"Unknown casting role ID '{roleId}'.");
+        if (ProjectCastingCatalog.IsReservedRole(role.Id))
+            throw ProjectConfigException.Invalid(
+                "reserved_casting_role",
+                $"Reserved orchestration role '{role.Id}' cannot be cast.");
+        var normalizedTitle = string.IsNullOrWhiteSpace(customRoleTitle) ? null : customRoleTitle.Trim();
+        if (normalizedTitle is { Length: > 120 })
+            throw ProjectConfigException.Invalid(
+                "invalid_custom_role_title",
+                "A custom role title must be at most 120 characters.");
+
+        return ExecuteCastingProposalTransactionAsync(async (context, token) =>
+        {
+            var project = await LockCastingProjectAndAuthorityAsync(
+                context, caller, projectId, write: true, token).ConfigureAwait(false);
+            RequireActiveCastingProject(project);
+            var proposal = await LockCastingProposalAsync(context, project.ProjectId, proposalId, token)
+                .ConfigureAwait(false);
+            RequirePendingCastingProposal(proposal, expectedDraftRevision);
+            var generation = await GetCastingGenerationForProposalAsync(
+                context, proposal.ProposalId, token).ConfigureAwait(false);
+            RequireCompletedCastingGeneration(generation);
+            if (proposal.BaseConfigurationRevision != project.ConfigurationRevision)
+                throw CastingConfigurationConflict();
+
+            var currentRevision = await context.ProjectConfigurationRevisions.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    record => record.ProjectId == project.ProjectId &&
+                        record.Revision == project.ConfigurationRevision,
+                    token)
+                .ConfigureAwait(false)
+                ?? throw ProjectConfigException.NotFound();
+            var currentConfiguration = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+            var draft = Deserialize<ProjectConfiguration>(proposal.DraftJson);
+            var charter = draft.AgentCharters.FirstOrDefault(item =>
+                string.Equals(item.AgentId, agentId, StringComparison.Ordinal));
+            if (charter is null || !draft.Casting.Any(item =>
+                    string.Equals(item.AgentId, agentId, StringComparison.Ordinal)))
+                throw ProjectConfigException.NotFound();
+
+            // Update the role ID in both projections and keep an optional display title on the charter.
+            var casting = draft.Casting.Select(item =>
+                string.Equals(item.AgentId, agentId, StringComparison.Ordinal)
+                    ? item with { Role = role.Id }
+                    : item).ToImmutableArray();
+            var roleIds = casting.Select(item => item.Role).ToHashSet(StringComparer.Ordinal);
+            var modelRoleOverrides = draft.ModelRoleOverrides.IsDefaultOrEmpty
+                ? ImmutableArray<ModelRoleSelectionOverride>.Empty
+                : draft.ModelRoleOverrides
+                    .Where(item => roleIds.Contains(item.RoleId))
+                    .ToImmutableArray();
+            draft = draft with
+            {
+                AgentCharters = draft.AgentCharters.Select(item =>
+                    string.Equals(item.AgentId, agentId, StringComparison.Ordinal)
+                        ? item with
+                        {
+                            Role = role.Id,
+                            // Title-only edits must not discard user-authored charter text.
+                            Charter = string.Equals(item.Role, role.Id, StringComparison.Ordinal)
+                                ? item.Charter
+                                : ProjectCastingCatalog.BuildCharter(role),
+                            CustomRoleTitle = normalizedTitle,
+                        }
+                        : item).ToImmutableArray(),
+                Casting = casting,
+                ModelRoleOverrides = modelRoleOverrides,
+            };
+
+            // Reuse the normal proposal validation and preserve settings owned by the current configuration.
+            draft = KeepStoredProviderOverrides(currentConfiguration, draft);
+            var normalized = ProjectConfigurationValidator.ValidateTransition(currentConfiguration, draft);
+            await EnsureCastingProjectNarrowingAsync(context, normalized, token).ConfigureAwait(false);
+            proposal.DraftJson = Serialize(normalized);
+            proposal.DraftRevision = checked(proposal.DraftRevision + 1);
+            proposal.UpdatedByActorId = caller.ActorId;
+            proposal.UpdatedAt = timeProvider.GetUtcNow();
+            await context.SaveChangesAsync(token).ConfigureAwait(false);
+            return ToCastingProposal(proposal, generation);
+        }, cancellationToken);
+    }
+
     /// <summary>
     /// Atomically appends the proposed configuration and marks the proposal confirmed; an exact retry returns the same result.
     /// </summary>

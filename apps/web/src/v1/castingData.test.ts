@@ -57,7 +57,7 @@ describe('casting helpers', () => {
   it('changes a team member role in both the charter and casting draft', () => {
     const source = config({
       agentCharters: [
-        { agentId: 'lead', name: 'Lead', role: 'lead', charter: 'Lead.' },
+        { agentId: 'lead', name: 'Lead', role: 'lead', charter: 'Lead.', customRoleTitle: 'Old title' },
         { agentId: 'tester', name: 'Tester', role: 'tester', charter: 'Test.' },
       ],
       casting: [
@@ -73,11 +73,16 @@ describe('casting helpers', () => {
     const changed = draftWithRole(source, 'lead', role('editor', 'Editor'));
     expect(changed.agentCharters[0].role).toBe('editor');
     expect(changed.agentCharters[0].charter).toBe(roleCharter(role('editor', 'Editor')));
+    expect(changed.agentCharters[0].customRoleTitle).toBeNull();
     expect(changed.casting[0].role).toBe('editor');
     expect(changed.modelRoleOverrides).toEqual([{ roleId: 'tester', selection: { reference: 'tester-model' } }]);
     expect(changed.modelAgentOverrides).toEqual(source.modelAgentOverrides);
     expect(changed.skills).toEqual(source.skills);
     expect(() => draftWithRole(source, 'missing', role('editor'))).toThrow('This agent is not in the current team.');
+
+    const titleOnly = draftWithRole(source, 'lead', role('lead', 'Lead'));
+    expect(titleOnly.agentCharters[0].charter).toBe('Lead.');
+    expect(titleOnly.agentCharters[0].customRoleTitle).toBe('Old title');
   });
 
   it('removes a member and cleans up assignments and overrides that would become invalid', () => {

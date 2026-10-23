@@ -94,8 +94,17 @@ export function draftWithRole(
     throw new Error('This agent is not in the current team.');
   const changed = {
     ...configuration,
-    agentCharters: configuration.agentCharters.map((item) =>
-      item.agentId === agentId ? { ...item, role: role.id, charter: roleCharter(role) } : item),
+    agentCharters: configuration.agentCharters.map((item) => {
+      if (item.agentId !== agentId) return item;
+      const roleChanged = item.role !== role.id;
+      // Preserve user edits for title-only changes, and clear role metadata when the catalog role changes.
+      return {
+        ...item,
+        role: role.id,
+        charter: roleChanged ? roleCharter(role) : item.charter,
+        customRoleTitle: roleChanged ? null : item.customRoleTitle,
+      };
+    }),
     casting: configuration.casting.map((item) =>
       item.agentId === agentId ? { ...item, role: role.id } : item),
   };
@@ -107,6 +116,7 @@ export interface DraftMember {
   agentId: string;
   name: string;
   role: string;
+  customRoleTitle: string | null;
   charter: string;
   order: number;
 }
@@ -119,7 +129,14 @@ export function draftMembers(configuration: ProjectConfiguration): DraftMember[]
     .map((item) => {
       // A casting entry without a charter still shows, using its ID as the name.
       const charter = charters.get(item.agentId);
-      return { agentId: item.agentId, name: charter?.name || item.agentId, role: item.role, charter: charter?.charter ?? '', order: item.order };
+      return {
+        agentId: item.agentId,
+        name: charter?.name || item.agentId,
+        role: item.role,
+        customRoleTitle: charter?.customRoleTitle ?? null,
+        charter: charter?.charter ?? '',
+        order: item.order,
+      };
     });
 }
 

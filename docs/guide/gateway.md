@@ -310,6 +310,11 @@ Catalog reads require an authenticated bearer.
 4. Review the returned pending proposal. List proposals with `GET /proposals`
    and optional `limit` (1 through 100, default 50). Read or patch one at
    `/proposals/{proposalId}`; patch requires `expectedDraftRevision` and `draft`.
+   Change one member's role at
+   `PATCH /proposals/{proposalId}/members/{agentId}/role` with
+   `expectedDraftRevision`, `roleId`, and optional `customRoleTitle`. This
+   updates only the pending draft; the catalog role ID remains separate from
+   its display title.
 5. Send `POST /proposals/{proposalId}/confirm` or `/reject` with
    `expectedDraftRevision`. Confirmation appends a configuration revision;
    rejection leaves configuration unchanged.
