@@ -648,7 +648,8 @@ internal sealed record FunctionState(
 /// <summary>Source-generated target and exact per-service role, schema, relation, and function plan.</summary>
 /// <summary>Source-bound service grants and exact Core/Events migration versions requiring separate live approval.</summary>
 internal sealed record PostgresPlan(
-    int FormatVersion, TargetPlan Target, ServicePlan[] Services, int[] CoreVersions, int[] EventsVersions);
+    int FormatVersion, TargetPlan Target, ServicePlan[] Services, int[] CoreVersions, int[] EventsVersions,
+    int[] EnvironmentVersions);
 /// <summary>Connection and Entra operator identity selected for a PostgreSQL initialization.</summary>
 internal sealed record TargetPlan(string TenantId, string PostgresHost, string Database, string OperatorName,
     string OperatorObjectId, string ConnectionHost, int ConnectionPort);

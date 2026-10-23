@@ -3,7 +3,7 @@
 #:package Azure.Identity@1.17.1
 #:project ../../../packages/Agentweaver.Persistence.Postgres/Agentweaver.Persistence.Postgres.csproj
 
-// Hands ownership of the Core (orchestrator) and Events (events_sessions) schemas from the
+// Hands ownership of the Environment, Core (orchestrator), and Events (events_sessions) schemas from the
 // operator's Entra role to the dedicated P1 migration role, so later migration Jobs can run
 // as that role with no operator connection. The database maintenance runner starts this
 // through its owned relay. Every step is idempotent: a second run changes nothing and only
@@ -20,7 +20,7 @@ if (args.Length != 1 || args[0] != "--execute")
 // wrong environment can only stop the run, never point it at another server or role.
 const string ExpectedHost = "agentweaver-pg.postgres.database.azure.com";
 const string ExpectedRole = "agentweaver-id-p1-postgres-migration";
-string[] schemas = ["orchestrator", "events_sessions"];
+string[] schemas = ["environment", "orchestrator", "events_sessions"];
 var host = Environment.GetEnvironmentVariable("P1Handover__PostgresHost");
 var admin = Environment.GetEnvironmentVariable("P1Handover__AdminUsername");
 var role = Environment.GetEnvironmentVariable("P1Handover__MigrationRole");
@@ -102,8 +102,8 @@ async Task<object?> Scalar(string sql)
 }
 if (!Equals(await Scalar("SELECT current_user = @admin AND current_database() = 'agentweaver'"), true))
     throw new InvalidOperationException("The handover did not connect as the approved administrator to agentweaver.");
-if (!Equals(await Scalar("SELECT count(*) = 2 FROM pg_namespace WHERE nspname = ANY(@schemas)"), true))
-    throw new InvalidOperationException("Both P1 schemas must already exist. The handover never creates or initializes them.");
+if (!Equals(await Scalar("SELECT count(*) = 3 FROM pg_namespace WHERE nspname = ANY(@schemas)"), true))
+    throw new InvalidOperationException("All three P1 schemas must already exist. The handover never creates or initializes them.");
 
 // The role gets login only. CONNECT lets it open the database. CREATE on the database is needed
 // because the migrators run CREATE SCHEMA IF NOT EXISTS, and PostgreSQL checks that privilege

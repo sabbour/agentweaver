@@ -7,6 +7,39 @@ namespace Agentweaver.Environment;
 public static class EnvironmentMigrator
 {
     private const string LockName = "agentweaver.environment.migrate";
+    private const int CurrentSchemaVersion = 11;
+    private static readonly string[] SupportedMigrationIds =
+    [
+        "20261006150000_InitialEnvironmentLifecycle",
+        "20261006160000_WorkspaceVolumeCleanup",
+        "20261006170000_SandboxLeases",
+        "20261010041000_SandboxBuildTestCommands",
+        "20261010135714_AddRemoteMcpConnections",
+        "20261010151941_ProviderLifecycleReports",
+        "20261011133000_WorkspaceFlushEvidence",
+        "20261011222000_RuntimeResumeBootstrap",
+        "20261013190000_RuntimeBootstrapProfileReplacements",
+        "20261014160000_SandboxProviderAttempts",
+        "20261023074226_AddRemoteMcpConnectionAdapterPin",
+    ];
+
+    /// <summary>Ordered versions assigned to the EF migration history for maintenance planning.</summary>
+    public static IReadOnlyList<int> SupportedVersions { get; } =
+        Array.AsReadOnly(Enumerable.Range(1, CurrentSchemaVersion).ToArray());
+
+    /// <summary>Checks that EF's migration catalog matches the reviewed Environment version map.</summary>
+    public static IReadOnlyList<int> ValidateMigrationCatalog(DbContextOptions<EnvironmentDbContext> options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        using var context = new EnvironmentDbContext(options);
+        var migrations = context.Database.GetMigrations().ToArray();
+        // EF uses timestamp IDs; maintenance uses their fixed source order as numeric versions.
+        if (SupportedMigrationIds.Length != CurrentSchemaVersion ||
+            !migrations.SequenceEqual(SupportedMigrationIds, StringComparer.Ordinal))
+            throw new InvalidOperationException(
+                "The Environment migration catalog differs from the reviewed schema version map.");
+        return SupportedVersions;
+    }
 
     /// <summary>Fails startup when the schema, required tables, migration history, or migration state is incomplete.</summary>
     public static async Task VerifyMigrationsAppliedAsync(
@@ -16,6 +49,7 @@ public static class EnvironmentMigrator
     {
         ArgumentNullException.ThrowIfNull(dataSource);
         ArgumentNullException.ThrowIfNull(options);
+        ValidateMigrationCatalog(options);
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var schemaCheck = new NpgsqlCommand(
@@ -132,6 +166,7 @@ public static class EnvironmentMigrator
     {
         ArgumentNullException.ThrowIfNull(dataSource);
         ArgumentNullException.ThrowIfNull(options);
+        ValidateMigrationCatalog(options);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using (var advisoryLock = new NpgsqlCommand(
             "SELECT pg_advisory_lock(hashtext(@lock_name))",
@@ -160,5 +195,20 @@ public static class EnvironmentMigrator
             release.Parameters.AddWithValue("lock_name", LockName);
             await release.ExecuteNonQueryAsync(CancellationToken.None).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Reads and verifies the complete EF history after the explicit migration run.</summary>
+    public static async Task<IReadOnlyList<int>> ReadAppliedVersionsAsync(
+        DbContextOptions<EnvironmentDbContext> options,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateMigrationCatalog(options);
+        await using var context = new EnvironmentDbContext(options);
+        var applied = (await context.Database.GetAppliedMigrationsAsync(cancellationToken).ConfigureAwait(false))
+            .ToArray();
+        if (!applied.SequenceEqual(SupportedMigrationIds, StringComparer.Ordinal))
+            throw new InvalidOperationException(
+                "The Environment migration history does not match the exact reviewed migration catalog.");
+        return SupportedVersions;
     }
 }

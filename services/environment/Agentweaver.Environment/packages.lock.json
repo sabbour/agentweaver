@@ -343,6 +343,12 @@
           "Agentweaver.Abstractions": "[1.4.0, )"
         }
       },
+      "agentweaver.persistence.postgres": {
+        "type": "Project",
+        "dependencies": {
+          "Npgsql": "[10.0.3, )"
+        }
+      },
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {

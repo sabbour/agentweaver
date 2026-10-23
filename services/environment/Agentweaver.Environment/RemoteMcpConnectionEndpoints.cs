@@ -16,7 +16,8 @@ public sealed record CreateRemoteMcpConnectionRequest(
     string? ResourceUri,
     RemoteMcpAuthenticationMode AuthenticationMode,
     string? RegistryServerName = null,
-    string? RegistryExactVersion = null);
+    string? RegistryExactVersion = null,
+    RemoteMcpTransportProfile TransportProfile = RemoteMcpTransportProfile.StreamableHttp20250618);
 
 /// <summary>Request body for replacing a connection configuration at an expected row revision.</summary>
 public sealed record UpdateRemoteMcpConnectionRequest(
@@ -27,7 +28,8 @@ public sealed record UpdateRemoteMcpConnectionRequest(
     string? ResourceUri,
     RemoteMcpAuthenticationMode AuthenticationMode,
     string? RegistryServerName = null,
-    string? RegistryExactVersion = null);
+    string? RegistryExactVersion = null,
+    RemoteMcpTransportProfile TransportProfile = RemoteMcpTransportProfile.StreamableHttp20250618);
 
 /// <summary>Request body for an idempotent connection state change.</summary>
 public sealed record RemoteMcpConnectionStateRequest(
@@ -110,6 +112,7 @@ public static class RemoteMcpConnectionEndpoints
                         request.EndpointUri,
                         request.ResourceUri,
                         request.AuthenticationMode,
+                        request.TransportProfile,
                         request.RegistryServerName,
                         request.RegistryExactVersion,
                         cancellationToken).ConfigureAwait(false),
@@ -208,6 +211,7 @@ public static class RemoteMcpConnectionEndpoints
                         request.EndpointUri,
                         request.ResourceUri,
                         request.AuthenticationMode,
+                        request.TransportProfile,
                         request.RegistryServerName,
                         request.RegistryExactVersion,
                         cancellationToken).ConfigureAwait(false),
