@@ -2,6 +2,13 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-23T16:50:51.334Z — source `9c91a0de3fa9989cca17aa15900e5202c42936fc`
+
+- `Agentweaver.Gateway`: 1.4.0 -> 1.5.0 (minor) — .changeset/reviewed-pull-request-records.md, .changeset/v1-casting-universe-picker.md
+- `Agentweaver.Orchestrator`: 1.4.0 -> 1.5.0 (minor) — .changeset/reviewed-pull-request-records.md
+- `Agentweaver.Projects.Config`: 1.4.0 -> 1.5.0 (minor) — .changeset/v1-casting-universe-picker.md
+- `Agentweaver.Web`: 1.3.0 -> 1.4.0 (minor) — .changeset/v1-casting-universe-picker.md, .changeset/web-reviewed-team-casting-restore.md
+
 ## 2026-10-22T22:41:37.240Z — source `a0856e97d2e7df43b9ee85cf29e120c862cf4f55`
 
 - `Agentweaver.Abstractions`: 1.3.0 -> 1.4.0 (minor) — .changeset/user-run-messages.md
