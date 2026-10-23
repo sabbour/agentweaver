@@ -554,6 +554,16 @@ Each item includes the selected `workflowId` and `needsInputCount`, the count of
 durable pending decision gates. Saved run requests supply `title` and `goal`;
 they can be `null` for older or non-interactive runs without a saved request.
 
+### Project run session history
+
+| Method | Native path | Auth | Purpose | Gateway path |
+| --- | --- | --- | --- | --- |
+| GET | `/api/projects/{projectId}/runs/{runId}/history/sessions` | Read | Read a run's session tree. | `/api/v1/projects/{projectId}/runs/{runId}/history/sessions` |
+
+This read uses fresh project authority, so an authorized project reader does
+not need to be the actor who accepted the run. A run-bound token remains limited
+to its bound run. The Gateway route returns `Cache-Control: no-store`.
+
 ### Project issue and pull request lists
 
 These reads return Agentweaver's stored data. They make no source control
@@ -1044,6 +1054,7 @@ All routes require Journal authority and exact project/run claims.
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | GET | `/internal/projects/{projectId}/runs/{runId}/events` | Journal | Replay committed run journal. | `/api/v1/projects/{projectId}/runs/{runId}/events` |
+| GET | `/internal/projects/{projectId}/runs/{runId}/project-history/events` | Read | Read run activity with current project read authority. | `/api/v1/projects/{projectId}/runs/{runId}/history/events` |
 | GET | `/internal/projects/{projectId}/runs/{runId}/events/live` | Journal | Native NDJSON stream. | No; Gateway SSE uses replay instead |
 | GET | `/internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` | Exact bound `ReadRunSelection` authority and current provider | Read immutable Sessions pin. | No |
 | GET | No native SSE route | Exact run bearer and current Gateway/owner access checks | SSE over committed replay pages. | `/api/v1/projects/{projectId}/runs/{runId}/events/live` |

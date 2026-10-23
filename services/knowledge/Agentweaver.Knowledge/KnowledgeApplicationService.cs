@@ -681,31 +681,11 @@ public sealed class KnowledgeApplicationService(
         expected.Resource == current.Resource &&
         expected.NegotiatedCapabilities.SetEquals(current.NegotiatedCapabilities);
 
-    /// <summary>Produces a deterministic identity for provider bindings that share one searchable resource.</summary>
-    private sealed record SearchSourceKey(
-        string ProviderId,
-        Version AdapterVersion,
-        int OptionsSchemaVersion,
-        string OptionsRevision,
-        string ResourceId,
-        long ResourceGeneration,
-        string Capabilities)
+    /// <summary>Identifies provider bindings that point to the same searchable backing resource.</summary>
+    private sealed record SearchSourceKey(ProviderResourceRef Resource)
     {
-        public static SearchSourceKey For(PinnedProviderBinding binding)
-        {
-            // Length-prefix capabilities so distinct capability lists cannot collide during resource grouping.
-            var capabilities = string.Concat(binding.NegotiatedCapabilities
-                .OrderBy(value => value, StringComparer.Ordinal)
-                .Select(value => $"{value.Length}:{value}"));
-            return new SearchSourceKey(
-                binding.ProviderId,
-                binding.AdapterVersion,
-                binding.OptionsSchemaVersion,
-                binding.OptionsRevision,
-                binding.Resource.ResourceId,
-                binding.Resource.Generation,
-                capabilities);
-        }
+        // Legacy and current pins can negotiate different capabilities for one backing store.
+        public static SearchSourceKey For(PinnedProviderBinding binding) => new(binding.Resource);
     }
 
     private static KnowledgeRecord RequireAgentRecord(KnowledgeRecord? record, string agentId)

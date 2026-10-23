@@ -59,8 +59,10 @@ point. Its newest 100 runs have direct **Session tree** and **Activity** links,
 so users can browse project sessions and addressed-message receipts without
 entering run or session IDs. **Session tree** lists the sessions for that run.
 **Activity** shows its committed event journal, including addressed-message
-receipts and routing details. The journal does not include message text;
-delivery and acknowledgment remain owned by the message service.
+receipts and routing details. Current project readers can open this history even
+if they did not start the run. A run-bound sign-in remains limited to its own
+run. The journal does not include message text; delivery and acknowledgment
+remain owned by the message service.
 
 The **Sessions** page lists runs across projects and private conversations.
 Private conversation history is separate from project work-focus history.

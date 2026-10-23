@@ -184,7 +184,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             writeAllowed: true,
             bindCaller: false,
             selectedMemoryByRun: runId => runId == "run-b"
-                ? (cosmosProvider.Descriptor, cosmosOptions.OptionsSchemaVersion, cosmosOptions.OptionsRevision)
+                ? (cosmosProvider.Descriptor, cosmosOptions.OptionsSchemaVersion, cosmosOptions.OptionsRevision, null)
                 : null);
         await using var app = await CreateAppAsync(
             database,
@@ -272,6 +272,93 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 .Select(item => item.RecordId)
                 .Distinct(StringComparer.Ordinal)
                 .Count());
+    }
+
+    [Fact]
+    public async Task ProjectSearchCountsSharedResourceOnceAcrossLegacyAndCurrentCapabilityPins()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var legacyDescriptor = database.Provider.Descriptor with
+        {
+            AdvertisedCapabilities = MemoryProviderCapabilities.All
+                .Remove(MemoryProviderCapabilities.AcceptedEffectDelivery)
+        };
+        var owner = new FakeProjectsOwnerHandler(
+            database.Options,
+            writeAllowed: true,
+            bindCaller: false,
+            selectedMemoryByRun: runId => runId == "run-b"
+                ? (legacyDescriptor, database.Options.OptionsSchemaVersion, database.Options.OptionsRevision,
+                    legacyDescriptor.AdvertisedCapabilities.ToImmutableArray())
+                : null);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+
+        async Task CreateRecordAsync(string key, string content)
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                "/api/projects/project-a/runs/run-a/agents/agent-a/records")
+            {
+                Content = JsonContent.Create(
+                    new
+                    {
+                        kind = "memory",
+                        type = "note",
+                        content,
+                        importance = "medium",
+                        tags = new[] { "project-search" }
+                    },
+                    options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+
+        await CreateRecordAsync("legacy-capability-pin-a", "first record");
+        await CreateRecordAsync("legacy-capability-pin-b", "second record");
+        using (var bindLegacyPin = new HttpRequestMessage(
+                   HttpMethod.Get,
+                   "/api/projects/project-a/runs/run-b/agents/agent-b/records"))
+        {
+            bindLegacyPin.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            using var response = await client.SendAsync(bindLegacyPin);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        await using (var connection = await database.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT negotiated_capabilities
+            FROM "{database.Options.Schema}".memory_provider_bindings
+            WHERE project_id = 'project-a' AND run_id IN ('run-a', 'run-b')
+            ORDER BY run_id
+            """, connection))
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            using var currentPin = JsonDocument.Parse(reader.GetString(0));
+            Assert.Equal(MemoryProviderCapabilities.All.Count, currentPin.RootElement.GetArrayLength());
+            Assert.True(await reader.ReadAsync());
+            using var legacyPin = JsonDocument.Parse(reader.GetString(0));
+            Assert.Equal(MemoryProviderCapabilities.All.Count - 1, legacyPin.RootElement.GetArrayLength());
+            Assert.False(await reader.ReadAsync());
+        }
+
+        using var search = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/projects/project-a/knowledge/records?includeInactive=true&page=1&pageSize=10");
+        search.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+        using var searchResponse = await client.SendAsync(search);
+        using var searchBody = JsonDocument.Parse(await searchResponse.Content.ReadAsStringAsync());
+        var items = searchBody.RootElement.GetProperty("items").EnumerateArray().ToArray();
+
+        Assert.Equal(HttpStatusCode.OK, searchResponse.StatusCode);
+        Assert.Equal(2, searchBody.RootElement.GetProperty("totalCount").GetInt32());
+        Assert.Equal(2, items.Length);
+        Assert.Equal(2, items.Select(item => item.GetProperty("record").GetProperty("recordId").GetString())
+            .Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]
@@ -1391,7 +1478,8 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         string? selectedOptionsRevision = null,
         bool revokeWriteAfterFirstSelection = false,
         int? maxPromptTokens = 1000,
-        Func<string, (ProviderDescriptor Descriptor, int OptionsSchemaVersion, string OptionsRevision)?>?
+        Func<string, (ProviderDescriptor Descriptor, int OptionsSchemaVersion, string OptionsRevision,
+            ImmutableArray<string>? RequiredCapabilities)?>?
             selectedMemoryByRun = null) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<string> _paths = new();
@@ -1489,7 +1577,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                         runSelection?.OptionsRevision ?? selectedOptionsRevision ?? options.OptionsRevision,
                         descriptor.Hosting,
                         descriptor.AdvertisedCapabilities.ToImmutableArray(),
-                        MemoryProviderCapabilities.All.ToImmutableArray())])],
+                        runSelection?.RequiredCapabilities ?? MemoryProviderCapabilities.All.ToImmutableArray())])],
                 new ProjectRunLimitSnapshot(maxPromptTokens));
         }
     }

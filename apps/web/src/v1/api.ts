@@ -1223,6 +1223,22 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /** Reads the run session tree using current project-read authority. */
+  getProjectRunHistorySessions(
+    token: string,
+    projectId: string,
+    runId: string,
+    tenantSelector?: string | null,
+  ): Promise<SessionTreeSnapshot> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'history', 'sessions')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
   /** Reads current activity and blockers for one coordination session. */
   getSessionStatus(
     token: string,
@@ -1561,6 +1577,26 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'events')}?${query.toString()}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads a bounded run event page using current project-read authority. */
+  async replayProjectRunHistoryEvents(
+    token: string,
+    projectId: string,
+    runId: string,
+    cursor?: string | null,
+    limit = 100,
+    tenantSelector?: string | null,
+  ): Promise<SessionEventPage> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (cursor) query.set('cursor', cursor);
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'history', 'events')}?${query.toString()}`,
       {},
       this.baseUrl,
       tenantSelector,

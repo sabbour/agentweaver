@@ -46,6 +46,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/DecisionView.tsx`, `src/v1/decisionTitles.ts` | Shared decision view that rereads a gate before it approves or rejects. |
 | `src/v1/AttentionList.tsx`, `src/v1/runAttention.ts` | Caller notifications across projects, for Overview and the notification bell: pending gates and backlog promotions, each with **Dismiss**. |
 | `src/v1/runState.ts` | State words for runs: Needs input, Open, Working, Done, and Unavailable. |
+| `src/v1/App.tsx` (`ProjectRunHistoryPage`) | Project-authorized session tree and activity history for one run, using the shared tree and journal views. |
 | `src/v1/NewChatComposer.tsx` | Message composer with a stable idempotency key per draft. The run Chat tab uses it. |
 | `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
 | `src/v1/AgentsView.tsx`, `src/v1/AgentsTeamControls.tsx` | Agents roster, filters, the charter drawer, **Cast team**, **Add member**, pending team proposals, and team export and import. |
@@ -85,6 +86,7 @@ data hooks are not mounted.
 | `/assistant` | `NewSessionPage`; `project` or `projectId` preselects the project. |
 | `/platform-settings` | `PlatformSettingsPage`. |
 | `/projects/:projectId/team/cast` | `CastTeamPage`. |
+| `/projects/:projectId/runs/:runId/history` | Project-authorized Session tree or Activity history for the selected run. Current project readers can open it without run-accepting authority; run-bound tokens remain limited to their run. |
 | `/projects/:projectId/runs/:runId` | `RunPage`; `view` selects `chat`, `topology`, `approvals`, `activity`, `changes`, `usage`, or `selection` (**Run settings**). Missing or unknown values open `chat`. |
 | `/projects/:projectId/orchestrations/:runId` | Redirect to the corresponding run route. |
 | `/auth/callback` | Broker callback handling; popup callbacks bypass the main route tree. |

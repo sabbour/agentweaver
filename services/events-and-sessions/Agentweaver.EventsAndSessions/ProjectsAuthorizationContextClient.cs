@@ -53,6 +53,13 @@ public interface IProjectsAuthorizationContextClient
     Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
         HttpContext context,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches fresh authority for a project-scoped read without widening a run-bound caller.</summary>
+    Task<ProjectsAuthorizationContextResponse> GetProjectReadAsync(
+        HttpContext context,
+        string projectId,
+        string ownerAudience,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>Calls the Projects owner without redirects and validates its uncached authorization contract.</summary>

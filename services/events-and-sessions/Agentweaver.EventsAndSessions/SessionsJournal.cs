@@ -184,6 +184,20 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return binding ?? throw new SessionNotFoundException("The project run does not exist.");
     }
 
+    /// <summary>Reads an existing run pin after the caller validates project-level read authority.</summary>
+    internal async Task<SessionProviderBinding> GetProjectRunProviderBindingAsync(
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        var scope = new SessionRunScope(projectId, runId);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        var binding = await ReadProviderBindingAsync(
+            connection, null, scope.ProjectId, scope.RunId, lockRow: false, cancellationToken)
+            .ConfigureAwait(false);
+        return binding ?? throw new SessionNotFoundException("The project run does not exist.");
+    }
+
     /// <summary>Appends an ordinary event, denying owner-only receipt and producer-owned material payloads.</summary>
     public async Task<SessionAppendResult> AppendAsync(
         ClaimsPrincipal principal,
@@ -764,6 +778,23 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             connection, null, scope.ProjectId, scope.RunId, cancellationToken);
         return await ReadEventPageAsync(
             connection, scope, null, afterPosition, request.Limit, request.Cursor, cancellationToken);
+    }
+
+    /// <summary>Replays project-authorized run history after the endpoint validates current Projects authority.</summary>
+    internal async Task<SessionEventPage> ReplayProjectRunAsync(
+        SessionRunEventPageRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var scope = new SessionRunScope(request.ProjectId, request.RunId);
+        ValidatePageRequest(request.Limit);
+        var afterPosition = DecodeRunCursor(request.Cursor, scope);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        _ = await ReadRunPositionAsync(
+            connection, null, scope.ProjectId, scope.RunId, cancellationToken).ConfigureAwait(false);
+        return await ReadEventPageAsync(
+            connection, scope, null, afterPosition, request.Limit, request.Cursor, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Loads up to one extra row to determine whether another page exists, then encodes the last position.</summary>

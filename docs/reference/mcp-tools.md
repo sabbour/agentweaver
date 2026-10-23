@@ -176,6 +176,7 @@ See [AgentSuite import](./agentsuite-import.md).
 | `startProjectRun` | Deliver the first run message. |
 | `cancelProjectRun` | Cancel a run. |
 | `listProjectRuns` | List accepted project runs, newest first. |
+| `getProjectRunHistorySessions` | Read a run's sessions with current project read authority. |
 | `listProjectIssues` | List synced repository issues stored in the project backlog. |
 | `listProjectPullRequests` | List pull requests that project runs recorded after migration 032 was applied. |
 | `readProjectMetrics` | Read bounded project run counts and daily UTC activity from Orchestrator. |
@@ -260,6 +261,7 @@ for metric definitions and differences from the 0.x dashboard.
 | --- | --- |
 | `createKnowledgeRecord` | Create a scoped record. |
 | `searchKnowledge` | Search and page records. |
+| `searchProjectKnowledge` | Search across existing project Memory bindings and agents. |
 | `readKnowledgeRecord` | Read one record. |
 | `updateKnowledgeRecord` | Apply a revision-checked update. |
 | `restoreKnowledgeRecord` | Append a restored revision. |
@@ -276,6 +278,7 @@ for metric definitions and differences from the 0.x dashboard.
 | Operation ID | Purpose |
 | --- | --- |
 | `replayRunEvents` | Read a finite committed journal page. |
+| `replayProjectRunHistoryEvents` | Read run activity with current project read authority. |
 | `readSessionTurnContent` | Read recorded turn text with current run-bound project authority. Excludes cache, configuration, and tool-result material. |
 | `readRunUsage` | Read run usage totals. |
 | `readProjectUsage` | Read persisted project usage grouped by model and agent. |

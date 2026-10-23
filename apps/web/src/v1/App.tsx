@@ -2257,11 +2257,11 @@ function KnowledgePage() {
                 </div>
                 <div className="v1-actions">
                   <Link className="v1-link-button"
-                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}?view=topology`}>
+                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}/history?view=sessions`}>
                     Session tree
                   </Link>
                   <Link className="v1-link-button"
-                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}?view=activity`}>
+                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}/history?view=activity`}>
                     Activity
                   </Link>
                 </div>
@@ -3456,6 +3456,188 @@ function RunTree({ tree, statuses, selectedSession, onSelect }: {
   );
 }
 
+/** Reads one run's tree or event journal with project-read authority, not the accepting run actor. */
+function ProjectRunHistoryPage() {
+  const { projectId = '', runId = '' } = useParams();
+  const { apiCall, authorize, ensureSession } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedView = searchParams.get('view');
+  const view = requestedView === 'activity' ? 'activity' : 'sessions';
+  const [tree, setTree] = useState<SessionTreeSnapshot | null>(null);
+  const [events, setEvents] = useState<SessionEventEnvelope[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [selectedSession, setSelectedSession] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [loadedKey, setLoadedKey] = useState('');
+  const [needsSignIn, setNeedsSignIn] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const requestGeneration = useRef(0);
+  const historyKey = JSON.stringify([projectId, runId, view]);
+
+  useEffect(() => {
+    if (requestedView === 'sessions' || requestedView === 'activity') return;
+    const normalized = new URLSearchParams(searchParams);
+    normalized.set('view', 'sessions');
+    setSearchParams(normalized, { replace: true });
+  }, [requestedView, searchParams, setSearchParams]);
+
+  const fetchHistory = useCallback(async (cursor: string | null) => {
+    if (!await ensureSession(null, false)) return null;
+    if (view === 'sessions') {
+      const result = await apiCall((token, tenantSelector) =>
+        gatewayClient.getProjectRunHistorySessions(
+          token, projectId, runId, tenantSelector), null);
+      // Reject cross-run data even if a project-scoped endpoint returns a broader result.
+      if (!Array.isArray(result.nodes) ||
+          result.nodes.some((node) =>
+            node.identity.projectId !== projectId || node.identity.runId !== runId) ||
+          !result.nodes.some((node) => node.identity.sessionId === result.rootSessionId))
+        throw new Error('The service returned a session tree for a different run.');
+      return { kind: 'sessions' as const, result };
+    }
+    const page = await apiCall((token, tenantSelector) =>
+      gatewayClient.replayProjectRunHistoryEvents(
+        token, projectId, runId, cursor, 100, tenantSelector), null);
+    // Reject cross-run data even if a project-scoped endpoint returns a broader result.
+    if (!Array.isArray(page.events) ||
+        page.events.some((event) =>
+          event.identity.projectId !== projectId || event.identity.runId !== runId))
+      throw new Error('The service returned activity for a different run.');
+    return { kind: 'activity' as const, page };
+  }, [apiCall, ensureSession, projectId, runId, view]);
+
+  const applyHistory = useCallback((
+    history: Awaited<ReturnType<typeof fetchHistory>>,
+    cursor: string | null,
+  ) => {
+    if (history === null) {
+      setNeedsSignIn(true);
+      return;
+    }
+    setNeedsSignIn(false);
+    if (history.kind === 'sessions') {
+      setTree(history.result);
+      setSelectedSession(history.result.rootSessionId);
+    } else {
+      setEvents((current) => {
+        if (cursor === null) return history.page.events;
+        // Keep replay pages disjoint when the same event arrives on adjacent cursors.
+        const unique = new Map(current.concat(history.page.events).map((event) => [event.eventId, event]));
+        return [...unique.values()];
+      });
+      setNextCursor(history.page.nextCursor ?? null);
+      setHasMore(history.page.hasMore);
+    }
+  }, []);
+
+  const load = useCallback(async (cursor: string | null = null) => {
+    const generation = ++requestGeneration.current;
+    setLoading(true);
+    setError(null);
+    if (cursor === null) {
+      setTree(null);
+      setEvents([]);
+      setNextCursor(null);
+      setHasMore(false);
+    }
+    try {
+      const history = await fetchHistory(cursor);
+      // A response from an earlier run or tab must not replace the current history.
+      if (generation !== requestGeneration.current) return;
+      applyHistory(history, cursor);
+      if (cursor === null) setLoadedKey(historyKey);
+    } catch (caught) {
+      if (generation === requestGeneration.current) {
+        setError(caught);
+        if (cursor === null) setLoadedKey(historyKey);
+      }
+    } finally {
+      if (generation === requestGeneration.current) setLoading(false);
+    }
+  }, [applyHistory, fetchHistory, historyKey]);
+
+  useEffect(() => {
+    const generation = ++requestGeneration.current;
+    let active = true;
+    void fetchHistory(null).then((history) => {
+      if (!active || generation !== requestGeneration.current) return;
+      applyHistory(history, null);
+      setError(null);
+      setLoadedKey(historyKey);
+    }).catch((caught: unknown) => {
+      if (!active || generation !== requestGeneration.current) return;
+      setError(caught);
+      setLoadedKey(historyKey);
+    }).finally(() => {
+      if (active && generation === requestGeneration.current) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [applyHistory, fetchHistory, historyKey]);
+
+  const isLoading = loading || loadedKey !== historyKey;
+  const selectedNode = tree?.nodes.find((node) => node.identity.sessionId === selectedSession) ?? null;
+  const setView = (nextView: string) => {
+    const normalized = new URLSearchParams(searchParams);
+    normalized.set('view', nextView);
+    setSearchParams(normalized);
+  };
+
+  return (
+    <div className="v1-stack">
+      <PageHeading title="Run history" description="Project-authorized sessions and activity for this run." page="Memories" />
+      <Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/memories`}>Back to Memories</Link>
+      <TabList
+        selectedValue={view}
+        onTabSelect={(_, data) => setView(String(data.value))}
+        aria-label="Run history"
+      >
+        <Tab value="sessions">Session tree</Tab>
+        <Tab value="activity">Activity</Tab>
+      </TabList>
+      {needsSignIn && (
+        <Panel title="Sign in for project history">
+          <Button appearance="primary" onClick={() => void authorize(null).then(() => load(null))}>
+            Sign in
+          </Button>
+        </Panel>
+      )}
+      {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
+      {needsSignIn ? null : isLoading ? <Loading label="Loading run history" /> : view === 'sessions' ? (
+        <div className="v1-run-body">
+          <RunTree tree={tree} statuses={{}} selectedSession={selectedSession} onSelect={setSelectedSession} />
+          <section className="v1-run-pane" aria-label="Selected session">
+            <Panel title={selectedNode ? sessionName(selectedNode) : 'Session'}>
+              {selectedNode ? (
+                <dl className="v1-detail-list">
+                  <div><dt>Lifecycle</dt><dd>{selectedNode.lifecycle}</dd></div>
+                  <div><dt>Created</dt><dd>{new Date(selectedNode.createdAt).toLocaleString()}</dd></div>
+                  {selectedNode.parentSessionId && (
+                    <div><dt>Parent</dt><dd>{selectedNode.parentSessionId}</dd></div>
+                  )}
+                </dl>
+              ) : <p className="v1-muted">No session history is available.</p>}
+            </Panel>
+          </section>
+        </div>
+      ) : (
+        <Panel title="Activity" description="Committed events, oldest first. Message text is not included.">
+          <JournalList events={events} />
+          {hasMore && (
+            <Button
+              appearance="secondary"
+              disabled={isLoading}
+              onClick={() => void load(nextCursor)}
+            >
+              Load more
+            </Button>
+          )}
+        </Panel>
+      )}
+    </div>
+  );
+}
+
 /** Adapts the coordinator session tree into the shared interactive React Flow canvas. */
 function ReactFlowView({
   nodes,
@@ -3675,6 +3857,7 @@ function AuthenticatedRoutes() {
       <Route path="/projects/:projectId/board" element={<Shell><BoardPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations" element={<Shell><OrchestrationsPage /></Shell>} />
       <Route path="/projects/:projectId/sessions" element={<Navigate to="/sessions" replace />} />
+      <Route path="/projects/:projectId/runs/:runId/history" element={<Shell><ProjectRunHistoryPage /></Shell>} />
       <Route path="/projects/:projectId/runs/:runId" element={<Shell><RunPage /></Shell>} />
       <Route path="/projects/:projectId/orchestrations/:runId" element={<CoordinatorRunRedirect />} />
       {/* 0.x operations pages. Each shows the parts current reads support and names what is missing. */}

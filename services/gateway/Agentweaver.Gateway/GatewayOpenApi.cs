@@ -97,6 +97,7 @@ internal static partial class GatewayOpenApi
             ["readSourceControlOutputCaptureDiff"] = C(null, "SourceControlOutputCaptureDiff", "200"),
             ["readSourceControlOutputCaptureFile"] = C(null, "SourceControlOutputFileContent", "200"),
             ["listProjectRuns"] = C(null, "ProjectRunPage", "200"),
+            ["getProjectRunHistorySessions"] = C(null, "SessionTreeSnapshot", "200"),
             ["listProjectIssues"] = C(null, "ProjectIssuePage", "200"),
             ["listProjectPullRequests"] = C(null, "ProjectPullRequestPage", "200"),
             // Reporting contracts stay separate across the two data owners.
@@ -157,6 +158,7 @@ internal static partial class GatewayOpenApi
             ["compileKnowledgeContext"] = C(null, "MemoryContextCompilation", "200"),
             ["readSessionTurnContent"] = C(null, "SessionTurnContent", "200"),
             ["replayRunEvents"] = C(null, "SessionEventPage", "200"),
+            ["replayProjectRunHistoryEvents"] = C(null, "SessionEventPage", "200"),
             ["streamRunEvents"] = C(null, "SessionEventPage", "200"),
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
             ["listRemoteMcpConnections"] = C(null, "RemoteMcpConnectionDirectoryPage", "200"),

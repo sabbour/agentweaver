@@ -7,6 +7,7 @@ using System.Text.Json;
 using Agentweaver.Orchestrator;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Npgsql;
 using Xunit;
 
@@ -330,6 +331,30 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         Assert.Equal(0, handler.Calls);
     }
 
+    [Fact]
+    public async Task AnotherProjectReaderCanReadAcceptedRunSessionTree()
+    {
+        var run = await AcceptRunAsync("tenant-1", DateTimeOffset.Parse("2026-10-01T00:00:00Z"), _actor);
+        var reader = new CoordinationActor(_actor.Issuer, Guid.NewGuid().ToString("D"));
+        var authorization = new ProjectsAuthorizationContext(
+            1, reader.Issuer, reader.Subject, "tenant-1", 1, null, null,
+            [new ProjectsAuthority("project", Project, [new ProjectsPermissionGrant("readProjects", 1)])]);
+        using var http = new HttpClient(new AuthorizationHandler(authorization));
+        var projects = new ProjectsRunSelectionClient(
+            http, _options, new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
+        var context = Context(null, null, actor: reader);
+        var store = new CoordinationOwnerStore(fixture.DataSource, _schema);
+
+        var result = await ProjectRunEndpoints.ReadProjectRunSessionTreeAsync(
+            Project, run, context, projects, store, default);
+
+        var snapshot = Assert.IsType<Ok<SessionTreeSnapshot>>(result).Value;
+        Assert.NotNull(snapshot);
+        Assert.NotEmpty(snapshot.Nodes);
+        Assert.Equal(run, Assert.Single(snapshot.Nodes).Identity.RunId);
+        Assert.NotEqual(_actor.Subject, reader.Subject);
+    }
+
     [Theory]
     [InlineData("?pageSize=0", "page_size_invalid")]
     [InlineData("?pageSize=abc", "page_size_invalid")]
@@ -354,11 +379,16 @@ public sealed class ProjectRunListPostgresTests(CoordinationPostgresFixture fixt
         Assert.Equal(StatusCodes.Status400BadRequest, exception.StatusCode);
     }
 
-    private HttpContext Context(string? boundProject, string? boundRun, string scope = "api.read")
+    private HttpContext Context(
+        string? boundProject,
+        string? boundRun,
+        string scope = "api.read",
+        CoordinationActor? actor = null)
     {
+        actor ??= _actor;
         var claims = new List<Claim>
         {
-            new("sub", _actor.Subject), new("aud", _options.Audience), new("aud", _options.ProjectsAudience),
+            new("sub", actor.Subject), new("aud", _options.Audience), new("aud", _options.ProjectsAudience),
             new("scope", scope)
         };
         if (boundProject is not null)
