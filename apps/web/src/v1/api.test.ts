@@ -272,6 +272,26 @@ describe('Gateway API client', () => {
     expect(init?.method).toBe('POST');
   });
 
+  it('searches project Knowledge without requiring a run or agent in the request path', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => Response.json({ items: [], totalCount: 0, page: 2, pageSize: 10 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await client.searchProjectKnowledge(
+      'token',
+      'p1',
+      { query: 'deployment', kind: 'memory', includeInactive: false, page: 2, pageSize: 10 },
+      'tenant-1',
+    );
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe(
+      'https://gateway.example.test/api/v1/projects/p1/knowledge/records?q=deployment&kind=memory&page=2&pageSize=10&includeInactive=false',
+    );
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+  });
+
   it('uses the Knowledge revision, Decision lifecycle, and bounded transfer routes', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => Response.json({}),

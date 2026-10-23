@@ -1243,10 +1243,15 @@ resolution additionally requires effective project `ReadRunSelection`. If the va
 caller token is already bound to a project/run, those bindings must match the requested
 route and the authority response.
 
+Project-wide discovery uses an unbound Broker token and additionally requires direct
+project `ReadRunSelection`. It searches all agents through existing run-provider
+bindings; it does not create a binding for a run that has no Knowledge pin.
+
 | Method and path | Contract |
 | --- | --- |
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL and current owned-schema readiness; returns `503` when migrations, tables, or required runtime grants are missing. |
+| `GET /api/projects/{projectId}/knowledge/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` (Gateway: `/api/v1/projects/{projectId}/knowledge/records`) | Search every agent across existing run-provider bindings and globally page the merged results. Rejects run-bound tokens. Each item returns `accessRunId`, the existing run binding used to authorize history reads, separately from `record.sourceRunId` provenance. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records` | Create a Memory, SessionContext, or Proposal record. Requires one `Idempotency-Key`; a new write returns `201`, an identical retry returns `200`, and reuse with different request content returns `409`. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` | Search only the requested project and agent, with bounded pages; requires current `AccessPrivateKnowledge` for private content. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Read one record in the requested project/agent scope; requires current `AccessPrivateKnowledge` for private content. |

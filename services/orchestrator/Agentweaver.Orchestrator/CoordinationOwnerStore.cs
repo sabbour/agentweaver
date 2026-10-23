@@ -1540,6 +1540,36 @@ internal sealed partial class CoordinationOwnerStore
         return new SessionTreeSnapshot(session.RootSessionId, nodes);
     }
 
+    /// <summary>Reads a run's session tree after the endpoint validates current project read authority.</summary>
+    internal async Task<SessionTreeSnapshot> ReadProjectSessionTreeAsync(
+        string tenantId,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        CoordinationIdentity.ValidateIdentity(tenantId, nameof(tenantId));
+        CoordinationIdentity.ValidateIdentity(projectId, nameof(projectId));
+        CoordinationIdentity.ValidateIdentity(runId, nameof(runId));
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var run = await ReadAcceptedRunAsync(
+            connection, transaction, projectId, runId, forUpdate: false, cancellationToken)
+            .ConfigureAwait(false);
+        // Projects supplies the tenant scope; never return a matching project/run row from another tenant.
+        if (run.TenantId != tenantId)
+            throw new CoordinationException("accepted_run_not_found", StatusCodes.Status404NotFound);
+        var root = await ReadRootSessionAsync(
+            connection, transaction, projectId, runId, forUpdate: false, cancellationToken)
+            .ConfigureAwait(false);
+        if (root is null)
+            throw new CoordinationException("session_tree_unavailable", StatusCodes.Status503ServiceUnavailable);
+        var nodes = await ReadTreeNodesAsync(
+            connection, transaction, projectId, runId, root.SessionId, cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new SessionTreeSnapshot(root.SessionId, nodes);
+    }
+
     /// <summary>
     /// Reads current work-plan children for MAF dispatch, including explicitly associated fixed-work children.
     /// </summary>

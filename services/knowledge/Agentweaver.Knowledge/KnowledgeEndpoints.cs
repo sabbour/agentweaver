@@ -10,6 +10,9 @@ public static class KnowledgeEndpoints
     /// <summary>Registers project/run/agent record routes and internal accepted-effect receipt routes.</summary>
     public static void MapKnowledgeEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/projects/{projectId}/knowledge/records", SearchProjectAsync)
+            .RequireAuthorization();
+
         var agents = app.MapGroup("/api/projects/{projectId}/runs/{runId}/agents/{agentId}")
             .RequireAuthorization();
         agents.MapPost("/records", CreateAsync);
@@ -32,6 +35,29 @@ public static class KnowledgeEndpoints
                 "/internal/projects/{projectId}/runs/{runId}/accepted-effects/{receiptId:guid}",
                 ReadScopedAcceptedEffectReceiptAsync)
             .RequireAuthorization();
+    }
+
+    /// <summary>Searches private Knowledge across currently authorized project-run provider bindings.</summary>
+    private static Task<IResult> SearchProjectAsync(
+        string projectId,
+        KnowledgeRecordKind? kind,
+        string? q,
+        bool? includeInactive,
+        int? page,
+        int? pageSize,
+        HttpContext httpContext,
+        KnowledgeApplicationService service,
+        CancellationToken cancellationToken)
+    {
+        httpContext.Response.Headers.CacheControl = "no-store";
+        return ExecuteAsync(async () => Results.Ok(await service.SearchProjectAsync(
+            projectId,
+            kind,
+            q,
+            includeInactive ?? false,
+            page ?? 1,
+            pageSize ?? 50,
+            cancellationToken).ConfigureAwait(false)));
     }
 
     /// <summary>Creates a record and returns 201, or 200 when the idempotency receipt is reused.</summary>

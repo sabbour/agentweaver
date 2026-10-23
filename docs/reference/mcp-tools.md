@@ -136,6 +136,11 @@ Revision checks stay inside `body`; no idempotency header is required.
 | `readProjectBacklog` | Read project backlog tasks and dependencies. |
 | `captureBacklogTask` | Capture project backlog work. |
 | `editBacklogTaskContent` | Replace backlog task content and lifecycle. |
+| `setProjectBacklogTaskState` | Queue or return an unclaimed task. |
+| `archiveProjectBacklogTask` | Archive an unclaimed task. |
+| `addProjectBacklogDependency` | Add a prerequisite to a task. |
+| `removeProjectBacklogDependency` | Remove a task prerequisite. |
+| `claimBacklogTask` | Atomically claim eligible work for an accepted run with an idempotency key. |
 
 ### Skills and marketplace
 
@@ -176,6 +181,7 @@ See [AgentSuite import](./agentsuite-import.md).
 | `startProjectRun` | Deliver the first run message. |
 | `cancelProjectRun` | Cancel a run. |
 | `listProjectRuns` | List accepted project runs, newest first. |
+| `getProjectRunHistorySessions` | Read a run's sessions with current project read authority and tenant ownership checks. |
 | `listProjectIssues` | List synced repository issues stored in the project backlog. |
 | `listProjectPullRequests` | List pull requests that project runs recorded after migration 032 was applied. |
 | `readProjectMetrics` | Read bounded project run counts and daily UTC activity from Orchestrator. |
@@ -260,6 +266,7 @@ for metric definitions and differences from the 0.x dashboard.
 | --- | --- |
 | `createKnowledgeRecord` | Create a scoped record. |
 | `searchKnowledge` | Search and page records. |
+| `searchProjectKnowledge` | Search across existing project Memory bindings and agents. |
 | `readKnowledgeRecord` | Read one record. |
 | `updateKnowledgeRecord` | Apply a revision-checked update. |
 | `restoreKnowledgeRecord` | Append a restored revision. |
@@ -276,6 +283,7 @@ for metric definitions and differences from the 0.x dashboard.
 | Operation ID | Purpose |
 | --- | --- |
 | `replayRunEvents` | Read a finite committed journal page. |
+| `replayProjectRunHistoryEvents` | Read run activity with current project read authority and tenant ownership checks. |
 | `readSessionTurnContent` | Read recorded turn text with current run-bound project authority. Excludes cache, configuration, and tool-result material. |
 | `readRunUsage` | Read run usage totals. |
 | `readProjectUsage` | Read persisted project usage grouped by model and agent. |

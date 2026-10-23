@@ -738,6 +738,156 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AnotherAuthorizedProjectMemberCanReadRunActivityWithoutRunBinding()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var issuer = new Uri("https://identity.test");
+        const string audience = "https://events.test";
+        const string projectsAudience = "agentweaver.projects";
+        const string runId = "project-history-run";
+        const string sessionId = "project-history-root";
+        const string readerId = "44444444-4444-4444-4444-444444444444";
+        var owner = Principal("project-1", runId);
+        var binding = await _bindingService.ResolveAndPinAsync(owner);
+        await _journal.CreateSessionAsync(owner, sessionId, binding);
+        var appended = await _journal.AppendAsync(owner, sessionId, Turn(Guid.NewGuid(), "turns/history"));
+
+        var projectsHandler = new ProjectAuthorizationHandler(new ProjectsAuthorizationContextResponse(
+            1,
+            issuer.AbsoluteUri,
+            readerId,
+            "tenant-1",
+            4,
+            null,
+            null,
+            [new("project", "project-1", [new("readProjects", 1)])]));
+        var projects = new ProjectsAuthorizationContextClient(
+            new HttpClient(projectsHandler),
+            new("https://projects.internal/", projectsAudience, issuer.AbsoluteUri));
+        var token = CreateProjectReadToken(
+            rsa, issuer.AbsoluteUri, [audience, projectsAudience], readerId);
+
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Configuration["Identity:Audience"] = audience;
+        builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
+        builder.Services.AddOpenIddict().AddValidation(validation =>
+        {
+            validation.SetIssuer(issuer);
+            validation.AddAudiences(audience, projectsAudience);
+            validation.Configure(configuration => configuration.Configuration = new OpenIddictConfiguration
+            {
+                Issuer = issuer,
+                SigningKeys = { signingKey }
+            });
+            validation.UseAspNetCore();
+        });
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<ISessionsJournal>(_journal);
+        builder.Services.AddSingleton(_journal);
+        builder.Services.AddSingleton<ISessionsProviderBinder>(_bindingService);
+        builder.Services.AddSingleton(_bindingService);
+        builder.Services.AddSingleton<IProjectsAuthorizationContextClient>(projects);
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapEventsAndSessionsEndpoints();
+        await app.StartAsync();
+
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant-1");
+        using var response = await client.GetAsync(
+            $"/internal/projects/project-1/runs/{runId}/project-history/events?limit=10");
+
+        var responseBody = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == HttpStatusCode.OK, responseBody);
+        Assert.True(response.Headers.CacheControl?.NoStore == true);
+        Assert.Equal(2, projectsHandler.Calls);
+        var page = JsonSerializer.Deserialize<SessionEventPage>(
+            responseBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(page);
+        Assert.Equal(appended.Event.EventId, Assert.Single(page.Events).EventId);
+        Assert.Equal(readerId, projectsHandler.Authorization.ActorId);
+        Assert.NotEqual("33333333-3333-3333-3333-333333333333", readerId);
+    }
+
+    [Fact]
+    public async Task TenantAdminCannotReadRunActivityFromAnotherTenant()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var issuer = new Uri("https://identity.test");
+        const string audience = "https://events.test";
+        const string projectsAudience = "agentweaver.projects";
+        const string runId = "tenant-b-run";
+        const string sessionId = "tenant-b-root";
+        const string readerId = "44444444-4444-4444-4444-444444444444";
+        var projectId = Guid.NewGuid().ToString("N");
+        var owner = Principal(projectId, runId);
+        var binding = await _bindingService.ResolveAndPinAsync(owner);
+        await _journal.CreateSessionAsync(owner, sessionId, binding);
+        var appended = await _journal.AppendAsync(owner, sessionId, Turn(Guid.NewGuid(), "turns/tenant-b"));
+
+        var projectsHandler = new ProjectAuthorizationHandler(
+            new ProjectsAuthorizationContextResponse(
+                1,
+                issuer.AbsoluteUri,
+                readerId,
+                "tenant-1",
+                4,
+                null,
+                null,
+                [new("tenant", "tenant-1", [new("readProjects", 1)])]),
+            projectId);
+        var projects = new ProjectsAuthorizationContextClient(
+            new HttpClient(projectsHandler),
+            new("https://projects.internal/", projectsAudience, issuer.AbsoluteUri));
+        var token = CreateProjectReadToken(
+            rsa, issuer.AbsoluteUri, [audience, projectsAudience], readerId);
+
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Configuration["Identity:Audience"] = audience;
+        builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
+        builder.Services.AddOpenIddict().AddValidation(validation =>
+        {
+            validation.SetIssuer(issuer);
+            validation.AddAudiences(audience, projectsAudience);
+            validation.Configure(configuration => configuration.Configuration = new OpenIddictConfiguration
+            {
+                Issuer = issuer,
+                SigningKeys = { signingKey }
+            });
+            validation.UseAspNetCore();
+        });
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<ISessionsJournal>(_journal);
+        builder.Services.AddSingleton(_journal);
+        builder.Services.AddSingleton<ISessionsProviderBinder>(_bindingService);
+        builder.Services.AddSingleton(_bindingService);
+        builder.Services.AddSingleton<IProjectsAuthorizationContextClient>(projects);
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapEventsAndSessionsEndpoints();
+        await app.StartAsync();
+
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant-1");
+        using var response = await client.GetAsync(
+            $"/internal/projects/{projectId}/runs/{runId}/project-history/events?limit=10");
+
+        var responseBody = await response.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Contains("project_read_permission_denied", responseBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(appended.Event.EventId.ToString("D"), responseBody, StringComparison.Ordinal);
+        Assert.Equal(2, projectsHandler.Calls);
+    }
+
+    [Fact]
     public async Task AuthenticatedEventsRouteForksOnlyTheRequestedCommittedPrefix()
     {
         using var rsa = RSA.Create(2048);
@@ -1622,6 +1772,31 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         return $"{unsignedToken}.{Base64Url(signature)}";
     }
 
+    private static string CreateProjectReadToken(
+        RSA signingKey,
+        string issuer,
+        string[] audiences,
+        string subject)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var header = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new { alg = "RS256", typ = "at+jwt" }));
+        var payload = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            iss = issuer,
+            aud = audiences,
+            sub = subject,
+            scope = "api.read",
+            nbf = now - 60,
+            exp = now + 300
+        }));
+        var unsignedToken = $"{header}.{payload}";
+        var signature = signingKey.SignData(
+            Encoding.ASCII.GetBytes(unsignedToken),
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        return $"{unsignedToken}.{Base64Url(signature)}";
+    }
+
     private static string Base64Url(byte[] value) =>
         Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
@@ -1803,6 +1978,67 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         {
             var index = Interlocked.Increment(ref _callCount) - 1;
             return Task.FromResult(responses[Math.Min(index, responses.Length - 1)]);
+        }
+
+        public Task<ProjectsAuthorizationContextResponse> GetProjectReadAsync(
+            HttpContext context,
+            string projectId,
+            string ownerAudience,
+            CancellationToken cancellationToken) =>
+            Task.FromException<ProjectsAuthorizationContextResponse>(
+                new NotSupportedException("Project reads are not configured in this test fake."));
+    }
+
+    private sealed class ProjectAuthorizationHandler : HttpMessageHandler
+    {
+        private readonly ProjectsAuthorizationContextResponse _authorization;
+        private readonly string? _tenantBProjectId;
+        private int _calls;
+
+        public ProjectAuthorizationHandler(
+            ProjectsAuthorizationContextResponse authorization,
+            string? tenantBProjectId = null)
+        {
+            _authorization = authorization;
+            _tenantBProjectId = tenantBProjectId;
+        }
+
+        public int Calls => Volatile.Read(ref _calls);
+        public ProjectsAuthorizationContextResponse Authorization => _authorization;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _calls);
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            if (request.RequestUri!.AbsolutePath.StartsWith("/api/projects/", StringComparison.Ordinal))
+            {
+                Assert.Equal($"/api/projects/{_tenantBProjectId}", request.RequestUri.AbsolutePath);
+                var tenant = Assert.Single(request.Headers.GetValues("X-Agentweaver-Tenant"));
+                if (tenant == "tenant-b")
+                {
+                    var project = new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = JsonContent.Create(new { projectId = _tenantBProjectId }),
+                        Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+                    };
+                    return Task.FromResult(project);
+                }
+
+                // Projects hides this tenant-B project from the tenant-A admin.
+                Assert.Equal("tenant-1", tenant);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            }
+            Assert.Equal("tenant-1", Assert.Single(request.Headers.GetValues("X-Agentweaver-Tenant")));
+            Assert.Equal("/api/authorization/context", request.RequestUri.AbsolutePath);
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(_authorization),
+                Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+            };
+            return Task.FromResult(response);
         }
     }
 

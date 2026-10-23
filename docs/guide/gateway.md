@@ -47,6 +47,13 @@ decision.
 4. Check the owning service's response. A Gateway-accepted request does not
    prove that an asynchronous operation completed.
 
+Project-wide Knowledge search uses
+`GET /api/v1/projects/{projectId}/knowledge/records`. Use a Broker token that
+is not bound to a run. The Knowledge owner checks current `AccessPrivateKnowledge`
+and direct project `ReadRunSelection` authority, then searches existing provider
+bindings across agents. Run-scoped create and update operations continue to use
+the run-and-agent routes.
+
 ## Configure the Gateway
 
 Set the following configuration before you start the host:

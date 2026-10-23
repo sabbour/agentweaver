@@ -25,6 +25,11 @@ import type {
   BacklogGraph,
   CaptureBacklogTaskRequest,
   EditBacklogTaskContentRequest,
+  SetBacklogTaskStateRequest,
+  BacklogTaskRevisionRequest,
+  BacklogGraphRevisionRequest,
+  ClaimBacklogTaskRequest,
+  BacklogTaskClaimReceipt,
   ProjectIssuePage,
   ProjectIssueStateFilter,
   ProjectMetrics,
@@ -52,6 +57,7 @@ import type {
   KnowledgeRecordImportResult,
   KnowledgeProposalPromotionResult,
   KnowledgeRecordPage,
+  ProjectKnowledgeRecordPage,
   KnowledgeRecordRevisionPage,
   KnowledgeRecordTransferBundle,
   KnowledgeRecordUpdateInput,
@@ -1222,6 +1228,22 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /** Reads the run session tree using current project-read authority. */
+  getProjectRunHistorySessions(
+    token: string,
+    projectId: string,
+    runId: string,
+    tenantSelector?: string | null,
+  ): Promise<SessionTreeSnapshot> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'history', 'sessions')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
   /** Reads current activity and blockers for one coordination session. */
   getSessionStatus(
     token: string,
@@ -1566,6 +1588,26 @@ export class AgentweaverGatewayClient {
     );
   }
 
+  /** Reads a bounded run event page using current project-read authority. */
+  async replayProjectRunHistoryEvents(
+    token: string,
+    projectId: string,
+    runId: string,
+    cursor?: string | null,
+    limit = 100,
+    tenantSelector?: string | null,
+  ): Promise<SessionEventPage> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (cursor) query.set('cursor', cursor);
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'history', 'events')}?${query.toString()}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
   /** Streams live coordination events and yields each event with its resume cursor. */
   async *streamEvents(
     token: string,
@@ -1880,6 +1922,98 @@ export class AgentweaverGatewayClient {
     return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
   }
 
+  /** Sets an unclaimed task's state using both revisions read from the board. */
+  async setProjectBacklogTaskState(
+    token: string,
+    projectId: string,
+    taskId: string,
+    request: SetBacklogTaskStateRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'state')}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Archives one unclaimed task at the graph and task revisions read from the board. */
+  async archiveProjectBacklogTask(
+    token: string,
+    projectId: string,
+    taskId: string,
+    request: BacklogTaskRevisionRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'archive')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Adds a prerequisite edge using the graph revision read from the board. */
+  async addProjectBacklogDependency(
+    token: string,
+    projectId: string,
+    taskId: string,
+    prerequisiteTaskId: string,
+    request: BacklogGraphRevisionRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'dependencies', prerequisiteTaskId)}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Removes a prerequisite edge using the graph revision read from the board. */
+  async removeProjectBacklogDependency(
+    token: string,
+    projectId: string,
+    taskId: string,
+    prerequisiteTaskId: string,
+    request: BacklogGraphRevisionRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'dependencies', prerequisiteTaskId)}`,
+      { method: 'DELETE', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Claims eligible work for an accepted run. Reuse the same idempotency key on retry. */
+  async claimBacklogTask(
+    token: string,
+    projectId: string,
+    runId: string,
+    taskId: string,
+    request: ClaimBacklogTaskRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogTaskClaimReceipt> {
+    return this.request<BacklogTaskClaimReceipt>(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'backlog', 'tasks', taskId, 'claim')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
   /**
    * Lists one page of the project's synced repository issues. The service reads
    * stored issues only. Pass `cursor` from the previous page with the same filter.
@@ -2189,6 +2323,28 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'agents', agentId, 'records')}?${query.toString()}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Searches private Knowledge across the accessible runs of one project. */
+  searchProjectKnowledge(
+    token: string,
+    projectId: string,
+    options: { query?: string; kind?: string; page?: number; pageSize?: number; includeInactive?: boolean } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectKnowledgeRecordPage> {
+    const query = new URLSearchParams();
+    if (options.query) query.set('q', options.query);
+    if (options.kind) query.set('kind', options.kind);
+    query.set('page', String(options.page ?? 1));
+    query.set('pageSize', String(options.pageSize ?? 50));
+    query.set('includeInactive', String(options.includeInactive ?? true));
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'knowledge', 'records')}?${query.toString()}`,
       {},
       this.baseUrl,
       tenantSelector,

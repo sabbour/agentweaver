@@ -97,6 +97,7 @@ internal static partial class GatewayOpenApi
             ["readSourceControlOutputCaptureDiff"] = C(null, "SourceControlOutputCaptureDiff", "200"),
             ["readSourceControlOutputCaptureFile"] = C(null, "SourceControlOutputFileContent", "200"),
             ["listProjectRuns"] = C(null, "ProjectRunPage", "200"),
+            ["getProjectRunHistorySessions"] = C(null, "SessionTreeSnapshot", "200"),
             ["listProjectIssues"] = C(null, "ProjectIssuePage", "200"),
             ["listProjectPullRequests"] = C(null, "ProjectPullRequestPage", "200"),
             // Reporting contracts stay separate across the two data owners.
@@ -144,6 +145,7 @@ internal static partial class GatewayOpenApi
             ["validatePolicyEvaluationAdmission"] = C(null, "PolicyEvaluationReceiptAdmissionAcknowledgment", "200"),
             ["createKnowledgeRecord"] = C("CreateKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
             ["searchKnowledge"] = C(null, "KnowledgeRecordPage", "200"),
+            ["searchProjectKnowledge"] = C(null, "ProjectKnowledgeRecordPage", "200"),
             ["readKnowledgeRecord"] = C(null, "KnowledgeRecord", "200"),
             ["updateKnowledgeRecord"] = C("UpdateKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
             ["restoreKnowledgeRecord"] = C("RestoreKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201", "409"),
@@ -156,12 +158,18 @@ internal static partial class GatewayOpenApi
             ["compileKnowledgeContext"] = C(null, "MemoryContextCompilation", "200"),
             ["readSessionTurnContent"] = C(null, "SessionTurnContent", "200"),
             ["replayRunEvents"] = C(null, "SessionEventPage", "200"),
+            ["replayProjectRunHistoryEvents"] = C(null, "SessionEventPage", "200"),
             ["streamRunEvents"] = C(null, "SessionEventPage", "200"),
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
             ["listRemoteMcpConnections"] = C(null, "RemoteMcpConnectionDirectoryPage", "200"),
             ["readProjectBacklog"] = C(null, "BacklogGraph", "200"),
             ["captureBacklogTask"] = C("CaptureBacklogTaskRequest", "BacklogGraph", "200"),
             ["editBacklogTaskContent"] = C("EditBacklogTaskContentRequest", "BacklogGraph", "200"),
+            ["setProjectBacklogTaskState"] = C("SetBacklogTaskStateRequest", "BacklogGraph", "200"),
+            ["archiveProjectBacklogTask"] = C("BacklogTaskRevisionRequest", "BacklogGraph", "200"),
+            ["addProjectBacklogDependency"] = C("BacklogGraphRevisionRequest", "BacklogGraph", "200"),
+            ["removeProjectBacklogDependency"] = C("BacklogGraphRevisionRequest", "BacklogGraph", "200"),
+            ["claimBacklogTask"] = C("ClaimBacklogTaskRequest", "BacklogTaskClaimReceipt", "200"),
         };
 
     /// <summary>Checks operation/schema coverage and returns the versioned API document.</summary>
@@ -326,12 +334,25 @@ internal static partial class GatewayOpenApi
                             }
                             : null);
         }
-        if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent")
+        if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent" or
+            "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or
+            "addProjectBacklogDependency" or "removeProjectBacklogDependency" or "claimBacklogTask")
         {
-            responses["400"] = JsonResponse(Ref("BacklogIssues"), "Invalid backlog content or revision.");
-            responses["409"] = JsonResponse(Ref("BacklogIssues"), "Stale revision, duplicate issue, or noneditable task.");
-            if (route.OperationId == "editBacklogTaskContent")
-                responses["404"] = JsonResponse(Ref("BacklogIssues"), "The task does not exist.");
+            responses["400"] = JsonResponse(
+                new { oneOf = new[] { Ref("BacklogIssues"), Ref("Problem") } },
+                "Invalid backlog request or revision.");
+            responses["409"] = JsonResponse(
+                new { oneOf = new[] { Ref("BacklogIssues"), Ref("Problem") } },
+                "Stale revision, blocked prerequisite, duplicate claim, or current owner conflict.");
+            if (route.OperationId is "editBacklogTaskContent" or "setProjectBacklogTaskState" or
+                "archiveProjectBacklogTask" or "addProjectBacklogDependency" or
+                "removeProjectBacklogDependency" or "claimBacklogTask")
+                responses["404"] = JsonResponse(
+                    new { oneOf = new[] { Ref("BacklogIssues"), Ref("Problem") } },
+                    "The project or task does not exist or is not visible to the caller.");
+            if (route.OperationId == "claimBacklogTask")
+                responses["503"] = ProblemResponse(
+                    "A prerequisite or run owner is unavailable. Events session registration may fail after the durable claim commits; retry with the same idempotency key.");
         }
         else if (route.IsRunEventStream)
         {
@@ -856,9 +877,9 @@ else if (route.OperationId is
         ["Problem"] = Obj(["title", "status", "code"],
             ("type", Str()), ("title", Str()), ("status", Int()), ("detail", Str()), ("code", Str())),
 
-        ["BacklogTaskReference"] = Obj(["projectId", "taskId"], ("projectId", Str()), ("taskId", Str())),
-        ["BacklogIssues"] = Obj(["issues"], ("issues", Arr(Ref("BacklogIssue")))),
-        ["BacklogIssue"] = Obj(["code", "path", "message"], ("code", Str()), ("path", Str()), ("message", Str())),
+        ["BacklogTaskReference"] = StrictObj(["projectId", "taskId"], ("projectId", Str()), ("taskId", Str())),
+        ["BacklogIssues"] = StrictObj(["issues"], ("issues", Arr(Ref("BacklogIssue")))),
+        ["BacklogIssue"] = StrictObj(["code", "path", "message"], ("code", Str()), ("path", Str()), ("message", Str())),
         ["SourceControlRepositoryIdentity"] = Obj(["owner", "name"], ("owner", Str()), ("name", Str())),
         ["IssueSyncSettings"] = Obj(["enabled", "grantId", "intervalSeconds", "maxItems", "maxCycleSeconds"],
             ("enabled", Bool()), ("grantId", Uuid()), ("intervalSeconds", Int()),
@@ -878,25 +899,58 @@ else if (route.OperationId is
             ("expectedRevision", Int()), ("settings", Ref("IssueSyncSettings"))),
         ["CreateIssueSyncGrant"] = Obj(["selectionCode"], ("selectionCode", Str())),
         ["IssueSyncGrantRevocation"] = Obj(["revoked"], ("revoked", Bool())),
-        ["BacklogRepositoryIssueLink"] = Obj(["providerId", "repository", "issueNumber"],
-            ("providerId", Str()), ("repository", Ref("SourceControlRepositoryIdentity")), ("issueNumber", Int())),
-        ["BacklogTaskContent"] = Obj(["title"], ("title", Str()), ("description", NullableStr()),
+        ["BacklogRepositoryIdentity"] = StrictObj(["owner", "name"], ("owner", Str()), ("name", Str())),
+        ["BacklogRepositoryIssueLink"] = StrictObj(["providerId", "repository", "issueNumber"],
+            ("providerId", Str()), ("repository", Ref("BacklogRepositoryIdentity")), ("issueNumber", Int())),
+        ["BacklogTaskContent"] = StrictObj(["title"], ("title", Str()), ("description", NullableStr()),
             ("lifecycle", Enum("open", "closed")), ("repositoryIssue", Nullable(Ref("BacklogRepositoryIssueLink")))),
-        ["BacklogTaskSnapshot"] = Obj(
+        ["BacklogTaskSnapshot"] = StrictObj(
             ["reference", "revision", "state", "isArchived", "isAutomationInvocationPending", "title", "lifecycle"],
             ("reference", Ref("BacklogTaskReference")), ("revision", Int()),
             ("state", Enum("backlog", "ready", "claimed")), ("isArchived", Bool()),
             ("isAutomationInvocationPending", Bool()), ("title", Str()), ("description", NullableStr()),
             ("lifecycle", Enum("open", "closed")), ("repositoryIssue", Nullable(Ref("BacklogRepositoryIssueLink")))),
-        ["BacklogDependencyEdge"] = Obj(["task", "prerequisite"],
+        ["BacklogDependencyEdge"] = StrictObj(["task", "prerequisite"],
             ("task", Ref("BacklogTaskReference")), ("prerequisite", Ref("BacklogTaskReference"))),
-        ["BacklogGraph"] = Obj(["projectId", "revision", "tasks", "dependencies"],
+        ["BacklogGraph"] = StrictObj(["projectId", "revision", "tasks", "dependencies", "snapshot"],
+            ("projectId", Str()), ("revision", Int()), ("tasks", Arr(Ref("BacklogTaskSnapshot"))),
+            ("dependencies", Arr(Ref("BacklogDependencyEdge"))),
+            ("snapshot", Ref("BacklogDependencyGraphSnapshot"))),
+        ["BacklogDependencyGraphSnapshot"] = StrictObj(["projectId", "revision", "tasks", "dependencies"],
             ("projectId", Str()), ("revision", Int()), ("tasks", Arr(Ref("BacklogTaskSnapshot"))),
             ("dependencies", Arr(Ref("BacklogDependencyEdge")))),
-        ["CaptureBacklogTaskRequest"] = Obj(["taskId", "content", "expectedGraphRevision"],
+        ["CaptureBacklogTaskRequest"] = StrictObj(["taskId", "content", "expectedGraphRevision"],
             ("taskId", Str()), ("content", Ref("BacklogTaskContent")), ("expectedGraphRevision", Int())),
-        ["EditBacklogTaskContentRequest"] = Obj(["content", "expectedGraphRevision", "expectedTaskRevision"],
+        ["EditBacklogTaskContentRequest"] = StrictObj(["content", "expectedGraphRevision", "expectedTaskRevision"],
             ("content", Ref("BacklogTaskContent")), ("expectedGraphRevision", Int()), ("expectedTaskRevision", Int())),
+        ["SetBacklogTaskStateRequest"] = StrictObj(
+            ["state", "expectedGraphRevision", "expectedTaskRevision"],
+            ("state", Enum("backlog", "ready")),
+            ("expectedGraphRevision", Int()),
+            ("expectedTaskRevision", Int())),
+        ["BacklogTaskRevisionRequest"] = StrictObj(
+            ["expectedGraphRevision", "expectedTaskRevision"],
+            ("expectedGraphRevision", Int()),
+            ("expectedTaskRevision", Int())),
+        ["BacklogGraphRevisionRequest"] = StrictObj(
+            ["expectedGraphRevision"], ("expectedGraphRevision", Int())),
+        ["ClaimBacklogTaskRequest"] = StrictObj(
+            ["expectedGraphRevision", "expectedTaskRevision", "idempotencyKey"],
+            ("expectedGraphRevision", Int()),
+            ("expectedTaskRevision", Int()),
+            ("idempotencyKey", new { type = "string", minLength = 1, maxLength = 128 })),
+        ["BacklogTaskClaimReceipt"] = StrictObj(
+            ["task", "taskRevision", "claimId", "phase", "runId", "rootSessionId", "selectionHash",
+                "executionFence", "decisionStateVersion"],
+            ("task", Ref("BacklogTaskReference")),
+            ("taskRevision", Int()),
+            ("claimId", Uuid()),
+            ("phase", Enum("preparing", "confirmed")),
+            ("runId", Str()),
+            ("rootSessionId", Str()),
+            ("selectionHash", Str()),
+            ("executionFence", Int()),
+            ("decisionStateVersion", Int())),
 
         ["ProjectSummary"] = Obj(["projectId", "name", "state", "revision", "configurationRevision", "createdAt", "updatedAt", "effectiveRoles"],
             ("projectId", Str()), ("name", Str()), ("state", Enum("active", "archived")),
@@ -1908,6 +1962,16 @@ else if (route.OperationId is
             ("supersededByRecordId", NullableUuid())),
         ["KnowledgeRecordPage"] = StrictObj(["items", "totalCount", "page", "pageSize"],
             ("items", Arr(Ref("KnowledgeRecord"))), ("totalCount", Int()), ("page", Int()), ("pageSize", Int())),
+        ["ProjectKnowledgeRecord"] = StrictObj(["accessRunId", "record"],
+            ("accessRunId", new
+            {
+                type = "string",
+                description = "Existing run binding that authorizes history reads; not record provenance."
+            }),
+            ("record", Ref("KnowledgeRecord"))),
+        ["ProjectKnowledgeRecordPage"] = StrictObj(["items", "totalCount", "page", "pageSize"],
+            ("items", Arr(Ref("ProjectKnowledgeRecord"))), ("totalCount", Int()),
+            ("page", Int()), ("pageSize", Int())),
         ["KnowledgeRecordRevision"] = StrictObj(["recordId", "revision", "revisionId", "kind", "type", "content", "importance", "tags", "state", "trustState", "reason", "createdAt"],
             ("recordId", Uuid()), ("revision", Int()), ("revisionId", Uuid()), ("previousRevisionId", NullableUuid()),
             ("kind", Enum("memory", "proposal", "decision", "sessionContext")), ("type", Str()), ("title", NullableStr()),

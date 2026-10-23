@@ -120,6 +120,32 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
                 field => field.GetString() == "projectId");
         }
 
+        foreach (var operation in new[]
+        {
+            "readProjectBacklog",
+            "captureBacklogTask",
+            "editBacklogTaskContent",
+            "setProjectBacklogTaskState",
+            "archiveProjectBacklogTask",
+            "addProjectBacklogDependency",
+            "removeProjectBacklogDependency",
+            "claimBacklogTask",
+        })
+        {
+            var tool = Assert.Single(tools.EnumerateArray(),
+                candidate => candidate.GetProperty("name").GetString() == "agentweaver_" + operation);
+            var backlogInputSchema = tool.GetProperty("inputSchema");
+            Assert.False(backlogInputSchema.GetProperty("additionalProperties").GetBoolean());
+            if (operation is "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or
+                "addProjectBacklogDependency" or "removeProjectBacklogDependency" or "claimBacklogTask")
+                Assert.False(backlogInputSchema.GetProperty("properties").GetProperty("body")
+                    .GetProperty("additionalProperties").GetBoolean());
+            if (operation == "claimBacklogTask")
+                foreach (var field in new[] { "projectId", "runId", "taskId", "body" })
+                    Assert.Contains(backlogInputSchema.GetProperty("required").EnumerateArray(),
+                        item => item.GetString() == field);
+        }
+
         var knowledgeTool = Assert.Single(
             tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_createKnowledgeRecord");

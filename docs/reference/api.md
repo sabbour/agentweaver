@@ -97,7 +97,7 @@ lifetime. Scopes do not replace current roles, owner state, or immutable binding
 | Selection | `api.read` and `projects.orchestrator`, current project Orchestrator assignment, and matching project/run binding. |
 | Coordination | Exact project/run bearer with `api.read` and `projects.orchestrator`, matching owner audience, and a current accepted Projects selection. |
 | Journal | Authenticated signed project/run scope, current Sessions provider binding, and owner-authorized journal access. Writes also require the appropriate owner admission. |
-| Private Knowledge | Selection authority plus current `AccessPrivateKnowledge` permission and accepted run Memory selection. The permission comes from Projects, not record content. |
+| Private Knowledge | Current `AccessPrivateKnowledge` permission plus `ReadRunSelection` authority. Run-scoped routes use the accepted run Memory selection; project-wide search requires an unbound token and uses only existing run-provider bindings. The permission comes from Projects, not record content. |
 | Runtime | Authenticated bearer plus exact current runtime registration, placement, purpose, proof, or receipt required by that operation. These are not ordinary user write APIs. |
 | Environment read | Bearer plus current `ReadProjects` authority and matching tenant/project/run binding. |
 | Environment write | Bearer plus current `WriteProjects` authority, matching owner binding, and operation-specific fences. Operations that read accepted selections also require `ReadRunSelection`. Projects does not grant `WriteProjects` to run-bound callers. |
@@ -118,13 +118,18 @@ forwards the tenant selector and exposes these versioned operations:
 | GET | `/api/v1/projects/{projectId}/backlog` | Current `ReadProjects` |
 | POST | `/api/v1/projects/{projectId}/backlog/tasks` | Current `WriteProjects` |
 | PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/content` | Current `WriteProjects` |
+| PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/state` | Current `WriteProjects` |
+| POST | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/archive` | Current `WriteProjects` |
+| PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Current `WriteProjects` |
+| DELETE | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Current `WriteProjects` |
 
 The native paths replace `/api/v1` with `/api`. Reads require `api.read`.
 Writes also require `projects.admin` and project Owner or tenant administrator
 authority. Run-bound and purpose-bound tokens cannot use these routes. An
 optional project binding must match the route. The bearer must include the
 Orchestrator and Projects audiences. The owner rechecks membership and role
-revisions after acquiring the graph lock and before committing a write.
+revisions after acquiring the graph lock and again before committing every
+write.
 
 Capture accepts `taskId`, `expectedGraphRevision`, and `content`. Content
 contains `title`, optional `description`, `lifecycle` (`open` or `closed`,
@@ -149,10 +154,20 @@ claim and run ownership; it does not cancel execution. Reopening does not
 schedule work. Archive remains separate from open/closed lifecycle.
 Historical ID-only tasks retain an empty title until edited.
 
+State writes can move an unclaimed open task between `backlog` and `ready`;
+only an atomic claim can set `claimed`. Dependency writes reject self-links,
+cross-project links, missing tasks, and cycles. Adding an existing dependency
+succeeds as a no-op and does not change the graph revision. Marking a task
+Ready queues it but does not prove its prerequisites are complete. A claim
+checks current prerequisite execution and output evidence again and returns
+typed blockers when work is not eligible. Archive and dependency changes use
+the same graph lock and revision checks as task edits.
+
 These source mappings require migration `026_backlog_task_content.sql`.
 Migration application, existing grant reconciliation, and the changed
 PostgreSQL plan hash require separate operator approval and remain unapplied.
-This content contract does not add MCP tools or a retained UI.
+MCP discovers these operations from the Gateway catalog. The retained Board
+uses the state, archive, and dependency operations; it does not start a run.
 
 Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 `GatewayRouteCatalog.cs`.
@@ -554,6 +569,16 @@ Each item includes the selected `workflowId` and `needsInputCount`, the count of
 durable pending decision gates. Saved run requests supply `title` and `goal`;
 they can be `null` for older or non-interactive runs without a saved request.
 
+### Project run session history
+
+| Method | Native path | Auth | Purpose | Gateway path |
+| --- | --- | --- | --- | --- |
+| GET | `/api/projects/{projectId}/runs/{runId}/history/sessions` | Read | Read a run's session tree. | `/api/v1/projects/{projectId}/runs/{runId}/history/sessions` |
+
+This read uses fresh project authority, so an authorized project reader does
+not need to be the actor who accepted the run. A run-bound token remains limited
+to its bound run. The Gateway route returns `Cache-Control: no-store`.
+
 ### Project issue and pull request lists
 
 These reads return Agentweaver's stored data. They make no source control
@@ -821,10 +846,14 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/sessions/{sessionId}/suspend` | Request fenced suspend. | No |
 | POST | `/sessions/{sessionId}/resume` | Request retained-Workspace resume. | No |
 
-### Backlog
+### Backlog claims
 
-Native-only prefix: `/api/projects/{projectId}/runs/{runId}/backlog`.
-All routes use Coordination authority and current owner task/graph revisions.
+Native owner prefix: `/api/projects/{projectId}/runs/{runId}/backlog`.
+Graph reads, task creation, state/archive changes, and dependency edits also
+have project-scoped operations described above. The Gateway and MCP expose the
+claim operation at
+`/api/v1/projects/{projectId}/runs/{runId}/backlog/tasks/{taskId}/claim`.
+Claims use the current accepted run selection and Coordination authority.
 
 | Method | Suffix | Purpose |
 | --- | --- | --- |
@@ -834,7 +863,7 @@ All routes use Coordination authority and current owner task/graph revisions.
 | POST | `/tasks/{taskId}/archive` | Archive task. |
 | PUT | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Add dependency. |
 | DELETE | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Remove dependency. |
-| POST | `/tasks/{taskId}/claim` | Atomically claim with current prerequisite evidence. |
+| POST | `/tasks/{taskId}/claim` | Atomically claim eligible work with current prerequisite evidence. |
 | POST | `/promotions` | Promote the run's confirmed work plan into backlog tasks. |
 
 #### Plan promotion and task origin
@@ -871,6 +900,24 @@ response is a `BacklogPlanPromotion` with `promotionId`, `projectId`, `runId`,
 | `backlog_promotion_selection_unavailable` | 409 | The pinned selection context is missing. |
 
 A stale graph revision returns `409` with typed backlog issues.
+
+A claim request contains `expectedGraphRevision`, `expectedTaskRevision`, and
+an `idempotencyKey` of 1-128 characters. The owner binds that key to the task,
+the accepted selection snapshot, actor, and run. Retrying the same request
+returns the stored claim and root-session identity; reusing the key with
+different inputs returns `409`. The task claim, accepted root, initial
+decision, and outbox intent commit in one Orchestrator transaction. The
+Gateway does not return an accepted claim if prerequisite evidence, run
+admission, or current authority checks fail before commit. The Events session
+is registered after the transaction. If that registration fails, the task
+claim is still durable; retry the same request with the same key to recover
+the receipt and retry registration. This does not promise exactly-once
+external effects or start an automatic scheduler.
+
+The claim reserves a coordinator root against the run's accepted workflow and
+immutable selection snapshot. Its `preparing` phase is a reservation state,
+not proof that work has been dispatched or completed. Subsequent coordination
+and dispatch use the existing Orchestrator workflow owner.
 
 Two native project routes read the recorded data with current `ReadProjects`
 authority:
@@ -980,6 +1027,21 @@ native SDK session or an available provider.
 ## Knowledge
 
 Source: `services/knowledge/Agentweaver.Knowledge/KnowledgeEndpoints.cs`.
+
+Project-wide native prefix: `/api/projects/{projectId}/knowledge`.
+Project-wide Gateway prefix: `/api/v1/projects/{projectId}/knowledge`.
+Project-wide search requires an unbound Broker token with current project
+`AccessPrivateKnowledge` and direct project `ReadRunSelection`. It searches all
+agents through existing provider bindings and does not create a new binding.
+Run-bound tokens are rejected. Results are globally ordered across provider
+resources before paging. Each item includes `accessRunId`, the run binding used
+to authorize revision-history reads; `record.sourceRunId` is separate record
+provenance.
+
+| Method | Suffix | Auth | Purpose |
+| --- | --- | --- | --- |
+| GET | `/records` | Private Knowledge and direct project `ReadRunSelection` | Search all agents across existing run-provider bindings by `kind`, `q`, `includeInactive`, `page`, and `pageSize`. Each result includes the access run for history reads; record provenance is separate. |
+
 Native prefix: `/api/projects/{projectId}/runs/{runId}/agents/{agentId}`.
 Gateway prefix: `/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}`.
 Every route in this table is in the Gateway catalog.
@@ -1029,6 +1091,7 @@ All routes require Journal authority and exact project/run claims.
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | GET | `/internal/projects/{projectId}/runs/{runId}/events` | Journal | Replay committed run journal. | `/api/v1/projects/{projectId}/runs/{runId}/events` |
+| GET | `/internal/projects/{projectId}/runs/{runId}/project-history/events` | Read | Read run activity with current project read authority and tenant ownership checks. | `/api/v1/projects/{projectId}/runs/{runId}/history/events` |
 | GET | `/internal/projects/{projectId}/runs/{runId}/events/live` | Journal | Native NDJSON stream. | No; Gateway SSE uses replay instead |
 | GET | `/internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` | Exact bound `ReadRunSelection` authority and current provider | Read immutable Sessions pin. | No |
 | GET | No native SSE route | Exact run bearer and current Gateway/owner access checks | SSE over committed replay pages. | `/api/v1/projects/{projectId}/runs/{runId}/events/live` |

@@ -101,6 +101,56 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProjectStateArchiveAndDependencyWritesRecheckAuthorityInsideTheirTransactions()
+    {
+        var task = TaskRef("project-mutation");
+        var prerequisite = TaskRef("project-prerequisite");
+        var graph = await AddTaskAsync(task);
+        graph = (await _backlog.AddTaskAsync(
+            prerequisite, graph.Revision, CancellationToken.None)).Value!;
+
+        async Task AssertRollback(
+            Func<Func<CancellationToken, Task>, Task> mutation,
+            int failOnCheck)
+        {
+            var checks = 0;
+            await Assert.ThrowsAsync<CoordinationException>(() => mutation(token =>
+                ++checks == failOnCheck
+                    ? Task.FromException(new CoordinationException("backlog_project_permission_denied", 403))
+                    : Task.CompletedTask));
+            Assert.Equal(failOnCheck, checks);
+        }
+
+        await AssertRollback(
+            revalidate => _backlog.SetTaskStateAsync(
+                task, BacklogTaskState.Ready, graph.Revision, 0, CancellationToken.None, revalidate),
+            failOnCheck: 1);
+        await AssertRollback(
+            revalidate => _backlog.ArchiveTaskAsync(
+                task, graph.Revision, 0, CancellationToken.None, revalidate),
+            failOnCheck: 2);
+        await AssertRollback(
+            revalidate => _backlog.AddDependencyAsync(
+                task, prerequisite, graph.Revision, CancellationToken.None, revalidate),
+            failOnCheck: 2);
+
+        var added = await _backlog.AddDependencyAsync(
+            task, prerequisite, graph.Revision, CancellationToken.None);
+        Assert.True(added.IsSuccess);
+        await AssertRollback(
+            revalidate => _backlog.RemoveDependencyAsync(
+                task, prerequisite, added.Value!.Revision, CancellationToken.None, revalidate),
+            failOnCheck: 2);
+
+        var persisted = (await _backlog.ReadGraphAsync(task.ProjectId, CancellationToken.None)).Value!;
+        Assert.Equal(added.Value!.Revision, persisted.Revision);
+        Assert.Equal(BacklogTaskState.Backlog,
+            persisted.Tasks.Single(item => item.Reference == task).State);
+        Assert.False(persisted.Tasks.Single(item => item.Reference == task).IsArchived);
+        Assert.Single(persisted.Dependencies);
+    }
+
+    [Fact]
     public async Task ContentPersistenceFailureRollsBackRevisionAndSurfacesDatabaseError()
     {
         var captured = await _backlog.AddTaskAsync(TaskRef("content-failure"),
@@ -274,6 +324,117 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
             "project_id = 'backlog-project' AND action_kind = 'run.initialize'"));
         Assert.Equal(1, await ReadCountAsync("coordinator_decision_outbox",
             "project_id = 'backlog-project' AND event_kind = 'decision.accepted'"));
+    }
+
+    [Fact]
+    public async Task ReusingClaimKeyForDifferentTaskReturnsConflictWithoutAnotherRun()
+    {
+        var firstTask = TaskRef("claim-key-first");
+        var secondTask = TaskRef("claim-key-second");
+        var graph = await AddTaskAsync(firstTask);
+        graph = (await _backlog.AddTaskAsync(
+            secondTask, graph.Revision, CancellationToken.None)).Value!;
+        var first = await ClaimAsync(firstTask, graph.Revision, Selection("run-key-first"), "shared-claim-key");
+        Assert.True(first.IsSuccess);
+
+        var conflict = await Assert.ThrowsAsync<CoordinationException>(() => ClaimAsync(
+            secondTask, graph.Revision, Selection("run-key-second"), "shared-claim-key"));
+
+        Assert.Equal("backlog_claim_idempotency_conflict", conflict.Code);
+        Assert.Equal(1, await ReadCountAsync("backlog_tasks", "claim_id IS NOT NULL"));
+        Assert.Equal(1, await ReadCountAsync("accepted_runs", "project_id = 'backlog-project'"));
+        Assert.Equal(1, await ReadCountAsync("coordination_sessions",
+            "project_id = 'backlog-project' AND node_kind = 'coordinator'"));
+        var persisted = (await _backlog.ReadGraphAsync(
+            firstTask.ProjectId, CancellationToken.None)).Value!;
+        Assert.Equal(BacklogTaskState.Backlog,
+            persisted.Tasks.Single(item => item.Reference == secondTask).State);
+    }
+
+    [Fact]
+    public async Task ConfigurationChangeDuringClaimWaitRollsBackTheClaimAndAcceptedRoot()
+    {
+        var task = TaskRef("configuration-changed");
+        var graph = await AddTaskAsync(task);
+        var selection = Selection("run-configuration-changed");
+        var expectedConfigurationRevision = 1;
+        var currentConfigurationRevision = expectedConfigurationRevision;
+        var authorityChecks = 0;
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(() => _backlog.ClaimTaskAsync(
+            _actor,
+            selection,
+            task,
+            graph.Revision,
+            0,
+            "claim-configuration-changed",
+            _evidence,
+            _coordination,
+            _decisions,
+            _ =>
+            {
+                authorityChecks++;
+                if (authorityChecks == 1)
+                {
+                    // The configuration can change after the pre-transaction check and while locks are acquired.
+                    currentConfigurationRevision++;
+                    return Task.CompletedTask;
+                }
+                return currentConfigurationRevision == expectedConfigurationRevision
+                    ? Task.CompletedTask
+                    : Task.FromException(new CoordinationException("backlog_configuration_stale", 409));
+            },
+            CancellationToken.None));
+
+        Assert.Equal("backlog_configuration_stale", error.Code);
+        Assert.Equal(2, authorityChecks);
+        Assert.Equal(0, await ReadCountAsync("accepted_runs", "project_id = 'backlog-project'"));
+        Assert.Equal(0, await ReadCountAsync("coordination_sessions",
+            "project_id = 'backlog-project' AND node_kind = 'coordinator'"));
+        Assert.Equal(0, await ReadCountAsync("coordinator_decisions",
+            "project_id = 'backlog-project'"));
+        Assert.Equal(0, await ReadCountAsync("backlog_tasks", "claim_id IS NOT NULL"));
+        var persisted = (await _backlog.ReadGraphAsync(task.ProjectId, CancellationToken.None)).Value!;
+        Assert.Equal(graph.Revision, persisted.Revision);
+        Assert.Equal(BacklogTaskState.Backlog, Assert.Single(persisted.Tasks).State);
+    }
+
+    [Fact]
+    public async Task ClaimWithPendingPrerequisiteEvidenceIsBlockedWithoutPersistingAClaim()
+    {
+        var task = TaskRef("dependent-work");
+        var prerequisite = TaskRef("unfinished-prerequisite");
+        var graph = await AddTaskAsync(task);
+        graph = (await _backlog.AddTaskAsync(
+            prerequisite, graph.Revision, CancellationToken.None)).Value!;
+        graph = (await _backlog.AddDependencyAsync(
+            task, prerequisite, graph.Revision, CancellationToken.None)).Value!;
+        graph = (await _backlog.SetTaskStateAsync(
+            task, BacklogTaskState.Ready, graph.Revision, 0, CancellationToken.None)).Value!;
+
+        var result = await _backlog.ClaimTaskAsync(
+            _actor,
+            Selection("run-dependent-work"),
+            task,
+            graph.Revision,
+            1,
+            "claim-dependent-work",
+            new PendingPrerequisiteEvidenceReader(prerequisite),
+            _coordination,
+            _decisions,
+            _ => Task.CompletedTask,
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(result.Issues, issue => issue.Code == BacklogIssueCode.PrerequisiteNotMerged);
+        Assert.Equal(0, await ReadCountAsync("accepted_runs", "project_id = 'backlog-project'"));
+        Assert.Equal(0, await ReadCountAsync("coordination_sessions",
+            "project_id = 'backlog-project' AND node_kind = 'coordinator'"));
+        Assert.Equal(0, await ReadCountAsync("backlog_tasks", "claim_id IS NOT NULL"));
+        var persisted = (await _backlog.ReadGraphAsync(task.ProjectId, CancellationToken.None)).Value!;
+        Assert.Equal(graph.Revision, persisted.Revision);
+        Assert.Equal(BacklogTaskState.Ready,
+            persisted.Tasks.Single(item => item.Reference == task).State);
     }
 
     [Fact]
@@ -608,6 +769,45 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
             Assert.True(executionFence > 0);
             ReadCount++;
             return Task.FromResult(ImmutableArray<BacklogPrerequisiteExecutionSnapshot>.Empty);
+        }
+    }
+
+    private sealed class PendingPrerequisiteEvidenceReader(
+        BacklogTaskReference prerequisite) : IBacklogPrerequisiteEvidenceReader
+    {
+        public Task<BacklogPrerequisiteEvidencePreparation> PrepareForClaimAsync(
+            CoordinationActor actor,
+            AuthorizedRunSelection selection,
+            BacklogDependencyGraph graph,
+            BacklogTaskReference task,
+            CancellationToken cancellationToken)
+        {
+            Assert.Contains(graph.Dependencies, edge =>
+                edge.Task == task && edge.Prerequisite == prerequisite);
+            return Task.FromResult(new BacklogPrerequisiteEvidencePreparation([]));
+        }
+
+        public Task<ImmutableArray<BacklogPrerequisiteExecutionSnapshot>> ReadCurrentForClaimAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            CoordinationActor actor,
+            AuthorizedRunSelection selection,
+            BacklogDependencyGraph graph,
+            BacklogTaskReference task,
+            BacklogPrerequisiteEvidencePreparation prepared,
+            long decisionStateVersion,
+            long executionFence,
+            CancellationToken cancellationToken)
+        {
+            Assert.Same(connection, transaction.Connection);
+            var prerequisiteTask = Assert.Single(graph.Tasks, item => item.Reference == prerequisite);
+            return Task.FromResult(ImmutableArray.Create(new BacklogPrerequisiteExecutionSnapshot(
+                prerequisite,
+                prerequisiteTask.Revision,
+                1,
+                BacklogPrerequisiteExecutionState.Pending,
+                BacklogOutputProofState.NotRequired,
+                null)));
         }
     }
 }
