@@ -25,8 +25,8 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   postgresHost: 'agentweaver-pg.postgres.database.azure.com',
   registry: 'ghcr.io/sabbour',
 });
-/** The reviewed plan: Core 1-16 and 18-33, Events 1-9. */
-export const REVIEWED_PLAN_SHA256 = '74f984b26a7df480476dbdee0c36164c46d0f4afc93d6624cbc590098d73c685';
+/** The reviewed plan: Core 1-16 and 18-33, Events 1-9, and Projects & Config runtime grants. */
+export const REVIEWED_PLAN_SHA256 = '2aad6a1c305a1264648e6d001698c13cbfb50dae6e5c4a829f07c37a60ba6a62';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';

@@ -16,11 +16,13 @@ and `issue_sync_receipts`; Identity requires exactly `SELECT, INSERT, UPDATE`
 on `identity_broker.issue_sync_grants`, and `SELECT, INSERT` only on
 `identity_broker.issue_sync_mint_audit`. No new DELETE, default privilege,
 schema CREATE or authority function EXECUTE is granted. These database grants,
-the new Core plan hash, service TLS configuration, and live application-level
-issue-sync grant creation remain separate approval items. Source validation
-does not perform a migration, grant or deployment action.
+the new P1 plan hash, service TLS configuration, and live application-level
+issue-sync grant creation remain separate approval items. The Projects & Config
+runtime role receives exactly `SELECT, INSERT, UPDATE` on
+`casting_generation_requests`; this grant is included in the same reviewed plan.
+Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`74f984b26a7df480476dbdee0c36164c46d0f4afc93d6624cbc590098d73c685`.
+`2aad6a1c305a1264648e6d001698c13cbfb50dae6e5c4a829f07c37a60ba6a62`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
 placeholder. The Core list is 1-16 and 18-33. Version 027 requires 026 only.
@@ -275,7 +277,7 @@ The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
 Events requires versions 1 through 9 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 110 tables and eight exact row-lock columns.
+The plan lists 112 tables and eight exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.
