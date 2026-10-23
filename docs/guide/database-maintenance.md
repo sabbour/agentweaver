@@ -9,11 +9,12 @@ tunnel, or a one-off command.
 The runner applies these migrations, in this order:
 
 1. Identity Broker EF Core migrations, when you pass a Broker digest.
-2. Orchestrator (Core) migrations 1 to 16, 18 to 31, and 33.
+2. Orchestrator (Core) migrations 1 to 16 and 18 to 33.
 3. Events & Sessions migrations 1 to 9.
 
-The reviewed plan fixes these versions by hash. Core migrations 017 and 032 are
-not in the plan. An image that would apply them fails before it connects.
+The reviewed plan fixes these versions by hash. Core migration 017 is not in the
+plan, while 032 is included with its exact runtime table grants. An image that
+would apply a version outside the plan fails before it connects.
 
 ## What one run does
 
@@ -211,11 +212,11 @@ planned-gap path. The runner records each schema version in its state after a
 run, and uses it to decide whether a new image accepts the current schema.
 
 For the Core 031 to 033 upgrade, the old owner accepts only 31 to 32. The new
-owner accepts 31 to 33, so it can become ready before 033 is applied. When the
-state records schema 31, `--deploy-apps` deploys the new owner first, waits for
-readiness, then applies 033. If no schema version is recorded, the runner
-cannot prove that order is safe and uses a planned readiness gap instead.
-Both paths keep 017 and 032 out of the migration plan.
+owner accepts 31 to 33, so it can become ready before 032 and 033 are applied.
+When the state records schema 31, `--deploy-apps` deploys the new owner first,
+waits for readiness, then applies both planned migrations. If no schema version
+is recorded, the runner cannot prove that order is safe and uses a planned
+readiness gap instead. Both paths keep 017 out of the migration plan.
 
 ### Planned readiness gap
 
@@ -298,7 +299,7 @@ npm run db:maintenance -- --release-lock <run-id>
 
 ## What the runner never does
 
-- Apply Core migration 032 or any version outside the reviewed plan.
+- Apply Core migration 017 or any version outside the reviewed plan.
 - Reset, reinitialize, or drop a database, schema, or role.
 - Create Azure role assignments or change identities other than the P1
   migration identity. Only the setup command assigns roles, and only the ones

@@ -18,7 +18,7 @@ public static class CoordinationOwnerMigrator
     /// </summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33])];
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -64,8 +64,8 @@ public static class CoordinationOwnerMigrator
                 applied.Add(reader.GetInt32(0));
 
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
-        // Optional 032 is a known version here, so a database where 032 was applied separately is
-        // accepted, but 032 is not in the default list below and is never applied by this method.
+        // Version 032 is in the reviewed default catalog. Readiness still accepts its complete
+        // pre-migration shape so a compatible owner can start before the maintenance Job runs.
         if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
@@ -144,6 +144,8 @@ public static class CoordinationOwnerMigrator
                 29 => "spend_budget_exposure",
                 30 => "backlog_task_origin",
                 31 => "user_notification_promotion_dismissals",
+                // 032 adds stored pull-request records before the independent Priority-link update in 033.
+                32 => "source_control_pull_request_records",
                 33 => "priority_link_repository_identity",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
@@ -166,63 +168,6 @@ public static class CoordinationOwnerMigrator
     }
 
     /// <summary>
-    /// Applies optional migration 032, which adds Source Control pull request records.
-    /// </summary>
-    /// <remarks>
-    /// <see cref="MigrateAsync"/>, service startup, and the P1 initializer never apply 032. It needs
-    /// separate live approval, and no command or bootstrap path calls this method yet. Until 032 is
-    /// applied, startup still succeeds, run create or reuse skips the record write, and the project
-    /// pull request list returns <c>pull_request_records_unavailable</c>. Calling this method again
-    /// after 032 is applied does nothing.
-    /// </remarks>
-    /// <exception cref="InvalidOperationException">The base schema isn't current, or the migration resource is missing.</exception>
-    public static async Task ApplyPullRequestRecordsAsync(
-        NpgsqlDataSource dataSource,
-        string schema,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(dataSource);
-        ValidateSchema(schema);
-        // Apply 032 only on top of a current base schema. Verify also rejects a half-applied 032.
-        await VerifyAsync(dataSource, schema, cancellationToken);
-
-        var quotedSchema = Quote(schema);
-        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        // Take the same transaction-scoped lock as MigrateAsync, so this can't run at the same time
-        // as a default migration or a second apply on the same schema.
-        await using (var advisoryLock = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtext('agentweaver.coordination.migrate'), hashtext(@schema))",
-            connection, transaction))
-        {
-            advisoryLock.Parameters.AddWithValue("schema", NpgsqlDbType.Text, schema);
-            await advisoryLock.ExecuteNonQueryAsync(cancellationToken);
-        }
-        // Check the ledger under the lock. If another caller already applied 032, do nothing.
-        await using (var query = new NpgsqlCommand(
-            $"SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32",
-            connection, transaction))
-            if ((long)(await query.ExecuteScalarAsync(cancellationToken))! != 0)
-                return;
-
-        await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
-            "Agentweaver.Orchestrator.Migrations.032_source_control_pull_request_records.sql")
-            ?? throw new InvalidOperationException("The coordination owner migration resource is missing.");
-        using var text = new StreamReader(resource);
-        var sql = (await text.ReadToEndAsync(cancellationToken))
-            .Replace("{schema}", quotedSchema, StringComparison.Ordinal);
-        // Create the table and write the ledger row in one transaction, so a failure leaves neither.
-        // The ledger row's applied_at becomes the start of pull request list coverage.
-        await using (var migration = new NpgsqlCommand(sql, connection, transaction))
-            await migration.ExecuteNonQueryAsync(cancellationToken);
-        await using (var record = new NpgsqlCommand(
-            $"INSERT INTO {quotedSchema}.coordination_schema_migrations (version) VALUES (32)",
-            connection, transaction))
-            await record.ExecuteNonQueryAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-    }
-
-    /// <summary>
     /// Checks that the recorded migration versions, tables, columns, and immutability guards are current.
     /// </summary>
     /// <exception cref="InvalidOperationException">The schema is missing an expected migration or database object.</exception>
@@ -240,7 +185,8 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // One shape check accepts either complete 031 or complete 033; optional 032 stays independent.
+        // 032 remains optional to readiness so the owner can start before maintenance applies the
+        // reviewed plan; accept only its complete table-and-ledger shape when it is present.
         await using var command = new NpgsqlCommand($"""
             SELECT
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),
@@ -259,7 +205,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33, 32)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
