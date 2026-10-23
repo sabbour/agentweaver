@@ -256,6 +256,9 @@ selection and registration are still current. Orchestrator does not persist the
 proposal result; the Gateway completes the request through Projects & Config.
 AgentHost obtains the model credential from Identity using the run-bound
 registration, so it never passes through Orchestrator or Projects.
+Casting generation marks its AgentHost turn to continue if the HTTP waiter
+disconnects. An exact retry waits for or replays the same result; a retry with
+changed content conflicts.
 
 Generation completion must match the request's run ID and current configuration
 revision. It validates and replaces only the proposal's charters and cast, then

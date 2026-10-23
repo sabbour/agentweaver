@@ -69,7 +69,7 @@ internal static class CastingGenerationExecutionContract
             RuntimeContractValidation.NativeSessionId(registration.Binding),
             "user",
             [new("text", request.Prompt)],
-            new(proof, AddressedMessageDeliveryMode.Immediate));
+            new(proof, AddressedMessageDeliveryMode.Immediate, ContinueAfterCallerDisconnect: true));
         return new(message);
     }
 

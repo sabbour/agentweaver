@@ -1079,6 +1079,42 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal(3, fixture.Material.Count(request => request.Kind == SessionMaterialKind.SdkCache));
     }
 
+    [Fact]
+    public async Task CallerCancellationDoesNotCancelAnAdmittedTurnAndExactRetryReplaysIt()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var turns = 0;
+        fixture.Sdk.BeforeTurnResponse = token =>
+        {
+            Interlocked.Increment(ref turns);
+            return release.Task.WaitAsync(token);
+        };
+        var message = fixture.Message(fixture.Proof(ready));
+        message = message with
+        {
+            Message = message.Message with
+            {
+                Metadata = message.Message.Metadata with { ContinueAfterCallerDisconnect = true }
+            }
+        };
+        using var caller = new CancellationTokenSource();
+        var firstSend = fixture.Host.SendAsync(message, fixture.Actor, caller.Token);
+        await fixture.Sdk.TurnReceived.Task.WaitAsync(timeout.Token);
+
+        caller.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstSend);
+        release.TrySetResult();
+
+        var replay = await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(replay.Parts).Text);
+        Assert.Equal(1, turns);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
     [Theory]
     [InlineData(" Explain this:\n```csharp\nvar value = 1;\n\tConsole.WriteLine(value);\n```\n ", true)]
     [InlineData("\tFirst line\r\n\tSecond line\r\n ", true)]

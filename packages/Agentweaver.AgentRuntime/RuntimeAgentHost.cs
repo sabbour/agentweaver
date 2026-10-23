@@ -412,8 +412,11 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                     throw new RuntimeAuthorizationException("runtime_session_suspended");
                 if (_immediate.Count + _enqueue.Count >= _options.MaximumPendingTurns)
                     throw new RuntimeAuthorizationException("runtime_a2a_pending_capacity_exceeded");
+                var operationCancellation = message.Metadata.ContinueAfterCallerDisconnect
+                    ? CancellationToken.None
+                    : token;
                 pending = new(message.MessageId, fingerprint, request, message.Metadata.Runtime, actor,
-                    token, new(TaskCreationOptions.RunContinuationsAsynchronously));
+                    operationCancellation, new(TaskCreationOptions.RunContinuationsAsynchronously));
                 _turns.Add(message.MessageId, pending);
                 (message.Metadata.DeliveryMode == AddressedMessageDeliveryMode.Immediate
                     ? _immediate : _enqueue).Enqueue(pending);
@@ -913,7 +916,9 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                     pending = _immediate.Count > 0 ? _immediate.Dequeue() : _enqueue.Dequeue();
                     _lastTurn = pending;
                 }
-                using var turn = CancellationTokenSource.CreateLinkedTokenSource(pending.Cancellation, _stop.Token);
+                // Generation turns outlive a disconnected waiter so an exact retry can retrieve their result.
+                using var turn = CancellationTokenSource.CreateLinkedTokenSource(
+                    pending.Cancellation, _stop.Token);
                 try
                 {
                     turn.Token.ThrowIfCancellationRequested();
@@ -1004,5 +1009,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
 
     private sealed record PendingTurn(
         Guid MessageId, string Fingerprint, RuntimeA2ASendRequest Request, RuntimeHostSessionProof Proof,
-        RuntimeActorAuthorization Actor, CancellationToken Cancellation, TaskCompletionSource<RuntimeA2AResponse> Completion);
+        RuntimeActorAuthorization Actor, CancellationToken Cancellation,
+        TaskCompletionSource<RuntimeA2AResponse> Completion);
 }

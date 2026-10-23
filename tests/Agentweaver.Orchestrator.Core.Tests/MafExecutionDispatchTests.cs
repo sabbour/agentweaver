@@ -68,6 +68,7 @@ public sealed class MafExecutionDispatchTests
         Assert.Equal(request.RequestId, hostRequest.Message.MessageId);
         Assert.Equal(RuntimeContractValidation.NativeSessionId(registration.Binding), hostRequest.Message.ContextId);
         Assert.Equal(AddressedMessageDeliveryMode.Immediate, hostRequest.Message.Metadata.DeliveryMode);
+        Assert.True(hostRequest.Message.Metadata.ContinueAfterCallerDisconnect);
         Assert.Equal("user", hostRequest.Message.Role);
         Assert.Equal(request.Prompt, hostRequest.Message.Parts.Single().Text);
     }
