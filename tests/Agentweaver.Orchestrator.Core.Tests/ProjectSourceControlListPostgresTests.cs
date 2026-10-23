@@ -15,7 +15,7 @@ using Xunit;
 namespace Agentweaver.Orchestrator.Core.Tests;
 
 /// <summary>
-/// Verifies the stored project issue and pull request lists, their endpoints, and optional migration 032.
+/// Verifies the stored project issue and pull request lists, their endpoints, and reviewed migration 032.
 /// </summary>
 [Collection("Coordination PostgreSQL")]
 public sealed class ProjectSourceControlListPostgresTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
@@ -46,38 +46,38 @@ public sealed class ProjectSourceControlListPostgresTests(CoordinationPostgresFi
     }
 
     [Fact]
-    public async Task DefaultMigrationLeavesPullRequestRecordsUnappliedAndStartupVerificationPasses()
+    public async Task ReviewedMigrationAppliesPullRequestRecordsAndStartupVerificationPasses()
     {
-        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
-        Assert.False(await TableExistsAsync());
-        Assert.Equal(0, await LedgerCountAsync());
-        var exception = await Assert.ThrowsAsync<CoordinationException>(
-            () => _pullRequests.ListAsync("tenant-1", _project, null, "all", null, 25, default));
-        Assert.Equal("pull_request_records_unavailable", exception.Code);
-        Assert.Equal(StatusCodes.Status503ServiceUnavailable, exception.StatusCode);
-    }
-
-    [Fact]
-    public async Task ExplicitPullRequestRecordMigrationIsIdempotentAndSurvivesDefaultMigration()
-    {
-        await CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync(fixture.DataSource, _schema);
-        await CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync(fixture.DataSource, _schema);
-        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         Assert.True(await TableExistsAsync());
         Assert.Equal(1, await LedgerCountAsync());
-
         var page = await _pullRequests.ListAsync("tenant-1", _project, null, "all", null, 25, default);
         Assert.Empty(page.Items);
-        Assert.Null(page.NextCursor);
         Assert.False(page.Coverage.IncludesEarlierPullRequests);
         Assert.Equal(await AppliedAtAsync(), page.Coverage.RecordedSince);
     }
 
     [Fact]
+    public async Task ReviewedMigrationIsIdempotentAndPreservesCoverageStart()
+    {
+        var recordedSince = await AppliedAtAsync();
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        Assert.True(await TableExistsAsync());
+        Assert.Equal(1, await LedgerCountAsync());
+        Assert.Equal(recordedSince, await AppliedAtAsync());
+
+        var page = await _pullRequests.ListAsync("tenant-1", _project, null, "all", null, 25, default);
+        Assert.Empty(page.Items);
+        Assert.Null(page.NextCursor);
+        Assert.False(page.Coverage.IncludesEarlierPullRequests);
+        Assert.Equal(recordedSince, page.Coverage.RecordedSince);
+    }
+
+    [Fact]
     public async Task VerificationRejectsPartialPullRequestRecordState()
     {
-        await CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync(fixture.DataSource, _schema);
         await ExecuteAsync($"DELETE FROM \"{_schema}\".coordination_schema_migrations WHERE version = 32");
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
@@ -144,12 +144,15 @@ public sealed class ProjectSourceControlListPostgresTests(CoordinationPostgresFi
     [Fact]
     public async Task PullRequestEndpointReturnsUnavailableBeforeMigrationAndCoverageAfterIt()
     {
+        // Model a prior release's complete 031 schema without touching any shared database.
+        await ExecuteAsync($"DROP TABLE \"{_schema}\".source_control_pull_requests");
+        await ExecuteAsync($"DELETE FROM \"{_schema}\".coordination_schema_migrations WHERE version = 32");
         var authorization = ReadAuthorization();
         var before = await InvokePullRequestsAsync("", [authorization, authorization]);
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, StatusCode(before));
         Assert.Equal("pull_request_records_unavailable", ErrorCode(before));
 
-        await CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         var after = Assert.IsType<Ok<ProjectPullRequestPage>>(
             await InvokePullRequestsAsync("?state=all&pageSize=5", [authorization, authorization]));
         Assert.Empty(after.Value!.Items);
@@ -162,7 +165,6 @@ public sealed class ProjectSourceControlListPostgresTests(CoordinationPostgresFi
     {
         await ConfigureIssueSyncAsync(_project, "tenant-1");
         await AddLinkedTaskAsync(_project, "task-1", "Visible", 1, BacklogTaskLifecycle.Open);
-        await CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync(fixture.DataSource, _schema);
         var granted = ReadAuthorization();
         var revoked = ReadAuthorization(permission: "readRunSelection");
 
