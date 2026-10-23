@@ -101,10 +101,10 @@ public sealed record KnowledgeRecordRevision(
     string? ActorFingerprint = null,
     string? ChangeKind = null);
 
-/// <summary>Project and agent filter with optional kind, text query, and paging inputs.</summary>
+/// <summary>Project filter with an optional agent, kind, text query, and paging inputs.</summary>
 public sealed record KnowledgeRecordQuery(
     string ProjectId,
-    string AgentId,
+    string? AgentId,
     KnowledgeRecordKind? Kind = null,
     string? Query = null,
     bool IncludeInactive = false,

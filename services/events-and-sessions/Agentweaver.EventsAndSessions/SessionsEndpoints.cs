@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Globalization;
+using System.Net;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Authorization;
@@ -26,6 +28,9 @@ public static class SessionsEndpoints
 
         app.MapGet("/internal/projects/{projectId}/runs/{runId}/events", ReplayRunAsync)
             .RequireAuthorization();
+        app.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/project-history/events",
+            ReadProjectRunHistoryEventsAsync).RequireAuthorization();
         app.MapGet("/internal/projects/{projectId}/runs/{runId}/events/live", SubscribeRunAsync)
             .RequireAuthorization();
         app.MapGet("/internal/projects/{projectId}/runs/{runId}/sessions-provider-binding", ReadRunBindingAsync)
@@ -197,6 +202,80 @@ public static class SessionsEndpoints
                 new SessionRunEventPageRequest(projectId, runId, cursor, limit ?? 100), cancellationToken);
             return Results.Json(PublicSessionEventProjection.Project(page), JsonOptions);
         }, cancellationToken);
+
+    /// <summary>Reads run history for a current project reader while preserving exact run-token narrowing.</summary>
+    private static Task<IResult> ReadProjectRunHistoryEventsAsync(
+        HttpContext context,
+        string projectId,
+        string runId,
+        [FromServices] IProjectsAuthorizationContextClient projects,
+        [FromServices] PostgresSessionsJournal journal,
+        [FromServices] SessionsProviderBindingService bindings,
+        [FromServices] IConfiguration configuration,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var (cursor, limit) = ReadProjectHistoryQuery(context.Request.Query);
+            var audience = configuration["Identity:Audience"]
+                ?? throw new InvalidOperationException("Missing Events audience.");
+            var first = await projects.GetProjectReadAsync(
+                context, projectId, audience, cancellationToken).ConfigureAwait(false);
+            RequireProjectRunRead(first, runId);
+
+            var binding = await journal.GetProjectRunProviderBindingAsync(
+                projectId, runId, cancellationToken).ConfigureAwait(false);
+            await bindings.VerifyPinnedForProjectReadAsync(binding, cancellationToken).ConfigureAwait(false);
+            var page = await journal.ReplayProjectRunAsync(
+                new SessionRunEventPageRequest(projectId, runId, cursor, limit), cancellationToken)
+                .ConfigureAwait(false);
+
+            // Recheck membership after replay so a revoked project grant cannot return a stale page.
+            var current = await projects.GetProjectReadAsync(
+                context, projectId, audience, cancellationToken).ConfigureAwait(false);
+            RequireProjectRunRead(current, runId);
+            if (current.TenantId != first.TenantId ||
+                current.ActorId != first.ActorId ||
+                current.BoundProjectId != first.BoundProjectId ||
+                current.BoundRunId != first.BoundRunId ||
+                current.MembershipRevision != first.MembershipRevision)
+                throw new ProjectsAuthorizationContextException(
+                    "project_read_permission_denied", HttpStatusCode.Forbidden);
+            return Results.Json(PublicSessionEventProjection.Project(page), JsonOptions);
+        }, cancellationToken);
+
+    private static (string? Cursor, int Limit) ReadProjectHistoryQuery(IQueryCollection query)
+    {
+        string? cursor = null;
+        var limit = 100;
+        foreach (var (name, value) in query)
+        {
+            if (value.Count != 1 || value[0] is null)
+                throw new ArgumentException("query_invalid");
+            switch (name)
+            {
+                case "cursor":
+                    cursor = value[0];
+                    break;
+                case "limit" when int.TryParse(
+                    value[0], NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) &&
+                    parsed is >= 1 and <= PostgresSessionsJournal.MaximumPageSize:
+                    limit = parsed;
+                    break;
+                default:
+                    throw new ArgumentException("query_invalid");
+            }
+        }
+        return (cursor, limit);
+    }
+
+    private static void RequireProjectRunRead(ProjectsAuthorizationContextResponse authority, string runId)
+    {
+        // Fresh project authority may span runs; a run-bound token may read only its own run.
+        if (authority.BoundRunId is not null && authority.BoundRunId != runId)
+            throw new ProjectsAuthorizationContextException(
+                "project_read_permission_denied", HttpStatusCode.Forbidden);
+    }
 
     /// <summary>Streams bounded NDJSON session events until the event or duration limit, caller cancellation, or failure.</summary>
     private static async Task SubscribeAsync(

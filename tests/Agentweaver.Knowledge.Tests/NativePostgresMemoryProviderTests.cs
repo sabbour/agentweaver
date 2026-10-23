@@ -45,10 +45,14 @@ public sealed class NativePostgresMemoryProviderTests(KnowledgePostgresFixture p
 
         var own = await database.Provider.SearchAsync(new KnowledgeRecordQuery("project-a", "agent-a"));
         var otherAgent = await database.Provider.SearchAsync(new KnowledgeRecordQuery("project-a", "agent-b"));
+        var projectWide = await database.Provider.SearchAsync(new KnowledgeRecordQuery("project-a", null));
         var otherProjectRead = await database.Provider.ReadAsync("project-a", otherProject.Record!.RecordId);
 
         Assert.Equal(first.Record!.RecordId, Assert.Single(own.Items).RecordId);
         Assert.Equal("b", Assert.Single(otherAgent.Items).Content);
+        Assert.Equal(
+            ["agent-a", "agent-b"],
+            projectWide.Items.Select(record => record.AgentId).OrderBy(agentId => agentId, StringComparer.Ordinal));
         Assert.Null(otherProjectRead);
     }
 

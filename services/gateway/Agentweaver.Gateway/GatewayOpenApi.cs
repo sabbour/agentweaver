@@ -98,6 +98,7 @@ internal static partial class GatewayOpenApi
             ["readSourceControlOutputCaptureDiff"] = C(null, "SourceControlOutputCaptureDiff", "200"),
             ["readSourceControlOutputCaptureFile"] = C(null, "SourceControlOutputFileContent", "200"),
             ["listProjectRuns"] = C(null, "ProjectRunPage", "200"),
+            ["getProjectRunHistorySessions"] = C(null, "SessionTreeSnapshot", "200"),
             ["listProjectIssues"] = C(null, "ProjectIssuePage", "200"),
             ["listProjectPullRequests"] = C(null, "ProjectPullRequestPage", "200"),
             // Reporting contracts stay separate across the two data owners.
@@ -145,6 +146,7 @@ internal static partial class GatewayOpenApi
             ["validatePolicyEvaluationAdmission"] = C(null, "PolicyEvaluationReceiptAdmissionAcknowledgment", "200"),
             ["createKnowledgeRecord"] = C("CreateKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
             ["searchKnowledge"] = C(null, "KnowledgeRecordPage", "200"),
+            ["searchProjectKnowledge"] = C(null, "ProjectKnowledgeRecordPage", "200"),
             ["readKnowledgeRecord"] = C(null, "KnowledgeRecord", "200"),
             ["updateKnowledgeRecord"] = C("UpdateKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
             ["restoreKnowledgeRecord"] = C("RestoreKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201", "409"),
@@ -157,6 +159,7 @@ internal static partial class GatewayOpenApi
             ["compileKnowledgeContext"] = C(null, "MemoryContextCompilation", "200"),
             ["readSessionTurnContent"] = C(null, "SessionTurnContent", "200"),
             ["replayRunEvents"] = C(null, "SessionEventPage", "200"),
+            ["replayProjectRunHistoryEvents"] = C(null, "SessionEventPage", "200"),
             ["streamRunEvents"] = C(null, "SessionEventPage", "200"),
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
             ["listRemoteMcpConnections"] = C(null, "RemoteMcpConnectionDirectoryPage", "200"),
@@ -1985,6 +1988,16 @@ else if (route.OperationId is
             ("supersededByRecordId", NullableUuid())),
         ["KnowledgeRecordPage"] = StrictObj(["items", "totalCount", "page", "pageSize"],
             ("items", Arr(Ref("KnowledgeRecord"))), ("totalCount", Int()), ("page", Int()), ("pageSize", Int())),
+        ["ProjectKnowledgeRecord"] = StrictObj(["accessRunId", "record"],
+            ("accessRunId", new
+            {
+                type = "string",
+                description = "Existing run binding that authorizes history reads; not record provenance."
+            }),
+            ("record", Ref("KnowledgeRecord"))),
+        ["ProjectKnowledgeRecordPage"] = StrictObj(["items", "totalCount", "page", "pageSize"],
+            ("items", Arr(Ref("ProjectKnowledgeRecord"))), ("totalCount", Int()),
+            ("page", Int()), ("pageSize", Int())),
         ["KnowledgeRecordRevision"] = StrictObj(["recordId", "revision", "revisionId", "kind", "type", "content", "importance", "tags", "state", "trustState", "reason", "createdAt"],
             ("recordId", Uuid()), ("revision", Int()), ("revisionId", Uuid()), ("previousRevisionId", NullableUuid()),
             ("kind", Enum("memory", "proposal", "decision", "sessionContext")), ("type", Str()), ("title", NullableStr()),

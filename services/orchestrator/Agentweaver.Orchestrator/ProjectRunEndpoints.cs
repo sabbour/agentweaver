@@ -138,6 +138,7 @@ public static class ProjectRunEndpoints
 {
     private static readonly HashSet<string> ListQueryNames =
         new(["state", "startedBy", "cursor", "pageSize"], StringComparer.Ordinal);
+    private static readonly HashSet<string> NoQueryNames = new([], StringComparer.Ordinal);
 
     /// <summary>
     /// Registers <c>GET /api/projects/{projectId}/runs</c>.
@@ -147,8 +148,33 @@ public static class ProjectRunEndpoints
         app.MapGet("/api/projects/{projectId}/runs", ListRunsAsync).RequireAuthorization();
         // Metrics use the same fresh authority and run-bound narrowing as the run list.
         app.MapGet("/api/projects/{projectId}/metrics", ReadMetricsAsync).RequireAuthorization();
+        app.MapGet(
+            "/api/projects/{projectId}/runs/{runId}/history/sessions",
+            ReadProjectRunSessionTreeAsync).RequireAuthorization();
         return app;
     }
+
+    /// <summary>Reads a run's session tree for a caller with current project read authority.</summary>
+    internal static Task<IResult> ReadProjectRunSessionTreeAsync(
+        string projectId,
+        string runId,
+        HttpContext context,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        CoordinationEndpoints.ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            ReadSingleValuedQuery(context.Request.Query, NoQueryNames);
+            var authority = await projects.ReadProjectReadAuthorityAsync(
+                context, projectId, cancellationToken).ConfigureAwait(false);
+            // Project grants allow another project member to read history, but a run-bound token stays exact.
+            if (authority.BoundRunId is not null && authority.BoundRunId != runId)
+                throw new CoordinationException(
+                    "project_read_permission_denied", StatusCodes.Status403Forbidden);
+            return Results.Ok(await store.ReadProjectSessionTreeAsync(
+                authority.TenantId, projectId, runId, cancellationToken).ConfigureAwait(false));
+        }, cancellationToken);
 
     /// <summary>Returns stable query failures and reads bounded, uncached UTC project metrics.</summary>
     internal static Task<IResult> ReadMetricsAsync(

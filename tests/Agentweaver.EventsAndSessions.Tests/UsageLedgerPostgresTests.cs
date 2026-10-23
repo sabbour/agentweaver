@@ -1428,6 +1428,14 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(responses[Math.Min(CallCount++, responses.Length - 1)]);
         }
+
+        public Task<ProjectsAuthorizationContextResponse> GetProjectReadAsync(
+            HttpContext context,
+            string projectId,
+            string ownerAudience,
+            CancellationToken cancellationToken) =>
+            Task.FromException<ProjectsAuthorizationContextResponse>(
+                new NotSupportedException("Project reads are not configured in this test fake."));
     }
 
     private sealed class AdmissionSelectionHandler(Func<int, JsonElement> selection) : HttpMessageHandler

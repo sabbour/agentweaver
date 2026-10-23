@@ -8,9 +8,9 @@ it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal and serves ordered run-event replay. Configured private remote tool result routes require direct mutual TLS before reading bodies. Events checks current Orchestrator proof, stores bytes before journal references, and verifies reads before returning bytes. Generic and public routes do not expose private results. Native remote-tool dispatch remains disabled." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal and serves ordered run-event replay. Project history reads require fresh Projects read authority and preserve exact run-bound narrowing. Configured private remote tool result routes require direct mutual TLS before reading bodies. Events checks current Orchestrator proof, stores bytes before journal references, and verifies reads before returning bytes. Generic and public routes do not expose private results. Native remote-tool dispatch remains disabled." />
   </a>
-  <figcaption>Run-bound events, project facts, and addressed messages use separate storage. Private result routes require configured mutual TLS and current owner proof. Bytes precede journal references and acknowledgments. The figure describes source behavior, not an approved deployment.</figcaption>
+  <figcaption>Run-bound events, project facts, and addressed messages use separate storage. Project history reads recheck current project access; run-bound callers stay within their run. Private result routes require configured mutual TLS and current owner proof. Bytes precede journal references and acknowledgments. The figure describes source behavior, not an approved deployment.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 

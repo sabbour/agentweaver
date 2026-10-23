@@ -379,5 +379,13 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
                 [new("project", binding.ProjectId,
                     [new ProjectsAuthorizationPermissionGrant("readRunSelection", 1)])]));
         }
+
+        public Task<ProjectsAuthorizationContextResponse> GetProjectReadAsync(
+            HttpContext context,
+            string projectId,
+            string ownerAudience,
+            CancellationToken cancellationToken) =>
+            Task.FromException<ProjectsAuthorizationContextResponse>(
+                new NotSupportedException("Project reads are not configured in this test fake."));
     }
 }

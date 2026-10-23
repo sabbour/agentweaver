@@ -113,6 +113,276 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
     }
 
     [Fact]
+    public async Task ProjectSearchDiscoversRecordsAcrossExistingRunsAndAgents()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true, bindCaller: false);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+
+        async Task CreateRecordAsync(string runId, string agentId, string key, string content)
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/projects/project-a/runs/{runId}/agents/{agentId}/records")
+            {
+                Content = JsonContent.Create(
+                    new
+                    {
+                        kind = "memory",
+                        type = "note",
+                        content,
+                        importance = "medium",
+                        tags = new[] { "project-search" }
+                    },
+                    options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+
+        await CreateRecordAsync("run-a", "agent-a", "project-search-a", "first run");
+        await CreateRecordAsync("run-b", "agent-b", "project-search-b", "second run");
+        using var search = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/projects/project-a/knowledge/records?includeInactive=true&page=1&pageSize=50");
+        search.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+
+        using var response = await client.SendAsync(search);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var items = body.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Equal(2, items.Length);
+        Assert.Equal(
+            ["agent-a", "agent-b"],
+            items.Select(item => item.GetProperty("record").GetProperty("agentId").GetString())
+                .Order(StringComparer.Ordinal));
+        Assert.Contains(owner.Paths, path => path == "/api/projects/project-a/runs/run-a/selection");
+        Assert.Contains(owner.Paths, path => path == "/api/projects/project-a/runs/run-b/selection");
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+    }
+
+    [Fact]
+    public async Task ProjectSearchPagesGloballyAcrossDistinctProviderResources()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var now = DateTimeOffset.UtcNow;
+        var cosmosRecords = new[]
+        {
+            SearchRecord("agent-b", "cosmos newest", now.AddMinutes(1), "origin-run"),
+            SearchRecord("agent-b", "cosmos oldest", now.AddMinutes(-1), "origin-run")
+        };
+        var cosmosOptions = CosmosOptions("cosmos-resource-a");
+        var cosmosStore = new ReceiptOnlyCosmosMemoryStore(
+            cosmosOptions, CreateReceipt(Guid.NewGuid()), cosmosRecords);
+        var cosmosProvider = new CosmosMemoryProvider(cosmosStore, cosmosOptions);
+        var owner = new FakeProjectsOwnerHandler(
+            database.Options,
+            writeAllowed: true,
+            bindCaller: false,
+            selectedMemoryByRun: runId => runId == "run-b"
+                ? (cosmosProvider.Descriptor, cosmosOptions.OptionsSchemaVersion, cosmosOptions.OptionsRevision, null)
+                : null);
+        await using var app = await CreateAppAsync(
+            database,
+            owner,
+            cosmosProvider: cosmosProvider,
+            cosmosOptions: cosmosOptions);
+        using var client = app.GetTestClient();
+
+        async Task CreateNativeRecordAsync(string key, string content)
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                "/api/projects/project-a/runs/run-a/agents/agent-a/records")
+            {
+                Content = JsonContent.Create(
+                    new
+                    {
+                        kind = "memory",
+                        type = "note",
+                        content,
+                        importance = "medium",
+                        tags = new[] { "project-search" }
+                    },
+                    options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+
+        await CreateNativeRecordAsync("global-page-a", "native first");
+        await CreateNativeRecordAsync("global-page-b", "native second");
+
+        using (var bindCosmos = new HttpRequestMessage(
+                   HttpMethod.Get,
+                   "/api/projects/project-a/runs/run-b/agents/agent-b/records"))
+        {
+            bindCosmos.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            using var response = await client.SendAsync(bindCosmos);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        async Task<(int TotalCount, (string AccessRunId, string RecordId, string? SourceRunId)[] Items)>
+            SearchPageAsync(int page)
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/api/projects/project-a/knowledge/records?includeInactive=true&page={page}&pageSize=2");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var root = body.RootElement;
+            var items = root.GetProperty("items").EnumerateArray()
+                .Select(item =>
+                {
+                    var record = item.GetProperty("record");
+                    return (
+                        AccessRunId: item.GetProperty("accessRunId").GetString()!,
+                        RecordId: record.GetProperty("recordId").GetString()!,
+                        SourceRunId: record.GetProperty("sourceRunId").GetString());
+                })
+                .ToArray();
+            return (root.GetProperty("totalCount").GetInt32(), items);
+        }
+
+        var firstPage = await SearchPageAsync(1);
+        var secondPage = await SearchPageAsync(2);
+
+        Assert.Equal(4, firstPage.TotalCount);
+        Assert.Equal(4, secondPage.TotalCount);
+        Assert.Equal(2, firstPage.Items.Length);
+        Assert.Equal(2, secondPage.Items.Length);
+        Assert.Equal("run-b", firstPage.Items[0].AccessRunId);
+        Assert.Equal(cosmosRecords[0].RecordId.ToString(), firstPage.Items[0].RecordId);
+        Assert.Equal("origin-run", firstPage.Items[0].SourceRunId);
+        Assert.Equal("run-a", firstPage.Items[1].AccessRunId);
+        Assert.Equal("run-a", secondPage.Items[0].AccessRunId);
+        Assert.Equal("run-b", secondPage.Items[1].AccessRunId);
+        Assert.Equal(cosmosRecords[1].RecordId.ToString(), secondPage.Items[1].RecordId);
+        Assert.Equal(
+            4,
+            firstPage.Items.Concat(secondPage.Items)
+                .Select(item => item.RecordId)
+                .Distinct(StringComparer.Ordinal)
+                .Count());
+    }
+
+    [Fact]
+    public async Task ProjectSearchCountsSharedResourceOnceAcrossLegacyAndCurrentCapabilityPins()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var legacyDescriptor = database.Provider.Descriptor with
+        {
+            AdvertisedCapabilities = MemoryProviderCapabilities.All
+                .Remove(MemoryProviderCapabilities.AcceptedEffectDelivery)
+        };
+        var owner = new FakeProjectsOwnerHandler(
+            database.Options,
+            writeAllowed: true,
+            bindCaller: false,
+            selectedMemoryByRun: runId => runId == "run-b"
+                ? (legacyDescriptor, database.Options.OptionsSchemaVersion, database.Options.OptionsRevision,
+                    legacyDescriptor.AdvertisedCapabilities.ToImmutableArray())
+                : null);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+
+        async Task CreateRecordAsync(string key, string content)
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                "/api/projects/project-a/runs/run-a/agents/agent-a/records")
+            {
+                Content = JsonContent.Create(
+                    new
+                    {
+                        kind = "memory",
+                        type = "note",
+                        content,
+                        importance = "medium",
+                        tags = new[] { "project-search" }
+                    },
+                    options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+
+        await CreateRecordAsync("legacy-capability-pin-a", "first record");
+        await CreateRecordAsync("legacy-capability-pin-b", "second record");
+        using (var bindLegacyPin = new HttpRequestMessage(
+                   HttpMethod.Get,
+                   "/api/projects/project-a/runs/run-b/agents/agent-b/records"))
+        {
+            bindLegacyPin.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            using var response = await client.SendAsync(bindLegacyPin);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        await using (var connection = await database.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT negotiated_capabilities
+            FROM "{database.Options.Schema}".memory_provider_bindings
+            WHERE project_id = 'project-a' AND run_id IN ('run-a', 'run-b')
+            ORDER BY run_id
+            """, connection))
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            using var currentPin = JsonDocument.Parse(reader.GetString(0));
+            Assert.Equal(MemoryProviderCapabilities.All.Count, currentPin.RootElement.GetArrayLength());
+            Assert.True(await reader.ReadAsync());
+            using var legacyPin = JsonDocument.Parse(reader.GetString(0));
+            Assert.Equal(MemoryProviderCapabilities.All.Count - 1, legacyPin.RootElement.GetArrayLength());
+            Assert.False(await reader.ReadAsync());
+        }
+
+        using var search = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/projects/project-a/knowledge/records?includeInactive=true&page=1&pageSize=10");
+        search.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+        using var searchResponse = await client.SendAsync(search);
+        using var searchBody = JsonDocument.Parse(await searchResponse.Content.ReadAsStringAsync());
+        var items = searchBody.RootElement.GetProperty("items").EnumerateArray().ToArray();
+
+        Assert.Equal(HttpStatusCode.OK, searchResponse.StatusCode);
+        Assert.Equal(2, searchBody.RootElement.GetProperty("totalCount").GetInt32());
+        Assert.Equal(2, items.Length);
+        Assert.Equal(2, items.Select(item => item.GetProperty("record").GetProperty("recordId").GetString())
+            .Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public async Task ProjectSearchRejectsRunBoundAuthority()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/projects/project-a/knowledge/records");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(
+            "project_wide_authority_required",
+            JsonDocument.Parse(await response.Content.ReadAsStringAsync())
+                .RootElement.GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task EndpointRechecksWriteAuthorityAfterProviderBindingBeforeCreatingRecord()
     {
         await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
@@ -999,6 +1269,33 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             "cosmos-options-v1",
             CosmosMemoryOptions.CurrentOptionsSchemaVersion);
 
+    private static KnowledgeRecord SearchRecord(
+        string agentId,
+        string content,
+        DateTimeOffset updatedAt,
+        string sourceRunId) =>
+        new(
+            Guid.NewGuid(),
+            "project-a",
+            agentId,
+            KnowledgeRecordKind.Memory,
+            "note",
+            content,
+            content,
+            null,
+            "medium",
+            ImmutableArray<string>.Empty,
+            KnowledgeRecordState.Active,
+            KnowledgeTrustState.Approved,
+            1,
+            Guid.NewGuid(),
+            null,
+            sourceRunId,
+            null,
+            null,
+            updatedAt,
+            updatedAt);
+
     private static AcceptedEffectReceipt CreateReceipt(Guid receiptId) =>
         new(
             receiptId,
@@ -1039,8 +1336,11 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
 
     private sealed class ReceiptOnlyCosmosMemoryStore(
         CosmosMemoryOptions options,
-        AcceptedEffectReceipt receipt) : ICosmosMemoryDocumentStore
+        AcceptedEffectReceipt receipt,
+        IReadOnlyCollection<KnowledgeRecord>? records = null) : ICosmosMemoryDocumentStore
     {
+        private readonly ImmutableArray<KnowledgeRecord> _records =
+            records?.ToImmutableArray() ?? ImmutableArray<KnowledgeRecord>.Empty;
         private readonly MemoryStoredDocument _stored = new(
             new KnowledgeMemoryDocument(
                 $"accepted-effect:{receipt.ReceiptId:N}",
@@ -1089,8 +1389,22 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var matching = _records
+                .Where(record => record.ProjectId == query.ProjectId)
+                .Where(record => query.AgentId is null || record.AgentId == query.AgentId)
+                .Where(record => query.Kind is null || record.Kind == query.Kind)
+                .Where(record => query.IncludeInactive || record.State == KnowledgeRecordState.Active)
+                .Where(record => query.Query is null ||
+                    record.Content.Contains(query.Query, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(record => record.UpdatedAt)
+                .ThenBy(record => record.RecordId)
+                .ToArray();
+            var offset = checked((query.Page - 1) * query.PageSize);
             return Task.FromResult(new KnowledgeRecordPage(
-                ImmutableArray<KnowledgeRecord>.Empty, 0, query.Page, query.PageSize));
+                matching.Skip(offset).Take(query.PageSize).ToImmutableArray(),
+                matching.Length,
+                query.Page,
+                query.PageSize));
         }
 
         public Task<IReadOnlyList<KnowledgeRecord>> ReadTransferCandidatesAsync(
@@ -1163,7 +1477,10 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         int? selectedOptionsSchemaVersion = null,
         string? selectedOptionsRevision = null,
         bool revokeWriteAfterFirstSelection = false,
-        int? maxPromptTokens = 1000) : HttpMessageHandler
+        int? maxPromptTokens = 1000,
+        Func<string, (ProviderDescriptor Descriptor, int OptionsSchemaVersion, string OptionsRevision,
+            ImmutableArray<string>? RequiredCapabilities)?>?
+            selectedMemoryByRun = null) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<string> _paths = new();
         private readonly ConcurrentQueue<string?> _authorizationHeaders = new();
@@ -1186,9 +1503,11 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             object payload;
             if (path == "/api/authorization/context")
                 payload = Authority();
-            else if (path == "/api/projects/project-a/runs/run-a/selection")
+            else if (path.StartsWith("/api/projects/project-a/runs/", StringComparison.Ordinal) &&
+                     path.EndsWith("/selection", StringComparison.Ordinal))
             {
-                payload = Selection();
+                var runId = path["/api/projects/project-a/runs/".Length..^"/selection".Length];
+                payload = Selection(runId);
                 if (revokeWriteAfterFirstSelection &&
                     Interlocked.Increment(ref _selectionCount) == 1)
                     Interlocked.Exchange(ref _writeAllowed, 0);
@@ -1229,9 +1548,10 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                     permissions.ToImmutable())]);
         }
 
-        private ProjectRunSelectionResponse Selection()
+        private ProjectRunSelectionResponse Selection(string runId)
         {
-            var descriptor = selectedMemoryDescriptor ?? new ProviderDescriptor(
+            var runSelection = selectedMemoryByRun?.Invoke(runId);
+            var descriptor = runSelection?.Descriptor ?? selectedMemoryDescriptor ?? new ProviderDescriptor(
                 ProviderSeam.Memory,
                 NativePostgresMemoryProvider.ProviderId,
                 NativePostgresMemoryProvider.AdapterVersion,
@@ -1240,7 +1560,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 MemoryProviderCapabilities.All);
             return new ProjectRunSelectionResponse(
                 "project-a",
-                "run-a",
+                runId,
                 1,
                 1,
                 1,
@@ -1252,11 +1572,12 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                         ProviderSeam.Memory,
                         descriptor.Id,
                         descriptor.AdapterVersion.ToString(),
-                        selectedOptionsSchemaVersion ?? descriptor.OptionsSchemaVersion,
-                        selectedOptionsRevision ?? options.OptionsRevision,
+                        runSelection?.OptionsSchemaVersion ??
+                            selectedOptionsSchemaVersion ?? descriptor.OptionsSchemaVersion,
+                        runSelection?.OptionsRevision ?? selectedOptionsRevision ?? options.OptionsRevision,
                         descriptor.Hosting,
                         descriptor.AdvertisedCapabilities.ToImmutableArray(),
-                        MemoryProviderCapabilities.All.ToImmutableArray())])],
+                        runSelection?.RequiredCapabilities ?? MemoryProviderCapabilities.All.ToImmutableArray())])],
                 new ProjectRunLimitSnapshot(maxPromptTokens));
         }
     }

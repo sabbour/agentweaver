@@ -1,14 +1,16 @@
 # Knowledge
 
-Use this page to search and manage memories for a project, run, and agent.
-The page is named **Memories** in the app. The run sets the authorization
-context and the Memory provider. Records belong to the project and agent.
+Use this page to discover memories across a project and manage records for a
+selected run and agent. The page is named **Memories** in the app. Records
+belong to a project and agent, and the run selection identifies the Memory
+provider used for scoped changes.
 
 ## Prerequisites
 
-- Have at least one run in the project.
-- Have current owner-granted access for the project and run.
-- Use a Broker token bound to the project and run.
+- Have current project access to `AccessPrivateKnowledge` and
+  `ReadRunSelection`.
+- Use a Broker token that is not bound to a run for project-wide discovery.
+- Have existing run-provider bindings in the project to discover their records.
 
 The v1 Memories page is backed by the unpublished `Agentweaver.Knowledge`
 source candidate. Its route names describe source contracts, not deployed
@@ -17,31 +19,53 @@ service availability.
 ## Select scope and search
 
 1. Open **Memories** from a project.
-2. Under **Show memories for**, choose a **Run**. The list contains up to 100 of the
-   project's newest runs.
-3. Choose an **Agent**. The list contains the agents in the project
-   configuration.
-4. Select **Show memories**.
-5. The app signs in to the run silently. If that fails, select
-   **Sign in for this project and run**.
-6. Choose a kind tab: **All**, **Memories**, **Decisions**, **Proposals**, or
-   **Session context**.
-7. Enter **Search text** and select **Search**. **Include inactive records**
-   is selected by default; clear it to omit historical states.
-8. Use **Previous page** and **Next page** to read more results. Select
+2. Use **Project-wide search** to find records across accessible runs and
+   agents. The app signs in without a run binding. If needed, select
+   **Sign in for project-wide search**.
+3. Choose a kind, enter search text, and select **Search project memories**.
+   **Include inactive records** is selected by default; clear it to omit
+   historical states.
+4. Use the page controls to read more results or change the page size. Select
    **Refresh** to read the results again.
+5. Select **View revision history** to inspect a record's revisions. Its
+   access run is shown with a link to the run. When recorded, the source run
+   appears separately as record provenance.
+6. To create or change records, use the run and agent controls below the
+   project-wide results. The list contains up to 100 of the project's newest
+   runs and the agents in project configuration.
 
-If the project has no runs, the page shows **No runs yet**
-with a link to **Orchestrations**. You don't type a run ID.
+Search returns 50 records per page by default; the page size can be changed to
+10, 25, or 50. It supports up to 100 pages at the selected size, searches all
+agents through existing provider bindings, merges results into one global
+order before paging, and does not create a provider binding for a run. Increase
+the page size or refine the search to find older results beyond the current
+100-page window.
 
-The page accepts `runId` and `agentId` query parameters. The **Memories for
-this session** link in **Topology** and the **View memories** link on
-**Agents** fill them in. Search pages contain up to 50 records. Each result
-shows kind, type, revision, lifecycle state, trust state, content, rationale,
-and tags.
+The page accepts `runId` and `agentId` query parameters for scoped
+management. The **Memories for this session** link in **Topology** and the
+**View memories** link on **Agents** fill them in. Each result shows kind,
+type, revision, lifecycle state, trust state, content, rationale, tags, and
+source run when recorded. The **Access run** link is the provider binding
+used for history reads; it is not record provenance.
 
-**Expected result:** The page shows results for the selected project and
-agent. The owner checks current access and run binding for every request.
+**Expected result:** Project-wide discovery shows records the current project
+authority can read, regardless of agent. The owner checks current project
+access and each existing run binding before returning results.
+
+## Browse project work history
+
+The **Recent project runs** panel is the reachable project-work-history entry
+point. Its newest 100 runs have direct **Session tree** and **Activity** links,
+so users can browse project sessions and addressed-message receipts without
+entering run or session IDs. **Session tree** lists the sessions for that run.
+**Activity** shows its committed event journal, including addressed-message
+receipts and routing details. Current project readers can open this history even
+if they did not start the run. A run-bound sign-in remains limited to its own
+run. The journal does not include message text; delivery and acknowledgment
+remain owned by the message service.
+
+The **Sessions** page lists runs across projects and private conversations.
+Private conversation history is separate from project work-focus history.
 
 ## Create and review records
 
@@ -90,6 +114,8 @@ overwritten.
 
 ## Understand states and errors
 
+- Project-wide search requires an unbound project token. A run-bound token is
+  rejected. Missing or unavailable provider bindings fail explicitly.
 - Missing IDs or a Broker binding for a different project/run prevent scoped
   requests.
 - Search and revision history show independent loading and empty states.
@@ -99,10 +125,26 @@ overwritten.
   change.
 - The browser rejects records and mutation responses outside the selected
   project and agent.
+- v1 does not expose a single cross-run session or addressed-message feed.
+  The **Recent project runs** panel provides the run-scoped entry point instead;
+  private conversation history remains separate from project work-focus
+  history.
 
 ## Requests
 
-All routes use the Gateway. The common prefix is
+All routes use the Gateway. Project-wide discovery uses
+`/api/v1/projects/{projectId}/knowledge`. Scoped operations use the prefix
+shown below.
+
+| Action | Method and path after the project-wide prefix |
+| --- | --- |
+| Search across existing run bindings | `GET /records` |
+
+The project-wide route requires current project `AccessPrivateKnowledge` and
+`ReadRunSelection` authority with a token that is not bound to a run. It
+searches only through existing provider bindings.
+
+Scoped operations use this prefix:
 `/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}`.
 
 | Action | Method and path after the prefix |

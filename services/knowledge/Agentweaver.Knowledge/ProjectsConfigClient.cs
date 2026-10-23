@@ -22,7 +22,7 @@ public sealed class ProjectsConfigClient(
     /// <exception cref="KnowledgeApiException">Authority is absent, malformed, rejected, or unavailable.</exception>
     public async Task<ProjectAuthorizationContextResponse> GetCurrentAuthorityAsync(
         string projectId,
-        string runId,
+        string? runId,
         CancellationToken cancellationToken)
     {
         using var response = await SendAsync(
@@ -54,9 +54,20 @@ public sealed class ProjectsConfigClient(
                 "Projects & Config returned an empty authorization-context contract.",
                 StatusCodes.Status502BadGateway);
 
+        if (runId is null && authority.BoundRunId is not null)
+            throw new KnowledgeApiException(
+                "project_wide_authority_required",
+                "Project-wide Knowledge search requires a Broker token that is not bound to a run.",
+                StatusCodes.Status403Forbidden);
         ValidateAuthority(authority, contextAccessor.HttpContext?.User, projectId, runId, options);
         return authority;
     }
+
+    /// <summary>Reads current project authority without accepting an authority token bound to one run.</summary>
+    public Task<ProjectAuthorizationContextResponse> GetCurrentProjectAuthorityAsync(
+        string projectId,
+        CancellationToken cancellationToken) =>
+        GetCurrentAuthorityAsync(projectId, runId: null, cancellationToken: cancellationToken);
 
     /// <summary>Reads the accepted provider selection and limits for a specific project run.</summary>
     /// <exception cref="KnowledgeApiException">The selection is absent, mismatched, malformed, or unavailable.</exception>
@@ -216,13 +227,12 @@ public sealed class ProjectsConfigClient(
         }
     }
 
-    /// <summary>Checks that returned claims, issuer, tenant, resource binding, and effective grants match the caller.</summary>
     /// <summary>Rejects owner responses that do not match authenticated caller claims and requested scope.</summary>
     private static void ValidateAuthority(
         ProjectAuthorizationContextResponse authority,
         ClaimsPrincipal? principal,
         string projectId,
-        string runId,
+        string? runId,
         KnowledgeRuntimeOptions options)
     {
         var identities = principal?.Identities.Where(identity => identity.IsAuthenticated).Take(2).ToArray() ?? [];
@@ -272,6 +282,7 @@ public sealed class ProjectsConfigClient(
             (authority.BoundRunId is not null && authority.BoundProjectId is null) ||
             (authority.BoundProjectId is not null &&
                 !string.Equals(authority.BoundProjectId, projectId, StringComparison.Ordinal)) ||
+            // A project-wide request deliberately has no run scope, so any run-bound authority is rejected here.
             (authority.BoundRunId is not null &&
                 !string.Equals(authority.BoundRunId, runId, StringComparison.Ordinal)) ||
             authority.EffectiveAuthority.IsDefault ||

@@ -57,6 +57,36 @@ public sealed class KnowledgeProviderBindingService(
         => await ResolveAsync(authority, projectId, runId, allowCreate: false, cancellationToken)
             .ConfigureAwait(false);
 
+    /// <summary>Lists only run IDs that already have an immutable Knowledge provider binding.</summary>
+    public async Task<ImmutableArray<string>> ListBoundRunIdsAsync(
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        // Discovery must never create pins: the stored bindings are the complete set of provider sources to validate.
+        var schema = $"\"{options.Schema}\"";
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT run_id
+            FROM {schema}.memory_provider_bindings
+            WHERE project_id = @project
+            ORDER BY run_id
+            """, connection);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var runIds = ImmutableArray.CreateBuilder<string>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var runId = reader.GetString(0);
+            if (string.IsNullOrWhiteSpace(runId) || runId.Length > 256 ||
+                runId.Any(character => !char.IsAsciiLetterOrDigit(character) &&
+                    character is not ('.' or '_' or '-' or ':')))
+                throw new KnowledgeProviderUnavailableException(
+                    "A persisted Memory provider binding contains an invalid run identifier.");
+            runIds.Add(runId);
+        }
+        return runIds.ToImmutable();
+    }
+
     private async Task<KnowledgeProviderContext> ResolveAsync(
         ProjectAuthorizationContextResponse authority,
         string projectId,
@@ -147,6 +177,8 @@ public sealed class KnowledgeProviderBindingService(
             .ConfigureAwait(false);
         var snapshotNegotiation = negotiation with
         {
+            // Narrow capabilities without changing the shared resource identity.
+            Resource = negotiation.Resource,
             Capabilities = negotiation.Capabilities
                 .Where(advertised.Contains)
                 .ToImmutableHashSet(StringComparer.Ordinal)
