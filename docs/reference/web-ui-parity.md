@@ -124,6 +124,17 @@ Each row says what works and what is still missing. The missing parts link to
 | Cluster | **Platform components** with owner, readiness, and implementations. | Node and replica topology. |
 | Apps and Canvas | Not shown. | Not planned for v1. |
 
+### Re-role comparison
+
+In 0.x, Re-role changes a team member directly. In v1, it updates the member
+in a pending proposal; confirm the proposal to apply the change. A custom role
+title changes the display name without replacing the catalog role. These
+screenshots use example data.
+
+![0.x Re-role control](images/casting-role-edit-0x.png)
+
+![v1 proposal Re-role dialog](images/casting-role-edit-v1.png)
+
 Every page shows a loading state, an empty state, a permission message for
 `403`, and the service error for other failures. The Platform components
 section on Diagnostics and Cluster needs tenant or platform administrator
