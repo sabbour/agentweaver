@@ -248,11 +248,10 @@ The appendix seeds the map, not a claim that parity is complete.
 
 ### Keep 0.x active
 
-0.x continues on `dev` while 1.0 grows on `v1`. Add a field to the 0.x
-pull-request template asking for “1.0 parity row: id / n.a.”, and have Squad
-sweep changes when each 0.x milestone closes. This is a team process, **not**
-a GitHub required check, and never delays a 0.x release. Shipped work updates
-parity rows; open work at cutover moves to the owning 1.0 backlog.
+0.x continues on `dev` while 1.0 grows on `v1`. The parity map records how
+each 0.x change maps to a 1.0 capability and names its owner. It guides
+cutover planning but does not block 0.x releases. Move unfinished work to the
+1.0 backlog at cutover.
 
 ### Cut over on evidence
 
@@ -263,8 +262,9 @@ into the 1.0 backlog rather than moving the gate forever ([R22](#risk-register))
 
 Tag the final 0.x release on `dev` and keep `release/0.x` for patches. Preserve
 both histories without a force push: merge old `dev` into `v1` with
-`--allow-unrelated-histories -s ours`, then fast-forward `dev` to `v1`
-([R21](#risk-register)). 1.0 is a fresh installation, not a data migration.
+`git merge --allow-unrelated-histories -s ours` to keep the `v1` tree, then
+fast-forward `dev` to `v1` ([R21](#risk-register)). Start 1.0 with a fresh
+installation; do not migrate 0.x data.
 
 The timeline shows active 0.x milestones feeding parity alongside 1.0 phases.
 These milestones are roadmap inputs, not prerequisites that all must ship.
@@ -290,7 +290,7 @@ flowchart LR
     P2 --> Gate
     Contracts --> Gate
     Gate --> Tag["Final 0.x tag"]
-    Tag --> Cutover["Preserve histories and fast-forward dev"]
+    Tag --> Cutover["Join histories; fast-forward dev"]
     Cutover --> P3["P3 later adapters"]
 ```
 
@@ -444,7 +444,7 @@ the design contains the failure mode.
 | R18 | Copilot AI-credit pricing changes. | Mitigated | Version the rate card and persist its version with each cost record. |
 | R19 | Azure price lag, provisioned throughput allocation, and reconciliation trail budgets. | Decided | Enforce on estimates; reconciliation corrects reports but never retroactively stops runs. |
 | R20 | The new branch needs a stable name. | Decided | Use orphan `v1`. |
-| R21 | Cutover could discard 0.x history or require a force push. | Decided | Tag final 0.x on `dev`, keep `release/0.x` for patches, merge old `dev` into `v1` with `--allow-unrelated-histories -s ours`, and fast-forward `dev` to `v1`. |
+| R21 | Cutover could discard 0.x history or require a force push. | Decided | Keep the 0.x patch line. Merge old `dev` into `v1` with `git merge --allow-unrelated-histories -s ours` to keep the `v1` tree, then fast-forward `dev` to `v1`. Install 1.0 fresh. |
 | R22 | An active 0.x line keeps moving the parity target. | Decided | Set a cut line once the map is complete; later changes enter the 1.0 backlog rather than blocking cutover. |
 | R23 | Persona harness coverage could arrive too late. | Decided | Run API/UI/MCP harnesses on exact-SHA AKS deployments from the end of P1; require all green at cutover. |
 | R24 | Sandbox options, viewer auth, and application hosting can be confused. | Decided | Keep only built-in AKS Application Hosting for now. Evaluate Container Apps Sandboxes under the Sandbox seam in P3. Gateway/Identity retains viewer authorization. Defer the image-backed and owner-managed hosting adapters. |
