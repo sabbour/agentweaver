@@ -34,7 +34,7 @@ const GROUPS = {
   projects_config: {
     SELECT: 'tenant_memberships project_role_assignments authority_audit __ef_migrations_history',
     'SELECT,UPDATE': 'platform_runtime_heads',
-    'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals hosted_model_reasoning_catalog',
+    'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog',
     'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations',
   },
   environment: {
