@@ -28,6 +28,20 @@ public sealed record ExecuteCastingGenerationResponse(Guid RequestId, string Run
 /// <summary>Builds and validates the AgentHost message used by accepted-run casting generation.</summary>
 internal static class CastingGenerationExecutionContract
 {
+    internal static void RequireProjectRunStart(
+        CoordinationOwnerStore.ProjectRunRequestRow runRequest,
+        string runId,
+        string sessionId,
+        string prompt)
+    {
+        // Bind first-time acceptance to the exact durable request, not just a caller-selected run ID.
+        if (runRequest.RunId != runId ||
+            runRequest.RootSessionId != sessionId ||
+            !string.Equals(runRequest.FirstMessage, prompt, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "casting_generation_run_conflict", StatusCodes.Status409Conflict);
+    }
+
     internal static RuntimeA2ASendRequest CreateHostRequest(
         ExecuteCastingGenerationRequest request,
         RuntimeRegistration registration,

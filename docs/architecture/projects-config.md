@@ -241,9 +241,10 @@ runs in AgentHost with that run's Identity credential; Projects & Config owns
 the proposal and never receives the credential.
 
 Generation uses the existing accepted project-run lifecycle rather than a
-separate scheduler or model-execution path. The Gateway creates or accepts that
-run with the caller's project authorization; the run-bound Identity session
-starts it, and its ID remains the generation request's immutable result binding.
+separate scheduler or model-execution path. The Gateway creates or accepts that run with the caller's project authorization.
+The generation route starts the saved run through the ordinary acceptance path
+using its run-bound Identity session, and the run ID remains the generation
+request's immutable result binding.
 
 Orchestrator accepts `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/casting-generation`
 only for the active coordinator root of that accepted run. It checks the
@@ -274,11 +275,12 @@ sequenceDiagram
     participant Projects as Projects & Config
     participant DB as PostgreSQL
     Client->>Gateway: Formulate or Analyze (expected revision, idempotency key)
-    Gateway->>Orchestrator: Create or accept a normal project run
-    Orchestrator-->>Gateway: Accepted run ID and root session
+    Gateway->>Orchestrator: Create or replay a normal project run
+    Orchestrator-->>Gateway: Run ID, root session, and binding
     Gateway->>Projects: Start generation request (run ID, request digest)
     Projects->>DB: Check current write authority and revision; store pending proposal
-    Gateway->>Orchestrator: Execute generation (request ID, prompt)
+    Gateway->>Orchestrator: Execute generation (request ID, prompt, run-bound token)
+    Orchestrator->>Orchestrator: Accept and start the saved run through the normal path
     Orchestrator->>Orchestrator: Recheck accepted root and current registration
     Orchestrator->>AgentHost: Immediate turn (message ID = request ID)
     AgentHost->>Identity: Redeem the run-bound model credential

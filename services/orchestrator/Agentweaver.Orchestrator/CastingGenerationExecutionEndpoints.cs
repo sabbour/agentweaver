@@ -32,6 +32,8 @@ public static partial class CoordinationEndpoints
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
         CoordinationOwnerStore sessions,
+        EventsAddressedMessageClient events,
+        CoordinatorDecisionOwnerStore decisions,
         RuntimeRegistrationOwner registrations,
         IHttpClientFactory clients,
         TimeProvider timeProvider,
@@ -45,6 +47,35 @@ public static partial class CoordinationEndpoints
             request.Validate();
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
             var identity = new SessionIdentity(projectId, runId, sessionId);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+
+            // The saved first message is the generation prompt, so accept and start the run without
+            // admitting a second Events message before the direct AgentHost generation turn.
+            await sessions.StartProjectRunAsync(
+                actor,
+                selection.Authorization.TenantId,
+                projectId,
+                runId,
+                async (runRequest, token) =>
+                {
+                    CastingGenerationExecutionContract.RequireProjectRunStart(
+                        runRequest, runId, sessionId, request.Prompt);
+                    await AcceptInteractiveRootAsync(
+                        projectId,
+                        runId,
+                        runRequest.RootSessionId,
+                        context,
+                        options,
+                        projects,
+                        events,
+                        sessions,
+                        decisions,
+                        token).ConfigureAwait(false);
+                },
+                token => RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, token),
+                cancellationToken).ConfigureAwait(false);
 
             async Task<SessionStatusSnapshot> ReadCurrentAcceptedRootAsync(CancellationToken token)
             {
@@ -58,8 +89,6 @@ public static partial class CoordinationEndpoints
                 return currentStatus;
             }
 
-            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
-                context, projectId, runId, cancellationToken).ConfigureAwait(false);
             var status = await ReadCurrentAcceptedRootAsync(cancellationToken).ConfigureAwait(false);
             // Pin the turn to the accepted snapshot before contacting the registered host.
             var selectionHash = CoordinationOwnerStore.HashSelection(selection.Selection);

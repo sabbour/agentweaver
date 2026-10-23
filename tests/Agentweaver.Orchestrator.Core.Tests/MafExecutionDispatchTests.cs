@@ -73,6 +73,21 @@ public sealed class MafExecutionDispatchTests
     }
 
     [Fact]
+    public void CastingGenerationStartsOnlyTheRunThatOwnsItsSavedPrompt()
+    {
+        var runRequest = new CoordinationOwnerStore.ProjectRunRequestRow(
+            "run-1", "session-1", "Generate a team proposal.", null, 7, "awaiting_binding");
+
+        CastingGenerationExecutionContract.RequireProjectRunStart(
+            runRequest, "run-1", "session-1", "Generate a team proposal.");
+        var failure = Assert.Throws<CoordinationException>(() =>
+            CastingGenerationExecutionContract.RequireProjectRunStart(
+                runRequest, "run-1", "session-1", "Generate a different proposal."));
+
+        Assert.Equal("casting_generation_run_conflict", failure.Code);
+    }
+
+    [Fact]
     public void CastingGenerationRejectsWorkflowChildRegistrations()
     {
         var now = DateTimeOffset.UtcNow;
