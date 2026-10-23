@@ -240,6 +240,11 @@ ID, and lifecycle state. It does not store model credentials. The model call
 runs in AgentHost with that run's Identity credential; Projects & Config owns
 the proposal and never receives the credential.
 
+Generation uses the existing accepted project-run lifecycle rather than a
+separate scheduler or model-execution path. The Gateway creates or accepts that
+run with the caller's project authorization; the run-bound Identity session
+starts it, and its ID remains the generation request's immutable result binding.
+
 Generation completion must match the request's run ID and current configuration
 revision. It validates and replaces only the proposal's charters and cast, then
 marks the request complete in the same database transaction. Until the user
@@ -259,10 +264,12 @@ sequenceDiagram
     participant Projects as Projects & Config
     participant DB as PostgreSQL
     Client->>Gateway: Formulate or Analyze (expected revision, idempotency key)
-    Gateway->>Orchestrator: Start run with generation mode and input
+    Gateway->>Orchestrator: Create or accept a normal project run
     Orchestrator->>Projects: Start generation request (run ID, request digest)
     Projects->>DB: Check current write authority and revision; store pending proposal
-    Orchestrator->>AgentHost: Dispatch the run
+    Client->>Identity: Obtain the run-bound session for the returned run ID
+    Client->>Orchestrator: Start the accepted run with generation input
+    Orchestrator->>AgentHost: Dispatch through the accepted run
     AgentHost->>Identity: Redeem the run-bound model credential
     Identity-->>AgentHost: Run-scoped credential
     AgentHost-->>Orchestrator: Proposed charters and cast
