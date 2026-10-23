@@ -108,6 +108,7 @@ public static class PlannedRuntimeGrants
         {
             "orchestrator" => "coreVersions",
             "events-and-sessions" => "eventsVersions",
+            "environment" => "environmentVersions",
             _ => throw new InvalidOperationException($"The {service} service has no planned integer migrations."),
         };
         var versions = root.GetProperty(versionsProperty).EnumerateArray().Select(item => item.GetInt32()).ToArray();

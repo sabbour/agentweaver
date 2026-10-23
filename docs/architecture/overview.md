@@ -14,6 +14,11 @@ Orchestrator Core provenance. Evidence is not an action grant. The action guard
 checks current grants and waits for a durable receipt before a protected effect;
 downstream effect-call-site wiring is not claimed.
 
+Environment uses a separate `EnvironmentMigration` connection for EF Core
+migrations. The P1 maintenance runner starts its migration Job with the
+reviewed runtime grant plan; normal startup checks migration history and fails
+while a migration is pending.
+
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 
 Its separate migration Job applies the canonical explicit runtime table grants

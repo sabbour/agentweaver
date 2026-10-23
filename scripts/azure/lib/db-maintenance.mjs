@@ -25,8 +25,8 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   postgresHost: 'agentweaver-pg.postgres.database.azure.com',
   registry: 'ghcr.io/sabbour',
 });
-/** The reviewed plan: Core 1-16 and 18-33, Events 1-9. */
-export const REVIEWED_PLAN_SHA256 = '74f984b26a7df480476dbdee0c36164c46d0f4afc93d6624cbc590098d73c685';
+/** The reviewed plan: Environment 1-11, Events 1-9, and Core 1-16 and 18-33. */
+export const REVIEWED_PLAN_SHA256 = 'c330dae05bb66a20b084bfa38934efb47e81fba0761d653bd5d1f33733ce0b60';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';
@@ -43,6 +43,9 @@ const PLAN_FILE = join('scripts', 'azure', 'lib', 'p1-postgres-plan.json');
 // the commit an image was built from to learn which schema versions that image accepts. Git
 // paths always use forward slashes.
 const OWNER_SOURCES = Object.freeze({
+  'Agentweaver.Environment': {
+    file: 'services/environment/Agentweaver.Environment/EnvironmentMigrator.cs',
+  },
   'Agentweaver.Orchestrator': {
     file: 'services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs',
     table: 'coordination_schema_migrations',
@@ -68,7 +71,7 @@ const PERMISSIONS = [
   ['get', 'serviceaccounts'], ['patch', 'serviceaccounts'], ['create', 'serviceaccounts'],
   ['get', 'ciliumnetworkpolicies.cilium.io'], ['patch', 'ciliumnetworkpolicies.cilium.io'],
   ['create', 'ciliumnetworkpolicies.cilium.io'],
-  ...['orchestrator', 'events-and-sessions'].flatMap(name => [
+  ...['environment', 'orchestrator', 'events-and-sessions'].flatMap(name => [
     ['get', 'deployments.apps', undefined, name], ['list', 'deployments.apps', undefined, name],
     ['watch', 'deployments.apps', undefined, name],
   ]),
@@ -77,7 +80,7 @@ const PERMISSIONS = [
 const APP_PERMISSIONS = [
   ['create', 'leases.coordination.k8s.io'], ['get', 'leases.coordination.k8s.io'],
   ['delete', 'leases.coordination.k8s.io'],
-  ...['orchestrator', 'events-and-sessions'].flatMap(name => [
+  ...['environment', 'orchestrator', 'events-and-sessions'].flatMap(name => [
     ['get', 'deployments.apps', undefined, name], ['list', 'deployments.apps', undefined, name],
     ['watch', 'deployments.apps', undefined, name], ['patch', 'deployments.apps', undefined, name],
   ]),
@@ -85,6 +88,8 @@ const APP_PERMISSIONS = [
 ];
 // Each Job: its kustomize name, the image, and the plan field whose versions its marker must report.
 const P1_JOBS = [
+  { key: 'environment', jobName: 'environment-migration', component: 'Agentweaver.Environment',
+    digestOption: 'environmentDigest', schema: 'environment', planVersions: 'environmentVersions' },
   { key: 'orchestrator', jobName: 'orchestrator-migration', component: 'Agentweaver.Orchestrator',
     digestOption: 'orchestratorDigest', schema: 'orchestrator', planVersions: 'coreVersions' },
   { key: 'events-and-sessions', jobName: 'events-and-sessions-migration', component: 'Agentweaver.EventsAndSessions',
@@ -99,16 +104,17 @@ export const USAGE = `Usage: npm run db:maintenance -- [options]
 Without --execute the runner only checks preconditions and prints what it would do.
 
   --execute                     Apply the identity, ServiceAccount, egress, handover, and Jobs.
+  --environment-digest <d>     Published Environment image digest (sha256:...). Required.
   --orchestrator-digest <d>     Published Orchestrator image digest (sha256:...). Required.
   --events-digest <d>           Published EventsAndSessions image digest (sha256:...). Required.
   --broker-digest <d>           Published Identity Broker image digest. Omit to skip the Broker Job.
   --handover auto|always|skip   Schema ownership handover. auto runs it once and records it. Default auto.
   --postgres-admin <upn>        Entra PostgreSQL administrator for the handover. Default: signed-in user.
   --reconcile-broker-egress     Re-apply the repository Broker egress policy when it has drifted.
-  --deploy-apps                 Roll the Orchestrator and EventsAndSessions Deployments to the same
+  --deploy-apps                 Roll the Environment, Orchestrator, and EventsAndSessions Deployments to the same
                                 digests in this run, before or after the migrations as the schema
                                 support of each image requires, and wait until they are ready.
-  --apps-only                   Skip identity, handover, and migration Jobs. Only roll the two
+  --apps-only                   Skip identity, handover, and migration Jobs. Only roll the three
                                 Deployments to the given digests under the lock and wait until they
                                 are ready. Use it when the schema is already migrated and services are
                                 unready because they still run older images.
@@ -125,7 +131,8 @@ export function parseDbMaintenanceArgs(argv) {
   const options = { execute: false, handover: 'auto', reconcileBrokerEgress: false, deployApps: false, appsOnly: false, prepareOnly: false,
     receiptDir: join(homedir(), '.agentweaver', 'db-maintenance'), jobTimeoutSeconds: 900, readinessTimeoutSeconds: 600, help: false };
   const valued = new Map([
-    ['--orchestrator-digest', 'orchestratorDigest'], ['--events-digest', 'eventsDigest'],
+    ['--environment-digest', 'environmentDigest'], ['--orchestrator-digest', 'orchestratorDigest'],
+    ['--events-digest', 'eventsDigest'],
     ['--broker-digest', 'brokerDigest'], ['--handover', 'handover'], ['--postgres-admin', 'postgresAdmin'],
     ['--release-lock', 'releaseLock'], ['--receipt-dir', 'receiptDir'], ['--job-timeout-seconds', 'jobTimeoutSeconds'],
     ['--readiness-timeout-seconds', 'readinessTimeoutSeconds'],
@@ -164,6 +171,7 @@ export function parseDbMaintenanceArgs(argv) {
   if (options.prepareOnly) {
     // Prepare-only never runs a Job or touches a service, so image options have no meaning.
     const conflicting = [
+      [options.environmentDigest !== undefined, '--environment-digest'],
       [options.orchestratorDigest !== undefined, '--orchestrator-digest'], [options.eventsDigest !== undefined, '--events-digest'],
       [options.brokerDigest !== undefined, '--broker-digest'], [options.deployApps, '--deploy-apps'],
       [options.appsOnly, '--apps-only'],
@@ -171,7 +179,8 @@ export function parseDbMaintenanceArgs(argv) {
     if (conflicting.length) throw new Error(`--prepare-only cannot be combined with ${conflicting.join(', ')}.`);
     return options;
   }
-  for (const [option, key] of [['--orchestrator-digest', 'orchestratorDigest'], ['--events-digest', 'eventsDigest']])
+  for (const [option, key] of [['--environment-digest', 'environmentDigest'],
+    ['--orchestrator-digest', 'orchestratorDigest'], ['--events-digest', 'eventsDigest']])
     if (!DIGEST.test(options[key] ?? '')) throw new Error(`${option} must be an exact sha256 image digest.`);
   if (options.brokerDigest !== undefined && !DIGEST.test(options.brokerDigest))
     throw new Error('--broker-digest must be an exact sha256 image digest.');
@@ -263,6 +272,15 @@ function checkAppImages(kubectl, options) {
 export function schemaRangeFromSource(source, component) {
   const owner = OWNER_SOURCES[component];
   if (!owner || typeof source !== 'string') return undefined;
+  if (component === 'Agentweaver.Environment') {
+    // EF migration IDs map to ordered numeric versions, and startup rejects pending migrations.
+    const current = source.match(/private const int CurrentSchemaVersion = (\d+);/);
+    if (!current || !source.includes('pending.Length > 0')) return undefined;
+    const version = Number(current[1]);
+    return Number.isSafeInteger(version) && version > 0
+      ? { minSchema: version, maxSchema: version }
+      : undefined;
+  }
   // Exactly one allow-list is expected; zero or several means the shape changed.
   const allowLists = [...source.matchAll(new RegExp(`${owner.table} WHERE version NOT IN \\(([\\d, ]+)\\)`, 'g'))];
   if (allowLists.length !== 1) return undefined;
@@ -530,7 +548,7 @@ export async function runDbMaintenance(options, overrides = {}) {
       'Could not configure kubelogin');
     // The Role restricts Deployment access by name, so preflight each target with the same name.
     const required = options.appsOnly ? APP_PERMISSIONS
-      : options.deployApps ? [...PERMISSIONS, ...['orchestrator', 'events-and-sessions']
+      : options.deployApps ? [...PERMISSIONS, ...['environment', 'orchestrator', 'events-and-sessions']
         .map(name => ['patch', 'deployments.apps', undefined, name])] : PERMISSIONS;
     const missing = required.filter(([verb, resource, sub, resourceName]) => {
       const target = sub ? `${resource}/${sub}` : resource;
@@ -706,7 +724,7 @@ export async function runDbMaintenance(options, overrides = {}) {
           ...(receipt.brokerEgressDrift && options.reconcileBrokerEgress ? ['broker-egress-reconcile'] : []),
           `handover-${handoverNeeded ? 'run' : 'skip'}`, 'connectivity-probes',
           ...(deployFirst.length ? ['deploy-apps-before-migrations'] : []),
-          ...(options.brokerDigest ? ['broker-job'] : []), 'orchestrator-job', 'events-and-sessions-job',
+            ...(options.brokerDigest ? ['broker-job'] : []), 'environment-job', 'orchestrator-job', 'events-and-sessions-job',
           ...(deployAfter.length ? ['deploy-apps-after-migrations'] : []), 'readiness', 'cleanup', 'receipt',
         ];
       log(`Dry run passed. With --execute the runner would: ${receipt.plannedSteps.join(', ')}.`);
@@ -889,7 +907,7 @@ export async function runDbMaintenance(options, overrides = {}) {
       waitReady({ afterMigration: Object.keys(pendingImages).length > 0 });
     }
 
-    // Migration Jobs run one at a time, in prerequisite order: Broker, Core, Events.
+    // Migration Jobs run one at a time, in prerequisite order: Broker, Environment, Core, Events.
     const jobs = [
       ...(options.brokerDigest ? [{ key: 'identity-broker', template: brokerJobTemplate,
         image: imageReference('Agentweaver.Identity.Broker', options.brokerDigest) }] : []),

@@ -67,7 +67,7 @@ export function setupScopes(target = DB_MAINTENANCE_TARGET) {
 }
 
 export function workflowAuthorizationResources(principalObjectId) {
-  // Job list/watch keeps foreground cleanup reliable; named Deployments limit access to the two rollouts.
+  // Job list/watch keeps foreground cleanup reliable; named Deployments limit access to the three rollouts.
   const namespace = DB_MAINTENANCE_TARGET.namespace;
   const roleName = SETUP_TARGET.kubernetesRole;
   return [
@@ -83,7 +83,7 @@ export function workflowAuthorizationResources(principalObjectId) {
         { apiGroups: [''], resources: ['serviceaccounts'], verbs: ['create', 'get', 'patch'] },
         { apiGroups: ['coordination.k8s.io'], resources: ['leases'], verbs: ['create', 'delete', 'get'] },
         { apiGroups: ['cilium.io'], resources: ['ciliumnetworkpolicies'], verbs: ['create', 'get', 'patch'] },
-        { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['orchestrator', 'events-and-sessions'],
+        { apiGroups: ['apps'], resources: ['deployments'], resourceNames: ['environment', 'orchestrator', 'events-and-sessions'],
           verbs: ['get', 'list', 'patch', 'watch'] },
       ],
     },

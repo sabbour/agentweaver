@@ -1,3 +1,4 @@
+using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Environment;
@@ -8,6 +9,9 @@ internal static class RemoteMcpConnectionModel
     /// <summary>Maps connection heads, immutable configurations, discovery snapshots, and idempotency records.</summary>
     internal static void Configure(ModelBuilder modelBuilder)
     {
+        var streamableHttpOptions = RemoteMcpTransportAdapterOptions.ForProfile(
+            RemoteMcpTransportProfile.StreamableHttp20250618);
+
         modelBuilder.Entity<RemoteMcpConnectionRow>(entity =>
         {
             entity.ToTable("remote_mcp_connections", EnvironmentDbContext.Schema, table =>
@@ -46,7 +50,7 @@ internal static class RemoteMcpConnectionModel
                     "authentication_mode IN ('None', 'DelegatedOAuth')");
                 table.HasCheckConstraint(
                     "ck_environment_remote_mcp_connection_configurations_transport",
-                    "transport_profile = 'StreamableHttp20250618'");
+                    $"transport_profile = 'StreamableHttp20250618' AND transport_adapter_id = '{streamableHttpOptions.AdapterId}' AND transport_adapter_version = '{streamableHttpOptions.AdapterVersion}' AND transport_options_schema_version = {streamableHttpOptions.OptionsSchemaVersion} AND transport_options_revision = '{streamableHttpOptions.OptionsRevision}' AND transport_protocol_version = '{streamableHttpOptions.ProtocolVersion}' AND transport_request_timeout_seconds = {streamableHttpOptions.RequestTimeoutSeconds} AND transport_maximum_response_bytes = {streamableHttpOptions.MaximumResponseBytes} AND transport_maximum_tools_list_pages = {streamableHttpOptions.MaximumToolsListPages} AND transport_options_sha256 = '{streamableHttpOptions.OptionsSha256}'");
                 table.HasCheckConstraint(
                     "ck_environment_remote_mcp_connection_configurations_registry_pin",
                     "(registry_server_name IS NULL AND registry_exact_version IS NULL AND registry_metadata_sha256 IS NULL) OR (registry_server_name IS NOT NULL AND registry_exact_version IS NOT NULL AND registry_exact_version <> 'latest' AND registry_metadata_sha256 ~ '^[0-9a-f]{64}$')");
@@ -75,6 +79,24 @@ internal static class RemoteMcpConnectionModel
             entity.Property(row => row.AuthenticationMode).HasColumnName("authentication_mode").HasMaxLength(32);
             entity.Property(row => row.IdentityBindingReference).HasColumnName("identity_binding_reference").HasMaxLength(512);
             entity.Property(row => row.TransportProfile).HasColumnName("transport_profile").HasMaxLength(64);
+            entity.Property(row => row.TransportAdapterId).HasColumnName("transport_adapter_id").HasMaxLength(64)
+                .HasDefaultValue(RemoteMcpTransportAdapterOptions.CurrentAdapterId);
+            entity.Property(row => row.TransportAdapterVersion).HasColumnName("transport_adapter_version").HasMaxLength(32)
+                .HasDefaultValue(RemoteMcpTransportAdapterOptions.CurrentAdapterVersion);
+            entity.Property(row => row.TransportOptionsSchemaVersion).HasColumnName("transport_options_schema_version")
+                .HasDefaultValue(RemoteMcpTransportAdapterOptions.CurrentOptionsSchemaVersion);
+            entity.Property(row => row.TransportOptionsRevision).HasColumnName("transport_options_revision").HasMaxLength(64)
+                .HasDefaultValue(RemoteMcpTransportAdapterOptions.CurrentOptionsRevision);
+            entity.Property(row => row.TransportProtocolVersion).HasColumnName("transport_protocol_version").HasMaxLength(32)
+                .HasDefaultValue(RemoteMcpTransportAdapterOptions.CurrentProtocolVersion);
+            entity.Property(row => row.TransportRequestTimeoutSeconds).HasColumnName("transport_request_timeout_seconds")
+                .HasDefaultValue(RemoteMcpTransportAdapterOptions.CurrentRequestTimeoutSeconds);
+            entity.Property(row => row.TransportMaximumResponseBytes).HasColumnName("transport_maximum_response_bytes")
+                .HasDefaultValue(RemoteMcpTransportAdapterOptions.CurrentMaximumResponseBytes);
+            entity.Property(row => row.TransportMaximumToolsListPages).HasColumnName("transport_maximum_tools_list_pages")
+                .HasDefaultValue(RemoteMcpTransportAdapterOptions.CurrentMaximumToolsListPages);
+            entity.Property(row => row.TransportOptionsSha256).HasColumnName("transport_options_sha256").HasMaxLength(64)
+                .HasDefaultValue(streamableHttpOptions.OptionsSha256);
             entity.Property(row => row.RegistryServerName).HasColumnName("registry_server_name").HasMaxLength(200);
             entity.Property(row => row.RegistryExactVersion).HasColumnName("registry_exact_version").HasMaxLength(255);
             entity.Property(row => row.RegistryMetadataSha256).HasColumnName("registry_metadata_sha256").HasMaxLength(64);
@@ -205,6 +227,15 @@ internal sealed class RemoteMcpConnectionConfigurationRow
     public string AuthenticationMode { get; set; } = string.Empty;
     public string? IdentityBindingReference { get; set; }
     public string TransportProfile { get; set; } = string.Empty;
+    public string TransportAdapterId { get; set; } = string.Empty;
+    public string TransportAdapterVersion { get; set; } = string.Empty;
+    public int TransportOptionsSchemaVersion { get; set; }
+    public string TransportOptionsRevision { get; set; } = string.Empty;
+    public string TransportProtocolVersion { get; set; } = string.Empty;
+    public int TransportRequestTimeoutSeconds { get; set; }
+    public int TransportMaximumResponseBytes { get; set; }
+    public int TransportMaximumToolsListPages { get; set; }
+    public string TransportOptionsSha256 { get; set; } = string.Empty;
     public string? RegistryServerName { get; set; }
     public string? RegistryExactVersion { get; set; }
     public string? RegistryMetadataSha256 { get; set; }

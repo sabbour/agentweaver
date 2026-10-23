@@ -12,10 +12,12 @@ and not deployed.
 
 The Environment API stores connection state in PostgreSQL. Each create or update writes an immutable configuration revision. The connection head points to the current revision. Row revisions support compare-and-swap. Each mutation also requires an idempotency key.
 
-The migration adds four remote MCP tables to the existing Environment schema.
-It does not recreate existing tables. The EF model snapshot includes the existing
-Environment tables and remote MCP records. A PostgreSQL test checks that the
-snapshot matches the current model.
+The initial migration adds four remote MCP tables to the existing Environment schema without
+recreating existing tables. A later EF migration adds the typed transport-adapter pin to immutable
+configuration rows. It backfills existing rows with the current Streamable HTTP option snapshot and
+leaves their configuration digests unchanged. The explicit Environment migration path applies
+pending migrations under its existing lock, and regular startup rejects a database with pending
+migrations. PostgreSQL tests check both the model snapshot and the existing-row backfill.
 
 Read routes require current `ReadProjects` authority. Write routes require current `WriteProjects` authority. Environment reads current authorization context from Projects & Config and repeats authority checks around mutations.
 
@@ -41,7 +43,17 @@ Connection mutation bodies do not accept OAuth codes, access tokens, or client s
 
 The Gateway exposes the directory route as `GET /api/v1/projects/{projectId}/remote-mcp/connections` (operation `listRemoteMcpConnections`). The other routes stay on the Environment owner.
 
-Mutation bodies include an idempotency key. Update and state mutations also include the expected row revision. The DELETE request uses `RemoteMcpConnectionStateRequest` as a JSON body; it does not move these values to headers or query parameters. The Identity-binding request uses `operationId` as its durable idempotency key and includes the expected configuration revision and SHA-256. A successful bind returns `RemoteMcpIdentityBindingReceipt` with `projectId`, `connectionId`, `operationId`, `finalConfigurationRevision`, `finalConfigurationSha256`, and `identityBindingReference`. Success and replay return 200; malformed references return 400; current authorization failures return 401 or 403; missing connections return 404; stale pins, mode conflicts, or idempotency conflicts return 409. Connection handlers set `Cache-Control: no-store` on responses that they handle.
+Mutation bodies include an idempotency key. Create and update accept `transportProfile`, which
+defaults to the only supported `streamableHttp20250618` value; another profile fails before
+persistence. Update and state mutations also include the expected row revision. The DELETE request
+uses `RemoteMcpConnectionStateRequest` as a JSON body; it does not move these values to headers or
+query parameters. The Identity-binding request uses `operationId` as its durable idempotency key and
+includes the expected configuration revision and SHA-256. A successful bind returns
+`RemoteMcpIdentityBindingReceipt` with `projectId`, `connectionId`, `operationId`,
+`finalConfigurationRevision`, `finalConfigurationSha256`, and `identityBindingReference`. Success
+and replay return 200; malformed references return 400; current authorization failures return 401
+or 403; missing connections return 404; stale pins, mode conflicts, or idempotency conflicts return
+409. Connection handlers set `Cache-Control: no-store` on responses that they handle.
 
 ## Configuration and identity
 
@@ -49,9 +61,18 @@ For Network Policy provider selection and runtime settings, see the planned
 [provider configuration guide](../guide/configure-providers.md) and
 [runtime configuration reference](../reference/runtime-configuration.md).
 
-`RemoteMcpConnectionConfiguration` contains the project and connection IDs, configuration revision, display name, canonical endpoint and optional resource URI, authentication mode, transport profile, optional exact Registry pin, optional Identity correlation handle, and `ConfigurationSha256`.
+`RemoteMcpConnectionConfiguration` contains the project and connection IDs, configuration revision,
+display name, canonical endpoint and optional resource URI, authentication mode, transport profile,
+a typed transport-adapter options snapshot, optional exact Registry pin, optional Identity
+correlation handle, and `ConfigurationSha256`.
 
-Environment supports the `StreamableHttp20250618` transport profile. Endpoints and resource URIs must be absolute HTTPS DNS URIs without user information or fragments.
+Environment supports only the `StreamableHttp20250618` transport profile and fails closed for another
+value. Its credential-free adapter pin records the adapter ID and version, options schema and
+revision, protocol version, request timeout, response-size limit, tools/list page limit, and an
+options SHA-256. The option values are currently fixed. The profile is already included in
+`ConfigurationSha256`, so the deterministic profile-to-options mapping preserves existing
+configuration digests. Endpoints and resource URIs must be absolute HTTPS DNS URIs without user
+information or fragments.
 
 HTTP responses use camel-case enum values: `draft`, `enabled`, `disabled`, and `removed`.
 Authentication is `none` or `delegatedOAuth`; the transport is `streamableHttp20250618`.
@@ -63,7 +84,10 @@ The Identity correlation handle is an opaque lower-case UUID-N generated by Iden
 
 The operation ID is scoped to the authorized actor in the durable request fingerprint. Repeating the same operation for that actor returns the original receipt. A different request or actor that reuses the operation ID conflicts. Every replay still requires a currently valid bearer with the Environment audience and fresh Projects `WriteProjects` authority. Environment does not accept or store OAuth codes, access tokens, client secrets, or bearer tokens. This route does not establish a background or service-to-service actor for OAuth callback or refresh.
 
-`ConfigurationSha256` binds the immutable Environment configuration revision. It includes the endpoint, resource, authentication mode, Identity handle, transport profile, and Registry pin. It is not the Identity binding hash.
+`ConfigurationSha256` binds the immutable Environment configuration revision. It includes the
+endpoint, resource, authentication mode, Identity handle, transport profile, and Registry pin. The
+separate adapter-options digest binds the exact typed options snapshot; it does not replace or
+change the connection digest. Neither digest is the Identity binding hash.
 
 ## Registry metadata and tool schemas
 
@@ -73,11 +97,23 @@ Limits are 1 MiB per document, depth 32, 100 Registry page items, 2,048 cursor c
 
 The Registry parser requires an exact server version. It rejects `latest`, templated endpoints, unsupported transports, and Registry-supplied headers. It accepts only static HTTPS DNS endpoints for `streamable-http`.
 
-The tools-list parser accepts at most 128 tools across all pages. Each tool must have a unique name and an object input schema. `BuildCatalog` joins the pages and rejects a duplicate name on any page. The parser returns exact schema, tool, and catalog digests.
+The tools-list parser accepts at most 128 tools across all pages. Each tool must have a unique name
+and an object input schema. It checks common JSON Schema structure in nested definitions, including
+schema maps, legacy dependencies, string-name arrays, non-empty composition and tuple-schema arrays,
+and numeric constraints.
+Mathematically integral decimal and exponent forms are accepted for count constraints. Boolean
+schemas are allowed below the root. The parser bounds schema depth and bytes, rejects duplicate
+JSON properties, and never fetches a `$ref`. `BuildCatalog` joins the pages and rejects a duplicate
+name on any page. The parser returns exact schema, tool, and catalog digests.
 
 ## Discovery
 
-`RemoteMcpDiscoveryService` runs discovery for one enabled connection. It requires current `WriteProjects` authority and the expected row revision. It follows `tools/list` cursors until the last page and stops at the parser limits. When the connection has a Registry pin, it reads the exact Registry version again and compares the digest with the pin. A changed digest fails discovery with 409 and keeps the old catalog.
+`RemoteMcpDiscoveryService` runs discovery for one enabled connection. It requires current
+`WriteProjects` authority and the expected row revision. It follows `tools/list` cursors until the
+last page and enforces the pinned adapter's protocol version, response-size, and page limits as well
+as the parser limits. When the connection has a Registry pin, it reads the exact Registry version
+again and compares the digest with the pin. A changed digest fails discovery with 409 and keeps the
+old catalog.
 
 Discovery calls `IRemoteMcpDiscoverySource`. The default `UnavailableRemoteMcpDiscoverySource` returns 503 `remote_mcp_discovery_transport_unavailable` and sends no network request. A trusted transport source replaces it when one is registered. Discovery output is a candidate for review. It does not accept a tool for use.
 

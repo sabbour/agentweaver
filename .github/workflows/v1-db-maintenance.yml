@@ -8,6 +8,10 @@ name: v1 database maintenance
 on:
   workflow_dispatch:
     inputs:
+      environment_digest:
+        description: Published Environment image digest (sha256:...)
+        required: true
+        type: string
       orchestrator_digest:
         description: Published Orchestrator image digest (sha256:...)
         required: true
@@ -33,7 +37,7 @@ on:
         type: boolean
       services:
         description: >-
-          Running Orchestrator and EventsAndSessions services. block stops when a service must move to
+          Running Environment, Orchestrator, and EventsAndSessions services. block stops when a service must move to
           stay ready; deploy also sets the given digests, before or after the migrations as the schema
           ranges require; apps-only skips all database steps and only rolls them (for a schema that is
           already migrated).
@@ -87,6 +91,7 @@ jobs:
           subscription-id: 90ab3701-83f0-4ba1-a90a-f2e68683adab
       - name: Run database maintenance
         env:
+          ENVIRONMENT_DIGEST: ${{ inputs.environment_digest }}
           ORCHESTRATOR_DIGEST: ${{ inputs.orchestrator_digest }}
           EVENTS_DIGEST: ${{ inputs.events_digest }}
           BROKER_DIGEST: ${{ inputs.broker_digest }}
@@ -95,7 +100,7 @@ jobs:
           SERVICES: ${{ inputs.services }}
           EXECUTE: ${{ inputs.execute }}
         run: |
-          args=(--orchestrator-digest "$ORCHESTRATOR_DIGEST" --events-digest "$EVENTS_DIGEST"
+          args=(--environment-digest "$ENVIRONMENT_DIGEST" --orchestrator-digest "$ORCHESTRATOR_DIGEST" --events-digest "$EVENTS_DIGEST"
                 --receipt-dir "$RUNNER_TEMP/db-maintenance")
           # apps-only rejects every database option, so they are added only for migration runs.
           if [ "$SERVICES" = "apps-only" ]; then

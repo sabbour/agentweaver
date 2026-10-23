@@ -61,10 +61,47 @@ public sealed class RemoteMcpMetadataParserTests
     [InlineData("""{"result":{"tools":[{"name":"same","inputSchema":{"type":"object"}},{"name":"same","inputSchema":{"type":"object"}}]}}""")]
     [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"array"}}]}}""")]
     [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","type":"object"}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","properties":"not-an-object"}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","properties":{"field":"not-a-schema"}}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","required":[1]}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","items":1}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","dependencies":{"trigger":{"properties":{"nested":42}}}}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","additionalItems":{"properties":{"nested":42}}}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","properties":{"items":{"type":"array","prefixItems":[]}}}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","properties":{"items":{"type":"array","items":[]}}}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","minLength":"1"}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","minLength":1.5}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","minLength":-1}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","minLength":1e-100}}]}}""")]
+    [InlineData("""{"result":{"tools":[{"name":"bad","inputSchema":{"type":"object","maxLength":2147483648}}]}}""")]
     public void RejectsDuplicateNamesInvalidSchemasAndDuplicateJsonProperties(string json)
     {
         Assert.Throws<InvalidDataException>(() =>
             RemoteMcpMetadataParser.ParseToolsList(Encoding.UTF8.GetBytes(json)));
+    }
+
+    [Fact]
+    public void AcceptsStructurallyValidNestedSchemasAndBooleanSubschemas()
+    {
+        const string response = """
+            {"result":{"tools":[{"name":"valid","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1},"metadata":true},"required":["name"],"additionalProperties":false,"dependencies":{"optional":[]},"dependentRequired":{"optional":[]}}}]}}
+            """;
+
+        var catalog = RemoteMcpMetadataParser.ParseToolsList(Encoding.UTF8.GetBytes(response));
+
+        Assert.Equal("valid", Assert.Single(catalog.Tools).Name);
+    }
+
+    [Fact]
+    public void AcceptsIntegralDecimalAndExponentSchemaConstraints()
+    {
+        const string response = """
+            {"result":{"tools":[{"name":"valid","inputSchema":{"type":"object","properties":{"name":{"type":"string","minLength":1.0,"maxLength":1e0}}}}]}}
+            """;
+
+        var catalog = RemoteMcpMetadataParser.ParseToolsList(Encoding.UTF8.GetBytes(response));
+
+        Assert.Equal("valid", Assert.Single(catalog.Tools).Name);
     }
 
     [Fact]

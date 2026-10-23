@@ -284,31 +284,11 @@ namespace Agentweaver.Environment.Migrations
 
                             t.HasCheckConstraint("ck_environment_owner_effects_kind", "effect_kind IN ('NetworkPolicy', 'WorkspaceVolume', 'BuildTestCommand', 'RuntimeResumeBootstrap')");
 
-                            t.HasCheckConstraint("ck_environment_owner_effects_runtime_resume_bootstrap",
-                                """
-                                effect_kind <> 'RuntimeResumeBootstrap' OR (
-                                    operation = 'Activate' AND resource_id IS NOT NULL
-                                    AND expected_provider_seam = 'Sandbox' AND expected_provider_id IS NOT NULL
-                                    AND expected_provider_resource_id IS NOT NULL AND expected_provider_resource_id = resource_id
-                                    AND target_provider_seam IS NULL AND target_provider_id IS NULL
-                                    AND target_provider_resource_id IS NULL AND policy_generation IS NULL
-                                    AND expected_previous_policy_generation IS NULL
-                                    AND expected_transition_revision IS NULL AND expected_resource_generation IS NULL
-                                    AND expected_data_generation IS NULL AND target_transition_revision IS NULL
-                                    AND target_resource_generation IS NULL AND target_data_generation IS NULL
-                                    AND target_volume_state IS NULL AND flush_evidence_json IS NULL
-                                    AND specification_json IS NOT NULL AND expected_provider_binding_json IS NOT NULL
-                                    AND effect_state IN ('Reserved', 'Completed', 'Stale')
-                                    AND ((effect_state = 'Completed' AND target_provider_binding_json IS NOT NULL
-                                          AND completed_at IS NOT NULL)
-                                         OR (effect_state IN ('Reserved', 'Stale') AND target_provider_binding_json IS NULL
-                                             AND completed_at IS NULL))
-                                )
-                                """);
-
                             t.HasCheckConstraint("ck_environment_owner_effects_lifecycle_generation", "lifecycle_generation > 0");
 
                             t.HasCheckConstraint("ck_environment_owner_effects_network_generations", "effect_kind <> 'NetworkPolicy' OR (policy_generation > 0 AND expected_previous_policy_generation >= 0 AND expected_previous_policy_generation < policy_generation AND target_transition_revision IS NULL AND target_resource_generation IS NULL AND target_data_generation IS NULL)");
+
+                            t.HasCheckConstraint("ck_environment_owner_effects_runtime_resume_bootstrap", "effect_kind <> 'RuntimeResumeBootstrap' OR (\r\n    operation = 'Activate' AND resource_id IS NOT NULL\r\n    AND expected_provider_seam = 'Sandbox' AND expected_provider_id IS NOT NULL\r\n    AND expected_provider_resource_id IS NOT NULL AND expected_provider_resource_id = resource_id\r\n    AND target_provider_seam IS NULL AND target_provider_id IS NULL\r\n    AND target_provider_resource_id IS NULL AND policy_generation IS NULL\r\n    AND expected_previous_policy_generation IS NULL\r\n    AND expected_transition_revision IS NULL AND expected_resource_generation IS NULL\r\n    AND expected_data_generation IS NULL AND target_transition_revision IS NULL\r\n    AND target_resource_generation IS NULL AND target_data_generation IS NULL\r\n    AND target_volume_state IS NULL AND flush_evidence_json IS NULL\r\n    AND specification_json IS NOT NULL AND expected_provider_binding_json IS NOT NULL\r\n    AND effect_state IN ('Reserved', 'Completed', 'Stale')\r\n    AND ((effect_state = 'Completed' AND target_provider_binding_json IS NOT NULL\r\n          AND completed_at IS NOT NULL)\r\n         OR (effect_state IN ('Reserved', 'Stale') AND target_provider_binding_json IS NULL\r\n             AND completed_at IS NULL))\r\n)");
 
                             t.HasCheckConstraint("ck_environment_owner_effects_state", "effect_state IN ('Reserved', 'Completed', 'ReconciliationRequired', 'Reconciled', 'Failed', 'Stale')");
 
@@ -824,11 +804,75 @@ namespace Agentweaver.Environment.Migrations
                         .HasColumnType("character varying(2048)")
                         .HasColumnName("resource_uri");
 
+                    b.Property<string>("TransportAdapterId")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasDefaultValue("streamable-http")
+                        .HasColumnName("transport_adapter_id");
+
+                    b.Property<string>("TransportAdapterVersion")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("1.0.0")
+                        .HasColumnName("transport_adapter_version");
+
+                    b.Property<int>("TransportMaximumResponseBytes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1048576)
+                        .HasColumnName("transport_maximum_response_bytes");
+
+                    b.Property<int>("TransportMaximumToolsListPages")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(16)
+                        .HasColumnName("transport_maximum_tools_list_pages");
+
+                    b.Property<string>("TransportOptionsRevision")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasDefaultValue("streamable-http-2025-06-18-v1")
+                        .HasColumnName("transport_options_revision");
+
+                    b.Property<int>("TransportOptionsSchemaVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("transport_options_schema_version");
+
+                    b.Property<string>("TransportOptionsSha256")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasDefaultValue("d01cdc1f6ba701256d992bdc1ecc76f6ff3445ccb0c957a285c71c6a5c03fe93")
+                        .HasColumnName("transport_options_sha256");
+
                     b.Property<string>("TransportProfile")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
                         .HasColumnName("transport_profile");
+
+                    b.Property<string>("TransportProtocolVersion")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("2025-06-18")
+                        .HasColumnName("transport_protocol_version");
+
+                    b.Property<int>("TransportRequestTimeoutSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(30)
+                        .HasColumnName("transport_request_timeout_seconds");
 
                     b.HasKey("TenantId", "ProjectId", "ConnectionId", "ConfigurationRevision")
                         .HasName("pk_environment_remote_mcp_connection_configurations");
@@ -845,7 +889,7 @@ namespace Agentweaver.Environment.Migrations
 
                             t.HasCheckConstraint("ck_environment_remote_mcp_connection_configurations_revision", "configuration_revision > 0");
 
-                            t.HasCheckConstraint("ck_environment_remote_mcp_connection_configurations_transport", "transport_profile = 'StreamableHttp20250618'");
+                            t.HasCheckConstraint("ck_environment_remote_mcp_connection_configurations_transport", "transport_profile = 'StreamableHttp20250618' AND transport_adapter_id = 'streamable-http' AND transport_adapter_version = '1.0.0' AND transport_options_schema_version = 1 AND transport_options_revision = 'streamable-http-2025-06-18-v1' AND transport_protocol_version = '2025-06-18' AND transport_request_timeout_seconds = 30 AND transport_maximum_response_bytes = 1048576 AND transport_maximum_tools_list_pages = 16 AND transport_options_sha256 = 'd01cdc1f6ba701256d992bdc1ecc76f6ff3445ccb0c957a285c71c6a5c03fe93'");
                         });
                 });
 
