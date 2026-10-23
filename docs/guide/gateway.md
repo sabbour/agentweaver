@@ -351,6 +351,11 @@ never include credentials, tokens, or tool schemas. Environment requires
 current `ReadProjects` authority. For the full contract, see
 [Remote MCP connections](../architecture/remote-mcp-connections.md).
 
+Connection records and catalog pins do not establish a trusted path to a
+remote server. Trusted L7 mediation, network-policy enforcement, live
+discovery, and remote tool execution are deferred. The default discovery
+source returns 503 without making a network request.
+
 ## Send idempotent writes
 
 The following operations require exactly one `Idempotency-Key` header:

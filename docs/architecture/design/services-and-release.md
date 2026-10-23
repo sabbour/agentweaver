@@ -701,24 +701,23 @@ flowchart LR
 
 ### Parity and cutover
 
-Every post-fork 0.x change enters a parity map with a 1.0 owner and a disposition: rebuild,
-redesign, drop, or defer. The map includes existing specs, API behavior, and open roadmap issues;
-verified behavior guarantees become acceptance conditions. A 0.x release never waits for 1.0. When
-the parity map is complete, a declared cut line moves later 0.x changes into the 1.0 backlog rather
-than indefinitely delaying cutover
-([R22](../decisions/0001-platform-architecture.md#risk-register)).
+The parity map assigns each post-fork 0.x capability to a 1.0 owner and a disposition: rebuild,
+redesign, drop, or defer. It compares existing specs and observable API behavior with the planned
+1.0 capability. Verified behavior guarantees become acceptance criteria. 0.x releases continue
+independently. Once the parity map is complete, declare a cut line and move later 0.x work to the
+1.0 backlog instead of delaying cutover ([R22](../decisions/0001-platform-architecture.md#risk-register)).
 
 Knowledge parity includes project-wide discovery across the project's authorized,
 existing run-provider bindings. Readers can search before selecting a run or agent;
 record changes remain scoped to one run and agent, and project facts remain separate
 from the Sessions journal.
 
-Cutover requires the parity map closed and API, UI, and MCP persona harnesses green against an
-exact-SHA AKS deployment. The final 0.x version is tagged on `dev`, and `release/0.x` remains for
-patches. The old `dev` history is joined to `v1` with an unrelated-history merge that keeps the `v1`
-tree, then `dev` fast-forwards to `v1`; neither history is discarded and no force push is needed
-([R21](../decisions/0001-platform-architecture.md#risk-register)). A 1.0 installation starts fresh
-without data migration.
+Cutover requires a closed parity map and green API, UI, and MCP persona harnesses against one
+exact-SHA AKS deployment. Tag the final 0.x release on `dev` and keep `release/0.x` for patches.
+Preserve both histories without a force push: merge old `dev` into `v1` with
+`git merge --allow-unrelated-histories -s ours` to keep the `v1` tree, then fast-forward `dev` to
+`v1` ([R21](../decisions/0001-platform-architecture.md#risk-register)). Start 1.0 with a fresh
+installation. There is no data migration.
 
 ## Alternatives considered
 
@@ -763,8 +762,8 @@ without data migration.
   made FQDN-only by Cilium alone; model, MCP, and A2A egress uses the L7 gateway.
 - [R17](../decisions/0001-platform-architecture.md#risk-register): Agentweaver's Tool & MCP gateway is the
   default L7 implementation; an alternative is optional in P3.
-- [R21](../decisions/0001-platform-architecture.md#risk-register): Cutover preserves both histories,
-  keeps a 0.x patch branch, and fast-forwards `dev` without force pushing.
+- [R21](../decisions/0001-platform-architecture.md#risk-register): Cutover preserves both histories
+  without force-pushing and keeps the 0.x patch line.
 - [R22](../decisions/0001-platform-architecture.md#risk-register): A declared parity cut line bounds
   the moving 0.x target while allowing 0.x to continue shipping.
 - [R23](../decisions/0001-platform-architecture.md#risk-register): Exact-SHA AKS API/UI/MCP harness
