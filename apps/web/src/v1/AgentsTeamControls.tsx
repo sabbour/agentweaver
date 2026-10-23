@@ -132,13 +132,14 @@ export function TeamMemberActions({ projectId, configuration, configurationRevis
 
   /** Stages a role change without changing the live configuration. */
   const rerole = async () => {
-    if (!roleId || roleId === currentRoleId) return;
+    const role = roles?.find((item) => item.id === roleId);
+    if (!role || role.id === currentRoleId) return;
     setBusy(true);
     setError(null);
     try {
       const proposal = await apiCall((token, tenant) => gatewayClient.createCastingDraftProposal(token, projectId, {
         expectedConfigurationRevision: configurationRevision,
-        draft: draftWithRole(configuration, agentId, roleId),
+        draft: draftWithRole(configuration, agentId, role),
       }, tenant), null);
       navigate(reviewPath(projectId, proposal.proposalId));
     } catch (reason) {

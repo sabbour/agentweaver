@@ -13,6 +13,8 @@ function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfigura
   return {
     providerOverrides: [],
     orderedProviderOverrides: [],
+    modelRoleOverrides: [],
+    modelAgentOverrides: [],
     agentCharters: [{ agentId: 'lead', name: 'Lead', role: 'lead', charter: 'Lead.' }],
     casting: [{ agentId: 'lead', role: 'lead', order: 0 }],
     blueprintWorkflowReferences: [],
@@ -53,22 +55,61 @@ describe('casting helpers', () => {
   });
 
   it('changes a team member role in both the charter and casting draft', () => {
-    const changed = draftWithRole(config(), 'lead', 'editor');
+    const source = config({
+      agentCharters: [
+        { agentId: 'lead', name: 'Lead', role: 'lead', charter: 'Lead.' },
+        { agentId: 'tester', name: 'Tester', role: 'tester', charter: 'Test.' },
+      ],
+      casting: [
+        { agentId: 'lead', role: 'lead', order: 0 },
+        { agentId: 'tester', role: 'tester', order: 1 },
+      ],
+      modelRoleOverrides: [
+        { roleId: 'lead', selection: { reference: 'lead-model' } },
+        { roleId: 'tester', selection: { reference: 'tester-model' } },
+      ],
+      modelAgentOverrides: [{ agentId: 'lead', selection: { reference: 'agent-model' } }],
+    });
+    const changed = draftWithRole(source, 'lead', role('editor', 'Editor'));
     expect(changed.agentCharters[0].role).toBe('editor');
+    expect(changed.agentCharters[0].charter).toBe(roleCharter(role('editor', 'Editor')));
     expect(changed.casting[0].role).toBe('editor');
-    expect(changed.skills).toEqual(config().skills);
-    expect(() => draftWithRole(config(), 'missing', 'editor')).toThrow('This agent is not in the current team.');
+    expect(changed.modelRoleOverrides).toEqual([{ roleId: 'tester', selection: { reference: 'tester-model' } }]);
+    expect(changed.modelAgentOverrides).toEqual(source.modelAgentOverrides);
+    expect(changed.skills).toEqual(source.skills);
+    expect(() => draftWithRole(source, 'missing', role('editor'))).toThrow('This agent is not in the current team.');
   });
 
-  it('lists members in team order and removes one', () => {
+  it('removes a member and cleans up assignments and overrides that would become invalid', () => {
     const draft = config({
-      agentCharters: [{ agentId: 'b', name: 'Bea', role: 'tester', charter: 'Test.' }],
+      agentCharters: [
+        { agentId: 'a', name: 'Ada', role: 'lead', charter: 'Lead.' },
+        { agentId: 'b', name: 'Bea', role: 'tester', charter: 'Test.' },
+      ],
       casting: [{ agentId: 'b', role: 'tester', order: 2 }, { agentId: 'a', role: 'lead', order: 1 }],
+      modelRoleOverrides: [
+        { roleId: 'lead', selection: { reference: 'lead-model' } },
+        { roleId: 'tester', selection: { reference: 'tester-model' } },
+      ],
+      modelAgentOverrides: [
+        { agentId: 'a', selection: { reference: 'ada-model' } },
+        { agentId: 'b', selection: { reference: 'bea-model' } },
+      ],
+      skills: [
+        { skillId: 'ada-only', enabled: true, order: 0, revision: 1, contentDigest: 'a'.repeat(64), agentIds: ['a'] },
+        { skillId: 'shared', enabled: true, order: 1, revision: 1, contentDigest: 'b'.repeat(64), agentIds: ['a', 'b'] },
+      ],
     });
-    expect(draftMembers(draft).map((item) => [item.agentId, item.name])).toEqual([['a', 'a'], ['b', 'Bea']]);
-    const removed = draftWithoutMember(draft, 'b');
-    expect(removed.casting.map((item) => item.agentId)).toEqual(['a']);
-    expect(removed.agentCharters).toEqual([]);
+    expect(draftMembers(draft).map((item) => [item.agentId, item.name])).toEqual([['a', 'Ada'], ['b', 'Bea']]);
+    const removed = draftWithoutMember(draft, 'a');
+    expect(removed.casting.map((item) => item.agentId)).toEqual(['b']);
+    expect(removed.agentCharters.map((item) => item.agentId)).toEqual(['b']);
+    expect(removed.modelRoleOverrides).toEqual([{ roleId: 'tester', selection: { reference: 'tester-model' } }]);
+    expect(removed.modelAgentOverrides).toEqual([{ agentId: 'b', selection: { reference: 'bea-model' } }]);
+    expect(removed.skills).toEqual([
+      { skillId: 'ada-only', enabled: false, order: 0, revision: 1, contentDigest: 'a'.repeat(64), agentIds: [] },
+      { skillId: 'shared', enabled: true, order: 1, revision: 1, contentDigest: 'b'.repeat(64), agentIds: ['b'] },
+    ]);
   });
 
   it('gives plain copy for permission, conflict, and file errors', () => {

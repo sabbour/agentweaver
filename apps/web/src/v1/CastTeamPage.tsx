@@ -246,6 +246,12 @@ export function CastTeamPage() {
   const currentCount = configuration?.configuration.casting.length ?? 0;
   const existingAgentIds = new Set(configuration?.configuration.casting.map((item) => item.agentId) ?? []);
   const addedMembers = members.filter((member) => !existingAgentIds.has(member.agentId));
+  // Linked proposals do not retain their original action, so recognize an augment by its unchanged roster plus additions.
+  const preservesCurrentRoster = Boolean(proposal && configuration?.configuration.casting.every((existing) =>
+    proposal.draft.casting.some((candidate) =>
+      candidate.agentId === existing.agentId && candidate.role === existing.role && candidate.order === existing.order)));
+  const augmentProposal = proposalIntent === 'augment' ||
+    (proposalIntent === null && currentCount > 0 && addedMembers.length > 0 && preservesCurrentRoster);
   const pending = proposal?.state === 'pending';
   const currentIndex = STEPS.indexOf(step);
   const errorBar = error && <ErrorNotice>{error}</ErrorNotice>;
@@ -351,7 +357,7 @@ export function CastTeamPage() {
                   </MessageBar>
                 )}
                 <Text className={styles.muted}>
-                  {proposalIntent === 'augment'
+                  {augmentProposal
                     ? `This proposal adds ${addedMembers.length} member${addedMembers.length === 1 ? '' : 's'} to the current team.`
                     : `This proposal sets the team to ${members.length} member${members.length === 1 ? '' : 's'}.`}
                 </Text>
@@ -363,7 +369,7 @@ export function CastTeamPage() {
                           <Text className={styles.memberName}>{member.name}</Text>
                           <Text className={styles.muted}> — {member.role}</Text>
                         </div>
-                        {pending && (
+                        {pending && (!augmentProposal || !existingAgentIds.has(member.agentId)) && (
                           <Button appearance="subtle" size="small" disabled={busy} aria-label={`Remove ${member.name}`} onClick={() => void removeMember(member.agentId)}>
                             Remove
                           </Button>
@@ -398,7 +404,7 @@ export function CastTeamPage() {
               <div className={styles.card}>
                 <Title3>Cast team</Title3>
                 <Text>
-                  {proposalIntent === 'augment'
+                  {augmentProposal
                     ? `You are about to add ${addedMembers.length} member${addedMembers.length === 1 ? '' : 's'} to the current team.`
                     : `You are about to set the team to ${members.length} member${members.length === 1 ? '' : 's'}.`}
                   {currentCount > 0 && ' Runs that already started keep their accepted team.'}

@@ -122,6 +122,19 @@ describe('CastTeamPage', () => {
     expect(request.expectedConfigurationRevision).toBe(5);
     expect(request.draft.casting.map((item: { agentId: string }) => item.agentId)).toEqual(['old', 'docs']);
     expect(screen.getByText('This proposal adds 1 member to the current team.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Remove Old' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove Docs Writer' })).toBeTruthy();
+  });
+
+  it('keeps the current roster intact when reviewing a linked augment proposal', async () => {
+    api.getCastingProposal.mockResolvedValue(proposal({
+      draft: config([['old', 'Old'], ['docs', 'Docs']]),
+    }));
+    renderPage('/projects/p1/team/cast?proposal=pr-1');
+    await screen.findByText('This proposal adds 1 member to the current team.');
+    expect(screen.getByText('This proposal adds 1 member to the current team.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Remove Old' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove Docs' })).toBeTruthy();
   });
 
   it('re-reads the configuration and explains a revision conflict', async () => {

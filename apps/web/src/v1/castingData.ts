@@ -70,23 +70,36 @@ export function draftWithRoles(
   return roles.reduce((draft, role) => draftWithMember(draft, role), configuration);
 }
 
+/** Keeps only model overrides that still target a configured role or agent. */
+function retainConfiguredModelOverrides(configuration: ProjectConfiguration): ProjectConfiguration {
+  const roles = new Set(configuration.casting.map((item) => item.role));
+  const agents = new Set(configuration.agentCharters.map((item) => item.agentId));
+  // A removed role or agent cannot keep a model override in the next configuration revision.
+  return {
+    ...configuration,
+    modelRoleOverrides: (configuration.modelRoleOverrides ?? []).filter((item) => roles.has(item.roleId)),
+    modelAgentOverrides: (configuration.modelAgentOverrides ?? []).filter((item) => agents.has(item.agentId)),
+  };
+}
+
 /** Returns a copy with one cast member's charter and roster role changed together. */
 export function draftWithRole(
   configuration: ProjectConfiguration,
   agentId: string,
-  roleId: string,
+  role: ProjectCastingRoleDefinition,
 ): ProjectConfiguration {
   // The owner requires the charter and casting role to match exactly.
   if (!configuration.agentCharters.some((item) => item.agentId === agentId) ||
       !configuration.casting.some((item) => item.agentId === agentId))
     throw new Error('This agent is not in the current team.');
-  return {
+  const changed = {
     ...configuration,
     agentCharters: configuration.agentCharters.map((item) =>
-      item.agentId === agentId ? { ...item, role: roleId } : item),
+      item.agentId === agentId ? { ...item, role: role.id, charter: roleCharter(role) } : item),
     casting: configuration.casting.map((item) =>
-      item.agentId === agentId ? { ...item, role: roleId } : item),
+      item.agentId === agentId ? { ...item, role: role.id } : item),
   };
+  return retainConfiguredModelOverrides(changed);
 }
 
 /** One member of a draft team: its charter joined with its casting entry. */
@@ -112,11 +125,18 @@ export function draftMembers(configuration: ProjectConfiguration): DraftMember[]
 
 /** Returns a copy of `configuration` without one agent's charter and casting entry. */
 export function draftWithoutMember(configuration: ProjectConfiguration, agentId: string): ProjectConfiguration {
-  return {
+  const changed = {
     ...configuration,
     agentCharters: configuration.agentCharters.filter((item) => item.agentId !== agentId),
     casting: configuration.casting.filter((item) => item.agentId !== agentId),
+    skills: configuration.skills.map((skill) => {
+      if (!skill.agentIds?.includes(agentId)) return skill;
+      const remainingAgentIds = skill.agentIds.filter((item) => item !== agentId);
+      // An empty explicit assignment must not become an all-agents assignment.
+      return { ...skill, enabled: remainingAgentIds.length > 0 && skill.enabled, agentIds: remainingAgentIds };
+    }),
   };
+  return retainConfiguredModelOverrides(changed);
 }
 
 /** Plain text for casting failures. `write` selects the copy for changes and exports. */

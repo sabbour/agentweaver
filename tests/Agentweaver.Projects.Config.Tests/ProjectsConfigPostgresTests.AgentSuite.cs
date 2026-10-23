@@ -232,8 +232,9 @@ public sealed partial class ProjectsConfigPostgresTests
             RunRequest(confirmedRevision, platform.Revision),
             CancellationToken.None);
 
+        // The real consumer needs the complete immutable snapshot, including the accepted model routes.
         using var snapshot = JsonDocument.Parse(JsonSerializer.Serialize(
-            new { projectConfiguration = accepted.ProjectConfiguration },
+            accepted,
             new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         var catalogType = Assembly.Load("Agentweaver.Orchestrator")
             .GetType("Agentweaver.Orchestrator.CoordinatorWorkflowCatalog", throwOnError: true)!;
@@ -244,6 +245,8 @@ public sealed partial class ProjectsConfigPostgresTests
             createContext.Invoke(null, [snapshot.RootElement]));
         var consumedRole = Assert.Single(context.Roles, role => role.RoleId == agent.NativeId);
         Assert.Contains(agent.EffectiveAgentId, consumedRole.EligibleAgentIds);
+        Assert.Contains(accepted.ModelSelection.Reference, consumedRole.ModelSelectionReferences);
+        Assert.NotEmpty(context.ModelTaskSelections);
         Assert.Contains(
             accepted.ProjectConfiguration.AgentCharters,
             charter => charter.AgentId == agent.EffectiveAgentId && charter.Role == agent.NativeId);

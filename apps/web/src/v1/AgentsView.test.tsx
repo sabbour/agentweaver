@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentsView } from './AgentsView';
 import type { ProjectCastingProposal, ProjectConfiguration } from './contracts';
 
@@ -13,6 +13,15 @@ const api = vi.hoisted(() => ({
 
 // One stable apiCall, like the real provider, so effects that depend on it run once.
 const auth = vi.hoisted(() => ({ apiCall: (operation: (token: string, tenant: string) => unknown) => operation('token', 'tenant-1') }));
+const animationDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate');
+beforeAll(() => {
+  // Happy DOM's animation cancel rejects; Fluent UI's test fallback avoids noisy teardown errors.
+  Object.defineProperty(Element.prototype, 'animate', { configurable: true, value: undefined });
+});
+afterAll(() => {
+  if (animationDescriptor) Object.defineProperty(Element.prototype, 'animate', animationDescriptor);
+  else Reflect.deleteProperty(Element.prototype, 'animate');
+});
 vi.mock('./AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('./api', async (importActual) => ({ ...(await importActual<typeof import('./api')>()), gatewayClient: api }));
 vi.mock('./pageParts', async (importActual) => ({
@@ -127,7 +136,7 @@ describe('AgentsView', () => {
 
   it('stages a re-role proposal from the current team member details', async () => {
     api.listCatalogRoles.mockResolvedValue([
-      { id: 'frontend-engineer', title: 'Frontend Engineer', summary: '', responsibilities: [], boundaries: [] },
+      { id: 'frontend-engineer', title: 'Frontend Engineer', summary: 'Builds user-facing experiences.', responsibilities: ['Implement accessible screens'], boundaries: ['Do not change backend services'] },
     ]);
     renderView();
     fireEvent.click(screen.getByText('Ada'));
@@ -139,6 +148,7 @@ describe('AgentsView', () => {
     expect(projectId).toBe('p1');
     expect(request.expectedConfigurationRevision).toBe(4);
     expect(request.draft.agentCharters[0].role).toBe('frontend-engineer');
+    expect(request.draft.agentCharters[0].charter).toMatch(/Implement accessible screens/);
     expect(request.draft.casting[0].role).toBe('frontend-engineer');
   });
 
