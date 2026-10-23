@@ -256,6 +256,13 @@ const BOOTSTRAP_RELEASES = Object.freeze({
     continuation: false,
     allowLightweightTag: true,
   }),
+  // Pin v1.0.7 to this source SHA and its immutable normal publication; reject continuation receipts.
+  'v1.0.7': Object.freeze({
+    sourceSha: 'e9f463b345a8ec1bc879a32dd80fd509ba836867',
+    continuation: false,
+    allowLightweightTag: true,
+    additionalProductComponents: Object.freeze(['Agentweaver.Providers.Sessions.AgentSessions']),
+  }),
 });
 /** Maps each service to all required Cilium policy names, including shared egress policies. */
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
@@ -685,10 +692,14 @@ export function validateBootstrapManifest(manifest, publication, {
   const product = manifest.components.filter((component) =>
     component.id !== 'Agentweaver.FoundationProbe');
   const ids = product.map((component) => component.id).sort();
-  const expectedIds = [...PRODUCT_COMPONENTS].sort();
+  // v1.0.7 adds the Agent Sessions provider while earlier bootstrap manifests retain the 23-component inventory.
+  const expectedIds = [
+    ...PRODUCT_COMPONENTS,
+    ...(bootstrapRelease.additionalProductComponents ?? []),
+  ].sort();
   if (ids.length !== expectedIds.length ||
       ids.some((id, index) => id !== expectedIds[index])) {
-    fail(`the tracked draft must contain exactly the 23 ${releaseTag} product components`);
+    fail(`the tracked draft must contain exactly the ${expectedIds.length} ${releaseTag} product components`);
   }
   if (releaseTag === BOOTSTRAP_RELEASE_TAG) {
     for (const component of product) {
@@ -2593,12 +2604,13 @@ Usage:
   npm run release:deploy-bootstrap -- v1.0.4 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
   npm run release:deploy-bootstrap -- v1.0.5 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
   npm run release:deploy-bootstrap -- v1.0.6 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
+  npm run release:deploy-bootstrap -- v1.0.7 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
 
 The default is a read-only pre-acceptance dry-run. v1.0.0 requires its immutable
-continuation proof; v1.0.1, v1.0.2, v1.0.3, v1.0.4, v1.0.5, and v1.0.6
-accept only their exact source-bound normal publication receipts and reject
---completion. All require the tracked draft manifest and never create release
-acceptance evidence.
+continuation proof; v1.0.1, v1.0.2, v1.0.3, v1.0.4, v1.0.5, v1.0.6, and
+v1.0.7 accept only their exact source-bound normal publication receipts and
+reject --completion. All require the tracked draft manifest and never create
+release acceptance evidence.
 `;
 }
 
