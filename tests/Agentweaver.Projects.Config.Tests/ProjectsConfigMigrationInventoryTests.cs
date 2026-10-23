@@ -49,7 +49,10 @@ public sealed class ProjectsConfigMigrationInventoryTests(
 
         Assert.Contains("20261013095816_AddProjectSetupOperations", migrationIds);
         Assert.Contains("20261013194803_AddProjectSetupOwnerGrantReceipts", migrationIds);
-        Assert.Contains("20261023075529_AddHostedModelReasoningCatalog", migrationIds);
+        Assert.Contains("20261023165553_AddCastingGenerationRequests", migrationIds);
+        Assert.Contains("20261023201615_AddHostedModelReasoningCatalogAfterCasting", migrationIds);
+        Assert.True(migrationIds.IndexOf("20261023201615_AddHostedModelReasoningCatalogAfterCasting") >
+            migrationIds.IndexOf("20261023165553_AddCastingGenerationRequests"));
         Assert.All(migrationIds, migrationId => Assert.Contains('_', migrationId));
     }
 }

@@ -129,3 +129,11 @@ spec:
         - ports:
             - port: "8443"
               protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: identity-broker
+      toPorts:
+        - ports:
+            - port: "8444"
+              protocol: TCP

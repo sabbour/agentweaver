@@ -4,7 +4,7 @@
  * and a receipt. A person runs it with `npm run db:maintenance`; GitHub Actions runs the same
  * command from the v1-db-maintenance workflow. Every step is safe to repeat.
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -26,7 +26,7 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   registry: 'ghcr.io/sabbour',
 });
 /** The reviewed plan binds Environment, Events, Core, and Projects & Config runtime grants. */
-export const REVIEWED_PLAN_SHA256 = '855ab94d16386e5f1e086d501b9a70e1f64254da4d154cdb70e150dda31a7d89';
+export const REVIEWED_PLAN_SHA256 = 'c27bc525b1549ccc6716f74b1a5c15993321cf3d6fe9711fb1eaf80fd2287a90';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';
@@ -530,7 +530,8 @@ export async function runDbMaintenance(options, overrides = {}) {
     step('locked-restore-verified', { projects: LOCKED_PROJECTS });
 
     // 3. Plan: the committed plan bytes, the generator, and the pinned hash must all agree.
-    const committedPlanHash = createHash('sha256').update(readFileSync(join(repoRoot, PLAN_FILE))).digest('hex');
+    const committedPlan = JSON.parse(readFileSync(join(repoRoot, PLAN_FILE), 'utf8'));
+    const committedPlanHash = p1PostgresPlanHash(committedPlan);
     if (committedPlanHash !== REVIEWED_PLAN_SHA256 || p1PostgresPlanHash() !== REVIEWED_PLAN_SHA256)
       throw new Error('The committed P1 plan differs from the reviewed plan hash.');
     step('plan-verified');

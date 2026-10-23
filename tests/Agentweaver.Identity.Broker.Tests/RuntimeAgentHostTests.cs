@@ -72,6 +72,20 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task AgentHostReportsHostedLevelsUnavailableWithoutTheIdentityServiceChannel()
+    {
+        await using var fixture = new HostFixture(hostedCatalogIdentityAvailable: false);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var catalog = await fixture.Host.ReadHostedModelReasoningCatalogAsync(
+            fixture.Registration.Binding.ProjectId, fixture.Actor, timeout.Token);
+
+        Assert.Equal("unavailable", Assert.Single(catalog.Models).Value.State);
+        Assert.Equal("hosted_connection_unavailable", Assert.Single(catalog.Models).Value.UnavailableReason);
+        Assert.Empty(fixture.HostedCatalogCredentialRequests);
+    }
+
+    [Fact]
     public async Task OrdinarySessionCacheWritesCannotBypassTheGuardedSuspendPath()
     {
         await using var fixture = new HostFixture(workflowBound: true);
@@ -2441,7 +2455,8 @@ public sealed class RuntimeAgentHostTests
             int? maxPromptTokens = null,
             bool workflowBound = false,
             string sessionId = "session",
-            long executionFence = 1)
+            long executionFence = 1,
+            bool hostedCatalogIdentityAvailable = true)
         {
             Time = new() { Now = DateTimeOffset.UtcNow };
             Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
@@ -2534,7 +2549,13 @@ public sealed class RuntimeAgentHostTests
                     new("https://environment.test/"), new("https://events.test/"),
                     new("https://projects-config.test/"), Image, 8),
                 _http, new RuntimeRegistrationHttpClient(_http, new("https://orchestrator.test/")), factory, Time,
-                static (_, request, _) => Task.FromResult(CreateWorkspaceFlushReceipt(request)));
+                static (_, request, _) => Task.FromResult(CreateWorkspaceFlushReceipt(request)),
+                hostedCatalogCredentialHttp: hostedCatalogIdentityAvailable
+                    ? new HttpClient(new Handler(SendOwnerAsync))
+                    : null,
+                hostedCatalogCredentialAddress: hostedCatalogIdentityAvailable
+                    ? new Uri("https://identity-broker.test:9444/")
+                    : null);
             Configure = new(1, Registration, Guid.NewGuid(), Guid.NewGuid(), JsonSerializer.SerializeToElement(new { }));
         }
         public TestClock Time { get; }

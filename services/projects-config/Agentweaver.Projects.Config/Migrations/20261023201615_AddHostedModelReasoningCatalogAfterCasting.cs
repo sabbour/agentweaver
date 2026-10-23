@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Agentweaver.Projects.Config.Migrations
 {
     /// <inheritdoc />
-    public partial class AddHostedModelReasoningCatalog : Migration
+    public partial class AddHostedModelReasoningCatalogAfterCasting : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -27,8 +27,20 @@ namespace Agentweaver.Projects.Config.Migrations
                 },
                 constraints: table =>
                 {
-                    table.PrimaryKey("PK_hosted_model_reasoning_catalog", x => new { x.tenant_id, x.project_id, x.actor_id, x.connection_id, x.bindings_revision, x.reference });
-                    table.CheckConstraint("ck_hosted_model_reasoning_supported_efforts", "supported_reasoning_efforts <@ ARRAY['low', 'medium', 'high', 'xhigh']::text[]");
+                    table.PrimaryKey(
+                        "PK_hosted_model_reasoning_catalog",
+                        x => new
+                        {
+                            x.tenant_id,
+                            x.project_id,
+                            x.actor_id,
+                            x.connection_id,
+                            x.bindings_revision,
+                            x.reference
+                        });
+                    table.CheckConstraint(
+                        "ck_hosted_model_reasoning_supported_efforts",
+                        "supported_reasoning_efforts <@ ARRAY['low', 'medium', 'high', 'xhigh']::text[]");
                     table.ForeignKey(
                         name: "FK_hosted_model_reasoning_catalog_projects_project_id",
                         column: x => x.project_id,

@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Projects.Config.Migrations
 {
     [DbContext(typeof(ProjectsConfigDbContext))]
-    [Migration("20261023075529_AddHostedModelReasoningCatalog")]
-    partial class AddHostedModelReasoningCatalog
+    [Migration("20261023201615_AddHostedModelReasoningCatalogAfterCasting")]
+    partial class AddHostedModelReasoningCatalogAfterCasting
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -217,6 +217,117 @@ namespace Agentweaver.Projects.Config.Migrations
                             t.HasCheckConstraint("ck_authority_audit_event_type", "event_type IN ('membership_granted', 'membership_revoked', 'role_assigned', 'role_revoked')");
 
                             t.HasCheckConstraint("ck_authority_audit_revision", "revision > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectCastingGenerationRequestRecord", b =>
+                {
+                    b.Property<Guid>("RequestId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ActorIssuer")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("actor_issuer");
+
+                    b.Property<long>("BaseConfigurationRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("base_configuration_revision");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("failure_code");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("mode");
+
+                    b.Property<string>("OutputDigest")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("output_digest");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<Guid>("ProposalId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("proposal_id");
+
+                    b.Property<string>("RequestDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_digest");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("State")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("RequestId");
+
+                    b.HasIndex("ProposalId")
+                        .IsUnique();
+
+                    b.HasIndex("ProjectId", "RunId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_casting_generation_requests_project_run");
+
+                    b.HasIndex("ProjectId", "ActorIssuer", "ActorId", "IdempotencyKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_casting_generation_requests_idempotency");
+
+                    b.ToTable("casting_generation_requests", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_casting_generation_requests_base_revision", "base_configuration_revision > 0");
+
+                            t.HasCheckConstraint("ck_casting_generation_requests_idempotency_key", "idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'");
+
+                            t.HasCheckConstraint("ck_casting_generation_requests_mode", "mode IN ('Formulate', 'Analyze')");
+
+                            t.HasCheckConstraint("ck_casting_generation_requests_request_digest", "request_digest ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_casting_generation_requests_result", "(state = 'Completed' AND output_digest IS NOT NULL AND output_digest ~ '^[0-9a-f]{64}$' AND failure_code IS NULL) OR (state = 'Failed' AND output_digest IS NULL AND failure_code IS NOT NULL AND failure_code ~ '^[a-z][a-z0-9_]{0,63}$') OR (state IN ('Pending', 'Stale', 'Cancelled') AND output_digest IS NULL AND failure_code IS NULL)");
+
+                            t.HasCheckConstraint("ck_casting_generation_requests_state", "state IN ('Pending', 'Completed', 'Failed', 'Stale', 'Cancelled')");
                         });
                 });
 
@@ -1049,6 +1160,21 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.PlatformRuntimeHeadRecord", null)
                         .WithMany()
                         .HasForeignKey("HeadId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectCastingGenerationRequestRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectCastingProposalRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProposalId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

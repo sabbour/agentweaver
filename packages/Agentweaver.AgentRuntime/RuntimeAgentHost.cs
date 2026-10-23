@@ -55,6 +55,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
 {
     private readonly RuntimeAgentHostOptions _options;
     private readonly HttpClient _http;
+    private readonly HttpClient? _hostedCatalogCredentialHttp;
+    private readonly Uri? _hostedCatalogCredentialAddress;
     private readonly IRuntimeRegistrationOwner _owner;
     private readonly RuntimeCopilotSessionFactory _sessions;
     private readonly IRuntimeHostedModelReasoningCatalogSource _hostedModelReasoningCatalog;
@@ -97,9 +99,12 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         RuntimeCopilotSessionFactory sessions,
         TimeProvider timeProvider,
         ILogger? logger = null,
-        IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null)
+        IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null,
+        HttpClient? hostedCatalogCredentialHttp = null,
+        Uri? hostedCatalogCredentialAddress = null)
         : this(options, http, owner, sessions, timeProvider,
-            MountedWorkspaceFlush.FlushAndCreateReceiptAsync, logger, hostedModelReasoningCatalog)
+            MountedWorkspaceFlush.FlushAndCreateReceiptAsync, logger, hostedModelReasoningCatalog,
+            hostedCatalogCredentialHttp, hostedCatalogCredentialAddress)
     {
     }
 
@@ -112,10 +117,17 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         TimeProvider timeProvider,
         Func<string, WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushReceipt>> flushWorkspace,
         ILogger? logger = null,
-        IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null)
+        IRuntimeHostedModelReasoningCatalogSource? hostedModelReasoningCatalog = null,
+        HttpClient? hostedCatalogCredentialHttp = null,
+        Uri? hostedCatalogCredentialAddress = null)
     {
         _options = options.Validate();
         _http = http;
+        if ((hostedCatalogCredentialHttp is null) != (hostedCatalogCredentialAddress is null))
+            throw new ArgumentException("The hosted catalog credential client and owner address must be configured together.");
+        _hostedCatalogCredentialHttp = hostedCatalogCredentialHttp;
+        _hostedCatalogCredentialAddress = hostedCatalogCredentialAddress is null
+            ? null : RuntimeOwnerHttpTransport.RequireOwnerAddress(hostedCatalogCredentialAddress);
         _owner = owner;
         _sessions = sessions;
         _hostedModelReasoningCatalog = hostedModelReasoningCatalog ?? sessions;
@@ -215,12 +227,16 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 UnavailableModels(references, "hosted_connection_unavailable"));
         if (connectionId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_owner_response_contract_invalid");
+        if (_hostedCatalogCredentialHttp is null || _hostedCatalogCredentialAddress is null)
+            // Settings remain explicitly unavailable until the pinned Identity channel is configured.
+            return AvailableCatalog(projectId, configuration.Revision,
+                UnavailableModels(references, "hosted_connection_unavailable"));
 
         CopilotModelCatalogCredentialRead credentialReceipt;
         try
         {
             credentialReceipt = await RuntimeOwnerHttpTransport.SendAsync<CopilotModelCatalogCredentialRead>(
-                _http, _options.BrokerAddress,
+                _hostedCatalogCredentialHttp, _hostedCatalogCredentialAddress,
                 $"/internal/connections/copilot-user/{connectionId.Value:D}/model-catalog-credential",
                 actor, new { projectId }, cancellationToken).ConfigureAwait(false);
         }
@@ -1342,6 +1358,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         finally
         {
             _configure.Release();
+            _hostedCatalogCredentialHttp?.Dispose();
             _stop.Dispose();
         }
     }

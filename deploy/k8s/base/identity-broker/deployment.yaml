@@ -40,9 +40,16 @@ spec:
             - name: https
               containerPort: 8443
               protocol: TCP
+            - name: hosted-catalog
+              containerPort: 8444
+              protocol: TCP
           env:
             - name: ASPNETCORE_URLS
               value: https://+:8443
+            - name: Kestrel__Endpoints__Https__Url
+              value: https://+:8443
+            - name: Kestrel__Endpoints__HostedModelCatalogCredentialUse__Url
+              value: https://+:8444
             - name: ASPNETCORE_Kestrel__Certificates__Default__Path
               value: /var/run/identity-broker-tls/tls.crt
             - name: ASPNETCORE_Kestrel__Certificates__Default__KeyPath
@@ -66,6 +73,9 @@ spec:
           volumeMounts:
             - name: tls-certificate
               mountPath: /var/run/identity-broker-tls
+              readOnly: true
+            - name: hosted-catalog-tls
+              mountPath: /var/run/identity-broker-agenthost-tls
               readOnly: true
             - name: projects-ca
               mountPath: /var/run/service-backend-ca
@@ -111,6 +121,16 @@ spec:
           secret:
             secretName: identity-broker-tls
             optional: false
+            defaultMode: 0440
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        - name: hosted-catalog-tls
+          secret:
+            secretName: identity-broker-agenthost-tls
+            optional: true
             defaultMode: 0440
             items:
               - key: tls.crt

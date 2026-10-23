@@ -144,6 +144,14 @@ Identity returns only the current GitHub user access token and typed proof.
 Refresh tokens and OAuth client secrets stay inside Identity and its protected store.
 BYOK uses the exact selected `SecretRef` and explicit native SDK Provider configuration without Copilot authentication or catalog lookup.
 Neither a cache nor a submitted connection ID grants permission.
+For settings, the caller-authorized AgentHost catalog read checks current
+Projects & Config model choices and binding revisions before reading the live
+SDK model list. It obtains the short-lived user token from Identity only over
+the pinned AgentHost-to-Identity mTLS channel, holds the token inside AgentHost
+for the SDK read, and invalidates it afterward. The token is never returned by
+the AgentHost or Gateway catalog response. If the dedicated Identity channel
+is not configured, the catalog reports hosted levels as unavailable.
+
 The pinned SDK does not prove which A2A send owns a native usage callback.
 Workflow-bound Hosted Copilot with a positive hard credit limit uses the
 owner-prepared dispatch and begin path, which checks current whole-run priced

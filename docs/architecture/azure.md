@@ -182,7 +182,7 @@ Its source catalog includes 32 Core migration versions (1 through 16 and 18
 through 33), with version 17 excluded, nine Events versions, and 11 Environment
 versions. The initializer compares that catalog with each migrator's compiled
 version list. The reviewed offline plan hash is
-`855ab94d16386e5f1e086d501b9a70e1f64254da4d154cdb70e150dda31a7d89`.
+`c27bc525b1549ccc6716f74b1a5c15993321cf3d6fe9711fb1eaf80fd2287a90`.
 It retains 112 tables, eight row-lock columns, and 33 exact function signatures.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.

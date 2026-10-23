@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Secrets.AzureKeyVault;
@@ -66,10 +67,16 @@ public static class CopilotConnectionEndpoints
                 authority.RevokeAsync(actor, issuer, actorId, input.ConnectionId,
                     input.ExpectedRevision, context.RequestAborted)));
         routes.MapPost("/{connectionId:guid}/model-catalog-credential",
-            (HttpContext context, Guid connectionId, CopilotModelCatalogCredentialRequest input) =>
-                ExecuteAsync(context, (authority, actor, issuer, actorId) =>
-                    authority.ReadModelCatalogCredentialAsync(
-                        actor, issuer, actorId, connectionId, input.ProjectId, context.RequestAborted)));
+            (HttpContext context, Guid connectionId) =>
+                ExecuteAsync(context, async (authority, actor, issuer, actorId) =>
+                {
+                    // Check the service identity before reading the body on the shared listener.
+                    HostedModelCatalogCredentialUseComposition.RequireAgentHost(context);
+                    var input = await ReadModelCatalogCredentialRequestAsync(context).ConfigureAwait(false);
+                    return await authority.ReadModelCatalogCredentialAsync(
+                        actor, issuer, actorId, connectionId, input.ProjectId, context.RequestAborted)
+                        .ConfigureAwait(false);
+                }));
         routes.MapGet("/{connectionId:guid}", (HttpContext context, Guid connectionId) =>
             ExecuteAsync(context, (authority, actor, issuer, actorId) =>
                 authority.ReadStatusAsync(actor, issuer, actorId, connectionId, context.RequestAborted)));
@@ -141,4 +148,23 @@ public static class CopilotConnectionEndpoints
 
     private static Task ErrorAsync(HttpContext context, string code, int status) =>
         Results.Json(new { error = code }, statusCode: status).ExecuteAsync(context);
+
+    private static async Task<CopilotModelCatalogCredentialRequest> ReadModelCatalogCredentialRequestAsync(
+        HttpContext context)
+    {
+        try
+        {
+            return await context.Request.ReadFromJsonAsync<CopilotModelCatalogCredentialRequest>(
+                context.RequestAborted).ConfigureAwait(false)
+                ?? throw new ArgumentException("The model catalog request body is required.");
+        }
+        catch (JsonException error)
+        {
+            throw new ArgumentException("The model catalog request body is invalid.", error);
+        }
+        catch (InvalidOperationException error)
+        {
+            throw new ArgumentException("The model catalog request content type is invalid.", error);
+        }
+    }
 }

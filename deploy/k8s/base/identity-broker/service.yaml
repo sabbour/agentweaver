@@ -15,3 +15,7 @@ spec:
       port: 443
       targetPort: https
       protocol: TCP
+    - name: hosted-catalog
+      port: 8444
+      targetPort: hosted-catalog
+      protocol: TCP

@@ -192,6 +192,30 @@ pins Identity's owner address and has a 15-second timeout. The same native
 peer gate can protect a future read-only Environment verification route for
 Identity; this source does not map that route.
 
+Hosted model catalog credential reads use a separate
+`IdentityBroker:HostedModelCatalogCredentialUse:Tls` profile and the
+`HostedModelCatalogCredentialUse` HTTPS listener on port 8444. The peer is
+`AgentHost`; the corresponding client profile is
+`AgentHost:HostedModelCatalogCredentialUse:IdentityTls`. Both services pin
+the other service's certificate and use distinct service principals. The
+AgentHost certificate must have client-auth and server-auth purposes; Identity
+requires a client-auth certificate from that exact AgentHost profile.
+The Identity listener certificate is mounted from the optional
+`identity-broker-agenthost-tls` Secret at
+`/var/run/identity-broker-agenthost-tls`; its address is
+`https://identity-broker.agentweaver.svc.cluster.local:8444/`. AgentHost uses
+its mounted `/run/agenthost-tls` certificate and the service backend CA at
+`/var/run/service-backend-ca/ca.crt`.
+
+Only `POST /internal/connections/copilot-user/{connectionId}/model-catalog-credential`
+uses this channel. The route checks mTLS before reading the request or
+redeeming a connection credential, then applies the current caller, tenant,
+project, connection, and freshness checks. The caller's bearer token alone is
+not enough. Identity returns the short-lived user access token only to
+AgentHost; Gateway and browser routes do not proxy this response. When the
+profile is absent the listener cannot authorize credential use, and incomplete
+or shared-port configuration prevents startup.
+
 Only Environment has the separately configured Orchestrator verifier client.
 Identity has no Orchestrator client. Current call and applied-network
 verification before and after credential reads remain required from the
