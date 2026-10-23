@@ -131,7 +131,7 @@ internal static class CastingGenerationExecutionContract
             binding.RunId != runId ||
             binding.SessionId != sessionId ||
             binding.ExecutionFence != executionFence ||
-            binding.AcceptedSelectionHash != acceptedSelectionHash ||
+            binding.AcceptedSelectionHash != acceptedSelectionHash.ToLowerInvariant() ||
             binding.WorkflowStepId is not null)
             throw new CoordinationException(
                 "casting_generation_registration_stale", StatusCodes.Status409Conflict);

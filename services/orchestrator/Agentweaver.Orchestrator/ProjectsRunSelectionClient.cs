@@ -259,6 +259,12 @@ internal sealed class ProjectsRunSelectionClient(
             CoordinationOwnerStore.HashSelection(selection).ToLowerInvariant() != binding.AcceptedSelectionHash)
             throw new CoordinationException(
                 "runtime_skill_content_binding_mismatch", StatusCodes.Status403Forbidden);
+        if (binding.AgentId == CoordinationEndpoints.CoordinatorRuntimeAgentId &&
+            binding.WorkflowStepId is null)
+        {
+            // Coordinator roots are not cast agents and receive no project-assigned agent skills.
+            return [];
+        }
         var pins = ReadAssignedSkillPins(selection.Snapshot, binding.AgentId);
 
         var owner = RequireOwnerUri(options.ProjectsOwnerBaseAddress);

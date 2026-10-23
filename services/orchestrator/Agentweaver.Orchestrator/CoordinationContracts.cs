@@ -682,7 +682,10 @@ internal sealed record SessionRuntimeOwnerState(
     long ExecutionFence,
     long LogicalTurnOrdinal,
     long StateVersion,
-    string RuntimeTurnId);
+    string RuntimeTurnId)
+{
+    public bool IsCoordinatorRoot { get; init; }
+}
 
 /// <summary>
 /// Reports the accepted run's current root, fence, turn, and execution state.

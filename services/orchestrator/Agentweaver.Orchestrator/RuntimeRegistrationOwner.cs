@@ -392,7 +392,7 @@ internal sealed class RuntimeRegistrationOwner(
         HttpContext context, string projectId, string runId, string sessionId, CancellationToken cancellationToken) =>
         CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
             projectId, runId, sessionId, context, options, projects, sessions, decisions,
-            selectionContexts, checkpoints, cancellationToken);
+            selectionContexts, checkpoints, cancellationToken, allowCoordinatorRoot: true);
 
     /// <summary>
     /// Validates the environment owner's bootstrap response and placement against the requested owner context.

@@ -1815,12 +1815,37 @@ internal sealed partial class CoordinationOwnerStore
             .ConfigureAwait(false);
 
     /// <summary>
+    /// Reads an accepted coordinator root or active child binding for runtime registration.
+    /// </summary>
+    internal Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateForRegistrationAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        string tenantId,
+        string acceptedSelectionHash,
+        CancellationToken cancellationToken) =>
+        ReadRuntimeOwnerStateAsync(
+            actor, identity, allowTerminalChild: false, allowCoordinatorRoot: true,
+            tenantId, acceptedSelectionHash, cancellationToken);
+
+    /// <summary>
     /// Enforces actor, run-fence, child-work, turn, and version checks before returning runtime owner context.
     /// </summary>
     private async Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateAsync(
         CoordinationActor actor,
         SessionIdentity identity,
         bool allowTerminalChild,
+        CancellationToken cancellationToken) =>
+        await ReadRuntimeOwnerStateAsync(
+            actor, identity, allowTerminalChild, allowCoordinatorRoot: false,
+            expectedTenantId: null, expectedSelectionHash: null, cancellationToken).ConfigureAwait(false);
+
+    private async Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        bool allowTerminalChild,
+        bool allowCoordinatorRoot,
+        string? expectedTenantId,
+        string? expectedSelectionHash,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(actor);
@@ -1836,11 +1861,21 @@ internal sealed partial class CoordinationOwnerStore
             RequireCurrentObservationSession(session, run);
         else
             RequireCurrentActiveSession(session, run);
-        if (session.NodeKind != "child_work" ||
-            (session.TurnState != "active" &&
-                (!allowTerminalChild || session.TurnState is not ("completed" or "failed" or "indeterminate"))) ||
-            session.LogicalTurnOrdinal < 1 ||
-            session.StateVersion < 1)
+
+        // Only the registration path may accept a coordinator root; other reads require child work.
+        var isCoordinatorRoot = allowCoordinatorRoot &&
+            session.NodeKind == "coordinator" &&
+            session.ParentSessionId is null &&
+            session.RootSessionId == identity.SessionId &&
+            session.WorkPlanItemId is null &&
+            run.ExecutionState is not ("completed" or "failed" or "indeterminate" or "cancelled") &&
+            (expectedTenantId is null || run.TenantId == expectedTenantId) &&
+            (expectedSelectionHash is null || run.SelectionHash == expectedSelectionHash);
+        var isCurrentChildWork = session.NodeKind == "child_work" &&
+            (session.TurnState == "active" ||
+                allowTerminalChild && session.TurnState is "completed" or "failed" or "indeterminate") &&
+            session.LogicalTurnOrdinal >= 1;
+        if ((!isCoordinatorRoot && !isCurrentChildWork) || session.StateVersion < 1)
             throw new CoordinationException(
                 "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
 
@@ -1852,7 +1887,12 @@ internal sealed partial class CoordinationOwnerStore
             run.Fence,
             session.LogicalTurnOrdinal,
             session.StateVersion,
-            CreateRuntimeTurnId(identity, run.Fence, session.LogicalTurnOrdinal));
+            isCoordinatorRoot
+                ? CreateCoordinatorRootRuntimeTurnId(identity, run.Fence)
+                : CreateRuntimeTurnId(identity, run.Fence, session.LogicalTurnOrdinal))
+        {
+            IsCoordinatorRoot = isCoordinatorRoot
+        };
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }
@@ -5031,6 +5071,23 @@ internal sealed partial class CoordinationOwnerStore
             identity.SessionId,
             ExecutionFence = executionFence,
             LogicalTurnOrdinal = logicalTurnOrdinal
+        });
+        return $"turn-{Convert.ToHexStringLower(SHA256.HashData(bytes))}";
+    }
+
+    private static string CreateCoordinatorRootRuntimeTurnId(
+        SessionIdentity identity,
+        long executionFence)
+    {
+        if (executionFence < 1)
+            throw new InvalidOperationException("A coordinator runtime turn ID requires a current fence.");
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            Contract = "agentweaver.coordinator-runtime-turn.v1",
+            identity.ProjectId,
+            identity.RunId,
+            identity.SessionId,
+            ExecutionFence = executionFence
         });
         return $"turn-{Convert.ToHexStringLower(SHA256.HashData(bytes))}";
     }

@@ -155,7 +155,8 @@ public sealed class MafExecutionDispatchTests
             identity.ProjectId, identity.RunId, identity.SessionId, tree, status);
         CastingGenerationExecutionContract.RequireCurrentRegistration(
             registration, identity.ProjectId, identity.RunId, identity.SessionId,
-            registration.Binding.ExecutionFence, registration.Binding.AcceptedSelectionHash, timeProvider);
+            registration.Binding.ExecutionFence, registration.Binding.AcceptedSelectionHash.ToUpperInvariant(),
+            timeProvider);
 
         var invalidRoot = Assert.Throws<CoordinationException>(() =>
             CastingGenerationExecutionContract.RequireAcceptedRoot(

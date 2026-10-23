@@ -260,9 +260,17 @@ selection and registration are still current. Orchestrator does not persist the
 proposal result; the Gateway completes the request through Projects & Config.
 AgentHost obtains the model credential from Identity using the run-bound
 registration, so it never passes through Orchestrator or Projects.
+Runtime registration may read the active coordinator root using its accepted
+selection, current decision, and run admission. This path is limited to the
+root; runtime observation and child-work reads retain their child-work guards.
+The root uses the model selection accepted for the run and is not treated as a
+roster agent with assigned skills.
+
 Casting generation marks its AgentHost turn to continue if the HTTP waiter
-disconnects. An exact retry waits for or replays the same result; a retry with
-changed content conflicts.
+disconnects. The admitted turn owns a separate copy of the actor bearer, bounded
+by the original expiry and invalidated when the turn completes or is abandoned.
+An exact retry waits for or replays the same result; a retry with changed
+content conflicts.
 
 Generation completion must match the request's run ID and current configuration
 revision. It validates and replaces only the proposal's charters and cast, then

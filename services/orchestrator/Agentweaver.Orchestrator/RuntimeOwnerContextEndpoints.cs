@@ -11,6 +11,8 @@ namespace Agentweaver.Orchestrator;
 /// </summary>
 public static partial class CoordinationEndpoints
 {
+    internal const string CoordinatorRuntimeAgentId = "coordinator";
+
     /// <summary>
     /// HTTP endpoint handler that reads the current runtime owner context.
     /// </summary>
@@ -22,7 +24,8 @@ public static partial class CoordinationEndpoints
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () => Results.Ok(await ReadRuntimeOwnerContextCoreAsync(
             projectId, runId, sessionId, context, options, projects, store, decisions,
-            runSelectionContexts, checkpoints, cancellationToken).ConfigureAwait(false)), cancellationToken);
+            runSelectionContexts, checkpoints, cancellationToken, allowCoordinatorRoot: true)
+            .ConfigureAwait(false)), cancellationToken);
 
     /// <summary>
     /// Builds a runtime owner context from the accepted run selection, root decision, child association, and run admission.
@@ -37,7 +40,8 @@ public static partial class CoordinationEndpoints
         CoordinationOwnerStore store, CoordinatorDecisionOwnerStore decisions,
         CoordinatorRunSelectionContextStore runSelectionContexts, PostgresMafCheckpointStore checkpoints,
         CancellationToken cancellationToken,
-        bool allowTerminalChild = false)
+        bool allowTerminalChild = false,
+        bool allowCoordinatorRoot = false)
     {
         context.Response.Headers.CacheControl = "no-store";
         var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
@@ -45,9 +49,19 @@ public static partial class CoordinationEndpoints
             context, projectId, runId, cancellationToken).ConfigureAwait(false);
         var budgetLimits = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(selection.Selection.Snapshot);
         var identity = new SessionIdentity(projectId, runId, sessionId);
-        var owner = await (allowTerminalChild
-            ? store.ReadRuntimeOwnerStateForObservationAsync(actor, identity, cancellationToken)
-            : store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)).ConfigureAwait(false);
+        var acceptedSelectionHash = CoordinationOwnerStore.HashSelection(selection.Selection);
+        var owner = allowCoordinatorRoot
+            ? await store.ReadRuntimeOwnerStateForRegistrationAsync(
+                actor, identity, selection.Authorization.TenantId, acceptedSelectionHash, cancellationToken)
+                .ConfigureAwait(false)
+            : await (allowTerminalChild
+                ? store.ReadRuntimeOwnerStateForObservationAsync(actor, identity, cancellationToken)
+                : store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)).ConfigureAwait(false);
+        if (owner.IsCoordinatorRoot)
+            return await ReadCoordinatorRootRuntimeOwnerContextAsync(
+                projectId, runId, sessionId, context, actor, identity, projects, store, decisions,
+                selection, budgetLimits, owner, acceptedSelectionHash, cancellationToken).ConfigureAwait(false);
+
         var root = new SessionIdentity(projectId, runId, owner.RootSessionId);
         var selectionContext = await runSelectionContexts.ReadAsync(
                 selection.Selection, owner.ExecutionFence, cancellationToken).ConfigureAwait(false)
@@ -225,6 +239,104 @@ public static partial class CoordinationEndpoints
             CopilotSoftCreditLimit = budgetLimits.CopilotSoftCreditLimit,
             CopilotHardCreditLimit = budgetLimits.CopilotHardCreditLimit
         };
+    }
+
+    private static async Task<RuntimeOwnerContext> ReadCoordinatorRootRuntimeOwnerContextAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        HttpContext context,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CoordinatorDecisionOwnerStore decisions,
+        AuthorizedRunSelection selection,
+        (int? MaxModelTurns, int? MaxToolCalls, int? MaxPromptTokens, int? MaxRevisionAttempts,
+            decimal? CopilotSoftCreditLimit, decimal? CopilotHardCreditLimit) budgetLimits,
+        SessionRuntimeOwnerState owner,
+        string acceptedSelectionHash,
+        CancellationToken cancellationToken)
+    {
+        var root = new SessionIdentity(projectId, runId, owner.RootSessionId);
+        if (!owner.IsCoordinatorRoot || owner.RootSessionId != sessionId ||
+            owner.TenantId != selection.Authorization.TenantId ||
+            owner.AcceptedSelectionHash != acceptedSelectionHash)
+            throw new CoordinationException(
+                "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
+
+        var decision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
+            .ConfigureAwait(false);
+        RequireCoordinatorRootDecision(decision, owner);
+
+        RuntimeAcceptedModelSelection modelSelection;
+        try
+        {
+            // The coordinator root uses the model accepted for the run, not an assigned roster agent.
+            modelSelection = RuntimeAcceptedModelSelection.Read(selection.Selection.Snapshot);
+        }
+        catch (RuntimeAuthorizationException exception)
+        {
+            throw new CoordinationException(
+                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+
+        var runAdmission = await store.ReadRunAdmissionAsync(actor, selection, cancellationToken)
+            .ConfigureAwait(false);
+        await RequireUnchangedAuthorizedSelectionAsync(
+            context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+        var currentOwner = await store.ReadRuntimeOwnerStateForRegistrationAsync(
+            actor, identity, selection.Authorization.TenantId, acceptedSelectionHash, cancellationToken)
+            .ConfigureAwait(false);
+        var currentDecision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
+            .ConfigureAwait(false);
+        if (currentOwner != owner || currentDecision.StateVersion != decision.StateVersion ||
+            currentDecision.SelectionHash != decision.SelectionHash)
+            throw new CoordinationException(
+                "runtime_owner_context_stale", StatusCodes.Status409Conflict);
+        RequireCoordinatorRootDecision(currentDecision, currentOwner);
+        await RequireUnchangedAuthorizedSelectionAsync(
+            context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+
+        var modelBindingPin = runAdmission is { } admission &&
+            admission.ModelBindingPin.ModelSelectionReference == modelSelection.Reference &&
+            admission.ModelBindingPin.ReasoningEffort == modelSelection.ReasoningEffort
+                ? admission.ModelBindingPin
+                : modelSelection.ModelBindingPin;
+        return new RuntimeOwnerContext(
+            1, actor.Issuer, actor.Subject, owner.TenantId, projectId, runId, sessionId,
+            CoordinatorRuntimeAgentId, modelSelection.Reference, owner.RuntimeTurnId,
+            selection.Selection.ProjectRevision, selection.Selection.ProjectConfigurationRevision,
+            selection.Selection.PlatformRuntimeRevision, selection.Selection.ContextRevision,
+            owner.AcceptedSelectionHash.ToLowerInvariant(), owner.ExecutionFence, owner.LogicalTurnOrdinal,
+            owner.StateVersion, decision.StateVersion)
+        {
+            ModelCredentialReference = modelSelection.CredentialReference,
+            ModelSourceMode = modelSelection.SourceMode,
+            ReasoningEffort = modelSelection.ReasoningEffort,
+            ModelBindingPin = modelBindingPin,
+            ModelConnectionId = modelSelection.ConnectionId,
+            ModelConnectionScope = modelSelection.ConnectionScope,
+            MaxModelTurns = budgetLimits.MaxModelTurns,
+            MaxToolCalls = budgetLimits.MaxToolCalls,
+            MaxPromptTokens = budgetLimits.MaxPromptTokens,
+            MaxRevisionAttempts = budgetLimits.MaxRevisionAttempts,
+            CopilotSoftCreditLimit = budgetLimits.CopilotSoftCreditLimit,
+            CopilotHardCreditLimit = budgetLimits.CopilotHardCreditLimit
+        };
+    }
+
+    private static void RequireCoordinatorRootDecision(
+        CoordinatorDecisionCurrentState decision,
+        SessionRuntimeOwnerState owner)
+    {
+        if (decision.State.Fence != owner.ExecutionFence ||
+            decision.SelectionHash != owner.AcceptedSelectionHash ||
+            decision.State.ConfirmedWorkPlan is not null ||
+            decision.State.CandidateWorkPlan is not null ||
+            decision.State.PendingGate is not null)
+            throw new CoordinationException(
+                "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
     }
 
     /// <summary>

@@ -1115,6 +1115,55 @@ public sealed class RuntimeAgentHostTests
         Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
     }
 
+    [Fact]
+    public async Task HttpCancellationWhileTurnIsQueuedKeepsTheCopiedActorUntilExactRetryCompletes()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var turns = 0;
+        fixture.Sdk.BeforeTurnResponse = token =>
+            Interlocked.Increment(ref turns) == 1 ? release.Task.WaitAsync(token) : Task.CompletedTask;
+        var proof = fixture.Proof(ready);
+        var active = fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        await fixture.Sdk.TurnReceived.Task.WaitAsync(timeout.Token);
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        var queued = fixture.Message(proof, AddressedMessageDeliveryMode.Immediate);
+        queued = queued with
+        {
+            Message = queued.Message with
+            {
+                Metadata = queued.Message.Metadata with { ContinueAfterCallerDisconnect = true }
+            }
+        };
+        using var caller = new CancellationTokenSource();
+        var disconnected = client.PostAsJsonAsync(
+            "/runtime/v1/a2a/message:send", queued, HostFixture.Json, caller.Token);
+        Assert.True(SpinWait.SpinUntil(
+            () => fixture.Host.HasAdmittedTurn(queued.Message.MessageId),
+            TimeSpan.FromSeconds(10)));
+
+        caller.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => disconnected);
+        release.TrySetResult();
+
+        using var retry = await client.PostAsJsonAsync(
+            "/runtime/v1/a2a/message:send", queued, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        var replay = await retry.Content.ReadFromJsonAsync<RuntimeA2AResponse>(
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(replay!.Parts).Text);
+        await active;
+        Assert.Equal(2, turns);
+        Assert.Equal(2, fixture.Sdk.Requests.Count(request => request.Method == "session.send"));
+    }
+
     [Theory]
     [InlineData(" Explain this:\n```csharp\nvar value = 1;\n\tConsole.WriteLine(value);\n```\n ", true)]
     [InlineData("\tFirst line\r\n\tSecond line\r\n ", true)]

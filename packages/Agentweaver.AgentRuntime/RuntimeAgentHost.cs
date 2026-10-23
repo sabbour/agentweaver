@@ -415,15 +415,43 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 var operationCancellation = message.Metadata.ContinueAfterCallerDisconnect
                     ? CancellationToken.None
                     : token;
-                pending = new(message.MessageId, fingerprint, request, message.Metadata.Runtime, actor,
-                    operationCancellation, new(TaskCreationOptions.RunContinuationsAsynchronously));
-                _turns.Add(message.MessageId, pending);
-                (message.Metadata.DeliveryMode == AddressedMessageDeliveryMode.Immediate
-                    ? _immediate : _enqueue).Enqueue(pending);
-                _available.Release();
+                // HTTP teardown invalidates its actor, so detached work keeps a separate expiry-bounded handle.
+                var pendingActor = message.Metadata.ContinueAfterCallerDisconnect
+                    ? CopyActorForDetachedTurn(actor)
+                    : actor;
+                try
+                {
+                    pending = new(message.MessageId, fingerprint, request, message.Metadata.Runtime, pendingActor,
+                        operationCancellation, new(TaskCreationOptions.RunContinuationsAsynchronously),
+                        OwnsActorCredential: message.Metadata.ContinueAfterCallerDisconnect);
+                    _turns.Add(message.MessageId, pending);
+                    (message.Metadata.DeliveryMode == AddressedMessageDeliveryMode.Immediate
+                        ? _immediate : _enqueue).Enqueue(pending);
+                    _available.Release();
+                }
+                catch
+                {
+                    if (message.Metadata.ContinueAfterCallerDisconnect)
+                        pendingActor.Bearer.Invalidate();
+                    throw;
+                }
             }
         }
         return await pending.Completion.Task.WaitAsync(token).ConfigureAwait(false);
+    }
+
+    internal bool HasAdmittedTurn(Guid messageId)
+    {
+        lock (_queueLock)
+            return _turns.ContainsKey(messageId);
+    }
+
+    private RuntimeActorAuthorization CopyActorForDetachedTurn(RuntimeActorAuthorization actor)
+    {
+        if (!actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_actor_expired");
+        var copied = new SecretCredential(actor.Bearer.GetValue(), actor.Bearer.ExpiresAt, _time);
+        return new RuntimeActorAuthorization(copied, actor.TenantSelector);
     }
 
     /// <summary>
@@ -960,13 +988,22 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 {
                     pending.Completion.TrySetException(failure);
                 }
+                finally
+                {
+                    if (pending.OwnsActorCredential)
+                        pending.Actor.Bearer.Invalidate();
+                }
             }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
             lock (_queueLock)
                 foreach (var pending in _immediate.Concat(_enqueue))
+                {
                     pending.Completion.TrySetException(new RuntimeAuthorizationException("runtime_host_unavailable"));
+                    if (pending.OwnsActorCredential)
+                        pending.Actor.Bearer.Invalidate();
+                }
         }
     }
 
@@ -1010,5 +1047,5 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private sealed record PendingTurn(
         Guid MessageId, string Fingerprint, RuntimeA2ASendRequest Request, RuntimeHostSessionProof Proof,
         RuntimeActorAuthorization Actor, CancellationToken Cancellation,
-        TaskCompletionSource<RuntimeA2AResponse> Completion);
+        TaskCompletionSource<RuntimeA2AResponse> Completion, bool OwnsActorCredential);
 }
