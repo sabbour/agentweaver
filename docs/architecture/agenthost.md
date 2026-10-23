@@ -192,6 +192,15 @@ catalog capability and supported-effort list. BYOK requires an explicit supporte
 the server-owned model binding; an unknown or unsupported effort fails closed. The requested
 effort is passed to both native create and resume and checked against the SDK's effective session
 model. The host never silently substitutes a model default or lower effort.
+After reading the hosted SDK model catalog, AgentHost may publish its verified
+reasoning levels to Projects & Config. The request includes the opaque model
+reference, selected connection, model-binding revision, verification time, and
+supported levels; it does not include the hosted credential or model ID.
+Projects & Config stores the values for the same actor, project, connection,
+and binding revision, returns them for at most 24 hours, and rejects an older
+verification that arrives after a newer one. Publication is best-effort:
+failure does not block session creation, and every run still uses AgentHost's
+live SDK check as the authority.
 Legacy unpinned factory callers retain their existing API; they do not provide versioned admission proof.
 For configured hosted credit limits, coordination root acceptance and backlog claim
 now require a real Events run-admission receipt before their transaction writes the root.

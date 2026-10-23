@@ -53,6 +53,10 @@ test('P1 plan binds five service roles to the provisioned principal IDs', () => 
 });
 
 test('Only exact table DML is planned; history and authority remain SELECT-only', () => {
+  const projectsConfig = buildP1PostgresPlan().services.find(item => item.schema === 'projects_config');
+  assert.deepEqual(
+    projectsConfig.tables.find(item => item.table === 'hosted_model_reasoning_catalog').privileges,
+    ['SELECT', 'INSERT', 'UPDATE']);
   for (const service of buildP1PostgresPlan().services) {
     assert.equal(new Set(service.tables.map(item => item.table)).size, service.tables.length);
     for (const table of service.tables) {
@@ -231,7 +235,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 110);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 111);
   const orchestrator = plan.services.find(service => service.schema === 'orchestrator');
   assert.deepEqual(orchestrator.tables.find(table => table.table === 'project_run_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);

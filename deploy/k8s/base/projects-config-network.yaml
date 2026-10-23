@@ -37,6 +37,9 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: environment
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: agenthost
       toPorts:
         - ports:
             - port: "8443"

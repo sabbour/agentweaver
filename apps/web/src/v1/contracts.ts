@@ -1568,13 +1568,13 @@ export interface ProjectConfigurationChoices {
 }
 
 /**
- * One enabled model reference. BYOK references list their configured reasoning efforts; hosted references list
- * none because their reasoning levels are verified when a run starts.
+ * One enabled model reference. BYOK references list their configured reasoning efforts. Hosted references list
+ * previously verified levels when available and otherwise use run-start verification.
  */
 export interface ProjectModelChoice {
   reference: string;
   sourceMode: 'hostedCopilot' | 'byok';
-  reasoningEffortSource: 'modelBinding' | 'verifiedAtRunStart';
+  reasoningEffortSource: 'modelBinding' | 'hostedModelCatalog' | 'verifiedAtRunStart';
   reasoningEfforts: ReasoningEffort[];
 }
 

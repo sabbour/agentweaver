@@ -66,8 +66,8 @@ public sealed record ProjectModelChoices(
 
 /// <summary>
 /// One enabled model reference. BYOK references list their configured reasoning efforts
-/// (<c>reasoningEffortSource</c> <c>modelBinding</c>); hosted Copilot references list none because their efforts
-/// are verified against the SDK model list when a run starts (<c>verifiedAtRunStart</c>).
+/// (<c>reasoningEffortSource</c> <c>modelBinding</c>); hosted Copilot references list levels previously verified
+/// by AgentHost when available, and otherwise retain the run-start verification fallback.
 /// </summary>
 public sealed record ProjectModelChoice(
     string Reference,
@@ -176,7 +176,30 @@ public sealed partial class ProjectsConfigService
         var configuration = Deserialize<ProjectConfiguration>(configurationRevision.ConfigurationJson);
         var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
         var platform = await ReadPlatformDefaultsAsync(platformHead, cancellationToken).ConfigureAwait(false);
-        var modelChoices = BuildModelChoices(configuration, platform, modelBindings);
+        var connectionId = configuration.ModelSelection is { } projectSelection
+            ? projectSelection.ConnectionId
+            : platform.Defaults?.ModelSelection?.ConnectionId;
+        IReadOnlyDictionary<string, ImmutableArray<string>>? hostedReasoningEfforts = null;
+        // A publication is visible only in its original actor/project scope and for the currently selected binding.
+        if (connectionId is { } selectedConnection && modelBindings.Revision is { } bindingsRevision)
+        {
+            var catalogCutoff = timeProvider.GetUtcNow() - HostedReasoningCatalogMaxAge;
+            var publications = await db.HostedModelReasoningCatalog.AsNoTracking()
+                .Where(catalog =>
+                    catalog.TenantId == caller.TenantId &&
+                    catalog.ProjectId == project.ProjectId &&
+                    catalog.ActorId == caller.ActorId &&
+                    catalog.ConnectionId == selectedConnection &&
+                    catalog.BindingsRevision == bindingsRevision &&
+                    catalog.VerifiedAt >= catalogCutoff)
+                .ToArrayAsync(cancellationToken)
+                .ConfigureAwait(false);
+            hostedReasoningEfforts = publications.ToDictionary(
+                catalog => catalog.Reference,
+                catalog => catalog.SupportedReasoningEfforts.ToImmutableArray(),
+                StringComparer.Ordinal);
+        }
+        var modelChoices = BuildModelChoices(configuration, platform, modelBindings, hostedReasoningEfforts);
 
         return new ProjectConfigurationChoices(
             project.ProjectId,
@@ -1590,7 +1613,8 @@ public sealed partial class ProjectsConfigService
     internal static ProjectModelChoices BuildModelChoices(
         ProjectConfiguration project,
         VersionedPlatformRuntimeDefaults platform,
-        ModelBindingCapabilities modelBindings)
+        ModelBindingCapabilities modelBindings,
+        IReadOnlyDictionary<string, ImmutableArray<string>>? hostedReasoningEfforts = null)
     {
         var references = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         void Add(string? reference, string source)
@@ -1645,16 +1669,17 @@ public sealed partial class ProjectsConfigService
         }
 
         // Only enabled bindings are selectable; disabled ones are omitted because AgentHost refuses them at run start.
-        // An enabled BYOK binding with no efforts is omitted too: AgentHost accepts only a listed effort for BYOK, so
-        // no run could start with it. BYOK efforts come from the binding. Hosted efforts are left empty, even if the
-        // binding lists some, because AgentHost checks them against the SDK model list with the run's credential at
-        // start, which this owner cannot read.
+        // BYOK efforts come from the binding, while hosted efforts come only from a fresh AgentHost publication.
+        // The runtime still checks the selected effort against its live SDK catalog before starting a run.
         var choices = modelBindings.Bindings
             .Where(binding => binding.Enabled &&
                 (binding.SourceMode != "Byok" || !binding.SupportedReasoningEfforts.IsEmpty))
             .Select(binding => binding.SourceMode == "Byok"
                 ? new ProjectModelChoice(binding.Reference, "byok", "modelBinding", binding.SupportedReasoningEfforts)
-                : new ProjectModelChoice(binding.Reference, "hostedCopilot", "verifiedAtRunStart", []))
+                : hostedReasoningEfforts is not null &&
+                    hostedReasoningEfforts.TryGetValue(binding.Reference, out var efforts)
+                    ? new ProjectModelChoice(binding.Reference, "hostedCopilot", "hostedModelCatalog", efforts)
+                    : new ProjectModelChoice(binding.Reference, "hostedCopilot", "verifiedAtRunStart", []))
             .ToImmutableArray();
         return new ProjectModelChoices(
             "available",

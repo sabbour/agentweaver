@@ -26,7 +26,7 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   registry: 'ghcr.io/sabbour',
 });
 /** The reviewed plan: Core 1-16, 18-31 and 33, Events 1-9. Migration 032 is not part of it. */
-export const REVIEWED_PLAN_SHA256 = 'ff069555878416f3c4111eb70973c41f0d0eb9e907425ccc72c7270208aa3fbc';
+export const REVIEWED_PLAN_SHA256 = 'd23ce090b0bfaf5475ad179e82cef3dfbfa484cf33bf0c8ba8161b4a061cad52';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';

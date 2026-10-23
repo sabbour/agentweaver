@@ -2481,7 +2481,8 @@ public sealed class RuntimeAgentHostTests
                 new(120, 120, 120, 120, 120, 600), factory.WorkingDirectory);
             _http = new(new Handler(SendOwnerAsync));
             Host = new(new(b.ConfigureEndpoint, new("https://broker.test/"), new("https://orchestrator.test/"),
-                    new("https://environment.test/"), new("https://events.test/"), Image, 8),
+                    new("https://environment.test/"), new("https://events.test/"),
+                    new("https://projects-config.test/"), Image, 8),
                 _http, new RuntimeRegistrationHttpClient(_http, new("https://orchestrator.test/")), factory, Time,
                 static (_, request, _) => Task.FromResult(CreateWorkspaceFlushReceipt(request)));
             Configure = new(1, Registration, Guid.NewGuid(), Guid.NewGuid(), JsonSerializer.SerializeToElement(new { }));

@@ -58,19 +58,30 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false,
     ? choices.models.savedReferences.filter((saved) => !modelReferences.includes(saved.reference))
     : [];
   /**
-   * Reasoning levels offered for a model. BYOK bindings list their configured levels. Hosted models, unlisted
-   * references and inherited defaults show every owner-accepted level, because the runtime checks those
-   * levels when a run starts; this keeps the select from ever being empty.
+   * Reasoning levels from the binding copy or the latest matching AgentHost publication are exact. When no hosted
+   * publication exists, keep the existing run-start fallback so this selector remains usable before a first run.
    */
   const effortsFor = (reference: string | null | undefined): ReasoningEffort[] => {
     const choice = modelChoices.find((item) => item.reference === reference);
-    return choice?.reasoningEffortSource === 'modelBinding' ? choice.reasoningEfforts : REASONING_EFFORTS;
+    // Published catalog values are exact; only the run-start fallback uses the generic editable list.
+    return choice?.reasoningEffortSource === 'modelBinding' ||
+      choice?.reasoningEffortSource === 'hostedModelCatalog'
+      ? choice.reasoningEfforts
+      : REASONING_EFFORTS;
   };
   /** Hint shown under a reasoning select when the chosen model is hosted. */
-  const effortHint = (reference: string | null | undefined) =>
-    modelChoices.find((item) => item.reference === reference)?.reasoningEffortSource === 'verifiedAtRunStart'
-      ? 'Reasoning levels for this model are checked when a run starts.'
-      : undefined;
+  const effortHint = (reference: string | null | undefined) => {
+    const choice = modelChoices.find((item) => item.reference === reference);
+    const source = choice?.reasoningEffortSource;
+    // An empty published list is authoritative and must not look like an unverified fallback.
+    if (choice && source === 'hostedModelCatalog' && choice.reasoningEfforts.length === 0)
+      return 'AgentHost found no supported reasoning levels for this model.';
+    if (source === 'hostedModelCatalog')
+      return 'These reasoning levels were verified by AgentHost from the live hosted model catalog.';
+    if (source === 'verifiedAtRunStart')
+      return 'Reasoning levels for this model are checked when a run starts.';
+    return undefined;
+  };
   const modelOption = (reference: string) => (
     <option key={reference} value={reference}>
       {modelReferences.includes(reference) ? reference : `${reference} (not currently eligible)`}

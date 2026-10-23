@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Threading.Channels;
 using Agentweaver.Abstractions;
@@ -20,9 +21,13 @@ public sealed class RuntimeCopilotSessionFactory
     private readonly TimeSpan _abortDrainTimeout;
     private readonly string _workingDirectory;
     private readonly string? _expectedRuntimeVersion;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>The absolute workspace directory exposed to the SDK session.</summary>
     public string WorkingDirectory => _workingDirectory;
+
+    /// <summary>The model-binding revision that scopes hosted capability publications.</summary>
+    public string ModelBindingsRevision => _modelBindings.ConfigurationRevision;
 
     /// <summary>Creates a factory using the supplied legacy model-binding map.</summary>
     public RuntimeCopilotSessionFactory(
@@ -31,10 +36,11 @@ public sealed class RuntimeCopilotSessionFactory
         IReadOnlyDictionary<string, RuntimeModelBinding> approvedModelBindings,
         TimeSpan? abortDrainTimeout = null,
         string? workingDirectory = null,
-        string? expectedRuntimeVersion = null)
+        string? expectedRuntimeVersion = null,
+        TimeProvider? timeProvider = null)
         : this(approvedConnection, baseDirectory,
             new RuntimeModelBindingsResolver("legacy-unversioned", approvedModelBindings),
-            abortDrainTimeout, workingDirectory, expectedRuntimeVersion)
+            abortDrainTimeout, workingDirectory, expectedRuntimeVersion, timeProvider)
     {
     }
 
@@ -45,7 +51,8 @@ public sealed class RuntimeCopilotSessionFactory
         RuntimeModelBindingsResolver approvedModelBindings,
         TimeSpan? abortDrainTimeout = null,
         string? workingDirectory = null,
-        string? expectedRuntimeVersion = null)
+        string? expectedRuntimeVersion = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(approvedConnection);
         ArgumentNullException.ThrowIfNull(approvedModelBindings);
@@ -69,6 +76,7 @@ public sealed class RuntimeCopilotSessionFactory
         if (expectedRuntimeVersion is not null)
             RuntimeContractValidation.ValidateIdentifier(expectedRuntimeVersion);
         _expectedRuntimeVersion = expectedRuntimeVersion;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _modelBindings = approvedModelBindings;
         _abortDrainTimeout = abortDrainTimeout ?? TimeSpan.FromSeconds(30);
         if (_abortDrainTimeout <= TimeSpan.Zero || _abortDrainTimeout > TimeSpan.FromMinutes(5))
@@ -157,6 +165,8 @@ public sealed class RuntimeCopilotSessionFactory
             string catalogHash;
             decimal? multiplier = null;
             long? supportedPromptTokens = model.PromptCapacityTokens;
+            ImmutableArray<string>? verifiedHostedReasoningEfforts = null;
+            DateTimeOffset? verifiedHostedReasoningCatalogAt = null;
 #pragma warning disable GHCP001 // The pinned SDK marks its RPC policy and permission types as experimental.
             if (model.SourceMode == ModelSourceMode.HostedCopilot)
             {
@@ -169,6 +179,11 @@ public sealed class RuntimeCopilotSessionFactory
                     matches[0].Capabilities?.Supports?.ReasoningEffort,
                     matches[0].SupportedReasoningEfforts,
                     reasoningEffort);
+                // Publish only the contract's canonical levels and retain when the SDK catalog was observed.
+                verifiedHostedReasoningEfforts = ResolveHostedReasoningEfforts(
+                    matches[0].Capabilities?.Supports?.ReasoningEffort,
+                    matches[0].SupportedReasoningEfforts);
+                verifiedHostedReasoningCatalogAt = _timeProvider.GetUtcNow();
                 catalogHash = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(catalog));
                 multiplier = RuntimeCopilotSession.NullableDecimal(matches[0].Billing?.Multiplier);
                 var limits = matches[0].Capabilities?.Limits;
@@ -389,7 +404,8 @@ public sealed class RuntimeCopilotSessionFactory
                 : null;
             return new RuntimeCopilotSession(client, session, facts, usage, promptCapacityObserver, turns,
                 nativeFiles, recoveryMode, recoveryReason, recovery?.JournalRebuild,
-                consumedNativeCacheAcknowledgment, journalEvidence, _abortDrainTimeout);
+                consumedNativeCacheAcknowledgment, journalEvidence, _abortDrainTimeout,
+                verifiedHostedReasoningEfforts, verifiedHostedReasoningCatalogAt);
         }
         catch
         {
@@ -421,5 +437,19 @@ public sealed class RuntimeCopilotSessionFactory
             supportedEfforts is null ||
             !supportedEfforts.Contains(requestedEffort, StringComparer.Ordinal))
             throw new RuntimeAuthorizationException("runtime_reasoning_effort_unsupported");
+    }
+
+    private static ImmutableArray<string> ResolveHostedReasoningEfforts(
+        bool? modelSupportsReasoningEffort,
+        IEnumerable<string>? supportedEfforts)
+    {
+        if (modelSupportsReasoningEffort is not true || supportedEfforts is null)
+            return [];
+
+        // Keep the published vocabulary aligned with the values accepted by project configuration.
+        var supported = supportedEfforts.ToHashSet(StringComparer.Ordinal);
+        return new[] { "low", "medium", "high", "xhigh" }
+            .Where(supported.Contains)
+            .ToImmutableArray();
     }
 }

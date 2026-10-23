@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
@@ -123,6 +124,30 @@ public sealed class ProjectModelChoicesTests
         // A disabled binding and a merely saved reference stay out of the choices but remain visible as saved.
         Assert.DoesNotContain(choices.Choices, item => item.Reference is "retired" or "saved-only");
         Assert.Equal(["retired", "saved-only"], choices.SavedReferences.Select(item => item.Reference).ToArray());
+    }
+
+    [Fact]
+    public void HostedCapabilitiesUsePublishedLevelsAndOtherwiseRetainRunStartFallback()
+    {
+        var project = new ProjectConfiguration();
+        var platform = new VersionedPlatformRuntimeDefaults(0, null, null, null);
+        var fallback = ProjectsConfigService.BuildModelChoices(project, platform, SampleBindings());
+        var published = ProjectsConfigService.BuildModelChoices(
+            project,
+            platform,
+            SampleBindings(),
+            new Dictionary<string, ImmutableArray<string>>(StringComparer.Ordinal)
+            {
+                ["hosted-reasoning"] = ["low", "high"],
+            });
+
+        var fallbackChoice = Assert.Single(fallback.Choices, item => item.Reference == "hosted-reasoning");
+        Assert.Equal("verifiedAtRunStart", fallbackChoice.ReasoningEffortSource);
+        Assert.Empty(fallbackChoice.ReasoningEfforts);
+
+        var publishedChoice = Assert.Single(published.Choices, item => item.Reference == "hosted-reasoning");
+        Assert.Equal("hostedModelCatalog", publishedChoice.ReasoningEffortSource);
+        Assert.Equal(["low", "high"], publishedChoice.ReasoningEfforts.ToArray());
     }
 
     [Fact]

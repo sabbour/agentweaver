@@ -20,7 +20,7 @@ the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`ff069555878416f3c4111eb70973c41f0d0eb9e907425ccc72c7270208aa3fbc`.
+`d23ce090b0bfaf5475ad179e82cef3dfbfa484cf33bf0c8ba8161b4a061cad52`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
 placeholder. The Core list is 1-16, 18-31, 33. Version 027 requires 026 only.

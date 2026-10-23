@@ -49,6 +49,7 @@ public sealed class ProjectsConfigMigrationInventoryTests(
 
         Assert.Contains("20261013095816_AddProjectSetupOperations", migrationIds);
         Assert.Contains("20261013194803_AddProjectSetupOwnerGrantReceipts", migrationIds);
+        Assert.Contains("20261023075529_AddHostedModelReasoningCatalog", migrationIds);
         Assert.All(migrationIds, migrationId => Assert.Contains('_', migrationId));
     }
 }

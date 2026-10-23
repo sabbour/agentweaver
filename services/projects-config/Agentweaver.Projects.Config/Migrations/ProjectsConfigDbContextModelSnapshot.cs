@@ -23,6 +23,56 @@ namespace Agentweaver.Projects.Config.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.HostedModelReasoningCatalogRecord", b =>
+                {
+                    b.Property<string>("TenantId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ActorId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<Guid>("ConnectionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("connection_id");
+
+                    b.Property<string>("BindingsRevision")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("bindings_revision");
+
+                    b.Property<string>("Reference")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("reference");
+
+                    b.PrimitiveCollection<string[]>("SupportedReasoningEfforts")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("supported_reasoning_efforts");
+
+                    b.Property<DateTimeOffset>("VerifiedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("verified_at");
+
+                    b.HasKey("TenantId", "ProjectId", "ActorId", "ConnectionId", "BindingsRevision", "Reference");
+
+                    b.HasIndex("ProjectId");
+
+                    b.ToTable("hosted_model_reasoning_catalog", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_hosted_model_reasoning_supported_efforts", "supported_reasoning_efforts <@ ARRAY['low', 'medium', 'high', 'xhigh']::text[]");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.PlatformRuntimeHeadRecord", b =>
                 {
                     b.Property<string>("Id")
@@ -980,6 +1030,15 @@ namespace Agentweaver.Projects.Config.Migrations
 
                             t.HasCheckConstraint("ck_tenant_memberships_state", "state IN ('Active', 'Revoked')");
                         });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.HostedModelReasoningCatalogRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Agentweaver.Projects.Config.PlatformRuntimeRevisionRecord", b =>

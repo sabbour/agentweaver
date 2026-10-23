@@ -137,6 +137,21 @@ describe('readable project configuration', () => {
     expect(screen.getAllByText('Reasoning levels for this model are checked when a run starts.')).toHaveLength(1);
   });
 
+  it('uses AgentHost-published hosted reasoning levels when available', () => {
+    const choices = ownerChoices();
+    const hostedChoice = choices.models.choices.find((choice) => choice.reference === 'planner')!;
+    hostedChoice.reasoningEffortSource = 'hostedModelCatalog';
+    hostedChoice.reasoningEfforts = ['low', 'high'];
+
+    render(<ConfigurationFields configuration={fixture()} onChange={vi.fn()} choices={choices} part="models" />);
+    const planningEffort = screen.getByLabelText('Planning reasoning effort') as HTMLSelectElement;
+    expect(Array.from(planningEffort.options).map((option) => option.textContent))
+      .toEqual(['Use default', 'Extra high (saved; not listed for this model)', 'Low', 'High']);
+    expect(screen.getByText('These reasoning levels were verified by AgentHost from the live hosted model catalog.'))
+      .toBeTruthy();
+    expect(screen.queryByText('Reasoning levels for this model are checked when a run starts.')).toBeNull();
+  });
+
   it('restores the full saved hosted binding after clearing to the platform default', () => {
     const configuration: ProjectConfiguration = {
       ...fixture(),

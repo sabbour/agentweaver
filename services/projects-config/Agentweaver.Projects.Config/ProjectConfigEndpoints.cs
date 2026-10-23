@@ -60,6 +60,7 @@ public static class ProjectConfigEndpoints
             context.Response.Headers.CacheControl = "no-store";
             try
             {
+                // This scoped write is a settings hint, not an authority to start a model or bypass run-time checks.
                 if (context.Request.Query.Count != 0)
                     throw ProjectConfigException.Forbidden();
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
@@ -324,6 +325,34 @@ public static class ProjectConfigEndpoints
                 return ToProblem(exception);
             }
         });
+
+        projects.MapPost("/{projectId}/configuration/hosted-model-reasoning-catalog", async (
+            string projectId,
+            HostedModelReasoningCatalogPublicationV1 request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                // This scoped write is a settings hint, not an authority to start a model or bypass run-time checks.
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_query", "This endpoint does not accept query parameters.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                caller.RequireResourceBinding(projectId);
+                await service.PublishHostedModelReasoningCatalogAsync(
+                    caller, projectId, request, cancellationToken).ConfigureAwait(false);
+                return Results.NoContent();
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("PublishHostedModelReasoningCatalog");
 
         projects.MapPut("/{projectId}/configuration", async (
             string projectId,

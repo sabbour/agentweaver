@@ -113,9 +113,16 @@ entry in `choices` is an enabled binding with its `reference`, `sourceMode`
 (`byok` or `hostedCopilot`), `reasoningEffortSource`, and `reasoningEfforts`.
 For a BYOK binding, `reasoningEffortSource` is `modelBinding` and
 `reasoningEfforts` lists the configured levels. For a hosted binding,
-`reasoningEffortSource` is `verifiedAtRunStart` and `reasoningEfforts` is
-empty: the runtime checks the requested level against the hosted model list
-when a run starts. Disabled bindings are not listed. Choices never contain
+the owner reports recent levels published by AgentHost as
+`reasoningEffortSource: "hostedModelCatalog"`. A missing or expired
+publication uses `reasoningEffortSource: "verifiedAtRunStart"` with an empty
+`reasoningEfforts` array. Publications are scoped to the current actor,
+project, connection, and model-binding revision, expire after 24 hours, and
+cannot replace a newer verification with a delayed older one. AgentHost reads
+the live SDK catalog with the hosted credential and sends only the verified
+levels and binding metadata to Projects & Config; the hosted credential and
+model ID are not included. The runtime checks the requested level against the
+live catalog whenever a run starts. Disabled bindings are not listed. Choices never contain
 model IDs, provider settings, or credential references, and the owner does not
 add choices from saved values or a fixed list.
 

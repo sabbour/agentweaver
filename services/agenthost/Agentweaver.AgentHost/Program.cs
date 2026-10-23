@@ -86,7 +86,8 @@ builder.Services.AddSingleton(services =>
     var http = services.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-owners");
     return new RuntimeAgentHost(options, http,
         new RuntimeRegistrationHttpClient(http, options.OrchestratorAddress), sessions,
-        services.GetRequiredService<TimeProvider>());
+        services.GetRequiredService<TimeProvider>(),
+        services.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RuntimeAgentHost>>());
 });
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>

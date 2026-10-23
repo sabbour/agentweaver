@@ -3,6 +3,8 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.AgentRuntime;
 
@@ -13,6 +15,7 @@ public sealed record RuntimeAgentHostOptions(
     Uri OrchestratorAddress,
     Uri EnvironmentAddress,
     Uri EventsAddress,
+    Uri ProjectsConfigAddress,
     SandboxImageIdentity Image,
     int MaximumPendingTurns)
 {
@@ -26,6 +29,7 @@ public sealed record RuntimeAgentHostOptions(
         RuntimeOwnerHttpTransport.RequireOwnerAddress(OrchestratorAddress);
         RuntimeOwnerHttpTransport.RequireOwnerAddress(EnvironmentAddress);
         RuntimeOwnerHttpTransport.RequireOwnerAddress(EventsAddress);
+        RuntimeOwnerHttpTransport.RequireOwnerAddress(ProjectsConfigAddress);
         Image.Validate();
         return this;
     }
@@ -52,6 +56,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private readonly HttpClient _http;
     private readonly IRuntimeRegistrationOwner _owner;
     private readonly RuntimeCopilotSessionFactory _sessions;
+    private readonly ILogger _logger;
     private readonly Func<string, WorkspaceVolumeFlushRequest, CancellationToken,
         Task<WorkspaceVolumeFlushReceipt>> _flushWorkspace;
     private readonly TimeProvider _time;
@@ -88,8 +93,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         HttpClient http,
         IRuntimeRegistrationOwner owner,
         RuntimeCopilotSessionFactory sessions,
-        TimeProvider timeProvider)
-        : this(options, http, owner, sessions, timeProvider, MountedWorkspaceFlush.FlushAndCreateReceiptAsync)
+        TimeProvider timeProvider,
+        ILogger? logger = null)
+        : this(options, http, owner, sessions, timeProvider,
+            MountedWorkspaceFlush.FlushAndCreateReceiptAsync, logger)
     {
     }
 
@@ -100,12 +107,14 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         IRuntimeRegistrationOwner owner,
         RuntimeCopilotSessionFactory sessions,
         TimeProvider timeProvider,
-        Func<string, WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushReceipt>> flushWorkspace)
+        Func<string, WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushReceipt>> flushWorkspace,
+        ILogger? logger = null)
     {
         _options = options.Validate();
         _http = http;
         _owner = owner;
         _sessions = sessions;
+        _logger = logger ?? NullLogger.Instance;
         _flushWorkspace = flushWorkspace ?? throw new ArgumentNullException(nameof(flushWorkspace));
         _time = timeProvider;
         _dispatcher = DispatchAsync();
@@ -209,7 +218,9 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                     if (resumeBootstrap is not null)
                         await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, cancellation)
                             .ConfigureAwait(false);
-                }, capturedMcpServer: capturedMcpServer.Endpoint);
+                }, capturedMcpServer: capturedMcpServer.Endpoint,
+                hostedReasoningCatalog: new(_http, _options.ProjectsConfigAddress, retained),
+                logger: _logger);
             _session = await receiver.ConfigureAsync(
                 bootstrap, configurationBytes, request.ConsumeOperationId, request.ExchangeOperationId,
                 token, resumeBootstrap).ConfigureAwait(false);

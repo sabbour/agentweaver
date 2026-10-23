@@ -287,6 +287,97 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
+    public async Task HostedReasoningCatalogPublicationIsScopedToCurrentActorConnectionAndBindingRevision()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "hosted-reasoning-tenant-" + suffix;
+        var actorId = "hosted-reasoning-owner-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, actorId, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var connectionId = Guid.NewGuid();
+        var bindings = ProjectModelChoicesTests.SampleBindings();
+        var service = new ProjectsConfigService(
+            db, CreateProviderCatalog(), TimeProvider.System, modelBindings: bindings);
+        var project = await service.CreateProjectAsync(owner, "Hosted model reasoning", CancellationToken.None);
+        await service.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            new ProjectConfiguration
+            {
+                ModelSelection = new ModelSelectionSettings(
+                    "hosted-reasoning", SourceMode: ModelSourceMode.HostedCopilot, ConnectionId: connectionId),
+            },
+            CancellationToken.None);
+
+        var verifiedAt = DateTimeOffset.UtcNow;
+        await service.PublishHostedModelReasoningCatalogAsync(
+            owner,
+            project.ProjectId,
+            new("models-r7", "hosted-reasoning", connectionId, ["low", "high"], verifiedAt),
+            CancellationToken.None);
+
+        var choices = await service.GetProjectConfigurationChoicesAsync(
+            owner, project.ProjectId, CancellationToken.None);
+        var published = Assert.Single(choices.Models.Choices, item => item.Reference == "hosted-reasoning");
+        Assert.Equal("hostedModelCatalog", published.ReasoningEffortSource);
+        Assert.Equal(["low", "high"], published.ReasoningEfforts.ToArray());
+
+        var stalePublication = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.PublishHostedModelReasoningCatalogAsync(
+                owner,
+                project.ProjectId,
+                new("models-r7", "hosted-reasoning", connectionId, ["medium"], verifiedAt.AddMinutes(-1)),
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, stalePublication.StatusCode);
+        var unchanged = await service.GetProjectConfigurationChoicesAsync(
+            owner, project.ProjectId, CancellationToken.None);
+        Assert.Equal(
+            ["low", "high"],
+            Assert.Single(unchanged.Models.Choices, item => item.Reference == "hosted-reasoning")
+                .ReasoningEfforts.ToArray());
+
+        var wrongConnection = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.PublishHostedModelReasoningCatalogAsync(
+                owner,
+                project.ProjectId,
+                new("models-r7", "hosted-reasoning", Guid.NewGuid(), ["medium"], DateTimeOffset.UtcNow),
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, wrongConnection.StatusCode);
+
+        var viewerMembership = await SeedMembershipAsync(authorityStore, "hosted-reasoning-viewer-" + suffix, tenantId);
+        await authorityStore.AssignRoleAsync(
+            viewerMembership, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorityRole.Viewer, "fixture");
+        var viewer = await ResolveCallerAsync(
+            db, "hosted-reasoning-viewer-" + suffix, tenantId, ["api.read"]);
+        var viewerChoices = await service.GetProjectConfigurationChoicesAsync(
+            viewer, project.ProjectId, CancellationToken.None);
+        var viewerChoice = Assert.Single(viewerChoices.Models.Choices, item => item.Reference == "hosted-reasoning");
+        Assert.Equal("verifiedAtRunStart", viewerChoice.ReasoningEffortSource);
+        Assert.Empty(viewerChoice.ReasoningEfforts);
+
+        var stored = await db.HostedModelReasoningCatalog.SingleAsync(item =>
+            item.TenantId == tenantId &&
+            item.ProjectId == project.ProjectId &&
+            item.ActorId == actorId &&
+            item.ConnectionId == connectionId &&
+            item.BindingsRevision == "models-r7" &&
+            item.Reference == "hosted-reasoning");
+        stored.VerifiedAt = DateTimeOffset.UtcNow.AddHours(-25);
+        await db.SaveChangesAsync();
+        var expiredChoices = await service.GetProjectConfigurationChoicesAsync(
+            owner, project.ProjectId, CancellationToken.None);
+        var expired = Assert.Single(expiredChoices.Models.Choices, item => item.Reference == "hosted-reasoning");
+        Assert.Equal("verifiedAtRunStart", expired.ReasoningEffortSource);
+        Assert.Empty(expired.ReasoningEfforts);
+    }
+
+    [Fact]
     public async Task RejectsNewProjectProviderOverridesAndPreservesButIgnoresLegacyValues()
     {
         await using var db = CreateDbContext();

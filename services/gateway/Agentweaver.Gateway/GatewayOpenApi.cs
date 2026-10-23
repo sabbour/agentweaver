@@ -972,12 +972,12 @@ else if (route.OperationId is
         ["ProjectModelChoice"] = Obj(["reference", "sourceMode", "reasoningEffortSource", "reasoningEfforts"],
             ("reference", Str()),
             ("sourceMode", Enum("hostedCopilot", "byok")),
-            ("reasoningEffortSource", Enum("modelBinding", "verifiedAtRunStart")),
+            ("reasoningEffortSource", Enum("modelBinding", "hostedModelCatalog", "verifiedAtRunStart")),
             ("reasoningEfforts", new
             {
                 type = "array",
                 items = Enum("low", "medium", "high", "xhigh"),
-                description = "Reasoning efforts configured for a BYOK binding. Empty for hosted references, whose reasoning levels are verified when a run starts.",
+                description = "Reasoning efforts configured for BYOK or verified from AgentHost's live hosted catalog. Hosted references without a matching publication use run-start verification and list no cached levels.",
             })),
         ["ProjectModelReferenceChoice"] = Obj(["reference", "sources"],
             ("reference", Str()),

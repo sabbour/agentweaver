@@ -72,7 +72,8 @@ public sealed class RuntimeCopilotSessionTests
         await using var external = new ControlledCopilotRuntime
         {
             ExpectedReasoningEffort = "low",
-            EffectiveReasoningEffort = "low"
+            EffectiveReasoningEffort = "low",
+            SupportedReasoningEfforts = ["high", "low"]
         };
         var models = new RuntimeModelBindingsResolver("model-bindings-v1",
             new Dictionary<string, RuntimeModelBinding>
@@ -97,6 +98,8 @@ public sealed class RuntimeCopilotSessionTests
             _ => Task.CompletedTask, timeout.Token);
 
         Assert.Equal("low", session.Facts.ReasoningEffort);
+        Assert.True(session.VerifiedHostedReasoningEfforts.HasValue);
+        Assert.Equal(["low", "high"], session.VerifiedHostedReasoningEfforts.Value.ToArray());
         Assert.Equal(registration.Binding.ModelBindingPin, session.Facts.ModelBindingPin);
         Assert.Equal(registration.Binding.ModelBindingPin, session.Facts.ResolvedModelBindingPin);
         var create = Assert.Single(external.Requests, request => request.Method == "session.create");
