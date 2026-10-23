@@ -14,6 +14,8 @@ import type {
   CreateManualProjectCastingProposalRequest,
   CreateScenarioProjectCastingProposalRequest,
   CreateProjectCastingProposalRequest,
+  CastingGenerationAcceptedResponse,
+  CastingGenerationRequest,
   ImportProjectCastingTransferRequest,
   PlatformComponentReport,
   ProjectCastingUniverseList,
@@ -2055,6 +2057,38 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'casting', 'proposals', mode)}`,
       { method: 'POST', body: JSON.stringify(body) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Starts Formulate and stores its result on a pending proposal for review. */
+  formulateCastingProposal(
+    token: string,
+    projectId: string,
+    request: CastingGenerationRequest,
+    tenantSelector?: string | null,
+  ): Promise<CastingGenerationAcceptedResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', 'formulate')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Starts Analyze and stores its result on a pending proposal for review. */
+  analyzeCastingProposal(
+    token: string,
+    projectId: string,
+    request: CastingGenerationRequest,
+    tenantSelector?: string | null,
+  ): Promise<CastingGenerationAcceptedResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', 'analyze')}`,
+      { method: 'POST', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
     );

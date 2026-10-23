@@ -12,13 +12,20 @@ const api = vi.hoisted(() => ({
   listCatalogRoles: vi.fn(),
   getProjectConfiguration: vi.fn(),
   getCastingProposal: vi.fn(),
+  createProjectRun: vi.fn(),
+  formulateCastingProposal: vi.fn(),
+  analyzeCastingProposal: vi.fn(),
   createCastingProposal: vi.fn(),
   createCastingDraftProposal: vi.fn(),
   updateCastingProposal: vi.fn(),
   transitionCastingProposal: vi.fn(),
 }));
 // One stable apiCall, like the real provider, so effects that depend on it run once.
-const auth = vi.hoisted(() => ({ apiCall: (operation: (token: string, tenant: string) => unknown) => operation('token', 'tenant-1') }));
+const auth = vi.hoisted(() => ({
+  apiCall: (operation: (token: string, tenant: string) => unknown) => operation('token', 'tenant-1'),
+  ensureSession: vi.fn(async () => true),
+  authorize: vi.fn(async () => {}),
+}));
 vi.mock('./AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('./api', async (importActual) => ({ ...(await importActual<typeof import('./api')>()), gatewayClient: api }));
 vi.mock('./pageParts', async (importActual) => ({
@@ -43,6 +50,7 @@ function proposal(overrides: Partial<ProjectCastingProposal> = {}): ProjectCasti
     proposalId: 'pr-1', projectId: 'p1', baseConfigurationRevision: 5, draftRevision: 1, state: 'pending',
     draft: config([['lead', 'Lead'], ['tester', 'Tester']]),
     confirmedConfigurationRevision: null, result: null, transferProvenance: null,
+    generation: null,
     createdByActorId: 'user-1', createdAt: '2026-01-01T00:00:00Z', updatedByActorId: 'user-1', updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
   } as ProjectCastingProposal;
@@ -67,6 +75,8 @@ function renderPage(path = '/projects/p1/team/cast') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  auth.ensureSession.mockReset().mockResolvedValue(true);
+  auth.authorize.mockReset().mockResolvedValue(undefined);
   api.listCastingTemplates.mockResolvedValue([
     { id: 'small', title: 'Small team', description: 'A lead and a tester.', roleIds: ['lead', 'tester'] },
   ]);
@@ -78,11 +88,95 @@ beforeEach(() => {
     { id: 'coordinator', title: 'Coordinator', summary: '', responsibilities: [], boundaries: [] },
   ]);
   api.getProjectConfiguration.mockResolvedValue({ projectId: 'p1', revision: 5, configuration: config([['old', 'Old']]), updatedByActorId: 'u', createdAt: '' });
+  api.createProjectRun.mockResolvedValue({ runId: 'run-1', rootSessionId: 'session-1', state: 'awaiting_binding' });
+  api.formulateCastingProposal.mockResolvedValue({
+    requestId: 'generation-1', proposalId: 'proposal-generated', runId: 'run-1', mode: 'formulate', state: 'completed',
+  });
+  api.analyzeCastingProposal.mockResolvedValue({
+    requestId: 'generation-2', proposalId: 'proposal-analyzed', runId: 'run-1', mode: 'analyze', state: 'completed',
+  });
+  api.getCastingProposal.mockResolvedValue(proposal({
+    proposalId: 'proposal-generated',
+    generation: {
+      requestId: 'generation-1', mode: 'formulate', state: 'completed', failureCode: null,
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    },
+  }));
   api.createCastingProposal.mockResolvedValue(proposal());
   api.transitionCastingProposal.mockResolvedValue(proposal({ state: 'confirmed' }));
 });
 
 describe('CastTeamPage', () => {
+  it('formulates a proposal through a saved run and reviews output before confirmation', async () => {
+    api.getCastingProposal.mockResolvedValue(proposal({
+      proposalId: 'proposal-generated',
+      draft: config([['lead', 'Lead'], ['tester', 'Tester']]),
+      generation: {
+        requestId: 'generation-1', mode: 'formulate', state: 'completed', failureCode: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      },
+    }));
+    renderPage();
+    fireEvent.click(await screen.findByRole('radio', { name: 'Formulate' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Team brief' }), {
+      target: { value: 'Build a small product team.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Formulate' }));
+
+    await screen.findByText('Generated draft is ready. Review every member before confirming.');
+    expect(api.createProjectRun).toHaveBeenCalledWith(
+      'token',
+      'p1',
+      expect.objectContaining({
+        expectedProjectConfigRevision: 5,
+        firstMessage: expect.stringContaining('Build a small product team.'),
+      }),
+      expect.any(String),
+      'tenant-1',
+    );
+    const createRequest = api.createProjectRun.mock.calls[0][2];
+    expect(api.formulateCastingProposal).toHaveBeenCalledWith(
+      'token',
+      'p1',
+      expect.objectContaining({
+        expectedConfigurationRevision: 5,
+        runId: 'run-1',
+        sessionId: 'session-1',
+        prompt: createRequest.firstMessage,
+        castingUniverse: null,
+      }),
+      'tenant-1',
+    );
+    expect(auth.ensureSession).toHaveBeenCalledWith({ projectId: 'p1', runId: 'run-1' });
+    expect(within(screen.getByLabelText('Proposed members')).getByText('Tester')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeTruthy();
+  });
+
+  it('analyzes the current project context in a separate mode', async () => {
+    api.getCastingProposal.mockResolvedValue(proposal({
+      proposalId: 'proposal-analyzed',
+      generation: {
+        requestId: 'generation-2', mode: 'analyze', state: 'completed', failureCode: null,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      },
+    }));
+    renderPage();
+    fireEvent.click(await screen.findByRole('radio', { name: 'Analyze' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze' }));
+
+    await screen.findByText('Generated draft is ready. Review every member before confirming.');
+    const createRequest = api.createProjectRun.mock.calls[0][2];
+    expect(createRequest.firstMessage).toContain('Analyze this project and suggest a team.');
+    expect(createRequest.firstMessage).toContain('"agentId":"old"');
+    expect(api.analyzeCastingProposal).toHaveBeenCalledWith(
+      'token',
+      'p1',
+      expect.objectContaining({ runId: 'run-1', sessionId: 'session-1', prompt: createRequest.firstMessage }),
+      'tenant-1',
+    );
+    expect(api.formulateCastingProposal).not.toHaveBeenCalled();
+  });
+
   it('casts from a template, reviews, and confirms', async () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: /Small team/ }));

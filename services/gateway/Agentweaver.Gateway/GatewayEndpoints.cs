@@ -277,16 +277,30 @@ public static class GatewayEndpoints
             }
             else
             {
-                endpoint = route.OperationId == "getAuthorizationContext"
-                    ? endpoints.MapGet(
+                endpoint = route.OperationId switch
+                {
+                    "formulateProjectCastingProposal" => endpoints.MapPost(
+                        route.PublicPath,
+                        (FormulateProjectCastingProposalRequest request, HttpContext context,
+                            GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                            owner.CreateCastingGenerationProposalAsync(
+                                context, route, request, GatewayCastingGenerationMode.Formulate, cancellationToken)),
+                    "analyzeProjectCastingProposal" => endpoints.MapPost(
+                        route.PublicPath,
+                        (AnalyzeProjectCastingProposalRequest request, HttpContext context,
+                            GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                            owner.CreateCastingGenerationProposalAsync(
+                                context, route, request, GatewayCastingGenerationMode.Analyze, cancellationToken)),
+                    "getAuthorizationContext" => endpoints.MapGet(
                         route.PublicPath,
                         (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
-                            owner.ProxyAuthorizationContextAsync(context, route, cancellationToken))
-                    : endpoints.MapMethods(
+                            owner.ProxyAuthorizationContextAsync(context, route, cancellationToken)),
+                    _ => endpoints.MapMethods(
                         route.PublicPath,
                         [route.Method],
                         (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
-                            owner.ProxyAsync(context, route, cancellationToken));
+                            owner.ProxyAsync(context, route, cancellationToken)),
+                };
             }
 
             if (route.OperationId == "importKnowledgeRecords")

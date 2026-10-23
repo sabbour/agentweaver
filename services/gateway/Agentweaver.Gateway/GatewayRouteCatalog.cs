@@ -154,6 +154,17 @@ public static class GatewayRouteCatalog
             "createScenarioProjectCastingProposal", "Stage casting from a scenario", body: true, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, casting + "/proposals/manual", "/api" + casting + "/proposals/manual",
             "createManualProjectCastingProposal", "Stage casting from selected roles", body: true, forwardTenantSelector: true);
+        const long castingGenerationMaximumRequestBytes = 64 * 1024;
+        Add("POST", GatewayOwner.Projects, casting + "/proposals/formulate",
+            "/api" + casting + "/generation-requests",
+            "formulateProjectCastingProposal", "Formulate a casting proposal from a brief",
+            body: true, acceptsOnly: true, maximumRequestBodyBytes: castingGenerationMaximumRequestBytes,
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, casting + "/proposals/analyze",
+            "/api" + casting + "/generation-requests",
+            "analyzeProjectCastingProposal", "Analyze project context for a casting proposal",
+            body: true, acceptsOnly: true, maximumRequestBodyBytes: castingGenerationMaximumRequestBytes,
+            forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, casting + "/proposals", "/api" + casting + "/proposals",
             "listProjectCastingProposals", "List casting proposals", ["limit"], forwardTenantSelector: true);
         var proposal = casting + "/proposals/{proposalId:guid}";

@@ -38,6 +38,8 @@ internal static partial class GatewayOpenApi
             ["createProjectCastingProposal"] = C("CreateProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
             ["createScenarioProjectCastingProposal"] = C("CreateScenarioProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
             ["createManualProjectCastingProposal"] = C("CreateManualProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
+            ["formulateProjectCastingProposal"] = C("FormulateProjectCastingProposalRequest", "CastingGenerationAcceptedResponse", "202"),
+            ["analyzeProjectCastingProposal"] = C("AnalyzeProjectCastingProposalRequest", "CastingGenerationAcceptedResponse", "202"),
             ["listProjectCastingProposals"] = C(null, "ProjectCastingProposalList", "200"),
             ["getProjectCastingProposal"] = C(null, "ProjectCastingProposal", "200"),
             ["updateProjectCastingProposal"] = C("UpdateProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
@@ -346,6 +348,8 @@ internal static partial class GatewayOpenApi
             // Casting writes require the owner's current WriteProjects authority.
             if (route.HasJsonBody)
                 responses["403"] = ProblemResponse("The owner denied current WriteProjects authority.");
+            if (route.OperationId is "formulateProjectCastingProposal" or "analyzeProjectCastingProposal")
+                responses["413"] = ProblemResponse("The request exceeds 64 KiB.");
             if (route.OperationId == "importProjectCasting")
             {
                 responses["413"] = ProblemResponse("The casting import request exceeds 1 MiB.");
@@ -1001,6 +1005,13 @@ else if (route.OperationId is
             ("expectedConfigurationRevision", Int()), ("templateId", Str()), ("universe", NullableStr())),
         ["CreateManualProjectCastingProposalRequest"] = StrictObj(["expectedConfigurationRevision", "roleIds"],
             ("expectedConfigurationRevision", Int()), ("roleIds", Arr(Str())), ("universe", NullableStr())),
+        ["FormulateProjectCastingProposalRequest"] = CastingGenerationRequestSchema(),
+        ["AnalyzeProjectCastingProposalRequest"] = CastingGenerationRequestSchema(),
+        ["CastingGenerationAcceptedResponse"] = StrictObj(
+            ["requestId", "proposalId", "runId", "mode", "state"],
+            ("requestId", Uuid()), ("proposalId", Uuid()), ("runId", new { type = "string", minLength = 1, maxLength = 256 }),
+            ("mode", Enum("formulate", "analyze")),
+            ("state", Enum("pending", "completed", "failed", "stale", "cancelled"))),
         ["UpdateProjectCastingProposalRequest"] = StrictObj(["expectedDraftRevision", "draft"],
             ("expectedDraftRevision", Int()), ("draft", Ref("ProjectConfiguration"))),
         ["TransitionProjectCastingProposalRequest"] = StrictObj(["expectedDraftRevision"], ("expectedDraftRevision", Int())),
@@ -1009,12 +1020,18 @@ else if (route.OperationId is
         ["ProjectCastingProposal"] = StrictObj(
             ["proposalId", "projectId", "baseConfigurationRevision", "draftRevision", "state", "draft",
                 "confirmedConfigurationRevision", "result", "transferProvenance", "createdByActorId", "createdAt",
-                "updatedByActorId", "updatedAt"],
+                "updatedByActorId", "updatedAt", "generation"],
             ("proposalId", Uuid()), ("projectId", Str()), ("baseConfigurationRevision", Int()),
             ("draftRevision", Int()), ("state", Enum("pending", "confirmed", "rejected")),
             ("draft", Ref("ProjectConfiguration")), ("confirmedConfigurationRevision", Nullable(Int())),
             ("result", NullableRef("ProjectConfiguration")), ("transferProvenance", NullableRef("ProjectCastingTransferProvenance")),
-            ("createdByActorId", Str()), ("createdAt", Date()), ("updatedByActorId", Str()), ("updatedAt", Date())),
+            ("createdByActorId", Str()), ("createdAt", Date()), ("updatedByActorId", Str()), ("updatedAt", Date()),
+            ("generation", NullableRef("ProjectCastingGenerationStatus"))),
+        ["ProjectCastingGenerationStatus"] = StrictObj(
+            ["requestId", "mode", "state", "failureCode", "createdAt", "updatedAt"],
+            ("requestId", Uuid()), ("mode", Enum("formulate", "analyze")),
+            ("state", Enum("pending", "completed", "failed", "stale", "cancelled")),
+            ("failureCode", NullableStr()), ("createdAt", Date()), ("updatedAt", Date())),
         ["ProjectCastingProposalList"] = Arr(Ref("ProjectCastingProposal")),
         ["ProjectCastingTransfer"] = StrictObj(
             ["formatVersion", "sourceProjectId", "sourceConfigurationRevision", "agentCharters", "casting", "contentDigest"],
@@ -2015,6 +2032,27 @@ else if (route.OperationId is
             ("identityBound", Bool()), ("registryServerName", NullableStr()), ("registryExactVersion", NullableStr()),
             ("discoveryRevision", NullableInt()), ("catalogSha256", NullableStr()), ("toolCount", Int())),
     };
+
+    private static object CastingGenerationRequestSchema() =>
+        StrictObj(
+            ["expectedConfigurationRevision", "runId", "sessionId", "idempotencyKey", "prompt", "castingUniverse"],
+            ("expectedConfigurationRevision", Int()),
+            ("runId", new { type = "string", minLength = 1, maxLength = 256 }),
+            ("sessionId", new { type = "string", minLength = 1, maxLength = 256 }),
+            ("idempotencyKey", new
+            {
+                type = "string",
+                minLength = 1,
+                maxLength = 128,
+                pattern = "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            }),
+            ("prompt", new
+            {
+                type = "string",
+                minLength = 1,
+                maxLength = AddressedMessageValidation.MaximumTextLength,
+            }),
+            ("castingUniverse", NullableStr()));
 
     private static object Obj(
         string[] required,

@@ -40,7 +40,10 @@ public sealed partial class ProjectsConfigPostgresTests
         var request = await service.StartCastingGenerationAsync(
             owner,
             project.ProjectId,
-            StartRequest(initial.Revision, "formulate-" + suffix, "casting-run-" + suffix),
+            StartRequest(initial.Revision, "formulate-" + suffix, "casting-run-" + suffix) with
+            {
+                CastingUniverse = "The Matrix",
+            },
             CancellationToken.None);
         Assert.Equal(ProjectCastingGenerationRequestState.Pending, request.State);
         var pendingProposal = await service.GetCastingProposalAsync(
@@ -54,7 +57,7 @@ public sealed partial class ProjectsConfigPostgresTests
             owner,
             project.ProjectId,
             request.RequestId,
-            GeneratedResult(request.RunId, "generated"),
+            GeneratedResult(request.RunId, "generated") with { CastingUniverse = "The Matrix" },
             CancellationToken.None);
         Assert.Equal(ProjectCastingGenerationRequestState.Completed, completed.State);
         var proposal = await service.GetCastingProposalAsync(
@@ -63,6 +66,7 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(ProjectCastingGenerationRequestState.Completed, proposal.Generation?.State);
         Assert.Equal("preserved-model", proposal.Draft.ModelSelection?.Reference);
         Assert.Equal("generated", Assert.Single(proposal.Draft.Casting).AgentId);
+        Assert.Equal("The Matrix", proposal.Draft.CastingUniverse);
 
         var live = await service.GetProjectConfigurationAsync(
             owner, project.ProjectId, null, CancellationToken.None);

@@ -582,10 +582,40 @@ export interface ProjectCastingProposal {
   confirmedConfigurationRevision: number | null;
   result: ProjectConfiguration | null;
   transferProvenance: ProjectCastingTransferProvenance | null;
+  generation: ProjectCastingGenerationStatus | null;
   createdByActorId: string;
   createdAt: string;
   updatedByActorId: string;
   updatedAt: string;
+}
+
+/** Run-bound status attached to a generated proposal while it is reviewed. */
+export interface ProjectCastingGenerationStatus {
+  requestId: string;
+  mode: 'formulate' | 'analyze';
+  state: 'pending' | 'completed' | 'failed' | 'stale' | 'cancelled';
+  failureCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Accepted-run identity and saved first message for proposal generation. */
+export interface CastingGenerationRequest {
+  expectedConfigurationRevision: number;
+  runId: string;
+  sessionId: string;
+  idempotencyKey: string;
+  prompt: string;
+  castingUniverse: string | null;
+}
+
+/** Receipt for a proposal-generation request; read the proposal to review its result. */
+export interface CastingGenerationAcceptedResponse {
+  requestId: string;
+  proposalId: string;
+  runId: string;
+  mode: 'formulate' | 'analyze';
+  state: ProjectCastingGenerationStatus['state'];
 }
 
 /** Complete configuration staged for review without applying it. */

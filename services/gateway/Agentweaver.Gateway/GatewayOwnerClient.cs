@@ -1,8 +1,10 @@
 using System.Buffers;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
@@ -38,6 +40,14 @@ public sealed class GatewayOwnerClient(
         MaxDepth = 16,
     };
     private static readonly JsonSerializerOptions AuthorizationContextJsonOptions =
+        new(JsonSerializerDefaults.Web)
+        {
+            MaxDepth = 16,
+            PropertyNameCaseInsensitive = false,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },
+        };
+    private static readonly JsonSerializerOptions StrictOwnerJsonOptions =
         new(JsonSerializerDefaults.Web)
         {
             MaxDepth = 16,
@@ -163,6 +173,335 @@ public sealed class GatewayOwnerClient(
             await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
                 .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Stages a proposal, executes its accepted run, and stores only validated output.</summary>
+    internal async Task CreateCastingGenerationProposalAsync<TRequest>(
+        HttpContext context,
+        GatewayRoute route,
+        TRequest requestBody,
+        GatewayCastingGenerationMode mode,
+        CancellationToken cancellationToken)
+        where TRequest : IProjectCastingGenerationRequest
+    {
+        try
+        {
+            if (context.Request.Query.Count != 0 ||
+                context.Request.Headers.ContainsKey("Idempotency-Key"))
+            {
+                await WriteProblemAsync(
+                    context, "casting_generation_request_invalid", StatusCodes.Status400BadRequest)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            CastingGenerationGatewayContract.Validate(requestBody);
+            var projectId = context.Request.RouteValues["projectId"]?.ToString()
+                ?? throw OwnerContractFailure("casting_generation_request_invalid");
+            var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
+            using var timeout = CreateOwnerTimeout(cancellationToken);
+            var modeName = mode.ToString().ToLowerInvariant();
+            // Bind every retry to the same run, prompt, and universe.
+            var requestDigest = CreateCastingGenerationRequestDigest(requestBody, modeName);
+            var startPath = ExpandOwnerPath(route.OwnerPath, context);
+            var generation = await PostCastingGenerationOwnerAsync<
+                ProjectsCastingGenerationStartRequest, ProjectsCastingGenerationRequest>(
+                GatewayOwner.Projects,
+                startPath,
+                bearer,
+                context,
+                new ProjectsCastingGenerationStartRequest(
+                    requestBody.ExpectedConfigurationRevision,
+                    modeName,
+                    requestBody.RunId,
+                    requestBody.IdempotencyKey,
+                    requestDigest,
+                    requestBody.CastingUniverse),
+                timeout.Token).ConfigureAwait(false);
+            RequireCastingGenerationRequest(
+                generation, projectId, requestBody, modeName);
+
+            if (generation.State == "pending")
+            {
+                // Finish the bounded accepted-run turn before returning; polling reads the proposal owner state.
+                var orchestratorPath =
+                    $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(requestBody.RunId)}" +
+                    $"/coordination/sessions/{Uri.EscapeDataString(requestBody.SessionId)}/casting-generation";
+                try
+                {
+                    var execution = await PostCastingGenerationOwnerAsync<
+                        OrchestratorCastingGenerationRequest, OrchestratorCastingGenerationResponse>(
+                        GatewayOwner.Orchestrator,
+                        orchestratorPath,
+                        bearer,
+                        context,
+                        new OrchestratorCastingGenerationRequest(generation.RequestId, requestBody.Prompt),
+                        timeout.Token).ConfigureAwait(false);
+                    if (execution.RequestId != generation.RequestId ||
+                        execution.RunId != requestBody.RunId ||
+                        string.IsNullOrWhiteSpace(execution.Output) ||
+                        execution.Output.Length > AddressedMessageValidation.MaximumTextLength)
+                        throw OwnerContractFailure("casting_generation_result_invalid");
+
+                    if (!TryReadGeneratedCasting(execution.Output, out var generated))
+                    {
+                        generation = await FailCastingGenerationAsync(
+                            projectId,
+                            generation,
+                            requestBody.RunId,
+                            "agenthost_output_invalid",
+                            bearer,
+                            context,
+                            timeout.Token).ConfigureAwait(false);
+                        RequireCastingGenerationRequest(generation, projectId, requestBody, modeName);
+                        RequireCastingGenerationTerminalState(generation, "failed");
+                    }
+                    else
+                    {
+                        try
+                        {
+                            generation = await PostCastingGenerationOwnerAsync<
+                                ProjectsCastingGenerationCompleteRequest, ProjectsCastingGenerationRequest>(
+                                GatewayOwner.Projects,
+                                $"{startPath}/{generation.RequestId:D}/complete",
+                                bearer,
+                                context,
+                                new ProjectsCastingGenerationCompleteRequest(
+                                    requestBody.RunId,
+                                    generated.AgentCharters,
+                                    generated.Casting,
+                                    requestBody.CastingUniverse),
+                                timeout.Token).ConfigureAwait(false);
+                            RequireCastingGenerationRequest(generation, projectId, requestBody, modeName);
+                            RequireCastingGenerationTerminalState(generation, "completed", "stale", "cancelled");
+                        }
+                        catch (GatewayOwnerFailureException exception)
+                            when (exception.StatusCode is StatusCodes.Status400BadRequest or StatusCodes.Status422UnprocessableEntity)
+                        {
+                            generation = await FailCastingGenerationAsync(
+                                projectId,
+                                generation,
+                                requestBody.RunId,
+                                "agenthost_output_rejected",
+                                bearer,
+                                context,
+                                timeout.Token).ConfigureAwait(false);
+                            RequireCastingGenerationRequest(generation, projectId, requestBody, modeName);
+                            RequireCastingGenerationTerminalState(generation, "failed");
+                        }
+                    }
+                }
+                catch (GatewayOwnerFailureException exception)
+                    when (exception.StatusCode is StatusCodes.Status400BadRequest or
+                        StatusCodes.Status404NotFound or StatusCodes.Status409Conflict)
+                {
+                    generation = await FailCastingGenerationAsync(
+                        projectId,
+                        generation,
+                        requestBody.RunId,
+                        "accepted_run_unavailable",
+                        bearer,
+                        context,
+                        timeout.Token).ConfigureAwait(false);
+                    RequireCastingGenerationRequest(generation, projectId, requestBody, modeName);
+                    RequireCastingGenerationTerminalState(generation, "failed");
+                }
+            }
+
+            await WriteCastingGenerationAcceptedAsync(
+                context, generation, modeName, timeout.Token).ConfigureAwait(false);
+        }
+        catch (GatewayOwnerFailureException exception)
+        {
+            await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
+        }
+        catch (ArgumentException)
+        {
+            await WriteProblemAsync(
+                context, "casting_generation_request_invalid", StatusCodes.Status400BadRequest)
+                .ConfigureAwait(false);
+        }
+        catch (JsonException)
+        {
+            await WriteProblemAsync(
+                context, "owner_contract_invalid", StatusCodes.Status502BadGateway).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await WriteProblemAsync(context, "owner_timeout", StatusCodes.Status504GatewayTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async Task<TResponse> PostCastingGenerationOwnerAsync<TRequest, TResponse>(
+        GatewayOwner owner,
+        string path,
+        AuthenticationHeaderValue bearer,
+        HttpContext context,
+        TRequest body,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, BuildOwnerUri(owner, path));
+        request.Headers.Authorization = bearer;
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        CopyTenantSelector(context, request);
+        request.Content = new ByteArrayContent(
+            JsonSerializer.SerializeToUtf8Bytes(body, StrictOwnerJsonOptions));
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        using var response = await SendAsync(owner, request, cancellationToken).ConfigureAwait(false);
+        if (IsRedirect(response.StatusCode))
+            throw OwnerContractFailure("owner_redirect_rejected");
+        if (response.StatusCode != HttpStatusCode.OK)
+            throw await ToOwnerFailureAsync(response, cancellationToken).ConfigureAwait(false);
+        if (response.Headers.CacheControl?.NoStore != true ||
+            response.Content.Headers.ContentType?.MediaType is not { } mediaType ||
+            !(mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+              mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase)))
+            throw OwnerContractFailure("owner_contract_invalid");
+
+        var payload = await ReadBoundedAsync(
+            response.Content, MaximumProxyResponseBytes, cancellationToken).ConfigureAwait(false);
+        return JsonSerializer.Deserialize<TResponse>(payload, StrictOwnerJsonOptions)
+            ?? throw OwnerContractFailure("owner_contract_invalid");
+    }
+
+    private async Task<ProjectsCastingGenerationRequest> FailCastingGenerationAsync(
+        string projectId,
+        ProjectsCastingGenerationRequest generation,
+        string runId,
+        string failureCode,
+        AuthenticationHeaderValue bearer,
+        HttpContext context,
+        CancellationToken cancellationToken) =>
+        await PostCastingGenerationOwnerAsync<FailCastingGenerationRequest, ProjectsCastingGenerationRequest>(
+            GatewayOwner.Projects,
+            $"/api/projects/{Uri.EscapeDataString(projectId)}/casting/generation-requests/{generation.RequestId:D}/fail",
+            bearer,
+            context,
+            new FailCastingGenerationRequest(runId, failureCode),
+            cancellationToken).ConfigureAwait(false);
+
+    private static string CreateCastingGenerationRequestDigest(
+        IProjectCastingGenerationRequest request,
+        string mode) =>
+        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            mode,
+            request.ExpectedConfigurationRevision,
+            request.RunId,
+            request.SessionId,
+            request.Prompt,
+            request.CastingUniverse,
+        }, JsonOptions))).ToLowerInvariant();
+
+    private static void RequireCastingGenerationRequest(
+        ProjectsCastingGenerationRequest generation,
+        string projectId,
+        IProjectCastingGenerationRequest request,
+        string mode)
+    {
+        if (generation.RequestId == Guid.Empty ||
+            generation.ProposalId == Guid.Empty ||
+            generation.ProjectId != projectId ||
+            generation.BaseConfigurationRevision != request.ExpectedConfigurationRevision ||
+            generation.RunId != request.RunId ||
+            generation.Mode != mode ||
+            !IsKnownCastingGenerationState(generation.State))
+            throw OwnerContractFailure("owner_contract_invalid");
+    }
+
+    private static bool IsKnownCastingGenerationState(string state) =>
+        state is "pending" or "completed" or "failed" or "stale" or "cancelled";
+
+    private static void RequireCastingGenerationTerminalState(
+        ProjectsCastingGenerationRequest generation,
+        params string[] states)
+    {
+        if (!states.Contains(generation.State, StringComparer.Ordinal))
+            throw OwnerContractFailure("owner_contract_invalid");
+    }
+
+    private static bool TryReadGeneratedCasting(
+        string json,
+        out GeneratedCastingProposal output)
+    {
+        output = new(
+            ImmutableArray<CastingGenerationAgentCharter>.Empty,
+            ImmutableArray<CastingGenerationAgentCast>.Empty);
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<GeneratedCastingProposal>(json, StrictOwnerJsonOptions);
+            if (parsed is null ||
+                parsed.AgentCharters.IsDefault ||
+                parsed.Casting.IsDefault ||
+                parsed.AgentCharters.Length is < 2 or > 10 ||
+                parsed.Casting.Length != parsed.AgentCharters.Length ||
+                parsed.AgentCharters.Any(charter => charter is null) ||
+                parsed.Casting.Any(member => member is null))
+                return false;
+
+            var agentIds = parsed.AgentCharters.Select(charter => charter.AgentId).ToArray();
+            if (agentIds.Any(string.IsNullOrWhiteSpace) ||
+                agentIds.Distinct(StringComparer.Ordinal).Count() != agentIds.Length ||
+                parsed.AgentCharters.Any(charter =>
+                    string.IsNullOrWhiteSpace(charter.Name) ||
+                    string.IsNullOrWhiteSpace(charter.Role) ||
+                    string.IsNullOrWhiteSpace(charter.Charter)) ||
+                parsed.Casting.Any(member =>
+                    string.IsNullOrWhiteSpace(member.AgentId) ||
+                    string.IsNullOrWhiteSpace(member.Role) ||
+                    !agentIds.Contains(member.AgentId, StringComparer.Ordinal)) ||
+                parsed.Casting.Select(member => member.Order).OrderBy(order => order)
+                    .Where((order, index) => order != index).Any())
+                return false;
+
+            output = parsed;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task WriteCastingGenerationAcceptedAsync(
+        HttpContext context,
+        ProjectsCastingGenerationRequest generation,
+        string mode,
+        CancellationToken cancellationToken)
+    {
+        var accepted = new CastingGenerationAcceptedResponse(
+            generation.RequestId,
+            generation.ProposalId,
+            generation.RunId,
+            mode,
+            generation.State);
+        var body = JsonSerializer.SerializeToUtf8Bytes(accepted, JsonOptions);
+        context.Response.StatusCode = StatusCodes.Status202Accepted;
+        context.Response.ContentType = "application/json; charset=utf-8";
+        context.Response.ContentLength = body.Length;
+        context.Response.Headers.CacheControl = "no-store";
+        context.Response.Headers.XContentTypeOptions = "nosniff";
+        await context.Response.Body.WriteAsync(body, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Validates the owner's live authorization context before returning it without caching.</summary>
@@ -1246,6 +1585,66 @@ public sealed class GatewayOwnerClient(
             status = statusCode,
             code,
         }, JsonOptions);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record ProjectsCastingGenerationStartRequest(
+        long ExpectedConfigurationRevision,
+        string Mode,
+        string RunId,
+        string IdempotencyKey,
+        string RequestDigest,
+        string? CastingUniverse);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record ProjectsCastingGenerationCompleteRequest(
+        string RunId,
+        ImmutableArray<CastingGenerationAgentCharter> AgentCharters,
+        ImmutableArray<CastingGenerationAgentCast> Casting,
+        string? CastingUniverse);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record FailCastingGenerationRequest(string RunId, string FailureCode);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record ProjectsCastingGenerationRequest
+    {
+        public required Guid RequestId { get; init; }
+        public required Guid ProposalId { get; init; }
+        public required string ProjectId { get; init; }
+        public required long BaseConfigurationRevision { get; init; }
+        public required string RunId { get; init; }
+        public required string Mode { get; init; }
+        public required string State { get; init; }
+        public string? FailureCode { get; init; }
+        public required DateTimeOffset CreatedAt { get; init; }
+        public required DateTimeOffset UpdatedAt { get; init; }
+    }
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record OrchestratorCastingGenerationRequest(Guid RequestId, string Prompt);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record OrchestratorCastingGenerationResponse
+    {
+        public required Guid RequestId { get; init; }
+        public required string RunId { get; init; }
+        public required string Output { get; init; }
+    }
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record GeneratedCastingProposal(
+        ImmutableArray<CastingGenerationAgentCharter> AgentCharters,
+        ImmutableArray<CastingGenerationAgentCast> Casting);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record CastingGenerationAgentCharter(
+        string AgentId,
+        string Name,
+        string Role,
+        string Charter);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    private sealed record CastingGenerationAgentCast(string AgentId, string Role, int Order);
 
     private sealed record GatewayRunEventPage(JsonElement? Event, string? NextCursor);
 }

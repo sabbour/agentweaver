@@ -89,6 +89,9 @@ public sealed partial class ProjectsConfigService
                 .ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
             var current = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+            _ = ProjectConfigurationValidator.ValidateTransition(
+                current,
+                current with { CastingUniverse = request.CastingUniverse });
             var proposal = await AddCastingProposalAsync(
                 context, caller, project, current, transferProvenance: null, token).ConfigureAwait(false);
             var now = timeProvider.GetUtcNow();
@@ -134,6 +137,7 @@ public sealed partial class ProjectsConfigService
         {
             agentCharters = request.AgentCharters,
             casting = request.Casting,
+            castingUniverse = request.CastingUniverse,
         });
 
         return ExecuteCastingProposalTransactionAsync(async (context, token) =>
@@ -189,6 +193,8 @@ public sealed partial class ProjectsConfigService
                 {
                     AgentCharters = request.AgentCharters,
                     Casting = request.Casting,
+                    // Apply the selected universe with the generated team proposal.
+                    CastingUniverse = request.CastingUniverse,
                 });
             await EnsureCastingProjectNarrowingAsync(context, draft, token).ConfigureAwait(false);
 

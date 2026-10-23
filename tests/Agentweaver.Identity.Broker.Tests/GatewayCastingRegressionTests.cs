@@ -33,6 +33,13 @@ public sealed class GatewayCastingRegressionTests
         ("GET", "/casting/templates", "listProjectCastingTemplates", null, "ProjectCastingTemplateList", "200"),
         ("GET", "/catalog/roles", "listProjectCastingRoles", null, "ProjectCastingRoleList", "200"),
     ];
+    private static readonly (string Suffix, string Operation, string Request, string Mode)[] GenerationRoutes =
+    [
+        ("/projects/{projectId}/casting/proposals/formulate", "formulateProjectCastingProposal",
+            "FormulateProjectCastingProposalRequest", "formulate"),
+        ("/projects/{projectId}/casting/proposals/analyze", "analyzeProjectCastingProposal",
+            "AnalyzeProjectCastingProposalRequest", "analyze"),
+    ];
 
     /// <summary>Every casting operation has an owner-aligned schema, selector, and request bound.</summary>
     [Fact]
@@ -91,6 +98,34 @@ public sealed class GatewayCastingRegressionTests
                     .GetProperty("schema").GetProperty("format").GetString());
         }
 
+        foreach (var expected in GenerationRoutes)
+        {
+            var route = Assert.Single(GatewayRouteCatalog.Routes, item => item.OperationId == expected.Operation);
+            Assert.Equal("POST", route.Method);
+            Assert.Equal("/api/v1" + expected.Suffix, route.PublicPath);
+            Assert.Equal("/api/projects/{projectId}/casting/generation-requests", route.OwnerPath);
+            Assert.Equal(GatewayOwner.Projects, route.Owner);
+            Assert.True(route.ForwardTenantSelector);
+            Assert.False(route.RequiresTenantSelector);
+            Assert.True(route.HasJsonBody);
+            Assert.True(route.AcceptsOnly);
+            Assert.Equal(64 * 1024, route.MaximumRequestBodyBytes);
+            var operation = paths.GetProperty(route.PublicPath).GetProperty("post");
+            Assert.Equal(expected.Operation, operation.GetProperty("operationId").GetString());
+            Assert.Equal("#/components/schemas/" + expected.Request,
+                SchemaReference(operation.GetProperty("requestBody")));
+            Assert.Equal("#/components/schemas/CastingGenerationAcceptedResponse",
+                SchemaReference(operation.GetProperty("responses").GetProperty("202")));
+            Assert.True(operation.GetProperty("responses").TryGetProperty("413", out _));
+            Assert.Equal(64 * 1024L, gateway.GetRequestSizeLimit(route.PublicPath)?.MaxRequestBodySize);
+            var requestSchema = document.RootElement.GetProperty("components").GetProperty("schemas")
+                .GetProperty(expected.Request);
+            Assert.False(requestSchema.GetProperty("additionalProperties").GetBoolean());
+            Assert.Equal(expected.Mode, document.RootElement.GetProperty("components").GetProperty("schemas")
+                .GetProperty("CastingGenerationAcceptedResponse").GetProperty("properties")
+                .GetProperty("mode").GetProperty("enum")[expected.Mode == "formulate" ? 0 : 1].GetString());
+        }
+
         var import = paths.GetProperty("/api/v1/projects/{projectId}/casting/import").GetProperty("post");
         Assert.Equal(1_048_576, import.GetProperty("x-agentweaver-max-request-body-bytes").GetInt32());
         Assert.Equal(1_048_576L, gateway.GetRequestSizeLimit("/api/v1/projects/{projectId}/casting/import")?.MaxRequestBodySize);
@@ -101,6 +136,8 @@ public sealed class GatewayCastingRegressionTests
         {
             "CreateProjectCastingProposalRequest", "CreateScenarioProjectCastingProposalRequest",
             "CreateManualProjectCastingProposalRequest", "UpdateProjectCastingProposalRequest",
+            "FormulateProjectCastingProposalRequest", "AnalyzeProjectCastingProposalRequest",
+            "CastingGenerationAcceptedResponse", "ProjectCastingGenerationStatus",
             "TransitionProjectCastingProposalRequest", "ImportProjectCastingTransferRequest",
             "ProjectCastingProposal", "ProjectCastingTransfer", "ProjectCastingTransferProvenance",
             "ProjectCastingUniverseList", "ProjectCastingTemplateDefinition", "ProjectCastingRoleDefinition",

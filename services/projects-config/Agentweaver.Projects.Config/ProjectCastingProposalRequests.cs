@@ -53,6 +53,7 @@ public sealed record StartProjectCastingGenerationRequest
     public required string RunId { get; init; }
     public required string IdempotencyKey { get; init; }
     public required string RequestDigest { get; init; }
+    public string? CastingUniverse { get; init; }
 }
 
 /// <summary>Completes a generation request with only the proposed charter and cast data.</summary>
@@ -62,6 +63,7 @@ public sealed record CompleteProjectCastingGenerationRequest
     public required string RunId { get; init; }
     public required ImmutableArray<ProjectAgentCharter> AgentCharters { get; init; }
     public required ImmutableArray<ProjectAgentCast> Casting { get; init; }
+    public string? CastingUniverse { get; init; }
 }
 
 /// <summary>Records a safe failure code for a generation run without persisting its raw exception or output.</summary>

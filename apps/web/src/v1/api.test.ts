@@ -24,6 +24,43 @@ describe('Gateway API client', () => {
       .rejects.toMatchObject({ status: 403, code: 'forbidden' });
   });
 
+  it('starts Formulate and Analyze through separate accepted proposal routes', async () => {
+    const response = {
+      requestId: 'request-1',
+      proposalId: 'proposal-1',
+      runId: 'run-1',
+      mode: 'formulate',
+      state: 'completed',
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(response), {
+      status: 202, headers: { 'Content-Type': 'application/json' },
+    }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const request = {
+      expectedConfigurationRevision: 4,
+      runId: 'run-1',
+      sessionId: 'session-1',
+      idempotencyKey: 'key-1',
+      prompt: 'Return a casting proposal.',
+      castingUniverse: null,
+    };
+
+    expect(await client.formulateCastingProposal('token', 'p/1', request, 'tenant-1')).toEqual(response);
+    expect(await client.analyzeCastingProposal('token', 'p/1', request, 'tenant-1')).toEqual(response);
+    expect(String(fetcher.mock.calls[0][0])).toBe(
+      'https://gateway.example.test/api/v1/projects/p%2F1/casting/proposals/formulate',
+    );
+    expect(String(fetcher.mock.calls[1][0])).toBe(
+      'https://gateway.example.test/api/v1/projects/p%2F1/casting/proposals/analyze',
+    );
+    for (const [, init] of fetcher.mock.calls) {
+      expect(init?.method).toBe('POST');
+      expect(JSON.parse(String(init?.body))).toEqual(request);
+      expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+      expect(new Headers(init?.headers).get('Idempotency-Key')).toBeNull();
+    }
+  });
+
   it('rejects a manifest belonging to a different capture', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       capture: { captureId: 'other' }, manifest: { files: [] },

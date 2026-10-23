@@ -107,6 +107,91 @@ public static class ProjectConfigEndpoints
 
         var projects = app.MapGroup("/api/projects").RequireAuthorization();
 
+        projects.MapPost("/{projectId}/casting/generation-requests", async (
+            string projectId,
+            StartProjectCastingGenerationRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_casting_generation_request",
+                        "The generation request must not include query parameters.");
+                context.Response.Headers.CacheControl = "no-store";
+                return Results.Ok(await service.StartCastingGenerationAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    request,
+                    cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("StartProjectCastingGeneration");
+
+        projects.MapPost("/{projectId}/casting/generation-requests/{requestId:guid}/complete", async (
+            string projectId,
+            Guid requestId,
+            CompleteProjectCastingGenerationRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_casting_generation_request",
+                        "The generation request must not include query parameters.");
+                context.Response.Headers.CacheControl = "no-store";
+                return Results.Ok(await service.CompleteCastingGenerationAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    requestId,
+                    request,
+                    cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("CompleteProjectCastingGeneration");
+
+        projects.MapPost("/{projectId}/casting/generation-requests/{requestId:guid}/fail", async (
+            string projectId,
+            Guid requestId,
+            FailProjectCastingGenerationRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_casting_generation_request",
+                        "The generation request must not include query parameters.");
+                context.Response.Headers.CacheControl = "no-store";
+                return Results.Ok(await service.FailCastingGenerationAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    requestId,
+                    request,
+                    cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("FailProjectCastingGeneration");
+
         projects.MapPost("/", async (
             CreateProjectRequest request,
             HttpContext context,
