@@ -9,8 +9,9 @@ tunnel, or a one-off command.
 The runner applies these migrations, in this order:
 
 1. Identity Broker EF Core migrations, when you pass a Broker digest.
-2. Orchestrator (Core) migrations 1 to 16 and 18 to 33.
-3. Events & Sessions migrations 1 to 9.
+2. Environment EF Core migrations 1 to 11.
+3. Orchestrator (Core) migrations 1 to 16 and 18 to 33.
+4. Events & Sessions migrations 1 to 9.
 
 The reviewed plan fixes these versions by hash. Core migration 017 is not in the
 plan, while 032 is included with its exact runtime table grants. An image that
@@ -30,9 +31,9 @@ would apply a version outside the plan fails before it connects.
 | Lock | Creates the Lease `p1-db-maintenance-lock`. A second run fails here. | Released at the end of every run. |
 | Migration identity | Uses the existing identity when it and its federated credential match. Otherwise a run signed in as the PostgreSQL Entra administrator deploys `infra/bicep/p1-postgres-migration-identity.bicep`. | The deployment is declarative. |
 | ServiceAccount and egress | Applies `p1-postgres-migration` and its egress policy with server-side apply. | Server-side apply. |
-| Ownership handover | Makes the migration identity the owner of the `orchestrator` and `events_sessions` schemas. | Recorded in the ConfigMap `p1-db-maintenance-state`; later runs skip it. |
+| Ownership handover | Makes the migration identity the owner of the `environment`, `orchestrator`, and `events_sessions` schemas. | Recorded in the ConfigMap `p1-db-maintenance-state`; later runs skip it. |
 | Connectivity probes | A short Job under each migration egress policy resolves the PostgreSQL name, including its private link name, and opens port 5432. It requests at least 25m CPU and 32Mi memory to satisfy the P1 namespace minimum. | Uniquely named and removed. |
-| Migration Jobs | Runs the Broker, Orchestrator, and Events & Sessions Jobs on the pinned digests, one at a time. | Migrators skip applied versions. |
+| Migration Jobs | Runs the Broker, Environment, Orchestrator, and Events & Sessions Jobs on the pinned digests, one at a time. | Migrators skip applied versions. |
 | Grants check | Requires one grants marker per P1 Job whose versions equal the plan exactly. | Read-only. |
 | Services | Rolls mismatched Deployments to the same digests when asked, then waits for every service to be ready. | Matching images are not changed. |
 | Cleanup and receipt | Deletes the run's Jobs and pods, releases the lock, removes temporary files, and writes a receipt. | Runs on success and on failure. |
@@ -50,8 +51,8 @@ You need:
 - An Azure CLI sign-in on the Agentweaver subscription and tenant with
   access to the `agentweaver-aks` cluster.
 - The image digests of a published release for Orchestrator and
-  Events & Sessions, and for the Identity Broker if it has new migrations.
-  Read them from the release's runtime manifest.
+  Environment, Events & Sessions, and for the Identity Broker if it has new
+  migrations. Read them from the release's runtime manifest.
 
 The P1 migration Jobs require images built from source that prints the grants
 marker. Older images fail the grants check after they migrate. Use
@@ -88,8 +89,8 @@ but it also grants access to Secrets and lets the identity run Pods as any
 ServiceAccount in the namespace. It also does not grant access to the Cilium
 network-policy resource that the runner checks. Instead, setup applies a
 Kubernetes Role with only the verbs the runner needs, including access to that
-Cilium resource. Deployment access is limited by name to `orchestrator` and
-`events-and-sessions`. The RoleBinding names the workflow identity's object ID.
+Cilium resource. Deployment access is limited by name to `environment`,
+`orchestrator`, and `events-and-sessions`. The RoleBinding names the workflow identity's object ID.
 This uses both AKS authorization models without creating an Azure custom role
 definition. Setup reads the Role and RoleBinding back to verify their exact
 permissions and identity. It never removes the workflow identity, Azure
@@ -123,6 +124,7 @@ Check preconditions first. This changes nothing:
 
 ```powershell
 npm run db:maintenance -- `
+  --environment-digest sha256:<environment> `
   --orchestrator-digest sha256:<orchestrator> `
   --events-digest sha256:<events-and-sessions> `
   --broker-digest sha256:<identity-broker>
@@ -132,6 +134,7 @@ Then apply, and roll the services to the same digests:
 
 ```powershell
 npm run db:maintenance -- --execute --deploy-apps `
+  --environment-digest sha256:<environment> `
   --orchestrator-digest sha256:<orchestrator> `
   --events-digest sha256:<events-and-sessions> `
   --broker-digest sha256:<identity-broker>
@@ -151,6 +154,7 @@ From the GitHub CLI:
 ```powershell
 gh workflow run v1-db-maintenance.yml --ref v1 `
   -f orchestrator_digest=sha256:<orchestrator> `
+  -f environment_digest=sha256:<environment> `
   -f events_digest=sha256:<events-and-sessions> `
   -f services=deploy `
   -f execute=true
@@ -160,7 +164,7 @@ Only one workflow run executes at a time.
 
 ## Keep services ready
 
-The Orchestrator and EventsAndSessions services check their schema version at
+The Environment, Orchestrator, and EventsAndSessions services check their schema version at
 startup and on `/health/ready`. Each image accepts only a range of schema
 versions. If the database moves outside that range, the service becomes
 unready.
@@ -180,8 +184,8 @@ The options are:
 | Option | Workflow `services` | Behavior |
 | --- | --- | --- |
 | None | `block` | Stops before any change when a service would need a new image to stay ready. |
-| `--deploy-apps` | `deploy` | Sets the given digests in the order above and waits until both services are ready. |
-| `--apps-only` | `apps-only` | Skips every database step. Only rolls the Deployments to the given digests under the lock and waits until they are ready. |
+| `--deploy-apps` | `deploy` | Sets the given digests in the order above and waits until all three services are ready. |
+| `--apps-only` | `apps-only` | Skips every database step. Only rolls the three Deployments to the given digests under the lock and waits until they are ready. |
 
 ### Schema ranges
 
@@ -201,6 +205,11 @@ For every target image and each different running image, the runner:
    version it allows is the highest accepted version. For example, the current
    Orchestrator image accepts 31 to 33. It accepts the complete schema before
    and after migration 033, and migration 032 remains optional.
+
+Environment uses EF Core timestamp migration IDs. The source assigns their
+catalog order to schema versions 1 through 11, and startup rejects pending
+migrations, so the runner treats an Environment image as accepting its exact
+catalog version.
 
 If the runner cannot read the range of a new image, the run stops before any
 change. If the new image does not accept the target schema of the reviewed
@@ -250,6 +259,7 @@ services to the release that matches the schema:
 
 ```powershell
 npm run db:maintenance -- --execute --apps-only `
+  --environment-digest sha256:<environment> `
   --orchestrator-digest sha256:<orchestrator> `
   --events-digest sha256:<events-and-sessions>
 ```

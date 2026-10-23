@@ -19,6 +19,7 @@ public sealed class GatewayCastingRegressionTests
     // Independent expectations catch missing routes as well as accidental owner contract changes.
     private static readonly (string Method, string Suffix, string Operation, string? Request, string Response, string Status)[] Routes =
     [
+        ("GET", "/projects/{projectId}/casting/universes", "listProjectCastingUniverses", null, "ProjectCastingUniverseList", "200"),
         ("POST", "/projects/{projectId}/casting/proposals", "createProjectCastingProposal", "CreateProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
         ("POST", "/projects/{projectId}/casting/proposals/scenario", "createScenarioProjectCastingProposal", "CreateScenarioProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
         ("POST", "/projects/{projectId}/casting/proposals/manual", "createManualProjectCastingProposal", "CreateManualProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
@@ -102,7 +103,7 @@ public sealed class GatewayCastingRegressionTests
             "CreateManualProjectCastingProposalRequest", "UpdateProjectCastingProposalRequest",
             "TransitionProjectCastingProposalRequest", "ImportProjectCastingTransferRequest",
             "ProjectCastingProposal", "ProjectCastingTransfer", "ProjectCastingTransferProvenance",
-            "ProjectCastingTemplateDefinition", "ProjectCastingRoleDefinition",
+            "ProjectCastingUniverseList", "ProjectCastingTemplateDefinition", "ProjectCastingRoleDefinition",
         })
             Assert.False(schemas.GetProperty(name).GetProperty("additionalProperties").GetBoolean());
         Assert.Equal(["pending", "confirmed", "rejected"], schemas.GetProperty("ProjectCastingProposal")
@@ -110,6 +111,12 @@ public sealed class GatewayCastingRegressionTests
             .Select(item => item.GetString()!).ToArray());
         Assert.Equal(1, schemas.GetProperty("ProjectCastingTransfer").GetProperty("properties")
             .GetProperty("formatVersion").GetProperty("const").GetInt32());
+        Assert.Equal("array", schemas.GetProperty("ProjectCastingUniverseList").GetProperty("properties")
+            .GetProperty("universes").GetProperty("type").GetString());
+        var scenarioRequest = schemas.GetProperty("CreateScenarioProjectCastingProposalRequest");
+        Assert.True(scenarioRequest.GetProperty("properties").TryGetProperty("universe", out _));
+        Assert.DoesNotContain("universe", scenarioRequest.GetProperty("required").EnumerateArray()
+            .Select(item => item.GetString()!));
         Assert.Equal(100, paths.GetProperty("/api/v1/projects/{projectId}/casting/proposals").GetProperty("get")
             .GetProperty("parameters").EnumerateArray().Single(item => item.GetProperty("name").GetString() == "limit")
             .GetProperty("schema").GetProperty("maximum").GetInt32());

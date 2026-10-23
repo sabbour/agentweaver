@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Text.Json.Serialization;
 using System.Text;
 
 namespace Agentweaver.Abstractions;
@@ -186,9 +187,7 @@ public sealed record RemoteMcpRegistryServerPin
 /// </summary>
 public sealed record RemoteMcpConnectionConfiguration
 {
-    /// <summary>Creates and hashes a canonical connection configuration.</summary>
-    /// <exception cref="ArgumentException">A URI, display name, identity reference, or OAuth resource is invalid.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The revision or enum value is outside its supported range.</exception>
+    /// <summary>Creates a canonical configuration with the original constructor signature.</summary>
     public RemoteMcpConnectionConfiguration(
         RemoteMcpConnectionReference connection,
         long configurationRevision,
@@ -198,8 +197,40 @@ public sealed record RemoteMcpConnectionConfiguration
         RemoteMcpAuthenticationMode authenticationMode,
         string? identityBindingReference,
         RemoteMcpTransportProfile transportProfile,
-        RemoteMcpRegistryServerPin? registryServer = null,
-        RemoteMcpTransportAdapterOptions? transportAdapterOptions = null)
+        RemoteMcpRegistryServerPin? registryServer = null)
+        : this(
+            connection,
+            configurationRevision,
+            displayName,
+            endpointUri,
+            resourceUri,
+            authenticationMode,
+            identityBindingReference,
+            transportProfile,
+            registryServer,
+            null)
+    {
+    }
+
+    /// <summary>Creates and hashes a canonical connection configuration with an explicit adapter snapshot.</summary>
+    /// <remarks>
+    /// Both trailing arguments are required to keep calls to the original nine-parameter constructor unambiguous.
+    /// Pass <see langword="null"/> for either value when no registry pin or explicit adapter snapshot is supplied.
+    /// </remarks>
+    /// <exception cref="ArgumentException">A URI, display name, identity reference, or OAuth resource is invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The revision or enum value is outside its supported range.</exception>
+    [JsonConstructor]
+    public RemoteMcpConnectionConfiguration(
+        RemoteMcpConnectionReference connection,
+        long configurationRevision,
+        string displayName,
+        string endpointUri,
+        string? resourceUri,
+        RemoteMcpAuthenticationMode authenticationMode,
+        string? identityBindingReference,
+        RemoteMcpTransportProfile transportProfile,
+        RemoteMcpRegistryServerPin? registryServer,
+        RemoteMcpTransportAdapterOptions? transportAdapterOptions)
     {
         Connection = connection ?? throw new ArgumentNullException(nameof(connection));
         if (configurationRevision < 1)

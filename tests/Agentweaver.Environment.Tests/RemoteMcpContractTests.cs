@@ -7,6 +7,39 @@ namespace Agentweaver.Environment.Tests;
 public sealed class RemoteMcpContractTests
 {
     [Fact]
+    public void OriginalNineParameterConstructorRemainsAvailable()
+    {
+        var constructor = typeof(RemoteMcpConnectionConfiguration).GetConstructor(
+        [
+            typeof(RemoteMcpConnectionReference),
+            typeof(long),
+            typeof(string),
+            typeof(string),
+            typeof(string),
+            typeof(RemoteMcpAuthenticationMode),
+            typeof(string),
+            typeof(RemoteMcpTransportProfile),
+            typeof(RemoteMcpRegistryServerPin),
+        ]);
+
+        Assert.NotNull(constructor);
+        var configuration = new RemoteMcpConnectionConfiguration(
+            new("project-a", Guid.NewGuid()),
+            1,
+            "Weather",
+            "https://mcp.example.com",
+            "https://mcp.example.com",
+            RemoteMcpAuthenticationMode.DelegatedOAuth,
+            null,
+            RemoteMcpTransportProfile.StreamableHttp20250618,
+            null);
+
+        Assert.Equal(
+            RemoteMcpTransportAdapterOptions.ForProfile(RemoteMcpTransportProfile.StreamableHttp20250618),
+            configuration.TransportAdapterOptions);
+    }
+
+    [Fact]
     public void DelegatedOAuthConfigurationCanTruthfullyRemainUnlinked()
     {
         var configuration = new RemoteMcpConnectionConfiguration(
