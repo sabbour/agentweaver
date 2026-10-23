@@ -278,6 +278,34 @@ test('whole-release waits for a terminating old ReplicaSet Pod to disappear befo
     .map(call => call.settings.timeout), [4, 2]);
 });
 
+test('whole-release rerun verifies Pods and smoke without repatching target digests', async () => {
+  const world = makeFixture();
+  const originalExec = world.overrides.exec;
+  let failPodInventory = true;
+  world.overrides.exec = (command, args, settings) => {
+    if (failPodInventory && command === 'kubectl' && args.includes('replicasets,pods')) {
+      failPodInventory = false;
+      throw new Error('kubectl output exceeded the configured limit');
+    }
+    return originalExec(command, args, settings);
+  };
+  const executeOptions = { ...world.options, execute: true };
+
+  await assert.rejects(runWholeRelease(executeOptions, world.overrides), /Whole-release rollout partial/);
+  assert.equal(world.written[0].receipt.status, 'partial');
+  assert.equal(world.written[0].receipt.pods.status, 'failed');
+  const patchesAfterFirstRun = world.calls.filter(call =>
+    call.command === 'kubectl' && call.args.includes('patch')).length;
+  assert.equal(patchesAfterFirstRun, WHOLE_RELEASE_SERVICES.length);
+
+  const retry = await runWholeRelease(executeOptions, world.overrides);
+  assert.equal(retry.result, 'succeeded');
+  assert.equal(retry.pods.status, 'passed');
+  assert.equal(retry.smoke.status, 'passed');
+  assert.equal(world.calls.filter(call =>
+    call.command === 'kubectl' && call.args.includes('patch')).length, patchesAfterFirstRun);
+});
+
 test('Pod settling rejects an inventory that returns clean after its deadline', async () => {
   let now = 0;
   let readTimeout;

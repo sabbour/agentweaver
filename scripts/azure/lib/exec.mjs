@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 
 const isWindows = process.platform === 'win32';
+const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 // Characters cmd.exe treats specially; escape them so a shim invocation
 // cannot be reinterpreted as additional shell syntax.
 const CMD_META_CHARS = /([()%!^"<>&|;,\s])/g;
@@ -131,15 +132,20 @@ function spawnPlatformSafe(command, args, spawnOptions) {
  * With check enabled, launch or nonzero-exit failures throw with redacted diagnostics.
  */
 export function run(command, args, options = {}) {
-  const { check = true, cwd, env, input, timeout, projectJson, preserveProjectedJson = false } = options;
+  const {
+    check = true, cwd, env, input, timeout, projectJson, preserveProjectedJson = false,
+    maxBuffer = DEFAULT_MAX_BUFFER,
+  } = options;
   if (preserveProjectedJson && typeof projectJson !== 'function') {
     throw new TypeError('Preserving projected JSON requires an explicit non-secret field projection.');
   }
+  // Namespace inventories can exceed Node's 1 MiB default; callers can override this bound when needed.
   const result = spawnPlatformSafe(command, args, {
     cwd,
     env,
     input,
     timeout,
+    maxBuffer,
     encoding: 'utf8',
     windowsHide: true,
   });
@@ -147,6 +153,10 @@ export function run(command, args, options = {}) {
   const stderr = redact(result.stderr ?? '');
 
   if (result.error) {
+    // ENOBUFS means spawnSync stopped at maxBuffer; report the bound without exposing partial output.
+    if (result.error.code === 'ENOBUFS') {
+      throw new Error(`Failed to start ${redact(command)}: output exceeded the ${maxBuffer}-byte maxBuffer limit (ENOBUFS).`);
+    }
     throw new Error(`Failed to start ${command}: ${redact(result.error.message)}`);
   }
 

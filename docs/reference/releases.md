@@ -221,12 +221,23 @@ and chooses an active project from that actor's project list. The existing
 Gateway, tenant, token environment variable, issuer, audience, actor, and project
 flags are optional overrides.
 
+The shared command runner captures up to 64 MiB of output by default, enough
+for the namespace Pod and ReplicaSet inventory. A command can override the
+`maxBuffer` limit when needed. Exceeding the limit fails with a redacted error
+instead of returning partial output.
+
 The token stays in memory and is not written to the receipt. If the live
 settings, sign-in, authorization context, or project list cannot be verified,
 the command stops before changing Deployments and writes a partial receipt.
 The command writes one receipt with status `deployed` only when every check
 passes. Any failed service or check writes a `partial` receipt and exits
 non-zero.
+
+After a partial execute receipt, rerun the same whole-release command with
+`--execute` and the same publication inputs. The command compares live images
+to the published digests and patches only services that still differ, then
+repeats readiness, Pod, and Gateway verification. Deployments already at
+their target digests are not changed by the rerun.
 
 The Web-only and backend-only commands remain useful for diagnosis and
 controlled component work, but their receipts always report the installation
