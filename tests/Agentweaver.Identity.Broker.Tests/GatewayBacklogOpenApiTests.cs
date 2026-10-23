@@ -290,7 +290,8 @@ public sealed class GatewayBacklogOpenApiTests
         using var response = await gateway.Client.GetAsync("/openapi/v1.json");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var operation = document.RootElement.GetProperty("paths")
+        var paths = document.RootElement.GetProperty("paths");
+        var operation = paths
             .GetProperty("/api/v1/projects/{projectId}/configuration/choices")
             .GetProperty("get");
         Assert.Equal("getProjectConfigurationChoices", operation.GetProperty("operationId").GetString());
@@ -327,14 +328,44 @@ public sealed class GatewayBacklogOpenApiTests
         Assert.Equal(new string?[] { "hostedCopilot", "byok" },
             modelChoice.GetProperty("sourceMode").GetProperty("enum").EnumerateArray()
                 .Select(item => item.GetString()).ToArray());
-        Assert.Equal(new string?[] { "modelBinding", "verifiedAtRunStart" },
+        Assert.Equal(new string?[] { "modelBinding", "hostedModelCatalog", "verifiedAtRunStart" },
             modelChoice.GetProperty("reasoningEffortSource").GetProperty("enum").EnumerateArray()
                 .Select(item => item.GetString()).ToArray());
-        Assert.Contains("verified when a run starts",
+        Assert.Contains("run-start verification",
             modelChoice.GetProperty("reasoningEfforts").GetProperty("description").GetString());
         // The choice item carries eligibility fields only; provider and credential data stay with AgentHost.
         Assert.Equal(["reasoningEffortSource", "reasoningEfforts", "reference", "sourceMode"],
             modelChoice.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray());
+
+        var liveCatalogRoute = Assert.Single(
+            GatewayRouteCatalog.Routes,
+            candidate => candidate.OperationId == "getHostedModelReasoningCatalog");
+        Assert.Equal("GET", liveCatalogRoute.Method);
+        Assert.Equal(GatewayOwner.AgentHost, liveCatalogRoute.Owner);
+        Assert.Equal(
+            "/api/v1/projects/{projectId}/configuration/hosted-model-reasoning-catalog",
+            liveCatalogRoute.PublicPath);
+        Assert.Equal("/runtime/v1/projects/{projectId}/hosted-model-reasoning-catalog",
+            liveCatalogRoute.OwnerPath);
+        Assert.True(liveCatalogRoute.ForwardTenantSelector);
+        var liveCatalogOperation = paths.GetProperty(liveCatalogRoute.PublicPath).GetProperty("get");
+        Assert.Equal("getHostedModelReasoningCatalog",
+            liveCatalogOperation.GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/HostedModelReasoningCatalogV1",
+            liveCatalogOperation.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Contains(liveCatalogOperation.GetProperty("responses").GetProperty("200")
+            .GetProperty("headers").EnumerateObject(), header => header.Name == "Cache-Control");
+        var catalogSchema = schemas.GetProperty("HostedModelReasoningCatalogV1");
+        Assert.Contains("bindingsRevision",
+            catalogSchema.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal("#/components/schemas/HostedModelReasoningModelV1",
+            catalogSchema.GetProperty("properties").GetProperty("models")
+                .GetProperty("additionalProperties").GetProperty("$ref").GetString());
+        Assert.Equal(new string?[] { "available", "unavailable" },
+            schemas.GetProperty("HostedModelReasoningModelV1").GetProperty("properties").GetProperty("state")
+                .GetProperty("enum").EnumerateArray().Select(item => item.GetString()).ToArray());
+
         var projectConfiguration = schemas.GetProperty("ProjectConfiguration").GetProperty("properties");
         Assert.Contains("any non-empty value returns 400",
             projectConfiguration.GetProperty("providerOverrides").GetProperty("description").GetString());

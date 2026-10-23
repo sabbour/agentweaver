@@ -1,7 +1,7 @@
 namespace Agentweaver.Gateway;
 
 /// <summary>Contains the fixed HTTPS owner addresses, token validation identity, and proxy timeout.</summary>
-/// <remarks>The Environment owner is optional. Environment routes return 503 <c>owner_not_configured</c> when it is absent.</remarks>
+/// <remarks>The Environment and AgentHost owners are optional. Their routes return 503 <c>owner_not_configured</c> when absent.</remarks>
 public sealed record GatewayOptions(
     Uri IdentityIssuer,
     string IdentityAudience,
@@ -12,7 +12,8 @@ public sealed record GatewayOptions(
     Uri IdentityBrokerAddress,
     Uri WebOrigin,
     TimeSpan OwnerRequestTimeout,
-    Uri? EnvironmentOwnerBaseAddress = null)
+    Uri? EnvironmentOwnerBaseAddress = null,
+    Uri? AgentHostOwnerBaseAddress = null)
 {
     public const int EventPollIntervalMilliseconds = 1000;
 
@@ -26,6 +27,8 @@ public sealed record GatewayOptions(
         GatewayOwner.IdentityBroker => IdentityBrokerAddress,
         GatewayOwner.Environment => EnvironmentOwnerBaseAddress
             ?? throw new InvalidOperationException("Gateway:Owners:Environment is not configured."),
+        GatewayOwner.AgentHost => AgentHostOwnerBaseAddress
+            ?? throw new InvalidOperationException("Gateway:Owners:AgentHost is not configured."),
         _ => throw new ArgumentOutOfRangeException(nameof(owner)),
     };
 
@@ -54,7 +57,10 @@ public sealed record GatewayOptions(
             // the same HTTPS root validation as the required owners.
             owners["Environment"] is null
                 ? null
-                : RequiredHttpsRoot(owners["Environment"], "Gateway:Owners:Environment"));
+                : RequiredHttpsRoot(owners["Environment"], "Gateway:Owners:Environment"),
+            owners["AgentHost"] is null
+                ? null
+                : RequiredHttpsRoot(owners["AgentHost"], "Gateway:Owners:AgentHost"));
     }
 
     /// <summary>Requires an HTTPS audience without credentials, query, or fragment.</summary>

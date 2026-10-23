@@ -47,8 +47,9 @@ public static class RemoteMcpCredentialUseComposition
         builder.Services.AddKeyedSingleton<RuntimeServiceTlsIdentity>(RecipientTlsKey, (services, _) =>
             new RuntimeServiceTlsIdentity(
                 options, "IdentityBroker", "Environment", services.GetRequiredService<TimeProvider>()));
-        builder.WebHost.ConfigureKestrel(server =>
-            server.Configure(builder.Configuration.GetSection("Kestrel")).Endpoint(ListenerName, endpoint =>
+        // The shared loader preserves the Issue Sync and hosted catalog endpoint callbacks.
+        KestrelEndpointComposition.AddEndpoint(builder, (loader, server) =>
+            loader.Endpoint(ListenerName, endpoint =>
             {
                 var identity = server.ApplicationServices
                     .GetRequiredKeyedService<RuntimeServiceTlsIdentity>(RecipientTlsKey);

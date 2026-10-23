@@ -28,6 +28,8 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
         Set<ProjectSkillImportIdempotencyRecord>();
     public DbSet<ProjectSkillContentRevocationRecord> SkillContentRevocations =>
         Set<ProjectSkillContentRevocationRecord>();
+    public DbSet<HostedModelReasoningCatalogRecord> HostedModelReasoningCatalog =>
+        Set<HostedModelReasoningCatalogRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -559,6 +561,36 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                     revocation.SkillId,
                     revocation.Revision,
                 })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<HostedModelReasoningCatalogRecord>(entity =>
+        {
+            entity.ToTable("hosted_model_reasoning_catalog", table =>
+                table.HasCheckConstraint(
+                    "ck_hosted_model_reasoning_supported_efforts",
+                    "supported_reasoning_efforts <@ ARRAY['low', 'medium', 'high', 'xhigh']::text[]"));
+            entity.HasKey(catalog => new
+            {
+                catalog.TenantId,
+                catalog.ProjectId,
+                catalog.ActorId,
+                catalog.ConnectionId,
+                catalog.BindingsRevision,
+                catalog.Reference,
+            });
+            entity.Property(catalog => catalog.TenantId).HasColumnName("tenant_id").HasMaxLength(256);
+            entity.Property(catalog => catalog.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(catalog => catalog.ActorId).HasColumnName("actor_id").HasMaxLength(256);
+            entity.Property(catalog => catalog.ConnectionId).HasColumnName("connection_id");
+            entity.Property(catalog => catalog.BindingsRevision).HasColumnName("bindings_revision").HasMaxLength(256);
+            entity.Property(catalog => catalog.Reference).HasColumnName("reference").HasMaxLength(256);
+            entity.Property(catalog => catalog.SupportedReasoningEfforts)
+                .HasColumnName("supported_reasoning_efforts").HasColumnType("text[]").IsRequired();
+            entity.Property(catalog => catalog.VerifiedAt).HasColumnName("verified_at");
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(catalog => catalog.ProjectId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }

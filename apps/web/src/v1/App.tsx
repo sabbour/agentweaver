@@ -83,6 +83,7 @@ import type {
   ProjectKnowledgeRecord,
   ProjectConfiguration,
   ProjectConfigurationChoices,
+  HostedModelReasoningCatalogV1,
   ProjectSummary,
   SessionEventEnvelope,
   SessionStatusSnapshot,
@@ -629,6 +630,8 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
   const [versioned, setVersioned] = useState<VersionedProjectConfiguration | null>(null);
   const [configurationChoices, setConfigurationChoices] = useState<ProjectConfigurationChoices | null>(null);
   const [configurationChoicesError, setConfigurationChoicesError] = useState(false);
+  const [hostedReasoningCatalog, setHostedReasoningCatalog] = useState<HostedModelReasoningCatalogV1 | null>(null);
+  const [hostedReasoningCatalogError, setHostedReasoningCatalogError] = useState(false);
   // Two views of the same unsaved edit:
   // - `editor` is the raw JSON text in the Advanced section.
   // - `configurationDraft` is the parsed object that the form sections edit.
@@ -659,8 +662,10 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
     setNoticeScope(null);
     setConfigurationChoices(null);
     setConfigurationChoicesError(false);
+    setHostedReasoningCatalog(null);
+    setHostedReasoningCatalogError(false);
     try {
-      const [result, choiceResult] = await Promise.all([
+      const [result, choiceResult, hostedCatalogResult] = await Promise.all([
         apiCall(
           (token, tenantSelector) => gatewayClient.getProjectConfiguration(token, projectId, tenantSelector),
           null,
@@ -675,14 +680,30 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
             () => ({ value: null, failed: true }),
           )
           : Promise.resolve({ value: null, failed: false }),
+        view === 'settings'
+          ? apiCall(
+            (token, tenantSelector) =>
+              gatewayClient.getHostedModelReasoningCatalog(token, projectId, tenantSelector),
+            null,
+          ).then(
+            (value) => ({ value, failed: false }),
+            () => ({ value: null, failed: true }),
+          )
+          : Promise.resolve({ value: null, failed: false }),
       ]);
       if (activeScope.current !== scope || loadGeneration.current !== generation) return;
       if (result.projectId !== projectId)
         throw new Error('The server returned configuration for a different project.');
       setVersioned(result);
       const scopedChoices = choiceResult.value?.projectId === projectId ? choiceResult.value : null;
+      const scopedHostedCatalog = hostedCatalogResult.value?.projectId === projectId
+        ? hostedCatalogResult.value
+        : null;
       setConfigurationChoices(scopedChoices);
       setConfigurationChoicesError(view === 'settings' && (choiceResult.failed || !scopedChoices));
+      setHostedReasoningCatalog(scopedHostedCatalog);
+      setHostedReasoningCatalogError(view === 'settings' &&
+        (hostedCatalogResult.failed || !scopedHostedCatalog));
       setEditor(JSON.stringify(result.configuration, null, 2));
       // Start the form draft from the loaded document, so it matches the JSON text.
       setConfigurationDraft(result.configuration);
@@ -997,7 +1018,9 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
             <form className="v1-form" onSubmit={(event) => void save(event)}>
               {section === 'repository' && <RepositoryFields {...fieldProps} />}
               {section === 'models' && <ConfigurationFields {...fieldProps} part="models" savedSelection={currentConfiguration.configuration.modelSelection}
-                choices={configurationChoices} choicesError={configurationChoicesError} />}
+                choices={configurationChoices} choicesError={configurationChoicesError}
+                hostedReasoningCatalog={hostedReasoningCatalog}
+                hostedReasoningCatalogError={hostedReasoningCatalogError} />}
               {section === 'components' && <ConfigurationFields {...fieldProps} part="components" savedSelection={currentConfiguration.configuration.modelSelection}
                 choices={configurationChoices} choicesError={configurationChoicesError} />}
               {section === 'limits' && <RunLimitsFields {...fieldProps} />}

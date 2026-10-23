@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using GitHub.Copilot;
@@ -209,7 +210,9 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         RuntimeResumeJournalRebuildReceipt? journalRebuildReceipt,
         SessionMaterialAcknowledgment? consumedNativeCacheAcknowledgment,
         RuntimeSessionJournalEvidence? journalEvidence,
-        TimeSpan abortDrainTimeout)
+        TimeSpan abortDrainTimeout,
+        ImmutableArray<string>? verifiedHostedReasoningEfforts = null,
+        DateTimeOffset? verifiedHostedReasoningCatalogAt = null)
     {
         _client = client;
         _session = session;
@@ -223,11 +226,19 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         JournalRebuildReceipt = journalRebuildReceipt;
         ConsumedNativeCacheAcknowledgment = consumedNativeCacheAcknowledgment;
         JournalEvidence = journalEvidence;
+        VerifiedHostedReasoningEfforts = verifiedHostedReasoningEfforts;
+        VerifiedHostedReasoningCatalogAt = verifiedHostedReasoningCatalogAt;
         _abortDrainTimeout = abortDrainTimeout;
     }
 
     /// <summary>Immutable SDK, model, and source facts validated during session creation.</summary>
     public SdkSessionFacts Facts { get; }
+
+    /// <summary>Reasoning levels read from the live SDK catalog for this hosted session, or null for BYOK.</summary>
+    public ImmutableArray<string>? VerifiedHostedReasoningEfforts { get; }
+
+    /// <summary>Time the live hosted SDK model catalog was read for these reasoning levels.</summary>
+    public DateTimeOffset? VerifiedHostedReasoningCatalogAt { get; }
 
     /// <summary>Completes when the usage event channel is closed or faulted.</summary>
     public Task UsageCompletion => _usage.Reader.Completion;

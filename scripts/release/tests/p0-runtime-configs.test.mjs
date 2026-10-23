@@ -706,7 +706,7 @@ test('new Events and Projects Cilium policies admit only source-backed callers a
     {
       name: 'projects-config',
       callers: ['identity-broker', 'orchestrator', 'gateway', 'events-and-sessions',
-        'knowledge', 'environment'],
+        'knowledge', 'environment', 'agenthost'],
       owners: [],
       fqdns: [
         brokerHost,
@@ -825,6 +825,22 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
     'orchestrator.agentweaver.svc.cluster.local',
   ]);
 
+  const gateway = getPolicy('gateway-owner-network');
+  const gatewayAgentHostEgress = gateway.spec.egress.find(rule => rule.toEndpoints
+    ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'agenthost'));
+  assert.deepEqual(endpoints(gatewayAgentHostEgress), ['agenthost']);
+  assert.deepEqual(ports(gatewayAgentHostEgress), [{ port: '8443', protocol: 'TCP' }]);
+  const agentHost = getPolicy('agenthost-environment-ingress');
+  const gatewayAgentHostIngress = agentHost.spec.ingress.find(rule => rule.fromEndpoints
+    ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'gateway'));
+  assert.deepEqual(gatewayAgentHostIngress.fromEndpoints, [{
+    matchLabels: {
+      'k8s:io.kubernetes.pod.namespace': namespace,
+      'agentweaver.io/workload': 'gateway',
+    },
+  }]);
+  assert.deepEqual(ports(gatewayAgentHostIngress), [{ port: '8443', protocol: 'TCP' }]);
+
   const projects = getPolicy('projects-config-network');
   const projectsIssuerGateway = projects.spec.egress.find(rule => rule.toEndpoints
     ?.some(endpoint => endpoint.matchLabels['k8s:io.kubernetes.pod.namespace'] === 'agentweaver-gateway'));
@@ -878,6 +894,15 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
     },
   }]);
   assert.deepEqual(ports(environmentBrokerIngress), [{ port: '8443', protocol: 'TCP' }]);
+  const agentHostCredentialIngress = broker.spec.ingress.find(rule => rule.fromEndpoints
+    ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'agenthost'));
+  assert.deepEqual(agentHostCredentialIngress.fromEndpoints, [{
+    matchLabels: {
+      'k8s:io.kubernetes.pod.namespace': namespace,
+      'agentweaver.io/workload': 'agenthost',
+    },
+  }]);
+  assert.deepEqual(ports(agentHostCredentialIngress), [{ port: '8444', protocol: 'TCP' }]);
 
   const orchestrator = getPolicy('orchestrator-owner-network');
   const orchestratorBrokerIngress = orchestrator.spec.ingress.find(rule => rule.fromEndpoints
@@ -903,9 +928,14 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
 
   const agenthost = getPolicy('agenthost-egress');
   assert.deepEqual(endpoints(agenthost.spec.egress[0]), [
-    'environment', 'events-and-sessions', 'identity-broker', 'orchestrator',
+    'environment', 'events-and-sessions', 'identity-broker', 'orchestrator', 'projects-config',
   ]);
   assert.deepEqual(ports(agenthost.spec.egress[0]), [{ port: '8443', protocol: 'TCP' }]);
+  const agentHostCredentialEgress = agenthost.spec.egress.find(rule => rule.toEndpoints
+    ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'identity-broker') &&
+    ports(rule).some(({ port }) => port === '8444'));
+  assert.deepEqual(endpoints(agentHostCredentialEgress), ['identity-broker']);
+  assert.deepEqual(ports(agentHostCredentialEgress), [{ port: '8444', protocol: 'TCP' }]);
 });
 
 // The install root is the complete P0 source bundle; credentials and Gateway placement stay external.
@@ -1034,6 +1064,22 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   };
   assert.deepEqual(validateKustomizeInstall(installation, images, namespace, providerCatalog)
     .incompleteRuntimeConfigMaps, []);
+
+  const identityDeployment = resources.find(resource =>
+    resource.kind === 'Deployment' && resource.metadata.name === 'identity-broker');
+  const identityContainer = identityDeployment.spec.template.spec.containers[0];
+  assert.deepEqual(identityContainer.ports, [
+    { containerPort: 8443, name: 'https', protocol: 'TCP' },
+    { containerPort: 8444, name: 'hosted-catalog', protocol: 'TCP' },
+  ]);
+  const identityEnvironment = Object.fromEntries(identityContainer.env.map(({ name, value }) => [name, value]));
+  assert.equal(identityEnvironment.Kestrel__Endpoints__Https__Url, 'https://+:8443');
+  assert.equal(identityEnvironment.Kestrel__Endpoints__HostedModelCatalogCredentialUse__Url, 'https://+:8444');
+  assert.deepEqual(resources.find(resource =>
+    resource.kind === 'Service' && resource.metadata.name === 'identity-broker').spec.ports, [
+    { name: 'https', port: 443, protocol: 'TCP', targetPort: 'https' },
+    { name: 'hosted-catalog', port: 8444, protocol: 'TCP', targetPort: 'hosted-catalog' },
+  ]);
 
   for (const name of [
     'environment', 'events-and-sessions', 'gateway', 'identity-broker', 'knowledge', 'mcp', 'orchestrator',

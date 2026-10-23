@@ -102,6 +102,8 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PATCH /api/projects/{projectId}` | Change project name or lifecycle state with an expected project revision. Archive rather than physically delete. |
 | `GET /api/projects/{projectId}/configuration?revision={n}` | Read the current or a retained configuration revision. |
 | `PUT /api/projects/{projectId}/configuration` | Append a configuration revision with an expected configuration revision. |
+| `GET /api/projects/{projectId}/configuration/choices` | Read current model eligibility and platform provider choices for settings. |
+| `POST /api/projects/{projectId}/configuration/hosted-model-reasoning-catalog` | Store hosted reasoning levels verified by AgentHost for the caller's current project binding. Requires both the caller's project authority and AgentHost's pinned mTLS identity. |
 | `GET /api/projects/{projectId}/casting/universes` | List supported universe names after checking project read access. |
 | `GET /api/casting/templates` | List the built-in scenario templates available to seed a reviewed team proposal. |
 | `GET /api/catalog/roles` | List the role definitions available to scenario and manual team proposals. |
@@ -135,6 +137,16 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` | Import selected bytes with the expected content digest and idempotency key into the existing Skills content store. |
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
+
+The hosted reasoning publication contains only supported effort names and the
+binding reference, connection, revision, and verification time. AgentHost does
+not send the hosted credential or model ID. Projects & Config returns a
+publication only for the same actor, project, connection, and model-binding
+revision, and only while it is less than 24 hours old. A delayed older
+publication cannot replace a newer value. Settings now reads current hosted
+levels from AgentHost's separate live catalog route; this stored publication
+remains a non-authoritative hint. AgentHost checks every requested effort
+against the live SDK catalog when a run starts.
 
 Marketplace source CRUD, source revisioning, and commit-pinned browse are
 documented in the [skill marketplace source contract](./skill-marketplace.md).

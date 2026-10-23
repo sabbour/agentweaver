@@ -263,7 +263,7 @@ test('the migration identity template has a federated credential and no Azure ro
   if (result.error || result.status !== 0) {
     // The Bicep CLI is optional for offline runs; the source check below still applies.
     const source = readFileSync('infra/bicep/p1-postgres-migration-identity.bicep', 'utf8');
-    assert.match(source, /agentweaver-id-p1-postgres-migration|'\$\{namePrefix\}-id-p1-postgres-migration'/);
+    assert.match(source, /name:\s*'\$\{namePrefix\}-id-\$\{migration\.name\}'/);
     assert.doesNotMatch(source, /roleAssignments/);
     return;
   }

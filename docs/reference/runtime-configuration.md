@@ -37,6 +37,23 @@ certificates, grants or infrastructure. Per-project enable/disable, intervals
 and cycle limits are persisted through the
 [issue-sync API](api.md#periodic-issue-sync), not environment defaults.
 
+## Hosted model catalog publication
+
+Projects & Config can require AgentHost's pinned client certificate on
+`POST /api/projects/{projectId}/configuration/hosted-model-reasoning-catalog`.
+Set `ProjectsConfig:HostedModelCatalogPublication:AgentHostCertificateSha256`
+to the AgentHost leaf certificate SHA-256 used by the Identity TLS profile.
+The request must also include the
+caller's ordinary project bearer; neither credential substitutes for the
+other. Projects validates client certificates against the mounted
+`/var/run/service-backend-ca/ca.crt`, with client-auth purpose, validity,
+revocation, and the exact leaf pin. If this setting is absent, catalog
+publication is denied.
+
+AgentHost uses its mounted service certificate for this direct owner request.
+Gateway-to-AgentHost and AgentHost-from-Gateway traffic is limited to HTTPS
+port 8443 by the corresponding Cilium policies.
+
 ## Configuration rules
 
 - The runtime ConfigMaps use environment-variable names with `__` between
@@ -403,7 +420,7 @@ The `projects-config-runtime-config.json` map contains:
 | `AgentHost__ModelBindingsRevision` | Optional. A read-only copy of the AgentHost model-binding revision. Set it together with at least one binding below, and use the same value as AgentHost. When both the revision and the bindings are absent, model choices are reported as `unavailable`. |
 | `AgentHost__ModelBindings__<reference>__SourceMode` | Required for each copied binding: `HostedCopilot` or `Byok`, matching AgentHost. |
 | `AgentHost__ModelBindings__<reference>__Enabled` | Required for each copied binding: `true` or `false`. Disabled bindings are not offered as choices. |
-| `AgentHost__ModelBindings__<reference>__SupportedReasoningEfforts__<n>` | Optional. Indexes start at `0` with no gaps; values are unique entries from `low`, `medium`, `high`, and `xhigh`. For `Byok`, these are the levels offered in project settings, and an enabled `Byok` binding with no levels is not offered because no run can start with it. For `HostedCopilot`, any listed levels are ignored: hosted reasoning levels are checked when a run starts. |
+| `AgentHost__ModelBindings__<reference>__SupportedReasoningEfforts__<n>` | Optional. Indexes start at `0` with no gaps; values are unique entries from `low`, `medium`, `high`, and `xhigh`. For `Byok`, these are the levels offered in project settings, and an enabled `Byok` binding with no levels is not offered because no run can start with it. For `HostedCopilot`, any listed levels are ignored: AgentHost publishes levels read from its live SDK catalog, while every run still checks its requested level at startup. |
 
 The model-binding copy holds only eligibility fields. The profile renderer and
 the service reject model IDs, `Provider` fields (URLs, headers, API versions),
@@ -624,6 +641,7 @@ The `events-and-sessions-runtime-config.json` map contains:
 | `EventsAndSessions__Cost__Copilot__ResourceGeneration` | Required positive resource generation. |
 | `EventsAndSessions__Cost__Copilot__RateCard__Json` | Required versioned rate-card JSON. It must match the provider-published Copilot source and use USD per-million-token rates. Do not enter estimates or legacy model multipliers. |
 | `AgentHost__ModelBindingsRevision` | Required revision for the exact model-binding map. It must be 1-256 ASCII letters, digits, `.`, `_`, `-`, or `:`. Change it when the map changes. |
+| `AgentHost__ProjectsConfigAddress` | Required HTTPS Projects & Config service root. AgentHost uses it to read current project configuration and model choices, recheck revisions after live catalog reads, and publish verified run-start observations. The hosted credential and model ID are not sent to Projects & Config. |
 | `AgentHost__ModelBindings__<reference>__ModelId` | Exact model ID returned by the supported Copilot SDK model catalog. The reference key and model ID must each be 1-256 ASCII letters, digits, `.`, `_`, `-`, or `:`. Current reference keys include `reasoning`, `coding`, `gpt-6.1-sol`, and `gpt-6-luna`. |
 | `AgentHost__ModelBindings__<reference>__SourceMode` | Source mode enum: `HostedCopilot` or `Byok`. The current checked-in hosted profile uses `HostedCopilot`; BYOK also requires its provider and credential configuration. |
 | `AgentHost__ModelBindings__<reference>__Enabled` | Optional Boolean. Defaults to `true`; a disabled binding is not an available model choice. |

@@ -74,8 +74,14 @@ not a provisioning check or live upstream result. When Projects & Config has
 the read-only model-binding copy, `models` is `available` with a
 `bindingsRevision` and one `choices` entry per enabled binding. BYOK entries
 list their configured `reasoningEfforts`; hosted entries report
-`reasoningEffortSource: "verifiedAtRunStart"` with no levels. Without the
-copy, `models` is `unavailable` with reason
+recent AgentHost-verified `reasoningEfforts` with
+`reasoningEffortSource: "hostedModelCatalog"` when available. A missing or
+expired publication falls back to `reasoningEffortSource: "verifiedAtRunStart"`
+with no levels. Hosted publications are limited to the current actor, project,
+connection, and model-binding revision, expire after 24 hours, and cannot
+replace a newer verification with a delayed older one. The runtime still
+checks the selected level against its live SDK catalog when a run starts.
+Without the copy, `models` is `unavailable` with reason
 `model_capability_catalog_unavailable` and empty `choices`. In both states,
 `savedReferences` is not an eligibility claim. Model
 eligibility is checked against the runtime binding when a run starts, and

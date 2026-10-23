@@ -67,7 +67,7 @@ public static class PlannedRuntimeGrants
         Select(ReadEmbeddedPlan(), service, schema, runtimeRole, expectedPlanSha256, supportedVersions);
 
     /// <summary>
-    /// Validates raw plan bytes against the expected hash, the configured service identity and
+    /// Validates the plan against its canonical hash, the configured service identity and
     /// schema, and the compiled migration catalog. Kept separate from the embedded resource so
     /// tests can prove each gate with a changed plan.
     /// </summary>
@@ -79,15 +79,15 @@ public static class PlannedRuntimeGrants
         string expectedPlanSha256,
         IReadOnlyList<int> supportedVersions)
     {
-        // Step 1: the hash covers the exact bytes, so any edit to the embedded plan, even whitespace,
-        // stops the Job. The runner passes the hash it computed from the same reviewed source.
-        var actual = Convert.ToHexString(SHA256.HashData(planBytes)).ToLowerInvariant();
+        using var document = JsonDocument.Parse(planBytes);
+        // Match the initializer's compact JSON hash so formatting the reviewed file does not change its identity.
+        var canonicalPlan = JsonSerializer.SerializeToUtf8Bytes(document.RootElement);
+        var actual = Convert.ToHexString(SHA256.HashData(canonicalPlan)).ToLowerInvariant();
         if (!System.Text.RegularExpressions.Regex.IsMatch(expectedPlanSha256 ?? "", "^[0-9a-f]{64}$") ||
             actual != expectedPlanSha256)
             throw new InvalidOperationException(
                 $"The embedded P1 PostgreSQL plan hash {actual} differs from the expected reviewed plan hash.");
 
-        using var document = JsonDocument.Parse(planBytes);
         var root = document.RootElement;
         var entry = root.GetProperty("services").EnumerateArray()
             .SingleOrDefault(item => item.GetProperty("service").GetString() == service);

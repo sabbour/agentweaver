@@ -2,7 +2,11 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ConfigurationFields } from './ConfigurationFields';
 import { needsModelCredential } from './modelCredential';
-import type { ProjectConfiguration, ProjectConfigurationChoices } from './contracts';
+import type {
+  HostedModelReasoningCatalogV1,
+  ProjectConfiguration,
+  ProjectConfigurationChoices,
+} from './contracts';
 
 /** A complete configuration with unrelated exact references to preserve during edits. */
 function fixture(): ProjectConfiguration {
@@ -66,11 +70,13 @@ describe('readable project configuration', () => {
 
   it('edits reasoning effort without changing a model credential reference', () => {
     const configuration = fixture();
+    configuration.modelSelection = { ...configuration.modelSelection!, reference: 'platform-model' };
     const onChange = vi.fn();
-    render(<ConfigurationFields configuration={configuration} onChange={onChange} />);
-    fireEvent.change(screen.getByLabelText('Default reasoning effort'), { target: { value: 'medium' } });
+    render(<ConfigurationFields configuration={configuration} onChange={onChange}
+      choices={ownerChoices()} part="models" />);
+    fireEvent.change(screen.getByLabelText('Default reasoning effort'), { target: { value: 'xhigh' } });
     expect(onChange).toHaveBeenCalledWith({
-      ...configuration, modelSelection: { ...configuration.modelSelection, reasoningEffort: 'medium' },
+      ...configuration, modelSelection: { ...configuration.modelSelection, reasoningEffort: 'xhigh' },
     });
   });
 
@@ -128,13 +134,70 @@ describe('readable project configuration', () => {
     expect(screen.queryByText(/checked when a run starts/)).toBeNull();
   });
 
-  it('explains that hosted reasoning levels are checked at run start and never shows an empty select', () => {
+  it('does not invent hosted reasoning levels when the live catalog is unavailable', () => {
     render(<ConfigurationFields configuration={fixture()} onChange={vi.fn()} choices={ownerChoices()} part="models" />);
     // The planning task uses the hosted "planner" reference.
     const planningEffort = screen.getByLabelText('Planning reasoning effort') as HTMLSelectElement;
+    expect(Array.from(planningEffort.options).map((option) => option.textContent)).toEqual([
+      'Use default', 'Extra high (saved; not listed for this model)',
+    ]);
+    expect(screen.getAllByText('Live reasoning levels are unavailable.').length).toBeGreaterThan(0);
+  });
+
+  it('uses AgentHost live hosted reasoning levels when available', () => {
+    const choices = ownerChoices();
+    const hostedReasoningCatalog: HostedModelReasoningCatalogV1 = {
+      contractVersion: 1,
+      projectId: 'project-1',
+      projectConfigurationRevision: 4,
+      bindingsRevision: 'models-r7',
+      state: 'available',
+      unavailableReason: null,
+      models: {
+        planner: { state: 'available', unavailableReason: null, reasoningEfforts: ['low', 'high'] },
+      },
+    };
+
+    render(<ConfigurationFields configuration={fixture()} onChange={vi.fn()} choices={choices}
+      hostedReasoningCatalog={hostedReasoningCatalog} part="models" />);
+    const planningEffort = screen.getByLabelText('Planning reasoning effort') as HTMLSelectElement;
     expect(Array.from(planningEffort.options).map((option) => option.textContent))
-      .toEqual(['Use default', 'Low', 'Medium', 'High', 'Extra high']);
-    expect(screen.getAllByText('Reasoning levels for this model are checked when a run starts.')).toHaveLength(1);
+      .toEqual(['Use default', 'Extra high (saved; not listed for this model)', 'Low', 'High']);
+    expect(screen.getByText('Levels come from AgentHost.'))
+      .toBeTruthy();
+    expect(screen.queryByText('Live reasoning levels are unavailable.')).toBeNull();
+  });
+
+  it('uses the platform default model for tasks that inherit both defaults', () => {
+    const configuration: ProjectConfiguration = {
+      ...fixture(), modelSelection: null, modelTaskOverrides: [],
+    };
+    const choices = ownerChoices();
+    choices.models.choices.push({
+      reference: 'platform-hosted',
+      sourceMode: 'hostedCopilot',
+      reasoningEffortSource: 'verifiedAtRunStart',
+      reasoningEfforts: [],
+    });
+    choices.models.savedReferences.push({ reference: 'platform-hosted', sources: ['platformDefault'] });
+    const hostedReasoningCatalog: HostedModelReasoningCatalogV1 = {
+      contractVersion: 1,
+      projectId: 'project-1',
+      projectConfigurationRevision: 4,
+      bindingsRevision: 'models-r7',
+      state: 'available',
+      unavailableReason: null,
+      models: {
+        'platform-hosted': { state: 'available', unavailableReason: null, reasoningEfforts: ['medium', 'high'] },
+      },
+    };
+
+    render(<ConfigurationFields configuration={configuration} onChange={vi.fn()} choices={choices}
+      hostedReasoningCatalog={hostedReasoningCatalog} part="models" />);
+    const taskEffort = screen.getByLabelText('Code writing reasoning effort') as HTMLSelectElement;
+    expect(Array.from(taskEffort.options).map((option) => option.textContent))
+      .toEqual(['Use default', 'Medium', 'High']);
+    expect(screen.getAllByText('Levels come from AgentHost.').length).toBeGreaterThan(0);
   });
 
   it('restores the full saved hosted binding after clearing to the platform default', () => {

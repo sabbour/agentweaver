@@ -79,14 +79,54 @@ builder.Services.AddAgentweaverTelemetry("agentweaver.agenthost");
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(sessions);
+var hostedCatalogTlsSection = section.GetSection("HostedModelCatalogCredentialUse:IdentityTls");
+if (hostedCatalogTlsSection.Exists())
+{
+    // Use a dedicated pinned client so the caller's bearer never substitutes for AgentHost identity.
+    var hostedCatalogTls = (hostedCatalogTlsSection.Get<RuntimeServiceTlsOptions>()
+        ?? throw new InvalidOperationException("Hosted model catalog access requires an explicit Identity TLS profile."))
+        .Validate("AgentHost", "IdentityBroker");
+    if (hostedCatalogTls.PeerCertificateSha256Pins!.Contains(
+            hostedCatalogTls.LocalCertificateSha256!, StringComparer.OrdinalIgnoreCase))
+        throw new InvalidOperationException("Identity and AgentHost require different service certificates.");
+    builder.Services.AddSingleton(hostedCatalogTls);
+    builder.Services.AddSingleton<RuntimeServiceTlsIdentity>(services =>
+        new RuntimeServiceTlsIdentity(hostedCatalogTls, "AgentHost", "IdentityBroker",
+            services.GetRequiredService<TimeProvider>()));
+    builder.Services.AddHttpClient("hosted-model-catalog-identity", client =>
+            client.Timeout = TimeSpan.FromSeconds(15))
+        .ConfigurePrimaryHttpMessageHandler(services =>
+            services.GetRequiredService<RuntimeServiceTlsIdentity>().CreateHandler());
+}
 builder.Services.AddHttpClient("runtime-owners", client => client.Timeout = TimeSpan.FromSeconds(20))
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+builder.Services.AddHttpClient("hosted-model-catalog-publication", client =>
+        client.Timeout = TimeSpan.FromSeconds(20))
+    .ConfigurePrimaryHttpMessageHandler(services =>
+    {
+        // Present AgentHost's certificate only on the catalog publication request.
+        var handler = RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler();
+        var identity = services.GetRequiredService<RuntimeServiceTlsIdentity>();
+        handler.ClientCertificateOptions = ClientCertificateOption.Manual;
+        handler.ClientCertificates.Add(identity.Certificate);
+        return handler;
+    });
 builder.Services.AddSingleton(services =>
 {
     var http = services.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-owners");
+    var hostedCatalogTls = services.GetService<RuntimeServiceTlsIdentity>();
+    var hostedCatalogCredentialHttp = hostedCatalogTls is null
+        ? null
+        : services.GetRequiredService<IHttpClientFactory>().CreateClient("hosted-model-catalog-identity");
     return new RuntimeAgentHost(options, http,
         new RuntimeRegistrationHttpClient(http, options.OrchestratorAddress), sessions,
-        services.GetRequiredService<TimeProvider>());
+        services.GetRequiredService<TimeProvider>(),
+        services.GetRequiredService<Microsoft.Extensions.Logging.ILogger<RuntimeAgentHost>>(),
+        hostedCatalogCredentialHttp: hostedCatalogCredentialHttp,
+        hostedCatalogCredentialAddress: hostedCatalogTls?.PeerOwnerAddress,
+        hostedCatalogPublicationHttp: hostedCatalogTls is null
+            ? null
+            : services.GetRequiredService<IHttpClientFactory>().CreateClient("hosted-model-catalog-publication"));
 });
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>

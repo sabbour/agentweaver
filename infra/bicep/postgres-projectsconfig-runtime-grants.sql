@@ -18,3 +18,9 @@ SELECT format(
 SELECT format(
   'GRANT INSERT ON TABLE projects_config.authority_audit TO %I',
   :'runtime_role') \gexec
+
+-- AgentHost publishes only reasoning levels verified from its live SDK catalog.
+-- The owner scopes each row to the current actor, project, connection, and binding revision.
+SELECT format(
+  'GRANT SELECT, INSERT, UPDATE ON TABLE projects_config.hosted_model_reasoning_catalog TO %I',
+  :'runtime_role') \gexec

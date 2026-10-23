@@ -92,9 +92,78 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
 
     /// <summary>Accepts a peer certificate only when chain validation and client EKU/pinning both pass.</summary>
     public bool AcceptClientCertificate(
-        X509Certificate2? certificate, X509Chain? chain, SslPolicyErrors errors) =>
-        chain is not null && errors == SslPolicyErrors.None &&
-        AcceptPeerCertificate(certificate, ClientAuthentication);
+        X509Certificate2? certificate, X509Chain? chain, SslPolicyErrors errors)
+    {
+        // System trust does not contain the mounted backend CA, so validate against that root.
+        return ValidatePinnedClientCertificate(
+            certificate, chain, errors, _options.PeerCertificateSha256Pins!,
+            RuntimeOwnerHttpTransport.ServiceBackendCaFile, _timeProvider.GetUtcNow());
+    }
+
+    /// <summary>Validates a pinned client leaf against the mounted backend CA and its client-auth purpose.</summary>
+    public static bool ValidatePinnedClientCertificate(
+        X509Certificate? certificate,
+        X509Chain? peerChain,
+        SslPolicyErrors errors,
+        IReadOnlyCollection<string> sha256Pins,
+        string caFile,
+        DateTimeOffset now,
+        X509RevocationMode revocationMode = X509RevocationMode.Online)
+    {
+        var unexpectedErrors = errors & ~SslPolicyErrors.RemoteCertificateChainErrors;
+        if (certificate is null || unexpectedErrors != SslPolicyErrors.None ||
+            sha256Pins.Count is < 1 or > 4 || !File.Exists(caFile))
+            return false;
+
+        using var root = X509CertificateLoader.LoadCertificateFromFile(caFile);
+        using var converted = certificate is X509Certificate2
+            ? null
+            : X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
+        var leaf = certificate as X509Certificate2 ?? converted!;
+        if (!HasCertificatePurpose(leaf, ClientAuthentication, now))
+            return false;
+
+        using var validationChain = new X509Chain();
+        // The backend root is mounted for the service and is not installed in system trust.
+        validationChain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        validationChain.ChainPolicy.CustomTrustStore.Add(root);
+        validationChain.ChainPolicy.ApplicationPolicy.Add(new Oid(ClientAuthentication));
+        validationChain.ChainPolicy.RevocationMode = revocationMode;
+        validationChain.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;
+        validationChain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
+        validationChain.ChainPolicy.DisableCertificateDownloads = true;
+        validationChain.ChainPolicy.VerificationTime = now.UtcDateTime;
+        if (peerChain is not null)
+        {
+            foreach (var element in peerChain.ChainElements.Cast<X509ChainElement>().Skip(1))
+                validationChain.ChainPolicy.ExtraStore.Add(element.Certificate);
+        }
+        if (!validationChain.Build(leaf))
+            return false;
+
+        return IsPinnedClientCertificateLeaf(leaf, sha256Pins, now);
+    }
+
+    /// <summary>Checks a TLS-authenticated client leaf's validity, client purpose, and exact fingerprint pin.</summary>
+    public static bool IsPinnedClientCertificateLeaf(
+        X509Certificate? certificate,
+        IReadOnlyCollection<string> sha256Pins,
+        DateTimeOffset now)
+    {
+        if (certificate is null || sha256Pins.Count is < 1 or > 4)
+            return false;
+        using var converted = certificate is X509Certificate2
+            ? null
+            : X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
+        var leaf = certificate as X509Certificate2 ?? converted!;
+        if (!HasCertificatePurpose(leaf, ClientAuthentication, now))
+            return false;
+
+        var digest = SHA256.HashData(leaf.RawData);
+        return sha256Pins.Any(pin =>
+            RuntimeServiceTlsOptions.IsPin(pin) &&
+            CryptographicOperations.FixedTimeEquals(Convert.FromHexString(pin), digest));
+    }
 
     /// <summary>Rejects peer connections that do not use the configured direct TLS listener and certificate.</summary>
     public void RequirePeerConnection(

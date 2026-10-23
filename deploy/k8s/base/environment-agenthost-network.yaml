@@ -19,6 +19,14 @@ spec:
     - fromEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: gateway
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: environment
       toPorts:
         - ports:
@@ -122,7 +130,18 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: events-and-sessions
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: projects-config
       toPorts:
         - ports:
             - port: "8443"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: identity-broker
+      toPorts:
+        - ports:
+            - port: "8444"
               protocol: TCP

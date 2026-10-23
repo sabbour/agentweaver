@@ -213,6 +213,24 @@ export interface ModelSelectionSettings {
 /** Reasoning levels accepted by the Projects configuration validator. */
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
+/** Live reasoning levels returned by AgentHost for one project and binding revision. */
+export interface HostedModelReasoningCatalogV1 {
+  contractVersion: 1;
+  projectId: string;
+  projectConfigurationRevision: number;
+  bindingsRevision: string;
+  state: 'available' | 'unavailable';
+  unavailableReason: string | null;
+  models: Record<string, HostedModelReasoningModel>;
+}
+
+/** Exact live reasoning levels, or an explicit unavailable reason, for one model reference. */
+export interface HostedModelReasoningModel {
+  state: 'available' | 'unavailable';
+  unavailableReason: string | null;
+  reasoningEfforts: ReasoningEffort[];
+}
+
 /** Task categories serialized by the owner with stable camel-case names. */
 export type ModelTaskKind = 'planning' | 'review' | 'design' | 'security'
   | 'creativeWriting' | 'complex' | 'codeWriting' | 'straightforward';
@@ -1614,13 +1632,13 @@ export interface ProjectConfigurationChoices {
 }
 
 /**
- * One enabled model reference. BYOK references list their configured reasoning efforts; hosted references list
- * none because their reasoning levels are verified when a run starts.
+ * One enabled model reference. BYOK references list their configured reasoning efforts. Hosted references list
+ * previously verified levels when available and otherwise use run-start verification.
  */
 export interface ProjectModelChoice {
   reference: string;
   sourceMode: 'hostedCopilot' | 'byok';
-  reasoningEffortSource: 'modelBinding' | 'verifiedAtRunStart';
+  reasoningEffortSource: 'modelBinding' | 'hostedModelCatalog' | 'verifiedAtRunStart';
   reasoningEfforts: ReasoningEffort[];
 }
 

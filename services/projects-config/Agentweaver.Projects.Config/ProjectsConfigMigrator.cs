@@ -45,6 +45,7 @@ public static class ProjectsConfigMigrator
     /// Verifies the runtime authority boundary: SELECT on authority tables, no membership writes, no deletes,
     /// no access to setup-operation receipts, and either no role-assignment writes or exactly the
     /// role-assignment API grants (INSERT on assignments and audit, and UPDATE only on the four revoke columns).
+    /// The hosted reasoning catalog also requires SELECT, INSERT, and UPDATE, with no DELETE or TRUNCATE.
     /// </summary>
     /// <exception cref="InvalidOperationException">The database principal does not match the required grants.</exception>
     public static async Task VerifyRuntimeAuthorityReadOnlyAsync(
@@ -89,6 +90,11 @@ public static class ProjectsConfigMigrator
                AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'DELETE')
                AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'TRUNCATE')
                AND (SELECT true = ALL(grants) OR false = ALL(grants) FROM role_assignment_api)
+               AND has_table_privilege(current_user, 'projects_config.hosted_model_reasoning_catalog', 'SELECT')
+               AND has_table_privilege(current_user, 'projects_config.hosted_model_reasoning_catalog', 'INSERT')
+               AND has_table_privilege(current_user, 'projects_config.hosted_model_reasoning_catalog', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.hosted_model_reasoning_catalog', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.hosted_model_reasoning_catalog', 'TRUNCATE')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'SELECT')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'INSERT')
                AND NOT has_table_privilege(current_user, 'projects_config.project_setup_operations', 'UPDATE')
@@ -102,7 +108,7 @@ public static class ProjectsConfigMigrator
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
+                "The Projects & Config runtime database principal must have SELECT on authority tables, no membership writes, no DELETE or TRUNCATE on authority tables, SELECT/INSERT/UPDATE but no DELETE/TRUNCATE on hosted_model_reasoning_catalog, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), and no schema CREATE privilege. Role-assignment writes are optional, but when present they must be exactly INSERT on project_role_assignments and authority_audit plus UPDATE on project_role_assignments (state, revision, revoked_by, revoked_at).");
     }
 
     /// <summary>
