@@ -319,8 +319,9 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT, INSERT ON projects_config.project_configuration_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.platform_runtime_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.project_run_selections TO \"{runtimeRole}\"",
-            // Mirrors the deployed runtime grant for owner-reviewed casting proposals.
+            // Mirrors deployed runtime grants for casting proposals and generation requests.
             $"GRANT SELECT, INSERT, UPDATE ON projects_config.project_casting_proposals TO \"{runtimeRole}\"",
+            $"GRANT SELECT, INSERT, UPDATE ON projects_config.casting_generation_requests TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.project_skill_content_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.project_skill_content_revocations TO \"{runtimeRole}\"",
             $"GRANT USAGE, SELECT ON SEQUENCE projects_config.platform_runtime_revisions_revision_seq TO \"{runtimeRole}\"",

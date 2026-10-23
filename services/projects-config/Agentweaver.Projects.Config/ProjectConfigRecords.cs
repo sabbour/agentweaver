@@ -306,6 +306,43 @@ public sealed class ProjectCastingProposalRecord
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
+/// <summary>Generation approaches supported for reviewable casting proposals.</summary>
+public enum ProjectCastingGenerationMode
+{
+    Formulate,
+    Analyze
+}
+
+/// <summary>Lifecycle states for one run-bound casting generation request.</summary>
+public enum ProjectCastingGenerationRequestState
+{
+    Pending,
+    Completed,
+    Failed,
+    Stale,
+    Cancelled
+}
+
+/// <summary>Idempotency and run binding for a generated casting proposal.</summary>
+public sealed class ProjectCastingGenerationRequestRecord
+{
+    public Guid RequestId { get; set; }
+    public required string ProjectId { get; set; }
+    public Guid ProposalId { get; set; }
+    public long BaseConfigurationRevision { get; set; }
+    public required string RunId { get; set; }
+    public ProjectCastingGenerationMode Mode { get; set; }
+    public ProjectCastingGenerationRequestState State { get; set; }
+    public required string ActorIssuer { get; set; }
+    public required string ActorId { get; set; }
+    public required string IdempotencyKey { get; set; }
+    public required string RequestDigest { get; set; }
+    public string? OutputDigest { get; set; }
+    public string? FailureCode { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
 /// <summary>Immutable metadata and object-store key for one imported skill content revision.</summary>
 public sealed class ProjectSkillContentRevisionRecord
 {
