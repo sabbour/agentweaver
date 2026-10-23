@@ -118,13 +118,18 @@ forwards the tenant selector and exposes these versioned operations:
 | GET | `/api/v1/projects/{projectId}/backlog` | Current `ReadProjects` |
 | POST | `/api/v1/projects/{projectId}/backlog/tasks` | Current `WriteProjects` |
 | PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/content` | Current `WriteProjects` |
+| PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/state` | Current `WriteProjects` |
+| POST | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/archive` | Current `WriteProjects` |
+| PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Current `WriteProjects` |
+| DELETE | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Current `WriteProjects` |
 
 The native paths replace `/api/v1` with `/api`. Reads require `api.read`.
 Writes also require `projects.admin` and project Owner or tenant administrator
 authority. Run-bound and purpose-bound tokens cannot use these routes. An
 optional project binding must match the route. The bearer must include the
 Orchestrator and Projects audiences. The owner rechecks membership and role
-revisions after acquiring the graph lock and before committing a write.
+revisions after acquiring the graph lock and again before committing every
+write.
 
 Capture accepts `taskId`, `expectedGraphRevision`, and `content`. Content
 contains `title`, optional `description`, `lifecycle` (`open` or `closed`,
@@ -149,10 +154,20 @@ claim and run ownership; it does not cancel execution. Reopening does not
 schedule work. Archive remains separate from open/closed lifecycle.
 Historical ID-only tasks retain an empty title until edited.
 
+State writes can move an unclaimed open task between `backlog` and `ready`;
+only an atomic claim can set `claimed`. Dependency writes reject self-links,
+cross-project links, missing tasks, and cycles. Adding an existing dependency
+succeeds as a no-op and does not change the graph revision. Marking a task
+Ready queues it but does not prove its prerequisites are complete. A claim
+checks current prerequisite execution and output evidence again and returns
+typed blockers when work is not eligible. Archive and dependency changes use
+the same graph lock and revision checks as task edits.
+
 These source mappings require migration `026_backlog_task_content.sql`.
 Migration application, existing grant reconciliation, and the changed
 PostgreSQL plan hash require separate operator approval and remain unapplied.
-This content contract does not add MCP tools or a retained UI.
+MCP discovers these operations from the Gateway catalog. The retained Board
+uses the state, archive, and dependency operations; it does not start a run.
 
 Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 `GatewayRouteCatalog.cs`.
@@ -821,10 +836,14 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/sessions/{sessionId}/suspend` | Request fenced suspend. | No |
 | POST | `/sessions/{sessionId}/resume` | Request retained-Workspace resume. | No |
 
-### Backlog
+### Backlog claims
 
-Native-only prefix: `/api/projects/{projectId}/runs/{runId}/backlog`.
-All routes use Coordination authority and current owner task/graph revisions.
+Native owner prefix: `/api/projects/{projectId}/runs/{runId}/backlog`.
+Graph reads, task creation, state/archive changes, and dependency edits also
+have project-scoped operations described above. The Gateway and MCP expose the
+claim operation at
+`/api/v1/projects/{projectId}/runs/{runId}/backlog/tasks/{taskId}/claim`.
+Claims use the current accepted run selection and Coordination authority.
 
 | Method | Suffix | Purpose |
 | --- | --- | --- |
@@ -834,7 +853,7 @@ All routes use Coordination authority and current owner task/graph revisions.
 | POST | `/tasks/{taskId}/archive` | Archive task. |
 | PUT | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Add dependency. |
 | DELETE | `/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Remove dependency. |
-| POST | `/tasks/{taskId}/claim` | Atomically claim with current prerequisite evidence. |
+| POST | `/tasks/{taskId}/claim` | Atomically claim eligible work with current prerequisite evidence. |
 | POST | `/promotions` | Promote the run's confirmed work plan into backlog tasks. |
 
 #### Plan promotion and task origin
@@ -871,6 +890,24 @@ response is a `BacklogPlanPromotion` with `promotionId`, `projectId`, `runId`,
 | `backlog_promotion_selection_unavailable` | 409 | The pinned selection context is missing. |
 
 A stale graph revision returns `409` with typed backlog issues.
+
+A claim request contains `expectedGraphRevision`, `expectedTaskRevision`, and
+an `idempotencyKey` of 1-128 characters. The owner binds that key to the task,
+the accepted selection snapshot, actor, and run. Retrying the same request
+returns the stored claim and root-session identity; reusing the key with
+different inputs returns `409`. The task claim, accepted root, initial
+decision, and outbox intent commit in one Orchestrator transaction. The
+Gateway does not return an accepted claim if prerequisite evidence, run
+admission, or current authority checks fail before commit. The Events session
+is registered after the transaction. If that registration fails, the task
+claim is still durable; retry the same request with the same key to recover
+the receipt and retry registration. This does not promise exactly-once
+external effects or start an automatic scheduler.
+
+The claim reserves a coordinator root against the run's accepted workflow and
+immutable selection snapshot. Its `preparing` phase is a reservation state,
+not proof that work has been dispatched or completed. Subsequent coordination
+and dispatch use the existing Orchestrator workflow owner.
 
 Two native project routes read the recorded data with current `ReadProjects`
 authority:

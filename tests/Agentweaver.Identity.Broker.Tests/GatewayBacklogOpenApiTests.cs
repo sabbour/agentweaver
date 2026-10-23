@@ -3,7 +3,11 @@ extern alias GatewayHost;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Agentweaver.Orchestrator.Core;
 using GatewayHost::Agentweaver.Gateway;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
 
@@ -64,9 +68,167 @@ public sealed class GatewayBacklogOpenApiTests
         Assert.Equal("#/components/schemas/BacklogIssues",
             paths.GetProperty("/api/v1/projects/{projectId}/backlog/tasks").GetProperty("post")
                 .GetProperty("responses").GetProperty("409").GetProperty("content")
-                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+                .GetProperty("application/json").GetProperty("schema").GetProperty("oneOf")[0]
+                .GetProperty("$ref").GetString());
         Assert.True(schemas.GetProperty("BacklogTaskSnapshot").GetProperty("properties")
             .TryGetProperty("repositoryIssue", out _));
+
+        var state = paths.GetProperty("/api/v1/projects/{projectId}/backlog/tasks/{taskId}/state")
+            .GetProperty("put");
+        Assert.Equal("setProjectBacklogTaskState", state.GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/SetBacklogTaskStateRequest",
+            state.GetProperty("requestBody").GetProperty("content").GetProperty("application/json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
+        var dependencies = paths.GetProperty(
+            "/api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}");
+        Assert.Equal("addProjectBacklogDependency",
+            dependencies.GetProperty("put").GetProperty("operationId").GetString());
+        Assert.Equal("removeProjectBacklogDependency",
+            dependencies.GetProperty("delete").GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/BacklogGraphRevisionRequest",
+            dependencies.GetProperty("delete").GetProperty("requestBody").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+
+        var claim = paths.GetProperty(
+            "/api/v1/projects/{projectId}/runs/{runId}/backlog/tasks/{taskId}/claim").GetProperty("post");
+        Assert.Equal("claimBacklogTask", claim.GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/BacklogTaskClaimReceipt",
+            claim.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Equal("#/components/schemas/BacklogIssues",
+            claim.GetProperty("responses").GetProperty("409").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("oneOf")[0]
+                .GetProperty("$ref").GetString());
+        Assert.Contains("after the durable claim commits",
+            claim.GetProperty("responses").GetProperty("503").GetProperty("description").GetString()!);
+        foreach (var schemaName in new[]
+        {
+            "BacklogTaskReference",
+            "BacklogTaskContent",
+            "BacklogTaskSnapshot",
+            "BacklogDependencyEdge",
+            "BacklogGraph",
+            "BacklogDependencyGraphSnapshot",
+            "CaptureBacklogTaskRequest",
+            "EditBacklogTaskContentRequest",
+            "SetBacklogTaskStateRequest",
+            "BacklogTaskRevisionRequest",
+            "BacklogGraphRevisionRequest",
+            "ClaimBacklogTaskRequest",
+            "BacklogTaskClaimReceipt",
+        })
+            Assert.False(schemas.GetProperty(schemaName).GetProperty("additionalProperties").GetBoolean());
+    }
+
+    [Fact]
+    public async Task SerializedBacklogResponseMatchesItsStrictOpenApiSchema()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call an owner."));
+        using var openApiResponse = await gateway.Client.GetAsync("/openapi/v1.json");
+        Assert.Equal(HttpStatusCode.OK, openApiResponse.StatusCode);
+        using var document = JsonDocument.Parse(await openApiResponse.Content.ReadAsStringAsync());
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        var backlogGraphSchema = schemas.GetProperty("BacklogGraph");
+
+        var graph = BacklogDependencyGraph.Create(new BacklogDependencyGraphSnapshot(
+            "project-a",
+            5,
+            [
+                new BacklogTaskSnapshot(
+                    new BacklogTaskReference("project-a", "feature"), 2, BacklogTaskState.Ready, Title: "Feature"),
+                new BacklogTaskSnapshot(
+                    new BacklogTaskReference("project-a", "foundation"), 1, BacklogTaskState.Backlog, Title: "Foundation"),
+            ],
+            [
+                new BacklogDependencyEdge(
+                    new BacklogTaskReference("project-a", "feature"),
+                    new BacklogTaskReference("project-a", "foundation")),
+            ]));
+        Assert.True(graph.IsSuccess);
+
+        var services = new ServiceCollection();
+        services.ConfigureHttpJsonOptions(options =>
+        {
+            // Match the Orchestrator's successful Results.Ok JSON response settings.
+            options.SerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+            options.SerializerOptions.MaxDepth = 16;
+            options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        });
+        services.AddLogging();
+        using var serviceProvider = services.BuildServiceProvider();
+        using var serviceScope = serviceProvider.CreateScope();
+        var httpContext = new DefaultHttpContext { RequestServices = serviceScope.ServiceProvider };
+        await using var responseBody = new MemoryStream();
+        httpContext.Response.Body = responseBody;
+        await Results.Ok(graph.Value).ExecuteAsync(httpContext);
+        responseBody.Position = 0;
+        using var serializedResponse = await JsonDocument.ParseAsync(responseBody);
+
+        Assert.True(
+            MatchesSchema(serializedResponse.RootElement, backlogGraphSchema, schemas),
+            "The serialized successful backlog response must conform to the strict BacklogGraph schema.");
+    }
+
+    private static bool MatchesSchema(JsonElement value, JsonElement schema, JsonElement schemas)
+    {
+        // Check the schema keywords used by the strict backlog response contracts.
+        if (schema.TryGetProperty("$ref", out var reference))
+        {
+            const string prefix = "#/components/schemas/";
+            var name = reference.GetString();
+            return name is not null && name.StartsWith(prefix, StringComparison.Ordinal) &&
+                schemas.TryGetProperty(name[prefix.Length..], out var referencedSchema) &&
+                MatchesSchema(value, referencedSchema, schemas);
+        }
+
+        if (schema.TryGetProperty("anyOf", out var alternatives))
+            return alternatives.EnumerateArray().Any(alternative => MatchesSchema(value, alternative, schemas));
+        if (!schema.TryGetProperty("type", out var type))
+            return true;
+
+        switch (type.GetString())
+        {
+            case "object":
+                if (value.ValueKind != JsonValueKind.Object)
+                    return false;
+                if (schema.TryGetProperty("required", out var required) &&
+                    required.EnumerateArray().Any(name => !value.TryGetProperty(name.GetString()!, out _)))
+                    return false;
+                var properties = schema.GetProperty("properties");
+                foreach (var property in value.EnumerateObject())
+                {
+                    if (!properties.TryGetProperty(property.Name, out var propertySchema))
+                    {
+                        if (schema.TryGetProperty("additionalProperties", out var additionalProperties) &&
+                            additionalProperties.ValueKind == JsonValueKind.False)
+                            return false;
+                        continue;
+                    }
+                    if (!MatchesSchema(property.Value, propertySchema, schemas))
+                        return false;
+                }
+                return true;
+            case "array":
+                return value.ValueKind == JsonValueKind.Array &&
+                    value.EnumerateArray().All(item => MatchesSchema(item, schema.GetProperty("items"), schemas));
+            case "string":
+                return value.ValueKind == JsonValueKind.String &&
+                    (!schema.TryGetProperty("enum", out var values) ||
+                     values.EnumerateArray().Any(candidate => candidate.GetString() == value.GetString()));
+            case "integer":
+                return value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out _);
+            case "number":
+                return value.ValueKind == JsonValueKind.Number;
+            case "boolean":
+                return value.ValueKind is JsonValueKind.True or JsonValueKind.False;
+            case "null":
+                return value.ValueKind == JsonValueKind.Null;
+            default:
+                return false;
+        }
     }
 
     [Fact]

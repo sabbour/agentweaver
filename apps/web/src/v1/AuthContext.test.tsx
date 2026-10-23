@@ -209,7 +209,7 @@ describe('Broker refresh coordination', () => {
       (_, index) => window.sessionStorage.getItem(window.sessionStorage.key(index) ?? '') ?? '',
     );
     expect(sessionValues).toEqual(['1']);
-    expect(window.localStorage.length).toBe(0);
+    expect(window.localStorage?.length ?? 0).toBe(0);
     expect(document.cookie).not.toContain('access-1');
     expect(document.cookie).not.toContain('refresh-1');
     expect(window.location.search).not.toMatch(/[?&](access_token|refresh_token)=/);
@@ -274,6 +274,7 @@ describe('Broker refresh coordination', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/projects');
     window.__AGENTWEAVER_IDENTITY_CALLBACK__ = undefined;
+    window.localStorage?.clear();
     window.sessionStorage.clear();
     vi.clearAllMocks();
     mocks.readAuthorizationTransaction.mockReset().mockReturnValue(null);

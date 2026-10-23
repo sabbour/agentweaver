@@ -3,8 +3,8 @@
  * then the agent task board with Backlog, Ready, Active and Done columns.
  * Tasks come from the project backlog graph. Synced repository issues add the
  * issue reference and state to the cards that track them. Task content can be
- * edited in place. Moving tasks between columns has no service operation yet,
- * so cards are not draggable and the board says so.
+ * edited in place. Queue state and prerequisite edges use revision-checked
+ * owner operations; cards are not draggable.
  */
 import {
   Badge,
@@ -16,6 +16,7 @@ import {
   mergeClasses,
   MessageBar,
   MessageBarBody,
+  Select,
   Text,
   Textarea,
   tokens,
@@ -34,6 +35,10 @@ import {
   boardErrorMessage,
   captureTask,
   editTaskContent,
+  setTaskState,
+  archiveTask,
+  addPrerequisite,
+  removePrerequisite,
   isStaleRevision,
   MOVE_UNAVAILABLE_COPY,
   prerequisiteTitles,
@@ -116,6 +121,11 @@ const useStyles = makeStyles({
   },
   summaryButtonInfo: { ...border(tokens.colorNeutralStrokeAccessible), color: tokens.colorNeutralForeground1 },
   moveNote: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200 },
+  cardActions: { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
+  dependencyRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  dependencyRow: { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  dependencyControls: { display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: tokens.spacingHorizontalXS },
+  dependencySelect: { minWidth: '160px' },
   boardSurface: {
     backgroundColor: tokens.colorNeutralBackground1,
     borderRadius: tokens.borderRadiusMedium,
@@ -268,14 +278,14 @@ interface BoardTaskCardProps {
   task: BacklogTaskSnapshot;
   issue: ProjectIssueSummary | undefined;
   canEdit: boolean;
-  onSaved: (graph: BacklogGraph) => void;
+  onSaved: (graph: BacklogGraph, message: string) => void;
   onConflict: () => void;
 }
 
 /**
  * One task card. It shows the title, description, prerequisites, linked issue
- * and queue state. Users with edit access can change the title and description
- * in place, unless an automation is working on the task.
+ * and queue state. Users with edit access can update task content; queue and
+ * prerequisite actions are available only while the task is unclaimed.
  */
 function BoardTaskCard({ graph, task, issue, canEdit, onSaved, onConflict }: BoardTaskCardProps) {
   const styles = useStyles();
@@ -283,13 +293,17 @@ function BoardTaskCard({ graph, task, issue, canEdit, onSaved, onConflict }: Boa
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? '');
+  const [prerequisiteTaskId, setPrerequisiteTaskId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const prerequisites = prerequisiteTitles(graph, task.reference.taskId);
+  const dependencyEdges = graph.dependencies.filter((edge) => edge.task.taskId === task.reference.taskId);
   const reference = issueReference(task, issue);
   // The service rejects edits while an automation invocation is pending, so the
   // card hides the edit button then instead of offering an action that fails.
   const editable = canEdit && !task.isArchived && !task.isAutomationInvocationPending;
+  const queueEditable = editable && (task.state === 'backlog' || task.state === 'ready');
+  const canChangeQueue = queueEditable && task.lifecycle === 'open';
 
   const startEdit = () => {
     // Start from the latest saved content, not from an earlier cancelled draft.
@@ -314,11 +328,26 @@ function BoardTaskCard({ graph, task, issue, canEdit, onSaved, onConflict }: Boa
         description: description.trim() ? description.trim() : null,
       });
       setEditing(false);
-      onSaved(next);
+      onSaved(next, 'Task saved.');
     } catch (reason) {
       setError(boardErrorMessage(reason, 'edit'));
       // A conflict or a missing task means the board is out of date. Reload it so
       // the next attempt uses fresh revisions. The draft stays for a retry.
+      if (reason instanceof GatewayError && (reason.status === 409 || reason.status === 404)) onConflict();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const mutate = async (operation: () => Promise<BacklogGraph>, message: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onSaved(await operation(), message);
+      setPrerequisiteTaskId('');
+    } catch (reason) {
+      setError(boardErrorMessage(reason, 'mutate'));
+      // A conflict or missing task makes this snapshot stale; reload before another action.
       if (reason instanceof GatewayError && (reason.status === 409 || reason.status === 404)) onConflict();
     } finally {
       setBusy(false);
@@ -359,7 +388,7 @@ function BoardTaskCard({ graph, task, issue, canEdit, onSaved, onConflict }: Boa
     <div className={styles.card} data-testid={`task-card-${task.reference.taskId}`}>
       <div className={styles.cardHeader}>
         <Text className={styles.cardTitle}>{task.title}</Text>
-        {editable && (
+        {queueEditable && (
           <Button appearance="subtle" size="small" icon={<EditRegular />} aria-label={`Edit task ${task.title}`} onClick={startEdit} />
         )}
       </div>
@@ -370,9 +399,33 @@ function BoardTaskCard({ graph, task, issue, canEdit, onSaved, onConflict }: Boa
           <Caption1 className={styles.meta}>Editing is paused until it finishes.</Caption1>
         </div>
       )}
-      {prerequisites.titles.map((prerequisite) => (
-        <Caption1 key={prerequisite} className={styles.meta}>Needs {prerequisite}</Caption1>
-      ))}
+      {dependencyEdges.length > 0 && (
+        <div className={styles.dependencyRows} aria-label={`Prerequisites for ${task.title}`}>
+          {dependencyEdges.map((edge) => {
+            const prerequisite = graph.tasks.find((item) => item.reference.taskId === edge.prerequisite.taskId);
+            const title = prerequisite?.title || 'Task not shown';
+            return (
+              <div key={edge.prerequisite.taskId} className={styles.dependencyRow}>
+                <Caption1 className={styles.meta}>Needs {title}</Caption1>
+                {queueEditable && (
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    disabled={busy}
+                    aria-label={`Remove prerequisite ${title} from ${task.title}`}
+                    onClick={() => void mutate(
+                      () => removePrerequisite(apiCall, graph, task, edge.prerequisite.taskId),
+                      'Prerequisite removed.',
+                    )}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {prerequisites.unknown > 0 && (
         <Caption1 className={styles.meta}>
           Needs {prerequisites.unknown} {prerequisites.unknown === 1 ? 'task' : 'tasks'} not shown on this board
@@ -391,6 +444,69 @@ function BoardTaskCard({ graph, task, issue, canEdit, onSaved, onConflict }: Boa
       <div className={styles.metadataRow}>
         <Text className={styles.meta}>{queueLabel(task)}</Text>
       </div>
+      {queueEditable && (
+        <>
+          <div className={styles.cardActions}>
+            {canChangeQueue && (
+              <Button
+                appearance="secondary"
+                size="small"
+                disabled={busy}
+                onClick={() => void mutate(
+                  () => setTaskState(apiCall, graph, task, task.state === 'ready' ? 'backlog' : 'ready'),
+                  task.state === 'ready' ? 'Task moved to Backlog.' : 'Task marked Ready.',
+                )}
+              >
+                {task.state === 'ready' ? 'Move to Backlog' : 'Mark Ready'}
+              </Button>
+            )}
+            <Button
+              appearance="subtle"
+              size="small"
+              disabled={busy}
+              onClick={() => void mutate(() => archiveTask(apiCall, graph, task), 'Task archived.')}
+            >
+              Archive
+            </Button>
+          </div>
+          {graph.tasks.some((item) =>
+            item.reference.taskId !== task.reference.taskId &&
+            !item.isArchived &&
+            !item.isAutomationInvocationPending &&
+            !dependencyEdges.some((edge) => edge.prerequisite.taskId === item.reference.taskId)) && (
+            <div className={styles.dependencyControls}>
+              <Field label="Add prerequisite" className={styles.dependencySelect}>
+                <Select
+                  value={prerequisiteTaskId}
+                  disabled={busy}
+                  onChange={(_, data) => setPrerequisiteTaskId(data.value)}
+                >
+                  <option value="">Choose a task</option>
+                  {graph.tasks.filter((item) =>
+                    item.reference.taskId !== task.reference.taskId &&
+                    !item.isArchived &&
+                    !item.isAutomationInvocationPending &&
+                    !dependencyEdges.some((edge) => edge.prerequisite.taskId === item.reference.taskId))
+                    .map((item) => (
+                      <option key={item.reference.taskId} value={item.reference.taskId}>{item.title}</option>
+                    ))}
+                </Select>
+              </Field>
+              <Button
+                appearance="secondary"
+                size="small"
+                disabled={busy || !prerequisiteTaskId}
+                onClick={() => void mutate(
+                  () => addPrerequisite(apiCall, graph, task, prerequisiteTaskId),
+                  'Prerequisite added.',
+                )}
+              >
+                Add
+              </Button>
+            </div>
+          )}
+        </>
+      )}
       {error && <Text className={styles.error}>{error}</Text>}
     </div>
   );
@@ -402,7 +518,7 @@ interface BoardColumnViewProps {
   graph: BacklogGraph;
   issues: ReadonlyMap<string, ProjectIssueSummary>;
   canEdit: boolean;
-  onSaved: (graph: BacklogGraph) => void;
+  onSaved: (graph: BacklogGraph, message: string) => void;
   onConflict: () => void;
 }
 
@@ -502,9 +618,9 @@ export function BoardPage() {
     }
   }, [apiCall, graphRevision, projectId, reload, replaceGraph]);
 
-  const onSaved = useCallback((next: BacklogGraph) => {
+  const onSaved = useCallback((next: BacklogGraph, message: string) => {
     replaceGraph(next);
-    setNotice('Task saved.');
+    setNotice(message);
   }, [replaceGraph]);
 
   const readError = board.error;
@@ -514,7 +630,7 @@ export function BoardPage() {
     <div className={styles.root}>
       <PageHeading
         title="Board"
-        description="Capture tasks and follow them from Backlog to Done."
+        description="Queue work and record prerequisites; a run checks live eligibility when it claims a task."
         page="Board"
         actions={<Button appearance="secondary" icon={<ArrowSyncRegular />} disabled={board.loading} onClick={reload}>Refresh</Button>}
       />
