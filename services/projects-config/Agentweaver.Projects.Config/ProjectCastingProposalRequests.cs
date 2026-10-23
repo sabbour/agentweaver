@@ -17,6 +17,7 @@ public sealed record CreateScenarioProjectCastingProposalRequest
 {
     public required long ExpectedConfigurationRevision { get; init; }
     public required string TemplateId { get; init; }
+    public string? Universe { get; init; }
 }
 
 /// <summary>Request to stage a casting proposal from selected catalog role IDs.</summary>
@@ -25,6 +26,7 @@ public sealed record CreateManualProjectCastingProposalRequest
 {
     public required long ExpectedConfigurationRevision { get; init; }
     public required ImmutableArray<string> RoleIds { get; init; }
+    public string? Universe { get; init; }
 }
 
 /// <summary>Request to replace a pending proposal draft using its current draft revision.</summary>

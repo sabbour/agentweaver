@@ -2354,6 +2354,39 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
+    public async Task CastingUniverseListRequiresProjectReadAccessAndReturnsOnlySupportedNames()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "casting-universes-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "casting-universes-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var reader = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "casting-universes-reader-" + suffix,
+            tenantId,
+            ["api.read"]);
+        var service = CreateCastingProposalService(db);
+        var project = await service.CreateProjectAsync(owner, "Casting universes", CancellationToken.None);
+
+        Assert.Equal(
+            ProjectCastingCatalog.Universes,
+            await service.ListCastingUniversesAsync(owner, project.ProjectId, CancellationToken.None));
+        await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ListCastingUniversesAsync(reader, project.ProjectId, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ScenarioCastingProposalBuildsCatalogRosterPreservesUnrelatedSettingsAndConfirms()
     {
         await using var db = CreateDbContext();
@@ -2380,6 +2413,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             {
                 AgentCharters = [new ProjectAgentCharter("existing-agent", "Existing", "builder", "Existing charter")],
                 Casting = [new ProjectAgentCast("existing-agent", "builder", 0)],
+                CastingUniverse = "Inception",
                 Skills = [new SkillCatalogSetting("existing-skill", true, 0)],
             });
         var newUnpinnedSkill = await Assert.ThrowsAsync<ProjectConfigException>(() =>
@@ -2415,15 +2449,27 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var revisionsBeforeProposal = await db.ProjectConfigurationRevisions.AsNoTracking()
             .CountAsync(item => item.ProjectId == project.ProjectId);
 
+        var unsupportedUniverse = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.CreateScenarioCastingProposalAsync(
+                owner,
+                project.ProjectId,
+                ordinaryUpdate.Revision,
+                "quick-software-development",
+                CancellationToken.None,
+                "not-supported"));
+        Assert.Equal(StatusCodes.Status400BadRequest, unsupportedUniverse.StatusCode);
+
         var proposal = await service.CreateScenarioCastingProposalAsync(
             owner,
             project.ProjectId,
             ordinaryUpdate.Revision,
             "quick-software-development",
-            CancellationToken.None);
+            CancellationToken.None,
+            "The Matrix");
 
         Assert.Equal(ProjectCastingProposalState.Pending, proposal.State);
         Assert.Equal(ordinaryUpdate.Revision, proposal.BaseConfigurationRevision);
+        Assert.Equal("The Matrix", proposal.Draft.CastingUniverse);
         Assert.Equal(
             new[] { "frontend-engineer", "backend-engineer", "security-engineer", "devops-engineer", "qa-engineer" },
             proposal.Draft.Casting.Select(item => item.AgentId));
@@ -2454,6 +2500,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             owner, project.ProjectId, proposal.ProposalId, updatedProposal.DraftRevision, CancellationToken.None);
         Assert.Equal(ProjectCastingProposalState.Confirmed, confirmed.State);
         Assert.Equal("reviewed-workflow", confirmed.Result?.DefaultWorkflowId);
+        Assert.Equal("The Matrix", confirmed.Result?.CastingUniverse);
         Assert.Equal(ordinaryUpdate.Configuration.Skills.ToArray(), confirmed.Result?.Skills.ToArray());
     }
 

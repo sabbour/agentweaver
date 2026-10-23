@@ -23,6 +23,24 @@ public sealed record ProjectCastingTemplateDefinition(
 /// </summary>
 public static class ProjectCastingCatalog
 {
+    private static readonly ImmutableArray<string> UniverseNames =
+    [
+        "The Matrix",
+        "Star Wars",
+        "Inception",
+        "Firefly",
+        "The Office",
+        "Breaking Bad",
+        "Dune",
+        "Alien",
+        "Blade Runner",
+        "The Lord of the Rings",
+        "Star Trek",
+        "Harry Potter",
+        "The Avengers",
+        "Battlestar Galactica",
+    ];
+
     private static readonly ImmutableArray<ProjectCastingRoleDefinition> RoleDefinitions =
     [
         Role("lead-pm", "Lead PM",
@@ -137,6 +155,31 @@ public static class ProjectCastingCatalog
 
     /// <summary>Returns the immutable scenario templates exposed by the casting endpoint.</summary>
     public static ImmutableArray<ProjectCastingTemplateDefinition> Templates => TemplateDefinitions;
+
+    /// <summary>Returns the universe names supported by the v1 casting selector.</summary>
+    public static ImmutableArray<string> Universes => UniverseNames;
+
+    /// <summary>Validates and canonicalizes the optional universe stored with project casting configuration.</summary>
+    public static string? NormalizeUniverse(string? universe)
+    {
+        if (universe is null)
+            return null;
+
+        // Match only server-supported values; an invalid selection must not silently become the random option.
+        var canonical = UniverseNames.FirstOrDefault(item =>
+            string.Equals(item, universe, StringComparison.OrdinalIgnoreCase));
+        return canonical ?? throw ProjectConfigException.Invalid(
+            "unknown_casting_universe",
+            $"Unknown casting universe '{universe}'.");
+    }
+
+    /// <summary>Applies a validated universe selection to a draft in the same revision-bound proposal.</summary>
+    public static ProjectConfiguration ApplyUniverse(ProjectConfiguration draft, string? universe)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        // Null represents the 0.x "Random (any universe)" choice and clears a prior explicit selection.
+        return draft with { CastingUniverse = NormalizeUniverse(universe) };
+    }
 
     /// <summary>Creates a draft from a known template, replacing only the current charters and casting.</summary>
     /// <exception cref="ProjectConfigException">The template ID is empty or is not in the catalog.</exception>
