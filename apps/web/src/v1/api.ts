@@ -16,6 +16,7 @@ import type {
   CreateProjectCastingProposalRequest,
   ImportProjectCastingTransferRequest,
   PlatformComponentReport,
+  ProjectCastingUniverseList,
   ProjectCastingProposal,
   ProjectCastingRoleDefinition,
   ProjectCastingTemplateDefinition,
@@ -1999,6 +2000,21 @@ export class AgentweaverGatewayClient {
   /** Lists the built-in team templates that a casting proposal can start from. */
   listCastingTemplates(token: string, tenantSelector?: string | null): Promise<ProjectCastingTemplateDefinition[]> {
     return this.request(token, '/casting/templates', {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Lists supported universe names after the Projects owner checks project access. */
+  listCastingUniverses(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingUniverseList> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'universes')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
   /** Lists the built-in roles that a manual casting proposal can pick from. */

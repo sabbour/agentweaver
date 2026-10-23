@@ -53,14 +53,16 @@ public sealed partial class ProjectsConfigService
         string projectId,
         long expectedConfigurationRevision,
         string templateId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? universe = null)
     {
         RequireCastingWrite(caller, projectId);
         return CreateCastingProposalFromCurrentConfigurationAsync(
             caller,
             projectId,
             expectedConfigurationRevision,
-            current => ProjectCastingCatalog.CreateScenarioDraft(current, templateId),
+            current => ProjectCastingCatalog.ApplyUniverse(
+                ProjectCastingCatalog.CreateScenarioDraft(current, templateId), universe),
             cancellationToken);
     }
 
@@ -70,15 +72,28 @@ public sealed partial class ProjectsConfigService
         string projectId,
         long expectedConfigurationRevision,
         ImmutableArray<string> roleIds,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? universe = null)
     {
         RequireCastingWrite(caller, projectId);
         return CreateCastingProposalFromCurrentConfigurationAsync(
             caller,
             projectId,
             expectedConfigurationRevision,
-            current => ProjectCastingCatalog.CreateManualDraft(current, roleIds),
+            current => ProjectCastingCatalog.ApplyUniverse(
+                ProjectCastingCatalog.CreateManualDraft(current, roleIds), universe),
             cancellationToken);
+    }
+
+    /// <summary>Lists supported universes after confirming the caller can read the requested project.</summary>
+    public async Task<ImmutableArray<string>> ListCastingUniversesAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        // Reading the current configuration applies the same project-scoped access and existence checks as casting.
+        _ = await GetProjectConfigurationAsync(caller, projectId, null, cancellationToken).ConfigureAwait(false);
+        return ProjectCastingCatalog.Universes;
     }
 
     /// <summary>

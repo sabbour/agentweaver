@@ -114,8 +114,8 @@ for the owner transaction boundary.
 | Contract | Fields and behavior |
 | --- | --- |
 | `CreateProjectCastingProposalRequest` | `expectedConfigurationRevision`, complete `draft`. |
-| `CreateScenarioProjectCastingProposalRequest` | `expectedConfigurationRevision`, catalog `templateId`. |
-| `CreateManualProjectCastingProposalRequest` | `expectedConfigurationRevision`, non-empty catalog `roleIds`. |
+| `CreateScenarioProjectCastingProposalRequest` | `expectedConfigurationRevision`, catalog `templateId`, optional supported `universe`. |
+| `CreateManualProjectCastingProposalRequest` | `expectedConfigurationRevision`, non-empty catalog `roleIds`, optional supported `universe`. |
 | `UpdateProjectCastingProposalRequest` | `expectedDraftRevision`, replacement `draft`. |
 | `TransitionProjectCastingProposalRequest` | `expectedDraftRevision` for confirm or reject. |
 | `ProjectCastingProposal` | `proposalId`, `projectId`, `baseConfigurationRevision`, `draftRevision`, `state` (`pending`, `confirmed`, or `rejected`), `draft`, nullable `confirmedConfigurationRevision`, nullable `result`, nullable `transferProvenance`, and creation/update actor IDs and timestamps. |
@@ -126,9 +126,10 @@ for the owner transaction boundary.
 | `ProjectCastingRoleDefinition` | `id`, `title`, `summary`, `responsibilities`, `boundaries`. |
 
 The owner rejects unknown request fields and preserves revision conflicts as
-`409`. The Gateway publishes these schemas in `GET /openapi/v1.json`, and the
-web contract module supplies types only. There is no new casting permission,
-idempotency header, or UI implementation.
+`409`. A selected universe is validated against the server catalog and remains
+inside the revision-bound proposal draft. The Gateway publishes these schemas
+in `GET /openapi/v1.json`, and the web contract module supplies types only.
+There is no new casting permission or idempotency header.
 
 ## Cost and usage storage contracts
 

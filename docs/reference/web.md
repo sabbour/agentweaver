@@ -49,7 +49,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/NewChatComposer.tsx` | Message composer with a stable idempotency key per draft. The run Chat tab uses it. |
 | `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
 | `src/v1/AgentsView.tsx`, `src/v1/AgentsTeamControls.tsx` | Agents roster, filters, the charter drawer, **Cast team**, **Add member**, pending team proposals, and team export and import. |
-| `src/v1/CastTeamPage.tsx`, `src/v1/castingData.ts` | Cast a team from a template or roles, review the proposal, and confirm or reject it. |
+| `src/v1/CastTeamPage.tsx`, `src/v1/castingData.ts` | Cast a team from a template or roles, choose a server-supported universe, review the proposal, and confirm or reject it. |
 | `src/v1/PlatformSettingsPage.tsx` | Read-only status of the 16 platform component areas for tenant and platform administrators. |
 | `src/v1/ProjectSettingsSections.tsx`, `src/v1/settingsSections.ts`, `src/v1/projectReadiness.ts` | Project settings rail, General, Access, Repository, Run limits, and Danger zone sections. |
 | `src/v1/ProjectMembers.tsx` | Access > Members on the project role-assignment API. Only tenant administrators see add and remove. |
@@ -96,6 +96,14 @@ data hooks are not mounted.
 | `/projects/:projectId/flow`, `workflows`, `workspace`, `observability/*`, `diagnostics`, `heartbeat`, and `cluster` | `FlowPage`, `WorkflowsPage`, `WorkspacePage`, `ProjectObservabilityPage`, `DiagnosticsPage`, `HeartbeatPage`, and `ClusterPage` in `OperationsPages.tsx`. |
 | `/observability/*` | `UnavailablePage` explains that a summary across projects is not available in this version and links back. |
 | Other paths | `UnavailablePage` with **Page not found**. |
+
+## Cast a team
+
+The Cast a team page lists universe names from the Projects & Config owner.
+Choose a name or keep **Random (any universe)**. The page sends the choice with
+the template or role selection when it creates a proposal at the displayed
+configuration revision. Projects & Config stores the choice in the pending
+draft; it becomes project configuration only after confirmation.
 
 The production host serves `index.html` for client routes. Missing `/assets`
 files return `404`, not the SPA fallback.

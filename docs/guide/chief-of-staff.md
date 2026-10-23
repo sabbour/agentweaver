@@ -250,7 +250,10 @@ unique indexes to existing Priority links. It preserves every existing row
 and removes only the obsolete number-only index after its replacements exist.
 It runs in the migrator transaction and can block link writes while it validates
 and builds the indexes. Existing runtime table grants remain sufficient.
-It does not apply or require optional PR-recording migration 032.
+Migration 033 itself does not apply or require migration 032. The reviewed P1
+maintenance plan applies both migrations; 032 creates the records used by the
+project pull request list, and its grant is covered by the same source-bound
+plan.
 
 Deploy the owner built from this source before applying 033. Its startup and
 readiness checks accept the complete schema through 031, with optional 032
@@ -267,7 +270,7 @@ schema version. Rolling back to this compatible owner works on either shape.
 The machine-readable contract is
 `services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json`.
 Its required, optional and default-apply version lists describe this image's
-behavior. The P1 plan includes 033 but skips 017 and 032; regenerating the plan
+behavior. The P1 plan includes 032 and 033 but skips 017; regenerating the plan
 changes its hash. Schema compatibility is not permission to apply the plan.
 
 ## Related content

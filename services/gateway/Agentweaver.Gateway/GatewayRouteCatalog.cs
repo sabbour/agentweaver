@@ -145,6 +145,9 @@ public static class GatewayRouteCatalog
             forwardTenantSelector: true);
         // Casting remains owner-authorized; revisions travel in bodies, not idempotency headers.
         var casting = "/projects/{projectId}/casting";
+        Add("GET", GatewayOwner.Projects, casting + "/universes", "/api" + casting + "/universes",
+            "listProjectCastingUniverses", "List supported casting universes for a project",
+            forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, casting + "/proposals", "/api" + casting + "/proposals",
             "createProjectCastingProposal", "Stage a complete casting draft", body: true, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, casting + "/proposals/scenario", "/api" + casting + "/proposals/scenario",

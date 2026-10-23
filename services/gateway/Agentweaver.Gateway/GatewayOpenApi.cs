@@ -45,6 +45,7 @@ internal static partial class GatewayOpenApi
             ["rejectProjectCastingProposal"] = C("TransitionProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
             ["exportProjectCasting"] = C(null, "ProjectCastingTransfer", "200"),
             ["importProjectCasting"] = C("ImportProjectCastingTransferRequest", "ProjectCastingProposal", "201"),
+            ["listProjectCastingUniverses"] = C(null, "ProjectCastingUniverseList", "200"),
             ["listProjectCastingTemplates"] = C(null, "ProjectCastingTemplateList", "200"),
             ["listProjectCastingRoles"] = C(null, "ProjectCastingRoleList", "200"),
             ["listMarketplaceDefinitions"] = C(null, "SkillMarketplaceDefinitionList", "200"),
@@ -420,7 +421,7 @@ internal static partial class GatewayOpenApi
                 "The token lacks api.read or names another project, or the caller lacks current Projects " +
                 "read authority. The response contains no items.");
             responses["502"] = ProblemResponse("The Projects owner returned an invalid or failed authority response.");
-            // Only the pull request list depends on optional migration 032. Document its 503 so
+            // The pull request list depends on migration 032. Document its rollout-time 503 so
             // clients don't treat "not available" as an empty list.
             if (route.OperationId == "listProjectPullRequests")
                 responses["503"] = ProblemResponse(
@@ -998,9 +999,9 @@ else if (route.OperationId is
         ["CreateProjectCastingProposalRequest"] = StrictObj(["expectedConfigurationRevision", "draft"],
             ("expectedConfigurationRevision", Int()), ("draft", Ref("ProjectConfiguration"))),
         ["CreateScenarioProjectCastingProposalRequest"] = StrictObj(["expectedConfigurationRevision", "templateId"],
-            ("expectedConfigurationRevision", Int()), ("templateId", Str())),
+            ("expectedConfigurationRevision", Int()), ("templateId", Str()), ("universe", NullableStr())),
         ["CreateManualProjectCastingProposalRequest"] = StrictObj(["expectedConfigurationRevision", "roleIds"],
-            ("expectedConfigurationRevision", Int()), ("roleIds", Arr(Str()))),
+            ("expectedConfigurationRevision", Int()), ("roleIds", Arr(Str())), ("universe", NullableStr())),
         ["UpdateProjectCastingProposalRequest"] = StrictObj(["expectedDraftRevision", "draft"],
             ("expectedDraftRevision", Int()), ("draft", Ref("ProjectConfiguration"))),
         ["TransitionProjectCastingProposalRequest"] = StrictObj(["expectedDraftRevision"], ("expectedDraftRevision", Int())),
@@ -1025,6 +1026,7 @@ else if (route.OperationId is
             ["formatVersion", "sourceProjectId", "sourceConfigurationRevision", "contentDigest"],
             ("formatVersion", new { type = "integer", @const = 1 }), ("sourceProjectId", Str()),
             ("sourceConfigurationRevision", Int()), ("contentDigest", Str())),
+        ["ProjectCastingUniverseList"] = StrictObj(["universes"], ("universes", Arr(Str()))),
         ["ProjectCastingTemplateDefinition"] = StrictObj(["id", "title", "description", "roleIds"],
             ("id", Str()), ("title", Str()), ("description", Str()), ("roleIds", Arr(Str()))),
         ["ProjectCastingTemplateList"] = Arr(Ref("ProjectCastingTemplateDefinition")),
@@ -1225,6 +1227,7 @@ else if (route.OperationId is
             }),
             ("agentCharters", Arr(Ref("ProjectAgentCharter"))),
             ("casting", Arr(Ref("ProjectAgentCast"))),
+            ("castingUniverse", NullableStr()),
             ("blueprintWorkflowReferences", Arr(Ref("BlueprintWorkflowReference"))),
             ("defaultWorkflowId", NullableStr()), ("skills", Arr(Ref("SkillCatalogSetting"))),
             ("egressNarrowing", Nullable(Arr(Ref("NetworkEgressRule")))),

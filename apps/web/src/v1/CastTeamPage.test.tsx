@@ -8,6 +8,7 @@ import type { ProjectCastingProposal, ProjectConfiguration } from './contracts';
 
 const api = vi.hoisted(() => ({
   listCastingTemplates: vi.fn(),
+  listCastingUniverses: vi.fn(),
   listCatalogRoles: vi.fn(),
   getProjectConfiguration: vi.fn(),
   getCastingProposal: vi.fn(),
@@ -69,6 +70,7 @@ beforeEach(() => {
   api.listCastingTemplates.mockResolvedValue([
     { id: 'small', title: 'Small team', description: 'A lead and a tester.', roleIds: ['lead', 'tester'] },
   ]);
+  api.listCastingUniverses.mockResolvedValue({ universes: ['The Matrix'] });
   api.listCatalogRoles.mockResolvedValue([
     { id: 'lead', title: 'Lead', summary: '', responsibilities: [], boundaries: [] },
     { id: 'tester', title: 'Tester', summary: '', responsibilities: [], boundaries: [] },
@@ -90,7 +92,9 @@ describe('CastTeamPage', () => {
     fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     await screen.findByText('Review proposal', { selector: 'h3, span, div' });
-    expect(api.createCastingProposal).toHaveBeenCalledWith('token', 'p1', { mode: 'scenario', expectedConfigurationRevision: 5, templateId: 'small' }, 'tenant-1');
+    expect(api.createCastingProposal).toHaveBeenCalledWith('token', 'p1', {
+      mode: 'scenario', expectedConfigurationRevision: 5, templateId: 'small', universe: null,
+    }, 'tenant-1');
     expect(within(screen.getByLabelText('Proposed members')).getByText('Tester')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Cast team' }));
@@ -105,15 +109,35 @@ describe('CastTeamPage', () => {
     fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     await waitFor(() => expect(api.createCastingProposal).toHaveBeenCalledWith(
-      'token', 'p1', { mode: 'manual', expectedConfigurationRevision: 5, roleIds: ['lead', 'tester', 'docs'] }, 'tenant-1',
+      'token', 'p1', { mode: 'manual', expectedConfigurationRevision: 5, roleIds: ['lead', 'tester', 'docs'], universe: null }, 'tenant-1',
     ));
   });
 
-  it('stages an augment proposal with the existing team and selected roles', async () => {
+  it('shows only server-provided universes and sends the selected value with the proposal', async () => {
+    api.listCastingUniverses.mockResolvedValue({ universes: ['The Matrix'] });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Universe' }));
+    const picker = await screen.findByRole('combobox', { name: 'Universe' });
+    expect(within(picker).getByRole('option', { name: 'The Matrix' })).toBeTruthy();
+    expect(within(picker).queryByRole('option', { name: 'Star Wars' })).toBeNull();
+    fireEvent.change(picker, { target: { value: 'The Matrix' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Small team/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    await waitFor(() => expect(api.createCastingProposal).toHaveBeenCalledWith(
+      'token', 'p1', {
+        mode: 'scenario', expectedConfigurationRevision: 5, templateId: 'small', universe: 'The Matrix',
+      }, 'tenant-1',
+    ));
+  });
+
+  it('stages an augment proposal with the existing team, selected roles, and universe', async () => {
     api.createCastingDraftProposal.mockResolvedValue(proposal({
       draft: config([['old', 'Old'], ['docs-writer', 'Docs Writer']]),
     }));
     renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Universe' }));
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Universe' }), { target: { value: 'The Matrix' } });
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Docs' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     await screen.findByText('Review proposal', { selector: 'h3, span, div' });
@@ -121,6 +145,7 @@ describe('CastTeamPage', () => {
     expect(projectId).toBe('p1');
     expect(request.expectedConfigurationRevision).toBe(5);
     expect(request.draft.casting.map((item: { agentId: string }) => item.agentId)).toEqual(['old', 'docs']);
+    expect(request.draft.castingUniverse).toBe('The Matrix');
     expect(screen.getByText('This proposal adds 1 member to the current team.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Remove Old' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Remove Docs Writer' })).toBeTruthy();

@@ -102,6 +102,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PATCH /api/projects/{projectId}` | Change project name or lifecycle state with an expected project revision. Archive rather than physically delete. |
 | `GET /api/projects/{projectId}/configuration?revision={n}` | Read the current or a retained configuration revision. |
 | `PUT /api/projects/{projectId}/configuration` | Append a configuration revision with an expected configuration revision. |
+| `GET /api/projects/{projectId}/casting/universes` | List supported universe names after checking project read access. |
 | `GET /api/casting/templates` | List the built-in scenario templates available to seed a reviewed team proposal. |
 | `GET /api/catalog/roles` | List the role definitions available to scenario and manual team proposals. |
 | `GET /api/blueprints` | List the built-in blueprints with their default workflow and availability. |
@@ -172,7 +173,11 @@ sequenceDiagram
     participant Gateway
     participant Projects as Projects & Config
     participant DB as PostgreSQL
-    Client->>Gateway: Create proposal (expectedConfigurationRevision, draft or catalog selection)
+    Client->>Gateway: Read supported universe names for the project
+    Gateway->>Projects: Forward bearer and tenant selector
+    Projects->>DB: Check current ReadProjects and project context
+    Projects-->>Client: Supported universe names through Gateway
+    Client->>Gateway: Create proposal (expectedConfigurationRevision, catalog selection, universe)
     Gateway->>Projects: Forward bearer, tenant selector, and body
     Projects->>DB: Check current WriteProjects; stage revision-bound proposal
     Projects-->>Client: 201 pending proposal through Gateway
@@ -187,7 +192,7 @@ sequenceDiagram
     end
 ```
 
-Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
+Casting templates, roles, and supported universe names are server-owned catalog reads. The project-scoped universe route checks the caller's current project read access before returning the supported names. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both may include a selected `universe`, which Projects validates and stores in the pending draft at that same revision. The draft replaces only the proposed `AgentCharters`, `Casting`, and selected universe while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
 
 The retained web client uses that full-draft route for team changes that must
 preserve the current roster. **Augment** stages the existing members plus the
