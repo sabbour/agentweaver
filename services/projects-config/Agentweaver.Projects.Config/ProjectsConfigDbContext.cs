@@ -21,6 +21,8 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public DbSet<ProjectSetupOperationRecord> ProjectSetupOperations => Set<ProjectSetupOperationRecord>();
     public DbSet<ProjectMarketplaceSourceRecord> MarketplaceSources => Set<ProjectMarketplaceSourceRecord>();
     public DbSet<ProjectCastingProposalRecord> CastingProposals => Set<ProjectCastingProposalRecord>();
+    public DbSet<ProjectCastingGenerationRequestRecord> CastingGenerationRequests =>
+        Set<ProjectCastingGenerationRequestRecord>();
     public DbSet<ProjectSkillContentRevisionRecord> SkillContentRevisions => Set<ProjectSkillContentRevisionRecord>();
     public DbSet<ProjectSkillImportIdempotencyRecord> SkillImportIdempotency =>
         Set<ProjectSkillImportIdempotencyRecord>();
@@ -408,6 +410,75 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasForeignKey(proposal => proposal.ProjectId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(proposal => new { proposal.ProjectId, proposal.CreatedAt });
+        });
+
+        modelBuilder.Entity<ProjectCastingGenerationRequestRecord>(entity =>
+        {
+            entity.ToTable("casting_generation_requests", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_casting_generation_requests_base_revision",
+                    "base_configuration_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_casting_generation_requests_mode",
+                    "mode IN ('Formulate', 'Analyze')");
+                table.HasCheckConstraint(
+                    "ck_casting_generation_requests_state",
+                    "state IN ('Pending', 'Completed', 'Failed', 'Stale', 'Cancelled')");
+                table.HasCheckConstraint(
+                    "ck_casting_generation_requests_result",
+                    "(state = 'Completed' AND output_digest IS NOT NULL AND " +
+                    "output_digest ~ '^[0-9a-f]{64}$' AND failure_code IS NULL) OR " +
+                    "(state = 'Failed' AND output_digest IS NULL AND failure_code IS NOT NULL AND " +
+                    "failure_code ~ '^[a-z][a-z0-9_]{0,63}$') OR " +
+                    "(state IN ('Pending', 'Stale', 'Cancelled') AND output_digest IS NULL AND failure_code IS NULL)");
+                table.HasCheckConstraint(
+                    "ck_casting_generation_requests_request_digest",
+                    "request_digest ~ '^[0-9a-f]{64}$'");
+                table.HasCheckConstraint(
+                    "ck_casting_generation_requests_idempotency_key",
+                    "idempotency_key ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'");
+            });
+            entity.HasKey(request => request.RequestId);
+            entity.Property(request => request.RequestId).HasColumnName("request_id");
+            entity.Property(request => request.ProjectId).HasColumnName("project_id").HasMaxLength(32).IsRequired();
+            entity.Property(request => request.ProposalId).HasColumnName("proposal_id");
+            entity.Property(request => request.BaseConfigurationRevision)
+                .HasColumnName("base_configuration_revision").IsRequired();
+            entity.Property(request => request.RunId).HasColumnName("run_id").HasMaxLength(256).IsRequired();
+            entity.Property(request => request.Mode).HasColumnName("mode")
+                .HasConversion<string>().HasMaxLength(16).IsRequired();
+            entity.Property(request => request.State).HasColumnName("state")
+                .HasConversion<string>().HasMaxLength(16).IsConcurrencyToken();
+            entity.Property(request => request.ActorIssuer).HasColumnName("actor_issuer")
+                .HasMaxLength(512).IsRequired();
+            entity.Property(request => request.ActorId).HasColumnName("actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(request => request.IdempotencyKey).HasColumnName("idempotency_key")
+                .HasMaxLength(128).IsRequired();
+            entity.Property(request => request.RequestDigest).HasColumnName("request_digest")
+                .HasMaxLength(64).IsRequired();
+            entity.Property(request => request.OutputDigest).HasColumnName("output_digest").HasMaxLength(64);
+            entity.Property(request => request.FailureCode).HasColumnName("failure_code").HasMaxLength(64);
+            entity.Property(request => request.CreatedAt).HasColumnName("created_at");
+            entity.Property(request => request.UpdatedAt).HasColumnName("updated_at");
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(request => request.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ProjectCastingProposalRecord>()
+                .WithMany()
+                .HasForeignKey(request => request.ProposalId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(request => request.ProposalId).IsUnique();
+            entity.HasIndex(request => new
+            {
+                request.ProjectId,
+                request.ActorIssuer,
+                request.ActorId,
+                request.IdempotencyKey,
+            }).IsUnique().HasDatabaseName("ux_casting_generation_requests_idempotency");
+            entity.HasIndex(request => new { request.ProjectId, request.RunId })
+                .IsUnique().HasDatabaseName("ux_casting_generation_requests_project_run");
         });
 
         modelBuilder.Entity<ProjectSkillContentRevisionRecord>(entity =>

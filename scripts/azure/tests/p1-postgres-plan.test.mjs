@@ -217,11 +217,32 @@ test('Current source catalog preserves exact Core and Events versions and embedd
   }
 });
 
+test('Environment EF migrations map to the reviewed ordered schema versions', () => {
+  const plan = buildP1PostgresPlan();
+  const source = readFileSync(
+    new URL('../../../services/environment/Agentweaver.Environment/EnvironmentMigrator.cs', import.meta.url),
+    'utf8').replace(/\r\n/g, '\n');
+  const catalog = [...source.matchAll(/^\s*"(\d{14}_[A-Za-z0-9_]+)",$/gm)].map(match => match[1]);
+  const migrationsDirectory = new URL(
+    '../../../services/environment/Agentweaver.Environment/Migrations/', import.meta.url);
+  const migrationIds = readdirSync(migrationsDirectory)
+    .filter(name => name.endsWith('.cs') && name !== 'EnvironmentDbContextModelSnapshot.cs')
+    .flatMap(name => [...readFileSync(new URL(name, migrationsDirectory), 'utf8')
+      .matchAll(/\[Migration\("([^"]+)"\)\]/g)].map(match => match[1]))
+    .sort();
+
+  assert.deepEqual(catalog, migrationIds);
+  assert.deepEqual(plan.environmentVersions, Array.from({ length: catalog.length }, (_, index) => index + 1));
+  assert.match(source, /private const int CurrentSchemaVersion = 11;/);
+  assert.match(source, /context\.Database\.GetMigrations\(\)/);
+});
+
 // The initializer derives Core and Events versions from the plan and the compiled migrator catalogs.
 test('Initializer binds exact plan versions to compiled migrator catalogs and approved maxima', () => {
   const source = readFileSync(new URL('../../../tools/P1PostgresInitializer/Program.cs', import.meta.url), 'utf8');
   assert.ok(!source.includes('private const int CurrentSchemaVersion = 9;'));
   assert.ok(source.includes('InitializerChecks.AssertMigrationCatalog(plan.EventsVersions, EventsAndSessionsMigrator.SupportedVersions,'));
+  assert.ok(source.includes('plan.EnvironmentVersions'));
   assert.ok(source.includes('maxEventsVersion, "Events")'));
   assert.ok(source.includes('maxCoreVersion, "Core/Orchestrator")'));
 });
@@ -229,7 +250,10 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 111);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 112);
+  const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
+  assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
+    ['SELECT', 'INSERT', 'UPDATE']);
   const orchestrator = plan.services.find(service => service.schema === 'orchestrator');
   assert.deepEqual(orchestrator.tables.find(table => table.table === 'project_run_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);

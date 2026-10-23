@@ -34,7 +34,7 @@ const GROUPS = {
   projects_config: {
     SELECT: 'tenant_memberships project_role_assignments authority_audit __ef_migrations_history',
     'SELECT,UPDATE': 'platform_runtime_heads',
-    'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals',
+    'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests',
     'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations',
   },
   environment: {
@@ -212,7 +212,8 @@ export function buildP1PostgresPlan() {
     // 031 adds caller dismissals of promotion notices with SELECT,INSERT grants.
     // 032 adds pull-request records with SELECT,INSERT,UPDATE; 033 extends Priority links without new grants.
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
-    // Bind the separately approved Events reporting migration into the reviewed plan hash.
+    // Bind each owner migration catalog into the reviewed plan hash.
+    environmentVersions: Array.from({ length: 11 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',

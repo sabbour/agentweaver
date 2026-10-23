@@ -44,6 +44,34 @@ public sealed record TransitionProjectCastingProposalRequest
     public required long ExpectedDraftRevision { get; init; }
 }
 
+/// <summary>Starts a run-bound generation request without passing model credentials to Projects &amp; Config.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record StartProjectCastingGenerationRequest
+{
+    public required long ExpectedConfigurationRevision { get; init; }
+    public required ProjectCastingGenerationMode Mode { get; init; }
+    public required string RunId { get; init; }
+    public required string IdempotencyKey { get; init; }
+    public required string RequestDigest { get; init; }
+}
+
+/// <summary>Completes a generation request with only the proposed charter and cast data.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record CompleteProjectCastingGenerationRequest
+{
+    public required string RunId { get; init; }
+    public required ImmutableArray<ProjectAgentCharter> AgentCharters { get; init; }
+    public required ImmutableArray<ProjectAgentCast> Casting { get; init; }
+}
+
+/// <summary>Records a safe failure code for a generation run without persisting its raw exception or output.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record FailProjectCastingGenerationRequest
+{
+    public required string RunId { get; init; }
+    public required string FailureCode { get; init; }
+}
+
 /// <summary>Request to stage an explicit, digest-checked team transfer for review in the target project.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ImportProjectCastingTransferRequest

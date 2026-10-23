@@ -110,6 +110,9 @@ InitializerChecks.AssertMigrationCatalog(plan.CoreVersions, CoordinationOwnerMig
     maxCoreVersion, "Core/Orchestrator");
 InitializerChecks.AssertMigrationCatalog(plan.EventsVersions, EventsAndSessionsMigrator.SupportedVersions,
     maxEventsVersion, "Events");
+// EF migration IDs use an ordinal plan version so the runner can verify Environment grants too.
+InitializerChecks.AssertMigrationCatalog(plan.EnvironmentVersions,
+    Agentweaver.Environment.EnvironmentMigrator.SupportedVersions, null, "Environment");
 InitializerChecks.AssertPrincipalObjectIds(plan.Services);
 InitializerChecks.AssertMutationDenialPlan(plan.Services);
 InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);

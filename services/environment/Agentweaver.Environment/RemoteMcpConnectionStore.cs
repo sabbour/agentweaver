@@ -23,7 +23,9 @@ public sealed record RemoteMcpConnectionDraft(
     string EndpointUri,
     string? ResourceUri,
     RemoteMcpAuthenticationMode AuthenticationMode,
-    RemoteMcpRegistryServerPin? RegistryServer = null);
+    RemoteMcpRegistryServerPin? RegistryServer = null,
+    RemoteMcpTransportProfile TransportProfile = RemoteMcpTransportProfile.StreamableHttp20250618,
+    RemoteMcpTransportAdapterOptions? TransportAdapterOptions = null);
 
 /// <summary>Returns the current connection snapshot and whether the request replayed a saved result.</summary>
 public sealed record RemoteMcpConnectionMutationResult(
@@ -501,7 +503,8 @@ public sealed class RemoteMcpConnectionStore(
                     current.Configuration.AuthenticationMode,
                     identityBindingReference,
                     current.Configuration.TransportProfile,
-                    current.Configuration.RegistryServer);
+                    current.Configuration.RegistryServer,
+                    current.Configuration.TransportAdapterOptions);
                 var now = timeProvider.GetUtcNow();
                 await InsertConfigurationAsync(
                     connection,
@@ -857,8 +860,9 @@ public sealed class RemoteMcpConnectionStore(
             draft.ResourceUri,
             draft.AuthenticationMode,
             identityBindingReference: null,
-            RemoteMcpTransportProfile.StreamableHttp20250618,
-            draft.RegistryServer);
+            draft.TransportProfile,
+            draft.RegistryServer,
+            draft.TransportAdapterOptions ?? RemoteMcpTransportAdapterOptions.ForProfile(draft.TransportProfile));
 
     // Custom endpoint drafts keep the fingerprint input they had before Registry selection existed.
     private static string[] DraftFingerprintValues(RemoteMcpConnectionDraft draft) =>
@@ -895,12 +899,20 @@ public sealed class RemoteMcpConnectionStore(
                 (tenant_id, project_id, connection_id, configuration_revision, display_name,
                  endpoint_uri, resource_uri, authentication_mode, identity_binding_reference,
                  transport_profile, registry_server_name, registry_exact_version,
-                 registry_metadata_sha256, configuration_sha256, created_at)
+                 registry_metadata_sha256, transport_adapter_id, transport_adapter_version,
+                 transport_options_schema_version, transport_options_revision, transport_protocol_version,
+                 transport_request_timeout_seconds, transport_maximum_response_bytes,
+                 transport_maximum_tools_list_pages, transport_options_sha256,
+                 configuration_sha256, created_at)
             VALUES
                 (@tenant_id, @project_id, @connection_id, @revision, @display_name,
                  @endpoint_uri, @resource_uri, @authentication_mode, @identity_binding_reference,
                  @transport_profile, @registry_server_name, @registry_exact_version,
-                 @registry_metadata_sha256, @configuration_sha256, @created_at)
+                 @registry_metadata_sha256, @transport_adapter_id, @transport_adapter_version,
+                 @transport_options_schema_version, @transport_options_revision, @transport_protocol_version,
+                 @transport_request_timeout_seconds, @transport_maximum_response_bytes,
+                 @transport_maximum_tools_list_pages, @transport_options_sha256,
+                 @configuration_sha256, @created_at)
             """, connection, transaction);
         AddOwner(command, tenantId, projectId);
         command.Parameters.AddWithValue("connection_id", NpgsqlDbType.Uuid, configuration.Connection.ConnectionId);
@@ -914,6 +926,15 @@ public sealed class RemoteMcpConnectionStore(
         AddNullable(command, "registry_server_name", NpgsqlDbType.Text, configuration.RegistryServer?.ServerName);
         AddNullable(command, "registry_exact_version", NpgsqlDbType.Text, configuration.RegistryServer?.ExactVersion);
         AddNullable(command, "registry_metadata_sha256", NpgsqlDbType.Text, configuration.RegistryServer?.MetadataSha256);
+        command.Parameters.AddWithValue("transport_adapter_id", NpgsqlDbType.Text, configuration.TransportAdapterOptions.AdapterId);
+        command.Parameters.AddWithValue("transport_adapter_version", NpgsqlDbType.Text, configuration.TransportAdapterOptions.AdapterVersion);
+        command.Parameters.AddWithValue("transport_options_schema_version", NpgsqlDbType.Integer, configuration.TransportAdapterOptions.OptionsSchemaVersion);
+        command.Parameters.AddWithValue("transport_options_revision", NpgsqlDbType.Text, configuration.TransportAdapterOptions.OptionsRevision);
+        command.Parameters.AddWithValue("transport_protocol_version", NpgsqlDbType.Text, configuration.TransportAdapterOptions.ProtocolVersion);
+        command.Parameters.AddWithValue("transport_request_timeout_seconds", NpgsqlDbType.Integer, configuration.TransportAdapterOptions.RequestTimeoutSeconds);
+        command.Parameters.AddWithValue("transport_maximum_response_bytes", NpgsqlDbType.Integer, configuration.TransportAdapterOptions.MaximumResponseBytes);
+        command.Parameters.AddWithValue("transport_maximum_tools_list_pages", NpgsqlDbType.Integer, configuration.TransportAdapterOptions.MaximumToolsListPages);
+        command.Parameters.AddWithValue("transport_options_sha256", NpgsqlDbType.Text, configuration.TransportAdapterOptions.OptionsSha256);
         command.Parameters.AddWithValue("configuration_sha256", NpgsqlDbType.Text, configuration.ConfigurationSha256);
         command.Parameters.AddWithValue("created_at", NpgsqlDbType.TimestampTz, now);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -1038,7 +1059,12 @@ public sealed class RemoteMcpConnectionStore(
         await using var command = new NpgsqlCommand($"""
             SELECT display_name, endpoint_uri, resource_uri, authentication_mode,
                    identity_binding_reference, transport_profile, registry_server_name,
-                   registry_exact_version, registry_metadata_sha256, configuration_sha256
+                   registry_exact_version, registry_metadata_sha256, transport_adapter_id,
+                   transport_adapter_version, transport_options_schema_version,
+                   transport_options_revision, transport_protocol_version,
+                   transport_request_timeout_seconds, transport_maximum_response_bytes,
+                   transport_maximum_tools_list_pages, transport_options_sha256,
+                   configuration_sha256
             FROM {Configurations}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND connection_id = @connection_id AND configuration_revision = @revision
@@ -1056,6 +1082,17 @@ public sealed class RemoteMcpConnectionStore(
         var registry = registryName is null
             ? null
             : new RemoteMcpRegistryServerPin(registryName, registryVersion!, registryDigest!);
+        var transportOptions = new RemoteMcpTransportAdapterOptions(
+            reader.GetString(9),
+            reader.GetString(10),
+            reader.GetInt32(11),
+            reader.GetString(12),
+            reader.GetString(13),
+            reader.GetInt32(14),
+            reader.GetInt32(15),
+            reader.GetInt32(16));
+        if (!string.Equals(transportOptions.OptionsSha256, reader.GetString(17), StringComparison.Ordinal))
+            throw new InvalidOperationException("The stored remote MCP transport options digest does not match its revision.");
         var configuration = new RemoteMcpConnectionConfiguration(
             new(projectId, connectionId),
             revision,
@@ -1065,8 +1102,9 @@ public sealed class RemoteMcpConnectionStore(
             Enum.Parse<RemoteMcpAuthenticationMode>(reader.GetString(3), ignoreCase: false),
             reader.IsDBNull(4) ? null : reader.GetString(4),
             Enum.Parse<RemoteMcpTransportProfile>(reader.GetString(5), ignoreCase: false),
-            registry);
-        if (!string.Equals(configuration.ConfigurationSha256, reader.GetString(9), StringComparison.Ordinal))
+            registry,
+            transportOptions);
+        if (!string.Equals(configuration.ConfigurationSha256, reader.GetString(18), StringComparison.Ordinal))
             throw new InvalidOperationException("The stored remote MCP configuration digest does not match its revision.");
         return configuration;
     }
