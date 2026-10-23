@@ -532,6 +532,14 @@ public static class GatewayRouteCatalog
         Knowledge("GET", "/context", "compileKnowledgeContext", "Compile Knowledge context",
             ["q", "maxItems", "maxTokens"]);
 
+        Add("GET", GatewayOwner.Knowledge,
+            "/projects/{projectId}/knowledge/records",
+            "/api/projects/{projectId}/knowledge/records",
+            "searchProjectKnowledge",
+            "Search project Knowledge records",
+            ["kind", "q", "includeInactive", "page", "pageSize"],
+            forwardTenantSelector: true);
+
         var run = "/projects/{projectId}/runs/{runId}";
         var projectBacklog = "/projects/{projectId}/backlog";
         Add("GET", GatewayOwner.Orchestrator, projectBacklog, "/api" + projectBacklog + "/",

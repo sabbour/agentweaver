@@ -76,6 +76,22 @@ PostgreSQL; none of these commands publishes packages or deploys a service.
 The AgentSessions suite checks export verification and replay behavior. The
 absence test confirms that the native provider stays the default and the
 platform works without the optional AgentSessions package.
+
+## Test project-wide Knowledge discovery
+
+Run the Knowledge service suite to check authorization, existing provider
+bindings, and all-agent search across the native PostgreSQL, Cosmos, and Redis
+providers. Run the Web suite to check the project-wide search, source-run links,
+and revision history alongside the run-scoped record workflows:
+
+```powershell
+dotnet test tests\Agentweaver.Knowledge.Tests\Agentweaver.Knowledge.Tests.csproj
+npm --prefix apps/web test
+```
+
+These tests use test-owned stores and owner responses. They do not prove that
+Knowledge or the Gateway is deployed.
+
 The coverage runner used in CI saves TRX results, Cobertura coverage, and
 source identity alongside the test output. Match a result to the exact source
 SHA, pull request head, workflow run, and attempt. A compiled test or a green

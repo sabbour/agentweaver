@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => ({
   getDecisions: vi.fn(),
   sendProjectRunMessage: vi.fn(),
   searchKnowledge: vi.fn(),
+  searchProjectKnowledge: vi.fn(),
   createKnowledgeRecord: vi.fn(),
   updateKnowledgeRecord: vi.fn(),
   readKnowledgeRevisions: vi.fn(),
@@ -109,6 +110,7 @@ vi.mock('./api', () => ({
     getDecisions: mocks.getDecisions,
     sendProjectRunMessage: mocks.sendProjectRunMessage,
     searchKnowledge: mocks.searchKnowledge,
+    searchProjectKnowledge: mocks.searchProjectKnowledge,
     createKnowledgeRecord: mocks.createKnowledgeRecord,
     updateKnowledgeRecord: mocks.updateKnowledgeRecord,
     readKnowledgeRevisions: mocks.readKnowledgeRevisions,
@@ -514,6 +516,7 @@ describe('v1 web project scoping', () => {
     mocks.getDecisions.mockReset();
     mocks.sendProjectRunMessage.mockReset();
     mocks.searchKnowledge.mockReset();
+    mocks.searchProjectKnowledge.mockReset();
     mocks.createKnowledgeRecord.mockReset();
     mocks.updateKnowledgeRecord.mockReset();
     mocks.readKnowledgeRevisions.mockReset();
@@ -2175,6 +2178,44 @@ describe('v1 web project scoping', () => {
       'r1',
       'a1',
       expect.objectContaining({ page: 2, pageSize: 50 }),
+      'tenant-1',
+    );
+  });
+
+  it('discovers records across a project without run or agent selection and reads their history', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    const record = knowledgeRecord('project-record', 'p1', 'agent-b');
+    mocks.searchProjectKnowledge.mockResolvedValue(knowledgePage([
+      { accessRunId: 'run-b', record },
+    ]));
+    mocks.readKnowledgeRevisions.mockResolvedValue(knowledgePage([
+      knowledgeRevision('project-record', 1, 'Earlier content'),
+    ]));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'project-record' });
+    expect(mocks.ensureSession).toHaveBeenCalledWith(null);
+    expect(mocks.searchProjectKnowledge).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      expect.objectContaining({ page: 1, pageSize: 50 }),
+      'tenant-1',
+    );
+    expect(screen.getByRole('link', { name: 'run-b' }).getAttribute('href'))
+      .toBe('/projects/p1/runs/run-b');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View revision history' }));
+
+    await screen.findByText('Earlier content');
+    expect(mocks.readKnowledgeRevisions).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      'run-b',
+      'agent-b',
+      'project-record',
+      expect.objectContaining({ page: 1, pageSize: 50 }),
       'tenant-1',
     );
   });

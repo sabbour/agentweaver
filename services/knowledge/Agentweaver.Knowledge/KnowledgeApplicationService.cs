@@ -75,6 +75,99 @@ public sealed class KnowledgeApplicationService(
         return result;
     }
 
+    /// <summary>Searches project-wide Knowledge through existing, currently authorized run-provider bindings.</summary>
+    public async Task<ProjectKnowledgeRecordPage> SearchProjectAsync(
+        string projectId,
+        KnowledgeRecordKind? kind,
+        string? query,
+        bool includeInactive,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        ValidateResourceIdentifier(projectId, nameof(projectId));
+        if ((kind is not null && !Enum.IsDefined(kind.Value)) ||
+            query?.Length > 256 || query?.Any(char.IsControl) == true ||
+            page is < 1 or > 100 || pageSize is < 1 or > 100)
+            throw new KnowledgeApiException(
+                "invalid_knowledge_search",
+                "Knowledge search filters or paging values are invalid.",
+                StatusCodes.Status400BadRequest);
+
+        var authority = await projects.GetCurrentProjectAuthorityAsync(projectId, cancellationToken)
+            .ConfigureAwait(false);
+        ProjectsConfigClient.RequireProjectPermission(
+            authority, projectId, ProjectAuthorizationPermission.AccessPrivateKnowledge);
+        ProjectsConfigClient.RequireRunSelectionPermission(authority, projectId);
+        var runIds = await bindings.ListBoundRunIdsAsync(projectId, cancellationToken).ConfigureAwait(false);
+        var resolvedRuns = new List<(string RunId, AuthorizedProvider Context)>(runIds.Length);
+        foreach (var runId in runIds)
+        {
+            // ResolveExisting prevents discovery from creating a provider pin for a run with no prior Knowledge use.
+            var context = await ResolveProviderAsync(
+                projectId,
+                runId,
+                ProjectAuthorizationPermission.AccessPrivateKnowledge,
+                cancellationToken,
+                requireExistingBinding: true).ConfigureAwait(false);
+            resolvedRuns.Add((runId, context));
+        }
+
+        // Several runs may share one provider resource; querying it once avoids duplicate records and counts.
+        var sources = resolvedRuns
+            .GroupBy(item => SearchSourceKey.For(item.Context.Binding))
+            .Select(group => group.OrderBy(item => item.RunId, StringComparer.Ordinal).First())
+            .ToArray();
+        var offset = checked((page - 1) * pageSize);
+        var lastIndex = checked(offset + pageSize);
+        var results = new List<ProjectKnowledgeRecord>();
+        long totalCount = 0;
+        foreach (var source in sources)
+        {
+            var sourceRecords = new List<KnowledgeRecord>();
+            var sourceTotalCount = 0;
+            for (var sourcePage = 1; sourceRecords.Count < lastIndex; sourcePage++)
+            {
+                var sourceResult = await source.Context.Provider.SearchAsync(
+                    new KnowledgeRecordQuery(
+                        projectId, null, kind, query, includeInactive, sourcePage, pageSize),
+                    cancellationToken).ConfigureAwait(false);
+                if (sourcePage == 1)
+                    sourceTotalCount = sourceResult.TotalCount;
+                sourceRecords.AddRange(sourceResult.Items);
+                if (sourceResult.Items.Length < pageSize ||
+                    sourceRecords.Count >= sourceTotalCount)
+                    break;
+            }
+
+            totalCount += sourceTotalCount;
+            results.AddRange(sourceRecords
+                .Skip(offset)
+                .Take(pageSize)
+                .Select(record => new ProjectKnowledgeRecord(source.RunId, record)));
+        }
+
+        // Recheck every run, including shared-resource runs, so a revocation during search fails the whole response.
+        foreach (var (runId, context) in resolvedRuns)
+            await RevalidateProviderAsync(
+                projectId,
+                runId,
+                context,
+                ProjectAuthorizationPermission.AccessPrivateKnowledge,
+                cancellationToken).ConfigureAwait(false);
+
+        if (totalCount > int.MaxValue)
+            throw new KnowledgeProviderUnavailableException(
+                "The project-wide Knowledge result count exceeds the supported response range.");
+        var items = results
+            .OrderByDescending(item => item.Record.UpdatedAt)
+            .ThenBy(item => item.Record.RecordId)
+            .ThenBy(item => item.Record.AgentId, StringComparer.Ordinal)
+            .ThenBy(item => item.AccessRunId, StringComparer.Ordinal)
+            .ToImmutableArray();
+        return new ProjectKnowledgeRecordPage(items, (int)totalCount, page, pageSize);
+    }
+
     /// <summary>Reads one project record and returns not-found when it belongs to a different agent.</summary>
     public async Task<KnowledgeRecord> ReadAsync(
         string projectId,
@@ -586,6 +679,33 @@ public sealed class KnowledgeApplicationService(
         expected.Hosting == current.Hosting &&
         expected.Resource == current.Resource &&
         expected.NegotiatedCapabilities.SetEquals(current.NegotiatedCapabilities);
+
+    /// <summary>Produces a deterministic identity for provider bindings that share one searchable resource.</summary>
+    private sealed record SearchSourceKey(
+        string ProviderId,
+        Version AdapterVersion,
+        int OptionsSchemaVersion,
+        string OptionsRevision,
+        string ResourceId,
+        long ResourceGeneration,
+        string Capabilities)
+    {
+        public static SearchSourceKey For(PinnedProviderBinding binding)
+        {
+            // Length-prefix capabilities so distinct capability lists cannot collide during resource grouping.
+            var capabilities = string.Concat(binding.NegotiatedCapabilities
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .Select(value => $"{value.Length}:{value}"));
+            return new SearchSourceKey(
+                binding.ProviderId,
+                binding.AdapterVersion,
+                binding.OptionsSchemaVersion,
+                binding.OptionsRevision,
+                binding.Resource.ResourceId,
+                binding.Resource.Generation,
+                capabilities);
+        }
+    }
 
     private static KnowledgeRecord RequireAgentRecord(KnowledgeRecord? record, string agentId)
     {

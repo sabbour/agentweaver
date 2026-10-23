@@ -238,7 +238,7 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         var where = """
             c.projectId = @project
             AND c.documentType = @recordType
-            AND c.record.agentId = @agent
+            AND (@agent IS NULL OR c.record.agentId = @agent)
             AND (@kind IS NULL OR c.record.kind = @kind)
             AND (@includeInactive = true OR c.record.state = @active)
             """;

@@ -75,8 +75,15 @@ public sealed class CosmosMemoryProviderTests
         var revisions = await provider.ReadRevisionsAsync("project-a", created.Record.RecordId, 1, 10);
         Assert.Equal(1, revisions.TotalCount);
         Assert.Equal("created", revisions.Items[0].Reason);
+        await provider.CreateAsync(
+            CreateInput("memory", "another agent") with { AgentId = "agent-b" },
+            "create-another-agent");
         var search = await provider.SearchAsync(new KnowledgeRecordQuery("project-a", "agent-a"));
+        var projectWide = await provider.SearchAsync(new KnowledgeRecordQuery("project-a", null));
         Assert.Single(search.Items);
+        Assert.Equal(
+            ["agent-a", "agent-b"],
+            projectWide.Items.Select(record => record.AgentId).OrderBy(agentId => agentId, StringComparer.Ordinal));
     }
 
     [Fact]
@@ -1004,7 +1011,8 @@ public sealed class CosmosMemoryProviderTests
                     .Select(item => item.Document)
                     .Where(item => item.DocumentType == "record" && item.Record is not null)
                     .Select(item => item.Record!)
-                    .Where(record => record.ProjectId == query.ProjectId && record.AgentId == query.AgentId)
+                    .Where(record => record.ProjectId == query.ProjectId &&
+                        (query.AgentId is null || record.AgentId == query.AgentId))
                     .Where(record => query.Kind is null || record.Kind == query.Kind)
                     .Where(record => query.IncludeInactive || record.State == KnowledgeRecordState.Active)
                     .Where(record => string.IsNullOrWhiteSpace(query.Query) ||

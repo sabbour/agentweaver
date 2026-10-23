@@ -37,8 +37,12 @@ provider.
 
 The service forwards the original bearer and optional tenant selector; it
 keeps no membership or role cache. Signed project/run bindings must match the
-request and owner response. Search filters by project and agent before
-counting or returning results. Direct reads return the same not-found result
+request and owner response. Project-wide search uses an unbound bearer with
+current project `AccessPrivateKnowledge` and direct project `ReadRunSelection`.
+It searches all agents through existing run-provider bindings, rechecks those
+bindings before returning results, and never creates a provider pin. Scoped
+search filters by project and agent before counting or returning results.
+Direct reads return the same not-found result
 for a different requested agent as for an absent record. Revision reads first
 verify that the record and agent match.
 

@@ -51,6 +51,7 @@ import type {
   KnowledgeRecordImportResult,
   KnowledgeProposalPromotionResult,
   KnowledgeRecordPage,
+  ProjectKnowledgeRecordPage,
   KnowledgeRecordRevisionPage,
   KnowledgeRecordTransferBundle,
   KnowledgeRecordUpdateInput,
@@ -2173,6 +2174,28 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'agents', agentId, 'records')}?${query.toString()}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Searches private Knowledge across the accessible runs of one project. */
+  searchProjectKnowledge(
+    token: string,
+    projectId: string,
+    options: { query?: string; kind?: string; page?: number; pageSize?: number; includeInactive?: boolean } = {},
+    tenantSelector?: string | null,
+  ): Promise<ProjectKnowledgeRecordPage> {
+    const query = new URLSearchParams();
+    if (options.query) query.set('q', options.query);
+    if (options.kind) query.set('kind', options.kind);
+    query.set('page', String(options.page ?? 1));
+    query.set('pageSize', String(options.pageSize ?? 50));
+    query.set('includeInactive', String(options.includeInactive ?? true));
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'knowledge', 'records')}?${query.toString()}`,
       {},
       this.baseUrl,
       tenantSelector,

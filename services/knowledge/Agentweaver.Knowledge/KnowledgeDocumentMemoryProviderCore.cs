@@ -62,7 +62,9 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
         {
             ArgumentNullException.ThrowIfNull(query);
             ValidateIdentifier(query.ProjectId, nameof(query.ProjectId));
-            ValidateIdentifier(query.AgentId, nameof(query.AgentId));
+            // A null agent is reserved for authorized project-wide discovery; empty IDs remain invalid.
+            if (query.AgentId is not null)
+                ValidateIdentifier(query.AgentId, nameof(query.AgentId));
             if (query.Page < 1 || query.PageSize is < 1 or > 100)
                 throw new KnowledgeApiException(
                     "invalid_page",

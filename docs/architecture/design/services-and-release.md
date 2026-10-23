@@ -705,6 +705,11 @@ the parity map is complete, a declared cut line moves later 0.x changes into the
 than indefinitely delaying cutover
 ([R22](../decisions/0001-platform-architecture.md#risk-register)).
 
+Knowledge parity includes project-wide discovery across the project's authorized,
+existing run-provider bindings. Readers can search before selecting a run or agent;
+record changes remain scoped to one run and agent, and project facts remain separate
+from the Sessions journal.
+
 Cutover requires the parity map closed and API, UI, and MCP persona harnesses green against an
 exact-SHA AKS deployment. The final 0.x version is tagged on `dev`, and `release/0.x` remains for
 patches. The old `dev` history is joined to `v1` with an unrelated-history merge that keeps the `v1`

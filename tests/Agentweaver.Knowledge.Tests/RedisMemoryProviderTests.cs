@@ -20,6 +20,28 @@ public sealed class RedisMemoryProviderTests
     };
 
     [Fact]
+    public async Task ProjectWideSearchIncludesEveryAgentButKeepsProjectIsolation()
+    {
+        var (provider, _, options) = CreateProvider();
+        await provider.NegotiateAsync(Candidate(provider, options));
+        await provider.CreateAsync(
+            CreateInput("project-a", KnowledgeRecordKind.Memory, "agent a"),
+            "project-search-agent-a");
+        await provider.CreateAsync(
+            CreateInput("project-a", KnowledgeRecordKind.Memory, "agent b") with { AgentId = "agent-b" },
+            "project-search-agent-b");
+        await provider.CreateAsync(
+            CreateInput("project-b", KnowledgeRecordKind.Memory, "other project"),
+            "project-search-other-project");
+
+        var projectWide = await provider.SearchAsync(new KnowledgeRecordQuery("project-a", null));
+
+        Assert.Equal(
+            ["agent-a", "agent-b"],
+            projectWide.Items.Select(record => record.AgentId).OrderBy(agentId => agentId, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task NegotiationFailsClosedForUnverifiedDurabilityEvictionAndTopology()
     {
         var (provider, client, options) = CreateProvider();

@@ -31,6 +31,13 @@ use in-memory state, fake HTTP/Azure transports, and local hosts. Source
 Control tests use real isolated Git repositories for file behavior and
 controlled GitHub responses for remote behavior.
 
+Project-wide Knowledge discovery is covered by service boundary tests and
+provider tests for project isolation and all-agent search. Web API and page
+tests check that discovery needs no run or agent in the request path and that
+the returned source run can be used to read revision history. These tests use
+controlled owner responses and provider stores; they do not prove a deployed
+service.
+
 Store suites use disposable PostgreSQL through Testcontainers, which runs
 PostgreSQL in a container. These cases require Docker-compatible container
 access. Broker browser integration uses Chromium through Playwright. Native

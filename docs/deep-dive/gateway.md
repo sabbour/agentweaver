@@ -51,6 +51,13 @@ unchanged. `X-Agentweaver-Tenant` selects a tenant for owner validation; it is
 not a role or identity assertion. Supported idempotency and revision headers
 are forwarded, not interpreted as approval.
 
+Project-wide Knowledge search is the explicit
+`GET /api/v1/projects/{projectId}/knowledge/records` route. It requires an
+unbound Broker token; the Knowledge owner checks current project
+`AccessPrivateKnowledge` and direct project `ReadRunSelection` authority.
+Gateway does not add an arbitrary proxy path or make the authorization
+decision.
+
 Gateway preserves the owner's response status and body. In particular,
 `202 Accepted` means an owner accepted an operation; it does not prove that a
 resource, model turn, or workflow finished. Gateway has no domain database and

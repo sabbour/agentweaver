@@ -97,7 +97,7 @@ lifetime. Scopes do not replace current roles, owner state, or immutable binding
 | Selection | `api.read` and `projects.orchestrator`, current project Orchestrator assignment, and matching project/run binding. |
 | Coordination | Exact project/run bearer with `api.read` and `projects.orchestrator`, matching owner audience, and a current accepted Projects selection. |
 | Journal | Authenticated signed project/run scope, current Sessions provider binding, and owner-authorized journal access. Writes also require the appropriate owner admission. |
-| Private Knowledge | Selection authority plus current `AccessPrivateKnowledge` permission and accepted run Memory selection. The permission comes from Projects, not record content. |
+| Private Knowledge | Current `AccessPrivateKnowledge` permission plus `ReadRunSelection` authority. Run-scoped routes use the accepted run Memory selection; project-wide search requires an unbound token and uses only existing run-provider bindings. The permission comes from Projects, not record content. |
 | Runtime | Authenticated bearer plus exact current runtime registration, placement, purpose, proof, or receipt required by that operation. These are not ordinary user write APIs. |
 | Environment read | Bearer plus current `ReadProjects` authority and matching tenant/project/run binding. |
 | Environment write | Bearer plus current `WriteProjects` authority, matching owner binding, and operation-specific fences. Operations that read accepted selections also require `ReadRunSelection`. Projects does not grant `WriteProjects` to run-bound callers. |
@@ -976,6 +976,18 @@ native SDK session or an available provider.
 ## Knowledge
 
 Source: `services/knowledge/Agentweaver.Knowledge/KnowledgeEndpoints.cs`.
+
+Project-wide native prefix: `/api/projects/{projectId}/knowledge`.
+Project-wide Gateway prefix: `/api/v1/projects/{projectId}/knowledge`.
+Project-wide search requires an unbound Broker token with current project
+`AccessPrivateKnowledge` and direct project `ReadRunSelection`. It searches all
+agents through existing provider bindings and does not create a new binding.
+Run-bound tokens are rejected.
+
+| Method | Suffix | Auth | Purpose |
+| --- | --- | --- | --- |
+| GET | `/records` | Private Knowledge and direct project `ReadRunSelection` | Search all agents across existing run-provider bindings by `kind`, `q`, `includeInactive`, `page`, and `pageSize`. |
+
 Native prefix: `/api/projects/{projectId}/runs/{runId}/agents/{agentId}`.
 Gateway prefix: `/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}`.
 Every route in this table is in the Gateway catalog.

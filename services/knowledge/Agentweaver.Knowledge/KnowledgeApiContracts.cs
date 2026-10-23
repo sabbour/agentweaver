@@ -78,3 +78,13 @@ public sealed record MemoryContextCompilation(
     int OmittedSessionCount,
     ImmutableArray<string> OmissionCauses,
     ImmutableArray<KnowledgeRevisionReference> RevisionReferences);
+
+/// <summary>A Knowledge record discovered through one existing project-run provider binding.</summary>
+public sealed record ProjectKnowledgeRecord(string AccessRunId, KnowledgeRecord Record);
+
+/// <summary>A globally ordered page of private Knowledge records discovered across accessible project runs.</summary>
+public sealed record ProjectKnowledgeRecordPage(
+    ImmutableArray<ProjectKnowledgeRecord> Items,
+    int TotalCount,
+    int Page,
+    int PageSize);

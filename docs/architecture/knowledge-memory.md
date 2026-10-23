@@ -11,7 +11,7 @@ Events. Project facts remain separate from the Sessions run journal.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'" alt="Knowledge rechecks current project authority and run selection, commits an accepted proposal receipt and delivery intent through the selected Memory provider, then relays only the receipt ID and versions to Events. Events fetches the receipt from the fixed Knowledge owner, rechecks current authority, and commits a separate project fact with its sequence and inbox receipt. Native PostgreSQL remains the default; Cosmos and Redis are optional source candidates." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'" alt="Project-wide Knowledge search requires an unbound project token, checks current authority and existing run-provider pins, and searches all agents without creating pins. Knowledge rechecks current project authority and run selection, commits an accepted proposal receipt and delivery intent through the selected Memory provider, then relays only the receipt ID and versions to Events. Events fetches the receipt from the fixed Knowledge owner, rechecks current authority, and commits a separate project fact with its sequence and inbox receipt. Native PostgreSQL remains the default; Cosmos and Redis are optional source candidates." />
   </a>
   <figcaption>Accepted project facts are durably admitted by Events before Knowledge marks provider-owned delivery state complete. The Knowledge run pin and Sessions journal remain in PostgreSQL; project facts do not append to or change the run-bound journal.</figcaption>
 </figure>
@@ -55,14 +55,26 @@ Visibility is project-admin scoped, not agent-owned: a current project Owner rec
 generic `WriteProjects` remains unbound-only. A TenantAdmin receives
 `AccessPrivateKnowledge` and `WriteProjects` at the tenant or project resource scope
 when the token is not run-bound. These admins can inspect any agent's records in an
-authorized project by explicitly selecting that agent. The route's
+authorized project through project-wide search or by explicitly selecting an agent
+for scoped operations. The route's
 `agentId` selects rows; it does not prove the caller is that agent, and an admin
 grant does not extend to another project or tenant. Before provider resolution,
 Knowledge also requires `ReadRunSelection` for the exact project and reads its
 accepted run selection from Projects & Config.
 
-The data paths preserve project and agent/run scope. Search filters by project and
-agent before counting or returning records. Direct record reads return the same
+Project-wide discovery uses a separate Gateway route and requires an unbound
+Broker token with current project `AccessPrivateKnowledge` and direct project
+`ReadRunSelection`. Run-bound tokens are rejected. Knowledge enumerates only
+existing run-provider bindings, resolves each without creating a pin, groups
+bindings that share the same provider resource, and searches all agents in each
+resource. It rechecks authority and bindings before returning results; an
+inaccessible or unavailable binding fails the request. Each result identifies an
+existing source run so the app can read its revision history through the
+run-scoped route.
+
+The data paths preserve project and agent/run scope. Scoped search filters by
+project and agent before counting or returning records; project-wide search filters
+by project across agents. Direct record reads return the same
 not-found result when a record is absent or belongs to a different requested agent;
 the revisions endpoint checks that record/agent match before querying revision
 history. Context candidates are filtered by project, with active approved decisions

@@ -78,7 +78,7 @@ data hooks are not mounted.
 | `/projects/:projectId/team` | `ProjectConfigurationPage` on its Agents section. |
 | `/projects/:projectId/orchestrations` | `OrchestrationsPage`. |
 | `/projects/:projectId/board` | `BoardPage`. Each navigation reloads the backlog, so backlog promotion links and **Start task** show current tasks. |
-| `/projects/:projectId/knowledge`, `/projects/:projectId/memories` | `KnowledgePage`; `runId` and `agentId` query values prefill scope. |
+| `/projects/:projectId/knowledge`, `/projects/:projectId/memories` | `KnowledgePage`; project-wide discovery works across accessible runs and agents, while `runId` and `agentId` query values prefill scoped record management. |
 | `/projects/:projectId/team/:agentName/memory` | Redirect to Memories with `agentId` prefilled. |
 | `/settings` | Account settings: clear the session and manage the Repo App account. |
 | `/sessions` | `SessionsPage`. |
@@ -176,6 +176,9 @@ Owners recheck current authority.
 
 Knowledge writes send `Idempotency-Key`. Other operations use the
 owner contract's body key where defined. Path segments are encoded separately.
+Project-wide search uses `searchProjectKnowledge` with an unbound token; the
+owner checks current project authority and existing provider bindings. Scoped
+record changes continue to use the selected run and agent.
 
 The run page polls owner snapshots and replays the committed journal before
 following SSE. `mergeOrderedEvents` deduplicates by `eventId` and orders by

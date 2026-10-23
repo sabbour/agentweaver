@@ -79,6 +79,7 @@ import type {
   KnowledgeRecord,
   KnowledgeRecordRevision,
   KnowledgeRecordTransferBundle,
+  ProjectKnowledgeRecord,
   ProjectConfiguration,
   ProjectConfigurationChoices,
   ProjectSummary,
@@ -1092,7 +1093,289 @@ function assertKnowledgeTransferBundleScope(
     throw new Error('Knowledge transfer bundle contains records or revisions outside its exact scope.');
 }
 
-/** Lists, edits, versions, and transfers knowledge records within a selected project agent. */
+/** Discovers project-wide records and manages records within a selected run and agent. */
+function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
+  const { apiCall, authorize, ensureSession } = useAuth();
+  const [draftQuery, setDraftQuery] = useState('');
+  const [query, setQuery] = useState('');
+  const [kind, setKind] = useState('');
+  const [includeInactive, setIncludeInactive] = useState(true);
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+  const [records, setRecords] = useState<ProjectKnowledgeRecord[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [needsSignIn, setNeedsSignIn] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [recordsScope, setRecordsScope] = useState<string | null>(null);
+  const [expandedRecordKey, setExpandedRecordKey] = useState<string | null>(null);
+  const [historyItems, setHistoryItems] = useState<KnowledgeRecordRevision[]>([]);
+  const [historyTotalCount, setHistoryTotalCount] = useState(0);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyScope, setHistoryScope] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<unknown>(null);
+  const requestScope = JSON.stringify([projectId, query, kind, includeInactive, page]);
+  const activeScope = useRef(requestScope);
+  const activeHistoryScope = useRef<string | null>(null);
+  const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
+  const currentRecords = recordsScope === requestScope ? records : [];
+  const currentError = recordsScope === requestScope ? error : null;
+
+  const load = useCallback(async () => {
+    const scope = requestScope;
+    activeScope.current = scope;
+    activeHistoryScope.current = null;
+    setExpandedRecordKey(null);
+    setHistoryScope(null);
+    setLoading(true);
+    setError(null);
+    setRecords([]);
+    setTotalCount(0);
+    setRecordsScope(null);
+    try {
+      // Keep a project-wide token separate from the current run token; the owner rejects run-bound authority here.
+      if (!await ensureSession(null, false)) {
+        if (activeScope.current === scope) {
+          setNeedsSignIn(true);
+          setRecordsScope(scope);
+        }
+        return;
+      }
+      setNeedsSignIn(false);
+      const resultPage = await apiCall(
+        (token, tenantSelector) => gatewayClient.searchProjectKnowledge(token, projectId, {
+          query,
+          kind: kind || undefined,
+          includeInactive,
+          page,
+          pageSize,
+        }, tenantSelector),
+        null,
+      );
+      if (activeScope.current !== scope) return;
+      if (resultPage.items.some((item) =>
+        item.record.projectId !== projectId ||
+        !item.accessRunId ||
+        !item.record.agentId ||
+        !item.record.recordId))
+        throw new Error('Knowledge returned records outside the requested project scope.');
+      setRecords(resultPage.items);
+      setTotalCount(resultPage.totalCount);
+      setRecordsScope(scope);
+    } catch (reason) {
+      if (activeScope.current !== scope) return;
+      setError(reason);
+      setNeedsSignIn(errorCode(reason) === 'unauthorized');
+      setRecords([]);
+      setTotalCount(0);
+      setRecordsScope(scope);
+    } finally {
+      if (activeScope.current === scope) setLoading(false);
+    }
+  }, [apiCall, ensureSession, includeInactive, kind, page, pageSize, projectId, query, requestScope]);
+
+  useEffect(() => {
+    activeScope.current = requestScope;
+    const timer = window.setTimeout(() => { void load(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load, requestScope]);
+
+  const loadHistory = async (item: ProjectKnowledgeRecord, requestedPage = 1) => {
+    const key = JSON.stringify([item.accessRunId, item.record.recordId]);
+    const scope = JSON.stringify([requestScope, key, requestedPage]);
+    activeHistoryScope.current = scope;
+    setExpandedRecordKey(key);
+    setHistoryItems([]);
+    setHistoryTotalCount(0);
+    setHistoryPage(requestedPage);
+    setHistoryScope(null);
+    setHistoryError(null);
+    setHistoryLoading(true);
+    try {
+      // The exact source run comes from the provider binding returned with the record, never from user-entered IDs.
+      if (!await ensureSession(null, false)) {
+        setNeedsSignIn(true);
+        throw new Error('Sign in to read this record history.');
+      }
+      const resultPage = await apiCall((token, tenantSelector) => gatewayClient.readKnowledgeRevisions(
+        token,
+        projectId,
+        item.accessRunId,
+        item.record.agentId,
+        item.record.recordId,
+        { page: requestedPage, pageSize },
+        tenantSelector,
+      ), null);
+      if (activeScope.current !== requestScope || activeHistoryScope.current !== scope) return;
+      if (resultPage.items.some((revision) => revision.recordId !== item.record.recordId))
+        throw new Error('Knowledge returned revisions outside the requested record scope.');
+      setHistoryItems(resultPage.items);
+      setHistoryTotalCount(resultPage.totalCount);
+      setHistoryScope(scope);
+    } catch (reason) {
+      if (activeScope.current !== requestScope || activeHistoryScope.current !== scope) return;
+      setNeedsSignIn(errorCode(reason) === 'unauthorized');
+      setHistoryError(reason);
+      setHistoryScope(scope);
+    } finally {
+      if (activeScope.current === requestScope && activeHistoryScope.current === scope)
+        setHistoryLoading(false);
+    }
+  };
+
+  const search = (event: FormEvent) => {
+    event.preventDefault();
+    setPage(1);
+    setQuery(draftQuery);
+  };
+
+  return (
+    <Panel
+      title="Project-wide search"
+      description="Find records across accessible runs and agents. Choose a run and agent below to manage records."
+      actions={<Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => void load()}>Refresh</Button>}
+    >
+      <form className="v1-form v1-inline-form" onSubmit={search}>
+        <Field label="Search text">
+          <Input value={draftQuery} onChange={(_, data) => setDraftQuery(data.value)} />
+        </Field>
+        <Field label="Kind">
+          <select className="v1-select" aria-label="Project Knowledge kind" value={kind}
+            onChange={(event) => { setPage(1); setKind(event.target.value); }}>
+            <option value="">All kinds</option>
+            <option value="memory">Memories</option>
+            <option value="decision">Decisions</option>
+            <option value="proposal">Proposals</option>
+            <option value="sessionContext">Session context</option>
+          </select>
+        </Field>
+        <label className="v1-checkbox">
+          <input type="checkbox" checked={includeInactive}
+            onChange={(event) => { setPage(1); setIncludeInactive(event.target.checked); }} />
+          Include inactive records
+        </label>
+        <Button appearance="primary" type="submit">Search project memories</Button>
+      </form>
+      {needsSignIn && (
+        <div className="v1-scope-action">
+          <p className="v1-muted">Sign in without a run binding to search project-wide Knowledge.</p>
+          <Button appearance="primary" onClick={() => void authorize(null).then(() => load())}>
+            Sign in for project-wide search
+          </Button>
+        </div>
+      )}
+      {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
+      {currentError == null && recordsScope === requestScope && (
+        <>
+          <p className="v1-muted">
+            {totalCount} record(s) · Page {page} of {Math.min(100, pageCount)}.
+            {totalCount > 5000 ? ' Showing the first 5,000 matches; refine the search for older records.' : ''}
+          </p>
+          <div className="v1-actions">
+            <Button appearance="secondary" aria-label="Previous project-wide page" disabled={loading || page <= 1}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}>
+              Previous page
+            </Button>
+            <Button appearance="secondary" aria-label="Next project-wide page" disabled={loading || page >= Math.min(100, pageCount)}
+              onClick={() => setPage((current) => Math.min(100, current + 1))}>
+              Next page
+            </Button>
+          </div>
+        </>
+      )}
+      {loading || recordsScope !== requestScope ? <Loading /> : currentError != null ? null : currentRecords.length === 0 ? (
+        <p className="v1-muted">No project-wide records match this search.</p>
+      ) : (
+        <div className="v1-record-list">
+          {currentRecords.map((item) => {
+            const record = item.record;
+            const key = JSON.stringify([item.accessRunId, record.recordId]);
+            const isExpanded = expandedRecordKey === key;
+            const expectedHistoryScope = JSON.stringify([requestScope, key, historyPage]);
+            return (
+              <article className="v1-record" key={key}>
+                <div className="v1-record-title">
+                  <div>
+                    <h3>{record.title || record.type}</h3>
+                    <p className="v1-muted">{record.kind} · {record.type} · agent {record.agentId} · {record.state} · trust: {record.trustState}</p>
+                  </div>
+                  <Badge appearance="tint" color={record.state === 'active' ? 'success' : record.state === 'pending' ? 'warning' : 'subtle'}>
+                    {record.state}
+                  </Badge>
+                </div>
+                <p className="v1-record-content">{record.content}</p>
+                {record.rationale && <p className="v1-muted">Rationale: {record.rationale}</p>}
+                {record.tags.length > 0 && <p className="v1-muted">Tags: {record.tags.join(', ')}</p>}
+                <p className="v1-muted">
+                  Updated <time dateTime={record.updatedAt}>{new Date(record.updatedAt).toLocaleString()}</time>
+                  {' · '}Source run <Link to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.accessRunId)}`}>
+                    {item.accessRunId}
+                  </Link>
+                </p>
+                <Button appearance="secondary" onClick={() => {
+                  if (isExpanded) {
+                    activeHistoryScope.current = null;
+                    setExpandedRecordKey(null);
+                  } else {
+                    void loadHistory(item);
+                  }
+                }}>
+                  {isExpanded ? 'Hide revision history' : 'View revision history'}
+                </Button>
+                {isExpanded && (
+                  <section aria-label={`Revision history for ${record.title || record.type}`}>
+                    <h4>Revision history</h4>
+                    {historyError != null && <ErrorNotice code={errorCode(historyError)}>{errorMessage(historyError)}</ErrorNotice>}
+                    {historyLoading || historyScope !== expectedHistoryScope ? <Loading /> : historyError != null ? null : (
+                      <>
+                        <p className="v1-muted">
+                          {historyTotalCount} revision(s) · Page {historyPage} of {Math.max(1, Math.ceil(historyTotalCount / pageSize))}
+                        </p>
+                        <div className="v1-actions">
+                          <Button appearance="secondary" disabled={historyLoading || historyPage <= 1}
+                            onClick={() => void loadHistory(item, Math.max(1, historyPage - 1))}>
+                            Previous revisions
+                          </Button>
+                          <Button appearance="secondary"
+                            disabled={historyLoading || historyPage >= Math.max(1, Math.ceil(historyTotalCount / pageSize))}
+                            onClick={() => void loadHistory(item, historyPage + 1)}>
+                            Next revisions
+                          </Button>
+                        </div>
+                        {historyItems.length === 0 ? <p className="v1-muted">No revisions were returned.</p> : (
+                          <div className="v1-record-list">
+                            {historyItems.map((revision) => (
+                              <article className="v1-record" key={revision.revisionId}>
+                                <div className="v1-record-title">
+                                  <div>
+                                    <h5>Revision {revision.revision} · {revision.changeKind || revision.state}</h5>
+                                    <p className="v1-muted">{revision.createdAt}</p>
+                                  </div>
+                                  <Badge appearance="tint" color={revision.state === 'active' ? 'success' : 'subtle'}>
+                                    {revision.state}
+                                  </Badge>
+                                </div>
+                                <p className="v1-record-content">{revision.content}</p>
+                                {revision.rationale && <p className="v1-muted">Rationale: {revision.rationale}</p>}
+                                {revision.reason && <p className="v1-muted">Change reason: {revision.reason}</p>}
+                              </article>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </section>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function KnowledgePage() {
   const { projectId = '' } = useParams();
   const { session, apiCall, authorize, ensureSession } = useAuth();
@@ -1648,9 +1931,10 @@ function KnowledgePage() {
 
   return (
     <>
-      <PageHeading title="Memories" description="What your agents remember and decide. Choose a run and an agent to see their records." page="Memories" />
+      <PageHeading title="Memories" description="Search project-wide or choose a run and agent to manage records." page="Memories" />
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="info"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
+      <ProjectKnowledgeDiscovery projectId={projectId} />
       <Panel title="Show memories for">
         {projectRuns.error != null && <ErrorNotice code={errorCode(projectRuns.error)}>{runListErrorMessage(projectRuns.error)}</ErrorNotice>}
         {/* Wait for the run list before saying there are no runs. */}
@@ -1940,6 +2224,29 @@ function KnowledgePage() {
             </form>
           </Panel>
         </>
+      )}
+      {projectRuns.items.length > 0 && (
+        <Panel title="Recent project runs" description="Open a run to inspect its session tree and activity.">
+          <div className="v1-record-list">
+            {projectRuns.items.map((item) => (
+              <article className="v1-record" key={item.runId}>
+                <div className="v1-record-title">
+                  <div>
+                    <h3>{item.label}</h3>
+                    <p className="v1-muted">{runState(item.executionState).label} · {item.runId}</p>
+                  </div>
+                  <Link className="v1-link-button"
+                    to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(item.runId)}`}>
+                    Open run
+                  </Link>
+                </div>
+              </article>
+            ))}
+          </div>
+          <p className="v1-muted">
+            Project-wide session and addressed-message history is not available yet. Runs open the existing session tree.
+          </p>
+        </Panel>
       )}
     </>
   );
