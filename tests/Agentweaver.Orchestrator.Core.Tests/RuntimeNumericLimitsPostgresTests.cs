@@ -45,6 +45,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
     private HttpClient _projectsHttp = null!;
     private HttpContext _context = null!;
     private CoordinatorDecisionOwnerStore _decisions = null!;
+    private CoordinatorRunSelectionContextStore _runSelectionContexts = null!;
 
     public async Task InitializeAsync()
     {
@@ -54,7 +55,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         {
             projectId = "numeric-project", runId = run, projectRevision = 1,
             projectConfigurationRevision = 1, platformRuntimeRevision = 1, contextRevision = "context-1",
-            modelSelection = new { reference = "model:selected" }
+            modelSelection = new { reference = "model:selected", sourceMode = "hostedCopilot" },
+            runLimits = new { maxModelTurns = 1, maxToolCalls = 1 }
         });
         _selection = new(new("numeric-project", run, 1, 1, 1, "context-1", snapshot),
             new(1, _actor.Issuer, _actor.Subject, "tenant-1", 1, "numeric-project", run,
@@ -77,9 +79,9 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         var accepted = await coordination.AcceptRootAsync(_actor, _selection, "root", default);
         _root = new(_selection.Selection.ProjectId, run, accepted.RootSessionId);
         var catalog = ProviderCatalog.Create([], [], []).Value!;
-        var contexts = new CoordinatorRunSelectionContextStore(
+        _runSelectionContexts = new CoordinatorRunSelectionContextStore(
             fixture.DataSource, _schema, catalog, new ProviderResolver(catalog), []);
-        _decisions = new(fixture.DataSource, _schema, contexts);
+        _decisions = new(fixture.DataSource, _schema, _runSelectionContexts);
         var decision = await _decisions.InitializeRootAsync(_actor, _root, _selection, default);
         for (var index = 0; index < _registrations.Length; index++)
         {
@@ -170,6 +172,83 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
                 (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => IssueAsync(index, changed))).Code);
         }
         Assert.Equal(1, await CountRuntimeGrantsAsync());
+    }
+
+    [Fact]
+    public async Task CoordinatorRootAdmissionEnforcesAcceptedModelAndToolBudgets()
+    {
+        var rootRequestContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", _actor.Subject),
+                new Claim("aud", _options.Audience), new Claim("aud", _options.ProjectsAudience),
+                new Claim("project_id", _root.ProjectId), new Claim("run_id", _root.RunId),
+                new Claim("scope", "api.read projects.orchestrator")
+            ], "controlled-owner"))
+        };
+        rootRequestContext.Request.Headers.Authorization = "Bearer controlled-owner";
+        rootRequestContext.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        var rootContext = await CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
+            _root.ProjectId, _root.RunId, _root.SessionId, rootRequestContext, _options, ProjectsClient(),
+            new CoordinationOwnerStore(fixture.DataSource, _schema), _decisions, _runSelectionContexts,
+            new PostgresMafCheckpointStore(fixture.DataSource, _schema, null), default,
+            allowCoordinatorRoot: true);
+        Assert.Equal(RuntimeActionContract.CoordinatorRootStepId, rootContext.AgentId);
+        Assert.Null(rootContext.WorkflowStepId);
+        Assert.Equal(1, rootContext.MaxModelTurns);
+        Assert.Equal(1, rootContext.MaxToolCalls);
+
+        var rootBinding = _registrations[0].Binding with
+        {
+            SessionId = rootContext.SessionId,
+            AgentId = rootContext.AgentId,
+            WorkflowStepId = rootContext.WorkflowStepId,
+            TurnId = rootContext.TurnId,
+            AcceptedSelectionHash = rootContext.AcceptedSelectionHash,
+            ExecutionFence = rootContext.ExecutionFence,
+            ModelSelectionReference = rootContext.ModelSelectionReference,
+            ModelCredentialReference = rootContext.ModelCredentialReference,
+            ModelSourceMode = rootContext.ModelSourceMode,
+            ReasoningEffort = rootContext.ReasoningEffort,
+            ModelConnectionId = rootContext.ModelConnectionId,
+            ModelConnectionScope = rootContext.ModelConnectionScope,
+            MaxModelTurns = rootContext.MaxModelTurns,
+            MaxToolCalls = rootContext.MaxToolCalls
+        };
+        await RegisterSourceAsync(0, rootBinding);
+
+        var generationEventId = Guid.NewGuid();
+        const string generationPrompt = "Generate an unconfirmed casting proposal.";
+        var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(generationPrompt));
+        var modelRequest = new RuntimeActionRequest(
+            1, _registrations[0].RuntimeInstanceId, _registrations[0].Revision,
+            rootContext.ExecutionFence, generationEventId, "model.turn", promptHash)
+        {
+            DispatchId = generationEventId
+        };
+        var modelGrant = await IssueAsync(0, modelRequest);
+        var grantStore = GrantStore();
+        Assert.Equal(ExecutableActionGrantLookupStatus.Current,
+            (await grantStore.GetCurrentAsync(modelGrant)).Status);
+        var nextModelEventId = Guid.NewGuid();
+        var nextModelRequest = modelRequest with
+        {
+            EventId = nextModelEventId,
+            DispatchId = nextModelEventId
+        };
+        Assert.Equal("runtime_model_turn_limit_exhausted",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                IssueAsync(0, nextModelRequest))).Code);
+
+        var toolRequest = Action(0, toolInvocation: true);
+        var toolGrant = await IssueAsync(0, toolRequest);
+        await grantStore.RequireToolInvocationReservationAsync(_registrations[0], toolRequest, default);
+        Assert.Equal(ExecutableActionGrantLookupStatus.Current,
+            (await grantStore.GetCurrentAsync(toolGrant)).Status);
+        Assert.Equal("runtime_tool_call_limit_exhausted",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                IssueAsync(0, Action(0, toolInvocation: true)))).Code);
     }
 
     [Fact]
@@ -1045,9 +1124,11 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
 
     private ExecutableActionGrantOwnerStore GrantStore() => new(
         fixture.DataSource, _options, TimeProvider.System,
-        new ProjectsRunSelectionClient(
-            _projectsHttp, _options, new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema)),
+        ProjectsClient(),
         new HttpContextAccessor { HttpContext = _context });
+
+    private ProjectsRunSelectionClient ProjectsClient() => new(
+        _projectsHttp, _options, new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
 
     private Task<ExecutableActionGrantReference> IssueAsync(int index, RuntimeActionRequest request) =>
         GrantStore().IssueRuntimeActionGrantAsync(

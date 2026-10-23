@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
@@ -26,6 +27,12 @@ internal sealed class ExecutableActionGrantOwnerStore(
     IExecutableActionSourceReceiptWriter,
     IExecutableActionPolicyEvaluationReceiptWriter
 {
+    private static readonly JsonSerializerOptions DecisionJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        MaxDepth = 32
+    };
     private const int MaximumIdLength = 256;
     private const string ToolInvocationEventType = "orchestrator.runtime.tool_invocation_admitted";
     private readonly string _schema = $"\"{options.Schema}\"";
@@ -48,12 +55,20 @@ internal sealed class ExecutableActionGrantOwnerStore(
     {
         RuntimeActionContract.Validate(request);
         var binding = registration.Binding;
+        var isCoordinatorRoot = binding.AgentId == RuntimeActionContract.CoordinatorRootStepId &&
+            binding.WorkflowStepId is null;
+        if ((binding.AgentId == RuntimeActionContract.CoordinatorRootStepId && !isCoordinatorRoot) ||
+            (isCoordinatorRoot &&
+             ((request.ActionId != "model.turn" &&
+                !(request.IsToolInvocation && request.ActionId is ("tool.read" or "tool.write"))) ||
+              (request.ActionId == "model.turn" && request.DispatchId != request.EventId))))
+            throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
         RuntimeActionContract.RequireNativeDispatchAdmission(binding, request);
         if (request.RuntimeInstanceId != registration.RuntimeInstanceId ||
             request.RegistrationRevision != registration.Revision ||
-            request.ExecutionFence != binding.ExecutionFence ||
-            binding.WorkflowStepId is not { Length: > 0 and <= 128 } step)
+            request.ExecutionFence != binding.ExecutionFence)
             throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
+        var step = RuntimeActionContract.RequireActionStepId(binding);
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         if (actor.Issuer != binding.ActorIssuer || actor.Subject != binding.ActorId)
             throw new RuntimeAuthorizationException("runtime_action_actor_invalid");
@@ -71,23 +86,53 @@ internal sealed class ExecutableActionGrantOwnerStore(
             acquire.Parameters.AddWithValue("runScope", $"{binding.ProjectId}/{binding.RunId}");
             await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
+        if (isCoordinatorRoot && request.ActionId == "model.turn" && binding.MaxModelTurns is not null)
+        {
+            // Root turns share the run execution lock with workflow dispatches so both spend one model-turn cap.
+            await using var acquire = new NpgsqlCommand(
+                "SELECT pg_advisory_xact_lock(hashtext('agentweaver.maf.execution'), hashtext(@scope))",
+                connection, transaction);
+            acquire.Parameters.AddWithValue("scope", JsonSerializer.Serialize(
+                new[] { binding.ProjectId, binding.RunId, binding.SessionId }));
+            await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
         Guid decisionId;
         long decisionVersion;
-        await using (var current = new NpgsqlCommand($"""
-            SELECT d.decision_id, d.state_version
-            FROM {_schema}.coordination_sessions s
-            JOIN {_schema}.accepted_runs r ON r.project_id = s.project_id AND r.run_id = s.run_id
-            JOIN {_schema}.coordinator_decisions d
-              ON d.project_id = s.project_id AND d.run_id = s.run_id AND d.session_id = s.root_session_id
-            WHERE s.project_id = @project AND s.run_id = @run AND s.session_id = @session
-              AND s.writer_issuer = @issuer AND s.writer_subject = @actor
-              AND s.node_kind = 'child_work' AND s.lifecycle_state = 'active' AND s.turn_state = 'active'
-              AND s.execution_fence = @fence AND r.execution_fence = @fence
-              AND r.execution_state <> 'completed' AND r.tenant_id = @tenant
-              AND r.accepted_selection_hash = @selectionHash AND d.decision_state = 'accepted'
-            ORDER BY d.state_version DESC LIMIT 1
-            FOR SHARE OF s, r, d
-            """, connection, transaction))
+        string? rootDecisionJson = null;
+        var ownerQuery = isCoordinatorRoot
+            ? $"""
+                SELECT d.decision_id, d.state_version, d.decision::text
+                FROM {_schema}.coordination_sessions s
+                JOIN {_schema}.accepted_runs r ON r.project_id = s.project_id AND r.run_id = s.run_id
+                JOIN {_schema}.coordinator_decisions d
+                  ON d.project_id = s.project_id AND d.run_id = s.run_id AND d.session_id = s.session_id
+                WHERE s.project_id = @project AND s.run_id = @run AND s.session_id = @session
+                  AND s.writer_issuer = @issuer AND s.writer_subject = @actor
+                  AND s.node_kind = 'coordinator' AND s.parent_session_id IS NULL
+                  AND s.root_session_id = s.session_id AND s.lifecycle_state = 'active'
+                  AND s.execution_fence = @fence AND r.execution_fence = @fence
+                  AND r.execution_state NOT IN ('completed', 'failed', 'indeterminate', 'cancelled')
+                  AND r.tenant_id = @tenant AND r.accepted_selection_hash = @selectionHash
+                  AND d.decision_state = 'accepted'
+                ORDER BY d.state_version DESC LIMIT 1
+                FOR SHARE OF s, r, d
+                """
+            : $"""
+                SELECT d.decision_id, d.state_version, NULL::text
+                FROM {_schema}.coordination_sessions s
+                JOIN {_schema}.accepted_runs r ON r.project_id = s.project_id AND r.run_id = s.run_id
+                JOIN {_schema}.coordinator_decisions d
+                  ON d.project_id = s.project_id AND d.run_id = s.run_id AND d.session_id = s.root_session_id
+                WHERE s.project_id = @project AND s.run_id = @run AND s.session_id = @session
+                  AND s.writer_issuer = @issuer AND s.writer_subject = @actor
+                  AND s.node_kind = 'child_work' AND s.lifecycle_state = 'active' AND s.turn_state = 'active'
+                  AND s.execution_fence = @fence AND r.execution_fence = @fence
+                  AND r.execution_state <> 'completed' AND r.tenant_id = @tenant
+                  AND r.accepted_selection_hash = @selectionHash AND d.decision_state = 'accepted'
+                ORDER BY d.state_version DESC LIMIT 1
+                FOR SHARE OF s, r, d
+                """;
+        await using (var current = new NpgsqlCommand(ownerQuery, connection, transaction))
         {
             BindRuntime(current, binding);
             await using var reader = await current.ExecuteReaderAsync(cancellationToken);
@@ -95,6 +140,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 throw new RuntimeAuthorizationException("runtime_action_owner_unavailable");
             decisionId = reader.GetGuid(0);
             decisionVersion = reader.GetInt64(1);
+            if (isCoordinatorRoot)
+                rootDecisionJson = reader.GetString(2);
         }
         // Authority is read after the owner row-lock wait, before grant publication.
         var authorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
@@ -111,11 +158,50 @@ internal sealed class ExecutableActionGrantOwnerStore(
             authorized.Selection.ProjectRevision != binding.ProjectRevision ||
             authorized.Selection.ProjectConfigurationRevision != binding.ProjectConfigurationRevision ||
             authorized.Selection.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
+            authorized.Selection.ProjectId != binding.ProjectId ||
+            authorized.Selection.RunId != binding.RunId ||
             authorized.Selection.ContextRevision != binding.ContextRevision ||
             RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(authorized.Selection.Snapshot.GetRawText())) !=
                 binding.AcceptedSelectionHash || registration.ExpiresAt <= timeProvider.GetUtcNow())
             throw new RuntimeAuthorizationException("runtime_action_selection_changed");
-        if (request.ActionId == "model.turn" && request.DispatchId is { } dispatchId)
+        if (isCoordinatorRoot)
+        {
+            RequireCoordinatorRootDecision(rootDecisionJson, binding, decisionVersion);
+            var selectedModel = RuntimeAcceptedModelSelection.Read(authorized.Selection.Snapshot);
+            var limits = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(authorized.Selection.Snapshot);
+            if (selectedModel.Reference != binding.ModelSelectionReference ||
+                selectedModel.SourceMode != binding.ModelSourceMode ||
+                selectedModel.CredentialReference != binding.ModelCredentialReference ||
+                selectedModel.ConnectionId != binding.ModelConnectionId ||
+                selectedModel.ConnectionScope != binding.ModelConnectionScope ||
+                selectedModel.ReasoningEffort != binding.ReasoningEffort ||
+                limits.MaxModelTurns != binding.MaxModelTurns ||
+                limits.MaxToolCalls != binding.MaxToolCalls)
+                throw new RuntimeAuthorizationException("runtime_action_selection_changed");
+            if (request.ActionId == "model.turn" && binding.MaxModelTurns is { } maxModelTurns)
+            {
+                await using var count = new NpgsqlCommand($"""
+                    SELECT
+                        (SELECT count(*) FROM {_schema}.maf_execution_dispatches
+                         WHERE project_id = @project AND run_id = @run AND is_cost_producing)
+                        +
+                        (SELECT count(*) FROM {_schema}.executable_action_grants
+                         WHERE project_id = @project AND run_id = @run AND session_id = @session
+                           AND step_id = @step AND purpose = @purpose
+                           AND action_ids @> '["model.turn"]'::jsonb AND grant_id <> @grant)
+                    """, connection, transaction);
+                count.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+                count.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+                count.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, binding.SessionId);
+                count.Parameters.AddWithValue("step", NpgsqlDbType.Varchar, step);
+                count.Parameters.AddWithValue("purpose", NpgsqlDbType.Varchar, RuntimeActionContract.Purpose);
+                count.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, reference.GrantId);
+                RuntimeActionContract.RequireInvocationCapacity(maxModelTurns,
+                    (long)(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!,
+                    "runtime_model_turn_limit_exhausted");
+            }
+        }
+        if (!isCoordinatorRoot && request.ActionId == "model.turn" && request.DispatchId is { } dispatchId)
         {
             await using var dispatch = new NpgsqlCommand($"""
                 SELECT 1 FROM {_schema}.maf_execution_dispatches
@@ -270,6 +356,45 @@ internal sealed class ExecutableActionGrantOwnerStore(
         command.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, binding.AcceptedSelectionHash.ToUpperInvariant());
     }
 
+    private static void RequireCoordinatorRootDecision(
+        string? decisionJson, RuntimeBinding binding, long stateVersion)
+    {
+        try
+        {
+            // Root generation is allowed only before a plan or gate creates executable child work.
+            using var document = JsonDocument.Parse(decisionJson
+                ?? throw new JsonException("Coordinator decision is missing."));
+            if (!document.RootElement.TryGetProperty("envelope", out var envelopeElement))
+                throw new JsonException("Coordinator decision envelope is missing.");
+            var envelope = JsonSerializer.Deserialize<CoordinatorDecisionStateEnvelope>(
+                envelopeElement.GetRawText(), DecisionJsonOptions);
+            if (envelope is null ||
+                envelope.Version != CoordinatorDecisionStateEnvelope.CurrentVersion ||
+                envelope.Issuer != binding.ActorIssuer ||
+                envelope.Subject != binding.ActorId ||
+                envelope.TenantId != binding.TenantId ||
+                envelope.ProjectId != binding.ProjectId ||
+                envelope.RunId != binding.RunId ||
+                envelope.RootSessionId != binding.SessionId ||
+                envelope.AcceptedSelectionHash?.ToLowerInvariant() != binding.AcceptedSelectionHash ||
+                envelope.ProjectRevision != binding.ProjectRevision ||
+                envelope.ProjectConfigurationRevision != binding.ProjectConfigurationRevision ||
+                envelope.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
+                envelope.ContextRevision != binding.ContextRevision ||
+                envelope.Fence != binding.ExecutionFence ||
+                envelope.ConfirmedWorkPlan is not null ||
+                envelope.CandidateWorkPlan is not null ||
+                envelope.PendingGate is not null ||
+                stateVersion < 1)
+                throw new JsonException("Coordinator decision does not authorize a root model turn.");
+        }
+        catch (JsonException exception)
+        {
+            throw new RuntimeAuthorizationException(
+                "runtime_action_owner_unavailable", null, exception);
+        }
+    }
+
     /// <summary>
     /// Looks up a grant and returns it only if it remains current for the caller and accepted run.
     /// </summary>
@@ -398,7 +523,14 @@ internal sealed class ExecutableActionGrantOwnerStore(
                    g.source_state_version,
                    CASE
                      WHEN g.purpose = 'runtime.execution' THEN
-                       s.node_kind = 'child_work' AND s.turn_state = 'active'
+                       (s.node_kind = 'child_work' AND s.turn_state = 'active' OR
+                        s.node_kind = 'coordinator' AND s.parent_session_id IS NULL
+                          AND s.session_id = s.root_session_id AND g.step_id = @coordinatorStep
+                         AND r.execution_state NOT IN ('completed', 'failed', 'indeterminate', 'cancelled')
+                         AND jsonb_array_length(g.action_ids) = 1
+                          AND (g.action_ids @> '["model.turn"]'::jsonb OR
+                               g.action_ids @> '["tool.read"]'::jsonb OR
+                               g.action_ids @> '["tool.write"]'::jsonb))
                        AND g.source_control_intent_id IS NULL
                      WHEN g.action_ids @> '["source_control.merge"]'::jsonb THEN
                        jsonb_array_length(g.action_ids) = 1
@@ -452,6 +584,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, scope.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, scope.RunId);
         command.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, grantId);
+        command.Parameters.AddWithValue("coordinatorStep", NpgsqlDbType.Varchar,
+            RuntimeActionContract.CoordinatorRootStepId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return null;

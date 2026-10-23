@@ -39,6 +39,7 @@ internal sealed class RuntimeActionOwner(
             context, request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
         RequireRequest(registration, request);
         var binding = registration.Binding;
+        var actionStepId = RuntimeActionContract.RequireActionStepId(binding);
         await RequireCostTurnEnabledAsync(context, registration, request,
             RuntimeFixedCreditGuardStage.ActionAuthorize, cancellationToken).ConfigureAwait(false);
         var accepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
@@ -66,7 +67,7 @@ internal sealed class RuntimeActionOwner(
                     registration, RuntimeGuardrailsGate.SelectionHash(accepted.Selection)),
                 registration, accepted, request, grant, policyBinding, policyOptions,
                 cancellationToken).ConfigureAwait(false);
-        var invocation = new ExecutableActionInvocation(context.User, binding.SessionId, binding.WorkflowStepId!,
+        var invocation = new ExecutableActionInvocation(context.User, binding.SessionId, actionStepId,
             request.ActionId, RuntimeActionContract.Purpose, grant, binding.ExecutionFence, policyBinding, request.EventId);
         // The guarded callback admits dispatch; the native SDK effect remains in AgentHost.
         var evaluated = await guard.ExecuteAsync(invocation,
@@ -113,12 +114,13 @@ internal sealed class RuntimeActionOwner(
             await grants.RequireToolInvocationReservationAsync(
                 registration, admission.Request, cancellationToken).ConfigureAwait(false);
         var binding = registration.Binding;
+        var actionStepId = RuntimeActionContract.RequireActionStepId(binding);
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         var receipt = await grants.ValidateReceiptAdmissionAsync(actor, binding.ProjectId, binding.RunId,
             admission.PolicyReceiptId, cancellationToken).ConfigureAwait(false);
         if (receipt.Identity != new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId) ||
             receipt.Evidence.GrantId != admission.GrantId || receipt.Evidence.GrantRevision != admission.GrantRevision ||
-            receipt.Evidence.StepId != binding.WorkflowStepId || receipt.Evidence.ActionId != admission.Request.ActionId ||
+            receipt.Evidence.StepId != actionStepId || receipt.Evidence.ActionId != admission.Request.ActionId ||
             receipt.Evidence.Purpose != RuntimeActionContract.Purpose ||
             receipt.Evidence.Fence != binding.ExecutionFence || receipt.Evidence.Outcome != PolicyEvaluationOutcome.Allow)
             throw new RuntimeAuthorizationException("runtime_action_admission_invalid");

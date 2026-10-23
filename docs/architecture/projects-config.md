@@ -270,6 +270,9 @@ immediate AgentHost turn with the generation request ID as its stable message
 ID. Before returning `{ requestId, runId, output }`, it checks that the run
 selection and registration are still current. Orchestrator does not persist the
 proposal result; the Gateway completes the request through Projects & Config.
+The coordinator root uses the accepted model-turn and tool-call limits. Its
+model-turn admission is bound to the generation message ID and uses a distinct
+root action path; child-work dispatch admission remains step-bound.
 AgentHost obtains the model credential from Identity using the run-bound
 registration, so it never passes through Orchestrator or Projects.
 Runtime registration may read the active coordinator root using its accepted
@@ -304,6 +307,9 @@ sequenceDiagram
     participant DB as PostgreSQL
     Client->>Gateway: Create or replay normal project run
     Gateway-->>Client: Run ID and root session
+    AgentHost->>Orchestrator: Read accepted root runtime context
+    Orchestrator->>Projects: Validate accepted selection and current authority
+    Orchestrator-->>AgentHost: Root binding with accepted model and tool limits
     Client->>Identity: Obtain run-bound session
     Client->>Gateway: Formulate or Analyze (run ID, expected revision, idempotency key)
     Gateway->>Projects: Start generation request (run ID, request digest)
@@ -312,6 +318,9 @@ sequenceDiagram
     Orchestrator->>Orchestrator: Accept and start the saved run through the normal path
     Orchestrator->>Orchestrator: Recheck accepted root and current registration
     Orchestrator->>AgentHost: Immediate turn (message ID = request ID)
+    AgentHost->>Orchestrator: Admit model.turn (dispatch ID = message ID)
+    Orchestrator->>DB: Validate root decision and reserve within model-turn limit
+    Orchestrator-->>AgentHost: Root model.turn admission
     AgentHost->>Identity: Redeem the run-bound model credential
     Identity-->>AgentHost: Run-scoped credential
     AgentHost-->>Orchestrator: Proposed charters and cast

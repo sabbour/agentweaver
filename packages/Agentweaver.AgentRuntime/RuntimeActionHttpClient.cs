@@ -103,9 +103,9 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
     internal Task RequireAsync(
         RuntimeRegistration registration, string actionId, Guid eventId, ReadOnlyMemory<byte> input,
         Func<CancellationToken, Task> requireCurrentAuthority, CancellationToken cancellationToken,
-        Guid? costTurnId = null) =>
+        Guid? costTurnId = null, Guid? dispatchId = null) =>
         RequireAsync(registration, actionId, input, requireCurrentAuthority, cancellationToken,
-            costTurnId: costTurnId, eventId: eventId);
+            dispatchId: dispatchId, costTurnId: costTurnId, eventId: eventId);
 
     /// <summary>Retries one transport failure only after confirming the caller's authority remains current.</summary>
     private async Task<RuntimeActionAdmission> SendAdmissionAsync(

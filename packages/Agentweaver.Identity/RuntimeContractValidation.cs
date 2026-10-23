@@ -107,11 +107,11 @@ public static class RuntimeContractValidation
         ValidateHash(binding.AcceptedSelectionHash);
     }
 
-    /// <summary>Rejects model/tool numeric limits when the binding is not scoped to a workflow step.</summary>
+    /// <summary>Rejects model/tool numeric limits when the binding is not scoped to work or the coordinator root.</summary>
     public static void RequireSupportedNumericRunLimits(RuntimeBinding binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
-        if (binding.WorkflowStepId is null &&
+        if (binding.WorkflowStepId is null && binding.AgentId != RuntimeActionContract.CoordinatorRootStepId &&
             (binding.MaxModelTurns is not null || binding.MaxToolCalls is not null))
             throw new RuntimeAuthorizationException("runtime_numeric_limits_unsupported");
     }

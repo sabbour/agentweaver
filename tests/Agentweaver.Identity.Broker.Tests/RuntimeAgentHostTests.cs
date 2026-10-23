@@ -86,6 +86,34 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task CoordinatorRootGenerationConfiguresAndCompletesAnAdmittedModelTurn()
+    {
+        await using var fixture = new HostFixture(
+            maxModelTurns: 1, maxToolCalls: 1, coordinatorRoot: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var readiness = await fixture.ConfigureAsync(timeout.Token);
+        var message = fixture.Message(fixture.Proof(readiness));
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var httpResponse = await client.PostAsJsonAsync(
+            "/runtime/v1/a2a/message:send", message, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, httpResponse.StatusCode);
+        var response = (await httpResponse.Content.ReadFromJsonAsync<RuntimeA2AResponse>(
+            HostFixture.Json, timeout.Token))!;
+
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        var admission = Assert.Single(fixture.ModelTurnActions);
+        Assert.Equal("model.turn", admission.ActionId);
+        Assert.Equal(message.Message.MessageId, admission.EventId);
+        Assert.Equal(message.Message.MessageId, admission.DispatchId);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Fact]
     public async Task OrdinarySessionCacheWritesCannotBypassTheGuardedSuspendPath()
     {
         await using var fixture = new HostFixture(workflowBound: true);
@@ -2541,7 +2569,8 @@ public sealed class RuntimeAgentHostTests
             bool workflowBound = false,
             string sessionId = "session",
             long executionFence = 1,
-            bool hostedCatalogIdentityAvailable = true)
+            bool hostedCatalogIdentityAvailable = true,
+            bool coordinatorRoot = false)
         {
             Time = new() { Now = DateTimeOffset.UtcNow };
             Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
@@ -2556,6 +2585,9 @@ public sealed class RuntimeAgentHostTests
                 Binding = Registration.Binding with
                 {
                     SessionId = sessionId,
+                    AgentId = coordinatorRoot
+                        ? RuntimeActionContract.CoordinatorRootStepId
+                        : Registration.Binding.AgentId,
                     ExecutionFence = executionFence,
                     ConfigureEndpoint = new("https://runtime.test/runtime/v1/configure"),
                     PlacementProviderId = "sandbox-test", EnvironmentLifecycleGeneration = 1,

@@ -11,7 +11,7 @@ namespace Agentweaver.Orchestrator;
 /// </summary>
 public static partial class CoordinationEndpoints
 {
-    internal const string CoordinatorRuntimeAgentId = "coordinator";
+    internal const string CoordinatorRuntimeAgentId = RuntimeActionContract.CoordinatorRootStepId;
 
     /// <summary>
     /// HTTP endpoint handler that reads the current runtime owner context.
