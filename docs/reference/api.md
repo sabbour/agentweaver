@@ -156,7 +156,8 @@ Historical ID-only tasks retain an empty title until edited.
 
 State writes can move an unclaimed open task between `backlog` and `ready`;
 only an atomic claim can set `claimed`. Dependency writes reject self-links,
-cross-project links, missing tasks, duplicates, and cycles. Marking a task
+cross-project links, missing tasks, and cycles. Adding an existing dependency
+succeeds as a no-op and does not change the graph revision. Marking a task
 Ready queues it but does not prove its prerequisites are complete. A claim
 checks current prerequisite execution and output evidence again and returns
 typed blockers when work is not eligible. Archive and dependency changes use
