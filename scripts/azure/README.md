@@ -22,7 +22,7 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`2aad6a1c305a1264648e6d001698c13cbfb50dae6e5c4a829f07c37a60ba6a62`.
+`855ab94d16386e5f1e086d501b9a70e1f64254da4d154cdb70e150dda31a7d89`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
 placeholder. The Core list is 1-16 and 18-33. Version 027 requires 026 only.
@@ -240,7 +240,7 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16, 18 through 31, and 33.
+The source catalog requires Core versions 1 through 16 and 18 through 33.
 These are 31 registered versions; versions 17 and 32 remain excluded.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.

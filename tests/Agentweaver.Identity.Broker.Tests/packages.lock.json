@@ -1431,6 +1431,7 @@
         "dependencies": {
           "Agentweaver.Abstractions": "[1.4.0, )",
           "Agentweaver.Identity": "[1.4.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.0, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Providers.Sandbox.AgentSandbox": "[1.1.4, )",
           "Agentweaver.Providers.Storage.AzureFiles": "[1.0.4, )",

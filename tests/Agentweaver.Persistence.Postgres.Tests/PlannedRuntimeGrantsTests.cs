@@ -8,9 +8,10 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "74f984b26a7df480476dbdee0c36164c46d0f4afc93d6624cbc590098d73c685";
+    private const string ReviewedPlanSha256 = "855ab94d16386e5f1e086d501b9a70e1f64254da4d154cdb70e150dda31a7d89";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 15), 33];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 9)];
+    private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 11)];
 
     [Fact]
     public void EmbeddedPlanIsTheReviewedPlan()
@@ -36,6 +37,12 @@ public sealed class PlannedRuntimeGrantsTests
             "events-and-sessions", "events_sessions", "agentweaver-id-events-and-sessions", ReviewedPlanSha256, EventsVersions);
         Assert.Equal(EventsVersions, events.Versions);
         Assert.NotEmpty(events.Tables);
+
+        var environment = PlannedRuntimeGrants.Load(
+            "environment", "environment", "agentweaver-id-environment", ReviewedPlanSha256, EnvironmentVersions);
+        Assert.Equal(EnvironmentVersions, environment.Versions);
+        Assert.Contains(environment.Tables, table => table.Table == "remote_mcp_connections");
+        Assert.Contains(environment.Tables, table => table.Table == "remote_mcp_connection_configurations");
     }
 
     [Fact]
@@ -79,6 +86,8 @@ public sealed class PlannedRuntimeGrantsTests
 
         Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(
             "events-and-sessions", "events_sessions", "agentweaver-id-events-and-sessions", ReviewedPlanSha256, [.. Enumerable.Range(1, 8)]));
+        Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(
+            "environment", "environment", "agentweaver-id-environment", ReviewedPlanSha256, [.. Enumerable.Range(1, 10)]));
     }
 
     [Fact]

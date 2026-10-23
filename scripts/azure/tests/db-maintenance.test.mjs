@@ -24,8 +24,15 @@ const marker = (service, schema, versions) =>
   `P1_POSTGRES_RUNTIME_GRANTS_VERIFIED service=${service} schema=${schema} role=agentweaver-id-${service} ` +
   `planSha256=${REVIEWED_PLAN_SHA256} versions=${versions.join(',')}`;
 const goodLogs = {
+  environment: marker('environment', 'environment', plan.environmentVersions),
   orchestrator: marker('orchestrator', 'orchestrator', plan.coreVersions),
   'events-and-sessions': marker('events-and-sessions', 'events_sessions', plan.eventsVersions),
+};
+const defaultSchemaRanges = {
+  [digest('a')]: { minSchema: 31, maxSchema: 33 },
+  [digest('b')]: { minSchema: 9, maxSchema: 9 },
+  [digest('d')]: { minSchema: 11, maxSchema: 11 },
+  [digest('f')]: { minSchema: 10, maxSchema: 10 },
 };
 
 function kustomize(directory) {
@@ -47,8 +54,9 @@ const driftedSpec = () => {
 
 function world({ lease, drift = false, state, jobOutcome = () => 'Complete', logs = goodLogs, identityExists = true,
   federated = true, accountType = 'user', relayError, appImages = {}, rolloutFails = false, probeLog,
-  schemaRanges = { [digest('a')]: { minSchema: 31, maxSchema: 33 }, [digest('b')]: { minSchema: 9, maxSchema: 9 } } } = {}) {
+  schemaRanges = {} } = {}) {
   const calls = [];
+  const imageRanges = { ...defaultSchemaRanges, ...schemaRanges };
   const cluster = new Map();
   if (lease) cluster.set(`lease/${LOCK_NAME}`, lease);
   if (state) cluster.set(`configmap/${STATE_NAME}`, state);
@@ -151,7 +159,7 @@ function world({ lease, drift = false, state, jobOutcome = () => 'Complete', log
       exec, repoRoot: process.cwd(), sleep: async () => {}, now: () => new Date('2026-10-22T10:00:00.123Z'),
       newRunId: () => 'abcdef123456', log: () => {},
       // Image schema ranges come from this table instead of the registry, so tests stay offline.
-      imageSchemaRange: async image => schemaRanges[image?.slice(image.indexOf('@') + 1)] ?? { unknown: 'not in the test registry' },
+      imageSchemaRange: async image => imageRanges[image?.slice(image.indexOf('@') + 1)] ?? { unknown: 'not in the test registry' },
       writeReceipt: (path, receipt) => receipts.push({ path, receipt: structuredClone(receipt) }),
       relay: async options => {
         relayCalls.push(options);
@@ -164,7 +172,7 @@ function world({ lease, drift = false, state, jobOutcome = () => 'Complete', log
   };
 }
 
-const baseArgs = ['--orchestrator-digest', digest('a'), '--events-digest', digest('b')];
+const baseArgs = ['--environment-digest', digest('d'), '--orchestrator-digest', digest('a'), '--events-digest', digest('b')];
 const kubectlActions = calls => calls.filter(call => call.command === 'kubectl' && call.args[0] !== 'kustomize')
   .map(call => call.args[4]);
 
@@ -174,8 +182,8 @@ test('arguments require exact digests and reject unknown or malformed flags', ()
   assert.equal(parsed.handover, 'auto');
   assert.equal(parsed.jobTimeoutSeconds, 900);
   assert.ok(!parsed.receiptDir.startsWith(process.cwd()));
-  assert.throws(() => parseDbMaintenanceArgs([]), /--orchestrator-digest must be an exact sha256/);
-  assert.throws(() => parseDbMaintenanceArgs(['--orchestrator-digest', 'latest', '--events-digest', digest('b')]), /exact sha256/);
+  assert.throws(() => parseDbMaintenanceArgs([]), /--environment-digest must be an exact sha256/);
+  assert.throws(() => parseDbMaintenanceArgs(['--environment-digest', 'latest', ...baseArgs.slice(2)]), /exact sha256/);
   assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--broker-digest', 'sha256:abc']), /--broker-digest/);
   assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--handover', 'force']), /auto, always, or skip/);
   assert.throws(() => parseDbMaintenanceArgs([...baseArgs, '--reset']), /Unknown argument/);
@@ -193,6 +201,9 @@ test('image references pin the published component repository by digest', () => 
 test('grant markers must match the reviewed plan exactly', () => {
   const expected = { service: 'orchestrator', schema: 'orchestrator', versions: plan.coreVersions };
   assert.match(verifyGrantsMarker(`noise\n${goodLogs.orchestrator}\n`, expected), /versions=1,2/);
+  assert.match(verifyGrantsMarker(goodLogs.environment, {
+    service: 'environment', schema: 'environment', versions: plan.environmentVersions,
+  }), /versions=1,2/);
   assert.throws(() => verifyGrantsMarker('migrated\n', expected), /0 grant markers/);
   assert.throws(() => verifyGrantsMarker(`${goodLogs.orchestrator}\n${goodLogs.orchestrator}`, expected), /2 grant markers/);
   assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', [...plan.coreVersions, 34]), expected),
@@ -210,14 +221,15 @@ test('the reviewed plan includes 032 and matches the pinned hash', () => {
   assert.ok(plan.coreVersions.includes(32));
   assert.equal(Math.max(...plan.coreVersions), 33);
   assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(plan.environmentVersions, Array.from({ length: 11 }, (_, index) => index + 1));
 });
 
-test('P1 migration manifests render one identity, one egress, and two fail-closed Jobs', () => {
+test('P1 migration manifests render one identity, one egress, and three fail-closed Jobs', () => {
   const rendered = kustomize('deploy/k8s/migrations/p1-postgres');
   assert.equal(rendered.status, 0, rendered.stderr);
   const items = parseKustomizeResources(rendered.stdout).items;
   assert.deepEqual(items.map(item => `${item.kind}/${item.metadata.name}`).sort(), [
-    'CiliumNetworkPolicy/p1-postgres-migration-egress', 'Job/events-and-sessions-migration',
+    'CiliumNetworkPolicy/p1-postgres-migration-egress', 'Job/environment-migration', 'Job/events-and-sessions-migration',
     'Job/orchestrator-migration', 'ServiceAccount/p1-postgres-migration',
   ]);
   const account = items.find(item => item.kind === 'ServiceAccount');
@@ -226,6 +238,7 @@ test('P1 migration manifests render one identity, one egress, and two fail-close
   assert.equal(egress.spec.endpointSelector.matchLabels['agentweaver.io/workload'], 'p1-postgres-migration');
   assert.ok(JSON.stringify(egress).includes(DB_MAINTENANCE_TARGET.postgresHost));
   for (const [name, role, prefix] of [
+    ['environment-migration', 'agentweaver-id-environment', 'Environment'],
     ['orchestrator-migration', 'agentweaver-id-orchestrator', 'Orchestrator'],
     ['events-and-sessions-migration', 'agentweaver-id-events-and-sessions', 'EventsAndSessions'],
   ]) {
@@ -283,6 +296,7 @@ test('dry run checks every precondition, takes no lock, and changes nothing', as
     assert.equal(receipt.result, 'dry-run-passed');
     assert.equal(receipt.brokerEgressDrift, true);
     assert.deepEqual(receipt.brokerEgressDriftDetail, { extraDnsNames: ['extra.example.test'], missingDnsNames: [] });
+    assert.ok(receipt.plannedSteps.includes('environment-job'));
     assert.ok(receipt.plannedSteps.includes('orchestrator-job'));
     assert.ok(!receipt.plannedSteps.includes('broker-egress-reconcile'));
     assert.deepEqual([...fake.cluster.keys()], ['configmap/identity-broker-migration-config']);
@@ -294,6 +308,7 @@ test('dry run checks every precondition, takes no lock, and changes nothing', as
     assert.ok(authChecks.some(([verb, resource]) => verb === 'watch' && resource === 'jobs'));
     assert.deepEqual(new Set(authChecks.filter(([, resource]) => resource.startsWith('deployments.apps/'))
       .map(([verb, resource]) => `${verb}:${resource.slice('deployments.apps/'.length)}`)), new Set([
+      'get:environment', 'list:environment', 'watch:environment',
       'get:orchestrator', 'list:orchestrator', 'watch:orchestrator',
       'get:events-and-sessions', 'list:events-and-sessions', 'watch:events-and-sessions',
     ]));
@@ -324,7 +339,7 @@ test('execute applies the identity, egress, handover, and Jobs in order, then cl
       'source-verified', 'locked-restore-verified', 'plan-verified', 'cluster-access-verified', 'broker-egress-checked',
       'migration-identity-checked', 'app-images-checked', 'lock-acquired', 'migration-identity-ready', 'serviceaccount-and-egress-applied',
       'ownership-handover-verified', 'connectivity-verified', 'connectivity-verified',
-      'identity-broker-migrated', 'orchestrator-migrated', 'events-and-sessions-migrated',
+      'identity-broker-migrated', 'environment-migrated', 'orchestrator-migrated', 'events-and-sessions-migrated',
     ]);
     const probes = receipt.steps.filter(step => step.name === 'connectivity-verified');
     assert.deepEqual(probes.map(step => step.workload), ['identity-broker-migration', 'p1-postgres-migration']);
@@ -459,10 +474,16 @@ test('egress drift ignores key order and reports missing policies and DNS differ
     { extraDnsNames: [], missingDnsNames: ['extra.example.test'] });
 });
 
-const appWorld = (extra = {}) => world({ state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
-  data: { handoverPrincipalObjectId: PRINCIPAL_ID } }, appImages: {
-  orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
-  'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('e')) }, ...extra });
+const appWorld = (extra = {}) => {
+  const { appImages = {}, ...overrides } = extra;
+  return world({ state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
+    data: { handoverPrincipalObjectId: PRINCIPAL_ID } }, ...overrides, appImages: {
+    environment: imageReference('Agentweaver.Environment', digest('d')),
+    orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
+    'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('e')),
+    ...appImages,
+  } });
+};
 
 test('services on older images block the run unless the runner deploys the matching digests', async () => {
   const fake = appWorld();
@@ -471,7 +492,7 @@ test('services on older images block the run unless the runner deploys the match
       /Running services use other images \(events-and-sessions\)[\s\S]*--deploy-apps/);
     assert.equal(fake.receipts[0].receipt.result, 'failed');
     assert.deepEqual(fake.receipts[0].receipt.appImages.map(app => [app.deployment, app.status]),
-      [['orchestrator', 'match'], ['events-and-sessions', 'mismatch']]);
+      [['environment', 'match'], ['orchestrator', 'match'], ['events-and-sessions', 'mismatch']]);
   } finally { fake.done(); }
   // The planned-gap refusal happens in preflight, before the lock or any Job.
   assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
@@ -488,7 +509,7 @@ test('a planned readiness gap migrates, deploys the matching digests in the same
     assert.equal(receipt.result, 'succeeded');
     assert.equal(receipt.serviceOrder.order, 'planned-readiness-gap');
     assert.deepEqual(receipt.serviceOrder.services.map(service => [service.deployment, service.action]),
-      [['orchestrator', 'none'], ['events-and-sessions', 'gap']]);
+      [['environment', 'none'], ['orchestrator', 'none'], ['events-and-sessions', 'gap']]);
     const names = receipt.steps.map(step => step.name);
     assert.ok(names.indexOf('events-and-sessions-migrated') < names.indexOf('app-image-set'));
     assert.ok(names.indexOf('app-ready') < names.indexOf('roll-forward-cleared'));
@@ -496,6 +517,7 @@ test('a planned readiness gap migrates, deploys the matching digests in the same
       startedAt: '2026-10-22T10:00:00.123Z', endedAt: '2026-10-22T10:00:00.123Z', durationSeconds: 0 });
     // The state keeps the new schema versions and no roll-forward record.
     const data = fake.cluster.get(`configmap/${STATE_NAME}`).data;
+    assert.equal(data['environment.schema'], String(Math.max(...plan.environmentVersions)));
     assert.equal(data['orchestrator.schema'], String(Math.max(...plan.coreVersions)));
     assert.equal(data['events-and-sessions.schema'], String(Math.max(...plan.eventsVersions)));
     assert.equal(data.handoverPrincipalObjectId, PRINCIPAL_ID);
@@ -503,7 +525,7 @@ test('a planned readiness gap migrates, deploys the matching digests in the same
     assert.deepEqual(receipt.steps.filter(step => step.name === 'app-image-set').map(step => step.deployment),
       ['events-and-sessions']);
     assert.deepEqual(receipt.steps.filter(step => step.name === 'app-ready').map(step => step.deployment),
-      ['orchestrator', 'events-and-sessions']);
+      ['environment', 'orchestrator', 'events-and-sessions']);
     const set = fake.calls.find(call => call.args[4] === 'set');
     assert.deepEqual(set.args.slice(5), ['image', 'deployment/events-and-sessions',
       `events-and-sessions=${imageReference('Agentweaver.EventsAndSessions', digest('b'))}`]);
@@ -513,7 +535,7 @@ test('a planned readiness gap migrates, deploys the matching digests in the same
 });
 
 test('a service that does not become ready fails the run after cleanup', async () => {
-  const fake = appWorld({ rolloutFails: true });
+  const fake = appWorld({ rolloutFails: name => name === 'orchestrator' });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
       receiptDir: fake.receiptDir }, fake.deps), /orchestrator did not become ready/);
@@ -542,7 +564,7 @@ test('--apps-only rolls services to the pinned digests under the lock and runs n
     assert.equal(receipt.scope, 'apps-only');
     assert.equal(receipt.installation.status, 'partial');
     assert.deepEqual(receipt.steps.map(step => step.name).slice(-4),
-      ['lock-acquired', 'app-image-set', 'app-ready', 'app-ready']);
+      ['app-image-set', 'app-ready', 'app-ready', 'app-ready']);
     // No identity, handover, egress, probe, or migration Job is touched.
     assert.ok(!fake.calls.some(call => call.command === 'az' && ['deployment', 'identity'].includes(call.args[0])));
     assert.equal(fake.relayCalls.length, 0);
@@ -555,6 +577,7 @@ test('--apps-only rolls services to the pinned digests under the lock and runs n
 
 test('--apps-only is safe to rerun and rejects flags that reach the database', async () => {
   const fake = appWorld({ appImages: {
+    environment: imageReference('Agentweaver.Environment', digest('d')),
     orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')),
     'events-and-sessions': imageReference('Agentweaver.EventsAndSessions', digest('b')) } });
   try {
@@ -562,7 +585,7 @@ test('--apps-only is safe to rerun and rejects flags that reach the database', a
       receiptDir: fake.receiptDir }, fake.deps);
     assert.equal(receipt.result, 'succeeded');
     assert.ok(!receipt.steps.some(step => step.name === 'app-image-set'));
-    assert.equal(receipt.steps.filter(step => step.name === 'app-ready').length, 2);
+    assert.equal(receipt.steps.filter(step => step.name === 'app-ready').length, 3);
   } finally { fake.done(); }
   for (const flag of [['--broker-digest', digest('c')], ['--reconcile-broker-egress'], ['--deploy-apps'],
     ['--handover', 'skip'], ['--postgres-admin', 'a@example.test']])
@@ -573,7 +596,7 @@ test('--apps-only fails closed when a service Deployment does not exist', async 
   const fake = world({ appImages: { orchestrator: imageReference('Agentweaver.Orchestrator', digest('a')) } });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--apps-only']),
-      receiptDir: fake.receiptDir }, fake.deps), /events-and-sessions does not exist/);
+      receiptDir: fake.receiptDir }, fake.deps), /environment, events-and-sessions does not exist/);
     assert.ok(!fake.calls.some(call => call.args[4] === 'set' || call.args[4] === 'create'));
   } finally { fake.done(); }
 });
@@ -605,6 +628,7 @@ test('P1 migration Jobs provide valid settings and Events provider values match 
     };
   };
   const events = environmentFor('events-and-sessions-migration');
+  const environment = environmentFor('environment-migration');
   const orchestrator = environmentFor('orchestrator-migration');
   const eventValue = key => {
     assert.ok(events.env.has(key), `${key} must be explicit in the Events & Sessions Job.`);
@@ -658,10 +682,15 @@ test('P1 migration Jobs provide valid settings and Events provider values match 
   assert.ok(integer(messagingKeys[2]) >= 10 && integer(messagingKeys[2]) <= 3600);
   assert.ok(integer(messagingKeys[3]) >= 1 && integer(messagingKeys[3]) <= 7);
 
-  // Check the migration-only inputs for both Jobs; Orchestrator reaches this path before loading runtime provider settings.
+  // Check migration-only settings for all Jobs; Orchestrator skips provider validation before --migrate.
+  assert.deepEqual(environment.command, ['dotnet', 'Agentweaver.Environment.dll', '--migrate']);
   assert.deepEqual(events.command, ['dotnet', 'Agentweaver.EventsAndSessions.dll', '--migrate']);
   assert.deepEqual(orchestrator.command, ['dotnet', 'Agentweaver.Orchestrator.dll', '--migrate']);
-  for (const [env, service] of [[events.env, 'EventsAndSessions'], [orchestrator.env, 'Orchestrator']]) {
+  for (const [env, service] of [
+    [environment.env, 'Environment'],
+    [events.env, 'EventsAndSessions'],
+    [orchestrator.env, 'Orchestrator'],
+  ]) {
     assert.ok(env.get(`ConnectionStrings__${service}Migration`), `${service} migration connection must be set.`);
     assert.match(env.get(`${service}__Migration__WorkloadIdentity__TenantId`), /^[0-9a-f-]{36}$/i);
     assert.match(env.get(`${service}__Migration__WorkloadIdentity__ClientId`), /^[0-9a-f-]{36}$/i);
@@ -673,32 +702,36 @@ test('P1 migration Jobs provide valid settings and Events provider values match 
 });
 
 const eventsImage = character => imageReference('Agentweaver.EventsAndSessions', digest(character));
+const environmentImage = character => imageReference('Agentweaver.Environment', digest(character));
 const apps = (running, expected = 'b') => [
+  { deployment: 'environment', component: 'Agentweaver.Environment', status: 'match',
+    expected: environmentImage('d'), running: environmentImage('d') },
   { deployment: 'orchestrator', component: 'Agentweaver.Orchestrator', status: 'match',
     expected: imageReference('Agentweaver.Orchestrator', digest('a')), running: imageReference('Agentweaver.Orchestrator', digest('a')) },
   { deployment: 'events-and-sessions', component: 'Agentweaver.EventsAndSessions', status: 'mismatch',
     expected: eventsImage(expected), running: eventsImage(running) },
 ];
-const schemas = { orchestrator: 33, 'events-and-sessions': 9 };
+const schemas = { environment: 11, orchestrator: 33, 'events-and-sessions': 9 };
 const range = (minSchema, maxSchema) => ({ minSchema, maxSchema });
 
 test('the service order follows the schema ranges of the running and target images', () => {
   // Ranges are keyed by image reference, as the runner reads them from each image.
   const order = (running, target, current) => planServiceOrder({ appImages: apps('e'),
-    ranges: { [apps('e')[0].expected]: range(31, 33), [eventsImage('e')]: running, [eventsImage('b')]: target },
-    targetSchema: schemas, currentSchema: { orchestrator: 31, 'events-and-sessions': current } });
+    ranges: { [environmentImage('d')]: range(11, 11), [apps('e')[1].expected]: range(31, 33),
+      [eventsImage('e')]: running, [eventsImage('b')]: target },
+    targetSchema: schemas, currentSchema: { environment: 11, orchestrator: 31, 'events-and-sessions': current } });
   // The running image accepts the target schema: migrate first; deploying is optional.
   let result = order(range(8, 9), range(9, 9), 8);
   assert.equal(result.order, 'migrate-first');
-  assert.equal(result.services[1].action, 'migrate-first');
+  assert.equal(result.services[2].action, 'migrate-first');
   // The target image accepts the current schema: deploy first, so the service stays ready.
   result = order(undefined, range(8, 9), 8);
   assert.equal(result.order, 'deploy-first');
-  assert.equal(result.services[1].action, 'deploy-first');
+  assert.equal(result.services[2].action, 'deploy-first');
   // Neither image accepts the other's schema: a planned readiness gap, not an error.
   result = order(range(8, 8), range(9, 9), 8);
   assert.equal(result.order, 'planned-readiness-gap');
-  assert.equal(result.services[1].action, 'gap');
+  assert.equal(result.services[2].action, 'gap');
   // An unknown running image and an unrecorded current schema never assume compatibility.
   assert.equal(order(undefined, range(8, 9), undefined).order, 'planned-readiness-gap');
   // A matching service needs no action.
@@ -716,6 +749,13 @@ test('the schema range comes from the readiness check in the migrator source', (
     'Agentweaver.Orchestrator'), range(31, 33));
   assert.deepEqual(read('services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs',
     'Agentweaver.EventsAndSessions'), range(Math.max(...plan.eventsVersions), Math.max(...plan.eventsVersions)));
+  const environmentSource = readFileSync(
+    'services/environment/Agentweaver.Environment/EnvironmentMigrator.cs', 'utf8');
+  assert.deepEqual(schemaRangeFromSource(environmentSource, 'Agentweaver.Environment'), range(11, 11));
+  assert.deepEqual(schemaRangeFromSource(environmentSource.replace('CurrentSchemaVersion = 11', 'CurrentSchemaVersion = 10'),
+    'Agentweaver.Environment'), range(10, 10));
+  assert.equal(schemaRangeFromSource(environmentSource.replace('pending.Length > 0', 'pending.Length > 1'),
+    'Agentweaver.Environment'), undefined);
   // An older image with no optional version accepts exactly its own highest version.
   const older = ['WHERE version = 1),', 'WHERE version = 21) = 1,', 'WHERE version NOT IN (1, 2, 21)),']
     .map(line => `SELECT count(*) FROM s.coordination_schema_migrations ${line}`).join('\n');
@@ -839,7 +879,8 @@ test('an image schema range is read from its source label and the source at that
 test('a target image whose schema range cannot be read stops the run before any change', async () => {
   const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 33) } });
   try {
-    await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--deploy-apps']),
+    await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([
+      ...baseArgs, '--events-digest', digest('c'), '--deploy-apps']),
       receiptDir: fake.receiptDir }, fake.deps), /Could not read the schema range of events-and-sessions image .*not in the test registry/);
     assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
   } finally { fake.done(); }
@@ -880,7 +921,8 @@ test('migrate-first keeps a running image that accepts the target schema when no
     assert.equal(receipt.serviceOrder.order, 'migrate-first');
     assert.ok(!receipt.steps.some(step => step.name === 'app-image-set'));
     assert.deepEqual(receipt.steps.filter(step => step.name === 'app-ready').map(step => step.image),
-      [imageReference('Agentweaver.Orchestrator', digest('a')), imageReference('Agentweaver.EventsAndSessions', digest('e'))]);
+      [environmentImage('d'), imageReference('Agentweaver.Orchestrator', digest('a')),
+        imageReference('Agentweaver.EventsAndSessions', digest('e'))]);
   } finally { fake.done(); }
 });
 
@@ -905,7 +947,7 @@ test('a readiness timeout after the migration only rolls forward to the same dig
     for (const other of ['e', 'f']) {
       const before = fake.calls.length;
       const otherArgs = [...args];
-      otherArgs[3] = digest(other);
+      otherArgs[5] = digest(other);
       await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs(otherArgs), receiptDir: fake.receiptDir }, fake.deps),
       /must roll forward[\s\S]*events-and-sessions=.*sha256:b{64}[\s\S]*Rolling back to older images is not supported/);
       assert.ok(!fake.calls.slice(before).some(call => call.args[4] === 'create' || call.args[4] === 'set'));
@@ -970,6 +1012,6 @@ test('--prepare-only sets up identity, egress, and handover, then stops before a
     assert.ok(!fake.calls.some(call => call.args[4] === 'get' && call.args[5] === 'deployment'));
     assert.ok(![...fake.cluster.keys()].some(key => key.startsWith('lease/')));
   } finally { fake.done(); }
-  assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', ...baseArgs]), /--prepare-only cannot be combined with --orchestrator-digest/);
+  assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', ...baseArgs]), /--prepare-only cannot be combined with --environment-digest/);
   assert.throws(() => parseDbMaintenanceArgs(['--prepare-only', '--deploy-apps']), /--deploy-apps/);
 });
