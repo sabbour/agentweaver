@@ -1120,10 +1120,18 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
         fail(`${name} cannot mount host paths, CSI devices, or unreviewed network filesystems`);
       }
     }
+    const environment = container.env ?? [];
     const web = name === 'web';
+    const hostedCatalogListenerConfigured = name === 'identity-broker' &&
+      (environment.some(({ name: envName }) => [
+        'Kestrel__Endpoints__Https__Url',
+        'Kestrel__Endpoints__HostedModelCatalogCredentialUse__Url',
+      ].includes(envName)) ||
+        container.ports?.some(({ name: port }) => port === 'hosted-catalog'));
+    // Older immutable releases have only the main listener; validate the isolated listener when present.
     const expectedPorts = web
       ? [{ name: 'http', containerPort: 8080, protocol: 'TCP' }]
-      : name === 'identity-broker'
+      : hostedCatalogListenerConfigured
         ? [
           { name: 'https', containerPort: 8443, protocol: 'TCP' },
           { name: 'hosted-catalog', containerPort: 8444, protocol: 'TCP' },
@@ -1136,7 +1144,6 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
         !isDeepStrictEqual(container.ports, expectedPorts)) {
       fail(`${name} must expose only its source-declared ${scheme} application port`);
     }
-    const environment = container.env ?? [];
     const getEnvValue = (key) => {
       const matches = environment.filter((entry) => entry.name === key);
       if (matches.length !== 1 || typeof matches[0].value !== 'string') return undefined;
@@ -1150,7 +1157,7 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
     if (getEnvValue('ASPNETCORE_URLS') !== `${web ? 'http' : 'https'}://+:${portNumber}`) {
       fail(`${name} must explicitly configure its ${scheme} listener`);
     }
-    if (name === 'identity-broker' &&
+    if (hostedCatalogListenerConfigured &&
         (getEnvValue('Kestrel__Endpoints__Https__Url') !== 'https://+:8443' ||
           getEnvValue('Kestrel__Endpoints__HostedModelCatalogCredentialUse__Url') !== 'https://+:8444')) {
       fail('Identity Broker must explicitly configure its isolated hosted catalog listener');
@@ -1247,14 +1254,14 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
         fail(`${name} requires its source-owned ${scheme} ${expectedPath} ${probeName}`);
       }
     }
-    const expectedServicePorts = name === 'identity-broker'
+    const expectedServicePorts = hostedCatalogListenerConfigured
       ? [
         { name: 'https', port: 443, targetPort: 'https', protocol: 'TCP' },
         { name: 'hosted-catalog', port: 8444, targetPort: 'hosted-catalog', protocol: 'TCP' },
       ]
       : [{
         name: portName,
-        port: portNumber,
+        port: name === 'identity-broker' ? 443 : portNumber,
         targetPort: portName,
         protocol: 'TCP',
       }];

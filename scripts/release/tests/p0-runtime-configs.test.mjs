@@ -1049,6 +1049,22 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.deepEqual(validateKustomizeInstall(installation, images, namespace, providerCatalog)
     .incompleteRuntimeConfigMaps, []);
 
+  const identityDeployment = resources.find(resource =>
+    resource.kind === 'Deployment' && resource.metadata.name === 'identity-broker');
+  const identityContainer = identityDeployment.spec.template.spec.containers[0];
+  assert.deepEqual(identityContainer.ports, [
+    { containerPort: 8443, name: 'https', protocol: 'TCP' },
+    { containerPort: 8444, name: 'hosted-catalog', protocol: 'TCP' },
+  ]);
+  const identityEnvironment = Object.fromEntries(identityContainer.env.map(({ name, value }) => [name, value]));
+  assert.equal(identityEnvironment.Kestrel__Endpoints__Https__Url, 'https://+:8443');
+  assert.equal(identityEnvironment.Kestrel__Endpoints__HostedModelCatalogCredentialUse__Url, 'https://+:8444');
+  assert.deepEqual(resources.find(resource =>
+    resource.kind === 'Service' && resource.metadata.name === 'identity-broker').spec.ports, [
+    { name: 'https', port: 443, protocol: 'TCP', targetPort: 'https' },
+    { name: 'hosted-catalog', port: 8444, protocol: 'TCP', targetPort: 'hosted-catalog' },
+  ]);
+
   for (const name of [
     'environment', 'events-and-sessions', 'gateway', 'identity-broker', 'knowledge', 'mcp', 'orchestrator',
   ]) {
