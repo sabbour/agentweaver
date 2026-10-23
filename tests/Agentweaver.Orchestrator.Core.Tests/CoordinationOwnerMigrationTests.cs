@@ -48,6 +48,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(30)]
     // Version 31 adds the caller dismissal table for promotion notices.
     [InlineData(31)]
+    [InlineData(32)]
     [InlineData(33)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
@@ -58,6 +59,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         if (version < 31)
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        // The reviewed catalog applies PR records before the independent Priority-link update.
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await AssertCurrentSchemaAsync();
@@ -106,7 +108,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Fact]
-    public async Task RepositoryIdentityUpgradePreservesLegacyRowsAndSkipsOptional032()
+    public async Task RepositoryIdentityUpgradeAppliesReviewed032AndPreservesLegacyRows()
     {
         await ApplyMigrationsThroughAsync(31);
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
@@ -157,7 +159,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         await using var reader = await check.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
-        Assert.Equal(0L, reader.GetInt64(1));
+        Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
         // Old owner images cannot accept 033; migrating and deploying must be coordinated.
         Assert.Equal(1L, reader.GetInt64(3));
@@ -297,6 +299,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData("backlog_plan_promotions")]
     [InlineData("backlog_task_origins")]
     [InlineData("user_notification_promotion_dismissals")]
+    [InlineData("source_control_pull_requests")]
     public async Task VerificationRequiresRegisteredTables(string table)
     {
         // A version receipt alone is insufficient when its required table is missing.
@@ -375,6 +378,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (29, "029_spend_budget_exposure.sql"),
             (30, "030_backlog_task_origin.sql"),
             (31, "031_user_notification_promotion_dismissals.sql"),
+            (32, "032_source_control_pull_request_records.sql"),
             (33, "033_priority_link_repository_identity.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
@@ -504,8 +508,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        // The default history reaches 033 without applying optional 032.
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33]), reader.GetFieldValue<int[]>(9));
+        // The default history includes every reviewed version through 033.
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));

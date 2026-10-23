@@ -8,8 +8,8 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "ff069555878416f3c4111eb70973c41f0d0eb9e907425ccc72c7270208aa3fbc";
-    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 14), 33];
+    private const string ReviewedPlanSha256 = "74f984b26a7df480476dbdee0c36164c46d0f4afc93d6624cbc590098d73c685";
+    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 15), 33];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 9)];
 
     [Fact]
@@ -26,9 +26,11 @@ public sealed class PlannedRuntimeGrantsTests
             "orchestrator", "orchestrator", "agentweaver-id-orchestrator", ReviewedPlanSha256, CoreVersions);
         Assert.Equal(CoreVersions, core.Versions);
         Assert.DoesNotContain(17, core.Versions);
-        Assert.DoesNotContain(32, core.Versions);
+        Assert.Contains(32, core.Versions);
         Assert.Contains(33, core.Versions);
         Assert.NotEmpty(core.Tables);
+        var pullRequestRecords = Assert.Single(core.Tables, table => table.Table == "source_control_pull_requests");
+        Assert.Equal(["SELECT", "INSERT", "UPDATE"], pullRequestRecords.Privileges);
 
         var events = PlannedRuntimeGrants.Load(
             "events-and-sessions", "events_sessions", "agentweaver-id-events-and-sessions", ReviewedPlanSha256, EventsVersions);
@@ -69,10 +71,10 @@ public sealed class PlannedRuntimeGrantsTests
     [Fact]
     public void RejectsACatalogThatAddsOrDropsAMigration()
     {
-        // An image that compiled 032 in must stop before migrating.
-        int[] with032 = [.. CoreVersions, 32];
+        // A compiled migrator that omits reviewed 032 must stop before applying a different plan.
+        int[] without032 = [.. CoreVersions.Where(version => version != 32)];
         var error = Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(
-            "orchestrator", "orchestrator", "agentweaver-id-orchestrator", ReviewedPlanSha256, with032));
+            "orchestrator", "orchestrator", "agentweaver-id-orchestrator", ReviewedPlanSha256, without032));
         Assert.Contains("catalog", error.Message);
 
         Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(

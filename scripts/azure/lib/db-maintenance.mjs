@@ -25,8 +25,8 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   postgresHost: 'agentweaver-pg.postgres.database.azure.com',
   registry: 'ghcr.io/sabbour',
 });
-/** The reviewed plan: Core 1-16, 18-31 and 33, Events 1-9. Migration 032 is not part of it. */
-export const REVIEWED_PLAN_SHA256 = 'ff069555878416f3c4111eb70973c41f0d0eb9e907425ccc72c7270208aa3fbc';
+/** The reviewed plan: Core 1-16 and 18-33, Events 1-9. */
+export const REVIEWED_PLAN_SHA256 = '74f984b26a7df480476dbdee0c36164c46d0f4afc93d6624cbc590098d73c685';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';
@@ -209,8 +209,8 @@ export function verifyGrantsMarker(log, { service, schema, versions }) {
   if (fields.service !== service || fields.schema !== schema || fields.role !== expectedRole ||
       fields.planSha256 !== REVIEWED_PLAN_SHA256)
     throw new Error(`${service} Job marker does not match the reviewed plan: ${lines[0]}`);
-  // The ledger must equal the plan exactly. A missing version means an incomplete run, and an extra
-  // one (such as 032) means the database moved past the reviewed plan.
+  // The ledger must equal the plan exactly. A missing version means an incomplete run; an extra
+  // version means the database moved past the reviewed plan.
   if (fields.versions !== versions.join(','))
     throw new Error(`${service} ledger [${fields.versions}] differs from the reviewed plan [${versions.join(',')}].`);
   return lines[0];
