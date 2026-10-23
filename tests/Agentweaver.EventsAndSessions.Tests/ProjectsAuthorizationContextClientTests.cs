@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
@@ -98,7 +99,10 @@ public sealed class ProjectsAuthorizationContextClientTests
             EffectiveAuthority = [new(resource, resource == "tenant" ? "tenant-1" : "project-1",
                 [new(permission, 1)])]
         };
-        var handler = new CaptureHandler(_ => Success(owner));
+        var handler = new CaptureHandler(request =>
+            request.RequestUri!.AbsolutePath == "/api/authorization/context"
+                ? Success(owner)
+                : ProjectSuccess("project-1"));
         var context = CreateRequestContext();
         context.User = new(new ClaimsIdentity(
             new[] { new Claim("sub", ActorId), new("aud", Audience), new("aud", "events"), new("scope", "api.read") }
@@ -113,6 +117,51 @@ public sealed class ProjectsAuthorizationContextClientTests
         else
             Assert.Equal(HttpStatusCode.Forbidden, (await Assert.ThrowsAsync<ProjectsAuthorizationContextException>(
                 () => CreateClient(handler).GetProjectReadAsync(context, "project-1", "events", default))).StatusCode);
+    }
+
+    [Fact]
+    public async Task TenantReadRejectsAProjectOutsideTheAuthorizedTenant()
+    {
+        const string tenantBProjectId = "22222222222222222222222222222222";
+        var owner = ValidContext() with
+        {
+            BoundProjectId = null,
+            BoundRunId = null,
+            EffectiveAuthority = [new("tenant", "tenant-1", [new("readProjects", 1)])]
+        };
+        var requests = new List<string>();
+        var handler = new CaptureHandler(request =>
+        {
+            requests.Add(request.RequestUri!.AbsolutePath);
+            if (request.RequestUri!.AbsolutePath == "/api/authorization/context")
+                return Success(owner);
+            if (request.RequestUri.AbsolutePath == $"/api/projects/{tenantBProjectId}" &&
+                request.Headers.GetValues("X-Agentweaver-Tenant").Single() == "tenant-b")
+                return ProjectSuccess(tenantBProjectId);
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [
+                    new Claim("sub", ActorId),
+                    new Claim("aud", Audience),
+                    new Claim("aud", "events"),
+                    new Claim("scope", "api.read")
+                ],
+                "validated-bearer"))
+        };
+        context.Request.Headers.Authorization = "Bearer current-caller-token";
+        context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+
+        var denied = await Assert.ThrowsAsync<ProjectsAuthorizationContextException>(
+            () => CreateClient(handler).GetProjectReadAsync(context, tenantBProjectId, "events", default));
+
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal("project_read_permission_denied", denied.Code);
+        Assert.Equal(
+            ["/api/authorization/context", $"/api/projects/{tenantBProjectId}"],
+            requests);
     }
 
     /// <summary>Rejects missing scopes, either missing audience, or conflicting bindings before sending a request.</summary>
@@ -275,6 +324,16 @@ public sealed class ProjectsAuthorizationContextClientTests
         };
         if (noStore)
             response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+        return response;
+    }
+
+    private static HttpResponseMessage ProjectSuccess(string projectId)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { projectId }),
+            Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+        };
         return response;
     }
 

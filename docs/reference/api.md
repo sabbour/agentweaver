@@ -1091,7 +1091,7 @@ All routes require Journal authority and exact project/run claims.
 | Method | Native full path | Auth | Purpose | Gateway full path |
 | --- | --- | --- | --- | --- |
 | GET | `/internal/projects/{projectId}/runs/{runId}/events` | Journal | Replay committed run journal. | `/api/v1/projects/{projectId}/runs/{runId}/events` |
-| GET | `/internal/projects/{projectId}/runs/{runId}/project-history/events` | Read | Read run activity with current project read authority. | `/api/v1/projects/{projectId}/runs/{runId}/history/events` |
+| GET | `/internal/projects/{projectId}/runs/{runId}/project-history/events` | Read | Read run activity with current project read authority and tenant ownership checks. | `/api/v1/projects/{projectId}/runs/{runId}/history/events` |
 | GET | `/internal/projects/{projectId}/runs/{runId}/events/live` | Journal | Native NDJSON stream. | No; Gateway SSE uses replay instead |
 | GET | `/internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` | Exact bound `ReadRunSelection` authority and current provider | Read immutable Sessions pin. | No |
 | GET | No native SSE route | Exact run bearer and current Gateway/owner access checks | SSE over committed replay pages. | `/api/v1/projects/{projectId}/runs/{runId}/events/live` |
