@@ -186,12 +186,11 @@ The command sums theory-case durations per method, keeps methods that take at
 least one second, and sets `defaultSeconds` to the mean of the rest. Commit the
 updated file with the run URL in the pull request.
 
-The historical comparison baseline was approximately 29 minutes median for
-v1 PR CI versus 15 minutes for dev, with Broker alone taking 13m46s.
-Performance acceptance requires at least three representative successful PR
-runs, a median total duration of at most 20 minutes and a longest Broker shard
-of at most 8 minutes. Use run results to verify these targets; configuration
-changes alone do not prove them.
+Performance acceptance for `v1 foundation CI` requires at least three
+representative successful pull-request runs. The median total duration must
+not exceed 20 minutes, and the longest Broker shard must not exceed 8 minutes.
+Use completed run results to verify these targets. A configuration change
+alone does not prove performance acceptance.
 
 ## Measure v1 coverage weekly
 
