@@ -2,7 +2,7 @@ import { createBrokerAuthProvider } from '../../harness-shared/broker-auth.mjs';
 import { redact } from '../../harness-shared/redaction.mjs';
 import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
 
-const VIEWS = new Set(['Topology', 'Chat', 'Outcomes & approvals', 'Activity', 'Selection', 'Usage']);
+const VIEWS = new Set(['Topology', 'Chat', 'Approvals', 'Activity', 'Selection', 'Usage']);
 const GATE_KINDS = new Map([
   ['awaitingInput', ['question']],
   ['awaitingOutcomeConfirmation', ['outcomeConfirmation']],
@@ -163,7 +163,11 @@ export class UiHarnessClient {
   async selectView(name) {
     if (!VIEWS.has(name)) throw new Error('Unknown P1 run view.');
     this.requirePageScope();
-    await this.page.getByRole('tab', { name, exact: true }).click();
+    // The app appends the pending-decision count to the Approvals tab's accessible name.
+    const locator = name === 'Approvals'
+      ? { name: /^Approvals(?: \(\d+\))?$/ }
+      : { name, exact: true };
+    await this.page.getByRole('tab', locator).click();
   }
 
   /** Wait for a response at the exact Gateway path and HTTP method. */
@@ -180,7 +184,7 @@ export class UiHarnessClient {
     const runPath = this.runPath('coordination', 'status');
     const responses = [runPath, ...paths].map(path => this.waitFor(path));
     const records = (await Promise.all([
-      ...responses, this.page.getByRole('button', { name: 'Refresh owner snapshots', exact: true }).click(),
+      ...responses, this.page.getByRole('button', { name: 'Refresh run', exact: true }).click(),
     ])).slice(0, responses.length);
     const calls = await Promise.all(records.map(response => this.capture(response)));
     await this.flush();
@@ -200,7 +204,7 @@ export class UiHarnessClient {
   async gate({ sessionId, requestId, action, answer }) {
     if (!['answer', 'approve', 'reject'].includes(action)) throw new Error('Unknown exact-gate action.');
     segment(requestId);
-    await this.selectView('Outcomes & approvals');
+    await this.selectView('Approvals');
     const base = this.runPath('coordination', 'sessions', sessionId);
     const [run, status, decisions] = await this.refresh([`${base}/status`, `${base}/decisions`]);
     const blocker = status?.blockers?.find(item => item.requestId === requestId);

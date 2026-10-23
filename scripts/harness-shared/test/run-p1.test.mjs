@@ -121,8 +121,8 @@ test('P1 CLI help describes the explicit identity providers without exposing cre
   assert.doesNotMatch(output.join('\n'), /--token/);
 });
 
-test('P1 UI surface remains blocked on #1859 before credentials or page providers are used', async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-ui-blocked-'));
+test('P1 UI runner requires an authorized page provider before credentials or source checks', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-ui-provider-'));
   const inputPath = path.join(directory, 'input.json');
   const outputPath = path.join(directory, 'evidence.jsonl');
   await writeFile(inputPath, JSON.stringify(validInput()), 'utf8');
@@ -139,27 +139,25 @@ test('P1 UI surface remains blocked on #1859 before credentials or page provider
       '--surface', 'ui',
       '--input', inputPath,
       '--output', outputPath,
-      '--page-module', 'unused-page-provider.mjs',
     ], env, { log: text => output.push(text), error: text => output.push(text) }, {
       async prepareDeploymentEvidence() {
         calls.push('deployment');
-        throw new Error('The blocked UI runner prepared deployment evidence.');
+        throw new Error('The UI runner prepared deployment evidence without a page provider.');
       },
       async createSurfaceAdapters() { calls.push('adapters'); },
     });
 
-    assert.equal(code, 2);
+    assert.notEqual(code, 0);
     assert.deepEqual(calls, []);
     const result = JSON.parse(output.at(-1));
-    assert.equal(result.surfaceStatus, 'blocked');
-    assert.match(result.failure.message, /blocked on #1859/);
-    assert.doesNotMatch(result.failure.message, /credential|deployment evidence|unused-page-provider/);
+    assert.match(result.failure.message, /built-in sign-in launcher or an authorized page provider/);
+    assert.doesNotMatch(result.failure.message, /credential|deployment evidence/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test('P1 UI blocker does not overwrite probe envelopes or deployment artifacts', async () => {
+test('P1 UI input collisions do not overwrite probe envelopes or deployment artifacts', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-ui-collision-'));
   const nativePath = path.join(directory, 'native.json');
   const nativeInputPath = path.join(directory, 'native-input.json');

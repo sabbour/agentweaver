@@ -92,24 +92,22 @@ cursor pages and Activity view. It does not use MCP replay as UI evidence.
 Gate-answer, approval, rejection, and addressed-message journeys use the
 borrowed page and verify the actual owner response.
 
-The shared P1 CLI currently returns a blocked result for the UI surface:
-**blocked** until the 0.x UI is restored onto v1. Do not build
-selectors against the current `apps/web/src/v1/App.tsx` pages or use a
-`--page-module` as a workaround. No UI page provider is supplied by the
-one-account sign-in launcher.
+The sign-in launcher supplies the authorized page from the same temporary
+headed-Chrome session used for the Broker sign-in. It starts the app's silent
+authorization with that existing Broker session; it does not ask for another
+sign-in or read or seed browser token storage. It waits for a successful
+Gateway response on the selected origin. The UI adapter checks the page origin
+and the actor, tenant, issuer, and audience on observed Gateway requests
+before accepting UI evidence.
 
 ```powershell
 npm run harness:p1:signin-run -- --surface ui --input <manifest.json> --output <evidence.jsonl>
 ```
 
-The UI blocker is returned before a browser is opened or sign-in is attempted.
-When the restored UI is available on v1, add a page provider against the restored
-surface and its explicit contract tests. The launcher uses one account only;
-distinct denied-actor coverage is unavailable in this one-account operator
-flow. A lower-level runner can retain that check only when a separate actor
-credential is independently available; never substitute the signed-in actor
-or alter access. The Host-caller probe-provider gap remains blocked, and
-missing native probes continue to block full P1 acceptance.
+Use the [P1 operator guide](../harness-shared/P1-operator.md) for the required
+release evidence and cleanup steps. The launcher uses one account only. A
+distinct denied-actor check and any missing native or recovery evidence remain
+blocked; never substitute the signed-in actor or change access.
 
 The required `fixturePlan.expectedPlatformRuntimeRevision` is a positive
 expected value passed through the existing run-selection request and verified
