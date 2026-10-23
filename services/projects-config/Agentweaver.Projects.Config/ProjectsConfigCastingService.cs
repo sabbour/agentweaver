@@ -21,7 +21,10 @@ public sealed record ProjectCastingProposal(
     string CreatedByActorId,
     DateTimeOffset CreatedAt,
     string UpdatedByActorId,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    public ProjectCastingGenerationStatus? Generation { get; init; }
+}
 
 /// <summary>Implements revision-fenced casting proposal review using serialized PostgreSQL transactions.</summary>
 public sealed partial class ProjectsConfigService
@@ -208,7 +211,16 @@ public sealed partial class ProjectsConfigService
                 .Take(limit)
                 .ToArrayAsync(token)
                 .ConfigureAwait(false);
-            return (IReadOnlyList<ProjectCastingProposal>)proposals.Select(ToCastingProposal).ToArray();
+            var proposalIds = proposals.Select(proposal => proposal.ProposalId).ToArray();
+            var generations = await context.CastingGenerationRequests.AsNoTracking()
+                .Where(request => proposalIds.Contains(request.ProposalId))
+                .ToDictionaryAsync(request => request.ProposalId, token)
+                .ConfigureAwait(false);
+            return (IReadOnlyList<ProjectCastingProposal>)proposals
+                .Select(proposal => ToCastingProposal(
+                    proposal,
+                    generations.GetValueOrDefault(proposal.ProposalId)))
+                .ToArray();
         }, cancellationToken);
     }
 
@@ -228,7 +240,10 @@ public sealed partial class ProjectsConfigService
                 context, caller, projectId, write: false, token).ConfigureAwait(false);
             var proposal = await LockCastingProposalAsync(context, project.ProjectId, proposalId, token)
                 .ConfigureAwait(false);
-            return ToCastingProposal(proposal);
+            var generation = await context.CastingGenerationRequests.AsNoTracking()
+                .SingleOrDefaultAsync(request => request.ProposalId == proposal.ProposalId, token)
+                .ConfigureAwait(false);
+            return ToCastingProposal(proposal, generation);
         }, cancellationToken);
     }
 
@@ -253,6 +268,9 @@ public sealed partial class ProjectsConfigService
             var proposal = await LockCastingProposalAsync(context, project.ProjectId, proposalId, token)
                 .ConfigureAwait(false);
             RequirePendingCastingProposal(proposal, expectedDraftRevision);
+            var generation = await GetCastingGenerationForProposalAsync(
+                context, proposal.ProposalId, token).ConfigureAwait(false);
+            RequireCompletedCastingGeneration(generation);
             if (proposal.BaseConfigurationRevision != project.ConfigurationRevision)
                 throw CastingConfigurationConflict();
             var currentRevision = await context.ProjectConfigurationRevisions.AsNoTracking()
@@ -276,7 +294,7 @@ public sealed partial class ProjectsConfigService
             proposal.UpdatedByActorId = caller.ActorId;
             proposal.UpdatedAt = timeProvider.GetUtcNow();
             await context.SaveChangesAsync(token).ConfigureAwait(false);
-            return ToCastingProposal(proposal);
+            return ToCastingProposal(proposal, generation);
         }, cancellationToken);
     }
 
@@ -301,12 +319,14 @@ public sealed partial class ProjectsConfigService
                 context, caller, projectId, write: true, token).ConfigureAwait(false);
             var proposal = await LockCastingProposalAsync(context, project.ProjectId, proposalId, token)
                 .ConfigureAwait(false);
+            var generation = await GetCastingGenerationForProposalAsync(
+                context, proposal.ProposalId, token).ConfigureAwait(false);
 
             if (proposal.State != ProjectCastingProposalState.Pending)
             {
                 if (proposal.State == ProjectCastingProposalState.Confirmed &&
                     proposal.DraftRevision == expectedDraftRevision)
-                    return ToCastingProposal(proposal);
+                    return ToCastingProposal(proposal, generation);
                 throw CastingProposalConflict(
                     proposal.State == ProjectCastingProposalState.Rejected
                         ? "A rejected casting proposal cannot be confirmed."
@@ -314,6 +334,7 @@ public sealed partial class ProjectsConfigService
             }
 
             RequirePendingCastingProposal(proposal, expectedDraftRevision);
+            RequireCompletedCastingGeneration(generation);
             RequireActiveCastingProject(project);
             if (proposal.BaseConfigurationRevision != project.ConfigurationRevision)
                 throw CastingConfigurationConflict();
@@ -352,7 +373,7 @@ public sealed partial class ProjectsConfigService
             proposal.UpdatedByActorId = caller.ActorId;
             proposal.UpdatedAt = now;
             await context.SaveChangesAsync(token).ConfigureAwait(false);
-            return ToCastingProposal(proposal);
+            return ToCastingProposal(proposal, generation);
         }, cancellationToken);
     }
 
@@ -374,20 +395,47 @@ public sealed partial class ProjectsConfigService
                 context, caller, projectId, write: true, token).ConfigureAwait(false);
             var proposal = await LockCastingProposalAsync(context, project.ProjectId, proposalId, token)
                 .ConfigureAwait(false);
+            var generation = await GetCastingGenerationForProposalAsync(
+                context, proposal.ProposalId, token).ConfigureAwait(false);
             if (proposal.State == ProjectCastingProposalState.Rejected &&
                 proposal.DraftRevision == expectedDraftRevision)
-                return ToCastingProposal(proposal);
+                return ToCastingProposal(proposal, generation);
             RequirePendingCastingProposal(proposal, expectedDraftRevision);
 
+            if (generation?.State == ProjectCastingGenerationRequestState.Pending)
+            {
+                generation.State = ProjectCastingGenerationRequestState.Cancelled;
+                generation.UpdatedAt = timeProvider.GetUtcNow();
+            }
             proposal.State = ProjectCastingProposalState.Rejected;
             proposal.UpdatedByActorId = caller.ActorId;
             proposal.UpdatedAt = timeProvider.GetUtcNow();
             await context.SaveChangesAsync(token).ConfigureAwait(false);
-            return ToCastingProposal(proposal);
+            return ToCastingProposal(proposal, generation);
         }, cancellationToken);
     }
 
-    /// <summary>Runs a serializable proposal transaction and retries only bounded PostgreSQL serialization failures.</summary>
+    private static Task<ProjectCastingGenerationRequestRecord?> GetCastingGenerationForProposalAsync(
+        ProjectsConfigDbContext context,
+        Guid proposalId,
+        CancellationToken cancellationToken) =>
+        context.CastingGenerationRequests.SingleOrDefaultAsync(
+            request => request.ProposalId == proposalId,
+            cancellationToken);
+
+    private static void RequireCompletedCastingGeneration(
+        ProjectCastingGenerationRequestRecord? generation)
+    {
+        if (generation is null || generation.State == ProjectCastingGenerationRequestState.Completed)
+            return;
+        if (generation.State == ProjectCastingGenerationRequestState.Stale)
+            throw CastingConfigurationConflict();
+        throw ProjectConfigException.Conflict(
+            "casting_generation_not_ready",
+            "The casting proposal cannot be reviewed until generation has completed.");
+    }
+
+    /// <summary>Runs a serializable proposal transaction and retries bounded serialization and idempotency races.</summary>
     private async Task<T> ExecuteCastingProposalTransactionAsync<T>(
         Func<ProjectsConfigDbContext, CancellationToken, Task<T>> operation,
         CancellationToken cancellationToken)
@@ -408,10 +456,16 @@ public sealed partial class ProjectsConfigService
             catch (Exception exception) when (
                 dbContextFactory is not null &&
                 attempt + 1 < CastingProposalTransactionAttempts &&
-                IsSerializationFailure(exception))
+                (IsSerializationFailure(exception) ||
+                    IsCastingGenerationIdempotencyRace(exception)))
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(10 * (attempt + 1)), cancellationToken)
                     .ConfigureAwait(false);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                throw ProjectConfigException.Conflict(
+                    "The casting proposal changed during the request. Read the current state before retrying.");
             }
         }
     }
