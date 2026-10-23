@@ -91,9 +91,11 @@ do not create approval.
 
 When a run creates or reuses a pull request, the Orchestrator records the
 number, URL, provider title, state, head and base, run, and disposition. The
-record is written only after optional migration 032 is applied; before that,
-the write is skipped and the create or reuse result is unchanged. The project
-pull request list reads these records and makes no provider call.
+reviewed P1 database plan applies migration 032, which creates the records
+table and grants the runtime its exact read and write permissions. Before the
+maintenance run, the owner skips the write and the project list reports that
+records are unavailable. After the migration, the list reads stored records
+and makes no provider call.
 
 ## Admit webhooks through the owner path
 

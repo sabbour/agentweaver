@@ -377,6 +377,29 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        projects.MapGet("/{projectId}/casting/universes", async (
+            string projectId,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                var universes = await service.ListCastingUniversesAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    cancellationToken).ConfigureAwait(false);
+                // Return only supported names after the service has authorized this project context.
+                return Results.Ok(new { universes });
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("ListProjectCastingUniverses");
+
         projects.MapPost("/{projectId}/casting/proposals", async (
             string projectId,
             CreateProjectCastingProposalRequest request,
@@ -420,7 +443,8 @@ public static class ProjectConfigEndpoints
                     projectId,
                     request.ExpectedConfigurationRevision,
                     request.TemplateId,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    request.Universe).ConfigureAwait(false);
                 return Results.Created(
                     $"/api/projects/{projectId}/casting/proposals/{proposal.ProposalId}",
                     proposal);
@@ -447,7 +471,8 @@ public static class ProjectConfigEndpoints
                     projectId,
                     request.ExpectedConfigurationRevision,
                     request.RoleIds,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    request.Universe).ConfigureAwait(false);
                 return Results.Created(
                     $"/api/projects/{projectId}/casting/proposals/{proposal.ProposalId}",
                     proposal);

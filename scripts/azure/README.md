@@ -20,10 +20,10 @@ the new Core plan hash, service TLS configuration, and live application-level
 issue-sync grant creation remain separate approval items. Source validation
 does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`d23ce090b0bfaf5475ad179e82cef3dfbfa484cf33bf0c8ba8161b4a061cad52`.
+`74f984b26a7df480476dbdee0c36164c46d0f4afc93d6624cbc590098d73c685`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-31, 33. Version 027 requires 026 only.
+placeholder. The Core list is 1-16 and 18-33. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
 027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
 plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
@@ -35,14 +35,14 @@ DELETE. It is an **unapplied code-only migration**.
 
 Orchestrator migration `032_source_control_pull_request_records.sql` adds the
 `source_control_pull_requests` table for the project pull request list. It
-requires migration 012. It is an **unapplied code-only migration** that is
-**not** in the Core list, the default migrator, startup, or the P1 initializer,
-so the plan hash above doesn't change. Startup verification accepts a schema
-with or without it, but not a partial apply. The only apply path is
-`CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync`, which nothing calls
-yet. Applying it needs separate live approval and the planned grant of exactly
-`SELECT, INSERT, UPDATE` on `orchestrator.source_control_pull_requests`. Until
-then, the pull request list returns `503 pull_request_records_unavailable`.
+requires migration 012 and is part of the reviewed Core catalog and default P1
+maintenance plan. The source-bound plan hash covers both migration 032 and the
+exact `SELECT, INSERT, UPDATE` grant on
+`orchestrator.source_control_pull_requests`. The Orchestrator migration Job
+applies it before 033 and verifies the complete ledger and table. Startup still
+accepts a complete pre-032 schema during rollout, but the pull request list
+returns `503 pull_request_records_unavailable` until the maintenance Job applies
+the plan.
 
 Migration `033_priority_link_repository_identity.sql` requires only 024, not
 032. It adds nullable provider and repository columns while preserving legacy
@@ -57,7 +57,8 @@ instead of losing repository identity; existing operations continue.
 On 033 those saves work. Older images reject 033 and are not a rollback target.
 The source-owned machine-readable compatibility list is
 `services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json`.
-The Core catalog and plan include 033 but keep 032 separately approved.
+The Core catalog and plan include both 032 and 033; the maintenance Job applies
+them in version order.
 Existing grants on the Priority link table cover the added columns.
 
 Orchestrator migration `026_backlog_task_content.sql` adds task content,

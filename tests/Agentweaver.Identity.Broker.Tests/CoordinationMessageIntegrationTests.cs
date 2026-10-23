@@ -1464,46 +1464,30 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(SourceControlPullRequestDisposition.Reused, pullRequest.Disposition);
         }
 
-        // The owner started on the default migration set, without optional migration 032, and
-        // served every route above. The pull request list stays reachable and reports that its
-        // record isn't available, instead of an empty list; reusing a PR didn't apply 032.
+        // The reviewed migration plan installs 032 before the owner handles requests, so the
+        // reused pull request is listed immediately. Earlier pull requests aren't backfilled.
         var projectPullRequestsPath = $"/api/v1/projects/{project.ProjectId}/source-control/pull-requests";
-        using (var unavailablePullRequests = await SendAsync(
+        using (var availablePullRequests = await SendAsync(
                    gateway.Client, HttpMethod.Get, projectPullRequestsPath, runToken, [TenantId]))
         {
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailablePullRequests.StatusCode);
-            Assert.True(unavailablePullRequests.Headers.CacheControl?.NoStore);
-            Assert.Contains(
-                "pull_request_records_unavailable",
-                await unavailablePullRequests.Content.ReadAsStringAsync(),
-                StringComparison.Ordinal);
+            Assert.Equal(HttpStatusCode.OK, availablePullRequests.StatusCode);
+            Assert.True(availablePullRequests.Headers.CacheControl?.NoStore);
+            using var page = JsonDocument.Parse(await availablePullRequests.Content.ReadAsStringAsync());
+            var item = Assert.Single(page.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal(17, item.GetProperty("number").GetInt64());
+            Assert.Equal(RunId, item.GetProperty("runId").GetString());
+            Assert.Equal("reused", item.GetProperty("disposition").GetString());
+            Assert.Equal(sourceHeadSha, item.GetProperty("headSha").GetString());
+            Assert.False(page.RootElement.GetProperty("coverage")
+                .GetProperty("includesEarlierPullRequests").GetBoolean());
         }
-        using (var nativeUnavailablePullRequests = await SendAsync(
+        using (var nativePullRequests = await SendAsync(
                    orchestrator,
                    HttpMethod.Get,
                    $"/api/projects/{project.ProjectId}/source-control/pull-requests",
                    runToken,
                    [TenantId]))
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, nativeUnavailablePullRequests.StatusCode);
-        await using (var database = NpgsqlDataSource.Create(_connectionString))
-        {
-            await using (var tableQuery = database.CreateCommand(
-                             $"SELECT to_regclass('\"{ownerSchema}\".source_control_pull_requests') IS NULL"))
-                Assert.True((bool)(await tableQuery.ExecuteScalarAsync())!);
-
-            // Only the explicit, separately approved step applies 032. The running owner then
-            // records new create or reuse results; earlier pull requests aren't backfilled.
-            await CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync(database, ownerSchema);
-        }
-        using (var emptyRecord = await SendAsync(
-                   gateway.Client, HttpMethod.Get, projectPullRequestsPath, runToken, [TenantId]))
-        {
-            Assert.Equal(HttpStatusCode.OK, emptyRecord.StatusCode);
-            using var page = JsonDocument.Parse(await emptyRecord.Content.ReadAsStringAsync());
-            Assert.Equal(0, page.RootElement.GetProperty("items").GetArrayLength());
-            Assert.False(page.RootElement.GetProperty("coverage")
-                .GetProperty("includesEarlierPullRequests").GetBoolean());
-        }
+            Assert.Equal(HttpStatusCode.OK, nativePullRequests.StatusCode);
         using (var recordedReuse = await SendJsonAsync(
                    gateway.Client,
                    HttpMethod.Post,

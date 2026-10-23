@@ -463,7 +463,7 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
     }
 
     [Fact]
-    public async Task RecordsCreatedAndReusedPullRequestsOnlyAfterOptionalMigrationAndListsThemByProvenance()
+    public async Task RecordsCreatedAndReusedPullRequestsUnderReviewedMigrationAndListsThemByProvenance()
     {
         var schema = "source_control_" + Guid.NewGuid().ToString("N");
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, schema);
@@ -472,13 +472,9 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             var actor = new CoordinationActor("https://identity.example/", Guid.NewGuid().ToString("D"));
             var (firstPin, sourceStore) = await PersistRunPinAsync(schema, actor, "tenant-1");
             var list = new ProjectPullRequestReadStore(fixture.DataSource, schema);
-            Assert.False(await sourceStore.RecordPullRequestAsync(
+            Assert.True(await sourceStore.RecordPullRequestAsync(
                 firstPin, PullRequest() with { Disposition = SourceControlPullRequestDisposition.Created },
                 CancellationToken.None));
-            Assert.Equal("pull_request_records_unavailable", (await Assert.ThrowsAsync<CoordinationException>(
-                () => list.ListAsync("tenant-1", "project-1", null, "all", null, 25, default))).Code);
-
-            await CoordinationOwnerMigrator.ApplyPullRequestRecordsAsync(fixture.DataSource, schema);
             await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, schema);
             var (secondPin, _) = await PersistRunPinAsync(schema, actor, "tenant-1");
             var (otherTenantPin, _) = await PersistRunPinAsync(schema, actor, "tenant-2");
