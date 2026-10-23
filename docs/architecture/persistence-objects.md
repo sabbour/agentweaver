@@ -51,18 +51,23 @@ Call `AdmitAsync` with the same transaction as consumer state and any new outbox
 
 Delivery remains at least once. The inbox prevents duplicate committed local effects when the consumer gates all effects on the receipt and transaction.
 
-`Agentweaver.ObjectStore.AzureBlob` implements `IObjectStore` for opaque platform objects. It does not provide agent workspace storage, create a container, authorize callers, or fall back to disk.
+`Agentweaver.ObjectStore.AzureBlob` implements `IObjectStore` for opaque platform
+objects. It does not provide agent workspace storage, create a container, authorize
+callers, or fall back to disk. The container must exist before the adapter is used.
+Blob writes do not commit PostgreSQL references.
 
-The Blob container exists before adapter use. The caller owns authorization, authoritative references, retention, and upload-stream lifetime. Blob writes do not commit PostgreSQL references.
-The foundation Bicep creates the private `session-material` container used by
-Events & Sessions. Its workload identity receives Storage Blob Data Contributor
-on that container only, not on the storage account. These source definitions do
-not prove that the container or role assignment has been deployed.
+The Events & Sessions host composes the adapter with its typed session-material
+owner when an explicit HTTPS container is configured. The host's workload identity
+receives Blob access for that container; AgentHost and runtime clients use the
+owner's authenticated routes and do not receive Blob credentials or direct
+container access. The foundation Bicep creates the private `session-material`
+container and assigns its role at container scope. These source definitions do not
+prove that the container or role assignment has been deployed.
 
-Session event payloads store large content as typed opaque `ObjectKey` references with
-purpose and optional byte length; the journal stores and returns references and
-retention metadata, not the referenced bytes. Object upload, authorization, and blob
-deletion are outside this service slice. See [Events & Sessions](events-sessions.md).
+Session event payloads store typed opaque `ObjectKey` references with purpose and
+optional byte length. PostgreSQL stores the ordered event, reference, and retention
+metadata; Blob stores only the referenced bytes. The trusted Events owner controls
+authorization and access to those bytes. See [Events & Sessions](events-sessions.md).
 
 ## Events and Blob have different jobs
 
@@ -81,58 +86,105 @@ containing its large output. PostgreSQL answers what happened and in which order
 Blob supplies the referenced bytes when an authorized caller requests them.
 A normal small event does not require a Blob object.
 
-The approved source scope is a minimum typed interface inside the existing Events owner.
-It accepts only `TurnContent` and `SdkCache` material with bound operation, event, session,
-runtime revision, and fence identities. It is not a generic raw-content or Azure proxy API.
-Events generates the scoped object identity and records its kind, digest, length, revisions,
-and SDK/model binding. Caller-supplied references do not prove stored content or authority.
+## Production session-material composition
 
-Writes require fresh authenticated owner context, the current accepted selection, and
-Orchestrator runtime registration, turn fence, and writer eligibility.
-An Observe-purpose credential is insufficient. Events rechecks authority after storage
-and database waits and on retries. The same operation and material return the original
-acknowledgment; changed material conflicts.
+The existing foundations are the PostgreSQL journal and reference records, the
+`IObjectStore` contract, and the create-only Azure Blob adapter. The Events &
+Sessions host composes them through its typed owner when the explicit container
+setting is present. This is source composition, not evidence of a deployed route
+or Azure resource.
 
-The planned upload path writes an immutable object before committing its journal
-reference. A failed journal commit does not make that upload a committed event.
-The owner must report the failure and reconcile only its own unreferenced objects.
-PostgreSQL and Blob do not share an atomic transaction.
+The general runtime material route accepts only typed `TurnContent` and `SdkCache`
+bytes with bound event, session, runtime revision, and execution-fence identities.
+Events generates the object key and records the kind, digest, length, revisions,
+and SDK/model binding. A caller-supplied key is never proof that bytes were stored
+or that the caller may read them. Other protected material routes remain separate
+owner contracts; this boundary does not authorize a generic raw-content or Azure
+proxy API.
+
+Writes require current authenticated project/run authority and the Orchestrator's
+current runtime registration, source receipt, and writer fence. Events checks that
+authority before storage, again after storage, and before the journal transaction
+commits. An Observe-purpose credential is insufficient. An identical retry returns
+the original acknowledgment; changed material for the same event conflicts.
+
+The write order is deliberate: Events first creates the immutable Blob object, then
+commits the ordered event, object reference, and retention metadata in PostgreSQL.
+The caller receives a success acknowledgment only after the journal commit. A Blob
+failure is returned explicitly and creates no journal reference. A journal failure
+is also returned explicitly, but a Blob object may remain unreferenced. PostgreSQL
+and Blob do not share an atomic transaction, and an uncertain commit must not be
+treated as proof that no reference exists.
 
 ```mermaid
 sequenceDiagram
-    participant Host as AgentHost
-    participant Events as Events session-material owner (planned)
-    participant Objects as Object Store adapter
+    participant Runtime as AgentHost or runtime client
+    participant Events as Events & Sessions owner
+    participant Projects as Projects owner
+    participant Core as Orchestrator owner
+    participant Objects as IObjectStore
     participant Blob as Azure Blob
     participant PG as Events PostgreSQL
-    Host->>Events: Typed turn/cache material with bound execution identities
-    Events->>Events: Check fresh owner authority, selection, and writer fence
-    Events->>Objects: Create immutable object
-    Objects->>Blob: Write opaque bytes
-    Blob-->>Objects: Write completed
-    Objects-->>Events: Stored object identity
-    Events->>Events: Recheck current authority before reference commit
-    Events->>PG: Commit journal event and object reference
-    PG-->>Events: Committed event position
-    Events-->>Host: Committed event position and reference
+    Runtime->>Events: Typed bytes with event, session, and fence
+    Events->>Projects: Check current actor and project/run authority
+    Events->>Core: Check current registration, source, and writer fence
+    Events->>Objects: Create immutable object with owner-generated key
+    Objects->>Blob: Write opaque bytes to configured container
+    alt Blob write fails
+        Blob-->>Objects: Storage error
+        Objects-->>Events: Write failure
+        Events-->>Runtime: Explicit failure; no journal reference
+    else Blob write succeeds
+        Blob-->>Objects: Write completed
+        Objects-->>Events: Stored object
+        Events->>Projects: Recheck current authority after storage
+        Events->>Core: Recheck registration and fence
+        Events->>PG: Commit ordered event, reference, and retention
+        alt Journal commit fails
+            PG-->>Events: Commit failure or uncertain outcome
+            Events-->>Runtime: Explicit failure; no success acknowledgment
+            Note over Events,Blob: Bytes may remain; no cross-store rollback
+        else Journal commit succeeds
+            PG-->>Events: Committed position and reference
+            Events-->>Runtime: Typed acknowledgment; no Blob credential
+        end
+    end
+    Runtime->>Events: Read by session, event, and kind
+    Events->>Projects: Check current read authority
+    Events->>PG: Verify pinned provider; resolve reference and retention owner
+    Events->>Objects: Read exact owner-recorded key
+    Objects->>Blob: Read opaque bytes
+    Blob-->>Objects: Bytes
+    Objects-->>Events: Bytes and length
+    Events->>Events: Verify digest and length; recheck authority
+    Events-->>Runtime: Authorized material bytes
 ```
 
-Reads resolve owner-recorded material by event, session, and kind, not arbitrary keys,
-paths, URLs, or containers. Historical read authorization is separate from current
-execution-bound write authority. Events checks current authority and integrity after
-retrieval, before disclosing content. Cache restore also requires current runtime and
-model compatibility. AgentHost receives permitted content, not Blob account credentials
-or direct container access.
-Retention follows owner records; the Blob adapter does not decide which run data to delete.
+Reads resolve committed material by session, event, and kind. The caller cannot
+choose an object key, path, URL, or container. Events checks current read authority
+and the pinned Sessions provider, retrieves the exact reference, verifies its
+length and digest, and checks authority again before returning bytes. Historical
+turn reads and execution-bound cache reads use their respective current authority
+rules. Cache restore also requires compatible runtime and model bindings.
 
-The current source implements this typed Events interface with the existing Blob adapter.
-It supports bounded `TurnContent` and `SdkCache` material, committed journal references, and authorized integrity-checked reads.
-The diagram describes source behavior, not a deployed route.
-The integration is bounded by the existing AgentHost and orchestration acceptance
-criteria. It is not a new blanket P1 prerequisite.
-`IObjectStore` is a shared adapter, not a requirement to introduce another service.
-A cache comes from actual SDK-supported serialization through the runtime's custom filesystem.
-Do not rewrite an opaque SDK payload to fabricate safety or claim portable restore without SDK support.
-Missing, incompatible, or unpersistable cache requires actual journal-context rebuilding,
-without model or external-effect replay. Session IDs and blob-existence checks do not prove recovery.
-A missing required artifact remains an explicit error, not an empty successful read.
+PostgreSQL owns each reference's retention owner and expiry. The current source
+records that metadata but does not run Blob retention deletion. Any later cleanup
+must re-read the current Events-owned reference and retention state, confirm the
+object is no longer retained or referenced, and delete only that exact key under
+the owner boundary. Blob does not choose which run data to delete.
+
+The current source also has no durable inventory or enumeration path for unreferenced
+uploads. `IObjectStore` can create, read, and delete a known key, but it cannot list
+candidate objects; Events has no persistent orphan-reconciliation record. Therefore
+the service cannot discover every orphan after restart. Do not sweep the container
+or delete a key based on caller input. Reconciliation must remain Events-owned and
+must prove, from current PostgreSQL state, that an exact candidate has no committed
+reference before deletion. This limitation is unresolved in the current contract;
+it does not authorize a new public API or broader Blob access.
+
+A cache must come from actual SDK-supported serialization through the runtime's
+custom filesystem. Do not rewrite an opaque SDK payload to fabricate safety or
+claim portable restore without SDK support. Missing, incompatible, or unpersistable
+cache requires actual journal-context rebuilding, without model or external-effect
+replay. A missing required artifact is an explicit failure, not an empty successful
+read.
