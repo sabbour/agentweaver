@@ -144,7 +144,7 @@ Within a project, use these destinations:
 | Destination | Route | What you can do |
 | --- | --- | --- |
 | Dashboard | `/projects/:projectId` | Read setup readiness from the saved configuration, metric tiles, the **Activity** chart, run totals, model and agent usage, recent runs, and the team. Use quick actions to finish setup or open Orchestrations and Memories. |
-| Board | `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture a task in **Intake** and edit a task's title and description. Select **Refresh** to reload. |
+| Board | `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture and edit tasks, change queue state, manage prerequisites, archive tasks, and select **Refresh** to reload. |
 | Orchestrations | `/projects/:projectId/orchestrations` | List the project's runs in **Active** and **Recent** sections, with a status summary. Select **Refresh** to reload. |
 | Agents | `/projects/:projectId/team` | Read the **Total**, **In the team**, and **Not in the team** counts. Filter the agent tiles. Open an agent to read its ID, team position, and skills, or edit its role and charter. Use **Cast team**, **Add member**, and **Sync**. |
 | Skills | `/projects/:projectId/skills` | Browse marketplace sources, preview and import Skills, read the inventory, and assign Skills to agents. |
@@ -172,11 +172,17 @@ the repository issues synced to tasks:
   **Automation running** marks a task that an automation is changing.
 - With permission to change the project, use **Intake** to capture a task
   into **Backlog**. Select the edit button on a card to change its title and
-  description. Edit is hidden while an automation runs on the task.
+  description. Use **Mark Ready** or **Move to Backlog** to change queue
+  state, add or remove prerequisite links, and archive a task. These controls
+  are hidden while an automation runs on the task.
+- **Ready** records queue intent, not execution eligibility. A run checks
+  current prerequisite execution and output evidence when it claims a task.
+  The Board does not start a run; use **New session** to create one.
 - A write sends the revision the Board last read. If another change got there
-  first, a capture retries once with the new revision. Edits reload the Board
-  and ask you to try again.
-- Moving tasks between columns is not available yet. Cards can't be dragged.
+  first, a capture retries once with the new revision. Other revision
+  conflicts reload the Board and ask you to try again.
+- Cards can't be dragged between columns. Bulk-ready, reorder, **Human
+  Review**, and **Problems** controls aren't available.
 - Without read access, the Board says you don't have permission to view it.
   A failed read shows the reason and **Try again**.
 
@@ -658,9 +664,8 @@ missing measurements with zero.
 
 These 0.x features are not in this version:
 
-- Moving, reordering, or archiving tasks on the **Board**, and editing task
-  dependencies. The Board says "Moving tasks between columns is not available
-  yet." and cards can't be dragged.
+- Dragging or reordering tasks on the **Board**. Queue state, archive, and
+  prerequisite actions are available from each card; cards can't be dragged.
 - The **Human Review** and **Problems** columns on the **Board**.
 - The **AI Formulate** and **Analyze** casting modes and the **Universe**
   picker on **Cast a team**.

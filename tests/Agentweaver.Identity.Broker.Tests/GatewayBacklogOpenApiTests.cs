@@ -64,9 +64,55 @@ public sealed class GatewayBacklogOpenApiTests
         Assert.Equal("#/components/schemas/BacklogIssues",
             paths.GetProperty("/api/v1/projects/{projectId}/backlog/tasks").GetProperty("post")
                 .GetProperty("responses").GetProperty("409").GetProperty("content")
-                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+                .GetProperty("application/json").GetProperty("schema").GetProperty("oneOf")[0]
+                .GetProperty("$ref").GetString());
         Assert.True(schemas.GetProperty("BacklogTaskSnapshot").GetProperty("properties")
             .TryGetProperty("repositoryIssue", out _));
+
+        var state = paths.GetProperty("/api/v1/projects/{projectId}/backlog/tasks/{taskId}/state")
+            .GetProperty("put");
+        Assert.Equal("setProjectBacklogTaskState", state.GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/SetBacklogTaskStateRequest",
+            state.GetProperty("requestBody").GetProperty("content").GetProperty("application/json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
+        var dependencies = paths.GetProperty(
+            "/api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}");
+        Assert.Equal("addProjectBacklogDependency",
+            dependencies.GetProperty("put").GetProperty("operationId").GetString());
+        Assert.Equal("removeProjectBacklogDependency",
+            dependencies.GetProperty("delete").GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/BacklogGraphRevisionRequest",
+            dependencies.GetProperty("delete").GetProperty("requestBody").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+
+        var claim = paths.GetProperty(
+            "/api/v1/projects/{projectId}/runs/{runId}/backlog/tasks/{taskId}/claim").GetProperty("post");
+        Assert.Equal("claimBacklogTask", claim.GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/BacklogTaskClaimReceipt",
+            claim.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Equal("#/components/schemas/BacklogIssues",
+            claim.GetProperty("responses").GetProperty("409").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("oneOf")[0]
+                .GetProperty("$ref").GetString());
+        Assert.Contains("after the durable claim commits",
+            claim.GetProperty("responses").GetProperty("503").GetProperty("description").GetString()!);
+        foreach (var schemaName in new[]
+        {
+            "BacklogTaskReference",
+            "BacklogTaskContent",
+            "BacklogTaskSnapshot",
+            "BacklogDependencyEdge",
+            "BacklogGraph",
+            "CaptureBacklogTaskRequest",
+            "EditBacklogTaskContentRequest",
+            "SetBacklogTaskStateRequest",
+            "BacklogTaskRevisionRequest",
+            "BacklogGraphRevisionRequest",
+            "ClaimBacklogTaskRequest",
+            "BacklogTaskClaimReceipt",
+        })
+            Assert.False(schemas.GetProperty(schemaName).GetProperty("additionalProperties").GetBoolean());
     }
 
     [Fact]
