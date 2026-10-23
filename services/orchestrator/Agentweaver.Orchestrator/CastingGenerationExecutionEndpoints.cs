@@ -59,8 +59,6 @@ public static partial class CoordinationEndpoints
                 runId,
                 async (runRequest, token) =>
                 {
-                    CastingGenerationExecutionContract.RequireProjectRunStart(
-                        runRequest, runId, sessionId, request.Prompt);
                     await AcceptInteractiveRootAsync(
                         projectId,
                         runId,
@@ -75,7 +73,10 @@ public static partial class CoordinationEndpoints
                 },
                 token => RequireUnchangedAuthorizedSelectionAsync(
                     context, projectId, runId, selection, projects, token),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                validateRequest: runRequest =>
+                    CastingGenerationExecutionContract.RequireProjectRunStart(
+                        runRequest, runId, sessionId, request.Prompt)).ConfigureAwait(false);
 
             async Task<SessionStatusSnapshot> ReadCurrentAcceptedRootAsync(CancellationToken token)
             {
@@ -183,7 +184,7 @@ public static partial class CoordinationEndpoints
             expiry is null ||
             expiry <= timeProvider.GetUtcNow() ||
             CoordinationIdentity.RequireActor(context.User, actor.Issuer) != actor)
-            throw new RuntimeAuthorizationException("runtime_actor_expired");
+            throw new CoordinationException("runtime_actor_expired", StatusCodes.Status403Forbidden);
         return new(
             new SecretCredential(bearer, expiry.Value, timeProvider),
             CoordinationIdentity.ReadTenantSelector(context));

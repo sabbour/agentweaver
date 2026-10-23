@@ -71,14 +71,15 @@ internal sealed partial class CoordinationOwnerStore
     internal async Task<StartProjectRunResponse> StartProjectRunAsync(
         CoordinationActor actor, string tenantId, string projectId, string runId,
         Func<ProjectRunRequestRow, CancellationToken, Task> deliverFirstMessage,
-        Func<CancellationToken, Task> revalidateAuthority, CancellationToken cancellationToken)
+        Func<CancellationToken, Task> revalidateAuthority, CancellationToken cancellationToken,
+        Action<ProjectRunRequestRow>? validateRequest = null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         try
         {
             return await StartProjectRunWithinDeadlineAsync(actor, tenantId, projectId, runId,
-                deliverFirstMessage, revalidateAuthority, deadline.Token);
+                deliverFirstMessage, revalidateAuthority, validateRequest, deadline.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
         {
@@ -90,7 +91,9 @@ internal sealed partial class CoordinationOwnerStore
     private async Task<StartProjectRunResponse> StartProjectRunWithinDeadlineAsync(
         CoordinationActor actor, string tenantId, string projectId, string runId,
         Func<ProjectRunRequestRow, CancellationToken, Task> deliverFirstMessage,
-        Func<CancellationToken, Task> revalidateAuthority, CancellationToken cancellationToken)
+        Func<CancellationToken, Task> revalidateAuthority,
+        Action<ProjectRunRequestRow>? validateRequest,
+        CancellationToken cancellationToken)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -99,6 +102,8 @@ internal sealed partial class CoordinationOwnerStore
             ?? throw new CoordinationException("run_request_not_found", StatusCodes.Status404NotFound);
         if (row.State == "cancelled")
             throw new CoordinationException("run_terminal", StatusCodes.Status409Conflict);
+        // Replays skip first-message delivery, but must still match the durable request.
+        validateRequest?.Invoke(row);
         if (row.State != "started")
         {
             await deliverFirstMessage(row, cancellationToken);
