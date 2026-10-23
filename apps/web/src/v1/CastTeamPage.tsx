@@ -2,11 +2,12 @@
  * 0.x "Cast a team" wizard on v1 casting proposals. Step 1 picks a template or
  * roles and stages a proposal. Step 2 reviews the proposed agents and can
  * remove members. Step 3 confirms it. A proposal changes nothing until it is
- * confirmed. The AI Formulate and Analyze modes and the Universe picker from
- * 0.x are not shown, because v1 has no service for them.
+ * confirmed. The Universe picker uses the Projects & Config catalog and saves
+ * its choice in the revision-bound proposal.
  */
 import {
-  Button, Checkbox, MessageBar, MessageBarBody, Spinner, Text, Title3, makeStyles, mergeClasses, tokens,
+  Accordion, AccordionHeader, AccordionItem, AccordionPanel, Button, Checkbox, MessageBar, MessageBarBody,
+  Select, Spinner, Text, Title3, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import { CheckmarkRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
@@ -91,6 +92,8 @@ export function CastTeamPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [universes, setUniverses] = useState<string[]>([]);
+  const [universe, setUniverse] = useState('');
   const [proposal, setProposal] = useState<ProjectCastingProposal | null>(null);
   // True when this page created the proposal, so Back may discard it.
   const [createdHere, setCreatedHere] = useState(false);
@@ -122,15 +125,19 @@ export function CastTeamPage() {
       void (async () => {
         setLoading(true);
         setLoadError(null);
+        // Keep a prior project's explicit universe from carrying into this project.
+        setUniverse('');
         try {
-          const [templateList, roleList] = await Promise.all([
+          const [templateList, roleList, , universeList] = await Promise.all([
             apiCall((token, tenant) => gatewayClient.listCastingTemplates(token, tenant), null),
             apiCall((token, tenant) => gatewayClient.listCatalogRoles(token, tenant), null),
             readConfiguration(),
+            apiCall((token, tenant) => gatewayClient.listCastingUniverses(token, projectId, tenant), null),
           ]);
           if (cancelled) return;
           setTemplates(templateList);
           setRoles(castableRoles(roleList));
+          setUniverses(universeList.universes);
           // A link from the Agents page opens that proposal on the review step.
           if (linkedProposalId) {
             await readProposal(linkedProposalId);
@@ -144,7 +151,7 @@ export function CastTeamPage() {
       })();
     }, 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [apiCall, linkedProposalId, readConfiguration, readProposal]);
+  }, [apiCall, linkedProposalId, projectId, readConfiguration, readProposal]);
 
   const selectedTemplate = templates.find((item) => item.id === selectedTemplateId) ?? null;
   // Changing the template's roles turns the request into a manual pick of the checked roles.
@@ -178,8 +185,8 @@ export function CastTeamPage() {
     if (!configuration) return;
     const expectedConfigurationRevision = configuration.revision;
     const created = await apiCall((token, tenant) => gatewayClient.createCastingProposal(token, projectId, !rolesOverridden && selectedTemplate
-      ? { mode: 'scenario', expectedConfigurationRevision, templateId: selectedTemplate.id }
-      : { mode: 'manual', expectedConfigurationRevision, roleIds: selectedRoleIds }, tenant), null);
+      ? { mode: 'scenario', expectedConfigurationRevision, templateId: selectedTemplate.id, universe: universe || null }
+      : { mode: 'manual', expectedConfigurationRevision, roleIds: selectedRoleIds, universe: universe || null }, tenant), null);
     setProposal(created);
     setCreatedHere(true);
     setStep('review');
@@ -283,6 +290,21 @@ export function CastTeamPage() {
                     ))}
                   </div>
                 </PageSection>
+                <Accordion collapsible>
+                  <AccordionItem value="universe">
+                    <AccordionHeader>Universe</AccordionHeader>
+                    <AccordionPanel>
+                      <Select
+                        aria-label="Universe"
+                        value={universe}
+                        onChange={(_, data) => setUniverse(data.value)}
+                      >
+                        <option value="">Random (any universe)</option>
+                        {universes.map((item) => <option key={item} value={item}>{item}</option>)}
+                      </Select>
+                    </AccordionPanel>
+                  </AccordionItem>
+                </Accordion>
                 {currentCount > 0 && (
                   <Text className={styles.muted}>
                     This project already has {currentCount} member{currentCount === 1 ? '' : 's'}. A cast proposal replaces the whole team. Use Add member on the Agents page to add one member instead.

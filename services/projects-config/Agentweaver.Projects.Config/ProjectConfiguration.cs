@@ -140,6 +140,8 @@ public sealed record ProjectConfiguration
     public ImmutableArray<ProjectOrderedProviderOverride> OrderedProviderOverrides { get; init; } = [];
     public ImmutableArray<ProjectAgentCharter> AgentCharters { get; init; } = [];
     public ImmutableArray<ProjectAgentCast> Casting { get; init; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CastingUniverse { get; init; }
     public ImmutableArray<BlueprintWorkflowReference> BlueprintWorkflowReferences { get; init; } = [];
     public string? DefaultWorkflowId { get; init; }
     public ImmutableArray<SkillCatalogSetting> Skills { get; init; } = [];
@@ -319,6 +321,7 @@ public static class ProjectConfigurationValidator
         }
 
         ValidateCastingProjection(configuration.AgentCharters, configuration.Casting);
+        var castingUniverse = ProjectCastingCatalog.NormalizeUniverse(configuration.CastingUniverse);
         ValidateModelOverrides(
             configuration.ModelTaskOverrides,
             configuration.ModelRoleOverrides,
@@ -380,7 +383,7 @@ public static class ProjectConfigurationValidator
             : (ImmutableArray<NetworkEgressRule>?)null;
         ValidateLimitOverrides(configuration.RunLimits);
         ValidateSourceControl(configuration.SourceControl);
-        return configuration with { EgressNarrowing = normalizedEgress };
+        return configuration with { EgressNarrowing = normalizedEgress, CastingUniverse = castingUniverse };
     }
 
     /// <summary>

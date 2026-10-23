@@ -259,6 +259,7 @@ authorization cache, or a grant.
 | GET | `/{projectId}/configuration` | Read | Read current or requested `revision`. | Yes |
 | GET | `/{projectId}/configuration/choices` | Read | Read current project-scoped model and platform provider choices. No query parameters; `no-store`. | Yes |
 | PUT | `/{projectId}/configuration` | Admin | Append validated configuration. | Yes |
+| GET | `/{projectId}/casting/universes` | Read | List supported universe names for an authorized project. | Yes |
 | POST | `/{projectId}/casting/proposals` | Admin | Stage a complete configuration draft for review. | Yes |
 | POST | `/{projectId}/casting/proposals/scenario` | Admin | Create a scenario-based proposal. | Yes |
 | POST | `/{projectId}/casting/proposals/manual` | Admin | Create a manual proposal. | Yes |
@@ -393,10 +394,13 @@ TenantAdmin or project Owner authority. Catalog reads require authentication.
 No new roles or idempotency headers are introduced.
 
 Create requests carry `expectedConfigurationRevision` and either `draft`,
-`templateId`, or `roleIds`. Patch carries `expectedDraftRevision` and `draft`.
+`templateId`, or `roleIds`. Scenario and manual requests may also include
+`universe`, one of the names returned by the project-scoped universe route;
+`null` selects **Random (any universe)**. Patch carries `expectedDraftRevision` and `draft`.
 Confirm and reject carry `expectedDraftRevision`. Confirmation also checks the
 proposal's base configuration revision. A stale revision returns `409`; rejection
-does not change configuration. Import accepts `expectedConfigurationRevision`
+does not change configuration. A selected universe stays in the proposal draft
+and is saved with project configuration only after confirmation. Import accepts `expectedConfigurationRevision`
 and `transfer` and creates a pending proposal, not an applied configuration.
 Gateway and owner import request bodies are limited to 1,048,576 bytes.
 Unsupported transfer versions or incompatible teams return `422`.

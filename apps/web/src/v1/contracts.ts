@@ -535,6 +535,7 @@ export interface ProjectConfiguration {
   orderedProviderOverrides: Array<{ seam: string; providerIds: string[] }>;
   agentCharters: Array<{ agentId: string; name: string; role: string; charter: string }>;
   casting: Array<{ agentId: string; role: string; order: number }>;
+  castingUniverse?: string | null;
   blueprintWorkflowReferences: Array<{ blueprintId: string; workflowId: string }>;
   defaultWorkflowId?: string | null;
   skills: ProjectSkillAssignment[];
@@ -577,12 +578,19 @@ export interface CreateProjectCastingProposalRequest {
 export interface CreateScenarioProjectCastingProposalRequest {
   expectedConfigurationRevision: number;
   templateId: string;
+  universe?: string | null;
 }
 
 /** Catalog roles selected at the current configuration revision. */
 export interface CreateManualProjectCastingProposalRequest {
   expectedConfigurationRevision: number;
   roleIds: string[];
+  universe?: string | null;
+}
+
+/** Supported project casting universes returned by Projects & Config. */
+export interface ProjectCastingUniverseList {
+  universes: string[];
 }
 
 /** Replacement draft fenced to the pending proposal's draft revision. */
