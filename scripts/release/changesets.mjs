@@ -216,18 +216,11 @@ export function resolveCiComparisonBase(root, {
     const parents = git('rev-list', '--parents', '-n', '1', testedSourceSha).split(' ').slice(1);
     let authoredHead;
     if (eventName === 'pull_request') {
-      if (!sha.test(sourceHeadSha ?? '')) {
+      if (!sha.test(sourceHeadSha ?? '') || parents.length !== 2 ||
+          parents[0] !== baseSha || parents[1] !== sourceHeadSha) {
         fail('CI source', 'tested PR merge parents do not match the event base and authored head');
       }
-      if (parents.length === 2 && parents[0] === baseSha && parents[1] === sourceHeadSha) {
-        authoredHead = sourceHeadSha;
-      } else if (testedSourceSha === sourceHeadSha) {
-        // Actions checks out the authored head directly when it already contains the base.
-        git('merge-base', '--is-ancestor', baseSha, testedSourceSha);
-        authoredHead = sourceHeadSha;
-      } else {
-        fail('CI source', 'tested PR merge parents do not match the event base and authored head');
-      }
+      authoredHead = sourceHeadSha;
     } else {
       if (sourceHeadSha) fail('CI source', 'push and manual comparisons must derive authored history from the tested commit parents');
       // For a merge commit, compare its authored second parent with the event's first-parent base.

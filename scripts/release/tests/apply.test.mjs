@@ -712,22 +712,6 @@ test('CI comparison preserves linear push coverage and rejects missing or mismat
   assert.throws(() => resolveCiComparisonBase(f.dir, { ...linear, baseSha: f.target }), /cannot establish/);
 });
 
-test('PR CI accepts the exact authored head when it already contains the event base', t => {
-  const f = integratedPreparationFixture(t);
-  git(f.dir, 'switch', '--detach', '-q', f.target);
-  writeFileSync(path.join(f.dir, 'packages', 'Pkg.A', 'AfterBase.cs'), 'class AfterBase {}\n');
-  commit(f.dir, 'commit after base is integrated');
-  const head = git(f.dir, 'rev-parse', 'HEAD');
-  const context = {
-    eventName: 'pull_request',
-    testedSourceSha: head,
-    baseSha: f.target,
-    sourceHeadSha: head,
-  };
-  assert.equal(resolveCiComparisonBase(f.dir, context), f.target);
-  assert.ok(diffChanges(f.dir, f.target).some(({ file }) => file === 'packages/Pkg.A/AfterBase.cs'));
-});
-
 test('both CI workflows validate authored comparison against the integrated tested tree without changing checkout or coverage identity', () => {
   for (const name of ['v1-ci.yml', 'v1-docs-ci.yml']) {
     const workflow = readFileSync(path.join('.github', 'workflows', name), 'utf8').replaceAll('\r\n', '\n');
