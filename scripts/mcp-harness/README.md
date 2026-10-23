@@ -101,6 +101,9 @@ runtime-default endpoint.
 npm run harness:p1:signin-run -- --surface mcp --input <manifest.json> --output <evidence.jsonl>
 ```
 
+See the [P1 operator guide](../harness-shared/P1-operator.md) for the
+prerequisites, dry run, one-account sign-in, and cleanup instructions.
+
 Use `--surface api,mcp` to run both surfaces sequentially after one sign-in.
 The setup token and fresh browser session are shared. Each surface creates its
 own fixture, run-bound token, and evidence file: `evidence.api.jsonl` and
@@ -108,19 +111,13 @@ own fixture, run-bound token, and evidence file: `evidence.api.jsonl` and
 surface does not skip the next surface; the command returns the highest exit
 code. See the [API harness guide](../api-harness/README.md) for the full contract.
 
-The sign-in launcher uses the existing `agentweaver-web` public client and one
-interactive TenantAdmin sign-in. It uses one fresh empty headed-Chrome profile
-for the setup and run-bound authorization flows, then deletes it on success,
-failure, or cancellation. It never reads/copies an existing profile, cookie
-store, or credential cache. Token values stay in memory and never enter logs
-or evidence. Chrome request-stage interception blocks the registered Portal
-callback before the Portal loads, including server-side redirect hops. The
-launcher validates the callback and exchanges its code; the SPA cannot consume
-it. This one-account command requires `fixturePlan.deniedActor` to be
-omitted, so the distinct denied-actor check remains blocked while other
-journey steps continue. The Host-caller probe-provider gap remains blocked;
-the launcher adds no Host-caller provider, and missing native probes still
-block full P1 acceptance.
+The sign-in launcher uses the registered public client and one interactive
+sign-in. It uses one fresh headed-Chrome profile for setup and run-bound
+authorization, then deletes it on success, failure, or cancellation. It does
+not read or copy an existing browser profile, cookie store, or credential
+cache. Token values stay in memory and never enter logs or evidence. The
+one-account route does not create a distinct denied actor, and missing native
+or recovery evidence remains blocked.
 
 For advanced runs, the lower-level `npm run harness:p1` command still accepts
 `--identity-module` and `AGENTWEAVER_P1_SETUP_TOKEN`. A separately authorized

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { access, readdir, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runInNewContext } from 'node:vm';
 import {
@@ -12,6 +13,7 @@ import {
   createP1AuthorizationRequest,
   getValidatedP1BrokerTokenActorId,
   isAuthorizeUrl,
+  openP1AuthorizedUiPage,
   validateP1BrokerToken,
   withFreshP1BrowserContext,
 } from '../p1-signin.mjs';
@@ -667,6 +669,98 @@ test('fresh browser user-data directory is empty and deleted after success, fail
   }
 });
 
+test('built-in UI page adapter waits for a same-origin authorized Gateway response without reading browser tokens', async () => {
+  let location = 'about:blank';
+  let initialized;
+  let checkedResponse;
+  const navigationSteps = [];
+  const page = {
+    url: () => location,
+    async addInitScript(script, argument) {
+      initialized = { script, argument };
+      navigationSteps.push('init');
+    },
+    async goto(url) {
+      location = url;
+      navigationSteps.push('goto');
+    },
+    async evaluate(_callback, key) {
+      assert.equal(key, 'agentweaver.auth.signed-in-before');
+      return true;
+    },
+    async waitForResponse(predicate, options) {
+      assert.equal(options.timeout, 1000);
+      checkedResponse = {
+        url: () => `${new URL(ENVIRONMENT.baseUrl).origin}/api/v1/projects`,
+        status: () => 200,
+      };
+      assert.equal(predicate(checkedResponse), true);
+      return checkedResponse;
+    },
+  };
+  const context = { pages: () => [page], async newPage() { return page; } };
+  const output = [];
+  const result = await openP1AuthorizedUiPage({
+    context,
+    baseUrl: ENVIRONMENT.baseUrl,
+    timeoutMs: 1000,
+    io: { log: message => output.push(message) },
+  });
+
+  assert.equal(result, page);
+  assert.equal(location, ENVIRONMENT.baseUrl);
+  assert.deepEqual(navigationSteps, ['init', 'goto']);
+  assert.deepEqual(initialized.argument, {
+    origin: new URL(ENVIRONMENT.baseUrl).origin,
+    key: 'agentweaver.auth.signed-in-before',
+  });
+  assert.match(initialized.script.toString(), /sessionStorage\.setItem/);
+  assert.ok(checkedResponse);
+  assert.match(output.join('\n'), /does not read browser token storage/);
+});
+
+test('built-in UI page adapter rejects a foreign or unauthenticated Gateway response', async () => {
+  for (const response of [
+    { url: () => 'https://foreign.test/api/v1/projects', status: () => 200 },
+    { url: () => `${new URL(ENVIRONMENT.baseUrl).origin}/api/v1/projects`, status: () => 401 },
+  ]) {
+    const page = {
+      url: () => ENVIRONMENT.baseUrl,
+      async addInitScript() {},
+      async goto() {},
+      async evaluate() { return true; },
+      async waitForResponse(predicate) {
+        assert.equal(predicate(response), false);
+        throw new Error('controlled response did not match');
+      },
+    };
+    await assert.rejects(openP1AuthorizedUiPage({
+      context: { pages: () => [page], async newPage() { return page; } },
+      baseUrl: ENVIRONMENT.baseUrl,
+      timeoutMs: 1000,
+      io: { log() {} },
+    }), /did not reach an authorized Gateway response/);
+  }
+});
+
+test('built-in UI page adapter fails clearly when it cannot start silent authorization', async () => {
+  const page = {
+    url: () => ENVIRONMENT.baseUrl,
+    async addInitScript() {},
+    async goto() {},
+    async evaluate() { return false; },
+    async waitForResponse() {
+      throw new Error('must not wait when silent authorization could not start');
+    },
+  };
+  await assert.rejects(openP1AuthorizedUiPage({
+    context: { pages: () => [page], async newPage() { return page; } },
+    baseUrl: ENVIRONMENT.baseUrl,
+    timeoutMs: 1000,
+    io: { log() {} },
+  }), /could not start silent authorization/);
+});
+
 test('launcher excludes external module inputs and reuses one signed-in account for setup and run scope', async () => {
   assert.throws(() => parseP1SigninArguments([
     '--surface', 'api', '--input', 'input.json', '--output', 'evidence.jsonl',
@@ -737,23 +831,126 @@ test('launcher excludes external module inputs and reuses one signed-in account 
   }
 });
 
-test('UI P1 launcher blocks on #1859 without starting a browser sign-in', async () => {
-  let signIns = 0;
-  let received = false;
-  const code = await runP1SigninCli([
-    '--surface', 'ui',
-    '--input', 'manifest.json',
-    '--output', 'evidence.jsonl',
-  ], {}, { log() {}, error() {} }, {
-    signIn: async () => { signIns += 1; },
-    async runP1() {
-      received = true;
-      return 2;
+test('UI launcher reuses one browser context and supplies its built-in authorized page', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-ui-'));
+  const manifestPath = path.join(directory, 'input.json');
+  await writeFile(manifestPath, JSON.stringify(validInput()), 'utf8');
+  let location = 'about:blank';
+  const page = {
+    url: () => location,
+    async addInitScript() {},
+    async goto(url) { location = url; },
+    async evaluate() { return true; },
+    async waitForResponse(predicate) {
+      const response = {
+        url: () => `${new URL(ENVIRONMENT.baseUrl).origin}/api/v1/projects`,
+        status: () => 200,
+      };
+      assert.equal(predicate(response), true);
+      return response;
     },
+  };
+  const context = { pages: () => [page], async newPage() { return page; } };
+  const signIns = [];
+  const output = [];
+  let browserContexts = 0;
+  try {
+    const code = await runP1SigninCli([
+      '--surface', 'ui',
+      '--input', manifestPath,
+      '--output', path.join(directory, 'evidence.jsonl'),
+    ], { AGENTWEAVER_P1_SETUP_TOKEN: 'ignored-existing-value' }, {
+      log: message => output.push(message),
+      error: message => output.push(message),
+    }, {
+      signIn: async request => {
+        assert.equal(request.context, context);
+        signIns.push(request);
+        return jwt(request);
+      },
+      chromium: {},
+      withBrowserContext: async (_options, useContext) => {
+        browserContexts += 1;
+        return useContext(context);
+      },
+      async runP1(argv, env, _io, { identityProvider, pageProvider }) {
+        assert.equal(argv[argv.indexOf('--surface') + 1], 'ui');
+        assert.notEqual(env.AGENTWEAVER_P1_SETUP_TOKEN, 'ignored-existing-value');
+        assert.equal(typeof pageProvider, 'function');
+        const identity = await identityProvider({
+          ...ENVIRONMENT,
+          projectId: PROJECT_ID,
+          runId: RUN_ID,
+        });
+        assert.deepEqual(Object.keys(identity), ['token']);
+        assert.equal(signIns.length, 2);
+        assert.equal(await pageProvider({ baseUrl: ENVIRONMENT.baseUrl }), page);
+        return 0;
+      },
+    });
+
+    assert.equal(code, 0, output.join('\n'));
+    assert.equal(browserContexts, 1);
+    assert.equal(signIns.length, 2);
+    assert.ok(signIns.every(request => request.context === context));
+    assert.equal(signIns[0].projectId, undefined);
+    assert.equal(signIns[1].projectId, PROJECT_ID);
+    assert.equal(location, ENVIRONMENT.baseUrl);
+    assert.doesNotMatch(output.join('\n'), /eyJ|accessToken|Bearer/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('launcher dry-run validates the manifest without opening a browser or writing output', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-dry-run-'));
+  const manifestPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  await writeFile(manifestPath, JSON.stringify(validInput()), 'utf8');
+  const output = [];
+  let browserLoads = 0;
+  let signIns = 0;
+  let runs = 0;
+  try {
+    const code = await runP1SigninCli([
+      '--surface', 'api',
+      '--input', manifestPath,
+      '--output', outputPath,
+      '--dry-run',
+    ], {}, {
+      log: message => output.push(message),
+      error: message => output.push(message),
+    }, {
+      loadChromium: async () => { browserLoads += 1; throw new Error('browser must not load'); },
+      signIn: async () => { signIns += 1; },
+      async runP1() { runs += 1; },
+    });
+
+    assert.equal(code, 0);
+    assert.equal(browserLoads, 0);
+    assert.equal(signIns, 0);
+    assert.equal(runs, 0);
+    assert.match(output.join('\n'), /Owner and Orchestrator/);
+    assert.match(output.join('\n'), /No browser, network request, evidence file, project, or assignment is created/);
+    await assert.rejects(access(outputPath), { code: 'ENOENT' });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('launcher reports missing input before loading the browser', async () => {
+  const errors = [];
+  let browserLoads = 0;
+  const code = await runP1SigninCli([
+    '--surface', 'api',
+    '--output', 'evidence.jsonl',
+  ], {}, { log() {}, error: message => errors.push(message) }, {
+    loadChromium: async () => { browserLoads += 1; },
   });
+
   assert.equal(code, 2);
-  assert.equal(received, true);
-  assert.equal(signIns, 0);
+  assert.equal(browserLoads, 0);
+  assert.match(errors.join('\n'), /input manifest/i);
 });
 
 test('launcher refuses a fixture that asks it to sign in a second actor', async () => {
