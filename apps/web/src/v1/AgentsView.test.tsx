@@ -1,7 +1,7 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentsView } from './AgentsView';
 import type { ProjectCastingProposal, ProjectConfiguration } from './contracts';
 
@@ -13,6 +13,15 @@ const api = vi.hoisted(() => ({
 
 // One stable apiCall, like the real provider, so effects that depend on it run once.
 const auth = vi.hoisted(() => ({ apiCall: (operation: (token: string, tenant: string) => unknown) => operation('token', 'tenant-1') }));
+const animationDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'animate');
+beforeAll(() => {
+  // Happy DOM's animation cancel rejects; Fluent UI's test fallback avoids noisy teardown errors.
+  Object.defineProperty(Element.prototype, 'animate', { configurable: true, value: undefined });
+});
+afterAll(() => {
+  if (animationDescriptor) Object.defineProperty(Element.prototype, 'animate', animationDescriptor);
+  else Reflect.deleteProperty(Element.prototype, 'animate');
+});
 vi.mock('./AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('./api', async (importActual) => ({ ...(await importActual<typeof import('./api')>()), gatewayClient: api }));
 vi.mock('./pageParts', async (importActual) => ({
@@ -24,6 +33,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.listCastingProposals.mockResolvedValue([]);
   api.listCatalogRoles.mockResolvedValue([]);
+  api.createCastingDraftProposal.mockResolvedValue({ proposalId: 'pr-9' });
 });
 
 function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfiguration {
@@ -122,6 +132,40 @@ describe('AgentsView', () => {
     // Disabled skills are not listed, even when they apply to every agent.
     expect(within(drawer).queryByText('off')).toBeNull();
     expect(within(drawer).getByRole('link', { name: 'View memories' }).getAttribute('href')).toBe('/projects/p1/memories?agentId=a2');
+  });
+
+  it('stages a re-role proposal from the current team member details', async () => {
+    api.listCatalogRoles.mockResolvedValue([
+      { id: 'frontend-engineer', title: 'Frontend Engineer', summary: 'Builds user-facing experiences.', responsibilities: ['Implement accessible screens'], boundaries: ['Do not change backend services'] },
+    ]);
+    renderView();
+    fireEvent.click(screen.getByText('Ada'));
+    const drawer = await screen.findByRole('dialog');
+    fireEvent.change(within(drawer).getByRole('combobox', { name: 'New team role' }), { target: { value: 'frontend-engineer' } });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Re-role' }));
+    await waitFor(() => expect(api.createCastingDraftProposal).toHaveBeenCalledOnce());
+    const [, projectId, request] = api.createCastingDraftProposal.mock.calls[0];
+    expect(projectId).toBe('p1');
+    expect(request.expectedConfigurationRevision).toBe(4);
+    expect(request.draft.agentCharters[0].role).toBe('frontend-engineer');
+    expect(request.draft.agentCharters[0].charter).toMatch(/Implement accessible screens/);
+    expect(request.draft.casting[0].role).toBe('frontend-engineer');
+  });
+
+  it('stages a removal proposal without changing the displayed team', async () => {
+    const current = config({
+      agentCharters: [{ agentId: 'a1', name: 'Ada', role: 'Lead', charter: 'Lead the work.' }],
+      casting: [{ agentId: 'a1', role: 'Lead', order: 1 }],
+    });
+    renderView({ configuration: current });
+    fireEvent.click(screen.getByText('Ada'));
+    const drawer = await screen.findByRole('dialog');
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Remove from team' }));
+    await waitFor(() => expect(api.createCastingDraftProposal).toHaveBeenCalledOnce());
+    const [, , request] = api.createCastingDraftProposal.mock.calls[0];
+    expect(request.draft.casting).toEqual([]);
+    expect(request.draft.agentCharters).toEqual([]);
+    expect(within(drawer).getByText('In the team as Lead, position 1')).toBeTruthy();
   });
 
   it('saves only the selected agent charter', async () => {

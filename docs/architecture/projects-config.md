@@ -185,6 +185,15 @@ sequenceDiagram
 
 Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
 
+The retained web client uses that full-draft route for team changes that must
+preserve the current roster. **Augment** stages the existing members plus the
+selected roles; **Recast** uses a scenario or manual proposal to replace the
+roster. Removing or re-roling a member also stages a complete draft. These
+actions do not change the configuration until the proposal is confirmed.
+Re-roling uses a catalog role and updates the matching charter and cast entry.
+The configuration stores one role identifier, so it does not yet support the
+optional separate display title from the older interface.
+
 ### Blueprints
 
 A blueprint is a team recipe carried over from 0.x: a roster of roles, one or more workflows, a review policy, a sandbox profile, and optional skill bindings. Projects & Config embeds the five 0.x blueprints (AI agent engineering, content authoring, PM and software development, product management, and software development).

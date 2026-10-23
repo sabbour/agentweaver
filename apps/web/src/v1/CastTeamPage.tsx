@@ -1,12 +1,13 @@
 /**
  * 0.x "Cast a team" wizard on v1 casting proposals. Step 1 picks a template or
- * roles and stages a proposal. Step 2 reviews the proposed agents and can
- * remove members. Step 3 confirms it. A proposal changes nothing until it is
- * confirmed. The AI Formulate and Analyze modes and the Universe picker from
- * 0.x are not shown, because v1 has no service for them.
+ * roles and stages a proposal. When a team exists, the user can add members or
+ * replace it. Step 2 reviews the proposed agents and can remove members. Step 3
+ * confirms it. A proposal changes nothing until it is confirmed. The AI
+ * Formulate and Analyze modes and the Universe picker from 0.x are not shown,
+ * because v1 has no service for them.
  */
 import {
-  Button, Checkbox, MessageBar, MessageBarBody, Spinner, Text, Title3, makeStyles, mergeClasses, tokens,
+  Button, Checkbox, MessageBar, MessageBarBody, Radio, RadioGroup, Spinner, Text, Title3, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import { CheckmarkRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
@@ -14,13 +15,14 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
 import { gatewayClient } from './api';
-import { agentsPath, castableRoles, castingError, draftMembers, draftWithoutMember, isConflict } from './castingData';
+import { agentsPath, castableRoles, castingError, draftMembers, draftWithRoles, draftWithoutMember, isConflict } from './castingData';
 import type {
   ProjectCastingProposal, ProjectCastingRoleDefinition, ProjectCastingTemplateDefinition, VersionedProjectConfiguration,
 } from './contracts';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
 
 type Step = 'cast' | 'review' | 'confirm';
+type CastingIntent = 'augment' | 'recast';
 const STEPS: Step[] = ['cast', 'review', 'confirm'];
 const STEP_LABELS: Record<Step, string> = { cast: 'Cast', review: 'Review proposal', confirm: 'Confirm' };
 
@@ -91,6 +93,8 @@ export function CastTeamPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [castingIntent, setCastingIntent] = useState<CastingIntent>('augment');
+  const [proposalIntent, setProposalIntent] = useState<CastingIntent | null>(null);
   const [proposal, setProposal] = useState<ProjectCastingProposal | null>(null);
   // True when this page created the proposal, so Back may discard it.
   const [createdHere, setCreatedHere] = useState(false);
@@ -173,13 +177,31 @@ export function CastTeamPage() {
     }
   };
 
-  /** Stages a proposal from the template, or from the checked roles when they differ from it. */
+  /** Stages either a complete augment draft or the owner-built replacement proposal. */
   const createProposal = () => write(async () => {
     if (!configuration) return;
     const expectedConfigurationRevision = configuration.revision;
-    const created = await apiCall((token, tenant) => gatewayClient.createCastingProposal(token, projectId, !rolesOverridden && selectedTemplate
-      ? { mode: 'scenario', expectedConfigurationRevision, templateId: selectedTemplate.id }
-      : { mode: 'manual', expectedConfigurationRevision, roleIds: selectedRoleIds }, tenant), null);
+    let created: ProjectCastingProposal;
+    if (currentCount > 0 && castingIntent === 'augment') {
+      const selectedRoles: ProjectCastingRoleDefinition[] = [];
+      for (const id of selectedRoleIds) {
+        const role = roles.find((item) => item.id === id);
+        if (!role) throw new Error('One or more selected roles are no longer available. Reload the page and try again.');
+        selectedRoles.push(role);
+      }
+      // Augment must preserve the accepted roster, so stage the complete draft through the same owner.
+      created = await apiCall((token, tenant) => gatewayClient.createCastingDraftProposal(token, projectId, {
+        expectedConfigurationRevision,
+        draft: draftWithRoles(configuration.configuration, selectedRoles),
+      }, tenant), null);
+      setProposalIntent('augment');
+    } else {
+      // Scenario and manual routes keep replacement construction in Projects & Config.
+      created = await apiCall((token, tenant) => gatewayClient.createCastingProposal(token, projectId, !rolesOverridden && selectedTemplate
+        ? { mode: 'scenario', expectedConfigurationRevision, templateId: selectedTemplate.id }
+        : { mode: 'manual', expectedConfigurationRevision, roleIds: selectedRoleIds }, tenant), null);
+      setProposalIntent('recast');
+    }
     setProposal(created);
     setCreatedHere(true);
     setStep('review');
@@ -222,6 +244,14 @@ export function CastTeamPage() {
 
   const members = proposal ? draftMembers(proposal.draft) : [];
   const currentCount = configuration?.configuration.casting.length ?? 0;
+  const existingAgentIds = new Set(configuration?.configuration.casting.map((item) => item.agentId) ?? []);
+  const addedMembers = members.filter((member) => !existingAgentIds.has(member.agentId));
+  // Linked proposals do not retain their original action, so recognize an augment by its unchanged roster plus additions.
+  const preservesCurrentRoster = Boolean(proposal && configuration?.configuration.casting.every((existing) =>
+    proposal.draft.casting.some((candidate) =>
+      candidate.agentId === existing.agentId && candidate.role === existing.role && candidate.order === existing.order)));
+  const augmentProposal = proposalIntent === 'augment' ||
+    (proposalIntent === null && currentCount > 0 && addedMembers.length > 0 && preservesCurrentRoster);
   const pending = proposal?.state === 'pending';
   const currentIndex = STEPS.indexOf(step);
   const errorBar = error && <ErrorNotice>{error}</ErrorNotice>;
@@ -284,8 +314,22 @@ export function CastTeamPage() {
                   </div>
                 </PageSection>
                 {currentCount > 0 && (
+                  <PageSection title="Current team" description="Choose what this proposal will do when confirmed.">
+                    <RadioGroup
+                      value={castingIntent}
+                      onChange={(_, data) => {
+                        if (data.value === 'augment' || data.value === 'recast') setCastingIntent(data.value);
+                      }}
+                      aria-label="Team change"
+                    >
+                      <Radio value="augment" label="Augment — add new members to the current team" />
+                      <Radio value="recast" label="Recast — replace the current team" />
+                    </RadioGroup>
+                  </PageSection>
+                )}
+                {currentCount > 0 && (
                   <Text className={styles.muted}>
-                    This project already has {currentCount} member{currentCount === 1 ? '' : 's'}. A cast proposal replaces the whole team. Use Add member on the Agents page to add one member instead.
+                    This project has {currentCount} team member{currentCount === 1 ? '' : 's'}. Runs that already started keep their accepted team.
                   </Text>
                 )}
                 {errorBar}
@@ -313,7 +357,9 @@ export function CastTeamPage() {
                   </MessageBar>
                 )}
                 <Text className={styles.muted}>
-                  The current team has {currentCount} member{currentCount === 1 ? '' : 's'}. This proposal sets the team to {members.length} member{members.length === 1 ? '' : 's'}.
+                  {augmentProposal
+                    ? `This proposal adds ${addedMembers.length} member${addedMembers.length === 1 ? '' : 's'} to the current team.`
+                    : `This proposal sets the team to ${members.length} member${members.length === 1 ? '' : 's'}.`}
                 </Text>
                 <div className={styles.memberList} aria-label="Proposed members">
                   {members.map((member) => (
@@ -323,7 +369,7 @@ export function CastTeamPage() {
                           <Text className={styles.memberName}>{member.name}</Text>
                           <Text className={styles.muted}> — {member.role}</Text>
                         </div>
-                        {pending && (
+                        {pending && (!augmentProposal || !existingAgentIds.has(member.agentId)) && (
                           <Button appearance="subtle" size="small" disabled={busy} aria-label={`Remove ${member.name}`} onClick={() => void removeMember(member.agentId)}>
                             Remove
                           </Button>
@@ -348,7 +394,7 @@ export function CastTeamPage() {
                     ? <Button appearance="secondary" disabled={busy} onClick={() => void reject(() => navigate(agentsPath(projectId)))}>Reject</Button>
                     : <Button appearance="secondary" onClick={() => navigate(agentsPath(projectId))}>Back to Agents</Button>}
                   {pending && (
-                    <Button appearance="primary" disabled={members.length === 0 || busy} onClick={() => setStep('confirm')}>Confirm</Button>
+                    <Button appearance="primary" disabled={busy} onClick={() => setStep('confirm')}>Confirm</Button>
                   )}
                 </div>
               </div>
@@ -358,8 +404,10 @@ export function CastTeamPage() {
               <div className={styles.card}>
                 <Title3>Cast team</Title3>
                 <Text>
-                  You are about to set the team to {members.length} member{members.length === 1 ? '' : 's'}.
-                  {currentCount > 0 && ' The current team is replaced. Runs that already started keep their team.'}
+                  {augmentProposal
+                    ? `You are about to add ${addedMembers.length} member${addedMembers.length === 1 ? '' : 's'} to the current team.`
+                    : `You are about to set the team to ${members.length} member${members.length === 1 ? '' : 's'}.`}
+                  {currentCount > 0 && ' Runs that already started keep their accepted team.'}
                 </Text>
                 {errorBar}
                 <div className={styles.navRow}>
