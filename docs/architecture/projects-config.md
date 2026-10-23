@@ -241,10 +241,11 @@ runs in AgentHost with that run's Identity credential; Projects & Config owns
 the proposal and never receives the credential.
 
 Generation uses the existing accepted project-run lifecycle rather than a
-separate scheduler or model-execution path. The Gateway creates or accepts that run with the caller's project authorization.
-The generation route starts the saved run through the ordinary acceptance path
-using its run-bound Identity session, and the run ID remains the generation
-request's immutable result binding.
+separate scheduler or model-execution path. The client creates or resumes the
+normal project run through the Gateway with the caller's project authorization,
+then obtains the run-bound Identity session. The generation request accepts
+that run ID, and the owner returns it with the proposal as the immutable result
+binding.
 
 Orchestrator accepts `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/casting-generation`
 only for the active coordinator root of that accepted run. It checks the
@@ -274,9 +275,10 @@ sequenceDiagram
     participant Identity
     participant Projects as Projects & Config
     participant DB as PostgreSQL
-    Client->>Gateway: Formulate or Analyze (expected revision, idempotency key)
-    Gateway->>Orchestrator: Create or replay a normal project run
-    Orchestrator-->>Gateway: Run ID, root session, and binding
+    Client->>Gateway: Create or replay normal project run
+    Gateway-->>Client: Run ID and root session
+    Client->>Identity: Obtain run-bound session
+    Client->>Gateway: Formulate or Analyze (run ID, expected revision, idempotency key)
     Gateway->>Projects: Start generation request (run ID, request digest)
     Projects->>DB: Check current write authority and revision; store pending proposal
     Gateway->>Orchestrator: Execute generation (request ID, prompt, run-bound token)
@@ -289,6 +291,7 @@ sequenceDiagram
     Orchestrator-->>Gateway: Result bound to request ID and run ID
     Gateway->>Projects: Complete request (same run ID, generated roster)
     Projects->>DB: Recheck authority and revision; update proposal only
+    Gateway-->>Client: 202 Accepted (run ID, proposal ID, request ID)
     Client->>Gateway: Poll proposal for review
     Client->>Gateway: Confirm proposal (expected draft revision)
     Projects->>DB: Append live configuration only after confirmation
