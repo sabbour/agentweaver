@@ -90,7 +90,7 @@
     {
       "id": "Agentweaver.Gateway",
       "kind": "service",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "project": "services/gateway/Agentweaver.Gateway/Agentweaver.Gateway.csproj"
     },
     {
@@ -102,13 +102,13 @@
     {
       "id": "Agentweaver.Web",
       "kind": "service",
-      "version": "1.3.0",
+      "version": "1.4.0",
       "project": "apps/web/package.json"
     },
     {
       "id": "Agentweaver.Orchestrator",
       "kind": "service",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "project": "services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj"
     },
     {
@@ -126,7 +126,7 @@
     {
       "id": "Agentweaver.Projects.Config",
       "kind": "service",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "project": "services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj"
     },
     {
@@ -740,6 +740,20 @@
         "1.2.0",
         "1.3.0",
         "1.4.0"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Environment",
+      "dependency": "Agentweaver.Persistence.Postgres",
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0",
+        "1.0.1",
+        "1.0.2",
+        "1.1.0",
+        "1.1.1",
+        "1.2.0"
       ]
     },
     {

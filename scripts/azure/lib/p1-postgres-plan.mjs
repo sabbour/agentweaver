@@ -212,7 +212,8 @@ export function buildP1PostgresPlan() {
     // 031 adds caller dismissals of promotion notices with SELECT,INSERT grants.
     // 032 adds pull-request records with SELECT,INSERT,UPDATE; 033 extends Priority links without new grants.
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
-    // Bind the separately approved Events reporting migration into the reviewed plan hash.
+    // Bind each owner migration catalog into the reviewed plan hash.
+    environmentVersions: Array.from({ length: 11 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',

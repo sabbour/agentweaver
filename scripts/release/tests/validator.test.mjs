@@ -68,6 +68,7 @@ const projectReferences = new Map([
   ['Agentweaver.Environment', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers.Sandbox.AgentSandbox\\Agentweaver.Providers.Sandbox.AgentSandbox.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers.Storage.AzureFiles\\Agentweaver.Providers.Storage.AzureFiles.csproj',
@@ -170,7 +171,7 @@ test('the AgentHost collector dependency is present in the fixture and still req
 test('the Orchestrator host is registered as a prepared service with all project dependencies pinned', () => {
   const host = fixture.components.find(component => component.id === 'Agentweaver.Orchestrator');
   assert.equal(host.kind, 'service');
-  assert.equal(host.version, '1.4.0');
+  assert.equal(host.version, '1.5.0');
   assert.equal(host.project, 'services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj');
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
@@ -202,7 +203,7 @@ test('current Abstractions consumers declare 1.3.0 and predeclare 1.4.0 compatib
 
 test('current Persistence.Postgres consumers retain 1.1.0 and 1.1.1 and predeclare 1.2.0 compatibility', () => {
   const consumers = ['Agentweaver.FoundationProbe', 'Agentweaver.Orchestrator',
-    'Agentweaver.EventsAndSessions', 'Agentweaver.Knowledge'];
+    'Agentweaver.EventsAndSessions', 'Agentweaver.Environment', 'Agentweaver.Knowledge'];
   const relationships = fixture.compatibility
     .filter(({ dependency }) => dependency === 'Agentweaver.Persistence.Postgres');
   assert.deepEqual(relationships.map(({ consumer }) => consumer), consumers);

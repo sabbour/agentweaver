@@ -80,6 +80,7 @@ public sealed class EnvironmentRemoteMcpDiscoveryPostgresTests(EnvironmentPostgr
             "https://mcp.example.com/mcp",
             null,
             RemoteMcpAuthenticationMode.None,
+            RemoteMcpTransportProfile.StreamableHttp20250618,
             RegistryName,
             RegistryVersion,
             CancellationToken.None);
@@ -122,11 +123,17 @@ public sealed class EnvironmentRemoteMcpDiscoveryPostgresTests(EnvironmentPostgr
 
         await Assert.ThrowsAsync<ArgumentException>(() => discovery.ResolveDraftAsync(
             caller, projectId, "Weather", "https://mcp.example.com/mcp", null,
-            RemoteMcpAuthenticationMode.None, RegistryName, "latest", CancellationToken.None));
+            RemoteMcpAuthenticationMode.None, RemoteMcpTransportProfile.StreamableHttp20250618,
+            RegistryName, "latest", CancellationToken.None));
         var unadvertised = await Assert.ThrowsAsync<RemoteMcpConnectionException>(() => discovery.ResolveDraftAsync(
             caller, projectId, "Weather", "https://other.example.com/mcp", null,
-            RemoteMcpAuthenticationMode.None, RegistryName, RegistryVersion, CancellationToken.None));
+            RemoteMcpAuthenticationMode.None, RemoteMcpTransportProfile.StreamableHttp20250618,
+            RegistryName, RegistryVersion, CancellationToken.None));
         Assert.Equal("registry_metadata_invalid", unadvertised.Code);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => discovery.ResolveDraftAsync(
+            caller, projectId, "Weather", "https://mcp.example.com/mcp", null,
+            RemoteMcpAuthenticationMode.None, (RemoteMcpTransportProfile)999, null, null, CancellationToken.None));
     }
 
     [Fact]
@@ -194,6 +201,9 @@ public sealed class EnvironmentRemoteMcpDiscoveryPostgresTests(EnvironmentPostgr
         var protocol = await Assert.ThrowsAsync<RemoteMcpConnectionException>(() => discovery.DiscoverAsync(
             caller, projectId, ConnectionId(enabled), enabled.Head.RowRevision, "discover-protocol", CancellationToken.None));
         source.ProtocolVersion = RemoteMcpDiscoveryService.RequiredProtocolVersion;
+        source.Pages[""] = new byte[RemoteMcpTransportAdapterOptions.CurrentMaximumResponseBytes + 1];
+        var oversized = await Assert.ThrowsAsync<RemoteMcpConnectionException>(() => discovery.DiscoverAsync(
+            caller, projectId, ConnectionId(enabled), enabled.Head.RowRevision, "discover-oversized", CancellationToken.None));
 
         source.Pages[""] = Page("""[{"name":"a","inputSchema":{"type":"object"}}]""", "loop");
         source.Pages["loop"] = Page("""[{"name":"b","inputSchema":{"type":"object"}}]""", "loop");
@@ -207,6 +217,7 @@ public sealed class EnvironmentRemoteMcpDiscoveryPostgresTests(EnvironmentPostgr
         var current = await store.GetAsync(caller, projectId, ConnectionId(enabled), CancellationToken.None);
 
         Assert.Equal("remote_mcp_discovery_invalid", protocol.Code);
+        Assert.Equal("remote_mcp_discovery_invalid", oversized.Code);
         Assert.Equal("remote_mcp_discovery_invalid", loop.Code);
         Assert.Equal("applied_policy_changed", policy.Code);
         Assert.Null(current!.Catalog);

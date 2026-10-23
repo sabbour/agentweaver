@@ -4,6 +4,7 @@ namespace: agentweaver
 resources:
   - serviceaccount.yaml
   - egress.yaml
+  - environment-job.yaml
   - orchestrator-job.yaml
   - events-and-sessions-job.yaml
 patches:

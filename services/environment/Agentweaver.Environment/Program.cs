@@ -8,6 +8,7 @@ using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Identity;
+using Agentweaver.Persistence.Postgres;
 using Agentweaver.Providers;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
@@ -40,7 +41,25 @@ if (runMigrations)
                     "__ef_migrations_history",
                     EnvironmentDbContext.Schema))
             .Options;
+        var supportedVersions = EnvironmentMigrator.ValidateMigrationCatalog(migrationOptions);
+        var runtimeRole = builder.Configuration["Environment:Migration:RuntimeRole"];
+        // The runner supplies a reviewed role and hash; validate both before any migration connection is used.
+        var plannedGrants = string.IsNullOrWhiteSpace(runtimeRole)
+            ? null
+            : PlannedRuntimeGrants.Load(
+                "environment",
+                EnvironmentDbContext.Schema,
+                runtimeRole,
+                builder.Configuration["Environment:Migration:PlanSha256"] ?? "",
+                supportedVersions);
         await EnvironmentMigrator.MigrateAsync(migrationDataSource, migrationOptions);
+        if (plannedGrants is not null)
+        {
+            await using var grantConnection = await migrationDataSource.OpenConnectionAsync();
+            await PlannedRuntimeGrants.ApplyAndVerifyAsync(grantConnection, plannedGrants);
+            var applied = await EnvironmentMigrator.ReadAppliedVersionsAsync(migrationOptions);
+            Console.WriteLine(PlannedRuntimeGrants.FormatMarker(plannedGrants, applied));
+        }
     }
     finally
     {

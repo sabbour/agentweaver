@@ -237,22 +237,22 @@ migration; it changes all listed table grants, not just history access.
 ### P1 migration Job settings
 
 The [database maintenance runner](../guide/database-maintenance.md) runs the
-Orchestrator and Events & Sessions images with `--migrate` as Kubernetes Jobs.
+Environment, Orchestrator, and Events & Sessions images with `--migrate` as Kubernetes Jobs.
 The Jobs in `deploy/k8s/migrations/p1-postgres` set these keys. `<Service>` is
-`Orchestrator` or `EventsAndSessions`.
+`Environment`, `Orchestrator`, or `EventsAndSessions`.
 
 Events & Sessions validates its Sessions and Messaging options before it enters
 the migration branch. Its Job sets every option explicitly and keeps each value
 equal to the Events & Sessions runtime configuration; it does not rely on code
-defaults. Orchestrator enters its migration branch before loading normal runtime
-provider settings, so its Job needs the migration connection, identity, and
-grant-plan settings instead.
+defaults. Environment and Orchestrator enter their migration branches before
+loading normal runtime settings, so their Jobs need the migration connection,
+identity, and grant-plan settings instead.
 
 | Key | Contract | Default and how to obtain it |
 | --- | --- | --- |
-| `ConnectionStrings__OrchestratorMigration`, `ConnectionStrings__EventsAndSessionsMigration` | Password-free connection string whose user is `agentweaver-id-p1-postgres-migration`, the schema owner after the ownership handover. | No default. The kustomization sets the server name. |
+| `ConnectionStrings__EnvironmentMigration`, `ConnectionStrings__OrchestratorMigration`, `ConnectionStrings__EventsAndSessionsMigration` | Password-free connection string whose user is `agentweaver-id-p1-postgres-migration`, the schema owner after the ownership handover. | No default. The kustomization sets the server name. |
 | `<Service>__Migration__WorkloadIdentity__TenantId`, `__ClientId`, `__TokenFilePath` | Workload identity of the `p1-postgres-migration` ServiceAccount. | The runner sets the client ID from its identity deployment. The manifest holds a zero placeholder that is never applied. |
-| `<Service>__Migration__RuntimeRole` | Runtime role that receives the planned grants: `agentweaver-id-orchestrator` or `agentweaver-id-events-and-sessions`. Optional. | Set by the Job manifest. Without it, `--migrate` applies migrations only. |
+| `<Service>__Migration__RuntimeRole` | Runtime role that receives the planned grants: `agentweaver-id-environment`, `agentweaver-id-orchestrator`, or `agentweaver-id-events-and-sessions`. Optional. | Set by the Job manifest. Without it, `--migrate` applies migrations only. |
 | `<Service>__Migration__PlanSha256` | SHA-256 of the reviewed plan embedded in the image. Required when the runtime role is set. | Set by the Job manifest. The run fails before it connects when the hash, role, schema, or compiled migration catalog differs from the plan. |
 
 With the runtime role set, a run applies only the grants the plan names, reads

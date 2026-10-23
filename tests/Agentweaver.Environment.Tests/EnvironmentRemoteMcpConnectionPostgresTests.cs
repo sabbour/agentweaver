@@ -34,9 +34,62 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
             await context.GetService<IMigrator>()
                 .MigrateAsync("20261010135714_AddRemoteMcpConnections");
         Assert.True(await RemoteMcpTablesExistAsync(fixture.DataSource));
+
+        var connectionId = Guid.NewGuid();
+        var legacyConfiguration = new RemoteMcpConnectionConfiguration(
+            new("project-" + Guid.NewGuid().ToString("N"), connectionId),
+            configurationRevision: 1,
+            displayName: "Legacy",
+            endpointUri: "https://mcp.example.com",
+            resourceUri: null,
+            authenticationMode: RemoteMcpAuthenticationMode.None,
+            identityBindingReference: null,
+            RemoteMcpTransportProfile.StreamableHttp20250618);
+        var tenantId = "tenant-" + Guid.NewGuid().ToString("N");
+        var projectId = legacyConfiguration.Connection.ProjectId;
+        await ExecuteSqlAsync(fixture.DataSource, $"""
+            INSERT INTO environment.remote_mcp_connections
+                (tenant_id, project_id, connection_id, row_revision, current_configuration_revision,
+                 current_discovery_revision, state, created_at, updated_at)
+            VALUES
+                ('{tenantId}', '{projectId}', '{connectionId:D}', 1, 1, NULL, 'Draft', now(), now());
+            INSERT INTO environment.remote_mcp_connection_configurations
+                (tenant_id, project_id, connection_id, configuration_revision, display_name,
+                 endpoint_uri, resource_uri, authentication_mode, identity_binding_reference,
+                 transport_profile, registry_server_name, registry_exact_version,
+                 registry_metadata_sha256, configuration_sha256, created_at)
+            VALUES
+                ('{tenantId}', '{projectId}', '{connectionId:D}', 1, 'Legacy',
+                 'https://mcp.example.com/', NULL, 'None', NULL, 'StreamableHttp20250618',
+                 NULL, NULL, NULL, '{legacyConfiguration.ConfigurationSha256}', now());
+            """);
+
         await using (var context = new EnvironmentDbContext(options))
             await context.GetService<IMigrator>().MigrateAsync();
         await EnvironmentMigrator.VerifyMigrationsAppliedAsync(fixture.DataSource, options);
+
+        await using var verify = fixture.DataSource.CreateCommand($"""
+            SELECT transport_adapter_id, transport_adapter_version, transport_options_schema_version,
+                   transport_options_revision, transport_protocol_version, transport_request_timeout_seconds,
+                   transport_maximum_response_bytes, transport_maximum_tools_list_pages,
+                   transport_options_sha256, configuration_sha256
+            FROM environment.remote_mcp_connection_configurations
+            WHERE tenant_id = '{tenantId}' AND project_id = '{projectId}' AND connection_id = '{connectionId:D}'
+            """);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("streamable-http", reader.GetString(0));
+        Assert.Equal("1.0.0", reader.GetString(1));
+        Assert.Equal(1, reader.GetInt32(2));
+        Assert.Equal("streamable-http-2025-06-18-v1", reader.GetString(3));
+        Assert.Equal("2025-06-18", reader.GetString(4));
+        Assert.Equal(30, reader.GetInt32(5));
+        Assert.Equal(1024 * 1024, reader.GetInt32(6));
+        Assert.Equal(16, reader.GetInt32(7));
+        Assert.Equal(
+            RemoteMcpTransportAdapterOptions.ForProfile(RemoteMcpTransportProfile.StreamableHttp20250618).OptionsSha256,
+            reader.GetString(8));
+        Assert.Equal(legacyConfiguration.ConfigurationSha256, reader.GetString(9));
     }
 
     [Fact]
@@ -152,6 +205,9 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
             Assert.Equal(first.Snapshot.Head.Connection.ConnectionId, replay.Snapshot.Head.Connection.ConnectionId);
             Assert.Equal(first.Snapshot.Head.RowRevision, replay.Snapshot.Head.RowRevision);
             Assert.Equal(first.Snapshot.Configuration.ConfigurationSha256, replay.Snapshot.Configuration.ConfigurationSha256);
+            Assert.Equal(
+                first.Snapshot.Configuration.TransportAdapterOptions,
+                replay.Snapshot.Configuration.TransportAdapterOptions);
             Assert.Equal((1L, 1L, 1L), await CountOwnerRowsAsync(dataSource, projectId));
 
             var conflict = await Assert.ThrowsAsync<RemoteMcpConnectionException>(() =>

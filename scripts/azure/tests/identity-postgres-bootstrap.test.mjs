@@ -560,7 +560,7 @@ test('P1 ownership handover verifies Identity read-only, runs on the tunnel, and
     if (!args.some(arg => String(arg).endsWith('p1-postgres-ownership-handover.cs'))) return base(args, settings);
     assert.equal(fakes.portForwardStopped, false);
     handoverCall = { args, settings };
-    return ok('P1_POSTGRES_OWNERSHIP_HANDOVER_VERIFIED role=agentweaver-id-p1-postgres-migration schemas=orchestrator,events_sessions changed=3\n');
+    return ok('P1_POSTGRES_OWNERSHIP_HANDOVER_VERIFIED role=agentweaver-id-p1-postgres-migration schemas=environment,orchestrator,events_sessions changed=3\n');
   };
   const receipt = await bootstrapIdentityPostgres({
     ...options, verifyOnly: true, p1OwnershipHandover: { migrationPrincipalObjectId: handoverPrincipal },
@@ -608,6 +608,8 @@ test('P1 ownership handover program is transactional, idempotent, and reads back
   assert.match(source, /ExpectedRole = "agentweaver-id-p1-postgres-migration"/);
   assert.match(source, /pgaadauth_create_principal_with_oid\(@role, @principal, 'service', false, false\)/);
   assert.match(source, /BeginTransactionAsync[\s\S]*GRANT \{quotedRole\} TO CURRENT_USER WITH INHERIT FALSE, SET TRUE[\s\S]*REVOKE SET OPTION FOR \{quotedRole\} FROM CURRENT_USER[\s\S]*CommitAsync/);
+  assert.match(source, /string\[\] schemas = \["environment", "orchestrator", "events_sessions"\]/);
+  assert.match(source, /count\(\*\) = 3 FROM pg_namespace/);
   assert.match(source, /never creates or initializes them/);
   assert.doesNotMatch(source, /\b(DROP|TRUNCATE|DELETE FROM)\b/);
 });
