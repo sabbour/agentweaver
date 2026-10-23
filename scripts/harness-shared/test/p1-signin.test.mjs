@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -17,12 +18,14 @@ import {
   validateP1BrokerToken,
   withFreshP1BrowserContext,
 } from '../p1-signin.mjs';
+import { createP1AcceptanceResult } from '../p1-acceptance-result.mjs';
 import {
   createP1SigninIdentityProvider,
   parseP1SigninArguments,
   p1SigninSurfaceArguments,
   runP1SigninCli,
 } from '../p1-signin-run.mjs';
+import { runP1Cli } from '../run-p1.mjs';
 
 const ISSUER = 'https://agentweaver.cluster.aksapp.io/';
 const AUDIENCE = 'https://agentweaver.cluster.aksapp.io/';
@@ -835,25 +838,88 @@ test('UI launcher reuses one browser context and supplies its built-in authorize
   const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-ui-'));
   const manifestPath = path.join(directory, 'input.json');
   await writeFile(manifestPath, JSON.stringify(validInput()), 'utf8');
-  let location = 'about:blank';
-  const page = {
-    url: () => location,
-    async addInitScript() {},
-    async goto(url) { location = url; },
-    async evaluate() { return true; },
-    async waitForResponse(predicate) {
-      const response = {
-        url: () => `${new URL(ENVIRONMENT.baseUrl).origin}/api/v1/projects`,
-        status: () => 200,
+  class LauncherPage extends EventEmitter {
+    constructor() {
+      super();
+      this.location = 'about:blank';
+      this.waiters = [];
+      this.roleQueries = [];
+      this.token = null;
+    }
+
+    url() { return this.location; }
+    async addInitScript() {}
+    async evaluate() { return true; }
+
+    async goto(url) {
+      this.location = url;
+      if (url === ENVIRONMENT.baseUrl) await this.reply('/api/v1/projects', {});
+    }
+
+    waitForResponse(predicate) {
+      return new Promise((resolveResponse, rejectResponse) => {
+        this.waiters.push({ predicate, resolve: resolveResponse, reject: rejectResponse });
+      });
+    }
+
+    getByRole(role, options) {
+      this.roleQueries.push({ role, ...options });
+      const page = this;
+      return {
+        async click() {
+          if (role === 'button' && options.name === 'Refresh run') {
+            await page.reply(`/api/v1/projects/${PROJECT_ID}/runs/${RUN_ID}/coordination/status`, {
+              projectId: PROJECT_ID,
+              runId: RUN_ID,
+              executionFence: 7,
+            });
+          }
+        },
       };
-      assert.equal(predicate(response), true);
-      return response;
-    },
-  };
+    }
+
+    async reply(path, body) {
+      const url = `${new URL(ENVIRONMENT.baseUrl).origin}${path}`;
+      const request = {
+        url: () => url,
+        method: () => 'GET',
+        allHeaders: async () => ({
+          authorization: `Bearer ${this.token}`,
+          'x-agentweaver-tenant': ENVIRONMENT.tenantId,
+        }),
+        postData: () => null,
+      };
+      const response = {
+        url: () => url,
+        request: () => request,
+        status: () => 200,
+        allHeaders: async () => ({ 'content-type': 'application/json' }),
+        text: async () => JSON.stringify(body),
+      };
+      this.emit('response', response);
+      for (const waiter of [...this.waiters]) {
+        try {
+          if (await waiter.predicate(response)) {
+            this.waiters.splice(this.waiters.indexOf(waiter), 1);
+            waiter.resolve(response);
+          }
+        } catch (error) {
+          this.waiters.splice(this.waiters.indexOf(waiter), 1);
+          waiter.reject(error);
+        }
+      }
+    }
+  }
+  const page = new LauncherPage();
   const context = { pages: () => [page], async newPage() { return page; } };
   const signIns = [];
   const output = [];
   let browserContexts = 0;
+  let fixtureCleanups = 0;
+  const sourceEvidence = {
+    services: { status: 'passed' },
+    agentHostImageMeasurement: { status: 'passed' },
+  };
   try {
     const code = await runP1SigninCli([
       '--surface', 'ui',
@@ -873,29 +939,70 @@ test('UI launcher reuses one browser context and supplies its built-in authorize
         browserContexts += 1;
         return useContext(context);
       },
-      async runP1(argv, env, _io, { identityProvider, pageProvider }) {
-        assert.equal(argv[argv.indexOf('--surface') + 1], 'ui');
-        assert.notEqual(env.AGENTWEAVER_P1_SETUP_TOKEN, 'ignored-existing-value');
-        assert.equal(typeof pageProvider, 'function');
-        const identity = await identityProvider({
-          ...ENVIRONMENT,
-          projectId: PROJECT_ID,
-          runId: RUN_ID,
-        });
-        assert.deepEqual(Object.keys(identity), ['token']);
-        assert.equal(signIns.length, 2);
-        assert.equal(await pageProvider({ baseUrl: ENVIRONMENT.baseUrl }), page);
-        return 0;
-      },
+      runP1: (argv, env, io, { identityProvider, pageProvider }) => runP1Cli(argv, env, io, {
+        identityProvider,
+        pageProvider,
+        async prepareDeploymentEvidence() { return sourceEvidence; },
+        async createFixture(validated, { invocationId, acquireRunIdentity }) {
+          const identity = await acquireRunIdentity({ projectId: PROJECT_ID, runId: RUN_ID });
+          page.token = identity.token;
+          return {
+            input: validated,
+            identity,
+            state: {
+              invocationId,
+              setup: {
+                invocationId,
+                projectId: PROJECT_ID,
+                projectRevision: 1,
+                ownerAssignmentId: 'controlled-owner-assignment',
+                ownerAssignmentRevision: 1,
+                assignmentId: 'controlled-orchestrator-assignment',
+                assignmentRevision: 1,
+                complete: true,
+              },
+              requestFailures: [],
+            },
+            async cleanup() {
+              fixtureCleanups += 1;
+              return { invocationId, state: 'cleaned', projectState: 'archived' };
+            },
+          };
+        },
+        async runSurfaceJourney(surface, _input, { ui, sourceEvidence: verifiedEvidence }) {
+          assert.equal(surface, 'ui');
+          await ui.openRun({ projectId: PROJECT_ID, runId: RUN_ID });
+          await ui.selectView('Approvals');
+          await ui.refresh();
+          await ui.close();
+          return createP1AcceptanceResult({
+            surface,
+            surfaceStatus: 'blocked',
+            steps: [{ id: 'ui-controls', status: 'passed' }],
+            sourceEvidence: verifiedEvidence,
+            observations: { adapterCleanup: { mcp: 'not-required', ui: 'closed' } },
+            failure: { message: 'The controlled run does not provide distinct-actor evidence.' },
+          });
+        },
+      }),
     });
 
-    assert.equal(code, 0, output.join('\n'));
+    assert.equal(code, 2, output.join('\n'));
     assert.equal(browserContexts, 1);
     assert.equal(signIns.length, 2);
     assert.ok(signIns.every(request => request.context === context));
     assert.equal(signIns[0].projectId, undefined);
     assert.equal(signIns[1].projectId, PROJECT_ID);
-    assert.equal(location, ENVIRONMENT.baseUrl);
+    assert.equal(page.location, `${ENVIRONMENT.baseUrl}projects/${PROJECT_ID}/runs/${RUN_ID}`);
+    const approvalsTab = page.roleQueries.find(query => query.role === 'tab');
+    assert.ok(approvalsTab.name instanceof RegExp);
+    assert.equal(approvalsTab.name.test('Approvals (2)'), true);
+    assert.ok(page.roleQueries.some(query => query.role === 'button'
+      && query.name === 'Refresh run' && query.exact === true));
+    assert.equal(fixtureCleanups, 1);
+    const result = JSON.parse(output.at(-1));
+    assert.equal(result.surfaceStatus, 'blocked');
+    assert.equal(result.observations.fixtureSetup.cleanup.state, 'cleaned');
     assert.doesNotMatch(output.join('\n'), /eyJ|accessToken|Bearer/);
   } finally {
     await rm(directory, { recursive: true, force: true });
