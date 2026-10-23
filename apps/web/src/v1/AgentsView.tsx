@@ -18,7 +18,7 @@ import { MetricRow } from '../components/ui/Metric';
 import { PageSection } from '../components/ui/PageSection';
 import { EmptyState } from '../components/ui/States';
 import { Tile, TileGrid } from '../components/ui/TileGrid';
-import { AddMemberDialog, PendingProposals, TeamSyncPanel } from './AgentsTeamControls';
+import { AddMemberDialog, PendingProposals, TeamMemberActions, TeamSyncPanel } from './AgentsTeamControls';
 import { castPath } from './castingData';
 import type { ProjectConfiguration } from './contracts';
 import { PageHeading } from './pageParts';
@@ -35,13 +35,15 @@ const useStyles = makeStyles({
 });
 
 /** Drawer content for one agent. Saving replaces only this agent's charter entry. */
-function AgentDetail({ projectId, agent, configuration, readOnly, onClose, onSave }: {
+function AgentDetail({ projectId, agent, configuration, configurationRevision, readOnly, onClose, onSave, onConflict }: {
   projectId: string;
   agent: Charter;
   configuration: ProjectConfiguration;
+  configurationRevision: number;
   readOnly: boolean;
   onClose: () => void;
   onSave: (next: ProjectConfiguration) => Promise<boolean>;
+  onConflict?: () => void;
 }) {
   const styles = useStyles();
   // Form fields start from the agent's saved values. The parent remounts this
@@ -101,6 +103,16 @@ function AgentDetail({ projectId, agent, configuration, readOnly, onClose, onSav
                   <ul className={styles.list}>{skills.map((skill) => <li key={skill.skillId}>{skill.skillId}</li>)}</ul>
                 )}
               </div>
+              {casting && !readOnly && (
+                <TeamMemberActions
+                  projectId={projectId}
+                  configuration={configuration}
+                  configurationRevision={configurationRevision}
+                  agentId={agent.agentId}
+                  currentRoleId={casting.role}
+                  onConflict={onConflict}
+                />
+              )}
               <div className={styles.actions}>
                 <Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/memories?agentId=${encodeURIComponent(agent.agentId)}`}>View memories</Link>
                 <Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/skills`}>Manage skills</Link>
@@ -109,8 +121,8 @@ function AgentDetail({ projectId, agent, configuration, readOnly, onClose, onSav
           )}
           {tab === 'charter' && (
             <>
-              <Field label="Role">
-                <Input value={role} readOnly={readOnly} onChange={(_, data) => { setRole(data.value); setSaved(false); }} />
+              <Field label="Role" hint={casting ? 'Change team roles through a reviewed proposal.' : undefined}>
+                <Input value={role} readOnly={readOnly || Boolean(casting)} onChange={(_, data) => { setRole(data.value); setSaved(false); }} />
               </Field>
               <Field label="Charter content" hint="Instructions this agent follows in every run. Saved changes apply to future runs.">
                 <Textarea value={charter} readOnly={readOnly} resize="vertical" rows={16} onChange={(_, data) => { setCharter(data.value); setSaved(false); }} />
@@ -240,9 +252,11 @@ export function AgentsView({ projectId, configuration, configurationRevision, re
             projectId={projectId}
             agent={selected}
             configuration={configuration}
+            configurationRevision={configurationRevision}
             readOnly={readOnly}
             onClose={() => setSelectedId(null)}
             onSave={onSave}
+            onConflict={onReload}
           />
         )}
       </OverlayDrawer>

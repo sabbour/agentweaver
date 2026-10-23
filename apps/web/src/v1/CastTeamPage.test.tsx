@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   getProjectConfiguration: vi.fn(),
   getCastingProposal: vi.fn(),
   createCastingProposal: vi.fn(),
+  createCastingDraftProposal: vi.fn(),
   updateCastingProposal: vi.fn(),
   transitionCastingProposal: vi.fn(),
 }));
@@ -88,7 +89,7 @@ describe('CastTeamPage', () => {
     // Reserved roles are never offered.
     expect(screen.queryByRole('checkbox', { name: 'Coordinator' })).toBeNull();
     expect((screen.getByRole('checkbox', { name: 'Tester' }) as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByText(/replaces the whole team/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     await screen.findByText('Review proposal', { selector: 'h3, span, div' });
     expect(api.createCastingProposal).toHaveBeenCalledWith('token', 'p1', {
@@ -105,6 +106,7 @@ describe('CastTeamPage', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: /Small team/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Docs' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     await waitFor(() => expect(api.createCastingProposal).toHaveBeenCalledWith(
       'token', 'p1', { mode: 'manual', expectedConfigurationRevision: 5, roleIds: ['lead', 'tester', 'docs'], universe: null }, 'tenant-1',
@@ -120,6 +122,7 @@ describe('CastTeamPage', () => {
     expect(within(picker).queryByRole('option', { name: 'Star Wars' })).toBeNull();
     fireEvent.change(picker, { target: { value: 'The Matrix' } });
     fireEvent.click(await screen.findByRole('button', { name: /Small team/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     await waitFor(() => expect(api.createCastingProposal).toHaveBeenCalledWith(
       'token', 'p1', {
@@ -128,10 +131,42 @@ describe('CastTeamPage', () => {
     ));
   });
 
+  it('stages an augment proposal with the existing team, selected roles, and universe', async () => {
+    api.createCastingDraftProposal.mockResolvedValue(proposal({
+      draft: config([['old', 'Old'], ['docs-writer', 'Docs Writer']]),
+    }));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Universe' }));
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Universe' }), { target: { value: 'The Matrix' } });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Docs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    await screen.findByText('Review proposal', { selector: 'h3, span, div' });
+    const [, projectId, request] = api.createCastingDraftProposal.mock.calls[0];
+    expect(projectId).toBe('p1');
+    expect(request.expectedConfigurationRevision).toBe(5);
+    expect(request.draft.casting.map((item: { agentId: string }) => item.agentId)).toEqual(['old', 'docs']);
+    expect(request.draft.castingUniverse).toBe('The Matrix');
+    expect(screen.getByText('This proposal adds 1 member to the current team.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Remove Old' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove Docs Writer' })).toBeTruthy();
+  });
+
+  it('keeps the current roster intact when reviewing a linked augment proposal', async () => {
+    api.getCastingProposal.mockResolvedValue(proposal({
+      draft: config([['old', 'Old'], ['docs', 'Docs']]),
+    }));
+    renderPage('/projects/p1/team/cast?proposal=pr-1');
+    await screen.findByText('This proposal adds 1 member to the current team.');
+    expect(screen.getByText('This proposal adds 1 member to the current team.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Remove Old' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove Docs' })).toBeTruthy();
+  });
+
   it('re-reads the configuration and explains a revision conflict', async () => {
     api.createCastingProposal.mockRejectedValueOnce(new GatewayError(409, {}, 'Conflict'));
     renderPage();
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Lead' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Review' }));
     expect(await screen.findByText(/changed since you loaded it/)).toBeTruthy();
     expect(api.getProjectConfiguration).toHaveBeenCalledTimes(2);
@@ -152,6 +187,15 @@ describe('CastTeamPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/projects/p1/team'));
     expect(api.transitionCastingProposal).toHaveBeenCalledWith('token', 'p1', 'pr-1', 'reject', 2, 'tenant-1');
+  });
+
+  it('allows an empty removal proposal to be confirmed', async () => {
+    api.getCastingProposal.mockResolvedValue(proposal({ draft: config([]) }));
+    renderPage('/projects/p1/team/cast?proposal=pr-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cast team' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/projects/p1/team'));
+    expect(api.transitionCastingProposal).toHaveBeenCalledWith('token', 'p1', 'pr-1', 'confirm', 1, 'tenant-1');
   });
 
   it('shows a finished proposal without change controls', async () => {

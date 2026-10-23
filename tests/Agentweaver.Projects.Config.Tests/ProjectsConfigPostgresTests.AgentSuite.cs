@@ -1,7 +1,12 @@
 using System.Formats.Tar;
+using System.Reflection;
+using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Orchestrator;
+using Agentweaver.Orchestrator.Core;
 using Agentweaver.Projects.Config.Tests.AgentSuite;
 using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
@@ -99,6 +104,155 @@ public sealed partial class ProjectsConfigPostgresTests
             owner, project.ProjectId, AgentSuiteRequest(confirmedRevision + 5, "valid"), store, CancellationToken.None));
         Assert.Equal("stale_project_configuration", stale.Code);
         Assert.Equal(StatusCodes.Status409Conflict, stale.StatusCode);
+    }
+
+    [Fact]
+    public async Task AgentSuiteImportRejectsChangedLayerBytesUnderThePinnedSourceIdentity()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var store = new SkillTestObjectStore();
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "agentsuite-pinned-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, "agentsuite-pinned-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(owner, "Pinned suite", CancellationToken.None);
+
+        var request = AgentSuiteRequest(project.ConfigurationRevision, "valid");
+        var imported = await service.ImportAgentSuiteAsync(
+            owner, project.ProjectId, request, store, CancellationToken.None);
+        Assert.Equal(AgentSuiteValidManifest, imported.Import.SourceIdentity);
+
+        var changedArchive = AgentSuiteLayoutTar(
+            Path.Combine(AgentSuiteFixtureRoot, "valid"),
+            "blobs/sha256/c8a66d0cacdb86b823914a813ed7b2ecd323ae7908096e4b3839173c19c03b03");
+        var changed = await Assert.ThrowsAsync<AgentSuiteImportRejectedException>(() =>
+            service.ImportAgentSuiteAsync(
+                owner,
+                project.ProjectId,
+                request with { Archive = Convert.ToBase64String(changedArchive) },
+                store,
+                CancellationToken.None));
+
+        Assert.Equal("agentsuite_invalid", changed.Code);
+        Assert.Contains(changed.Errors, error => error.Contains("digest", StringComparison.OrdinalIgnoreCase));
+        AssertSameAgentSuiteRecord(imported.Import, await service.GetAgentSuiteImportAsync(
+            owner, project.ProjectId, AgentSuiteValidManifest, store, CancellationToken.None));
+        Assert.Single(await service.ListCastingProposalsAsync(owner, project.ProjectId, 50, CancellationToken.None));
+        Assert.Equal(project.ConfigurationRevision,
+            (await service.GetProjectConfigurationAsync(owner, project.ProjectId, null, CancellationToken.None)).Revision);
+    }
+
+    [Fact]
+    public async Task AgentSuiteImportIsDeniedAfterCurrentAuthorityIsRevoked()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var store = new SkillTestObjectStore();
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "agentsuite-revoked-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, "agentsuite-revoked-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var remainingAdmin = await SeedCallerAsync(
+            db, authorityStore, "agentsuite-remaining-admin-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(owner, "Revoked suite owner", CancellationToken.None);
+        var assignment = await db.RoleAssignments.AsNoTracking()
+            .SingleAsync(item =>
+                item.MembershipId == owner.MembershipId &&
+                item.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                item.Role == ProjectAuthorityRole.TenantAdmin &&
+                item.State == ProjectAuthorityRecordState.Active);
+        await authorityStore.RevokeRoleAssignmentAsync(assignment.AssignmentId, assignment.Revision, "fixture");
+
+        var forbidden = await Assert.ThrowsAsync<ProjectConfigException>(() => service.ImportAgentSuiteAsync(
+            owner,
+            project.ProjectId,
+            AgentSuiteRequest(project.ConfigurationRevision, "valid"),
+            store,
+            CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+        Assert.Empty(await service.ListCastingProposalsAsync(remainingAdmin, project.ProjectId, 50, CancellationToken.None));
+        var missingRecord = await Assert.ThrowsAsync<ProjectConfigException>(() => service.GetAgentSuiteImportAsync(
+            remainingAdmin, project.ProjectId, AgentSuiteValidManifest, store, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status404NotFound, missingRecord.StatusCode);
+        Assert.Equal(project.ConfigurationRevision,
+            (await service.GetProjectConfigurationAsync(remainingAdmin, project.ProjectId, null, CancellationToken.None)).Revision);
+    }
+
+    [Fact]
+    public async Task ConfirmedAgentSuiteRosterReachesTheAcceptedRunConsumer()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var store = new SkillTestObjectStore();
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "agentsuite-run-tenant-" + suffix;
+        var platformAdmin = await SeedCallerAsync(
+            db, authorityStore, "agentsuite-run-platform-admin-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        await ConfigurePlatformDefaultsAsync(db, authorityStore, service, suffix, tenantId);
+        var platform = await service.GetPlatformRuntimeDefaultsAsync(platformAdmin, CancellationToken.None);
+        var owner = await SeedCallerAsync(
+            db, authorityStore, "agentsuite-run-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(owner, "AgentSuite run target", CancellationToken.None);
+
+        var imported = await service.ImportAgentSuiteAsync(
+            owner, project.ProjectId, AgentSuiteRequest(project.ConfigurationRevision, "valid"), store,
+            CancellationToken.None);
+        var proposal = Assert.IsType<ProjectCastingProposal>(imported.Proposal);
+        var agent = Assert.Single(imported.Import.Agents);
+        var confirmed = await service.ConfirmCastingProposalAsync(
+            owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+        var confirmedRevision = confirmed.ConfirmedConfigurationRevision
+            ?? throw new InvalidOperationException("Confirmation returned no revision.");
+
+        var orchestratorSubject = "agentsuite-run-orchestrator-" + suffix;
+        var orchestratorMembership = await SeedMembershipAsync(authorityStore, orchestratorSubject, tenantId);
+        await authorityStore.AssignRoleAsync(
+            orchestratorMembership,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator,
+            "fixture");
+        var orchestrator = await ResolveCallerAsync(
+            db, orchestratorSubject, tenantId, ["api.read", "projects.orchestrator"]);
+        var accepted = await service.AcceptRunSelectionAsync(
+            orchestrator,
+            project.ProjectId,
+            "agentsuite-run-" + suffix,
+            RunRequest(confirmedRevision, platform.Revision),
+            CancellationToken.None);
+
+        // The real consumer needs the complete immutable snapshot, including the accepted model routes.
+        using var snapshot = JsonDocument.Parse(JsonSerializer.Serialize(
+            accepted,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var catalogType = Assembly.Load("Agentweaver.Orchestrator")
+            .GetType("Agentweaver.Orchestrator.CoordinatorWorkflowCatalog", throwOnError: true)!;
+        var createContext = catalogType.GetMethod(
+            "CreateRunSelectionContext", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("The Orchestrator run-selection consumer is unavailable.");
+        var context = Assert.IsType<WorkPlanRunSelectionContext>(
+            createContext.Invoke(null, [snapshot.RootElement]));
+        var consumedRole = Assert.Single(context.Roles, role => role.RoleId == agent.NativeId);
+        Assert.Contains(agent.EffectiveAgentId, consumedRole.EligibleAgentIds);
+        Assert.Contains(accepted.ModelSelection.Reference, consumedRole.ModelSelectionReferences);
+        Assert.NotEmpty(context.ModelTaskSelections);
+        Assert.Contains(
+            accepted.ProjectConfiguration.AgentCharters,
+            charter => charter.AgentId == agent.EffectiveAgentId && charter.Role == agent.NativeId);
+        Assert.Contains(
+            accepted.ProjectConfiguration.Casting,
+            cast => cast.AgentId == agent.EffectiveAgentId && cast.Role == agent.NativeId);
     }
 
     [Fact]
@@ -416,9 +570,10 @@ public sealed partial class ProjectsConfigPostgresTests
     };
 
     /// <summary>Packs a committed OCI layout directory into a deterministic tar with sorted regular files.</summary>
-    private static byte[] AgentSuiteLayoutTar(string directory)
+    private static byte[] AgentSuiteLayoutTar(string directory, string? changedPath = null)
     {
         using var output = new MemoryStream();
+        var changed = false;
         using (var writer = new TarWriter(output, TarEntryFormat.Ustar, leaveOpen: true))
         {
             foreach (var path in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
@@ -426,6 +581,11 @@ public sealed partial class ProjectsConfigPostgresTests
                          .Order(StringComparer.Ordinal))
             {
                 var bytes = File.ReadAllBytes(Path.Combine(directory, path));
+                if (string.Equals(path, changedPath, StringComparison.Ordinal))
+                {
+                    bytes[0] ^= 0x01;
+                    changed = true;
+                }
                 // Fixed mode 0644 and epoch time keep the archive bytes the same on every machine.
                 writer.WriteEntry(new UstarTarEntry(TarEntryType.RegularFile, path)
                 {
@@ -435,6 +595,8 @@ public sealed partial class ProjectsConfigPostgresTests
                 });
             }
         }
+        if (changedPath is not null && !changed)
+            throw new InvalidOperationException($"The requested AgentSuite fixture path '{changedPath}' was not found.");
         return output.ToArray();
     }
 

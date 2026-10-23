@@ -4,7 +4,7 @@
  * pending proposal first; nothing changes until someone confirms it on the
  * Cast a team page.
  */
-import { Button, Field, Select, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, Field, Select, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowDownloadRegular, ArrowUploadRegular, PersonAddRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -12,7 +12,7 @@ import { AppDialog } from '../components/ui/AppDialog';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
 import { gatewayClient } from './api';
-import { castableRoles, castingError, draftWithMember, isConflict, reviewPath } from './castingData';
+import { castableRoles, castingError, draftWithMember, draftWithRole, draftWithoutMember, isConflict, reviewPath } from './castingData';
 import type { ProjectCastingProposal, ProjectCastingRoleDefinition, ProjectCastingTransfer, ProjectConfiguration } from './contracts';
 import { ErrorNotice } from './pageParts';
 
@@ -101,6 +101,94 @@ export function AddMemberDialog({ projectId, configuration, configurationRevisio
         {error && <ErrorNotice>{error}</ErrorNotice>}
       </div>
     </AppDialog>
+  );
+}
+
+/** Stages a reviewed role change or removal for a current team member. */
+export function TeamMemberActions({ projectId, configuration, configurationRevision, agentId, currentRoleId, disabled, onConflict }: {
+  projectId: string;
+  configuration: ProjectConfiguration;
+  configurationRevision: number;
+  agentId: string;
+  currentRoleId: string;
+  disabled?: boolean;
+  onConflict?: () => void;
+}) {
+  const styles = useStyles();
+  const { apiCall } = useAuth();
+  const navigate = useNavigate();
+  const [roles, setRoles] = useState<ProjectCastingRoleDefinition[] | null>(null);
+  const [roleId, setRoleId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiCall((token, tenant) => gatewayClient.listCatalogRoles(token, tenant), null)
+      .then((result) => { if (!cancelled) setRoles(castableRoles(result)); })
+      .catch((reason: unknown) => { if (!cancelled) setError(castingError(reason, false)); });
+    return () => { cancelled = true; };
+  }, [apiCall]);
+
+  /** Stages a role change without changing the live configuration. */
+  const rerole = async () => {
+    const role = roles?.find((item) => item.id === roleId);
+    if (!role || role.id === currentRoleId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const proposal = await apiCall((token, tenant) => gatewayClient.createCastingDraftProposal(token, projectId, {
+        expectedConfigurationRevision: configurationRevision,
+        draft: draftWithRole(configuration, agentId, role),
+      }, tenant), null);
+      navigate(reviewPath(projectId, proposal.proposalId));
+    } catch (reason) {
+      setError(castingError(reason, true));
+      // A stale revision means the page must refresh before another proposal is staged.
+      if (isConflict(reason)) onConflict?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Stages removal; the member remains until the proposal is confirmed. */
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const proposal = await apiCall((token, tenant) => gatewayClient.createCastingDraftProposal(token, projectId, {
+        expectedConfigurationRevision: configurationRevision,
+        draft: draftWithoutMember(configuration, agentId),
+      }, tenant), null);
+      navigate(reviewPath(projectId, proposal.proposalId));
+    } catch (reason) {
+      setError(castingError(reason, true));
+      // Do not retry a proposal against the stale revision; refresh it first.
+      if (isConflict(reason)) onConflict?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className={styles.stack}>
+      <Field label="New team role">
+        <Select value={roleId} disabled={!roles || disabled || busy} onChange={(_, data) => setRoleId(data.value)}>
+          <option value="">{roles ? 'Select a role' : 'Loading roles…'}</option>
+          {roles?.map((role) => <option key={role.id} value={role.id}>{role.title}</option>)}
+        </Select>
+      </Field>
+      <div className={styles.row}>
+        <Button appearance="secondary" disabled={!roleId || roleId === currentRoleId || disabled || busy} onClick={() => void rerole()}>
+          {busy ? 'Saving…' : 'Re-role'}
+        </Button>
+        <Button appearance="secondary" disabled={disabled || busy} onClick={() => void remove()}>
+          {busy ? 'Saving…' : 'Remove from team'}
+        </Button>
+        {busy && <Spinner size="extra-tiny" aria-hidden="true" />}
+      </div>
+      {error && <ErrorNotice>{error}</ErrorNotice>}
+    </div>
   );
 }
 

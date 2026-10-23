@@ -221,7 +221,25 @@ export type ModelTaskKind = 'planning' | 'review' | 'design' | 'security'
 export interface ModelTaskOverride {
   taskKind: ModelTaskKind;
   /** Values for this task kind. A missing or null field uses the project default. */
-  selection: { reference?: string | null; reasoningEffort?: ReasoningEffort | null };
+  selection: ModelSelectionOverride;
+}
+
+/** A project model override can replace the model reference, reasoning effort, or both. */
+export interface ModelSelectionOverride {
+  reference?: string | null;
+  reasoningEffort?: ReasoningEffort | null;
+}
+
+/** Project model choice for work assigned to one role. */
+export interface ModelRoleOverride {
+  roleId: string;
+  selection: ModelSelectionOverride;
+}
+
+/** Project model choice for work assigned to one agent. */
+export interface ModelAgentOverride {
+  agentId: string;
+  selection: ModelSelectionOverride;
 }
 
 /** Owner scope of a user-managed Copilot connection. */
@@ -531,6 +549,8 @@ export interface ProjectConfiguration {
   modelSelection?: ModelSelectionSettings | null;
   /** Per-task model choices that replace parts of `modelSelection` for that kind of task. */
   modelTaskOverrides?: ModelTaskOverride[];
+  modelRoleOverrides?: ModelRoleOverride[];
+  modelAgentOverrides?: ModelAgentOverride[];
   providerOverrides: Array<{ seam: string; providerId: string }>;
   orderedProviderOverrides: Array<{ seam: string; providerIds: string[] }>;
   agentCharters: Array<{ agentId: string; name: string; role: string; charter: string }>;
