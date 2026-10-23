@@ -130,6 +130,23 @@ test('run does not throw on non-zero exit when check is false', () => {
   assert.equal(result.status, 3);
 });
 
+test('run allows output larger than Node default maxBuffer', () => {
+  const outputSize = 2 * 1024 * 1024;
+  const result = run(process.execPath, ['-e', `process.stdout.write('x\\n'.repeat(${outputSize / 2}))`]);
+  assert.equal(result.stdout.length, outputSize);
+});
+
+test('run reports maxBuffer exhaustion without exposing partial output', () => {
+  const maxBuffer = 1024 * 1024;
+  const args = ['-e',
+    `process.stdout.write("AccountKey=${SENSITIVE_FIXTURE_VALUE};" + "x".repeat(${maxBuffer * 2}))`];
+  assert.throws(() => run(process.execPath, args, { maxBuffer }), error => {
+    assert.match(error.message, /output exceeded the 1048576-byte maxBuffer limit \(ENOBUFS\)/);
+    assert.ok(!error.message.includes(SENSITIVE_FIXTURE_VALUE));
+    return true;
+  });
+});
+
 test('run projects raw JSON before returning stdout and never exposes fields omitted by the projection', () => {
   const sentinel = 'raw-secret-sentinel-82fbc9';
   const result = run(process.execPath, ['-e',
