@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "9c91a0de3fa9989cca17aa15900e5202c42936fc",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "ad957802ade5a94255aec0212b4ab94662093e854d8f6ca80c6f628f55718430",
+  "appliedAt": "2026-10-23T16:50:51.334Z",
+  "components": [
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.4.0",
+      "toVersion": "1.5.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "1.4.0",
+      "toVersion": "1.5.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.4.0",
+      "toVersion": "1.5.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.3.0",
+      "toVersion": "1.4.0",
+      "bump": "minor"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/reviewed-pull-request-records.md",
+      "archivedPath": ".changeset/archive/reviewed-pull-request-records.md",
+      "sha256": "77ecdaa7eb82d6f43ade172795a3cfd9726cdeaad1fca692221592d131cfc77c"
+    },
+    {
+      "sourcePath": ".changeset/v1-casting-universe-picker.md",
+      "archivedPath": ".changeset/archive/v1-casting-universe-picker.md",
+      "sha256": "8c6cc3d90f2f576bd39d32e1c300a322970dc067942cc2933d438b8b11718401"
+    },
+    {
+      "sourcePath": ".changeset/web-reviewed-team-casting-restore.md",
+      "archivedPath": ".changeset/archive/web-reviewed-team-casting-restore.md",
+      "sha256": "a6df9cad649a6199a576e6602f77144775999eae68a4619c338f4480ec58edd2"
+    }
+  ]
+}
