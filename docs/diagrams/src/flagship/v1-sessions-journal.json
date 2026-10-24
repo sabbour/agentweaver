@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Session journal and private reviewed tool results",
-  "alt": "Events & Sessions uses native PostgreSQL as its default Sessions journal. Project history reads require fresh Projects read authority and preserve exact run-bound narrowing. The current host requires SessionsCapabilities.All and cannot select the optional AgentSessions package. It verifies the run's provider binding before committing a session. Private tool result routes require direct mutual TLS and the original current actor. Orchestrator verifies the full selected call and native action admission. Events stores bytes before journal references and acknowledgments. Saved reads require exact proof, source, length and digest, with current checks before return. Public replay hides private result references and bytes. Native remote-tool dispatch remains disabled; this source does not prove deployment or a real remote call.",
+  "alt": "Events & Sessions uses native PostgreSQL as its default Sessions journal. Project history reads require fresh Projects read authority and preserve exact run-bound narrowing. The current host requires SessionsCapabilities.All and cannot select the optional AgentSessions package. It verifies the run's provider binding before committing a session. Private tool result routes require direct mutual TLS and the original current actor. Orchestrator verifies the full selected call and native action admission. Events inventories object keys before writes, commits references and retention deadlines with journal events, and deletes expired bytes or aged orphans while retaining journal history. Saved reads require exact proof, source, length and digest, with current checks before return. Public replay hides private result references and bytes. Native remote-tool dispatch remains disabled; this source does not prove deployment or a real remote call.",
   "autonumber": true,
   "participants": [
     {
@@ -129,6 +129,11 @@
       "label": "Commit event and reference under current authority",
       "line": "solid",
       "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["api", "provider", "postgres"],
+      "label": "Inventory is durable before writes. A one-hour owner pass deletes 24-hour orphans and expired bytes; journal history remains."
     },
     {
       "type": "message",

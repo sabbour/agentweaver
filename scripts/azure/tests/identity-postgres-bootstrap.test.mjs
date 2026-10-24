@@ -302,13 +302,13 @@ test('inspection and pending continuation never re-bootstrap Identity and pass e
   const cases = [
     [{ mode: 'inspect', sourceSha, planSha256 },
       ['--inspect', '--source-sha', sourceSha, '--plan-sha256', planSha256], 'read-only-inspection'],
-    [{ mode: 'apply-pending-dry-run', sourceSha, coreMergeSha, planSha256, maxCoreVersion: 23, maxEventsVersion: 9 },
+    [{ mode: 'apply-pending-dry-run', sourceSha, coreMergeSha, planSha256, maxCoreVersion: 23, maxEventsVersion: 10 },
       ['--apply-pending-migrations', '--source-sha', sourceSha, '--core-merge-sha', coreMergeSha,
-        '--plan-sha256', planSha256, '--max-core-version', '23', '--max-events-version', '9', '--dry-run'],
+        '--plan-sha256', planSha256, '--max-core-version', '23', '--max-events-version', '10', '--dry-run'],
       'read-only-pending-migration-dry-run'],
-    [{ mode: 'apply-pending', sourceSha, coreMergeSha, planSha256, maxCoreVersion: 23, maxEventsVersion: 9, receiptPath },
+    [{ mode: 'apply-pending', sourceSha, coreMergeSha, planSha256, maxCoreVersion: 23, maxEventsVersion: 10, receiptPath },
       ['--apply-pending-migrations', '--source-sha', sourceSha, '--core-merge-sha', coreMergeSha,
-        '--plan-sha256', planSha256, '--max-core-version', '23', '--max-events-version', '9', '--receipt', receiptPath],
+        '--plan-sha256', planSha256, '--max-core-version', '23', '--max-events-version', '10', '--receipt', receiptPath],
       'pending-migrations-applied'],
   ];
   for (const [p1Initializer, expected, verification] of cases) {
