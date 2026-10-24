@@ -167,6 +167,9 @@ public static class GatewayRouteCatalog
             "getProjectCastingProposal", "Read a casting proposal", forwardTenantSelector: true);
         Add("PATCH", GatewayOwner.Projects, proposal, "/api" + proposal,
             "updateProjectCastingProposal", "Revise a pending casting proposal", body: true, forwardTenantSelector: true);
+        Add("PATCH", GatewayOwner.Projects, proposal + "/members/{agentId}/role", "/api" + proposal + "/members/{agentId}/role",
+            "updateProjectCastingProposalMemberRole", "Change a member role in a pending casting proposal",
+            body: true, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, proposal + "/confirm", "/api" + proposal + "/confirm",
             "confirmProjectCastingProposal", "Confirm reviewed casting", body: true, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, proposal + "/reject", "/api" + proposal + "/reject",

@@ -251,6 +251,8 @@ public sealed partial class ProjectsConfigPostgresTests
             (await Assign(project.ProjectId, "role-api-input-admin-" + suffix, ProjectAuthorityRole.TenantAdmin)).Code);
         Assert.Equal("invalid_principal_id", (await Assign(project.ProjectId, " padded", ProjectAuthorityRole.Viewer)).Code);
         Assert.Equal("invalid_principal_id", (await Assign(project.ProjectId, "", ProjectAuthorityRole.Viewer)).Code);
+        Assert.Equal("email_principal_not_supported",
+            (await Assign(project.ProjectId, "person@example.test", ProjectAuthorityRole.Viewer)).Code);
         Assert.Equal("principal_not_found",
             (await Assign(project.ProjectId, "role-api-foreign-" + suffix, ProjectAuthorityRole.Viewer)).Code);
         Assert.Equal(StatusCodes.Status404NotFound,

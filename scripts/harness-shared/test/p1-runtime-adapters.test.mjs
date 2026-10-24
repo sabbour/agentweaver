@@ -120,3 +120,45 @@ test('setup API rejects a token for a different selected actor', () => {
     setupToken: jwt({ actorId: 'another-actor' }),
   }), /selected issuer, audience, and actor/);
 });
+
+test('UI adapter accepts the built-in authorized page provider without loading a module', async () => {
+  const page = {
+    url: () => ENVIRONMENT.baseUrl,
+    waitForResponse() {},
+    on() {},
+  };
+  const api = { target: new URL(ENVIRONMENT.baseUrl), tenantId: ENVIRONMENT.tenantId };
+  const identity = {
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    createClients: () => ({ api }),
+  };
+  let imports = 0;
+  let providerInput;
+  const adapters = await createP1SurfaceAdapters({
+    surface: 'ui',
+    environment: ENVIRONMENT,
+    identity,
+    pageProvider: async input => {
+      providerInput = input;
+      return page;
+    },
+    importModule: async () => {
+      imports += 1;
+      throw new Error('the built-in provider must not load a module');
+    },
+  });
+
+  assert.equal(adapters.api, api);
+  assert.equal(adapters.ui.page, page);
+  assert.equal(imports, 0);
+  assert.deepEqual(providerInput, {
+    baseUrl: ENVIRONMENT.baseUrl,
+    actorId: ENVIRONMENT.actorId,
+    tenantId: ENVIRONMENT.tenantId,
+    issuer: ENVIRONMENT.issuer,
+    audience: ENVIRONMENT.audience,
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+  });
+});

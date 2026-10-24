@@ -58,7 +58,11 @@ public sealed record ProjectOrderedProviderOverride(
 
 /// <summary>Project-defined agent name, role, and instructions.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record ProjectAgentCharter(string AgentId, string Name, string Role, string Charter);
+public sealed record ProjectAgentCharter(string AgentId, string Name, string Role, string Charter)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CustomRoleTitle { get; init; }
+}
 
 /// <summary>Project agent's role and stable order in the project cast.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -307,6 +311,13 @@ public static class ProjectConfigurationValidator
             ValidateText(item.Name, 160, "agentCharters.name");
             ValidateText(item.Role, 120, "agentCharters.role");
             ValidateText(item.Charter, 20000, "agentCharters.charter");
+            // The display override is separate from the catalog role identifier.
+            if (item.CustomRoleTitle is { } customRoleTitle)
+            {
+                ValidateText(customRoleTitle, 120, "agentCharters.customRoleTitle");
+                if (customRoleTitle.Any(char.IsControl))
+                    throw Invalid("'agentCharters.customRoleTitle' cannot contain control characters.");
+            }
         }
 
         if (configuration.Casting.Any(item => item is null))

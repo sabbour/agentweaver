@@ -159,6 +159,7 @@ export async function createP1SurfaceAdapters({
   identity,
   deniedActor,
   pageModulePath,
+  pageProvider,
   importModule = specifier => import(specifier),
   fetchImpl = globalThis.fetch,
 }) {
@@ -184,7 +185,12 @@ export async function createP1SurfaceAdapters({
     });
   }
   if (surface === 'ui') {
-    const providePage = await loadModule(pageModulePath, 'already-authorized page provider', importModule);
+    // Prefer the operator launcher's in-memory provider; module loading is only for advanced runs.
+    if (pageProvider !== undefined && typeof pageProvider !== 'function') {
+      throw new Error('The authorized UI page provider must be a function.');
+    }
+    const providePage = pageProvider
+      ?? await loadModule(pageModulePath, 'already-authorized page provider', importModule);
     let page;
     try {
       page = await providePage({

@@ -5,7 +5,8 @@ import { dirname } from 'node:path';
 import { parse } from 'yaml';
 import {
   assertIdentityRoutingPlacement, bootstrapIdentityRouting, deriveIdentityRouting,
-  managedBrokerHostname, planPublicBrokerCallback, verifyIdentityBrokerReadiness,
+  managedBrokerHostname, managedBrokerHostnameFromDomain, planPublicBrokerCallback,
+  preflightPublicBrokerRegistration, verifyIdentityBrokerReadiness,
   projectIdentityRoutingReadback,
   registerPublicBrokerCallback,
 } from '../lib/identity-broker-routing.mjs';
@@ -151,13 +152,25 @@ function transport({ native: nativeFixture = snapshot(), namespace, failWait = f
   const labels = Object.fromEntries(['enforce', 'audit', 'warn']
     .map(mode => [`pod-security.kubernetes.io/${mode}`, 'restricted']));
   const dependencies = {
-    execAz: args => {
+    execAz: (args, options = {}) => {
       azureCalls.push(args);
-      if (args[0] === 'account') return ok(JSON.stringify({
+      const projected = value => options.projectJson ? options.projectJson(value) : value;
+      if (args[0] === 'account') return ok(JSON.stringify(projected({
         id: config.subscriptionId, tenantId: config.tenantId, state: 'Enabled',
-      }));
+      })));
+      if (args[0] === 'aks' && args[1] === 'show') return ok(JSON.stringify(projected({
+        id: `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}` +
+          `/providers/Microsoft.ContainerService/managedClusters/${config.clusterName}`,
+        ingressProfile: { webAppRouting: { defaultDomain: {
+          enabled: true, domainName: hostname.slice('agentweaver.'.length),
+        } } },
+      })));
       return args[0] === 'ad'
-        ? ok(JSON.stringify({ id: applicationObjectId, appId: clientId, publicClient: { redirectUris: ['http://localhost'] } }))
+        ? ok(JSON.stringify(projected({
+          id: applicationObjectId, appId: clientId, signInAudience: 'AzureADMyOrg',
+          isFallbackPublicClient: true,
+          publicClient: { redirectUris: ['http://localhost', `https://${hostname}/signin-oidc`] },
+        })))
         : ok();
     },
     execKubelogin: () => ok(),
@@ -247,6 +260,51 @@ test('issuer and native signin callback come from the programmed exact managed H
     assert.deepEqual(route.spec.hostnames, [routeHostname]);
     assert.equal(route.spec.parentRefs[0].sectionName, 'https');
   }
+});
+
+test('first-install preflight derives the callback from AKS before certificate or route resources exist', () => {
+  const callbackUri = `https://${hostname}/signin-oidc`;
+  const application = {
+    id: applicationObjectId, appId: clientId, signInAudience: 'AzureADMyOrg',
+    isFallbackPublicClient: true, publicClient: { redirectUris: ['http://localhost'] },
+  };
+  const calls = [];
+  const execAz = (args, options) => {
+    calls.push(args);
+    if (args[0] === 'account') return ok(JSON.stringify({
+      id: config.subscriptionId, tenantId: config.tenantId, state: 'Enabled',
+    }));
+    if (args[0] === 'aks') return ok(JSON.stringify(options.projectJson({
+      id: `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}` +
+        `/providers/Microsoft.ContainerService/managedClusters/${config.clusterName}`,
+      ingressProfile: { webAppRouting: { defaultDomain: {
+        enabled: true, domainName: hostname.slice('agentweaver.'.length),
+      } } },
+    })));
+    if (args[0] === 'ad') return ok(JSON.stringify(options.projectJson(application)));
+    throw new Error(`unexpected Azure command: ${args.join(' ')}`);
+  };
+  assert.throws(() => preflightPublicBrokerRegistration(config, { execAz }),
+    error => error.message.includes(callbackUri) &&
+      error.message.includes('--identity-routing-certificates-only') &&
+      error.message.includes('--register-identity-broker-callback') &&
+      error.message.includes(`--confirm-identity-broker-callback "${callbackUri}"`));
+  assert.ok(calls.some(args => args[0] === 'aks'));
+  assert.ok(calls.some(args => args[0] === 'ad'));
+  assert.ok(calls.every(args => args[0] !== 'rest'));
+  assert.equal(managedBrokerHostnameFromDomain('test.eastus2.aksapp.io'), hostname);
+});
+
+test('existing-app preflight is read-only when tenant, client modes, and exact callback are ready', () => {
+  const { azureCalls, dependencies } = transport();
+  const plan = preflightPublicBrokerRegistration(config, dependencies);
+  assert.equal(plan.registrationReady, true);
+  assert.equal(plan.callbackUri, `https://${hostname}/signin-oidc`);
+  assert.equal(plan.mutationExecuted, false);
+  assert.ok(azureCalls.some(args => args[0] === 'account'));
+  assert.ok(azureCalls.some(args => args[0] === 'aks'));
+  assert.ok(azureCalls.some(args => args[0] === 'ad'));
+  assert.ok(azureCalls.every(args => args[0] !== 'rest'));
 });
 
 test('omitted native policy namespace binds only to the independently verified route parent', () => {
@@ -377,19 +435,29 @@ test('missing, stale, unprogrammed, cross-target, or unsafe native evidence neve
   }
 });
 
-test('public callback planning appends without loss and becomes a no-op without application writes', () => {
+test('public callback planning includes only required public-client settings and never grants permissions', () => {
   const callbackUri = deriveIdentityRouting(snapshot()).callbackUri;
   const application = { id: applicationObjectId, appId: clientId, publicClient: { redirectUris: ['http://localhost'] },
-    web: { redirectUris: ['https://existing.example.com/callback'] } };
+    web: { redirectUris: ['https://existing.example.com/callback'] }, signInAudience: 'AzureADMultipleOrgs',
+    isFallbackPublicClient: false, requiredResourceAccess: [{ resourceAppId: 'unrelated' }] };
   const original = structuredClone(application);
   const plan = planPublicBrokerCallback(application, clientId, callbackUri, clientId);
   assert.equal(plan.action, 'append');
   assert.equal(plan.platform, 'publicClient');
   assert.equal(plan.mutationExecuted, false);
   assert.deepEqual(plan.redirectUris, ['http://localhost', callbackUri]);
+  assert.deepEqual(plan.missingPrerequisites, [
+    'single-tenant sign-in audience (AzureADMyOrg)',
+    'public-client flow (isFallbackPublicClient=true)',
+    'the exact route-derived callback in publicClient.redirectUris',
+  ]);
+  assert.deepEqual(plan.patch, {
+    signInAudience: 'AzureADMyOrg', isFallbackPublicClient: true,
+    publicClient: { redirectUris: ['http://localhost', callbackUri] },
+  });
   assert.deepEqual(application, original);
   application.publicClient.redirectUris.push(callbackUri);
-  assert.equal(planPublicBrokerCallback(application, clientId, callbackUri, clientId).action, 'noop');
+  assert.equal(planPublicBrokerCallback(application, clientId, callbackUri, clientId).action, 'reconcile');
   assert.throws(() => planPublicBrokerCallback(application, 'wrong-client', callbackUri, clientId), /exact upstream/);
   assert.throws(() => planPublicBrokerCallback(application, clientId, callbackUri.replace('signin-oidc', 'auth/callback'), clientId),
     /exact upstream/);
@@ -457,8 +525,19 @@ test('production JSON projections preserve the native long DNS hostname and exis
   const { dependencies } = transport({ native: projected });
   const previousAzure = dependencies.execAz;
   const callbackUri = `https://${observedHost}/signin-oidc`;
-  const application = { id: applicationObjectId, appId: clientId, publicClient: { redirectUris: ['http://localhost', callbackUri] } };
+  const application = {
+    id: applicationObjectId, appId: clientId, signInAudience: 'AzureADMyOrg',
+    isFallbackPublicClient: true,
+    publicClient: { redirectUris: ['http://localhost', callbackUri] },
+  };
   dependencies.execAz = (args, options) => {
+    if (args[0] === 'aks' && args[1] === 'show') return ok(JSON.stringify(throughProductionWrapper({
+      id: `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}` +
+        `/providers/Microsoft.ContainerService/managedClusters/${config.clusterName}`,
+      ingressProfile: { webAppRouting: { defaultDomain: {
+        enabled: true, domainName: observedDomain.slice(2),
+      } } },
+    }, options.projectJson)));
     if (args[0] !== 'ad') return previousAzure(args, options);
     publicReadOptions = options;
     return ok(JSON.stringify(throughProductionWrapper(application, options.projectJson)));
@@ -476,12 +555,15 @@ test('production JSON projections preserve the native long DNS hostname and exis
   assert.ok(!JSON.stringify(projectIdentityRoutingReadback(withSensitiveFields)).includes('secret-value'));
 });
 
-test('explicit confirmed callback registration fresh-reads and patches only public redirects, preserving legacy platforms', () => {
+test('explicit confirmed registration narrowly reconciles client modes and public redirects, preserving legacy fields', () => {
   const callbackUri = deriveIdentityRouting(snapshot()).callbackUri;
   const application = {
     id: applicationObjectId, appId: clientId, publicClient: { redirectUris: ['http://localhost'] },
-    web: { redirectUris: ['https://legacy.example.com/callback'] }, isFallbackPublicClient: true,
+    web: { redirectUris: ['https://legacy.example.com/callback'] }, isFallbackPublicClient: false,
+    signInAudience: 'AzureADMultipleOrgs',
     spa: { redirectUris: ['https://spa.example.com'] }, appRoles: [{ id: 'existing-role' }],
+    oauth2PermissionScopes: [{ id: 'existing-scope' }],
+    requiredResourceAccess: [{ resourceAppId: 'unrelated' }],
   };
   const original = structuredClone(application);
   const plan = planPublicBrokerCallback(application, clientId, callbackUri, clientId);
@@ -492,12 +574,14 @@ test('explicit confirmed callback registration fresh-reads and patches only publ
     if (args[0] === 'account') return ok(JSON.stringify({ id: config.subscriptionId, tenantId: config.tenantId }));
     if (args[0] === 'ad') return ok(JSON.stringify(application));
     const patch = JSON.parse(args[args.indexOf('--body') + 1]);
-    assert.deepEqual(Object.keys(patch), ['publicClient']);
+    assert.deepEqual(Object.keys(patch), ['signInAudience', 'isFallbackPublicClient', 'publicClient']);
+    assert.equal(patch.signInAudience, 'AzureADMyOrg');
+    assert.equal(patch.isFallbackPublicClient, true);
     assert.deepEqual(Object.keys(patch.publicClient), ['redirectUris']);
     assert.equal(args[args.indexOf('--method') + 1], 'PATCH');
     assert.equal(args[args.indexOf('--uri') + 1], `https://graph.microsoft.com/v1.0/applications/${applicationObjectId}`);
     assert.equal(args[args.indexOf('--subscription') + 1], config.subscriptionId);
-    application.publicClient = patch.publicClient;
+    Object.assign(application, patch);
     return ok();
   };
   const result = registerPublicBrokerCallback(plan, { ...config,
@@ -506,9 +590,11 @@ test('explicit confirmed callback registration fresh-reads and patches only publ
   assert.equal(result.mutationExecuted, true);
   assert.equal(result.action, 'append');
   assert.deepEqual(result.redirectUris, ['http://localhost', 'http://localhost/newly-added', callbackUri]);
-  for (const field of ['web', 'spa', 'appRoles', 'isFallbackPublicClient']) {
+  for (const field of ['web', 'spa', 'appRoles', 'oauth2PermissionScopes', 'requiredResourceAccess']) {
     assert.deepEqual(application[field], original[field]);
   }
+  assert.equal(application.signInAudience, 'AzureADMyOrg');
+  assert.equal(application.isFallbackPublicClient, true);
   assert.deepEqual(calls.map(args => args[0]), ['account', 'ad', 'rest', 'ad']);
   const again = registerPublicBrokerCallback(result, { ...config,
     registerBrokerCallback: true, confirmBrokerCallback: callbackUri,
@@ -567,7 +653,7 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   const receipt = bootstrapIdentityRouting(config, dependencies);
   assert.ok(azureCalls.filter(args => args[0] === 'ad').every(args => !args.includes('--subscription')));
   assert.equal(receipt.runtimeVerified, false);
-  assert.equal(receipt.publicCallbackPlan.action, 'append');
+  assert.equal(receipt.publicCallbackPlan.action, 'noop');
   assert.deepEqual(receipt.runtimeConfigInputs, {
     IdentityBroker__Issuer: `https://${hostname}/`, IdentityBroker__ExternalProvider__ClientId: clientId,
   });

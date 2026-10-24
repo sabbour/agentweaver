@@ -38,6 +38,7 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
 
     public IdTokenTampering Tampering { get; set; } = IdTokenTampering.None;
     public string? AuthorizationError { get; set; }
+    public string? AuthorizationErrorDescription { get; set; }
 
     public string AuthorityUri => _authority;
 
@@ -149,6 +150,7 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
                 new Dictionary<string, string?>
                 {
                     ["error"] = authorizationError,
+                    ["error_description"] = AuthorizationErrorDescription,
                     ["state"] = state,
                 });
             context.Response.Redirect(errorLocation);
