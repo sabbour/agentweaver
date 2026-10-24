@@ -7,6 +7,34 @@ namespace Agentweaver.Identity.Tests;
 
 public sealed class RuntimeUsageSourceReceiptTests
 {
+    [Fact]
+    public void DefaultNativeSendKeepsItsLegacyWireFormAndRequestHash()
+    {
+        var (_, message, _) = NativeTurn();
+        var legacyWireShape = new
+        {
+            Message = new
+            {
+                message.Message.Kind,
+                message.Message.MessageId,
+                message.Message.ContextId,
+                message.Message.Role,
+                message.Message.Parts,
+                Metadata = new
+                {
+                    message.Message.Metadata.Runtime,
+                    message.Message.Metadata.DeliveryMode
+                }
+            }
+        };
+        var expectedWireBytes = JsonSerializer.SerializeToUtf8Bytes(legacyWireShape);
+        var actualWireBytes = JsonSerializer.SerializeToUtf8Bytes(message);
+
+        Assert.Equal(expectedWireBytes, actualWireBytes);
+        Assert.Equal(RuntimeContractValidation.Hash(expectedWireBytes),
+            RuntimeNativeTurnContract.RequestHash(message));
+    }
+
     [Theory]
     [InlineData(null, null, true)]
     [InlineData(null, 1024, false)]

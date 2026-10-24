@@ -217,6 +217,7 @@ public sealed record RuntimeA2ATextPart(string Kind, string Text);
 public sealed record RuntimeA2AMetadata(
     RuntimeHostSessionProof Runtime,
     AddressedMessageDeliveryMode DeliveryMode,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     bool ContinueAfterCallerDisconnect = false);
 
 /// <summary>Validated A2A text message shape sent to the runtime.</summary>

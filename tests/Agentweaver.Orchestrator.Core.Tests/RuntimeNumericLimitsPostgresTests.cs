@@ -43,6 +43,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
     private SessionIdentity _root;
     private MafExecutionCheckpointSnapshot _checkpoint = null!;
     private HttpClient _projectsHttp = null!;
+    private ProjectsHandler _projectsHandler = null!;
     private HttpContext _context = null!;
     private CoordinatorDecisionOwnerStore _decisions = null!;
     private CoordinatorRunSelectionContextStore _runSelectionContexts = null!;
@@ -74,7 +75,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         };
         _context.Request.Headers.Authorization = "Bearer controlled-owner";
         _context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
-        _projectsHttp = new HttpClient(new ProjectsHandler(_selection));
+        _projectsHandler = new ProjectsHandler(_selection);
+        _projectsHttp = new HttpClient(_projectsHandler);
         var coordination = new CoordinationOwnerStore(fixture.DataSource, _schema);
         var accepted = await coordination.AcceptRootAsync(_actor, _selection, "root", default);
         _root = new(_selection.Selection.ProjectId, run, accepted.RootSessionId);
@@ -234,6 +236,20 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         await rootGrantStore.AdmitCoordinatorRootModelTurnAsync(
             rootRequestContext, _registrations[0], generationEventId, promptHash,
             rootContext.DecisionStateVersion, default);
+        var now = DateTimeOffset.UtcNow;
+        var exhaustedProjectBudget = new SpendBudget(
+            "current-project-hard-limit", 1, SpendBudgetScopes.Project,
+            SdkMeterSources.CopilotNanoAiu, "AIC", null, 0m, 1m)
+        {
+            Period = new("current-period", now.AddHours(-1), now.AddHours(1))
+        };
+        _projectsHandler.ProjectSpendBudgets = new(
+            _root.ProjectId, 1, 1, [exhaustedProjectBudget]);
+        var budgetFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            IssueAsync(0, modelRequest));
+        Assert.Equal(SpendBudgetAdmissionMath.EvidenceUnavailable, budgetFailure.Code);
+        Assert.Equal(0, await CountRuntimeGrantsAsync());
+        _projectsHandler.ProjectSpendBudgets = null;
         Assert.Equal("runtime_model_turn_admission_required",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 IssueAsync(0, modelRequest with { InputHash = new string('b', 64) }))).Code);
@@ -278,6 +294,48 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             }));
         Assert.Equal("database_update_pending", missingAdmissionStoreFailure.Code);
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, missingAdmissionStoreFailure.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void CoordinatorRootHardSpendBudgetsFailClosedForPinnedAndCurrentProjectBudgets(
+        bool hasPinnedHardBudget, bool hasCurrentProjectHardBudget)
+    {
+        var now = DateTimeOffset.UtcNow;
+        SpendBudget[] pinned = hasPinnedHardBudget
+            ? [new("pinned-run-hard-limit", 1, SpendBudgetScopes.Run,
+                SdkMeterSources.CopilotNanoAiu, "AIC", null, 0m, 1m)]
+            : [];
+        SpendBudget[] current = hasCurrentProjectHardBudget
+            ? [new SpendBudget("current-project-hard-limit", 1, SpendBudgetScopes.Project,
+                SdkMeterSources.CopilotNanoAiu, "AIC", null, 0m, 1m)
+            {
+                Period = new("current-period", now.AddHours(-1), now.AddHours(1))
+            }]
+            : [];
+
+        var failure = Assert.Throws<RuntimeAuthorizationException>(() =>
+            ExecutableActionGrantOwnerStore.RequireCoordinatorRootSpendBudgetsSupported(pinned, current));
+        Assert.Equal(SpendBudgetAdmissionMath.EvidenceUnavailable, failure.Code);
+    }
+
+    [Fact]
+    public void CoordinatorRootIgnoresPinnedProjectBudgetAfterCurrentConfigurationRemovesIt()
+    {
+        var now = DateTimeOffset.UtcNow;
+        SpendBudget[] stalePinnedProjectBudget =
+        [
+            new SpendBudget("stale-project-hard-limit", 1, SpendBudgetScopes.Project,
+                SdkMeterSources.CopilotNanoAiu, "AIC", null, 0m, 1m)
+            {
+                Period = new("stale-period", now.AddHours(-1), now.AddHours(1))
+            }
+        ];
+
+        ExecutableActionGrantOwnerStore.RequireCoordinatorRootSpendBudgetsSupported(
+            stalePinnedProjectBudget, []);
     }
 
     [Theory]
@@ -1765,16 +1823,29 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
 
     private sealed class ProjectsHandler(AuthorizedRunSelection selection) : HttpMessageHandler
     {
+        public CurrentProjectSpendBudgets? ProjectSpendBudgets { get; set; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             Assert.Equal("controlled-owner", request.Headers.Authorization?.Parameter);
             Assert.Equal("tenant-1", Assert.Single(request.Headers.GetValues("X-Agentweaver-Tenant")));
+            var path = request.RequestUri!.AbsolutePath;
+            object body = path switch
+            {
+                "/api/authorization/context" => selection.Authorization,
+                _ when path.EndsWith("/spend-budgets", StringComparison.Ordinal) =>
+                    ProjectSpendBudgets ?? new CurrentProjectSpendBudgets(
+                        selection.Selection.ProjectId,
+                        selection.Selection.ProjectConfigurationRevision,
+                        selection.Selection.PlatformRuntimeRevision,
+                        []),
+                _ => selection.Selection.Snapshot
+            };
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 RequestMessage = request,
-                Content = request.RequestUri!.AbsolutePath == "/api/authorization/context"
-                    ? JsonContent.Create(selection.Authorization) : JsonContent.Create(selection.Selection.Snapshot),
+                Content = JsonContent.Create(body, body.GetType(), options: OwnerJson),
                 Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
             });
         }

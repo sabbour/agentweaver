@@ -490,8 +490,9 @@ public static class CoordinationOwnerMigrator
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
             // Columns 57 onward are boolean checks. The three version 028 checks, the three version 029
             // checks, the six version 030 checks, and the two version 031 checks precede the
-            // optional-033 and optional-032 shape checks. A partial apply never counts as ready.
-            Enumerable.Range(57, 45).Any(column => !reader.GetBoolean(column)))
+            // optional-033 and optional-032 shape checks, followed by both optional-036 shape checks.
+            // A partial apply never counts as ready.
+            Enumerable.Range(57, 46).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

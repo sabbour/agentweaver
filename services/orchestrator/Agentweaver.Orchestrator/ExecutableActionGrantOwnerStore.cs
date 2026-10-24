@@ -285,6 +285,14 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 limits.MaxModelTurns != binding.MaxModelTurns ||
                 limits.MaxToolCalls != binding.MaxToolCalls)
                 throw new RuntimeAuthorizationException("runtime_action_selection_changed");
+            if (request.ActionId == "model.turn")
+            {
+                var currentProjectSpendBudgets = await projects.ReadCurrentProjectSpendBudgetsAsync(
+                    context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+                RequireCoordinatorRootSpendBudgetsSupported(
+                    CoordinatorWorkflowCatalog.ReadSpendBudgets(authorized.Selection.Snapshot),
+                    currentProjectSpendBudgets.Budgets);
+            }
             if (request.ActionId == "model.turn" &&
                 !await HasCoordinatorRootModelTurnAdmissionAsync(
                     connection, transaction, binding, request, decisionId, decisionVersion, cancellationToken)
@@ -551,6 +559,17 @@ internal sealed class ExecutableActionGrantOwnerStore(
         admission.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, decisionId);
         admission.Parameters.AddWithValue("decisionVersion", NpgsqlDbType.Bigint, decisionVersion);
         return await admission.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
+    }
+
+    internal static void RequireCoordinatorRootSpendBudgetsSupported(
+        IEnumerable<SpendBudget> pinnedBudgets,
+        IEnumerable<SpendBudget> currentProjectBudgets)
+    {
+        // Root turns have no atomic Events evidence and exposure reservation path, so hard budgets must fail closed.
+        if (pinnedBudgets.Any(budget =>
+                budget.Scope != SpendBudgetScopes.Project && budget.HardLimit is not null) ||
+            currentProjectBudgets.Any(budget => budget.HardLimit is not null))
+            throw new RuntimeAuthorizationException(SpendBudgetAdmissionMath.EvidenceUnavailable);
     }
 
     private static void RequireCoordinatorRootDecision(

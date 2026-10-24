@@ -85,6 +85,25 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Fact]
+    public async Task RootAdmissionMigrationIsOptionalBeforeItIsApplied()
+    {
+        await ApplyMigrationsThroughAsync(33);
+
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 36),
+                to_regclass(@table) IS NOT NULL
+            """, connection);
+        command.Parameters.AddWithValue("table", $"{_schema}.maf_root_model_turn_admissions");
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0L, reader.GetInt64(0));
+        Assert.False(reader.GetBoolean(1));
+    }
+
+    [Fact]
     public async Task RootAdmissionMigrationUsesItsActualPrerequisiteWithoutReservedSiblingVersions()
     {
         await ApplyMigrationsThroughAsync(21);
@@ -323,6 +342,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData("backlog_task_origins")]
     [InlineData("user_notification_promotion_dismissals")]
     [InlineData("source_control_pull_requests")]
+    [InlineData("maf_root_model_turn_admissions")]
     public async Task VerificationRequiresRegisteredTables(string table)
     {
         // A version receipt alone is insufficient when its required table is missing.
@@ -361,6 +381,23 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand(sql, connection))
             await command.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task VerificationRequiresTheEnabledRootAdmissionImmutabilityTrigger(bool drop)
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        var sql = drop
+            ? $"DROP TRIGGER maf_root_model_turn_admissions_no_update ON \"{_schema}\".maf_root_model_turn_admissions"
+            : $"ALTER TABLE \"{_schema}\".maf_root_model_turn_admissions DISABLE TRIGGER maf_root_model_turn_admissions_no_update";
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(sql, connection))
+            await command.ExecuteNonQueryAsync();
+
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
     }

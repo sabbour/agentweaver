@@ -20,6 +20,9 @@ append-only coordinator-root model-turn admissions. Reserved migrations 034 and
 036 depends on the immutable-row trigger function from 021, not on those reserved
 versions; its foreign-key tables are introduced by 001 and 002. An image that
 would apply a version outside the plan fails before it connects.
+Readiness accepts migration 036 only when both its ledger row and table are
+absent, or when the migration is recorded and its table and enabled immutability
+trigger are present.
 
 ## What one run does
 
