@@ -41,7 +41,10 @@ internal sealed record AgentSuiteAgent(
     ImmutableArray<AgentSuiteInvoke> Invokes,
     bool HasPolicy,
     bool HasEvaluations,
-    ImmutableArray<string> Extensions);
+    ImmutableArray<string> Extensions)
+{
+    public string? CustomRoleTitle { get; init; }
+}
 
 /// <summary>A validated tool provider. Remote MCP endpoints are review-only and never contacted.</summary>
 internal sealed record AgentSuiteToolProvider(
