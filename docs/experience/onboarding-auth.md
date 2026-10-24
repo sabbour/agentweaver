@@ -72,6 +72,7 @@ roles. If the Broker needs your input, the app shows the sign-in card.
 | State or error | What you can do |
 | --- | --- |
 | Configuration error on the sign-in card | Configure the Broker URL, registered client ID, redirect URI, and scopes. See [runtime settings](../reference/runtime-configuration.md). |
+| Microsoft Entra denies sign-in or rejects the client or callback | Follow the message on the sign-in card. Check the selected tenant, client ID, public-client setting, and exact route callback. |
 | Waiting for Identity Broker | Finish the popup flow before the ten-minute client deadline. |
 | Declined consent, invalid state, or unmatched callback | Start sign-in again. The app rejects callbacks without the matching transaction. |
 | `401` on an API call | The app attempts one token refresh when a refresh token exists. If it fails, sign in again. |

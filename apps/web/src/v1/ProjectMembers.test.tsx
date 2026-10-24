@@ -164,6 +164,18 @@ describe('ProjectMembersPanel', () => {
     expect(await screen.findByText('No user or service account has this ID. Check the ID and try again.')).toBeTruthy();
   });
 
+  it('explains that email addresses cannot identify project members', async () => {
+    mocks.listProjectRoleAssignments.mockResolvedValue(listOf(owner));
+    mocks.assignProjectRole.mockRejectedValue(new GatewayError(400, {
+      code: 'email_principal_not_supported',
+    }, 'Invalid member ID'));
+    await renderPanel(true);
+    await addMember('person@example.test');
+    expect(await screen.findByText(
+      "Email addresses cannot identify project members. Use the member's Agentweaver sign-in subject ID.",
+    )).toBeTruthy();
+  });
+
   it('explains when removing the last owner is refused', async () => {
     mocks.listProjectRoleAssignments.mockResolvedValue(listOf(owner));
     mocks.revokeProjectRoleAssignment.mockRejectedValue(new GatewayError(409, { code: 'last_project_owner' }, 'Conflict'));

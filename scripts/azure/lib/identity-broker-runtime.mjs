@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 import { assertApprovedKeyVaultName } from './guardrails.mjs';
 import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
-import { observeExistingP0BrokerRouting, projectIdentityRoutingReadback } from './identity-broker-routing.mjs';
+import {
+  assertPublicBrokerRegistration, observeExistingP0BrokerRouting, planPublicBrokerCallback,
+  projectIdentityRoutingReadback,
+} from './identity-broker-routing.mjs';
 
 const NAMESPACE = 'agentweaver';
 const CONFIG = 'identity-broker-runtime-config-v2';
@@ -178,7 +181,13 @@ export function bootstrapIdentityBrokerRuntime(config, {
     throw new Error('Broker runtime federation does not match the actual cluster issuer and exact ServiceAccount.');
   }
   const application = azureJson(['ad', 'app', 'show', '--id', config.upstreamClientId, '-o', 'json'],
-    value => ({ appId: value.appId, redirectUris: value.publicClient?.redirectUris }));
+    value => ({
+      id: value.id,
+      appId: value.appId,
+      signInAudience: value.signInAudience,
+      isFallbackPublicClient: value.isFallbackPublicClient,
+      publicClient: { redirectUris: value.publicClient?.redirectUris },
+    }));
   return withKubeconfig(config, base => {
     const args = [...base, '--namespace', NAMESPACE, '--request-timeout=30s'];
     function read(resource, name, projection = projectBrokerRuntimeResource, namespace = NAMESPACE) {
@@ -209,10 +218,9 @@ export function bootstrapIdentityBrokerRuntime(config, {
       mcpBackendPolicy,
     });
     if (!routing.hostnameAligned) throw new Error('Broker runtime setup requires independently observed aligned native routing specs.');
-    if (application.appId !== config.upstreamClientId ||
-        !application.redirectUris?.includes(`${routing.issuer}signin-oidc`)) {
-      throw new Error('The exact upstream public application does not contain the native Broker callback; no app mutation was attempted.');
-    }
+    // Runtime setup rechecks the exact registered callback and Entra client modes against the live route.
+    assertPublicBrokerRegistration(planPublicBrokerCallback(
+      application, config.upstreamClientId, `${routing.issuer}signin-oidc`, config.tenantId));
     const data = brokerAcceptanceConfiguration(config, {
       issuer: routing.issuer, identity, portalHostname: routing.portalHostname,
     });

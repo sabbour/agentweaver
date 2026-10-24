@@ -859,6 +859,12 @@ authorization returns `consent_required`. These errors go only to the
 registered redirect URI and include the original `state`; silent authorization
 does not create or extend a permanent authorization.
 
+Other upstream sign-in failures also return through the one-use authorization
+continuation. The Broker sends the client a safe OAuth error and fixed
+actionable `error_description`; when present, it includes only the numeric
+Microsoft Entra error code. Provider descriptions and account details are not
+returned.
+
 `IdentityBroker:WebOrigin` is an optional, origin-only HTTPS value, required when
 `IdentityBroker:GitHubRepoApp` is configured. It has no path, credentials, query, or
 fragment. Identity normalizes it and allows credentialed CORS only for the browser
