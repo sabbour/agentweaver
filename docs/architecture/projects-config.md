@@ -508,6 +508,15 @@ does not produce a receipt.
   TenantAdmin assignment, and audit rows in one transaction. A rerun for the
   same active identity makes no changes; another active TenantAdmin stops the
   command. Normal host startup never bootstraps authority.
+- Operators create the first PlatformAdmin with the one-shot
+  `--bootstrap-first-platform-admin` command. It uses the same approved issuer,
+  subject, and tenant, then writes the platform-wide assignment and audit rows
+  in one transaction. A rerun for the same sole active identity makes no
+  changes; any other active PlatformAdmin stops the command. The command does
+  not configure runtime defaults. Operators must also write reviewed defaults
+  through the public platform runtime-defaults API. Until the platform head has
+  a configured revision, run-selection acceptance returns
+  `409 platform_runtime_unconfigured`.
 - Run-selection acceptance serializes a run ID and rechecks the current Orchestrator assignment before committing. Replays return the originally stored snapshot, but still require current authorization; snapshots never pin membership or roles.
 - Provider resolution returns candidates, not resource bindings. Resource identity, generation, negotiated capabilities, and final pins are owned by the consumer after provisioning.
 

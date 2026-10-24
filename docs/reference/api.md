@@ -362,6 +362,11 @@ authorization cache, or a grant.
 | PUT | `/{projectId}/runs/{runId}/interactive-selection` | Selection | Accept a new chat run selection from current server configuration. The Orchestrator calls this route during run creation. | No |
 | GET | `/{projectId}/runs/{runId}/cancellation-selection` | `api.read`, `projects.orchestrator`, unbound project cancellation authority | Read the saved selection after a fresh Contributor, Owner, or tenant-admin check. Used by Orchestrator cancellation, not run admission. | No |
 
+Run selection requires a configured platform runtime-defaults revision. On a
+fresh installation, selection returns `409 platform_runtime_unconfigured`
+until an operator bootstraps a PlatformAdmin and writes the reviewed defaults.
+See [Deploy to Azure](../guide/deploy-to-azure.md#bootstrap-the-first-platformadmin-and-configure-runtime-defaults).
+
 ### Project role assignments
 
 These routes manage who holds the Owner, Contributor, Viewer, and

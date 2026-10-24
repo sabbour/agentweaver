@@ -1,0 +1,72 @@
+{
+  "modelSelection": null,
+  "modelTaskDefaults": [
+    {
+      "taskKind": "planning",
+      "selection": {
+        "reference": "gpt-6.1-sol",
+        "reasoningEffort": "high"
+      }
+    },
+    {
+      "taskKind": "review",
+      "selection": {
+        "reference": "gpt-6.1-sol",
+        "reasoningEffort": "high"
+      }
+    },
+    {
+      "taskKind": "design",
+      "selection": {
+        "reference": "gpt-6.1-sol",
+        "reasoningEffort": "high"
+      }
+    },
+    {
+      "taskKind": "security",
+      "selection": {
+        "reference": "gpt-6.1-sol",
+        "reasoningEffort": "high"
+      }
+    },
+    {
+      "taskKind": "creativeWriting",
+      "selection": {
+        "reference": "gpt-6.1-sol",
+        "reasoningEffort": "high"
+      }
+    },
+    {
+      "taskKind": "complex",
+      "selection": {
+        "reference": "gpt-6.1-sol",
+        "reasoningEffort": "high"
+      }
+    },
+    {
+      "taskKind": "codeWriting",
+      "selection": {
+        "reference": "gpt-6-luna",
+        "reasoningEffort": "high"
+      }
+    },
+    {
+      "taskKind": "straightforward",
+      "selection": {
+        "reference": "gpt-6-luna",
+        "reasoningEffort": "high"
+      }
+    }
+  ],
+  "modelRoleDefaults": [],
+  "modelAgentDefaults": [],
+  "egressBaseline": [],
+  "runLimits": {
+    "maxModelTurns": 12,
+    "maxToolCalls": 100,
+    "maxChildren": 4,
+    "maxConcurrentChildren": 2,
+    "maxWallTimeSeconds": 3600,
+    "maxPromptTokens": 20000
+  }
+}

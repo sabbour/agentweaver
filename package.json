@@ -25,6 +25,7 @@
     "test:release": "node --test scripts/release/tests/*.test.mjs",
     "db:maintenance": "node scripts/azure/db-maintenance.mjs",
     "db:maintenance:projects-config": "node scripts/azure/projects-config-migration.mjs",
+    "platform:runtime-defaults": "node scripts/azure/platform-runtime-defaults.mjs",
     "db:maintenance:setup": "node scripts/azure/db-maintenance-setup.mjs",
     "test:azure": "node --test scripts/azure/tests/*.test.mjs",
     "test:harness": "node --test scripts/harness-shared/test/*.test.mjs scripts/api-harness/test/*.test.mjs scripts/ui-harness/test/*.test.mjs scripts/mcp-harness/test/*.test.mjs",
