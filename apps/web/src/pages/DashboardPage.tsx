@@ -1,7 +1,7 @@
 import { gatewayClient } from '../v1/api';
 import { useAuth } from '../v1/AuthContext';
 import { formatCost } from '../v1/projectMetrics';
-import type { ProjectMetrics, ProjectUsage } from '../v1/contracts';
+import type { EffectiveProjectRole, ProjectMetrics, ProjectUsage } from '../v1/contracts';
 import {
   Badge,
   Button,
@@ -26,6 +26,7 @@ import { AgentInvocationChart } from '../components/dashboard/AgentInvocationCha
 import { MetricEmptyState,
   MetricSectionHeading } from '../components/MetricTypography';
 import { PageHeader } from '../components/PageHeader';
+import { ProjectRoleBadge } from '../v1/pageParts';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import { ErrorState } from '../components/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -41,7 +42,13 @@ type ProjectSummaryData = {
   tasks_done_this_week: null;
 };
 /** View model for the retained dashboard without requesting its unpublished 0.x endpoint. */
-type DashboardData = { project_id: string; project_name: string; generated_utc: string; summary: ProjectSummaryData };
+type DashboardData = {
+  project_id: string;
+  project_name: string;
+  effective_roles: EffectiveProjectRole[];
+  generated_utc: string;
+  summary: ProjectSummaryData;
+};
 
 /**
  * Project-home dashboard. It combines a summary response with range-specific
@@ -708,6 +715,7 @@ export function DashboardPage() {
         setData({
           project_id: project.projectId,
           project_name: project.name,
+          effective_roles: project.effectiveRoles,
           generated_utc: new Date().toISOString(),
           summary: {
             runs_this_week: (weekMetrics ?? metricsDto).runsInRange,
@@ -728,7 +736,8 @@ export function DashboardPage() {
       if (abortSignal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
       if (mountedRef.current) setError(formatError(err));
     } finally {
-      if (mountedRef.current) setLoading(false);
+      // An aborted request must not clear loading for the replacement project or refresh.
+      if (mountedRef.current && !abortSignal?.aborted) setLoading(false);
     }
   }, [apiCall, projectId, selectedRange]);
 
@@ -766,26 +775,32 @@ export function DashboardPage() {
     };
   }, [projectId, load]);
 
+  // A project route can change while this dashboard stays mounted. Never render
+  // the previous project's owner snapshots while the new project is loading.
+  const currentData = data?.project_id === projectId ? data : null;
+  const currentMetrics = metrics?.projectId === projectId ? metrics : null;
+  const currentUsage = usage?.projectId === projectId ? usage : null;
+
   // Keep health copy, totals, evidence availability, and navigation decisions derived
   // from the same loaded snapshot rather than recalculating them in the markup.
   const dashboardModel = useMemo(() => {
-    if (!data) return null;
+    if (!currentData) return null;
     // Orchestrator reports project success, but no agent-level leaderboard.
     const leaderboard: AgentLeaderboardEntryDto[] = [];
-    const throughput = metrics?.series.map((point) => ({ date: point.date, created: point.created, done: point.completed })) ?? [];
+    const throughput = currentMetrics?.series.map((point) => ({ date: point.date, created: point.created, done: point.completed })) ?? [];
     const created = sumThroughput(throughput, 'created');
     const done = sumThroughput(throughput, 'done');
-    const success = metrics?.completedRuns
-      ? { rate: metrics.succeededRuns / metrics.completedRuns * 100, basis: metrics.completedRuns }
+    const success = currentMetrics?.completedRuns
+      ? { rate: currentMetrics.succeededRuns / currentMetrics.completedRuns * 100, basis: currentMetrics.completedRuns }
       : { rate: null, basis: 0 };
-    const modelTelemetry = hasModelTelemetry(usage);
-    const tone = statusTone(data.summary, leaderboard, {
+    const modelTelemetry = hasModelTelemetry(currentUsage);
+    const tone = statusTone(currentData.summary, leaderboard, {
       created,
       done,
       successBasis: success.basis,
       hasModelTelemetry: modelTelemetry,
     });
-    const primaryAction = primaryActionFor(tone, data.summary);
+    const primaryAction = primaryActionFor(tone, currentData.summary);
     return {
       leaderboard,
       throughput,
@@ -793,12 +808,12 @@ export function DashboardPage() {
       done,
       success,
       tone,
-      copy: statusCopy(tone, data.summary, success.basis > 0 || modelTelemetry),
+      copy: statusCopy(tone, currentData.summary, success.basis > 0 || modelTelemetry),
       modelTelemetry,
       primaryAction,
-      secondaryActions: secondaryActionsFor(tone, data.summary),
+      secondaryActions: secondaryActionsFor(tone, currentData.summary),
     };
-  }, [data, metrics, usage]);
+  }, [currentData, currentMetrics, currentUsage]);
 
   if (!projectId) return null;
 
@@ -811,21 +826,22 @@ export function DashboardPage() {
           <nav className={styles.breadcrumb} aria-label="Breadcrumb">
             <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
             <span aria-hidden="true">/</span>
-            <span className={styles.breadcrumbCurrent}>{data?.project_name ?? projectId}</span>
+            <span className={styles.breadcrumbCurrent}>{currentData?.project_name ?? projectId}</span>
           </nav>
         }
         actions={
           <div className={styles.headerActions}>
-            {data && (
+            {currentData && <ProjectRoleBadge roles={currentData.effective_roles} />}
+            {currentData && (
               <Text className={styles.generated}>
-                Updated {new Date(data.generated_utc).toLocaleTimeString()}
+                Updated {new Date(currentData.generated_utc).toLocaleTimeString()}
               </Text>
             )}
-            {data && (
+            {currentData && (
               <RefreshCountdown
                 className={styles.generated}
                 intervalMs={REFRESH_MS}
-                lastRefreshedAt={new Date(data.generated_utc)}
+                lastRefreshedAt={new Date(currentData.generated_utc)}
               />
             )}
             <Button
@@ -848,10 +864,10 @@ export function DashboardPage() {
         />
       )}
 
-      {loading && !data && <LoadingDashboard />}
+      {loading && !currentData && <LoadingDashboard />}
 
 
-      {data && dashboardModel && (
+      {currentData && dashboardModel && (
         <>
           <section className={styles.commandStrip} aria-labelledby="project-status-title">
             <div className={styles.healthBlock}>
@@ -882,13 +898,13 @@ export function DashboardPage() {
             <div className={styles.summaryGrid} aria-label="Project summary">
               <div className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Active runs</Text>
-                <Text className={styles.summaryValue}>{data.summary.active_runs}</Text>
+                <Text className={styles.summaryValue}>{currentData.summary.active_runs}</Text>
                 <Text className={styles.summaryMeta}>Active agent count unavailable</Text>
               </div>
               <div className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Runs, last 7 days</Text>
-                <Text className={styles.summaryValue}>{data.summary.runs_this_week}</Text>
-                <Text className={styles.summaryMeta}>{plural(data.summary.runs_total, 'total run')}</Text>
+                <Text className={styles.summaryValue}>{currentData.summary.runs_this_week}</Text>
+                <Text className={styles.summaryMeta}>{plural(currentData.summary.runs_total, 'total run')}</Text>
               </div>
               <div className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Completed tasks</Text>
@@ -970,7 +986,7 @@ export function DashboardPage() {
                 </div>
               </div>
               <AgentInvocationChart
-                points={metrics?.series.map((point) => ({ date: point.date, count: point.created })) ?? []}
+                points={currentMetrics?.series.map((point) => ({ date: point.date, count: point.created })) ?? []}
                 subtitle={`Daily runs created during the ${timeRangeLabel(selectedRange)}.`}
                 emptyLabel="No runs were created in this range. Start a task to add data."
               />
@@ -989,12 +1005,12 @@ export function DashboardPage() {
               <div className={styles.diagnosticsEmpty}>
                 <div>
                   <Text as="h3" className={styles.columnTitle}>
-                    {hasSummaryActivity(data.summary)
+                    {hasSummaryActivity(currentData.summary)
                       ? 'No model or agent metrics for this range.'
                       : 'No model or agent data.'}
                   </Text>
                   <MetricEmptyState>
-                    {usageError ? `Model usage could not load: ${usageError}` : hasSummaryActivity(data.summary)
+                    {usageError ? `Model usage could not load: ${usageError}` : hasSummaryActivity(currentData.summary)
                       ? 'No model usage was reported for this range. Agent scores are unavailable. Open Board or Orchestrations to review recent work.'
                       : 'Start a task. The dashboard adds model and agent data after a run reports it.'}
                   </MetricEmptyState>
@@ -1003,10 +1019,10 @@ export function DashboardPage() {
                   <Text as="h3" className={styles.columnTitle}>Agent leaderboard</Text>
                   <MetricEmptyState>Agent scores are unavailable from the Gateway. Open Flow to review agent runs.</MetricEmptyState>
                   <div className={styles.evidenceRail} aria-label="Available dashboard evidence">
-                    <span className={styles.evidencePill}>{plural(data.summary.runs_this_week, 'run')} in the last 7 days</span>
+                    <span className={styles.evidencePill}>{plural(currentData.summary.runs_this_week, 'run')} in the last 7 days</span>
                     <span className={styles.evidencePill}>Task completions unavailable</span>
-                    <span className={styles.evidencePill}>{plural(data.summary.runs_total, 'total run')}</span>
-                    <span className={styles.evidencePill}>{plural(data.summary.active_runs, 'active run')}</span>
+                    <span className={styles.evidencePill}>{plural(currentData.summary.runs_total, 'total run')}</span>
+                    <span className={styles.evidencePill}>{plural(currentData.summary.active_runs, 'active run')}</span>
                   </div>
                 </div>
                 <Link
@@ -1036,10 +1052,10 @@ export function DashboardPage() {
                   <div className={styles.diagnosticsColumn} aria-labelledby="model-performance-title">
                     <Text as="h3" id="model-performance-title" className={styles.columnTitle}>Model metrics</Text>
                     {usageError ? <MetricEmptyState>Model usage could not load: {usageError}</MetricEmptyState>
-                      : usage?.usageByModel.length ? (
+                      : currentUsage?.usageByModel.length ? (
                         <Table aria-label="Model usage" size="small">
                           <TableHeader><TableRow><TableHeaderCell>Model</TableHeaderCell><TableHeaderCell>Requests</TableHeaderCell><TableHeaderCell>Tokens</TableHeaderCell><TableHeaderCell>Cost</TableHeaderCell></TableRow></TableHeader>
-                          <TableBody>{usage.usageByModel.map((row) => (
+                          <TableBody>{currentUsage.usageByModel.map((row) => (
                             <TableRow key={row.id}>
                               <TableCell>{row.id}</TableCell>
                               <TableCell>{row.requestCount ?? '—'}</TableCell>

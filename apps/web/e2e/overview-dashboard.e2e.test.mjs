@@ -68,9 +68,13 @@ function projectReads(method, path) {
 }
 
 test('Overview and project dashboard make only versioned, existing Gateway reads', async () => {
+  const paymentsProject = {
+    ...project('p1', 'Payments'),
+    effectiveRoles: [{ resourceType: 'project', resourceId: 'p1', role: 'owner' }],
+  };
   const app = await openApp({
     origin: server.origin,
-    seed: { projects: [project('p1', 'Payments')], runs: { p1: [run('r1', 'active', 'Process payments')] } },
+    seed: { projects: [paymentsProject], runs: { p1: [run('r1', 'active', 'Process payments')] } },
     extra: projectReads,
   });
 

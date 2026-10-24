@@ -3,7 +3,10 @@ export function gatewayFixtureFetch(input: RequestInfo | URL): Promise<Response>
   const url = new URL(String(input), 'http://localhost');
   const path = url.pathname;
   const now = new Date().toISOString();
-  const project = { projectId: 'p1', name: 'Demo', state: 'active', revision: 1, configurationRevision: 1, createdAt: now, updatedAt: now };
+  const project = {
+    projectId: 'p1', name: 'Demo', state: 'active', revision: 1, configurationRevision: 1,
+    createdAt: now, updatedAt: now, effectiveRoles: [],
+  };
   const metrics = {
     projectId: 'p1', from: now, to: now, activeRuns: 2, blockedRuns: 1,
     runsInRange: 5, runsTotal: 20, completedRuns: 4, succeededRuns: 3,
