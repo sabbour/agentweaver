@@ -75,13 +75,37 @@ public sealed class ProjectsConfigClient(
         string projectId,
         string runId,
         CancellationToken cancellationToken)
-    {
-        using var response = await SendAsync(
-            HttpMethod.Get,
+        => await ReadRunSelectionAsync(
             $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/selection",
+            projectId,
+            runId,
+            requirePrivateKnowledgePermission: false,
             cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Reads only the accepted Memory provider selection under current private-Knowledge permission.</summary>
+    public async Task<ProjectRunSelectionResponse> GetPrivateKnowledgeRunSelectionAsync(
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+        => await ReadRunSelectionAsync(
+            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/knowledge-selection",
+            projectId,
+            runId,
+            requirePrivateKnowledgePermission: true,
+            cancellationToken).ConfigureAwait(false);
+
+    private async Task<ProjectRunSelectionResponse> ReadRunSelectionAsync(
+        string path,
+        string projectId,
+        string runId,
+        bool requirePrivateKnowledgePermission,
+        CancellationToken cancellationToken)
+    {
+        using var response = await SendAsync(HttpMethod.Get, path, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized)
-            throw MissingRunSelectionAuthority();
+            throw requirePrivateKnowledgePermission
+                ? MissingPrivateKnowledgeAuthority()
+                : MissingRunSelectionAuthority();
         if (response.StatusCode == HttpStatusCode.NotFound)
             throw new KnowledgeApiException(
                 "run_selection_not_found",
@@ -350,6 +374,12 @@ public sealed class ProjectsConfigClient(
         new(
             "missing_effective_read_run_selection",
             "The caller has no current effective ReadRunSelection permission for this project/run.",
+            StatusCodes.Status403Forbidden);
+
+    private static KnowledgeApiException MissingPrivateKnowledgeAuthority() =>
+        new(
+            "missing_effective_access_private_knowledge",
+            "The caller has no current effective AccessPrivateKnowledge permission for this project.",
             StatusCodes.Status403Forbidden);
 
     private static bool IsOpaqueIdentifier(string? value) =>

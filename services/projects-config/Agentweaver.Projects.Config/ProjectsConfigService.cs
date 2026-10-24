@@ -851,6 +851,47 @@ public sealed partial class ProjectsConfigService
         return DeserializeRunSelection(selection.SnapshotJson);
     }
 
+    /// <summary>Reads only a run's Memory selection for a caller with current private-Knowledge access.</summary>
+    public async Task<ProjectRunSelectionResponse> GetPrivateKnowledgeRunSelectionAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        // This read is project-scoped; a run-bound token cannot use it to inspect another run's selection.
+        var authority = caller.ToEffectiveResponse();
+        var project = await FindTenantProjectAsync(
+            caller, projectId, runId: null, cancellationToken).ConfigureAwait(false);
+        var hasPrivateKnowledgeAccess = authority.EffectiveAuthority.Any(resource =>
+            (resource.ResourceType == ProjectAuthorityResourceType.Project &&
+                string.Equals(resource.ResourceId, projectId, StringComparison.Ordinal) ||
+             resource.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                string.Equals(resource.ResourceId, caller.TenantId, StringComparison.Ordinal)) &&
+            resource.Permissions.Any(permission =>
+                permission.Permission == ProjectAuthorizationPermission.AccessPrivateKnowledge));
+        if (!hasPrivateKnowledgeAccess)
+            throw ProjectConfigException.Forbidden();
+
+        var selection = await db.RunSelections.AsNoTracking()
+            .SingleOrDefaultAsync(
+                item => item.ProjectId == project.ProjectId && item.RunId == runId,
+                cancellationToken).ConfigureAwait(false)
+            ?? throw ProjectConfigException.NotFound();
+        var effective = DeserializeRunSelection(selection.SnapshotJson);
+        // Knowledge needs only the Memory candidate; do not disclose model or other provider selections.
+        return new ProjectRunSelectionResponse(
+            effective.ProjectId,
+            effective.RunId,
+            effective.ProjectRevision,
+            effective.ProjectConfigurationRevision,
+            effective.PlatformRuntimeRevision,
+            effective.ContextRevision,
+            effective.Providers
+                .Where(provider => provider.Seam == ProviderSeam.Memory)
+                .ToImmutableArray(),
+            new ProjectRunLimitSnapshot(effective.RunLimits.MaxPromptTokens));
+    }
+
     /// <summary>
     /// Returns the project-scope spend budgets from the current project and platform configuration, not from the
     /// run's stored snapshot. Orchestrator calls this for each new dispatch, so a stricter project budget applies
