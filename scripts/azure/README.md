@@ -64,8 +64,11 @@ Migration `036_maf_root_model_turn_admissions.sql` adds an append-only owner
 record for coordinator-root model-turn admission. Root generation fails closed
 until the table and its immutability trigger are applied. It is optional to
 readiness during rollout and has no mutation grant; the runtime role receives
-only `SELECT, INSERT`. The migration runner applies the registered catalog in
-ascending order and permits the gaps at 034 and 035.
+only `SELECT, INSERT`. The table references run/session records from version 001
+and coordinator decisions from version 002; its immutability trigger reuses the
+function introduced in version 021, which is its prerequisite. The migration
+runner applies the registered catalog in ascending order and permits the
+reserved gaps at 034 and 035.
 The Core catalog and plan include 032, 033, and 036; the maintenance Job applies
 the included versions in order.
 Existing grants on the Priority link table cover the added columns.

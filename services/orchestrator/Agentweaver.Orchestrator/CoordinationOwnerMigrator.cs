@@ -18,7 +18,7 @@ public static class CoordinationOwnerMigrator
     /// </summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
-        // Reserved migration numbers are not inferred; version 036 can apply after 033 with gaps.
+        // Reserved versions are omitted; 036 only depends on the row-lock trigger introduced in 021.
         [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 36])];
 
     /// <summary>
@@ -106,7 +106,7 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(32) && !applied.Contains(12)) ||
             // Repository identity extends the private links from 024, not optional PR recording.
             (applied.Contains(33) && !applied.Contains(24)) ||
-            (applied.Contains(36) && !applied.Contains(33)))
+            (applied.Contains(36) && !applied.Contains(21)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.

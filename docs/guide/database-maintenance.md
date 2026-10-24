@@ -16,7 +16,9 @@ The runner applies these migrations, in this order:
 The reviewed plan fixes these versions by hash. Core migration 017 is not in the
 plan, while 032 is included with its exact runtime table grants and 036 adds
 append-only coordinator-root model-turn admissions. Reserved migrations 034 and
-035 remain outside this plan until their owner changes are integrated. An image that
+035 remain outside this plan until their owner changes are integrated. Migration
+036 depends on the immutable-row trigger function from 021, not on those reserved
+versions; its foreign-key tables are introduced by 001 and 002. An image that
 would apply a version outside the plan fails before it connects.
 
 ## What one run does

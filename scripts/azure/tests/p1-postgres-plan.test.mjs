@@ -16,10 +16,13 @@ test('Image compatibility permits rolling reviewed migrations across reserved ga
   assert.equal(compatibility.currentImage.repositoryIdentityWriteVersion, 33);
   assert.equal(compatibility.currentImage.beforeRepositoryIdentityUpdateError, 'database_update_pending');
   assert.equal(compatibility.rootModelTurnAdmissionsVersion, 36);
+  assert.equal(compatibility.rootModelTurnAdmissionsPrerequisiteVersion, 21);
   assert.deepEqual(compatibility.rolloutOrder, ['deployCurrentImages', 'applyCore032And033And036']);
   assert.deepEqual(compatibility.separateApprovalRequired, []);
   assert.equal(compatibility.preRepositoryIdentityImage.acceptsCore033, false);
   assert.equal(core.includes(32), true);
+  assert.equal(core.includes(34), false);
+  assert.equal(core.includes(35), false);
 });
 
 test('P1 plan binds five service roles to the provisioned principal IDs', () => {
@@ -214,7 +217,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.ok(source.includes('(applied.Contains(31) && (!applied.Contains(30) || !applied.Contains(25)))'));
       assert.ok(source.includes('Enumerable.Range(57, 45)'));
       assert.ok(source.includes('(applied.Contains(33) && !applied.Contains(24))'));
-      assert.ok(source.includes('(applied.Contains(36) && !applied.Contains(33))'));
+      assert.ok(source.includes('(applied.Contains(36) && !applied.Contains(21))'));
       assert.ok(plan.coreVersions.includes(32));
     } else {
       assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));

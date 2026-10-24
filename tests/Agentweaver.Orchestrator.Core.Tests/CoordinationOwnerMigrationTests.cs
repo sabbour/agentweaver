@@ -85,6 +85,28 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Fact]
+    public async Task RootAdmissionMigrationUsesItsActualPrerequisiteWithoutReservedSiblingVersions()
+    {
+        await ApplyMigrationsThroughAsync(21);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        var resourceName = "Agentweaver.Orchestrator.Migrations.036_maf_root_model_turn_admissions.sql";
+        await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Missing migration resource '{resourceName}'.");
+        using var reader = new StreamReader(resource);
+        var sql = (await reader.ReadToEndAsync()).Replace("{schema}", $"\"{_schema}\"", StringComparison.Ordinal);
+        await using (var apply = new NpgsqlCommand(sql, connection))
+            await apply.ExecuteNonQueryAsync();
+        await using (var record = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (36)
+            """, connection))
+            await record.ExecuteNonQueryAsync();
+
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await AssertCurrentSchemaAsync();
+    }
+
+    [Fact]
     public async Task UnknownSchemaVersionLogsTheReadinessFailureReasonAtWarningLevel()
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
