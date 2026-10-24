@@ -1906,6 +1906,7 @@ describe('v1 web project scoping', () => {
       await oldProjectLoad.promise;
     });
     expect(screen.queryByText('Project Two')).toBeNull();
+    expect(screen.getByRole('status', { name: 'Loading dashboard data' })).toBeTruthy();
 
     await act(async () => {
       currentProjectLoad.resolve(projectSummary('p3', 'Project Three'));

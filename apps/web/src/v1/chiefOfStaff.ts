@@ -109,7 +109,7 @@ export interface ConversationListState {
   items: ChiefOfStaffConversation[];
   loading: boolean;
   error: unknown;
-  reload: () => void;
+  reload: () => Promise<void>;
   /** Reads the next page when one exists. */
   loadMore?: () => void;
 }
@@ -123,11 +123,9 @@ export function useChiefOfStaffConversations(): ConversationListState {
   const [state, setState] = useState<{ items: ChiefOfStaffConversation[]; nextCursor: string | null; error: unknown; loaded: boolean }>(
     { items: [], nextCursor: null, error: null, loaded: false },
   );
-  // `generation` goes up on every reload. The first-page effect reruns when it changes.
-  // The ref mirrors it so an in-flight "load more" can tell that a reload happened.
-  const [generation, setGeneration] = useState(0);
-  const generationRef = useRef(generation);
-  useEffect(() => { generationRef.current = generation; }, [generation]);
+  // Each reload invalidates older reads, including a pending "load more" page.
+  const requestRef = useRef(0);
+  const mountedRef = useRef(false);
 
   // Reads one page. A null cursor means the first (newest) page.
   const readPage = useCallback((cursor: string | null): Promise<ChiefOfStaffConversationPage> => apiCall(
@@ -135,35 +133,44 @@ export function useChiefOfStaffConversations(): ConversationListState {
     null,
   ), [apiCall]);
 
-  // Load the first page on mount and after each reload.
+  // A reload returns its read promise so page-level refreshes can avoid overlap.
+  const reload = useCallback(async () => {
+    // Drop a reply if a newer refresh or unmount made this request stale.
+    const request = ++requestRef.current;
+    try {
+      const page = await readPage(null);
+      if (mountedRef.current && request === requestRef.current) {
+        setState({ items: page.items, nextCursor: page.nextCursor, error: null, loaded: true });
+      }
+    } catch (reason) {
+      if (mountedRef.current && request === requestRef.current) {
+        setState({ items: [], nextCursor: null, error: reason, loaded: true });
+      }
+    }
+  }, [readPage]);
+
+  // Defer the first read so the effect does not update state synchronously.
   useEffect(() => {
-    // `active` turns false on cleanup, so a late response from an old read is ignored.
-    let active = true;
-    // Defer the read by one tick so state is not set synchronously inside the effect.
+    mountedRef.current = true;
     const timer = window.setTimeout(() => {
-      // A first-page read replaces the whole list. On failure the list is cleared and the error kept.
-      void readPage(null).then(
-        (page) => { if (active) setState({ items: page.items, nextCursor: page.nextCursor, error: null, loaded: true }); },
-        (reason: unknown) => { if (active) setState({ items: [], nextCursor: null, error: reason, loaded: true }); },
-      );
+      void reload();
     }, 0);
     return () => {
-      active = false;
+      mountedRef.current = false;
       window.clearTimeout(timer);
+      requestRef.current += 1;
     };
-  }, [readPage, generation]);
-
-  const reload = useCallback(() => setGeneration((value) => value + 1), []);
+  }, [reload]);
   const nextCursor = state.nextCursor;
   // Appends the next page to the current list.
   const loadMore = useCallback(() => {
     // No cursor means the last page is already loaded.
     if (!nextCursor) return;
     // Remember which reload this request belongs to.
-    const started = generationRef.current;
+    const started = requestRef.current;
     void readPage(nextCursor).then((page) => {
       // A reload happened while this page was loading; its result is stale.
-      if (generationRef.current !== started) return;
+      if (requestRef.current !== started) return;
       // If the cursor already moved (another load more finished first), keep the newer state.
       // Otherwise append, skipping conversations that are already listed so a list
       // that shifted between pages never shows the same item twice.

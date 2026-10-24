@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectMetrics, ProjectUsage, ProjectUsageItem } from './contracts';
 import {
@@ -152,5 +152,36 @@ describe('useProjectMetrics', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(result.current.loading).toBe(false);
     expect(mocks.apiCall).not.toHaveBeenCalled();
+  });
+
+  it('cancels a stale refresh when the project disappears and ignores its eventual result', async () => {
+    let resolveMetrics: ((value: ProjectMetrics) => void) | undefined;
+    mocks.getProjectMetrics.mockResolvedValue(metrics());
+    mocks.getProjectUsage.mockResolvedValue(usage);
+    const { result, rerender } = renderHook(
+      ({ projectId }: { projectId: string | null }) => useProjectMetrics(projectId, '30d'),
+      { initialProps: { projectId: 'p1' as string | null } },
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    mocks.getProjectMetrics.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveMetrics = resolve;
+    }));
+    const staleRefresh = result.current.reload();
+    await waitFor(() => expect(resolveMetrics).toBeDefined());
+
+    rerender({ projectId: null });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await staleRefresh;
+
+    expect(result.current.metrics).toBeNull();
+    expect(result.current.usage).toBeNull();
+    expect(result.current.loading).toBe(false);
+
+    await act(async () => { resolveMetrics?.(metrics()); });
+
+    expect(result.current.metrics).toBeNull();
+    expect(result.current.usage).toBeNull();
+    expect(result.current.loading).toBe(false);
   });
 });

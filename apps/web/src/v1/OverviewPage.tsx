@@ -6,9 +6,9 @@
  * shows one chosen project and says so. Chief of Staff groups personal Priorities,
  * new chat, and private conversations without controlling project-owned views.
  */
-import { Button, Select, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Button, Select, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { AttentionList } from './AttentionList';
 import { useAuth } from './AuthContext';
@@ -70,22 +70,42 @@ const useStyles = makeStyles({
   muted: { color: tokens.colorNeutralForeground3 },
   link: { color: tokens.colorBrandForegroundLink, fontWeight: tokens.fontWeightSemibold, textDecorationLine: 'none', ':hover': { textDecorationLine: 'underline' } },
   projectList: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-    gap: tokens.spacingHorizontalM,
-  },
-  projectCard: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalM,
-    backgroundColor: tokens.colorNeutralBackground1,
+    minWidth: 0,
+  },
+  projectGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(240px, .8fr) minmax(0, 1.6fr)',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    overflow: 'hidden',
+    '@media (max-width: 900px)': { gridTemplateColumns: '1fr' },
+  },
+  focusProject: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    gap: tokens.spacingVerticalL,
+    padding: tokens.spacingVerticalXL,
+    backgroundColor: tokens.colorNeutralBackground2,
+    minWidth: 0,
+  },
+  projectCard: {
+    minHeight: '72px',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) max-content',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground1,
     textDecorationLine: 'none',
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '2px' },
+    '@media (max-width: 720px)': { gridTemplateColumns: '1fr', alignItems: 'start' },
   },
   projectIdentity: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   iconBubble: {
@@ -101,6 +121,15 @@ const useStyles = makeStyles({
   },
   projectName: { fontWeight: tokens.fontWeightSemibold, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   stat: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  projectStats: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gridColumn: '1 / -1',
+    gap: tokens.spacingHorizontalM,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    '@media (max-width: 720px)': { gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' },
+  },
   mainGrid: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1.35fr) minmax(320px, .85fr)',
@@ -110,7 +139,19 @@ const useStyles = makeStyles({
   },
 });
 
-const RECENT_PROJECT_LIMIT = 6;
+const RECENT_PROJECT_LIMIT = 4;
+const OVERVIEW_REFRESH_MS = 10_000;
+
+interface OverviewProjectDetails {
+  projectId: string;
+  repository: string | null;
+  activeRunCount: number | null;
+  queuedTaskCount: number | null;
+  runCount: number | null;
+  agentCount: number | null;
+  issueCount: number | null;
+  unavailable: boolean;
+}
 
 /** Renders the signed-in user's cross-project home. */
 export function OverviewPage() {
@@ -122,10 +163,13 @@ export function OverviewPage() {
   const conversations = useChiefOfStaffConversations();
   const priorities = useChiefOfStaffPriorities();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  const [projectDetails, setProjectDetails] = useState<OverviewProjectDetails[]>([]);
+  const [projectDetailsUnavailable, setProjectDetailsUnavailable] = useState(false);
   // Each project list load also reads the newest runs of every project.
   const runs = useCrossProjectRunList(projects, 5);
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<unknown>(null);
   // Project chosen for the metrics section, or null for the default project.
   const [metricsProjectId, setMetricsProjectId] = useState<string | null>(null);
@@ -137,7 +181,39 @@ export function OverviewPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setProjects(await apiCall((token, tenant) => gatewayClient.listProjects(token, tenant), null));
+      const nextProjects = await apiCall((token, tenant) => gatewayClient.listProjects(token, tenant), null);
+      const recentProjects = nextProjects
+        .filter((project) => project.state === 'active')
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, RECENT_PROJECT_LIMIT);
+      // These owner reads restore project-card counts without inventing totals.
+      // Each read is independent so a partial failure does not hide other panels.
+      const details = await Promise.all(recentProjects.map(async (project): Promise<OverviewProjectDetails> => {
+        const [configuration, metrics, backlog] = await Promise.allSettled([
+          apiCall((token, tenant) => gatewayClient.getProjectConfiguration(token, project.projectId, tenant), null),
+          apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, project.projectId, {}, tenant), null),
+          apiCall((token, tenant) => gatewayClient.readProjectBacklog(token, project.projectId, tenant), null),
+        ]);
+        const configurationData = configuration.status === 'fulfilled' ? configuration.value.configuration : null;
+        const metricsData = metrics.status === 'fulfilled' ? metrics.value : null;
+        const backlogData = backlog.status === 'fulfilled' ? backlog.value : null;
+        const repository = configurationData?.sourceControl?.repository;
+        return {
+          projectId: project.projectId,
+          repository: repository ? `${repository.owner}/${repository.name}` : null,
+          activeRunCount: metricsData?.activeRuns ?? null,
+          queuedTaskCount: backlogData?.tasks.filter((task) => !task.isArchived && task.state === 'ready').length ?? null,
+          runCount: metricsData?.runsTotal ?? null,
+          agentCount: configurationData?.agentCharters.length ?? null,
+          issueCount: backlogData?.tasks.filter((task) => !task.isArchived && task.repositoryIssue != null).length ?? null,
+          unavailable: configuration.status === 'rejected'
+            || metrics.status === 'rejected'
+            || backlog.status === 'rejected',
+        };
+      }));
+      setProjects(nextProjects);
+      setProjectDetails(details);
+      setProjectDetailsUnavailable(details.some((detail) => detail.unavailable));
       setLoadedAt(new Date());
       setError(null);
     } catch (reason) {
@@ -166,17 +242,55 @@ export function OverviewPage() {
   // so newest first is a reverse string compare.
   const active = (projects ?? []).filter((project) => project.state === 'active');
   const recent = [...active].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, RECENT_PROJECT_LIMIT);
+  const focusProject = recent[0] ?? null;
+  const detailsByProject = new Map(projectDetails.map((detail) => [detail.projectId, detail]));
   // Metrics show one active project. The default is the most recently updated
   // one. A chosen project that is no longer active falls back to the default.
   const chosen = active.some((project) => project.projectId === metricsProjectId) ? metricsProjectId : null;
   const shownProjectId = chosen ?? recent[0]?.projectId ?? null;
   const metrics = useProjectMetrics(shownProjectId, range);
   const tiles = metricTiles(metrics.metrics, range, metrics.loading);
+  const reloadAttention = attention.reload;
+  const reloadMetrics = metrics.reload;
+  const reloadConversations = conversations.reload;
+  const reloadPriorities = priorities.reload;
+  const pendingInitialReads = attention.loading || metrics.loading || runs.loading
+    || conversations.loading || priorities.loading;
   // Project names for the attention list. Unknown projects show their ID.
   const projectNames = new Map((projects ?? []).map((project) => [project.projectId, project.name]));
   // Refresh re-reads the project list, which also re-reads the runs, the
   // notifications, and the shown project's metrics.
-  const refresh = () => { void load(); attention.reload(); metrics.reload(); conversations.reload(); void priorities.reload(); };
+  const refreshInFlightRef = useRef(false);
+  const refresh = useCallback(async () => {
+    if (refreshInFlightRef.current || loading || pendingInitialReads) return;
+    refreshInFlightRef.current = true;
+    setRefreshing(true);
+    try {
+      // Keep the cycle locked until every refreshed panel has settled.
+      const results = await Promise.allSettled([
+        load(),
+        reloadAttention(),
+        reloadMetrics(),
+        reloadConversations(),
+        reloadPriorities(),
+      ]);
+      const failedRead = results.find((result) => result.status === 'rejected');
+      if (failedRead?.status === 'rejected') setError(failedRead.reason);
+    } finally {
+      refreshInFlightRef.current = false;
+      setRefreshing(false);
+    }
+  }, [load, loading, pendingInitialReads, reloadAttention, reloadConversations, reloadMetrics, reloadPriorities]);
+  const refreshRef = useRef(refresh);
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
+
+  useEffect(() => {
+    // Skip ticks during initial reads or until the previous full cycle settles.
+    const interval = window.setInterval(() => {
+      if (!refreshInFlightRef.current) void refreshRef.current();
+    }, OVERVIEW_REFRESH_MS);
+    return () => window.clearInterval(interval);
+  }, []);
 
   return (
     <div className={styles.root}>
@@ -187,7 +301,14 @@ export function OverviewPage() {
         actions={(
           <div className={styles.headerActions}>
             {loadedAt && <Text className={styles.generated}>Updated {loadedAt.toLocaleTimeString()}</Text>}
-            <Button appearance="subtle" icon={<ArrowSyncRegular />} disabled={loading} onClick={refresh}>Refresh</Button>
+            <Button
+              appearance="subtle"
+              icon={<ArrowSyncRegular />}
+              disabled={loading || refreshing || pendingInitialReads}
+              onClick={refresh}
+            >
+              Refresh
+            </Button>
           </div>
         )}
       />
@@ -208,23 +329,23 @@ export function OverviewPage() {
               <span className={styles.cardHeadIcon}><Pulse24Regular /></span>
               <Text as="h2" id="overview-operations" className={styles.cardHeadTitle}>Operations</Text>
             </div>
-            <Text className={styles.muted}>Cross-project run totals are unavailable. The Gateway does not provide an overview total yet.</Text>
+            <Text className={styles.muted}>In-flight, queued-work, and done-today totals and service health need GET /api/v1/overview, which is not published.</Text>
             <div className={styles.glanceGrid}>
+              <div className={styles.glance}>
+                <Text className={styles.glanceLabel}>In flight</Text>
+                <Text className={styles.glanceValue}>—</Text>
+              </div>
+              <div className={styles.glance}>
+                <Text className={styles.glanceLabel}>Queued work</Text>
+                <Text className={styles.glanceValue}>—</Text>
+              </div>
+              <div className={styles.glance}>
+                <Text className={styles.glanceLabel}>Done today</Text>
+                <Text className={styles.glanceValue}>—</Text>
+              </div>
               <div className={styles.glance}>
                 <Text className={styles.glanceLabel}>Active projects</Text>
                 <Text className={styles.glanceValue}>{active.length}</Text>
-              </div>
-              <div className={styles.glance}>
-                <Text className={styles.glanceLabel}>Archived projects</Text>
-                <Text className={styles.glanceValue}>{projects.length - active.length}</Text>
-              </div>
-              <div className={styles.glance}>
-                <Text className={styles.glanceLabel}>Recent runs</Text>
-                <Text className={styles.glanceValue}>{runs.items.length}{runs.hasMore ? '+' : ''}</Text>
-              </div>
-              <div className={styles.glance}>
-                <Text className={styles.glanceLabel}>Needs your input</Text>
-                <Text className={styles.glanceValue}>{attention.error ? '–' : attention.count}</Text>
               </div>
             </div>
           </section>
@@ -233,29 +354,60 @@ export function OverviewPage() {
               <Text as="h2" id="overview-projects" className={styles.sectionTitle}>Recent projects</Text>
               <Link className={styles.link} to="/projects">View all projects</Link>
             </div>
+            {projectDetailsUnavailable && <Text role="status" className={styles.muted}>Some project counts could not load. Refresh to try again.</Text>}
             {recent.length === 0 ? (
               <Text className={styles.muted}>{projects.length === 0 ? 'No projects yet. Create one in Projects.' : 'No active projects.'}</Text>
             ) : (
-              <div className={styles.projectList}>
-                {recent.map((project) => (
-                  <Link key={project.projectId} to={`/projects/${encodeURIComponent(project.projectId)}`} className={styles.projectCard}>
-                    <div className={styles.projectIdentity}>
-                      <span className={styles.iconBubble}><FolderRegular /></span>
-                      <Text className={styles.projectName}>{project.name}</Text>
-                    </div>
-                    <ProjectRoleBadge roles={project.effectiveRoles} />
-                    <span className={styles.stat}><ClockRegular />Updated {new Date(project.updatedAt).toLocaleString()}</span>
-                  </Link>
-                ))}
+              <div className={styles.projectGrid}>
+                <div className={styles.focusProject}>
+                  <Text as="h3" className={styles.sectionTitle}>Current focus</Text>
+                  {focusProject ? (
+                    <>
+                      <div>
+                        <Text className={styles.projectName}>{focusProject.name}</Text>
+                        <Text className={styles.muted}>Most recently updated active project</Text>
+                      </div>
+                      <Link className={styles.link} to={`/projects/${encodeURIComponent(focusProject.projectId)}`}>Open focus project</Link>
+                    </>
+                  ) : <Text className={styles.muted}>No active project is available.</Text>}
+                </div>
+                <div className={styles.projectList}>
+                  {recent.map((project) => {
+                    const details = detailsByProject.get(project.projectId);
+                    const status = details?.activeRunCount == null || details.queuedTaskCount == null
+                      ? 'Unavailable'
+                      : details.activeRunCount > 0 ? 'Active' : details.queuedTaskCount > 0 ? 'Queued' : 'Idle';
+                    const statusColor = status === 'Active' ? 'success' : status === 'Queued' ? 'warning' : 'subtle';
+                    return (
+                      <Link key={project.projectId} to={`/projects/${encodeURIComponent(project.projectId)}`} className={styles.projectCard}>
+                        <div className={styles.projectIdentity}>
+                          <span className={styles.iconBubble}><FolderRegular /></span>
+                          <div>
+                            <Text className={styles.projectName}>{project.name}</Text>
+                            {details?.repository && <Text className={styles.muted}>{details.repository}</Text>}
+                          </div>
+                        </div>
+                        <ProjectRoleBadge roles={project.effectiveRoles} />
+                        <Badge appearance="tint" color={statusColor}>{status}</Badge>
+                        <div className={styles.projectStats} aria-label={`${project.name} project counts`}>
+                          <span>Agents {details?.agentCount ?? '—'}</span>
+                          <span>Runs {details?.runCount ?? '—'}</span>
+                          <span>Issues {details?.issueCount ?? '—'}</span>
+                          <span className={styles.stat}><ClockRegular />Updated {new Date(project.updatedAt).toLocaleString()}</span>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </section>
           <section className={styles.card} aria-labelledby="overview-metrics">
             <div className={styles.sectionHead}>
-              <Text as="h2" id="overview-metrics" className={styles.sectionTitle}>Project metrics</Text>
+              <Text as="h2" id="overview-metrics" className={styles.sectionTitle}>AI usage &amp; performance</Text>
               {shownProjectId && <Link className={styles.link} to={`/projects/${encodeURIComponent(shownProjectId)}`}>Open project dashboard</Link>}
             </div>
-            <Text className={styles.muted}>Metrics are per project. The service does not total them across projects, so this section shows one project at a time.</Text>
+            <Text className={styles.muted}>The Gateway has no GET /api/v1/overview route for aggregate metrics or usage, so this section shows one project at a time.</Text>
             {!shownProjectId ? <Text className={styles.muted}>Metrics appear when you have an active project.</Text> : (
               <>
                 <div className={styles.glanceGrid} aria-label="Project metric summary">
@@ -292,8 +444,8 @@ export function OverviewPage() {
             <div>
               {runs.error != null && <ErrorNotice code={errorCode(runs.error)}>{runListErrorMessage(runs.error)}</ErrorNotice>}
               <RunList
-                title="Recent runs"
-                description="The newest runs across your projects."
+                title="Activity feed"
+                description="Recent run summaries across your projects. The Gateway has no GET /api/v1/overview route with a recentActivity feed."
                 data={runs}
                 emptyText={runs.loading ? 'Loading runs…' : 'No runs yet.'}
                 projectNames={runs.projectNames}
