@@ -335,6 +335,32 @@ test('guarded routing runs without namespace bootstrap, PostgreSQL, or applicati
   }), /Identity routing bootstrap failed: Gateway not Programmed/);
 });
 
+test('Entra application preflight does not add a subscription flag to az ad app show', async () => {
+  const calls = [];
+  const routing = { bootstrapIdentityRouting: true, gatewayNamespace: 'agentweaver-gateway',
+    gatewaySecurityPolicy: 'baseline', upstreamClientId: ids.subscriptionId };
+  const azure = fakeAzure({}, calls);
+  await deploy({ ...fixture, ...routing, execute: true }, {
+    sourceResolver: () => source,
+    execAz(args, options) {
+      if (args.slice(0, 3).join(' ') === 'ad app show') {
+        calls.push(args);
+        return { status: 0, stdout: '{}', stderr: '' };
+      }
+      return azure(args, options);
+    },
+    preflightIdentityBrokerRegistration(config, { execAz }) {
+      execAz(['ad', 'app', 'show', '--id', config.upstreamClientId, '-o', 'json']);
+      return { callbackUri: 'https://agentweaver.test.eastus2.aksapp.io/signin-oidc',
+        registrationReady: true, mutationExecuted: false };
+    },
+    initializeIdentityRouting: () => ({ routingConfigured: true, runtimeVerified: false }),
+  });
+  const applicationRead = calls.find(args => args.slice(0, 3).join(' ') === 'ad app show');
+  assert.ok(applicationRead);
+  assert.ok(!applicationRead.includes('--subscription'));
+});
+
 test('certificate-only routing stage is passed only through the guarded identity-routing operation', async () => {
   const routing = { bootstrapIdentityRouting: true, identityRoutingCertificatesOnly: true,
     gatewayNamespace: 'agentweaver-gateway', gatewaySecurityPolicy: 'baseline',

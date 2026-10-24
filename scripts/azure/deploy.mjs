@@ -120,7 +120,7 @@ export async function deploy(config, {
     // Validate the selected registration before what-if/create; any app write still requires explicit confirmation.
     const preflight = await preflightIdentityBrokerRegistration({
       ...config, clusterName: `${config.resourceGroup}-aks`,
-    }, { execAz: boundAz });
+    }, { execAz });
     summary.identityBrokerRegistrationPreflight = {
       callbackUri: preflight.callbackUri,
       registrationReady: preflight.registrationReady,
