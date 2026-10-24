@@ -218,7 +218,10 @@ internal static class AgentSuiteImportPlanner
                 mapping.EffectiveAgentId,
                 name,
                 mapping.Role,
-                strict.GetString(agent.InstructionsBytes.Span)), mapping.Role);
+                strict.GetString(agent.InstructionsBytes.Span))
+            {
+                CustomRoleTitle = agent.CustomRoleTitle,
+            }, mapping.Role);
         })];
     }
 

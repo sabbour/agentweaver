@@ -119,4 +119,36 @@ public sealed class CoordinatorRunAdmissionTests
             RateCardContentHash = card.ContentHash
         };
     }
+
+    internal static RuntimeRunAdmissionReceipt UnpricedReceipt(AuthorizedRunSelection selection)
+    {
+        var receipt = Receipt(selection);
+        // Keep this a valid explicit-unpriced contract, not a malformed priced receipt.
+        return receipt with
+        {
+            CostBinding = null,
+            Quote = new(null, "AIC", CostDisposition.Unpriced, null, "model-rate-unavailable"),
+            RateCardContentHash = null
+        };
+    }
+
+    internal static RuntimeRunAdmissionReceipt UnpricedUsageReceipt(AuthorizedRunSelection selection)
+    {
+        var receipt = Receipt(selection);
+        // Preserve the ledger event while representing its unknown amount as an unpriced event.
+        var amount = new UsageAmountTotal(SdkMeterSources.CopilotNanoAiu, "AIC", 0m, 0, 1);
+        var agent = new UsageAgentTotals(
+            "agent", 1, null, null, null, null, null, null, false, [amount]);
+        return receipt with
+        {
+            CopilotTotals = new(
+                selection.Authorization.TenantId,
+                selection.Selection.ProjectId,
+                selection.Selection.RunId,
+                1,
+                false,
+                [agent],
+                [amount])
+        };
+    }
 }

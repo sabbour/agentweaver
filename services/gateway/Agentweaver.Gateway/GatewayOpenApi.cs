@@ -47,6 +47,7 @@ internal static partial class GatewayOpenApi
             ["confirmProjectCastingProposal"] = C("TransitionProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
             ["rejectProjectCastingProposal"] = C("TransitionProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
             ["exportProjectCasting"] = C(null, "ProjectCastingTransfer", "200"),
+            ["exportProjectAgentSuite"] = C(null, "ProjectAgentSuiteExport", "200"),
             ["importProjectCasting"] = C("ImportProjectCastingTransferRequest", "ProjectCastingProposal", "201"),
             ["listProjectCastingUniverses"] = C(null, "ProjectCastingUniverseList", "200"),
             ["listProjectCastingTemplates"] = C(null, "ProjectCastingTemplateList", "200"),
@@ -408,6 +409,16 @@ internal static partial class GatewayOpenApi
         {
             responses["503"] = ProblemResponse("AgentHost is not configured or is unavailable.");
         }
+        else if (route.OperationId == "exportProjectAgentSuite")
+        {
+            responses["400"] = ProblemResponse("The revision query is invalid.");
+            responses["403"] = ProblemResponse("The owner denied current WriteProjects authority.");
+            responses["404"] = ProblemResponse("The owner did not find an accessible project or configuration revision.");
+            responses["413"] = ProblemResponse("The generated archive exceeds its response limit.");
+            responses["422"] = ProblemResponse("The current team cannot be represented as an AgentSuite package.");
+            responses["500"] = ProblemResponse("The owner reported an integrity error while reading retained package content.");
+            responses["503"] = ProblemResponse("The AgentSuite object store is not configured.");
+        }
         else if (route.OperationId == "importProjectAgentSuite")
         {
             responses["400"] = ProblemResponse("The format, archive encoding, tool connection, or blueprint data is invalid.");
@@ -619,6 +630,13 @@ else if (route.OperationId is
                 "source identity: native digests and IDs, effective agent IDs, capability blockers, and retained " +
                 "blob digests.";
         }
+        else if (route.OperationId == "exportProjectAgentSuite")
+        {
+            description +=
+                " This write-authorized read exports the selected configuration revision as a content-tar-gzip " +
+                "AgentSuite package. Remote tool endpoints, secret headers, and connection IDs are replaced by " +
+                "portable binding slots; the archive is validated before it is returned.";
+        }
         else if (route.OperationId == "importProjectAgentSuite")
         {
             description +=
@@ -678,6 +696,7 @@ else if (route.OperationId is
             ["x-agentweaver-accepted-only"] = route.AcceptsOnly,
             ["x-agentweaver-stream"] = route.IsRunEventStream ? "server-sent-events" : null,
             ["x-agentweaver-max-request-body-bytes"] = route.MaximumRequestBodyBytes,
+            ["x-agentweaver-max-response-bytes"] = route.MaximumResponseBytes,
         };
     }
 
@@ -1247,6 +1266,11 @@ else if (route.OperationId is
             ("expectedConfigurationRevision", Int()), ("format", Enum("oci-layout-tar", "content-tar-gzip")),
             ("archive", Str()), ("toolConnections", Arr(Ref("ProjectAgentSuiteToolConnection"))),
             ("blueprint", NullableRef("ProjectAgentSuiteBlueprint"))),
+        ["ProjectAgentSuiteExport"] = StrictObj(
+            ["format", "suiteName", "sourceConfigurationRevision", "archive"],
+            ("format", Enum("content-tar-gzip")), ("suiteName", Str()),
+            ("sourceConfigurationRevision", Int()),
+            ("archive", new { type = "string", minLength = 1, maxLength = 6_990_508 })),
         // A blueprint skill binding the import couldn't apply, with its stable reason code.
         ["BlueprintUnresolvedSkillBinding"] = Obj(["role", "skillId", "code"],
             ("role", Str()), ("skillId", Str()),

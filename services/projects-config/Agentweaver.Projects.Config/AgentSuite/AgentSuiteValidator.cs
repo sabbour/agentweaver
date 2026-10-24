@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 
 namespace Agentweaver.Projects.Config.AgentSuite;
 
@@ -126,7 +127,7 @@ internal static class AgentSuiteValidator
             return new AgentSuiteValidationResult(format, sourceDigest, manifestDigest, contentDigest, Lines(error),
                 [.. profileErrors], null, [.. blobs]);
         }
-        var graph = BuildGraph(validator!, content);
+        var graph = BuildGraph(validator!, content, profileErrors);
         // Secret references are only visible after the graph is built, so this profile check runs last.
         profileErrors.AddRange(SecretReferences(graph));
         // Also retain each content file as its own blob, de-duplicated by digest (identical files are stored once).
@@ -170,7 +171,10 @@ internal static class AgentSuiteValidator
             .Select(agent => new AgentSuiteProfileError(SecretReferenceCode,
                 $"Agent '{agent.Id}' model declares a secret reference; packages must not carry secrets."));
 
-    private static AgentSuiteGraph BuildGraph(AgentSuiteNativeValidator validator, ContentSet content)
+    private static AgentSuiteGraph BuildGraph(
+        AgentSuiteNativeValidator validator,
+        ContentSet content,
+        List<AgentSuiteProfileError> profileErrors)
     {
         // Only called after native validation passed, so every lookup below is known to succeed.
         var suite = validator.Suite;
@@ -184,6 +188,13 @@ internal static class AgentSuiteValidator
             var instructionsPath = instructions["path"].S;
             // Instruction bytes were already matched to their descriptor digest during native validation.
             var instructionBytes = content.Get(instructionsPath)?.Bytes ?? [];
+            var projectTeam = ReadProjectTeamMetadata(agent, id, content, validator.ToolProviders, profileErrors);
+            var toolRequirements = agent["toolProviders"].A
+                .Select(item => new AgentSuiteToolProviderRequirement(
+                    item["id"].S, item["version"].S, item["executionMode"].S))
+                .ToImmutableArray();
+            if (projectTeam is not null)
+                toolRequirements = toolRequirements.AddRange(projectTeam.RemoteToolProviders);
             var model = agent["model"];
             // Missing JSON fields read as empty strings (Go zero values); NullIfEmpty turns them into null.
             agents.Add(new AgentSuiteAgent(
@@ -200,13 +211,17 @@ internal static class AgentSuiteValidator
                     model["capabilities"].Present && !model["capabilities"].IsNull,
                     NullIfEmpty(model["endpointEnv"].S),
                     [.. model["secretRefs"].A.Select(item => item.S)]),
-                [.. agent["toolProviders"].A.Select(item =>
-                    new AgentSuiteToolProviderRequirement(item["id"].S, item["version"].S, item["executionMode"].S))],
+                toolRequirements,
                 [.. agent["invokes"].A.Select(item =>
                     new AgentSuiteInvoke(item["agent"].S, item["maxConcurrent"].I, item["maxDepth"].I))],
                 !agent["policy"].IsNull,
                 agent["evals"].Count > 0,
-                [.. agent["extensions"].A.Select(item => item["name"].S)]));
+                [.. agent["extensions"].A
+                    .Select(item => item["name"].S)
+                    .Where(name => name != AgentSuiteProjectTeamExtension.Name)])
+            {
+                CustomRoleTitle = projectTeam?.CustomRoleTitle,
+            });
         }
 
         // Bundled variants are packaged stdio MCP servers; a remote block is an endpoint that is recorded for review but never contacted.
@@ -253,6 +268,83 @@ internal static class AgentSuiteValidator
             [.. buildProfiles],
             [.. validator.Runtimes.Keys],
             [.. suite["capabilities"].A.Select(item => item.S)]);
+    }
+
+    private static AgentSuiteProjectTeamMetadata? ReadProjectTeamMetadata(
+        J agent,
+        string agentId,
+        ContentSet content,
+        IReadOnlyDictionary<string, J> providers,
+        List<AgentSuiteProfileError> profileErrors)
+    {
+        // The non-critical extension carries Agentweaver-only round-trip fields without changing native requirements.
+        var extensions = agent["extensions"].A
+            .Where(item => item["name"].S == AgentSuiteProjectTeamExtension.Name)
+            .ToArray();
+        if (extensions.Length == 0)
+            return null;
+        if (extensions.Length != 1)
+            return InvalidProjectTeamMetadata(profileErrors);
+
+        var entry = content.Get(AgentSuiteProjectTeamExtension.ContentPath(agentId));
+        if (entry is not { Type: "file", Bytes: { } bytes } ||
+            Go.DigestBytes(bytes) != extensions[0]["digest"].S)
+            return InvalidProjectTeamMetadata(profileErrors);
+
+        try
+        {
+            using var document = JsonDocument.Parse(bytes);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                root.EnumerateObject().Any(item => item.Name is not ("customRoleTitle" or "remoteToolProviders")) ||
+                !root.TryGetProperty("remoteToolProviders", out var rawProviders) ||
+                rawProviders.ValueKind != JsonValueKind.Array)
+                return InvalidProjectTeamMetadata(profileErrors);
+
+            string? title = null;
+            if (root.TryGetProperty("customRoleTitle", out var rawTitle) &&
+                rawTitle.ValueKind != JsonValueKind.Null)
+            {
+                if (rawTitle.ValueKind != JsonValueKind.String)
+                    return InvalidProjectTeamMetadata(profileErrors);
+                title = rawTitle.GetString();
+                if (string.IsNullOrWhiteSpace(title) || title.Length > 120 || title.Any(char.IsControl))
+                    return InvalidProjectTeamMetadata(profileErrors);
+            }
+
+            var requirements = ImmutableArray.CreateBuilder<AgentSuiteToolProviderRequirement>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in rawProviders.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object ||
+                    item.EnumerateObject().Any(property => property.Name is not ("id" or "version")) ||
+                    !item.TryGetProperty("id", out var rawId) || rawId.ValueKind != JsonValueKind.String ||
+                    !item.TryGetProperty("version", out var rawVersion) || rawVersion.ValueKind != JsonValueKind.String)
+                    return InvalidProjectTeamMetadata(profileErrors);
+
+                var id = rawId.GetString()!;
+                var version = rawVersion.GetString()!;
+                var key = id + "@" + version;
+                if (!seen.Add(key) || !providers.TryGetValue(key, out var provider) || provider["remote"].IsNull)
+                    return InvalidProjectTeamMetadata(profileErrors);
+                requirements.Add(new(id, version, AgentSuiteTypes.ExecutionSharedSandbox));
+            }
+
+            return new AgentSuiteProjectTeamMetadata(title, requirements.ToImmutable());
+        }
+        catch (JsonException)
+        {
+            return InvalidProjectTeamMetadata(profileErrors);
+        }
+    }
+
+    private static AgentSuiteProjectTeamMetadata? InvalidProjectTeamMetadata(
+        List<AgentSuiteProfileError> profileErrors)
+    {
+        profileErrors.Add(new(
+            "agentsuite_project_team_metadata_invalid",
+            "Agentweaver project-team metadata is missing, malformed, or does not match its digest."));
+        return null;
     }
 
     private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;

@@ -618,8 +618,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 enableHostedCopilotRunAdmission ? "true" : "false",
             ["AgentHost__ModelBindingsRevision"] =
                 enableHostedCopilotRunAdmission ? "native-run-admission-v1" : null,
+            // The hard-cap admission path needs a model covered by the pinned published rate card.
             ["AgentHost__ModelBindings__platform-model__ModelId"] =
-                enableHostedCopilotRunAdmission ? "controlled-model" : null,
+                enableHostedCopilotRunAdmission ? "gpt-6.1-sol" : null,
             ["AgentHost__ModelBindings__platform-model__SourceMode"] =
                 enableHostedCopilotRunAdmission ? "HostedCopilot" : null,
             ["EventsAndSessions__Cost__Copilot__ResourceId"] =

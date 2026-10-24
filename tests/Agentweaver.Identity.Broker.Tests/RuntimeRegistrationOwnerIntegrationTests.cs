@@ -400,6 +400,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             (request, response, token) => inspectOwnerResponse?.Invoke(request, response, token) ?? Task.CompletedTask));
         var currentOwner = new RuntimeRegistrationHttpClient(owners, new("https://orchestrator.test/"));
         await using var sdk = new ControlledCopilotRuntime(TimeSpan.FromMinutes(5));
+        if (registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+            registration.Binding.CopilotHardCreditLimit is not null)
+            // Hard-cap quote and usage evidence must use the model pinned in the published rate card.
+            sdk.ModelId = "gpt-6.1-sol";
         sdk.Byok = byokSecrets is not null;
         sdk.SdkCredential = byokSecrets?.Value ?? copilotConnection.AccessToken;
         using var runtimeHttp = new HttpClient(new RuntimeServiceRouter(routes, failures,
@@ -877,6 +881,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             accountNativeUsage = null, HttpClient? ownerClient = null,
         bool reserveObservedToolInvocation = false)
     {
+        var expectPricedNativeUsage = session.Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+            session.Registration.Binding.CopilotHardCreditLimit is not null;
         var sourceCredentialValue = session.Proof().Credential.GetValue();
         var material = new RuntimeSessionMaterialHttpClient(
             materialClient, materialClient.BaseAddress!, actor);
@@ -1143,14 +1149,24 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(intent.MessageId, accounted.Snapshot.DispatchId);
         if (accountNativeUsage is null)
         {
-            // Native usage without a published rate stays visible but never counts as priced credit.
             var totals = accounted.Snapshot.CopilotTotals;
             Assert.Equal(1, totals.Events);
             var amount = Assert.Single(totals.Amounts);
-            Assert.Equal(0m, amount.Amount);
-            Assert.Equal(0, amount.PricedEvents);
-            Assert.Equal(1, amount.UnpricedEvents);
-            Assert.Equal(CostDisposition.Unpriced, accounted.Snapshot.Quote.Disposition);
+            if (expectPricedNativeUsage)
+            {
+                Assert.Equal(0.01572m, amount.Amount);
+                Assert.Equal(1, amount.PricedEvents);
+                Assert.Equal(0, amount.UnpricedEvents);
+                Assert.Equal(CostDisposition.Estimate, accounted.Snapshot.Quote.Disposition);
+            }
+            else
+            {
+                // Native usage without a published rate stays visible but never counts as priced credit.
+                Assert.Equal(0m, amount.Amount);
+                Assert.Equal(0, amount.PricedEvents);
+                Assert.Equal(1, amount.UnpricedEvents);
+                Assert.Equal(CostDisposition.Unpriced, accounted.Snapshot.Quote.Disposition);
+            }
         }
         else
             Assert.Equal(Assert.Single(references), Assert.Single(accounted.Snapshot.RepresentedReceipts));
@@ -1207,7 +1223,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(binding.ExecutionFence, finalDispatch.ExecutionFence);
             Assert.True(finalDispatch.OwnerRevision > observedDispatch.OwnerRevision);
             Assert.Equal("completed", finalDispatch.State);
-            Assert.Equal("unpriced", finalDispatch.AccountingState);
+            Assert.Equal(expectPricedNativeUsage ? "priced" : "unpriced", finalDispatch.AccountingState);
 
             var persistedObservationState = await ReadRuntimeObservationPersistenceStateAsync(
                 ownerSchema, binding.ProjectId, binding.RunId, cancellationToken);
@@ -1228,7 +1244,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var persistedCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(
                     persistedObservationState.CreditGuard);
                 var initialCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(expectedCreditGuard);
-                Assert.Equal(0m, persistedCreditGuard.CopilotAicFloor);
+                Assert.Equal(expectPricedNativeUsage ? 0.01572m : 0m, persistedCreditGuard.CopilotAicFloor);
                 Assert.Equal(1L, persistedCreditGuard.AccountedThroughLedgerEventCount);
                 Assert.Equal(initialCreditGuard.LedgerDigest, persistedCreditGuard.LedgerDigest);
                 Assert.False(persistedCreditGuard.SoftWarningEmitted);
@@ -1411,6 +1427,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var sdkSource = sourceReceipt.Usage.SdkSource;
         Assert.NotNull(sdkSource);
         var byok = sdkSource.SourceMode == "byok";
+        // The hard-cap run must use fully priced usage; other hosted fixtures retain unpriced-model coverage.
+        var expectPricedUsage = !byok && binding.CopilotHardCreditLimit is not null;
         using var configuration = new TemporaryEnvironment(new Dictionary<string, string?>
         {
             ["EventsAndSessions__RuntimeUsage__Enabled"] = "true",
@@ -1459,9 +1477,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.False(accepted.IsDuplicate);
         Assert.Equal(sourceReceipt.Usage.EventId, accepted.Accounting.EventId);
         Assert.Equal(sourceReceipt.Usage.Attribution, accepted.Accounting.Attribution);
-        Assert.Null(accepted.Accounting.Amount);
-        Assert.Equal(CostDisposition.Unpriced, accepted.Accounting.Disposition);
-        Assert.NotNull(accepted.Accounting.UnpricedReason);
+        if (expectPricedUsage)
+        {
+            Assert.Equal(0.01572m, accepted.Accounting.Amount);
+            Assert.Equal(CostDisposition.Estimate, accepted.Accounting.Disposition);
+            Assert.Null(accepted.Accounting.UnpricedReason);
+        }
+        else
+        {
+            Assert.Null(accepted.Accounting.Amount);
+            Assert.Equal(CostDisposition.Unpriced, accepted.Accounting.Disposition);
+            Assert.NotNull(accepted.Accounting.UnpricedReason);
+        }
         await using (var ledgerDataSource = NpgsqlDataSource.Create(_connectionString))
         await using (var ledgerConnection = await ledgerDataSource.OpenConnectionAsync())
         await using (var storedEvent = new NpgsqlCommand($"""
@@ -1473,9 +1500,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 sourceReceipt.Usage.EventId);
             await using var ledgerReader = await storedEvent.ExecuteReaderAsync();
             Assert.True(await ledgerReader.ReadAsync());
-            Assert.Equal(nameof(CostDisposition.Unpriced), ledgerReader.GetString(0));
-            Assert.True(ledgerReader.IsDBNull(1));
-            Assert.False(string.IsNullOrWhiteSpace(ledgerReader.GetString(2)));
+            if (expectPricedUsage)
+            {
+                Assert.Equal(nameof(CostDisposition.Estimate), ledgerReader.GetString(0));
+                Assert.Equal(0.01572m, ledgerReader.GetDecimal(1));
+                Assert.True(ledgerReader.IsDBNull(2));
+            }
+            else
+            {
+                Assert.Equal(nameof(CostDisposition.Unpriced), ledgerReader.GetString(0));
+                Assert.True(ledgerReader.IsDBNull(1));
+                Assert.False(string.IsNullOrWhiteSpace(ledgerReader.GetString(2)));
+            }
             Assert.False(await ledgerReader.ReadAsync());
         }
         await AssertNativeHistoryImmutabilityAsync(eventsSchema,
@@ -1505,6 +1541,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             Assert.Empty(totals.Amounts);
             Assert.False(totals.IsFullyPriced);
+        }
+        else if (expectPricedUsage)
+        {
+            Assert.True(totals.IsFullyPriced);
+            var amount = Assert.Single(totals.Amounts);
+            Assert.Equal(0.01572m, amount.Amount);
+            Assert.Equal(1, amount.PricedEvents);
+            Assert.Equal(0, amount.UnpricedEvents);
         }
         else
         {
