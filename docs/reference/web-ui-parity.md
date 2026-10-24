@@ -95,6 +95,20 @@ they are not live acceptance evidence and do not claim pixel parity.
 | Overview | **Operations**, **Recent projects**, **AI usage & performance**, then **Activity feed** beside **Needs attention**. Recent projects shows one current-focus panel and up to four compact project rows. | One Operations card has a health badge and four counters. The project area is a split focus/list card. Five small usage cards follow. Activity and attention use bordered panels; there is no detail drawer or data table. | **Refresh**, a 7-, 30-, or 90-day range, **View all projects**, project links, and attention actions. The project list becomes one column below 900px; the lower panels stack below 980px. The approved v1-only **Chief of Staff** group appears before these sections. | Project card **Issues** counts only non-archived tasks linked to repository issues; other card stats use configuration and metrics. Operations keeps the four 0.x counters; only **Active projects** is measurable. `GET /api/v1/overview` is missing for the other totals, global health, aggregate usage, and full activity. v1 selects one project for metrics and shows recent run summaries. |
 | Dashboard | Status and four summary tiles lead; **Activity** range controls follow; a two-column area holds the run chart, run totals, and invocation chart; model and agent panels follow. | A status card pairs health and actions with four metric tiles. Activity uses bordered chart and total cards. Model metrics use compact panels; the agent leaderboard and response percentiles use tables. There is no detail drawer. | **Refresh** and automatic refresh; 7-, 30-, and 90-day range selector; status-based links to Board, Flow, and Orchestrations. The activity columns stack below 980px. | Project metrics and usage power the supported panels. Live health needs `GET /api/v1/projects/{projectId}/health`; task completions need `GET /api/v1/projects/{projectId}/task-metrics`; the leaderboard needs `GET /api/v1/projects/{projectId}/agent-metrics`; response percentiles need the `responseDuration` and `timeToFirstToken` fields on `GET /api/v1/projects/{projectId}/metrics`. |
 
+## Matched screenshots
+
+These captures use the same 1440 by 1000 viewport and equivalent fixture
+data. They show layout and data gaps; they are not live acceptance evidence
+and do not claim pixel parity.
+
+| Page section | 0.x baseline | v1 |
+| --- | --- | --- |
+| Overview, top | <img src="./images/parity/overview-0x-top.png" alt="0.x Overview at the top of the page" width="400"> | <img src="./images/parity/overview-v1-top.png" alt="v1 Overview at the top of the page" width="400"> |
+| Overview, Operations | <img src="./images/parity/overview-0x-operations.png" alt="0.x Overview Operations section" width="400"> | <img src="./images/parity/overview-v1-operations.png" alt="v1 Overview Operations section" width="400"> |
+| Overview, activity | <img src="./images/parity/overview-0x-activity.png" alt="0.x Overview activity section" width="400"> | <img src="./images/parity/overview-v1-activity.png" alt="v1 Overview activity section" width="400"> |
+| Dashboard, top | <img src="./images/parity/dashboard-0x-top.png" alt="0.x Dashboard at the top of the page" width="400"> | <img src="./images/parity/dashboard-v1-top.png" alt="v1 Dashboard at the top of the page" width="400"> |
+| Dashboard, model metrics | <img src="./images/parity/dashboard-0x-models.png" alt="0.x Dashboard model metrics section" width="400"> | <img src="./images/parity/dashboard-v1-models.png" alt="v1 Dashboard model metrics section" width="400"> |
+
 ## Surfaces
 
 Each row says what works and what is still missing. The missing parts link to
