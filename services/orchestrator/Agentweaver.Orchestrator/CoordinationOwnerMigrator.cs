@@ -18,7 +18,8 @@ public static class CoordinationOwnerMigrator
     /// </summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35])];
+        // Version 035 adds queue ordering; 036 uses the row-lock trigger introduced in 021.
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -66,7 +67,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Optional owner features remain compatible with their complete pre-migration shapes
         // until the reviewed maintenance plan applies them.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -106,7 +107,9 @@ public static class CoordinationOwnerMigrator
             // Repository identity extends the private links from 024, not optional PR recording.
             (applied.Contains(33) && !applied.Contains(24)) ||
             // Queue positions extend project backlog tasks from 016.
-            (applied.Contains(35) && !applied.Contains(16)))
+            (applied.Contains(35) && !applied.Contains(16)) ||
+            // Root model-turn admission uses the immutable row-lock guard from 021.
+            (applied.Contains(36) && !applied.Contains(21)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
@@ -150,6 +153,7 @@ public static class CoordinationOwnerMigrator
                 32 => "source_control_pull_request_records",
                 33 => "priority_link_repository_identity",
                 35 => "backlog_task_queue_position",
+                36 => "maf_root_model_turn_admissions",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -188,8 +192,8 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // 032 remains optional to readiness so the owner can start before maintenance applies the
-        // reviewed plan; accept only its complete table-and-ledger shape when it is present.
+        // Additive migrations 032 and 036 remain optional to readiness so the owner can start before
+        // maintenance applies the reviewed plan; accept only their complete table-and-ledger shapes.
         await using var command = new NpgsqlCommand($"""
             SELECT
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),
@@ -208,7 +212,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -352,6 +356,26 @@ public static class CoordinationOwnerMigrator
                 ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32) = 1
                     AND to_regclass(@sourceControlPullRequests) IS NOT NULL
                     AND to_regclass(@sourceControlPullRequestsIndex) IS NOT NULL),
+                -- 036 is additive; a ready applied table has every admission column and its immutability trigger.
+                ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 36) = 0
+                    AND to_regclass(@rootModelTurnAdmissions) IS NULL) OR
+                ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 36) = 1
+                    AND to_regclass(@rootModelTurnAdmissions) IS NOT NULL
+                    AND (SELECT count(*) FROM pg_attribute
+                        WHERE attrelid = to_regclass(@rootModelTurnAdmissions) AND NOT attisdropped
+                          AND attname IN ('project_id', 'run_id', 'root_session_id', 'request_id',
+                              'actor_issuer', 'actor_id', 'tenant_id', 'accepted_selection_hash',
+                              'prompt_hash', 'execution_fence', 'decision_id', 'decision_state_version',
+                              'created_at')) = 13
+                    AND EXISTS (SELECT 1 FROM pg_constraint
+                        WHERE conrelid = to_regclass(@rootModelTurnAdmissions) AND contype = 'p'
+                          AND pg_get_constraintdef(oid) = 'PRIMARY KEY (project_id, run_id, request_id)')
+                    AND EXISTS (SELECT 1 FROM pg_trigger
+                        WHERE tgrelid = to_regclass(@rootModelTurnAdmissions)
+                          AND tgname = 'maf_root_model_turn_admissions_no_update'
+                          AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 27
+                          AND tgenabled = 'O' AND NOT tgisinternal
+                          AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0)),
                 -- Queue positions are optional during rollout. Reject a ledger/column mismatch.
                 (((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 35) = 0
                     AND NOT EXISTS (SELECT 1 FROM pg_attribute
@@ -443,6 +467,8 @@ public static class CoordinationOwnerMigrator
             $"{schema}.source_control_pull_requests");
         command.Parameters.AddWithValue("sourceControlPullRequestsIndex", NpgsqlDbType.Text,
             $"{schema}.ix_source_control_pull_requests_project_recorded");
+        command.Parameters.AddWithValue("rootModelTurnAdmissions", NpgsqlDbType.Text,
+            $"{schema}.maf_root_model_turn_admissions");
         command.Parameters.AddWithValue("backlogIssueUnique", NpgsqlDbType.Text,
             $"{schema}.backlog_tasks_repository_issue_unique");
         command.Parameters.AddWithValue("backlogDependencies", NpgsqlDbType.Text, $"{schema}.backlog_dependencies");
@@ -492,8 +518,8 @@ public static class CoordinationOwnerMigrator
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
             // Columns 57 onward are boolean checks. The three version 028 checks, the three version 029
             // checks, the six version 030 checks, and the two version 031 checks precede the
-            // optional-033, optional-032, and optional-035 shape checks. A partial apply never counts as ready.
-            Enumerable.Range(57, 46).Any(column => !reader.GetBoolean(column)))
+            // optional-033, optional-032, optional-036, and optional-035 shape checks. A partial apply never counts as ready.
+            Enumerable.Range(57, 47).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

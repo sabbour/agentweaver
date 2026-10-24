@@ -797,6 +797,31 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(_acceptedRoot.ExecutionFence, owner.ExecutionFence);
     }
 
+    [Fact]
+    public async Task RuntimeRegistrationCanReadTheAcceptedCoordinatorRootWithoutRelaxingChildOwnerReads()
+    {
+        var acceptedSelectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var owner = await _store.ReadRuntimeOwnerStateForRegistrationAsync(
+            _actor, _root, _selection.Authorization.TenantId, acceptedSelectionHash, CancellationToken.None);
+
+        Assert.True(owner.IsCoordinatorRoot);
+        Assert.Equal(_root.SessionId, owner.RootSessionId);
+        Assert.Null(owner.WorkPlanItemId);
+        Assert.Equal(_selection.Authorization.TenantId, owner.TenantId);
+        Assert.Equal(acceptedSelectionHash, owner.AcceptedSelectionHash);
+        Assert.Equal(_acceptedRoot.ExecutionFence, owner.ExecutionFence);
+        Assert.StartsWith("turn-", owner.RuntimeTurnId, StringComparison.Ordinal);
+
+        var childOnlyRead = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.ReadRuntimeOwnerStateAsync(_actor, _root, CancellationToken.None));
+        Assert.Equal("runtime_owner_context_unavailable", childOnlyRead.Code);
+
+        var staleSelection = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.ReadRuntimeOwnerStateForRegistrationAsync(
+                _actor, _root, _selection.Authorization.TenantId, new string('b', 64), CancellationToken.None));
+        Assert.Equal("runtime_owner_context_unavailable", staleSelection.Code);
+    }
+
     [Theory]
     [InlineData("selection-hash")]
     [InlineData("fence")]

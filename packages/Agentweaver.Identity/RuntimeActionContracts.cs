@@ -45,6 +45,7 @@ public sealed record RuntimeActionAdmission(
 public static class RuntimeActionContract
 {
     public const string Purpose = "runtime.execution";
+    public const string CoordinatorRootStepId = "coordinator";
     public static readonly FrozenSet<string> ActionIds = new[]
     {
         "model.turn", "tool.read", "tool.write", "exec.shell",
@@ -79,6 +80,18 @@ public static class RuntimeActionContract
                  binding.CopilotHardCreditLimit is > 0) &&
             request.DispatchId is null)
             throw new RuntimeAuthorizationException("runtime_model_turn_admission_required");
+    }
+
+    /// <summary>Returns the policy step identity for a child-work or accepted coordinator-root action.</summary>
+    public static string RequireActionStepId(RuntimeBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        if (binding.WorkflowStepId is { Length: > 0 } step)
+            return step;
+        if (binding.AgentId == CoordinatorRootStepId)
+            // The accepted coordinator root has no workflow step, so use its reserved policy identity.
+            return CoordinatorRootStepId;
+        throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
     }
 
     /// <summary>Rejects invalid counters and stops new admissions when the configured capacity is reserved.</summary>

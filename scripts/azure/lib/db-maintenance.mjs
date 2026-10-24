@@ -26,7 +26,7 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   registry: 'ghcr.io/sabbour',
 });
 /** The reviewed plan binds Environment, Events, Core, and Projects & Config runtime grants. */
-export const REVIEWED_PLAN_SHA256 = 'd707f9e1af3c55e5da496e4185b5a64f9d2d0a594f00a5f7c6d2a505a86e1383';
+export const REVIEWED_PLAN_SHA256 = '2782a5c49d8de6c33914376332cb80eb24ea9f8cba10b2a3a6d7c9dc5acfb0d7';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';
@@ -354,6 +354,13 @@ export function planServiceOrder({ appImages, ranges, targetSchema, currentSchem
   const within = (range, version) => range !== undefined && version !== undefined &&
     version >= range.minSchema && version <= range.maxSchema &&
     range.supportedVersions?.includes(version) === true;
+  const describeRange = range => {
+    const bounds = `${range.minSchema}-${range.maxSchema}`;
+    const versions = range.supportedVersions ?? [];
+    return versions.length === range.maxSchema - range.minSchema + 1
+      ? bounds
+      : `${bounds} (supported versions: ${versions.join(', ')})`;
+  };
   const services = appImages.map(app => {
     const target = targetSchema[app.deployment];
     const current = currentSchema[app.deployment];
@@ -361,7 +368,7 @@ export function planServiceOrder({ appImages, ranges, targetSchema, currentSchem
     // A target image that rejects the plan's own schema was built from other source: wrong digest.
     if (!within(targetSupports, target))
       throw new Error(`${app.deployment} image ${app.expected} accepts schema ` +
-        `${targetSupports ? `${targetSupports.minSchema}-${targetSupports.maxSchema}` : 'unknown'}, ` +
+        `${targetSupports ? describeRange(targetSupports) : 'unknown'}, ` +
         `not ${target} from the reviewed plan. Pass the digest built from the reviewed source.`);
     const runningSupports = app.running ? ranges[app.running] : undefined;
     const action = app.status !== 'mismatch' ? 'none'

@@ -109,7 +109,7 @@ sequenceDiagram
     participant O as Orchestrator
     participant I as Identity
     participant E as Environment
-    Note over H: Permit workflow-bound MaxModelTurns and MaxToolCalls; configure the native SDK MaxPromptTokens compaction threshold
+    Note over H: Permit workflow-bound and admitted coordinator-root MaxModelTurns and MaxToolCalls; configure native SDK MaxPromptTokens.
     C->>H: GET /runtime/v1/readiness with Broker bearer
     H->>O: Revalidate current registration
     O-->>H: Current registration or denial
@@ -123,7 +123,7 @@ sequenceDiagram
         O-->>C: Owner snapshot or unavailable/denied (no-store)
     end
     Note over H: No SDK start or turn send
-    Note over C,H: Unbound positive hard-capped Hosted activation is rejected; workflow-bound dispatches use owner admission
+    Note over C,H: Unbound positive hard-capped Hosted activation is rejected; workflow and coordinator-root turns use owner admission.
 ```
 
 Runtime responses use `Cache-Control: no-store`.
@@ -162,16 +162,22 @@ cleaned up and the host does not become ready. An omitted limit keeps legacy
 startup, zero still permits startup but blocks dispatch, and BYOK remains
 token-metered.
 
-The immutable Projects selection's `maxModelTurns`, `maxToolCalls`, and optional `maxPromptTokens` values are carried
-through `RuntimeOwnerContext` into the registered `RuntimeBinding`. `maxModelTurns` and `maxToolCalls` are
-supported only for workflow-bound registrations. Native sends require the prepared-dispatch, action-grant, and
-native-begin admission path before SDK send. Each native tool invocation reserves one owner-side slot before
-approval; exact retries reuse the reservation and attempts beyond the run limit are denied. An unbound
-`maxModelTurns` or `maxToolCalls` fails activation with `runtime_numeric_limits_unsupported`,
+The immutable Projects selection's `maxModelTurns`, `maxToolCalls`, and optional `maxPromptTokens` values flow through
+`RuntimeOwnerContext` into the registered `RuntimeBinding`. `maxModelTurns` and `maxToolCalls` are
+supported for workflow-bound registrations and for the coordinator root used by casting generation.
+Native child sends require the prepared-dispatch, action-grant, and native-begin admission path before SDK send.
+Coordinator-root turns require an append-only admission bound to the accepted request ID, prompt digest, selection,
+fence, and decision version. Both paths reserve against the same run-wide model-turn count under the execution lock;
+exact retries exclude their existing reservation and attempts beyond the limit are denied. Each native tool invocation
+reserves one owner-side slot before approval; exact retries reuse the reservation and attempts beyond the run limit are
+denied. Other unbound registrations with `maxModelTurns` or `maxToolCalls` fail activation with `runtime_numeric_limits_unsupported`,
 before SDK session creation, readiness, or model/tool invocation. A configured `maxPromptTokens` is supported
 when its concrete capacity can be resolved; otherwise activation fails with
 `runtime_model_prompt_capacity_unavailable`. The resolved value is passed to the
 native SDK as its prompt-compaction threshold.
+Coordinator-root model turns fail closed with `runtime_spend_evidence_unavailable` when pinned run or agent budgets, or
+current project budgets, include a hard spend limit. The coordinator-root path does not support hard spend limits because
+it has no atomic Events evidence and exposure-reservation path.
 Absent values preserve the legacy path. The RuntimeAction owner also rejects unsupported numeric bindings before issuing
 an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
 dispatch and begin checks against observed whole-run priced usage. The source
@@ -299,6 +305,8 @@ The configured pending-turn limit rejects excess work explicitly.
 ### Numeric budget boundaries
 
 For workflow-bound registrations, `MaxModelTurns` bounds owner-admitted native sends across the whole run.
+For coordinator-root casting generation, it also counts root model-turn grants and workflow dispatches together,
+so a root generation turn cannot be followed by another run turn after using the last reservation.
 Preparation reserves one slot in the existing immutable MAF dispatch table before a new send.
 The root owner lock serializes reservations across child runtimes.
 Exact prepared replay uses the same slot.

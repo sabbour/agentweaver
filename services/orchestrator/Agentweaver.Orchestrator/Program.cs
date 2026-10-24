@@ -189,6 +189,8 @@ builder.Services.AddHttpClient<EventsAddressedMessageClient>()
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient<RuntimeRunAdmissionClient>(client => client.Timeout = TimeSpan.FromSeconds(20))
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+builder.Services.AddHttpClient("casting-generation-host", client => client.Timeout = TimeSpan.FromSeconds(120))
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddSingleton(secretRedemptionOptions);
 builder.Services.AddHttpClient<SourceControlSecretRedemptionClient>()
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
@@ -326,9 +328,12 @@ if (runtimeRegistrationEnabled)
     app.MapRuntimeRegistrationEndpoints();
     app.MapReviewedRemoteToolResultEndpoints();
     app.MapRuntimeSuspendResumeEndpoints();
+    app.MapCastingGenerationExecutionEndpoints();
 }
 if (runtimeUsageEnabled)
+{
     app.MapRuntimeUsageSourceEndpoints();
+}
 // Reports Policy, Guardrails, and Source Control from the frozen provider catalog.
 app.MapPlatformComponentOwner(platformComponentAuthentication, (services, ct) =>
     PlatformComponentCatalogReporter.CreateOwnerReportAsync(

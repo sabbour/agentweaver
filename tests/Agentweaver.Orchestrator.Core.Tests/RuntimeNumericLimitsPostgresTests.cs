@@ -43,8 +43,10 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
     private SessionIdentity _root;
     private MafExecutionCheckpointSnapshot _checkpoint = null!;
     private HttpClient _projectsHttp = null!;
+    private ProjectsHandler _projectsHandler = null!;
     private HttpContext _context = null!;
     private CoordinatorDecisionOwnerStore _decisions = null!;
+    private CoordinatorRunSelectionContextStore _runSelectionContexts = null!;
 
     public async Task InitializeAsync()
     {
@@ -54,7 +56,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         {
             projectId = "numeric-project", runId = run, projectRevision = 1,
             projectConfigurationRevision = 1, platformRuntimeRevision = 1, contextRevision = "context-1",
-            modelSelection = new { reference = "model:selected" }
+            modelSelection = new { reference = "model:selected", sourceMode = "hostedCopilot" },
+            runLimits = new { maxModelTurns = 1, maxToolCalls = 1 }
         });
         _selection = new(new("numeric-project", run, 1, 1, 1, "context-1", snapshot),
             new(1, _actor.Issuer, _actor.Subject, "tenant-1", 1, "numeric-project", run,
@@ -72,14 +75,15 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         };
         _context.Request.Headers.Authorization = "Bearer controlled-owner";
         _context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
-        _projectsHttp = new HttpClient(new ProjectsHandler(_selection));
+        _projectsHandler = new ProjectsHandler(_selection);
+        _projectsHttp = new HttpClient(_projectsHandler);
         var coordination = new CoordinationOwnerStore(fixture.DataSource, _schema);
         var accepted = await coordination.AcceptRootAsync(_actor, _selection, "root", default);
         _root = new(_selection.Selection.ProjectId, run, accepted.RootSessionId);
         var catalog = ProviderCatalog.Create([], [], []).Value!;
-        var contexts = new CoordinatorRunSelectionContextStore(
+        _runSelectionContexts = new CoordinatorRunSelectionContextStore(
             fixture.DataSource, _schema, catalog, new ProviderResolver(catalog), []);
-        _decisions = new(fixture.DataSource, _schema, contexts);
+        _decisions = new(fixture.DataSource, _schema, _runSelectionContexts);
         var decision = await _decisions.InitializeRootAsync(_actor, _root, _selection, default);
         for (var index = 0; index < _registrations.Length; index++)
         {
@@ -170,6 +174,273 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
                 (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => IssueAsync(index, changed))).Code);
         }
         Assert.Equal(1, await CountRuntimeGrantsAsync());
+    }
+
+    [Fact]
+    public async Task CoordinatorRootAdmissionEnforcesAcceptedModelAndToolBudgets()
+    {
+        var rootRequestContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", _actor.Subject),
+                new Claim("aud", _options.Audience), new Claim("aud", _options.ProjectsAudience),
+                new Claim("project_id", _root.ProjectId), new Claim("run_id", _root.RunId),
+                new Claim("scope", "api.read projects.orchestrator")
+            ], "controlled-owner"))
+        };
+        rootRequestContext.Request.Headers.Authorization = "Bearer controlled-owner";
+        rootRequestContext.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        var rootContext = await CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
+            _root.ProjectId, _root.RunId, _root.SessionId, rootRequestContext, _options, ProjectsClient(),
+            new CoordinationOwnerStore(fixture.DataSource, _schema), _decisions, _runSelectionContexts,
+            new PostgresMafCheckpointStore(fixture.DataSource, _schema, null), default,
+            allowCoordinatorRoot: true);
+        Assert.Equal(RuntimeActionContract.CoordinatorRootStepId, rootContext.AgentId);
+        Assert.Null(rootContext.WorkflowStepId);
+        Assert.Equal(1, rootContext.MaxModelTurns);
+        Assert.Equal(1, rootContext.MaxToolCalls);
+
+        var rootBinding = _registrations[0].Binding with
+        {
+            SessionId = rootContext.SessionId,
+            AgentId = rootContext.AgentId,
+            WorkflowStepId = rootContext.WorkflowStepId,
+            TurnId = rootContext.TurnId,
+            AcceptedSelectionHash = rootContext.AcceptedSelectionHash,
+            ExecutionFence = rootContext.ExecutionFence,
+            ModelSelectionReference = rootContext.ModelSelectionReference,
+            ModelCredentialReference = rootContext.ModelCredentialReference,
+            ModelSourceMode = rootContext.ModelSourceMode,
+            ReasoningEffort = rootContext.ReasoningEffort,
+            ModelConnectionId = rootContext.ModelConnectionId,
+            ModelConnectionScope = rootContext.ModelConnectionScope,
+            MaxModelTurns = rootContext.MaxModelTurns,
+            MaxToolCalls = rootContext.MaxToolCalls
+        };
+        await RegisterSourceAsync(0, rootBinding);
+
+        var generationEventId = Guid.NewGuid();
+        const string generationPrompt = "Generate an unconfirmed casting proposal.";
+        var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(generationPrompt));
+        var modelRequest = new RuntimeActionRequest(
+            1, _registrations[0].RuntimeInstanceId, _registrations[0].Revision,
+            rootContext.ExecutionFence, generationEventId, "model.turn", promptHash)
+        {
+            DispatchId = generationEventId
+        };
+        var rootGrantStore = GrantStore();
+        Assert.Equal("runtime_model_turn_admission_required",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                IssueAsync(0, modelRequest))).Code);
+        await rootGrantStore.AdmitCoordinatorRootModelTurnAsync(
+            rootRequestContext, _registrations[0], generationEventId, promptHash,
+            rootContext.DecisionStateVersion, default);
+        var now = DateTimeOffset.UtcNow;
+        var exhaustedProjectBudget = new SpendBudget(
+            "current-project-hard-limit", 1, SpendBudgetScopes.Project,
+            SdkMeterSources.CopilotNanoAiu, "AIC", null, 0m, 1m)
+        {
+            Period = new("current-period", now.AddHours(-1), now.AddHours(1))
+        };
+        _projectsHandler.ProjectSpendBudgets = new(
+            _root.ProjectId, 1, 1, [exhaustedProjectBudget]);
+        var budgetFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            IssueAsync(0, modelRequest));
+        Assert.Equal(SpendBudgetAdmissionMath.EvidenceUnavailable, budgetFailure.Code);
+        Assert.Equal(0, await CountRuntimeGrantsAsync());
+        _projectsHandler.ProjectSpendBudgets = null;
+        Assert.Equal("runtime_model_turn_admission_required",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                IssueAsync(0, modelRequest with { InputHash = new string('b', 64) }))).Code);
+        var modelGrant = await IssueAsync(0, modelRequest);
+        Assert.Equal(ExecutableActionGrantLookupStatus.Current,
+            (await rootGrantStore.GetCurrentAsync(modelGrant)).Status);
+        Assert.Equal("runtime_model_turn_limit_exhausted",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareAsync(1))).Code);
+        Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
+        var nextModelEventId = Guid.NewGuid();
+        var nextModelRequest = modelRequest with
+        {
+            EventId = nextModelEventId,
+            DispatchId = nextModelEventId
+        };
+        await rootGrantStore.AdmitCoordinatorRootModelTurnAsync(
+            rootRequestContext, _registrations[0], nextModelEventId, promptHash,
+            rootContext.DecisionStateVersion, default);
+        Assert.Equal("runtime_model_turn_limit_exhausted",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                IssueAsync(0, nextModelRequest))).Code);
+
+        var toolRequest = Action(0, toolInvocation: true);
+        var toolGrant = await IssueAsync(0, toolRequest);
+        await rootGrantStore.RequireToolInvocationReservationAsync(_registrations[0], toolRequest, default);
+        Assert.Equal(ExecutableActionGrantLookupStatus.Current,
+            (await rootGrantStore.GetCurrentAsync(toolGrant)).Status);
+        Assert.Equal("runtime_tool_call_limit_exhausted",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                IssueAsync(0, Action(0, toolInvocation: true)))).Code);
+
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var drop = new NpgsqlCommand(
+            $"DROP TABLE \"{_schema}\".maf_root_model_turn_admissions", connection))
+            await drop.ExecuteNonQueryAsync();
+        var missingAdmissionEventId = Guid.NewGuid();
+        var missingAdmissionStoreFailure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            IssueAsync(0, modelRequest with
+            {
+                EventId = missingAdmissionEventId,
+                DispatchId = missingAdmissionEventId
+            }));
+        Assert.Equal("database_update_pending", missingAdmissionStoreFailure.Code);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, missingAdmissionStoreFailure.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void CoordinatorRootHardSpendBudgetsFailClosedForPinnedAndCurrentProjectBudgets(
+        bool hasPinnedHardBudget, bool hasCurrentProjectHardBudget)
+    {
+        var now = DateTimeOffset.UtcNow;
+        SpendBudget[] pinned = hasPinnedHardBudget
+            ? [new("pinned-run-hard-limit", 1, SpendBudgetScopes.Run,
+                SdkMeterSources.CopilotNanoAiu, "AIC", null, 0m, 1m)]
+            : [];
+        SpendBudget[] current = hasCurrentProjectHardBudget
+            ? [new SpendBudget("current-project-hard-limit", 1, SpendBudgetScopes.Project,
+                SdkMeterSources.CopilotNanoAiu, "AIC", null, 0m, 1m)
+            {
+                Period = new("current-period", now.AddHours(-1), now.AddHours(1))
+            }]
+            : [];
+
+        var failure = Assert.Throws<RuntimeAuthorizationException>(() =>
+            ExecutableActionGrantOwnerStore.RequireCoordinatorRootSpendBudgetsSupported(pinned, current));
+        Assert.Equal(SpendBudgetAdmissionMath.EvidenceUnavailable, failure.Code);
+    }
+
+    [Fact]
+    public void CoordinatorRootIgnoresPinnedProjectBudgetAfterCurrentConfigurationRemovesIt()
+    {
+        var now = DateTimeOffset.UtcNow;
+        SpendBudget[] stalePinnedProjectBudget =
+        [
+            new SpendBudget("stale-project-hard-limit", 1, SpendBudgetScopes.Project,
+                SdkMeterSources.CopilotNanoAiu, "AIC", null, 0m, 1m)
+            {
+                Period = new("stale-period", now.AddHours(-1), now.AddHours(1))
+            }
+        ];
+
+        ExecutableActionGrantOwnerStore.RequireCoordinatorRootSpendBudgetsSupported(
+            stalePinnedProjectBudget, []);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CoordinatorRootAdmissionAndGrantLockRunBeforeSession(bool issueGrant)
+    {
+        var rootRequestContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", _actor.Subject),
+                new Claim("aud", _options.Audience), new Claim("aud", _options.ProjectsAudience),
+                new Claim("project_id", _root.ProjectId), new Claim("run_id", _root.RunId),
+                new Claim("scope", "api.read projects.orchestrator")
+            ], "controlled-owner"))
+        };
+        rootRequestContext.Request.Headers.Authorization = _context.Request.Headers.Authorization;
+        rootRequestContext.Request.Headers["X-Agentweaver-Tenant"] = _context.Request.Headers["X-Agentweaver-Tenant"];
+        var rootContext = await CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
+            _root.ProjectId, _root.RunId, _root.SessionId, rootRequestContext, _options, ProjectsClient(),
+            new CoordinationOwnerStore(fixture.DataSource, _schema), _decisions, _runSelectionContexts,
+            new PostgresMafCheckpointStore(fixture.DataSource, _schema, null), default,
+            allowCoordinatorRoot: true);
+        var rootBinding = _registrations[0].Binding with
+        {
+            SessionId = rootContext.SessionId,
+            AgentId = rootContext.AgentId,
+            WorkflowStepId = rootContext.WorkflowStepId,
+            TurnId = rootContext.TurnId,
+            AcceptedSelectionHash = rootContext.AcceptedSelectionHash,
+            ExecutionFence = rootContext.ExecutionFence,
+            ModelSelectionReference = rootContext.ModelSelectionReference,
+            ModelCredentialReference = rootContext.ModelCredentialReference,
+            ModelSourceMode = rootContext.ModelSourceMode,
+            ReasoningEffort = rootContext.ReasoningEffort,
+            ModelConnectionId = rootContext.ModelConnectionId,
+            ModelConnectionScope = rootContext.ModelConnectionScope,
+            MaxModelTurns = rootContext.MaxModelTurns,
+            MaxToolCalls = rootContext.MaxToolCalls
+        };
+        await RegisterSourceAsync(0, rootBinding);
+
+        var eventId = Guid.NewGuid();
+        const string generationPrompt = "Generate an unconfirmed casting proposal.";
+        var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(generationPrompt));
+        var rootGrantStore = GrantStore();
+        if (issueGrant)
+        {
+            await rootGrantStore.AdmitCoordinatorRootModelTurnAsync(
+                rootRequestContext, _registrations[0], eventId, promptHash,
+                rootContext.DecisionStateVersion, default);
+        }
+
+        await using var blocker = await fixture.DataSource.OpenConnectionAsync();
+        await using var observer = await fixture.DataSource.OpenConnectionAsync();
+        await using var blockerTransaction = await blocker.BeginTransactionAsync();
+        await using (var lockRun = new NpgsqlCommand($"""
+            SELECT run_id FROM "{_schema}".accepted_runs
+            WHERE project_id = @project AND run_id = @run
+            FOR UPDATE
+            """, blocker, blockerTransaction))
+        {
+            lockRun.Parameters.AddWithValue("project", _root.ProjectId);
+            lockRun.Parameters.AddWithValue("run", _root.RunId);
+            Assert.Equal(_root.RunId, await lockRun.ExecuteScalarAsync());
+        }
+
+        var cancellationSelection = _selection with
+        {
+            Authorization = _selection.Authorization with
+            {
+                BoundProjectId = null,
+                BoundRunId = null,
+                EffectiveAuthority =
+                [
+                    new("project", _root.ProjectId, [new("cancelRun", 1)])
+                ]
+            }
+        };
+        var cancellationOwner = new CoordinationOwnerStore(
+            fixture.DataSource, _schema, decisionStore: _decisions);
+        var cancellation = cancellationOwner.CancelProjectRunAsync(
+            _actor, cancellationSelection, "root-lock-order", new("Concurrent test."),
+            static _ => Task.CompletedTask, default);
+        await WaitUntilBlockedAsync(observer, blocker.ProcessID, "SELECT accepted_selection_hash");
+
+        Task operation = issueGrant
+            ? IssueAsync(0, new RuntimeActionRequest(
+                1, _registrations[0].RuntimeInstanceId, _registrations[0].Revision,
+                rootContext.ExecutionFence, eventId, "model.turn", promptHash)
+            {
+                DispatchId = eventId
+            })
+            : rootGrantStore.AdmitCoordinatorRootModelTurnAsync(
+                rootRequestContext, _registrations[0], eventId, promptHash,
+                rootContext.DecisionStateVersion, default);
+        await WaitUntilBlockedAsync(observer, -1, "accepted_runs%FOR SHARE");
+        await blockerTransaction.CommitAsync();
+
+        var cancelled = await cancellation;
+        Assert.Equal("cancelled", cancelled.State);
+        Assert.False(cancelled.AlreadyTerminal);
+        var rejected = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => operation);
+        Assert.Equal("runtime_action_owner_unavailable", rejected.Code);
     }
 
     [Fact]
@@ -1080,9 +1351,11 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
 
     private ExecutableActionGrantOwnerStore GrantStore() => new(
         fixture.DataSource, _options, TimeProvider.System,
-        new ProjectsRunSelectionClient(
-            _projectsHttp, _options, new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema)),
+        ProjectsClient(),
         new HttpContextAccessor { HttpContext = _context });
+
+    private ProjectsRunSelectionClient ProjectsClient() => new(
+        _projectsHttp, _options, new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
 
     private Task<ExecutableActionGrantReference> IssueAsync(int index, RuntimeActionRequest request) =>
         GrantStore().IssueRuntimeActionGrantAsync(
@@ -1242,6 +1515,30 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"SELECT count(*) FROM \"{_schema}\".{table}", connection);
         return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static async Task WaitUntilBlockedAsync(
+        NpgsqlConnection observer,
+        int blockerProcessId,
+        string queryPattern,
+        int minimumBlockedQueries = 1)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (true)
+        {
+            await using var wait = new NpgsqlCommand("""
+                SELECT count(*)::int
+                FROM (
+                    SELECT 1 FROM pg_stat_activity
+                    WHERE (@locker < 0 OR @locker = ANY(pg_blocking_pids(pid)))
+                      AND query ILIKE '%' || @pattern || '%') blocked
+                """, observer);
+            wait.Parameters.AddWithValue("locker", NpgsqlTypes.NpgsqlDbType.Integer, blockerProcessId);
+            wait.Parameters.AddWithValue("pattern", NpgsqlTypes.NpgsqlDbType.Text, queryPattern);
+            if ((int)(await wait.ExecuteScalarAsync(timeout.Token) ?? 0) >= minimumBlockedQueries)
+                return;
+            await Task.Delay(20, timeout.Token);
+        }
     }
 
     private async Task<long> CountToolReservationsAsync()
@@ -1526,16 +1823,29 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
 
     private sealed class ProjectsHandler(AuthorizedRunSelection selection) : HttpMessageHandler
     {
+        public CurrentProjectSpendBudgets? ProjectSpendBudgets { get; set; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             Assert.Equal("controlled-owner", request.Headers.Authorization?.Parameter);
             Assert.Equal("tenant-1", Assert.Single(request.Headers.GetValues("X-Agentweaver-Tenant")));
+            var path = request.RequestUri!.AbsolutePath;
+            object body = path switch
+            {
+                "/api/authorization/context" => selection.Authorization,
+                _ when path.EndsWith("/spend-budgets", StringComparison.Ordinal) =>
+                    ProjectSpendBudgets ?? new CurrentProjectSpendBudgets(
+                        selection.Selection.ProjectId,
+                        selection.Selection.ProjectConfigurationRevision,
+                        selection.Selection.PlatformRuntimeRevision,
+                        []),
+                _ => selection.Selection.Snapshot
+            };
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 RequestMessage = request,
-                Content = request.RequestUri!.AbsolutePath == "/api/authorization/context"
-                    ? JsonContent.Create(selection.Authorization) : JsonContent.Create(selection.Selection.Snapshot),
+                Content = JsonContent.Create(body, body.GetType(), options: OwnerJson),
                 Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
             });
         }

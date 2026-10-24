@@ -52,6 +52,36 @@ public sealed class ProjectsRunSelectionSkillContentTests
         });
     }
 
+    [Fact]
+    public async Task CoordinatorRootHasNoAgentSkillsAndDoesNotReadTheProjectSkillRoute()
+    {
+        var selection = JsonSerializer.Serialize(new
+        {
+            projectId = ProjectId,
+            runId = RunId,
+            projectRevision = 1,
+            projectConfigurationRevision = 2,
+            platformRuntimeRevision = 3,
+            contextRevision = "context-1",
+            projectConfiguration = new
+            {
+                casting = Array.Empty<object>(),
+                skills = Array.Empty<object>()
+            }
+        }, JsonOptions);
+        var handler = new OwnerHandler(selection, []);
+        using var http = new HttpClient(handler);
+
+        var result = await Client(http).ReadAcceptedRunSkillsAsync(
+            Context(), Registration(selection, "coordinator"), CancellationToken.None);
+
+        Assert.Empty(result);
+        Assert.Equal(
+            ["/api/authorization/context", "/api/projects/project-1/runs/run-1/selection",
+                "/api/authorization/context"],
+            handler.Paths);
+    }
+
     [Theory]
     [InlineData("actor")]
     [InlineData("tenant")]
@@ -279,9 +309,9 @@ public sealed class ProjectsRunSelectionSkillContentTests
         return context;
     }
 
-    private static RuntimeRegistration Registration(string selection) =>
+    private static RuntimeRegistration Registration(string selection, string agentId = AgentId) =>
         new(Guid.NewGuid(), 1, new RuntimeBinding(
-            Issuer, ActorId, "tenant-1", ProjectId, RunId, "session-1", AgentId, "turn-1",
+            Issuer, ActorId, "tenant-1", ProjectId, RunId, "session-1", agentId, "turn-1",
             1, 2, 3, "context-1",
             Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(selection))),
             4, "environment-1", "placement-1", 1, "profile-1",

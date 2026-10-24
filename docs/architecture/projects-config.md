@@ -259,9 +259,41 @@ runs in AgentHost with that run's Identity credential; Projects & Config owns
 the proposal and never receives the credential.
 
 Generation uses the existing accepted project-run lifecycle rather than a
-separate scheduler or model-execution path. The Gateway creates or accepts that
-run with the caller's project authorization; the run-bound Identity session
-starts it, and its ID remains the generation request's immutable result binding.
+separate scheduler or model-execution path. The client creates or resumes the
+normal project run through the Gateway with the caller's project authorization,
+then obtains the run-bound Identity session. The generation request accepts
+that run ID, and the owner returns it with the proposal as the immutable result
+binding.
+
+Orchestrator accepts `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/casting-generation`
+only for the active coordinator root of that accepted run. It checks the
+accepted selection, current registration, and host readiness, then sends one
+immediate AgentHost turn with the generation request ID as its stable message
+ID. Before returning `{ requestId, runId, output }`, it checks that the run
+selection and registration are still current. Orchestrator does not persist the
+proposal result; the Gateway completes the request through Projects & Config.
+The coordinator root uses the accepted model-turn and tool-call limits. Its
+model-turn admission is an append-only owner record bound to the generation
+request ID, exact prompt digest, accepted selection, execution fence, and
+accepted decision version. The AgentHost action must match that record before
+the root grant is issued; an arbitrary root event or changed prompt is denied.
+Root grants and child-work dispatches share one run-wide model-turn reservation
+count and execution lock, so neither path can spend a turn left by the other.
+The root action path remains separate; child-work dispatch admission stays
+step-bound.
+AgentHost obtains the model credential from Identity using the run-bound
+registration, so it never passes through Orchestrator or Projects.
+Runtime registration may read the active coordinator root using its accepted
+selection, current decision, and run admission. This path is limited to the
+root; runtime observation and child-work reads retain their child-work guards.
+The root uses the model selection accepted for the run and is not treated as a
+roster agent with assigned skills.
+
+Casting generation marks its AgentHost turn to continue if the HTTP waiter
+disconnects. The admitted turn owns a separate copy of the actor bearer, bounded
+by the original expiry and invalidated when the turn completes or is abandoned.
+An exact retry waits for or replays the same result; a retry with changed
+content conflicts.
 
 Generation completion must match the request's run ID and current configuration
 revision. It validates and replaces only the proposal's charters and cast, then
@@ -281,18 +313,30 @@ sequenceDiagram
     participant Identity
     participant Projects as Projects & Config
     participant DB as PostgreSQL
-    Client->>Gateway: Formulate or Analyze (expected revision, idempotency key)
-    Gateway->>Orchestrator: Create or accept a normal project run
-    Orchestrator->>Projects: Start generation request (run ID, request digest)
+    Client->>Gateway: Create or replay normal project run
+    Gateway-->>Client: Run ID and root session
+    AgentHost->>Orchestrator: Read accepted root runtime context
+    Orchestrator->>Projects: Validate accepted selection and current authority
+    Orchestrator-->>AgentHost: Root binding with accepted model and tool limits
+    Client->>Identity: Obtain run-bound session
+    Client->>Gateway: Formulate or Analyze (run ID, expected revision, idempotency key)
+    Gateway->>Projects: Start generation request (run ID, request digest)
     Projects->>DB: Check current write authority and revision; store pending proposal
-    Client->>Identity: Obtain the run-bound session for the returned run ID
-    Client->>Orchestrator: Start the accepted run with generation input
-    Orchestrator->>AgentHost: Dispatch through the accepted run
+    Gateway->>Orchestrator: Execute generation (request ID, prompt, run-bound token)
+    Orchestrator->>Orchestrator: Accept and start the saved run through the normal path
+    Orchestrator->>Orchestrator: Recheck accepted root and current registration
+    Orchestrator->>DB: Persist request, prompt digest, selection, fence, and decision-bound root admission
+    Orchestrator->>AgentHost: Immediate turn (message ID = request ID)
+    AgentHost->>Orchestrator: Request model.turn admission (dispatch ID = message ID)
+    Orchestrator->>DB: Match persisted admission; count root grants and workflow dispatches under one run lock
+    Orchestrator-->>AgentHost: Root model.turn admission
     AgentHost->>Identity: Redeem the run-bound model credential
     Identity-->>AgentHost: Run-scoped credential
     AgentHost-->>Orchestrator: Proposed charters and cast
-    Orchestrator->>Projects: Complete request (same run ID, generated roster)
+    Orchestrator-->>Gateway: Result bound to request ID and run ID
+    Gateway->>Projects: Complete request (same run ID, generated roster)
     Projects->>DB: Recheck authority and revision; update proposal only
+    Gateway-->>Client: 202 Accepted (run ID, proposal ID, request ID)
     Client->>Gateway: Poll proposal for review
     Client->>Gateway: Confirm proposal (expected draft revision)
     Projects->>DB: Append live configuration only after confirmation

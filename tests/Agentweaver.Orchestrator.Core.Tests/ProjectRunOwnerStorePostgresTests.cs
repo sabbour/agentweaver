@@ -150,6 +150,32 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StartReplayValidatesTheSavedRequestWithoutRedelivering()
+    {
+        var row = await Create("validate-replay", new CreateProjectRunRequest("Saved prompt", 1));
+        var deliveries = 0;
+        await Start(row.RunId, (_, _) =>
+        {
+            deliveries++;
+            return Task.CompletedTask;
+        }, request => Assert.Equal("Saved prompt", request.FirstMessage));
+
+        var replay = await Start(row.RunId, (_, _) =>
+        {
+            deliveries++;
+            return Task.CompletedTask;
+        }, request => Assert.Equal("Saved prompt", request.FirstMessage));
+        Assert.Equal("started", replay.State);
+        Assert.Equal(1, deliveries);
+
+        var conflict = await Assert.ThrowsAsync<CoordinationException>(() =>
+            Start(row.RunId, NoDelivery, request =>
+                CastingGenerationExecutionContract.RequireProjectRunStart(
+                    request, row.RunId, row.RootSessionId, "Changed prompt")));
+        Assert.Equal("casting_generation_run_conflict", conflict.Code);
+    }
+
+    [Fact]
     public async Task SelfAddressedMessageMustMatchThePersistedFirstMessage()
     {
         var row = await Create("forge", new CreateProjectRunRequest("Persisted", 1));
@@ -298,8 +324,11 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         _store.CreateProjectRunAsync(_actor, Tenant, Project, key, request, CancellationToken.None);
 
     private Task<StartProjectRunResponse> Start(
-        string runId, Func<CoordinationOwnerStore.ProjectRunRequestRow, CancellationToken, Task> deliver) =>
-        _store.StartProjectRunAsync(_actor, Tenant, Project, runId, deliver, NoCheck, CancellationToken.None);
+        string runId,
+        Func<CoordinationOwnerStore.ProjectRunRequestRow, CancellationToken, Task> deliver,
+        Action<CoordinationOwnerStore.ProjectRunRequestRow>? validateRequest = null) =>
+        _store.StartProjectRunAsync(
+            _actor, Tenant, Project, runId, deliver, NoCheck, CancellationToken.None, validateRequest);
 
     private static Task NoDelivery(CoordinationOwnerStore.ProjectRunRequestRow row, CancellationToken token) =>
         throw new InvalidOperationException("Delivery was not expected.");

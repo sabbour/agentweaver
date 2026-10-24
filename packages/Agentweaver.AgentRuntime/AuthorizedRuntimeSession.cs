@@ -102,6 +102,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         {
             RequireTurnAdmission();
             _lastNativeTurn = null;
+            var turnId = userEventId ?? Guid.NewGuid();
             if (userEventId is { } recordedId)
             {
                 if (recordedId == Guid.Empty)
@@ -113,10 +114,15 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                     throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
             }
             RequireSupportedCostTurnAffinity();
-            await CommitTurnContentAsync(material, userEventId ?? Guid.NewGuid(), "user", prompt, cancellationToken)
+            await CommitTurnContentAsync(material, turnId, "user", prompt, cancellationToken)
                 .ConfigureAwait(false);
-            await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),
-                RequireCurrentAsync, cancellationToken).ConfigureAwait(false);
+            var coordinatorRoot = Registration.Binding.AgentId == RuntimeActionContract.CoordinatorRootStepId &&
+                Registration.Binding.WorkflowStepId is null;
+            // Bind a coordinator turn to its persisted generation message for owner admission.
+            await _actions.RequireAsync(
+                Registration, "model.turn", turnId, System.Text.Encoding.UTF8.GetBytes(prompt),
+                RequireCurrentAsync, cancellationToken,
+                dispatchId: coordinatorRoot ? turnId : null).ConfigureAwait(false);
             var answer = await _session.SendTurnAsync(prompt, cancellationToken, userEventId).ConfigureAwait(false);
             await CommitTurnContentAsync(material, Guid.NewGuid(), "assistant", answer, cancellationToken).ConfigureAwait(false);
             await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
