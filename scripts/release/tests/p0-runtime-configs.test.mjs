@@ -566,6 +566,7 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
     ProjectsConfig__Database__WorkloadIdentity__TokenFilePath: tokenFile,
     ProjectsConfig__Authentication__Authority: broker,
     ProjectsConfig__Authentication__Audience: broker,
+    ProjectsConfig__Knowledge__BaseAddress: serviceAddress('knowledge'),
     ProjectsConfig__PrivilegedSetup__ApprovedIssuer: broker,
     ProjectsConfig__PrivilegedSetup__ApprovedTenantId: tenant,
     ProjectsConfig__PrivilegedSetup__ApprovedSubject: '518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0',
@@ -707,7 +708,7 @@ test('new Events and Projects Cilium policies admit only source-backed callers a
       name: 'projects-config',
       callers: ['identity-broker', 'orchestrator', 'gateway', 'events-and-sessions',
         'knowledge', 'environment', 'agenthost'],
-      owners: [],
+      owners: ['knowledge'],
       fqdns: [
         brokerHost,
         'login.microsoftonline.com',
@@ -715,6 +716,7 @@ test('new Events and Projects Cilium policies admit only source-backed callers a
         'raw.githubusercontent.com',
         'agentweaver-pg.postgres.database.azure.com',
         'agentweaver-pg.privatelink.postgres.database.azure.com',
+        'knowledge.agentweaver.svc.cluster.local',
       ],
       fqdnRules: [
         {
@@ -1083,6 +1085,7 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
 
   for (const name of [
     'environment', 'events-and-sessions', 'gateway', 'identity-broker', 'knowledge', 'mcp', 'orchestrator',
+    'projects-config',
   ]) {
     const pod = resources.find(resource =>
       resource.kind === 'Deployment' && resource.metadata.name === name).spec.template.spec;

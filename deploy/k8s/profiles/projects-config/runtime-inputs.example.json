@@ -6,6 +6,7 @@
     "ProjectsConfig__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
     "ProjectsConfig__Authentication__Authority": null,
     "ProjectsConfig__Authentication__Audience": null,
+    "ProjectsConfig__Knowledge__BaseAddress": "https://knowledge.agentweaver.svc.cluster.local:8443/",
     "AgentHost__ModelBindingsRevision": "p1-v1.0.1",
     "AgentHost__ModelBindings__reasoning__SourceMode": "HostedCopilot",
     "AgentHost__ModelBindings__reasoning__Enabled": "true",

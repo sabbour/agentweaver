@@ -24,6 +24,22 @@ describe('Gateway API client', () => {
       .rejects.toMatchObject({ status: 403, code: 'forbidden' });
   });
 
+  it('reads one agent history through the Projects owner route', async () => {
+    const history = { projectId: 'p1', agentId: 'a1', items: [] };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(history), {
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    // History is a private, non-cacheable Projects read scoped to one path agent.
+    await expect(client.getProjectAgentHistory('token', 'p1', 'a1', 'tenant-1')).resolves.toEqual(history);
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe('https://gateway.example.test/api/v1/projects/p1/agents/a1/history');
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(init?.cache).toBe('no-store');
+  });
+
   it('rejects a manifest belonging to a different capture', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       capture: { captureId: 'other' }, manifest: { files: [] },

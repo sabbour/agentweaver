@@ -136,6 +136,12 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/configuration",
             "getProjectConfiguration", "Read project configuration", ["revision"],
             forwardTenantSelector: true);
+        // The Projects owner checks the current charter before it asks Knowledge for private records.
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/agents/{agentId}/history",
+            "/api/projects/{projectId}/agents/{agentId}/history",
+            "getProjectAgentHistory", "Read recent caller-visible history for one project agent",
+            forwardTenantSelector: true,
+            maximumResponseBytes: ProjectAgentHistoryContract.MaximumResponseBytes);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/configuration",
             "/api/projects/{projectId}/configuration",
             "updateProjectConfiguration", "Update project configuration", body: true,

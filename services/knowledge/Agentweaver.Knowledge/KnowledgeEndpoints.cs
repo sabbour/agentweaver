@@ -13,6 +13,12 @@ public static class KnowledgeEndpoints
         app.MapGet("/api/projects/{projectId}/knowledge/records", SearchProjectAsync)
             .RequireAuthorization();
 
+        // Projects & Config forwards the caller after checking the current project agent.
+        app.MapGet(
+                "/internal/projects/{projectId}/agents/{agentId}/history",
+                ReadProjectAgentHistoryAsync)
+            .RequireAuthorization();
+
         var agents = app.MapGroup("/api/projects/{projectId}/runs/{runId}/agents/{agentId}")
             .RequireAuthorization();
         agents.MapPost("/records", CreateAsync);
@@ -58,6 +64,20 @@ public static class KnowledgeEndpoints
             page ?? 1,
             pageSize ?? 50,
             cancellationToken).ConfigureAwait(false)));
+    }
+
+    /// <summary>Reads a caller-authorized agent history without returning provider or run details.</summary>
+    private static Task<IResult> ReadProjectAgentHistoryAsync(
+        string projectId,
+        string agentId,
+        HttpContext httpContext,
+        KnowledgeApplicationService service,
+        CancellationToken cancellationToken)
+    {
+        httpContext.Response.Headers.CacheControl = "no-store";
+        // Knowledge rechecks the caller's current private-content grant before searching any provider.
+        return ExecuteAsync(async () => Results.Ok(await service.ReadProjectAgentHistoryAsync(
+            projectId, agentId, cancellationToken).ConfigureAwait(false)));
     }
 
     /// <summary>Creates a record and returns 201, or 200 when the idempotency receipt is reused.</summary>

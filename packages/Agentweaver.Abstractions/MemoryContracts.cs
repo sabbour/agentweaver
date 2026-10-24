@@ -118,6 +118,27 @@ public sealed record KnowledgeRecordPage(
     int Page,
     int PageSize);
 
+/// <summary>One recent Memory record shown in a project's agent history panel.</summary>
+public sealed record ProjectAgentHistoryEntry(
+    Guid RecordId,
+    string Type,
+    string? Title,
+    string Content,
+    DateTimeOffset UpdatedAt);
+
+/// <summary>Current, caller-visible Memory records for one configured project agent.</summary>
+public sealed record ProjectAgentHistoryResponse(
+    string ProjectId,
+    string AgentId,
+    ImmutableArray<ProjectAgentHistoryEntry> Items);
+
+/// <summary>Limits the recent Memory records returned to the agent details drawer.</summary>
+public static class ProjectAgentHistoryContract
+{
+    public const int MaximumItems = 10;
+    public const int MaximumResponseBytes = 4 * 1024 * 1024;
+}
+
 /// <summary>Page of immutable record revisions and the total count for the history query.</summary>
 public sealed record KnowledgeRecordRevisionPage(
     ImmutableArray<KnowledgeRecordRevision> Items,
