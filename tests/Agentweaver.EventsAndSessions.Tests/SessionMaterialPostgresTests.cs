@@ -136,6 +136,99 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
     }
 
     [Fact]
+    public async Task JournalCommitFailureAfterObjectWriteLeavesAnUnreferencedInventoryEntry()
+    {
+        await CreateFailingJournalCommitTriggerAsync();
+        var input = Request();
+
+        // A deferred trigger fails only at commit, after the owner has persisted the object bytes.
+        var failure = await Assert.ThrowsAsync<PostgresException>(() => Store.WriteAsync(
+            Principal, "session", input, _registration, Source, Current, default));
+        Assert.Contains("injected journal commit failure", failure.MessageText);
+        Assert.Equal(1, _objects.Writes);
+        Assert.Empty((await _journal.ReplayAsync(Principal, new("session"))).Events);
+        await Assert.ThrowsAsync<SessionNotFoundException>(() => Store.ReadAsync(
+            Principal, "session", input.EventId, input.Kind, Historical, default));
+
+        var key = Assert.Single(_objects.Values.Keys);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var verify = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".session_object_references WHERE object_key = @key),
+                (SELECT retain_until IS NULL AND deleted_at IS NULL
+                 FROM "{_schema}".session_object_inventory WHERE object_key = @key)
+            """, connection);
+        verify.Parameters.AddWithValue("key", key.Value);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0L, reader.GetInt64(0));
+        Assert.True(reader.GetBoolean(1));
+    }
+
+    [Fact]
+    public async Task StaleOrphanInventoryCanBeEnumeratedAndDeleted()
+    {
+        await CreateFailingJournalCommitTriggerAsync();
+        await Assert.ThrowsAsync<PostgresException>(() => Store.WriteAsync(
+            Principal, "session", Request(), _registration, Source, Current, default));
+        var key = Assert.Single(_objects.Values.Keys);
+        var retention = new SessionObjectRetentionService(fixture.DataSource, _options, _objects);
+        Assert.Equal(new[] { key }, (await retention.ReadOrphanInventoryAsync(default)).ToArray());
+        Assert.Equal(0, await retention.CleanupAsync(default));
+        Assert.Contains(key, _objects.Values.Keys);
+
+        // Age the failed attempt past the documented grace period without waiting a day in the test.
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var age = new NpgsqlCommand($"""
+            UPDATE "{_schema}".session_object_inventory
+            SET tracked_at = clock_timestamp() - interval '25 hours'
+            WHERE object_key = @key
+            """, connection))
+        {
+            age.Parameters.AddWithValue("key", key.Value);
+            Assert.Equal(1, await age.ExecuteNonQueryAsync());
+        }
+
+        Assert.Equal(new[] { key }, (await retention.ReadOrphanInventoryAsync(default)).ToArray());
+        Assert.Equal(1, await retention.CleanupAsync(default));
+        Assert.DoesNotContain(key, _objects.Values.Keys);
+        Assert.Empty(await retention.ReadOrphanInventoryAsync(default));
+    }
+
+    [Fact]
+    public async Task ExpiredReferencedMaterialIsDeletedAndCannotBeRecreatedByRetry()
+    {
+        var input = Request();
+        var acknowledgment = await Store.WriteAsync(
+            Principal, "session", input, _registration, Source, Current, default);
+        // Move both owner retention records into the past to exercise the normal cleanup path.
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        {
+            await using var expireInventory = new NpgsqlCommand($"""
+                UPDATE "{_schema}".session_object_inventory
+                SET retain_until = clock_timestamp() - interval '1 second'
+                WHERE object_key = @key
+                """, connection);
+            expireInventory.Parameters.AddWithValue("key", acknowledgment.Reference.Key.Value);
+            Assert.Equal(1, await expireInventory.ExecuteNonQueryAsync());
+            await using var expireReference = new NpgsqlCommand($"""
+                UPDATE "{_schema}".session_object_references
+                SET retain_until = clock_timestamp() - interval '1 second'
+                WHERE object_key = @key
+                """, connection);
+            expireReference.Parameters.AddWithValue("key", acknowledgment.Reference.Key.Value);
+            Assert.Equal(1, await expireReference.ExecuteNonQueryAsync());
+        }
+
+        var retention = new SessionObjectRetentionService(fixture.DataSource, _options, _objects);
+        Assert.Equal(1, await retention.CleanupAsync(default));
+        Assert.DoesNotContain(acknowledgment.Reference.Key, _objects.Values.Keys);
+        var retry = await Assert.ThrowsAsync<SessionMaterialIntegrityException>(() => Store.WriteAsync(
+            Principal, "session", input, _registration, Source, Current, default));
+        Assert.Equal("session_material_retention_expired", retry.Code);
+    }
+
+    [Fact]
     public async Task AuthorityLossAfterBlobReadPreventsDisclosureOfHistoricalMaterial()
     {
         var input = Request();
@@ -151,6 +244,28 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => Store.ReadAsync(
             Principal, "session", input.EventId, input.Kind, ReadAuthority, default));
         Assert.Equal(2, checks);
+    }
+
+    private async Task CreateFailingJournalCommitTriggerAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            CREATE FUNCTION "{_schema}".fail_session_event_commit()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $body$
+            BEGIN
+                RAISE EXCEPTION 'injected journal commit failure';
+            END;
+            $body$;
+            CREATE CONSTRAINT TRIGGER fail_session_event_commit
+            AFTER INSERT ON "{_schema}".session_events
+            DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW
+            EXECUTE FUNCTION "{_schema}".fail_session_event_commit()
+            """, connection);
+        // The deferred trigger exercises the failure after the object-store callback completes.
+        await command.ExecuteNonQueryAsync();
     }
 
     [Theory]

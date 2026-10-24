@@ -457,8 +457,8 @@ public sealed class P1PostgresInitializerTests
     {
         int[] core = [.. Enumerable.Range(1, 16), 18, 19, 20, 21, 22, 23];
         Assert.Equal([22, 23], InitializerChecks.PendingMigrationVersions(core, core[..^2], "Core"));
-        Assert.Equal([9], InitializerChecks.PendingMigrationVersions(
-            [.. Enumerable.Range(1, 9)], [8, 7, 6, 5, 4, 3, 2, 1], "Events"));
+        Assert.Equal([10], InitializerChecks.PendingMigrationVersions(
+            [.. Enumerable.Range(1, 10)], [9, 8, 7, 6, 5, 4, 3, 2, 1], "Events"));
         Assert.Empty(InitializerChecks.PendingMigrationVersions(core, core, "Core"));
         int[][] invalid =
         [
