@@ -18,6 +18,7 @@ deliver a tool call again, or restart a model.
 | `PostgresAddressedMessageStore.cs` and `AddressedMessageEndpoints.cs` | Thread ordering and fenced message delivery |
 | `CoordinationOwnerClient.cs` | Current Orchestrator admission and session-binding checks |
 | `SessionMaterialStore.cs` and `SessionMaterialEndpoints.cs` | Producer-owned material writes and reads |
+| `SessionObjectRetention.cs` | Durable object inventory, orphan enumeration, and retention deletion |
 | `PublicSessionEventProjection.cs` | Removes private configuration and remote-tool result details |
 | `AcceptedEffectFacts.cs` | Separate project-scoped accepted-effect facts |
 | `Usage/` and `Cost/` | Receipt admission, usage ledger, and cost-provider binding |
@@ -43,9 +44,20 @@ verify that exact binding. Changing the platform default does not move an
 existing run to a new provider.
 
 The journal stores typed references and retention metadata; Object Store holds
-the bytes. A material write persists bytes before the journal transaction
-commits its reference. Unreferenced bytes do not constitute an acknowledged
-session event.
+the bytes. Events first commits an inventory row for each generated object key,
+then persists bytes before the journal transaction commits its reference and
+retention deadline. Every committed object reference extends the inventory
+deadline in the journal transaction, including ordinary appends that do not
+write bytes. A failed journal commit leaves an unreferenced inventory entry and
+does not acknowledge the material. An append cannot create a reference to an
+object that cleanup has already deleted.
+
+An Events-owned worker checks inventory hourly. It removes an unreferenced
+object after a 24-hour grace period and removes referenced bytes after their
+retention deadline. Journal events and reference metadata remain, so reads of
+expired bytes fail rather than returning reconstructed content. Migration 010
+backfills committed references; it cannot discover older unreferenced objects
+because the Object Store contract does not list keys.
 
 ## Append and replay events
 
