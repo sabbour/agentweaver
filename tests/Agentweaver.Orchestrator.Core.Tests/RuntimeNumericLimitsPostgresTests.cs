@@ -266,6 +266,111 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
                 IssueAsync(0, Action(0, toolInvocation: true)))).Code);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CoordinatorRootAdmissionAndGrantLockRunBeforeSession(bool issueGrant)
+    {
+        var rootRequestContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", _actor.Subject),
+                new Claim("aud", _options.Audience), new Claim("aud", _options.ProjectsAudience),
+                new Claim("project_id", _root.ProjectId), new Claim("run_id", _root.RunId),
+                new Claim("scope", "api.read projects.orchestrator")
+            ], "controlled-owner"))
+        };
+        rootRequestContext.Request.Headers.Authorization = _context.Request.Headers.Authorization;
+        rootRequestContext.Request.Headers["X-Agentweaver-Tenant"] = _context.Request.Headers["X-Agentweaver-Tenant"];
+        var rootContext = await CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
+            _root.ProjectId, _root.RunId, _root.SessionId, rootRequestContext, _options, ProjectsClient(),
+            new CoordinationOwnerStore(fixture.DataSource, _schema), _decisions, _runSelectionContexts,
+            new PostgresMafCheckpointStore(fixture.DataSource, _schema, null), default,
+            allowCoordinatorRoot: true);
+        var rootBinding = _registrations[0].Binding with
+        {
+            SessionId = rootContext.SessionId,
+            AgentId = rootContext.AgentId,
+            WorkflowStepId = rootContext.WorkflowStepId,
+            TurnId = rootContext.TurnId,
+            AcceptedSelectionHash = rootContext.AcceptedSelectionHash,
+            ExecutionFence = rootContext.ExecutionFence,
+            ModelSelectionReference = rootContext.ModelSelectionReference,
+            ModelCredentialReference = rootContext.ModelCredentialReference,
+            ModelSourceMode = rootContext.ModelSourceMode,
+            ReasoningEffort = rootContext.ReasoningEffort,
+            ModelConnectionId = rootContext.ModelConnectionId,
+            ModelConnectionScope = rootContext.ModelConnectionScope,
+            MaxModelTurns = rootContext.MaxModelTurns,
+            MaxToolCalls = rootContext.MaxToolCalls
+        };
+        await RegisterSourceAsync(0, rootBinding);
+
+        var eventId = Guid.NewGuid();
+        const string generationPrompt = "Generate an unconfirmed casting proposal.";
+        var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(generationPrompt));
+        var rootGrantStore = GrantStore();
+        if (issueGrant)
+        {
+            await rootGrantStore.AdmitCoordinatorRootModelTurnAsync(
+                rootRequestContext, _registrations[0], eventId, promptHash,
+                rootContext.DecisionStateVersion, default);
+        }
+
+        await using var blocker = await fixture.DataSource.OpenConnectionAsync();
+        await using var observer = await fixture.DataSource.OpenConnectionAsync();
+        await using var blockerTransaction = await blocker.BeginTransactionAsync();
+        await using (var lockRun = new NpgsqlCommand($"""
+            SELECT run_id FROM "{_schema}".accepted_runs
+            WHERE project_id = @project AND run_id = @run
+            FOR UPDATE
+            """, blocker, blockerTransaction))
+        {
+            lockRun.Parameters.AddWithValue("project", _root.ProjectId);
+            lockRun.Parameters.AddWithValue("run", _root.RunId);
+            Assert.Equal(_root.RunId, await lockRun.ExecuteScalarAsync());
+        }
+
+        var cancellationSelection = _selection with
+        {
+            Authorization = _selection.Authorization with
+            {
+                BoundProjectId = null,
+                BoundRunId = null,
+                EffectiveAuthority =
+                [
+                    new("project", _root.ProjectId, [new("cancelRun", 1)])
+                ]
+            }
+        };
+        var cancellationOwner = new CoordinationOwnerStore(
+            fixture.DataSource, _schema, decisionStore: _decisions);
+        var cancellation = cancellationOwner.CancelProjectRunAsync(
+            _actor, cancellationSelection, "root-lock-order", new("Concurrent test."),
+            static _ => Task.CompletedTask, default);
+        await WaitUntilBlockedAsync(observer, blocker.ProcessID, "SELECT accepted_selection_hash");
+
+        Task operation = issueGrant
+            ? IssueAsync(0, new RuntimeActionRequest(
+                1, _registrations[0].RuntimeInstanceId, _registrations[0].Revision,
+                rootContext.ExecutionFence, eventId, "model.turn", promptHash)
+            {
+                DispatchId = eventId
+            })
+            : rootGrantStore.AdmitCoordinatorRootModelTurnAsync(
+                rootRequestContext, _registrations[0], eventId, promptHash,
+                rootContext.DecisionStateVersion, default);
+        await WaitUntilBlockedAsync(observer, -1, "accepted_runs%FOR SHARE");
+        await blockerTransaction.CommitAsync();
+
+        var cancelled = await cancellation;
+        Assert.Equal("cancelled", cancelled.State);
+        Assert.False(cancelled.AlreadyTerminal);
+        var rejected = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => operation);
+        Assert.Equal("runtime_action_owner_unavailable", rejected.Code);
+    }
+
     [Fact]
     public async Task PositiveHardCreditGrantRequiresPreparedDispatchWithoutAModelTurnLimit()
     {
@@ -1295,6 +1400,30 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"SELECT count(*) FROM \"{_schema}\".{table}", connection);
         return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private static async Task WaitUntilBlockedAsync(
+        NpgsqlConnection observer,
+        int blockerProcessId,
+        string queryPattern,
+        int minimumBlockedQueries = 1)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (true)
+        {
+            await using var wait = new NpgsqlCommand("""
+                SELECT count(*)::int
+                FROM (
+                    SELECT 1 FROM pg_stat_activity
+                    WHERE (@locker < 0 OR @locker = ANY(pg_blocking_pids(pid)))
+                      AND query ILIKE '%' || @pattern || '%') blocked
+                """, observer);
+            wait.Parameters.AddWithValue("locker", NpgsqlTypes.NpgsqlDbType.Integer, blockerProcessId);
+            wait.Parameters.AddWithValue("pattern", NpgsqlTypes.NpgsqlDbType.Text, queryPattern);
+            if ((int)(await wait.ExecuteScalarAsync(timeout.Token) ?? 0) >= minimumBlockedQueries)
+                return;
+            await Task.Delay(20, timeout.Token);
+        }
     }
 
     private async Task<long> CountToolReservationsAsync()
