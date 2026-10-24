@@ -1,7 +1,7 @@
 import { gatewayClient } from '../v1/api';
 import { useAuth } from '../v1/AuthContext';
-import { formatCost } from '../v1/projectMetrics';
-import type { ProjectMetrics, ProjectUsage } from '../v1/contracts';
+import { formatCost, sortUsage } from '../v1/projectMetrics';
+import type { EffectiveProjectRole, ProjectMetrics, ProjectSummary, ProjectUsage } from '../v1/contracts';
 import {
   Badge,
   Button,
@@ -26,6 +26,11 @@ import { AgentInvocationChart } from '../components/dashboard/AgentInvocationCha
 import { MetricEmptyState,
   MetricSectionHeading } from '../components/MetricTypography';
 import { PageHeader } from '../components/PageHeader';
+import { ProjectRoleBadge } from '../v1/pageParts';
+import { useProjectConfiguration } from '../v1/projectData';
+import { projectReadiness } from '../v1/projectReadiness';
+import { RunList } from '../v1/RunList';
+import { runListErrorMessage, useProjectRunList } from '../v1/runListData';
 import { RefreshCountdown } from '../hooks/useRefreshCountdown';
 import { ErrorState } from '../components/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -34,14 +39,24 @@ import type { AgentLeaderboardEntryDto, ThroughputPointDto } from '../api/types'
 
 /** Summary fields the v1 owners can prove; the two 0.x-only totals stay unavailable. */
 type ProjectSummaryData = {
-  runs_this_week: number;
+  runs_this_week: number | null;
+  weekly_runs_error: string | null;
   runs_total: number;
   active_runs: number;
   active_agents: null;
   tasks_done_this_week: null;
 };
 /** View model for the retained dashboard without requesting its unpublished 0.x endpoint. */
-type DashboardData = { project_id: string; project_name: string; generated_utc: string; summary: ProjectSummaryData };
+type DashboardData = {
+  project_id: string;
+  project_name: string;
+  project_state: ProjectSummary['state'];
+  effective_roles: EffectiveProjectRole[];
+  generated_utc: string;
+  summary: ProjectSummaryData;
+};
+type RangedSnapshot<T> = { projectId: string; range: TimeRange; value: T };
+type UsageSnapshot = RangedSnapshot<ProjectUsage | null> & { error: string | null };
 
 /**
  * Project-home dashboard. It combines a summary response with range-specific
@@ -75,6 +90,10 @@ function timeRangeLabel(range: TimeRange): string {
   }
 }
 
+function formatDashboardError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 const useStyles = makeStyles({
   root: {
     display: 'flex',
@@ -83,6 +102,42 @@ const useStyles = makeStyles({
     maxWidth: '1480px',
     margin: '0 auto',
     '@media (max-width: 720px)': { gap: tokens.spacingVerticalXL },
+  },
+  supportGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: tokens.spacingHorizontalL,
+    '@media (max-width: 760px)': { gridTemplateColumns: '1fr' },
+  },
+  checkList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    margin: 0,
+    padding: 0,
+    listStyleType: 'none',
+  },
+  checkRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    minWidth: 0,
+  },
+  teamList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    margin: 0,
+    padding: 0,
+    listStyleType: 'none',
+  },
+  teamMember: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    gap: tokens.spacingHorizontalM,
+    paddingBlockEnd: tokens.spacingVerticalS,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
   },
   breadcrumb: {
     display: 'flex',
@@ -496,7 +551,7 @@ function statusTone(
   if (riskyAgent) return 'attention';
   if (summary.active_runs > 0) return 'active';
   const hasActivity =
-    summary.runs_this_week > 0 ||
+    (summary.runs_this_week ?? 0) > 0 ||
     summary.runs_total > 0 ||
     evidence.created > 0 ||
     evidence.done > 0;
@@ -514,7 +569,7 @@ function plural(value: number, singular: string, pluralLabel = `${singular}s`): 
 /** Reports whether the summary contains any run or task activity. */
 function hasSummaryActivity(summary: ProjectSummaryData): boolean {
   // Only count measured run activity; v1 has no task completion timestamp.
-  return summary.runs_this_week > 0 || summary.runs_total > 0;
+  return (summary.runs_this_week ?? 0) > 0 || summary.runs_total > 0;
 }
 
 /** Supplies the copy and badge tone associated with a derived health state. */
@@ -545,7 +600,9 @@ function statusCopy(
         label: 'Idle',
         badge: 'subtle',
         title: 'No runs are active.',
-        body: `${plural(summary.runs_this_week, 'run')} started this week. Task completions are unavailable.`,
+        body: summary.runs_this_week == null
+          ? 'The 7-day run count is unavailable. Task completions are unavailable.'
+          : `${plural(summary.runs_this_week, 'run')} started this week. Task completions are unavailable.`,
       };
     case 'insufficient':
       return {
@@ -553,7 +610,9 @@ function statusCopy(
         badge: 'subtle',
         title: 'Run activity is available.',
         body: hasSummaryActivity(summary)
-          ? `${plural(summary.runs_this_week, 'run')} started this week. Task completions are unavailable.`
+          ? summary.runs_this_week == null
+            ? 'The 7-day run count is unavailable. Task completions are unavailable.'
+            : `${plural(summary.runs_this_week, 'run')} started this week. Task completions are unavailable.`
           : 'The selected range has run activity.',
       };
     case 'quiet':
@@ -668,21 +727,23 @@ export function DashboardPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
   const { apiCall } = useAuth();
+  const configuration = useProjectConfiguration(projectId ?? '');
+  const recentRuns = useProjectRunList(projectId ?? '', { pageSize: 5 });
 
   // Dashboard summary and analytics are separate API responses; retain their own
   // state so the range selector can update metrics without conflating summary data.
   const [data, setData] = useState<DashboardData | null>(null);
-  const [metrics, setMetrics] = useState<ProjectMetrics | null>(null);
-  const [usage, setUsage] = useState<ProjectUsage | null>(null);
-  const [usageError, setUsageError] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<RangedSnapshot<ProjectMetrics> | null>(null);
+  const [usage, setUsage] = useState<UsageSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [selectedRange, setSelectedRange] = useState<TimeRange>('30d');
-  const formatError = (err: unknown): string => err instanceof Error ? err.message : String(err);
 
   const mountedRef = useRef(true);
   const inFlightRef = useRef<AbortController | null>(null);
+  const reloadConfiguration = configuration.reload;
+  const reloadRecentRuns = recentRuns.reload;
 
   /**
    * Composes the 0.x dashboard panels from the project's published v1 owner reads.
@@ -693,48 +754,57 @@ export function DashboardPage() {
     if (!projectId) return;
     const rangeDates = timeRangeDates(selectedRange);
     try {
-      const [project, metricsDto, weekMetrics, usageResult] = await Promise.all([
+      const weekMetricsRequest = selectedRange === '7d'
+        ? Promise.resolve({ value: null, error: null })
+        : apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, projectId, timeRangeDates('7d'), tenant), null)
+          .then((value) => ({ value, error: null }), (reason: unknown) => ({ value: null, error: formatDashboardError(reason) }));
+      const [project, metricsDto, weekMetricsResult, usageResult] = await Promise.all([
         apiCall((token, tenant) => gatewayClient.getProject(token, projectId, tenant), null),
         apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, projectId, rangeDates, tenant), null),
-        // The "this week" tile needs a seven-day window, not the selected chart range.
-        selectedRange === '7d'
-          ? null
-          : apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, projectId, timeRangeDates('7d'), tenant), null),
+        // Keep the weekly tile independent so its failure cannot discard range metrics or usage.
+        weekMetricsRequest,
         // Usage can be unavailable independently of the run metrics.
         apiCall((token, tenant) => gatewayClient.getProjectUsage(token, projectId, rangeDates, tenant), null)
-          .then((value) => ({ value, error: null }), (reason: unknown) => ({ value: null, error: formatError(reason) })),
+          .then((value) => ({ value, error: null }), (reason: unknown) => ({ value: null, error: formatDashboardError(reason) })),
       ]);
       if (mountedRef.current && !abortSignal?.aborted) {
         setData({
           project_id: project.projectId,
           project_name: project.name,
+          project_state: project.state,
+          effective_roles: project.effectiveRoles,
           generated_utc: new Date().toISOString(),
           summary: {
-            runs_this_week: (weekMetrics ?? metricsDto).runsInRange,
+            runs_this_week: selectedRange === '7d'
+              ? metricsDto.runsInRange
+              : weekMetricsResult.value?.runsInRange ?? null,
+            weekly_runs_error: weekMetricsResult.error,
             runs_total: metricsDto.runsTotal,
             active_runs: metricsDto.activeRuns,
             active_agents: null,
             tasks_done_this_week: null,
           },
         });
-        setMetrics(metricsDto);
-        setUsage(usageResult.value);
-        setUsageError(usageResult.error);
+        setMetrics({ projectId: project.projectId, range: selectedRange, value: metricsDto });
+        setUsage({
+          projectId: project.projectId,
+          range: selectedRange,
+          value: usageResult.value,
+          error: usageResult.error,
+        });
         setError(null);
       }
     } catch (err) {
-      // #208 point 5: an aborted fetch (unmount/range change/overlapping-poll guard) is expected
-      // control flow, not a user-facing error — don't surface it.
+      // An aborted fetch is expected control flow, not a user-facing error.
       if (abortSignal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
-      if (mountedRef.current) setError(formatError(err));
+      if (mountedRef.current) setError(formatDashboardError(err));
     } finally {
-      if (mountedRef.current) setLoading(false);
+      // An aborted request must not clear loading for the replacement project or refresh.
+      if (mountedRef.current && !abortSignal?.aborted) setLoading(false);
     }
   }, [apiCall, projectId, selectedRange]);
 
-  // #208 point 5: single shared entry point for the poll tick AND manual refresh/retry clicks —
-  // aborts whatever request is still in flight before starting a new one, so overlapping fan-outs
-  // (interval firing while a manual refresh is pending, or vice versa) can't stack.
+  // Keep a single request active so manual refreshes and interval polls cannot stack.
   /** Aborts any previous poll or manual request before starting a fresh load. */
   const runLoad = useCallback(() => {
     if (!projectId) return;
@@ -750,55 +820,89 @@ export function DashboardPage() {
   useEffect(() => {
     if (!projectId) return;
     mountedRef.current = true;
-    const runLoadLoop = async () => {
+    const runLoadLoop = async (refreshSupport = false) => {
       inFlightRef.current?.abort();
       const controller = new AbortController();
       inFlightRef.current = controller;
       setLoading(true);
+      if (refreshSupport) {
+        reloadConfiguration();
+        reloadRecentRuns();
+      }
       await load(controller.signal);
     };
     void runLoadLoop();
-    const iv = setInterval(() => { void runLoadLoop(); }, REFRESH_MS);
+    const iv = setInterval(() => { void runLoadLoop(true); }, REFRESH_MS);
     return () => {
       mountedRef.current = false;
       inFlightRef.current?.abort();
       clearInterval(iv);
     };
-  }, [projectId, load]);
+  }, [projectId, load, reloadConfiguration, reloadRecentRuns]);
+
+  // A project route can change while this dashboard stays mounted. Never render
+  // the previous project's owner snapshots while the new project is loading.
+  const currentData = data?.project_id === projectId ? data : null;
+  // Hide snapshots until they match both the route and selected range.
+  const currentMetrics = metrics && metrics.projectId === projectId && metrics.range === selectedRange ? metrics.value : null;
+  const currentUsageSnapshot = usage && usage.projectId === projectId && usage.range === selectedRange ? usage : null;
+  const currentUsage = currentUsageSnapshot?.value ?? null;
+  const currentUsageError = currentUsageSnapshot?.error ?? null;
 
   // Keep health copy, totals, evidence availability, and navigation decisions derived
   // from the same loaded snapshot rather than recalculating them in the markup.
+  const readiness = useMemo(() => {
+    if (!currentData || !configuration.data) return null;
+    return projectReadiness(configuration.data.configuration, currentData.project_state === 'archived');
+  }, [configuration.data, currentData]);
+  const agentNames = useMemo(
+    () => new Map((configuration.data?.configuration.agentCharters ?? []).map((agent) => [agent.agentId, agent.name])),
+    [configuration.data],
+  );
+
   const dashboardModel = useMemo(() => {
-    if (!data) return null;
+    if (!currentData) return null;
     // Orchestrator reports project success, but no agent-level leaderboard.
     const leaderboard: AgentLeaderboardEntryDto[] = [];
-    const throughput = metrics?.series.map((point) => ({ date: point.date, created: point.created, done: point.completed })) ?? [];
-    const created = sumThroughput(throughput, 'created');
-    const done = sumThroughput(throughput, 'done');
-    const success = metrics?.completedRuns
-      ? { rate: metrics.succeededRuns / metrics.completedRuns * 100, basis: metrics.completedRuns }
+    const throughput = currentMetrics?.series.map((point) => ({ date: point.date, created: point.created, done: point.completed })) ?? [];
+    const created = currentMetrics ? sumThroughput(throughput, 'created') : null;
+    const done = currentMetrics ? sumThroughput(throughput, 'done') : null;
+    const success = currentMetrics?.completedRuns
+      ? { rate: currentMetrics.succeededRuns / currentMetrics.completedRuns * 100, basis: currentMetrics.completedRuns }
       : { rate: null, basis: 0 };
-    const modelTelemetry = hasModelTelemetry(usage);
-    const tone = statusTone(data.summary, leaderboard, {
-      created,
-      done,
+    const modelTelemetry = hasModelTelemetry(currentUsage);
+    const archived = currentData.project_state === 'archived';
+    const tone = statusTone(currentData.summary, leaderboard, {
+      created: created ?? 0,
+      done: done ?? 0,
       successBasis: success.basis,
       hasModelTelemetry: modelTelemetry,
     });
-    const primaryAction = primaryActionFor(tone, data.summary);
+    const primaryAction = archived
+      ? { label: 'Open Project settings', path: 'settings?section=danger' }
+      : primaryActionFor(tone, currentData.summary);
     return {
       leaderboard,
+      hasAgentUsage: Boolean(currentUsage?.usageByAgent.length),
       throughput,
       created,
       done,
       success,
       tone,
-      copy: statusCopy(tone, data.summary, success.basis > 0 || modelTelemetry),
+      copy: archived
+        ? {
+          label: 'Archived',
+          badge: 'subtle' as const,
+          title: 'This project is archived',
+          body: 'Restore the project in Project settings before starting new runs.',
+        }
+        : statusCopy(tone, currentData.summary, success.basis > 0 || modelTelemetry),
       modelTelemetry,
       primaryAction,
-      secondaryActions: secondaryActionsFor(tone, data.summary),
+      secondaryActions: archived ? [] : secondaryActionsFor(tone, currentData.summary),
+      archived,
     };
-  }, [data, metrics, usage]);
+  }, [currentData, currentMetrics, currentUsage]);
 
   if (!projectId) return null;
 
@@ -809,30 +913,36 @@ export function DashboardPage() {
         subtitle="Active work, completed runs, and agent metrics for this project."
         breadcrumb={
           <nav className={styles.breadcrumb} aria-label="Breadcrumb">
-            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <Link to="/projects" className={styles.breadcrumbLink}>Projects</Link>
             <span aria-hidden="true">/</span>
-            <span className={styles.breadcrumbCurrent}>{data?.project_name ?? projectId}</span>
+            <span className={styles.breadcrumbCurrent}>{currentData?.project_name ?? projectId}</span>
           </nav>
         }
         actions={
           <div className={styles.headerActions}>
-            {data && (
+            {currentData && <ProjectRoleBadge roles={currentData.effective_roles} />}
+            {currentData && (
               <Text className={styles.generated}>
-                Updated {new Date(data.generated_utc).toLocaleTimeString()}
+                Updated {new Date(currentData.generated_utc).toLocaleTimeString()}
               </Text>
             )}
-            {data && (
+            {currentData && (
               <RefreshCountdown
                 className={styles.generated}
                 intervalMs={REFRESH_MS}
-                lastRefreshedAt={new Date(data.generated_utc)}
+                lastRefreshedAt={new Date(currentData.generated_utc)}
               />
             )}
             <Button
               appearance="secondary"
               icon={<ArrowSyncRegular />}
               disabled={loading}
-              onClick={() => { setLoading(true); runLoad(); }}
+              onClick={() => {
+                setLoading(true);
+                runLoad();
+                configuration.reload();
+                recentRuns.reload();
+              }}
             >
               Refresh
             </Button>
@@ -848,10 +958,10 @@ export function DashboardPage() {
         />
       )}
 
-      {loading && !data && <LoadingDashboard />}
+      {loading && !currentData && <LoadingDashboard />}
 
 
-      {data && dashboardModel && (
+      {currentData && dashboardModel && (
         <>
           <section className={styles.commandStrip} aria-labelledby="project-status-title">
             <div className={styles.healthBlock}>
@@ -862,17 +972,17 @@ export function DashboardPage() {
               <div>
                 <Text as="h2" id="project-status-title" className={styles.healthTitle}>{dashboardModel.copy.title}</Text>
                 <Text className={styles.healthCopy}>{dashboardModel.copy.body}</Text>
-                <Text className={styles.healthCopy}>Live project health is unavailable. This status uses run counts only.</Text>
+                {!dashboardModel.archived && <Text className={styles.healthCopy}>Live project health is unavailable. This status uses run counts only.</Text>}
               </div>
               <div className={styles.quickActions} aria-label="Project actions">
                 <Link
-                  to={`/projects/${projectId}/${dashboardModel.primaryAction.path}`}
+                  to={`/projects/${encodeURIComponent(projectId)}/${dashboardModel.primaryAction.path}`}
                   className={`${styles.actionLink} ${styles.primaryActionLink}`}
                 >
                   {dashboardModel.primaryAction.label}
                 </Link>
                 {dashboardModel.secondaryActions.map((action) => (
-                  <Link key={action.path} to={`/projects/${projectId}/${action.path}`} className={styles.actionLink}>
+                  <Link key={action.path} to={`/projects/${encodeURIComponent(projectId)}/${action.path}`} className={styles.actionLink}>
                     {action.label}
                   </Link>
                 ))}
@@ -882,13 +992,19 @@ export function DashboardPage() {
             <div className={styles.summaryGrid} aria-label="Project summary">
               <div className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Active runs</Text>
-                <Text className={styles.summaryValue}>{data.summary.active_runs}</Text>
+                <Text className={styles.summaryValue}>{currentData.summary.active_runs}</Text>
                 <Text className={styles.summaryMeta}>Active agent count unavailable</Text>
               </div>
               <div className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Runs, last 7 days</Text>
-                <Text className={styles.summaryValue}>{data.summary.runs_this_week}</Text>
-                <Text className={styles.summaryMeta}>{plural(data.summary.runs_total, 'total run')}</Text>
+                <Text className={styles.summaryValue}>{currentData.summary.runs_this_week ?? '—'}</Text>
+                <Text className={styles.summaryMeta}>
+                  {currentData.summary.runs_this_week == null
+                    ? currentData.summary.weekly_runs_error
+                      ? `Weekly run count unavailable: ${currentData.summary.weekly_runs_error}`
+                      : '7-day run count unavailable'
+                    : plural(currentData.summary.runs_total, 'total run')}
+                </Text>
               </div>
               <div className={styles.summaryTile}>
                 <Text className={styles.summaryLabel}>Completed tasks</Text>
@@ -905,6 +1021,106 @@ export function DashboardPage() {
                 </Text>
               </div>
             </div>
+          </section>
+
+          <div className={styles.supportGrid}>
+            <section className={styles.panel} aria-labelledby="project-setup-title">
+              <div className={styles.panelHeader}>
+                <MetricSectionHeading
+                  title={<span id="project-setup-title">Setup checks</span>}
+                  subtitle="Saved project settings and the next setup action."
+                />
+                {readiness && <Badge appearance="tint" color={readiness.badge.color}>{readiness.badge.label}</Badge>}
+              </div>
+              {configuration.error != null && (
+                <ErrorState
+                  title="Project setup could not refresh"
+                  message={formatDashboardError(configuration.error)}
+                  onRetry={configuration.reload}
+                />
+              )}
+              {configuration.loading && !configuration.data && <Spinner label="Loading project setup" />}
+              {readiness && (
+                <>
+                  <Text>{readiness.body}</Text>
+                  <ul className={styles.checkList}>
+                    {readiness.checks.map((check) => (
+                      <li key={check.key} className={styles.checkRow}>
+                        <Badge appearance="tint" color={check.done ? 'success' : 'warning'}>
+                          {check.done ? 'Ready' : 'Needs setup'}
+                        </Badge>
+                        <Link
+                          to={`/projects/${encodeURIComponent(projectId)}/${check.path}`}
+                          className={styles.breadcrumbLink}
+                        >
+                          {check.label}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className={styles.quickActions}>
+                    <Link
+                      to={`/projects/${encodeURIComponent(projectId)}/${readiness.primaryAction.path}`}
+                      className={`${styles.actionLink} ${styles.primaryActionLink}`}
+                    >
+                      {readiness.primaryAction.label}
+                    </Link>
+                  </div>
+                </>
+              )}
+            </section>
+
+            <section className={styles.panel} aria-labelledby="team-title">
+              <div className={styles.panelHeader}>
+                <MetricSectionHeading
+                  title={<span id="team-title">Team</span>}
+                  subtitle="Agents saved in this project's configuration."
+                />
+                {configuration.data && (
+                  <Badge appearance="outline">
+                    {plural(configuration.data.configuration.agentCharters.length, 'agent')}
+                  </Badge>
+                )}
+              </div>
+              {configuration.data?.configuration.agentCharters.length ? (
+                <ul className={styles.teamList}>
+                  {configuration.data.configuration.agentCharters.map((agent) => (
+                    <li key={agent.agentId} className={styles.teamMember}>
+                      <Text>{agent.name}</Text>
+                      <Text className={styles.summaryMeta}>{agent.customRoleTitle?.trim() || agent.role}</Text>
+                    </li>
+                  ))}
+                </ul>
+              ) : configuration.loading ? (
+                <Spinner label="Loading project team" />
+              ) : (
+                <MetricEmptyState>
+                  {configuration.error != null ? 'The saved team could not be read.' : 'No agents are assigned to this project.'}
+                </MetricEmptyState>
+              )}
+              <div className={styles.quickActions}>
+                <Link to={`/projects/${encodeURIComponent(projectId)}/team`} className={styles.actionLink}>
+                  Open Team
+                </Link>
+              </div>
+            </section>
+          </div>
+
+          <section className={styles.section} aria-label="Recent project runs">
+            {recentRuns.error != null && (
+              <ErrorState
+                title="Recent runs could not refresh"
+                message={runListErrorMessage(recentRuns.error)}
+                onRetry={recentRuns.reload}
+              />
+            )}
+            <RunList
+              title="Recent runs"
+              description="Latest runs in this project."
+              data={recentRuns}
+              emptyText={recentRuns.loading ? 'Loading recent runs…' : recentRuns.error != null ? 'Recent runs could not load.' : 'No runs yet.'}
+              limit={5}
+            />
           </section>
 
           <div className={styles.sharedMetricsHeader}>
@@ -970,7 +1186,7 @@ export function DashboardPage() {
                 </div>
               </div>
               <AgentInvocationChart
-                points={metrics?.series.map((point) => ({ date: point.date, count: point.created })) ?? []}
+                points={currentMetrics?.series.map((point) => ({ date: point.date, count: point.created })) ?? []}
                 subtitle={`Daily runs created during the ${timeRangeLabel(selectedRange)}.`}
                 emptyLabel="No runs were created in this range. Start a task to add data."
               />
@@ -985,32 +1201,38 @@ export function DashboardPage() {
               />
             </div>
             <Text className={styles.healthCopy}>Agent leaderboard and latency percentiles are unavailable. The Gateway does not report them yet.</Text>
-            {!dashboardModel.modelTelemetry && dashboardModel.leaderboard.length === 0 ? (
+            {!dashboardModel.modelTelemetry && !dashboardModel.hasAgentUsage && dashboardModel.leaderboard.length === 0 ? (
               <div className={styles.diagnosticsEmpty}>
                 <div>
                   <Text as="h3" className={styles.columnTitle}>
-                    {hasSummaryActivity(data.summary)
-                      ? 'No model or agent metrics for this range.'
+                    {hasSummaryActivity(currentData.summary)
+                      ? 'No model or agent usage for this range.'
                       : 'No model or agent data.'}
                   </Text>
                   <MetricEmptyState>
-                    {usageError ? `Model usage could not load: ${usageError}` : hasSummaryActivity(data.summary)
-                      ? 'No model usage was reported for this range. Agent scores are unavailable. Open Board or Orchestrations to review recent work.'
+                    {currentUsageError ? `Model usage could not load: ${currentUsageError}` : hasSummaryActivity(currentData.summary)
+                      ? 'No model or agent usage was reported for this range. Agent scores are unavailable. Open Board or Orchestrations to review recent work.'
                       : 'Start a task. The dashboard adds model and agent data after a run reports it.'}
                   </MetricEmptyState>
                   <Text as="h3" className={styles.columnTitle}>Model metrics</Text>
-                  <MetricEmptyState>{usageError ? 'Model usage could not load.' : 'No model usage has been recorded for this range.'}</MetricEmptyState>
+                  <MetricEmptyState>{currentUsageError ? 'Model usage could not load.' : 'No model usage has been recorded for this range.'}</MetricEmptyState>
+                  <Text as="h3" className={styles.columnTitle}>Agent usage</Text>
+                  <MetricEmptyState>{currentUsageError ? 'Agent usage could not load.' : 'No agent usage has been recorded for this range.'}</MetricEmptyState>
                   <Text as="h3" className={styles.columnTitle}>Agent leaderboard</Text>
                   <MetricEmptyState>Agent scores are unavailable from the Gateway. Open Flow to review agent runs.</MetricEmptyState>
                   <div className={styles.evidenceRail} aria-label="Available dashboard evidence">
-                    <span className={styles.evidencePill}>{plural(data.summary.runs_this_week, 'run')} in the last 7 days</span>
+                    <span className={styles.evidencePill}>
+                      {currentData.summary.runs_this_week == null
+                        ? '7-day run count unavailable'
+                        : `${plural(currentData.summary.runs_this_week, 'run')} in the last 7 days`}
+                    </span>
                     <span className={styles.evidencePill}>Task completions unavailable</span>
-                    <span className={styles.evidencePill}>{plural(data.summary.runs_total, 'total run')}</span>
-                    <span className={styles.evidencePill}>{plural(data.summary.active_runs, 'active run')}</span>
+                    <span className={styles.evidencePill}>{plural(currentData.summary.runs_total, 'total run')}</span>
+                    <span className={styles.evidencePill}>{plural(currentData.summary.active_runs, 'active run')}</span>
                   </div>
                 </div>
                 <Link
-                  to={`/projects/${projectId}/${dashboardModel.primaryAction.path}`}
+                  to={`/projects/${encodeURIComponent(projectId)}/${dashboardModel.primaryAction.path}`}
                   className={`${styles.actionLink} ${styles.primaryActionLink}`}
                 >
                   {dashboardModel.primaryAction.label}
@@ -1021,13 +1243,14 @@ export function DashboardPage() {
                 <div className={styles.diagnosticsBrief}>
                   <div className={styles.diagnosticsBriefCopy}>
                     <Text as="h3" className={styles.columnTitle}>
-                      {dashboardModel.modelTelemetry && dashboardModel.leaderboard.length > 0
+                      {dashboardModel.modelTelemetry || dashboardModel.hasAgentUsage || dashboardModel.leaderboard.length > 0
                         ? 'Model and agent data is available.'
                         : 'Some model or agent data is missing.'}
                     </Text>
                   </div>
                   <div className={styles.evidenceRail} aria-label="Model and agent data status">
                     <span className={styles.evidencePill}>{dashboardModel.modelTelemetry ? 'Model data available' : 'No model data'}</span>
+                    <span className={styles.evidencePill}>{dashboardModel.hasAgentUsage ? 'Agent usage available' : 'No agent usage'}</span>
                     <span className={styles.evidencePill}>{dashboardModel.leaderboard.length > 0 ? 'Agent scores available' : 'No agent scores'}</span>
                   </div>
                 </div>
@@ -1035,11 +1258,11 @@ export function DashboardPage() {
                 <div className={styles.diagnosticsBody}>
                   <div className={styles.diagnosticsColumn} aria-labelledby="model-performance-title">
                     <Text as="h3" id="model-performance-title" className={styles.columnTitle}>Model metrics</Text>
-                    {usageError ? <MetricEmptyState>Model usage could not load: {usageError}</MetricEmptyState>
-                      : usage?.usageByModel.length ? (
+                    {currentUsageError ? <MetricEmptyState>Model usage could not load: {currentUsageError}</MetricEmptyState>
+                      : currentUsage?.usageByModel.length ? (
                         <Table aria-label="Model usage" size="small">
                           <TableHeader><TableRow><TableHeaderCell>Model</TableHeaderCell><TableHeaderCell>Requests</TableHeaderCell><TableHeaderCell>Tokens</TableHeaderCell><TableHeaderCell>Cost</TableHeaderCell></TableRow></TableHeader>
-                          <TableBody>{usage.usageByModel.map((row) => (
+                          <TableBody>{currentUsage.usageByModel.map((row) => (
                             <TableRow key={row.id}>
                               <TableCell>{row.id}</TableCell>
                               <TableCell>{row.requestCount ?? '—'}</TableCell>
@@ -1052,6 +1275,36 @@ export function DashboardPage() {
                   </div>
 
                   <div className={styles.diagnosticsColumn} aria-labelledby="agent-leaderboard-title">
+                    <Text as="h3" id="agent-usage-title" className={styles.columnTitle}>Agent usage</Text>
+                    {currentUsageError ? <MetricEmptyState>Agent usage could not load: {currentUsageError}</MetricEmptyState>
+                      : currentUsage?.usageByAgent.length ? (
+                        <Table aria-label="Agent usage" size="small">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHeaderCell>Agent</TableHeaderCell>
+                              <TableHeaderCell>Runs</TableHeaderCell>
+                              <TableHeaderCell>Requests</TableHeaderCell>
+                              <TableHeaderCell>Tokens</TableHeaderCell>
+                              <TableHeaderCell>Average duration</TableHeaderCell>
+                              <TableHeaderCell>Cost</TableHeaderCell>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>{sortUsage(currentUsage.usageByAgent).map((row) => (
+                            <TableRow key={row.id}>
+                              <TableCell>{agentNames.get(row.id) ?? row.id}</TableCell>
+                              <TableCell>{row.runs}</TableCell>
+                              <TableCell>{row.requestCount ?? '—'}</TableCell>
+                              <TableCell>
+                                {row.inputTokens != null && row.outputTokens != null
+                                  ? row.inputTokens + row.outputTokens
+                                  : '—'}
+                              </TableCell>
+                              <TableCell>{formatDuration(row.avgDurationMs)}</TableCell>
+                              <TableCell>{row.cost.length ? row.cost.map(formatCost).join(', ') : '—'}</TableCell>
+                            </TableRow>
+                          ))}</TableBody>
+                        </Table>
+                      ) : <MetricEmptyState>No agent usage has been recorded for this range.</MetricEmptyState>}
                     <div className={styles.leaderboardHeader}>
                       <Text as="h3" id="agent-leaderboard-title" className={styles.columnTitle}>Agent leaderboard</Text>
                       <Text className={styles.healthCopy}>Agent scores are unavailable. Open Flow to review agent runs.</Text>
@@ -1061,7 +1314,7 @@ export function DashboardPage() {
                         <MetricEmptyState>
                           No agent scores are available for this range. Open Flow to review agent runs.
                         </MetricEmptyState>
-                        <Link to={`/projects/${projectId}/flow`} className={styles.actionLink}>
+                        <Link to={`/projects/${encodeURIComponent(projectId)}/flow`} className={styles.actionLink}>
                           Open Flow
                         </Link>
                       </div>
@@ -1085,7 +1338,7 @@ export function DashboardPage() {
                                 <TableCell>
                                   <TableCellLayout className={styles.agentCell}>
                                     <Link
-                                      to={`/projects/${projectId}/flow?agent=${encodeURIComponent(row.agentName)}`}
+                                      to={`/projects/${encodeURIComponent(projectId)}/flow?agent=${encodeURIComponent(row.agentName)}`}
                                       className={styles.breadcrumbLink}
                                     >
                                       {row.agentName}
