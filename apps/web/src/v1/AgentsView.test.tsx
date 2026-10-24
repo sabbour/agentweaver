@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   listCastingProposals: vi.fn(),
   listCatalogRoles: vi.fn(),
   createCastingDraftProposal: vi.fn(),
+  getProjectAgentHistory: vi.fn(),
 }));
 
 // One stable apiCall, like the real provider, so effects that depend on it run once.
@@ -34,6 +35,11 @@ beforeEach(() => {
   api.listCastingProposals.mockResolvedValue([]);
   api.listCatalogRoles.mockResolvedValue([]);
   api.createCastingDraftProposal.mockResolvedValue({ proposalId: 'pr-9' });
+  api.getProjectAgentHistory.mockImplementation(async (_token, projectId, agentId) => ({
+    projectId,
+    agentId,
+    items: [],
+  }));
 });
 
 function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfiguration {
@@ -132,6 +138,67 @@ describe('AgentsView', () => {
     // Disabled skills are not listed, even when they apply to every agent.
     expect(within(drawer).queryByText('off')).toBeNull();
     expect(within(drawer).getByRole('link', { name: 'View memories' }).getAttribute('href')).toBe('/projects/p1/memories?agentId=a2');
+    expect(await within(drawer).findByText('No history yet.')).toBeTruthy();
+    expect(api.getProjectAgentHistory).toHaveBeenCalledWith('token', 'p1', 'a2', 'tenant-1');
+  });
+
+  it('shows a loading state and recent history content', async () => {
+    let resolveHistory!: (history: {
+      projectId: string;
+      agentId: string;
+      items: { recordId: string; type: string; title: string; content: string; updatedAt: string }[];
+    }) => void;
+    api.getProjectAgentHistory.mockReturnValue(new Promise((resolve) => { resolveHistory = resolve; }));
+    renderView();
+    fireEvent.click(screen.getByText('Ada'));
+    const drawer = await screen.findByRole('dialog');
+    expect(within(drawer).getByText('Loading history…')).toBeTruthy();
+
+    // The drawer displays only the same bounded excerpt as the 0.x history panel.
+    const content = 'x'.repeat(1005);
+    await act(async () => resolveHistory({
+      projectId: 'p1',
+      agentId: 'a1',
+      items: [{
+        recordId: 'record-1',
+        type: 'note',
+        title: 'Release planning',
+        content,
+        updatedAt: '2026-01-01T00:00:00Z',
+      }],
+    }));
+
+    expect(within(drawer).getByText('Release planning')).toBeTruthy();
+    expect(within(drawer).getByText(`${content.slice(0, 1000)}…`)).toBeTruthy();
+  });
+
+  it('shows a permission state when history access is denied', async () => {
+    const { GatewayError } = await import('./api');
+    api.getProjectAgentHistory.mockRejectedValue(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    renderView();
+    fireEvent.click(screen.getByText('Ada'));
+
+    // A denied private Knowledge read is not presented as an empty history.
+    expect(await screen.findByText('You do not have permission to view this history.')).toBeTruthy();
+  });
+
+  it('surfaces history errors and retries the request', async () => {
+    const { GatewayError } = await import('./api');
+    api.getProjectAgentHistory
+      .mockRejectedValueOnce(new GatewayError(503, { code: 'unavailable' }, 'Unavailable'))
+      .mockResolvedValueOnce({
+        projectId: 'p1',
+        agentId: 'a1',
+        items: [{ recordId: 'record-2', type: 'note', title: null, content: 'Recovered.', updatedAt: '2026-01-02T00:00:00Z' }],
+      });
+    renderView();
+    fireEvent.click(screen.getByText('Ada'));
+
+    // A service failure stays visible and the retry issues a new request.
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    fireEvent.click(retry);
+    expect(await screen.findByText('Recovered.')).toBeTruthy();
+    expect(api.getProjectAgentHistory).toHaveBeenCalledTimes(2);
   });
 
   it('stages a re-role proposal from the current team member details', async () => {

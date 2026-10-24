@@ -414,6 +414,7 @@ The `projects-config-runtime-config.json` map contains:
 | `ProjectsConfig__Database__WorkloadIdentity__TokenFilePath` | Required absolute projected-token path. |
 | `ProjectsConfig__Authentication__Authority` | Required absolute HTTPS Broker authority. |
 | `ProjectsConfig__Authentication__Audience` | Required token audience for Projects & Config. |
+| `ProjectsConfig__Knowledge__BaseAddress` | Required HTTPS Knowledge service root. Projects uses the mounted backend CA and forwards the current caller's bearer and tenant selector to read private agent history. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedIssuer` | Exact issuer approved for the privileged project-setup command: `https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/`. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedTenantId` | Exact approved Entra tenant: `72f988bf-86f1-41af-91ab-2d7cd011db47`. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedSubject` | Exact approved caller subject: `518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0`. This is the approved user's Identity Broker user ID, which the Broker issues as the token `sub` claim. It is not the Entra object ID. Do not add another subject or role. |

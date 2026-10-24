@@ -303,6 +303,40 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        projects.MapGet("/{projectId}/agents/{agentId}/history", async (
+            string projectId,
+            string agentId,
+            HttpContext context,
+            ProjectsConfigService service,
+            KnowledgeAgentHistoryClient historyClient,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                // Check the current charter before asking Knowledge so removed or unknown agents stay hidden.
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_agent_history_query",
+                        "Agent history does not accept query parameters.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var current = await service.GetProjectConfigurationAsync(
+                    caller, projectId, revision: null, cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (!current.Configuration.AgentCharters.Any(
+                        charter => string.Equals(charter.AgentId, agentId, StringComparison.Ordinal)))
+                    throw ProjectConfigException.NotFound();
+
+                return Results.Ok(await historyClient.ReadAsync(
+                    context.Request, projectId, agentId, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("GetProjectAgentHistory");
+
         projects.MapGet("/{projectId}/configuration/choices", async (
             string projectId,
             HttpContext context,
@@ -867,6 +901,33 @@ public static class ProjectConfigEndpoints
                     return ToProblem(exception);
                 }
             });
+
+        // Knowledge receives only the Memory selection after this caller's current private-access grant is checked.
+        app.MapGet("/internal/projects/{projectId}/runs/{runId}/knowledge-selection", async (
+            string projectId,
+            string runId,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_knowledge_selection_query",
+                        "The private Knowledge selection does not accept query parameters.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.GetPrivateKnowledgeRunSelectionAsync(
+                    caller, projectId, runId, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).RequireAuthorization();
 
         // Returns the current project-scope spend budgets for one accepted run. Orchestrator calls this before
         // each new dispatch.

@@ -32,6 +32,7 @@ internal static partial class GatewayOpenApi
             ["assignProjectRole"] = C("AssignProjectRoleRequest", "ProjectRoleAssignment", "201"),
             ["revokeProjectRoleAssignment"] = C(null, "ProjectRoleAssignment", "200"),
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
+            ["getProjectAgentHistory"] = C(null, "ProjectAgentHistoryResponse", "200"),
             ["updateProjectConfiguration"] = C("UpdateProjectConfigurationRequest", "VersionedProjectConfiguration", "200"),
             ["getProjectConfigurationChoices"] = C(null, "ProjectConfigurationChoices", "200"),
             ["getHostedModelReasoningCatalog"] = C(null, "HostedModelReasoningCatalogV1", "200"),
@@ -323,13 +324,15 @@ internal static partial class GatewayOpenApi
                             ? "Accepted by the owner; this does not mean the requested work is complete."
                             : "Owner response; returned by the owning service.",
                         (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices" or
-                            "getHostedModelReasoningCatalog") && status == "200"
+                        "getHostedModelReasoningCatalog" or "getProjectAgentHistory") && status == "200"
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
                                 ["Cache-Control"] = new
                                 {
                                     description = route.OperationId switch
                                     {
+                                        "getProjectAgentHistory" =>
+                                            "Private project agent history responses are not cacheable.",
                                         "getProjectConfigurationChoices" =>
                                             "Project configuration choice responses are not cacheable.",
                                         "getHostedModelReasoningCatalog" =>
@@ -392,6 +395,13 @@ internal static partial class GatewayOpenApi
         {
             responses["400"] = ProblemResponse("The request must not include query parameters.");
             responses["404"] = ProblemResponse("The owner did not find an accessible project.");
+        }
+        else if (route.OperationId == "getProjectAgentHistory")
+        {
+            // Distinguish an unavailable owner from an agent hidden by current project configuration.
+            responses["400"] = ProblemResponse("The request must not include query parameters.");
+            responses["404"] = ProblemResponse("The project or configured agent is not visible to the caller.");
+            responses["503"] = ProblemResponse("The Knowledge owner is unavailable.");
         }
         else if (route.OperationId == "getHostedModelReasoningCatalog")
         {
@@ -1998,6 +2008,18 @@ else if (route.OperationId is
         ["ProjectKnowledgeRecordPage"] = StrictObj(["items", "totalCount", "page", "pageSize"],
             ("items", Arr(Ref("ProjectKnowledgeRecord"))), ("totalCount", Int()),
             ("page", Int()), ("pageSize", Int())),
+        ["ProjectAgentHistoryEntry"] = StrictObj(
+            ["recordId", "type", "content", "updatedAt"],
+            ("recordId", Uuid()), ("type", Str()), ("title", NullableStr()),
+            ("content", Str()), ("updatedAt", Date())),
+        ["ProjectAgentHistoryResponse"] = StrictObj(["projectId", "agentId", "items"],
+            ("projectId", Str()), ("agentId", Str()),
+            ("items", new
+            {
+                type = "array",
+                items = Ref("ProjectAgentHistoryEntry"),
+                maxItems = ProjectAgentHistoryContract.MaximumItems
+            })),
         ["KnowledgeRecordRevision"] = StrictObj(["recordId", "revision", "revisionId", "kind", "type", "content", "importance", "tags", "state", "trustState", "reason", "createdAt"],
             ("recordId", Uuid()), ("revision", Int()), ("revisionId", Uuid()), ("previousRevisionId", NullableUuid()),
             ("kind", Enum("memory", "proposal", "decision", "sessionContext")), ("type", Str()), ("title", NullableStr()),
