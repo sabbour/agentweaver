@@ -16,7 +16,10 @@ if (options.help) {
 }
 try {
   const receipt = await runProjectsConfigMigration(options);
-  console.log(`Projects & Config migration ${receipt.result} run=${receipt.runId}; receipt=${receipt.receiptPath}`);
+  const operation = receipt.operation === 'bootstrap-first-platform-admin'
+    ? 'PlatformAdmin bootstrap'
+    : 'migration';
+  console.log(`Projects & Config ${operation} ${receipt.result} run=${receipt.runId}; receipt=${receipt.receiptPath}`);
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

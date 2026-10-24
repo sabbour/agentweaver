@@ -25,9 +25,15 @@ var runFirstTenantAdminBootstrap = args.Length == 1 && args[0] == "--bootstrap-f
 if (args.Contains("--bootstrap-first-tenant-admin", StringComparer.Ordinal) && !runFirstTenantAdminBootstrap)
     throw new ArgumentException(
         "The --bootstrap-first-tenant-admin command must be used by itself.", nameof(args));
+var runFirstPlatformAdminBootstrap = PlatformAdminBootstrapCommand.IsCommandAlone(args);
+if (args.Contains(PlatformAdminBootstrapCommand.Argument, StringComparer.Ordinal) &&
+    !runFirstPlatformAdminBootstrap)
+    throw new ArgumentException(
+        "The --bootstrap-first-platform-admin command must be used by itself.", nameof(args));
 
 var builder = WebApplication.CreateBuilder(
-    runMigrations || runPrivilegedProjectSetup || runFirstTenantAdminBootstrap ? [] : args);
+    runMigrations || runPrivilegedProjectSetup || runFirstTenantAdminBootstrap ||
+        runFirstPlatformAdminBootstrap ? [] : args);
 if (runPrivilegedProjectSetup)
 {
     // This one-shot path reports only a stable error code; token and exception details never reach console output.
@@ -67,6 +73,30 @@ if (runFirstTenantAdminBootstrap)
     {
         await Console.Error.WriteLineAsync(
             "First TenantAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (runFirstPlatformAdminBootstrap)
+{
+    try
+    {
+        var created = await PlatformAdminBootstrapCommand.RunAsync(builder.Configuration);
+        await Console.Out.WriteLineAsync(created
+            ? "The first PlatformAdmin was created."
+            : "The approved PlatformAdmin already exists; no changes were made.");
+    }
+    catch (PlatformAdminBootstrapConflictException)
+    {
+        await Console.Error.WriteLineAsync(
+            "First PlatformAdmin bootstrap refused because another active PlatformAdmin exists.");
+        Environment.ExitCode = 1;
+    }
+    catch (Exception)
+    {
+        await Console.Error.WriteLineAsync(
+            "First PlatformAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.");
         Environment.ExitCode = 1;
     }
     return;

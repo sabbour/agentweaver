@@ -747,6 +747,81 @@ open without `403`. The runtime database role stays read-only on authority
 tables until an operator applies the separately approved role-assignment
 grants. See [Runtime authority writes](../reference/runtime-configuration.md#runtime-authority-writes).
 
+### Bootstrap the first PlatformAdmin and configure runtime defaults
+
+Run these steps after the Projects & Config schema is migrated and the
+TenantAdmin is ready. A fresh installation has no platform runtime defaults
+revision. Until one is written, run selection returns
+`409 platform_runtime_unconfigured`.
+
+The PlatformAdmin bootstrap uses the approved issuer, subject, and tenant in
+`projects-config-runtime-config`. It does not accept identity arguments. It
+uses the publication-bound Projects & Config image, verifies that the schema
+is already migrated, and runs one Job under the database-maintenance lock.
+The Job uses the approved identity configuration and the same short-lived
+schema-owner database credential as the migration command. The runner removes
+the Job and credential Secret and writes its receipt outside the checkout.
+
+From a clean checkout of the fetched `origin/v1` tip, first check the plan:
+
+```powershell
+npm run db:maintenance:projects-config -- `
+  --publication .\artifacts\release\publication.json `
+  --bootstrap-first-platform-admin
+```
+
+For execution, provide the password-free migration connection and a
+short-lived PostgreSQL access token through the documented environment
+variables. Read them from protected local files without printing their
+contents:
+
+```powershell
+$env:AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION =
+  Get-Content -Raw .\projects-config-migration-connection.txt
+$env:AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN =
+  Get-Content -Raw .\projects-config-access-token.txt
+npm run db:maintenance:projects-config -- `
+  --publication .\artifacts\release\publication.json `
+  --bootstrap-first-platform-admin --execute
+```
+
+The runner reports whether it created the PlatformAdmin, found the same
+approved grant, or refused because another active PlatformAdmin exists. Stop
+if it reports a conflict. The command verifies the migration history and does
+not rerun migrations or apply runtime grants.
+
+After the bootstrap succeeds, write the reviewed defaults in
+`deploy/k8s/runtime-configs/platform-runtime-defaults.json` through the public
+Gateway API. The script opens the existing P1 browser sign-in flow and requests
+the `P1_SETUP_SCOPES`, including `api.read` and `projects.admin`. Review and
+approve the scopes for the signed-in PlatformAdmin. Tokens remain in memory
+and are never displayed.
+
+Run a comparison first:
+
+```powershell
+npm run platform:runtime-defaults -- `
+  --base-url https://<gateway-host> `
+  --issuer https://<identity-broker-host>/ `
+  --audience https://<api-audience>/
+```
+
+Exit code `2` means the current defaults differ from the reviewed file. To
+write them, add `--execute`. The script uses the current platform revision as
+`expectedRevision`, then reads the configuration again and requires an exact
+readback before reporting the new revision:
+
+```powershell
+npm run platform:runtime-defaults -- `
+  --base-url https://<gateway-host> `
+  --issuer https://<identity-broker-host>/ `
+  --audience https://<api-audience>/ `
+  --execute
+```
+
+Run selection is ready only after the script confirms a configured platform
+revision and exact defaults readback.
+
 3. Check readiness, the deployed image digests, and the exact ServiceAccount
    on each workload. Review only the affected pod's logs if a rollout fails.
    If you enabled public routing, verify the Gateway and route conditions too:

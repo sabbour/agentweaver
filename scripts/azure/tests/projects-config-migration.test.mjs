@@ -42,7 +42,23 @@ function grantResult(overrides = {}) {
   };
 }
 
-function createWorld({ jobOutcome = 'Complete', originV1 = deploymentSourceSha, grants = async () => grantResult() } = {}) {
+function createWorld({
+  jobOutcome = 'Complete',
+  bootstrapLog = 'The first PlatformAdmin was created.',
+  configMap = {
+    kind: 'ConfigMap',
+    metadata: { name: 'projects-config-runtime-config', namespace: DB_MAINTENANCE_TARGET.namespace },
+    immutable: true,
+    data: {
+      ProjectsConfig__Authentication__Authority: 'https://agentweaver.example.aksapp.io/',
+      ProjectsConfig__PrivilegedSetup__ApprovedIssuer: 'https://agentweaver.example.aksapp.io/',
+      ProjectsConfig__PrivilegedSetup__ApprovedSubject: 'approved-subject',
+      ProjectsConfig__PrivilegedSetup__ApprovedTenantId: 'approved-tenant',
+    },
+  },
+  originV1 = deploymentSourceSha,
+  grants = async () => grantResult(),
+} = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), 'projects-config-migration-test-'));
   const calls = [];
   const objects = new Map();
@@ -79,18 +95,19 @@ function createWorld({ jobOutcome = 'Complete', originV1 = deploymentSourceSha, 
         ? { status: 0, stdout: JSON.stringify(objects.get(`lease/${LOCK_NAME}`)), stderr: '' }
         : { status: 1, stdout: '', stderr: 'Error from server (NotFound): leases not found' };
     }
+    if (args.includes('get') && args.includes('configmap')) {
+      return { status: 0, stdout: JSON.stringify(configMap), stderr: '' };
+    }
     if (args.includes('get') && args.includes('job')) {
       const name = args[args.indexOf('job') + 1];
+      const job = objects.get(`job/${name}`);
       return {
         status: 0,
-        stdout: JSON.stringify({
-          kind: 'Job', metadata: { name, namespace: DB_MAINTENANCE_TARGET.namespace },
-          spec: { template: { spec: { automountServiceAccountToken: false } } },
-          status: { conditions: [{ type: jobOutcome, status: 'True' }] },
-        }),
+        stdout: JSON.stringify({ ...job, status: { conditions: [{ type: jobOutcome, status: 'True' }] } }),
         stderr: '',
       };
     }
+    if (args.includes('logs')) return { status: 0, stdout: `${bootstrapLog}\n`, stderr: '' };
     if (args.includes('get') && args.includes('pods')) {
       return { status: 0, stdout: JSON.stringify({ kind: 'List', items: [] }), stderr: '' };
     }
@@ -156,6 +173,116 @@ test('migration arguments are dry-run by default and require a publication', () 
   assert.throws(() => parseProjectsConfigMigrationArgs([]), /--publication is required/);
   assert.throws(() => parseProjectsConfigMigrationArgs(['--publication', 'x', '--reset']), /unknown argument/);
   assert.equal(parseProjectsConfigMigrationArgs(['--publication', 'receipt.json']).execute, false);
+  assert.equal(parseProjectsConfigMigrationArgs([
+    '--publication', 'receipt.json', '--bootstrap-first-platform-admin',
+  ]).bootstrapFirstPlatformAdmin, true);
+});
+
+test('PlatformAdmin bootstrap dry run verifies the approved ConfigMap and avoids writes', async () => {
+  const world = createWorld();
+  try {
+    const receipt = await runProjectsConfigMigration({
+      ...world.options, bootstrapFirstPlatformAdmin: true,
+    }, world.overrides);
+    assert.equal(receipt.result, 'dry-run-passed');
+    assert.equal(receipt.schemaVersion, 1);
+    assert.equal(receipt.operation, 'bootstrap-first-platform-admin');
+    assert.deepEqual(receipt.steps.map(step => step.name), [
+      'publication-image-verified', 'migration-lock-checked', 'bootstrap-identity-config-verified',
+    ]);
+    assert.ok(receipt.plannedSteps.includes('create-platform-admin-bootstrap-job'));
+    assert.equal(world.calls.some(call =>
+      call.command === 'kubectl' && ['create', 'delete', 'apply'].some(verb => call.args.includes(verb))), false);
+    assert.equal(world.calls.some(call => call.command === 'grants'), false);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('PlatformAdmin bootstrap creates one pinned Job, parses the stable outcome, and cleans up', async () => {
+  for (const [bootstrapLog, expectedOutcome] of [
+    ['The first PlatformAdmin was created.', 'created'],
+    ['The approved PlatformAdmin already exists; no changes were made.', 'already-present'],
+  ]) {
+    const world = createWorld({ bootstrapLog });
+    try {
+      const receipt = await withMigrationCredentials(() => runProjectsConfigMigration({
+        ...world.options, execute: true, bootstrapFirstPlatformAdmin: true,
+      }, world.overrides));
+      assert.equal(receipt.result, 'succeeded');
+      assert.equal(receipt.bootstrap.outcome, expectedOutcome);
+      assert.equal(receipt.grants, undefined);
+      assert.deepEqual(receipt.cleanup, { job: true, secret: true, lock: true });
+      assert.equal(world.calls.some(call => call.command === 'grants'), false);
+      const jobCreate = world.calls.find(call =>
+        call.command === 'kubectl' && call.args.includes('create') &&
+        JSON.parse(call.settings.input ?? '{}').kind === 'Job');
+      const job = JSON.parse(jobCreate.settings.input);
+      const container = job.spec.template.spec.containers[0];
+      assert.deepEqual(container.command, [
+        'dotnet', 'Agentweaver.Projects.Config.dll', '--bootstrap-first-platform-admin',
+      ]);
+      assert.equal(container.image, image);
+      for (const key of [
+        'ProjectsConfig__Authentication__Authority',
+        'ProjectsConfig__PrivilegedSetup__ApprovedIssuer',
+        'ProjectsConfig__PrivilegedSetup__ApprovedSubject',
+        'ProjectsConfig__PrivilegedSetup__ApprovedTenantId',
+      ]) {
+        assert.deepEqual(
+          container.env.find(entry => entry.name === key)?.valueFrom?.configMapKeyRef,
+          { name: 'projects-config-runtime-config', key });
+      }
+      assert.equal(world.objects.size, 0);
+      assert.equal(JSON.stringify(receipt).includes('approved-subject'), false);
+    } finally {
+      world.dispose();
+    }
+  }
+});
+
+test('PlatformAdmin bootstrap conflict is recorded as a stable outcome and cleaned up', async () => {
+  const world = createWorld({
+    jobOutcome: 'Failed',
+    bootstrapLog: 'First PlatformAdmin bootstrap refused because another active PlatformAdmin exists.',
+  });
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+      ...world.options, execute: true, bootstrapFirstPlatformAdmin: true,
+    }, world.overrides)), /refused because another active PlatformAdmin exists/);
+    assert.equal(world.receipts[0].receipt.result, 'failed');
+    assert.deepEqual(world.receipts[0].receipt.bootstrap, { outcome: 'conflict' });
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.equal(world.calls.some(call => call.command === 'grants'), false);
+    assert.equal(world.objects.size, 0);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('PlatformAdmin bootstrap fails closed when ConfigMap issuer differs from authority', async () => {
+  const world = createWorld({
+    configMap: {
+      kind: 'ConfigMap',
+      metadata: { name: 'projects-config-runtime-config', namespace: DB_MAINTENANCE_TARGET.namespace },
+      immutable: true,
+      data: {
+        ProjectsConfig__Authentication__Authority: 'https://agentweaver.example.aksapp.io/',
+        ProjectsConfig__PrivilegedSetup__ApprovedIssuer: 'https://other.example.aksapp.io/',
+        ProjectsConfig__PrivilegedSetup__ApprovedSubject: 'approved-subject',
+        ProjectsConfig__PrivilegedSetup__ApprovedTenantId: 'approved-tenant',
+      },
+    },
+  });
+  try {
+    await assert.rejects(runProjectsConfigMigration({
+      ...world.options, bootstrapFirstPlatformAdmin: true,
+    }, world.overrides), /does not match the authentication authority/);
+    assert.equal(world.calls.some(call =>
+      call.command === 'kubectl' && ['create', 'delete'].some(verb => call.args.includes(verb))), false);
+  } finally {
+    world.dispose();
+  }
 });
 
 test('dry run accepts the older publication from a newer v1 tool commit and makes no writes', async () => {

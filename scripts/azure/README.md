@@ -370,6 +370,44 @@ node scripts\azure\bootstrap-p1-postgres.mjs --apply-pending-migrations --max-co
 Run `--inspect` again after applying, and prove each new version from the live
 history.
 
+### Bootstrapping the first PlatformAdmin
+
+After Projects & Config migrations have been applied, the
+`db:maintenance:projects-config` runner can execute the one-shot
+`--bootstrap-first-platform-admin` command. The runner verifies the published
+Projects & Config image digest and source, checks the immutable runtime
+ConfigMap and database-maintenance Lease, then uses the existing hardened Job
+template with the approved issuer, subject, and tenant. The command verifies
+the migration history itself. This mode does not migrate or apply runtime
+grants.
+
+Without `--execute`, it checks the publication, approved identity source, and
+Lease, then writes a plan receipt outside the checkout. For execution, supply
+the same password-free migration connection and short-lived PostgreSQL token
+used by the migration runner through
+`AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION` and
+`AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN`. It creates a temporary
+credential Secret and one bootstrap Job under the Lease, removes both, and
+records the stable result as `created`, `already-present`, or `conflict`.
+
+```powershell
+npm run db:maintenance:projects-config -- --publication .\artifacts\release\publication.json --bootstrap-first-platform-admin
+npm run db:maintenance:projects-config -- --publication .\artifacts\release\publication.json --bootstrap-first-platform-admin --execute
+```
+
+`npm run platform:runtime-defaults` signs in through the P1 browser helper with
+`P1_SETUP_SCOPES`, reads `/api/v1/platform/runtime-defaults`, and compares it
+with the reviewed `deploy/k8s/runtime-configs/platform-runtime-defaults.json`.
+The default invocation is read-only. Add `--execute` to append the reviewed
+defaults with the current expected revision. The script reads them back and
+requires an exact normalized configuration and revision before it succeeds.
+It never writes or prints the access token.
+
+```powershell
+npm run platform:runtime-defaults -- --base-url https://<gateway-host> --issuer https://<identity-broker-host>/ --audience https://<api-audience>/
+npm run platform:runtime-defaults -- --base-url https://<gateway-host> --issuer https://<identity-broker-host>/ --audience https://<api-audience>/ --execute
+```
+
 #### Applying the Projects & Config runtime grants
 
 The Projects & Config migration Job runs as the schema owner and creates

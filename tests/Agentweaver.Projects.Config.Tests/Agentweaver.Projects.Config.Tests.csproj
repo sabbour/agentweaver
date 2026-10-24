@@ -31,6 +31,9 @@
     <None Include="..\..\deploy\k8s\provider-catalogs\projects-config-provider-catalog.json"
           Link="provider-catalog\projects-config-provider-catalog.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\deploy\k8s\runtime-configs\platform-runtime-defaults.json"
+          Link="platform-runtime-defaults.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\docs\reference\contracts.md"
           Link="provider-catalog\contracts.md"
           CopyToOutputDirectory="PreserveNewest" />
