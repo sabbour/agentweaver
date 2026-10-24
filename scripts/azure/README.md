@@ -22,7 +22,7 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`2782a5c49d8de6c33914376332cb80eb24ea9f8cba10b2a3a6d7c9dc5acfb0d7`.
+`2d23dae8dd58c37671fd196a13550907c244694c5a54b0ec51c1ffcde47ff1a1`.
 It is not an approval receipt. The runner uses its explicit registered
 version list, not contiguous numbering; the absent 017 does not require a
 placeholder. The Core list is 1-16, 18-33, and 35-36; 034 is not in the
@@ -388,17 +388,22 @@ Before any write, the mode checks:
 - that every existing relation is planned, operator-owned, and holds no
   runtime privilege beyond the plan;
 - that the runtime role and `PUBLIC` hold no column-level grants, except a
-  planned `UPDATE` on a table's lock column;
+  planned `UPDATE` on a table's lock column or on the role-assignment revoke
+  columns;
 - that the live migration history equals the source's compiled migrations and
   the schema holds exactly the planned objects.
 
 Add `--dry-run` to stop after these checks. It prints the current grant state
 as `exact` or `incomplete` with the first difference, then
 `P1_POSTGRES_PROJECTS_CONFIG_GRANTS_DRY_RUN writes=false`. Without
-`--dry-run`, the mode grants schema `USAGE`, the planned table privileges, and
-`EXECUTE` on the casting authority function, and revokes `PUBLIC` execution
+`--dry-run`, the mode grants schema `USAGE`, the planned table privileges,
+`EXECUTE` on the casting authority function, and the project role-assignment
+writes: `INSERT` on `project_role_assignments` and `authority_audit`, and
+`UPDATE` on only the `state`, `revision`, `revoked_by`, and `revoked_at`
+columns of `project_role_assignments`. It also revokes `PUBLIC` execution
 from the schema's functions. It reads back every grant in the same
-transaction and commits only an exact match. It writes its receipt to
+transaction, including that the role can update exactly those columns and no
+others, and commits only an exact match. It writes its receipt to
 `~/.agentweaver/db-maintenance`, outside the checkout, so the checkout stays
 clean for the next command. Use `--receipt-dir <path>` to choose another
 directory outside the checkout. It ends with `P1_POSTGRES_PROJECTS_CONFIG_GRANTS_APPLIED`. Running it again on

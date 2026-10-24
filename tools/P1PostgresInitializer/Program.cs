@@ -122,6 +122,7 @@ InitializerChecks.AssertMigrationCatalog(plan.EnvironmentVersions,
     Agentweaver.Environment.EnvironmentMigrator.SupportedVersions, null, "Environment");
 InitializerChecks.AssertPrincipalObjectIds(plan.Services);
 InitializerChecks.AssertMutationDenialPlan(plan.Services);
+InitializerChecks.AssertColumnUpdatePlan(plan.Services);
 InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);
 
 if (continuationMode)
@@ -703,16 +704,8 @@ try
                     $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}",
                     cancellationToken);
                 foreach (var table in service.Tables)
-                {
-                    var relation = $"{Quote(service.Schema)}.{Quote(table.Table)}";
-                    await ExecuteAsync(connection, grants,
-                        $"GRANT {string.Join(", ", table.Privileges)} ON TABLE {relation} TO {Quote(service.Role)}",
-                        cancellationToken);
-                    if (table.LockColumn is not null)
-                        await ExecuteAsync(connection, grants,
-                            $"GRANT UPDATE ({Quote(table.LockColumn)}) ON TABLE {relation} TO {Quote(service.Role)}",
-                            cancellationToken);
-                }
+                    foreach (var statement in InitializerChecks.TableGrantStatements(service, table))
+                        await ExecuteAsync(connection, grants, statement, cancellationToken);
                 foreach (var function in service.Functions)
                 {
                     var signature = $"{Quote(service.Schema)}.{function.Signature}";
@@ -754,14 +747,8 @@ try
         await ExecuteAsync(connection, grants, $"GRANT CONNECT ON DATABASE agentweaver TO {Quote(service.Role)}", cancellationToken);
         await ExecuteAsync(connection, grants, $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}", cancellationToken);
         foreach (var table in service.Tables)
-        {
-            var relation = $"{Quote(service.Schema)}.{Quote(table.Table)}";
-            await ExecuteAsync(connection, grants,
-                $"GRANT {string.Join(", ", table.Privileges)} ON TABLE {relation} TO {Quote(service.Role)}", cancellationToken);
-            if (table.LockColumn is not null)
-                await ExecuteAsync(connection, grants,
-                    $"GRANT UPDATE ({Quote(table.LockColumn)}) ON TABLE {relation} TO {Quote(service.Role)}", cancellationToken);
-        }
+            foreach (var statement in InitializerChecks.TableGrantStatements(service, table))
+                await ExecuteAsync(connection, grants, statement, cancellationToken);
         foreach (var function in service.Functions)
         {
             var signature = $"{Quote(service.Schema)}.{function.Signature}";
@@ -803,17 +790,10 @@ static async Task ApplyPlannedServiceGrantsAsync(NpgsqlConnection connection, Np
     await ExecuteAsync(connection, transaction,
         $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}", cancellationToken);
     foreach (var table in service.Tables)
-    {
-        var relation = $"{Quote(service.Schema)}.{Quote(table.Table)}";
-        await ExecuteAsync(connection, transaction,
-            $"GRANT {string.Join(", ", table.Privileges)} ON TABLE {relation} TO {Quote(service.Role)}",
-            cancellationToken);
-        // Some tables also let the runtime role update only one lock column.
-        if (table.LockColumn is not null)
-            await ExecuteAsync(connection, transaction,
-                $"GRANT UPDATE ({Quote(table.LockColumn)}) ON TABLE {relation} TO {Quote(service.Role)}",
-                cancellationToken);
-    }
+        // Each table gets its table privileges, plus one column-list UPDATE for a row-lock column or for
+        // planned column-scoped updates such as the role-assignment revoke columns.
+        foreach (var statement in InitializerChecks.TableGrantStatements(service, table))
+            await ExecuteAsync(connection, transaction, statement, cancellationToken);
     foreach (var function in service.Functions)
     {
         var signature = $"{Quote(service.Schema)}.{function.Signature}";
@@ -1012,22 +992,18 @@ static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTrans
             if (!Equals(await check.ExecuteScalarAsync(cancellationToken), table.Privileges.Contains(privilege)))
                 throw new InvalidOperationException($"Unexpected {privilege} authority on {service.Schema}.{table.Table}.");
         }
-        if (table.LockColumn is not null)
+        // Row-lock tables and column-scoped tables must hold UPDATE on exactly their planned columns.
+        var updateColumns = InitializerChecks.PlannedUpdateColumns(table);
+        if (updateColumns.Length != 0)
         {
-            await using var columnCheck = new NpgsqlCommand("""
-                SELECT has_column_privilege(@role, @table, @column, 'UPDATE')
-                  AND NOT EXISTS (
-                    SELECT 1 FROM pg_catalog.pg_attribute a
-                    WHERE a.attrelid = pg_catalog.to_regclass(@table)
-                      AND a.attnum > 0 AND NOT a.attisdropped AND a.attname <> @column
-                      AND pg_catalog.has_column_privilege(@role, a.attrelid, a.attnum, 'UPDATE'))
-                """, connection, transaction);
+            await using var columnCheck = new NpgsqlCommand(
+                InitializerChecks.ExactUpdateColumnsQuery, connection, transaction);
             columnCheck.Parameters.AddWithValue("role", service.Role);
             columnCheck.Parameters.AddWithValue("table", $"{service.Schema}.{table.Table}");
-            columnCheck.Parameters.AddWithValue("column", table.LockColumn);
+            columnCheck.Parameters.AddWithValue("columns", updateColumns);
             if (await columnCheck.ExecuteScalarAsync(cancellationToken) is not true)
                 throw new InvalidOperationException(
-                    $"The {service.Service} role does not have exactly its planned UPDATE column on {service.Schema}.{table.Table}.");
+                    $"The {service.Service} role does not have exactly its planned UPDATE columns on {service.Schema}.{table.Table}.");
         }
     }
     // Table-level checks can't see column grants, such as UPDATE on one column of a read-only table.
