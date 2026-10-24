@@ -3030,6 +3030,65 @@ test('v1.0.7 verifies the exact normal publication result ref and source commit'
   }, { root, run }), /differs from the immutable GitHub publication result/);
 });
 
+const v109SourceSha = 'f21632d48f606da215cf37e70921c85c2d604f1d';
+
+test('v1.0.9 is pinned for P1 evidence but refused by the pre-acceptance bootstrap deployment', async () => {
+  assert.throws(() => parseArgs(normalBootstrapArgsFor({}, 'v1.0.9')), (error) =>
+    /--pre-acceptance is limited to the exact .*v1\.0\.7 publications/.test(error.message)
+      && !error.message.includes('v1.0.9'));
+  await assert.rejects(deployRelease({
+    preAcceptance: true,
+    releaseTag: 'v1.0.9',
+    target,
+  }), /--pre-acceptance is limited to the exact /);
+});
+
+test('v1.0.9 evidence verifies its exact annotated tag, source commit, and publication result', async () => {
+  const fixture = normalBootstrapFixture(v107Manifest, v109SourceSha);
+  const resultObjectSha = '7'.repeat(40);
+  const resultRefName = `agentweaver-publication/${v109SourceSha}/result`;
+  let tagRef = { object: { type: 'tag', sha: '8'.repeat(40) } };
+  let tagCommitSha = v109SourceSha;
+  const run = (file, args) => {
+    if (file === 'git' && args[0] === 'rev-parse') return 'e'.repeat(40);
+    if (file === 'git' && args[0] === 'status') return '';
+    if (file === 'gh' && args[0] === 'api') {
+      const endpoint = args[1];
+      if (endpoint.endsWith('/releases/tags/v1.0.9')) {
+        return JSON.stringify({ tag_name: 'v1.0.9', draft: false, prerelease: false });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent('v1.0.9')}`)) {
+        return JSON.stringify(tagRef);
+      }
+      if (endpoint.endsWith(`/git/tags/${'8'.repeat(40)}`)) {
+        return JSON.stringify({ tag: 'v1.0.9', object: { type: 'commit', sha: tagCommitSha } });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(resultRefName)}`)) {
+        return JSON.stringify({ object: { type: 'tag', sha: resultObjectSha } });
+      }
+      if (endpoint.endsWith(`/git/tags/${resultObjectSha}`)) {
+        return JSON.stringify({
+          tag: resultRefName,
+          object: { type: 'commit', sha: v109SourceSha },
+          message: JSON.stringify(fixture.publication),
+        });
+      }
+    }
+    assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
+  };
+  assert.equal(await verifyBootstrapRelease('v1.0.9', fixture.publication, { root, run }), v109SourceSha);
+  tagCommitSha = 'f'.repeat(40);
+  await assert.rejects(verifyBootstrapRelease('v1.0.9', fixture.publication, { root, run }),
+    /must resolve to the exact published source commit/);
+  tagCommitSha = v109SourceSha;
+  // The whole-release tag is annotated, so the evidence pin does not allow a lightweight tag.
+  tagRef = { object: { type: 'commit', sha: v109SourceSha } };
+  await assert.rejects(verifyBootstrapRelease('v1.0.9', fixture.publication, { root, run }));
+  tagRef = { object: { type: 'tag', sha: '8'.repeat(40) } };
+  await assert.rejects(verifyBootstrapRelease('v1.0.9',
+    normalBootstrapFixture(v107Manifest, v107SourceSha).publication, { root, run }));
+});
+
 test('strict release deployment still rejects a lightweight release tag', async () => {
   const manifest = releaseManifest();
   const publication = publicationReceipt(manifest);

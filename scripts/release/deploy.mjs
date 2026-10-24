@@ -266,7 +266,31 @@ const BOOTSTRAP_RELEASES = Object.freeze({
     allowLightweightTag: true,
     additionalProductComponents: Object.freeze(['Agentweaver.Providers.Sessions.AgentSessions']),
   }),
+  // Pin v1.0.9 for P1 acceptance evidence only. The whole-release script deployed it, so the
+  // pre-acceptance bootstrap deployment must refuse it while the P1 harness can still verify it.
+  'v1.0.9': Object.freeze({
+    sourceSha: 'f21632d48f606da215cf37e70921c85c2d604f1d',
+    continuation: false,
+    wholeReleaseDeployed: true,
+    additionalProductComponents: Object.freeze(['Agentweaver.Providers.Sessions.AgentSessions']),
+  }),
 });
+
+/**
+ * Returns the pinned release that the pre-acceptance bootstrap deployment may apply.
+ * Releases deployed by the whole-release script stay pinned for P1 evidence checks only.
+ */
+function deployableBootstrapRelease(tag) {
+  const bootstrapRelease = BOOTSTRAP_RELEASES[tag];
+  // A whole-release deployment owns its live rollout and receipt. Applying the same release through
+  // the older bootstrap path would create a second, conflicting deployment history.
+  return bootstrapRelease && !bootstrapRelease.wholeReleaseDeployed ? bootstrapRelease : undefined;
+}
+
+/** Lists the pinned releases that the pre-acceptance bootstrap deployment accepts. */
+function deployableBootstrapReleaseTags() {
+  return Object.keys(BOOTSTRAP_RELEASES).filter(tag => deployableBootstrapRelease(tag));
+}
 /** Maps each service to all required Cilium policy names, including shared egress policies. */
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
   'identity-broker': 'identity-broker-egress',
@@ -474,9 +498,9 @@ export function parseArgs(argv = []) {
   if (help) return { help: true, preAcceptance };
   if (execute && dryRun) fail('--execute and --dry-run are mutually exclusive');
   if (!RELEASE_TAG.test(releaseTag ?? '')) fail('an exact v1.x.y GitHub release tag is required');
-  const bootstrapRelease = BOOTSTRAP_RELEASES[releaseTag];
+  const bootstrapRelease = deployableBootstrapRelease(releaseTag);
   if (preAcceptance && !bootstrapRelease) {
-    fail(`--pre-acceptance is limited to the exact ${Object.keys(BOOTSTRAP_RELEASES).join(' and ')} publications`);
+    fail(`--pre-acceptance is limited to the exact ${deployableBootstrapReleaseTags().join(' and ')} publications`);
   }
   if (resume && restart) fail('--resume and --restart are mutually exclusive');
   if ((resume || restart) && !execute) fail('--resume and --restart require explicit --execute');
@@ -2608,9 +2632,10 @@ export async function deployRelease(options = {}, dependencies = {}) {
   if (parsed.runtimeManifestPath || Object.hasOwn(options, 'runtimeManifest')) {
     fail('release deployment uses the checked-in Kustomize installation; runtime manifests are not accepted');
   }
-  const bootstrapRelease = parsed.preAcceptance ? BOOTSTRAP_RELEASES[parsed.releaseTag] : undefined;
+  // Check the deployable table again because callers can pass parsed options without parseArgs.
+  const bootstrapRelease = parsed.preAcceptance ? deployableBootstrapRelease(parsed.releaseTag) : undefined;
   if (parsed.preAcceptance && !bootstrapRelease) {
-    fail(`--pre-acceptance is limited to the exact ${Object.keys(BOOTSTRAP_RELEASES).join(' and ')} publications`);
+    fail(`--pre-acceptance is limited to the exact ${deployableBootstrapReleaseTags().join(' and ')} publications`);
   }
   if (bootstrapRelease && !bootstrapRelease.continuation &&
       (parsed.completionPath !== undefined || Object.hasOwn(options, 'completion'))) {
