@@ -56,11 +56,16 @@ function tar(files: Array<{ path: string; content: Uint8Array; type?: string; li
 function suiteFiles(
   hasRemoteProvider: boolean,
   hasRemoteDependency: boolean,
+  includeProjectTeamMetadata = false,
 ): Array<{ path: string; content: Uint8Array }> {
   // The shallow graph has only the manifests that the browser must inspect before import.
   const providers = hasRemoteProvider
     ? [{ id: 'search', version: '1.0.0', path: 'providers/search.json' }]
     : [];
+  const projectTeamMetadata = bytes(JSON.stringify({
+    customRoleTitle: 'Project lead',
+    remoteToolProviders: [{ id: 'search', version: '1.0.0' }],
+  }));
   const files = [
     {
       path: 'agentsuite.json',
@@ -72,7 +77,19 @@ function suiteFiles(
     {
       path: 'agents/writer.json',
       content: bytes(JSON.stringify({
-        toolProviders: hasRemoteDependency ? [{ id: 'search', version: '1.0.0' }] : [],
+        id: 'writer',
+        ...(!includeProjectTeamMetadata
+          ? { toolProviders: hasRemoteDependency ? [{ id: 'search', version: '1.0.0' }] : [] }
+          : {}),
+        ...(includeProjectTeamMetadata
+          ? {
+            extensions: [{
+              name: 'agentweaver.project-team.v1',
+              critical: false,
+              digest: `sha256:${createHash('sha256').update(projectTeamMetadata).digest('hex')}`,
+            }],
+          }
+          : {}),
       })),
     },
     { path: 'catalog.json', content: bytes(JSON.stringify({ toolProviders: providers })) },
@@ -81,6 +98,12 @@ function suiteFiles(
     files.push({
       path: 'providers/search.json',
       content: bytes(JSON.stringify({ remote: { endpointRef: 'portable-endpoint' } })),
+    });
+  }
+  if (includeProjectTeamMetadata) {
+    files.push({
+      path: 'agentweaver/project-team/writer.json',
+      content: projectTeamMetadata,
     });
   }
   return files;
@@ -103,13 +126,16 @@ export function contentArchive(
   prefixPaths = false,
   hasRemoteDependency = hasRemoteProvider,
   includeLinks = false,
+  includeRootDirectory = false,
+  includeProjectTeamMetadata = false,
 ): File {
   // Produce the direct gzip content-layer format supported by the importer.
   const files: Array<{ path: string; content: Uint8Array; type?: string; linkName?: string }> =
-    suiteFiles(hasRemoteProvider, hasRemoteDependency).map((file) => ({
+    suiteFiles(hasRemoteProvider, hasRemoteDependency, includeProjectTeamMetadata).map((file) => ({
     ...file,
     path: prefixPaths ? `./${file.path}` : file.path,
     }));
+  if (includeRootDirectory) files.unshift({ path: './', content: new Uint8Array(), type: '5' });
   if (includeLinks) {
     files.push(
       { path: 'payload/search-link', content: new Uint8Array(), type: '2', linkName: 'search' },
@@ -119,19 +145,22 @@ export function contentArchive(
   return toFile(gzipContent(tar(files)), 'team.tar.gz', 'application/gzip');
 }
 
-export function ociArchive(): File {
+export function ociArchive(includeIndexArtifactType = true, manifestArtifactType = 'application/vnd.agentsuite.suite.v1'): File {
   // Build an OCI index and manifest that point to the same compressed suite content layer.
   const contentLayer = gzipContent(tar(suiteFiles(true, true)));
   const contentDigest = `sha256:${createHash('sha256').update(contentLayer).digest('hex')}`;
   const manifest = bytes(JSON.stringify({
     schemaVersion: 2,
+    mediaType: 'application/vnd.oci.image.manifest.v1+json',
+    artifactType: manifestArtifactType,
     layers: [{ mediaType: CONTENT_MEDIA_TYPE, digest: contentDigest, size: contentLayer.byteLength }],
   }));
   const manifestDigest = `sha256:${createHash('sha256').update(manifest).digest('hex')}`;
   const index = bytes(JSON.stringify({
     schemaVersion: 2,
     manifests: [{
-      artifactType: 'application/vnd.agentsuite.suite.v1',
+      mediaType: 'application/vnd.oci.image.manifest.v1+json',
+      ...(includeIndexArtifactType ? { artifactType: 'application/vnd.agentsuite.suite.v1' } : {}),
       digest: manifestDigest,
       size: manifest.byteLength,
     }],

@@ -165,7 +165,8 @@ public sealed partial class ProjectsConfigService
             {
                 Id = exportIdByRole[item.Cast.Role],
                 Title = item.Charter.Name,
-                Charter = item.Charter.Charter,
+                // The converter validates authoring blueprints at 8,192 characters; project charters allow 20,000.
+                Charter = "Project instructions are copied from the configuration revision.",
             })],
         };
 
@@ -198,11 +199,9 @@ public sealed partial class ProjectsConfigService
         }
 
         // Rewrite the generated manifests with retained AgentSuite relationships and remote tool declarations.
-        var files = RemapConvertedBlueprintRoles(package, exportIdByRole);
+        var files = RemapConvertedBlueprintRoles(package, exportIdByRole, active);
         var fileModes = new Dictionary<string, int>(StringComparer.Ordinal);
-        var retainedEntries = new Dictionary<string, AgentSuiteArchiveEntryMetadata>(StringComparer.Ordinal);
         var providerReferences = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
-        var providerKeysByRole = new Dictionary<string, string[]>(StringComparer.Ordinal);
         var roleByEffectiveId = active.ToDictionary(
             item => item.Cast.AgentId,
             item => item.Cast.Role,
@@ -248,7 +247,7 @@ public sealed partial class ProjectsConfigService
                     var providerKey = dependency.ToolProvider;
                     requirements[providerKey] = (providerId, version);
                     var providerReference = AddPortableToolProvider(
-                        imported.Source.Content, providerId, version, files, fileModes, retainedEntries);
+                        imported.Source.Content, providerId, version, files, fileModes);
                     if (providerReferences.TryGetValue(providerKey, out var existingReference))
                     {
                         var existingDigest = existingReference["descriptor"]?["digest"]?.GetValue<string>();
@@ -285,65 +284,46 @@ public sealed partial class ProjectsConfigService
                     },
                 };
             }
-            var toolProviders = new JsonArray();
-            foreach (var provider in requirements.Values
-                         .OrderBy(item => item.Id, StringComparer.Ordinal)
-                         .ThenBy(item => item.Version, StringComparer.Ordinal))
-            {
-                toolProviders.Add(new JsonObject
+            agent["toolProviders"] = new JsonArray();
+            var metadataProviders = new JsonArray(requirements.Values
+                .OrderBy(provider => provider.Id, StringComparer.Ordinal)
+                .ThenBy(provider => provider.Version, StringComparer.Ordinal)
+                .Select(provider => (JsonNode)new JsonObject
                 {
                     ["id"] = provider.Id,
                     ["version"] = provider.Version,
-                    ["executionMode"] = AgentSuiteTypes.ExecutionSharedSandbox,
+                })
+                .ToArray());
+            if (item.Charter.CustomRoleTitle is not null || metadataProviders.Count > 0)
+            {
+                // Remote dependencies have no bundled variant to pin; keep their portable IDs in this non-critical extension.
+                var metadata = new JsonObject
+                {
+                    ["customRoleTitle"] = item.Charter.CustomRoleTitle,
+                    ["remoteToolProviders"] = metadataProviders,
+                };
+                var metadataBytes = Canonical(metadata);
+                AddFileWithoutConflict(
+                    files,
+                    fileModes,
+                    AgentSuiteProjectTeamExtension.ContentPath(item.Cast.Role),
+                    metadataBytes);
+                agent["extensions"] = new JsonArray(new JsonObject
+                {
+                    ["name"] = AgentSuiteProjectTeamExtension.Name,
+                    ["critical"] = false,
+                    ["digest"] = AgentSuiteBlueprintConverter.Digest(metadataBytes),
                 });
             }
-            agent["toolProviders"] = toolProviders;
-            providerKeysByRole[item.Cast.Role] = [.. requirements.Keys.Order(StringComparer.Ordinal)];
             files[agentPath] = Canonical(agent);
         }
 
-        // Agent compositions pin the copied provider manifest and the selected portable platform variant.
+        // The converter's compositions remain free of provider pins because remote providers have no variants.
         var suite = ParseJsonObject(files["agentsuite.json"], "The generated suite manifest is invalid.");
         var compositions = suite["compositions"] as JsonArray
             ?? throw AgentSuiteExportIntegrityError("The generated suite has no compositions array.");
-        foreach (var reference in compositions.OfType<JsonObject>())
-        {
-            var role = reference["agent"]?.GetValue<string>()
-                ?? throw AgentSuiteExportIntegrityError("A generated composition has no agent.");
-            if (!providerKeysByRole.TryGetValue(role, out var providerKeys) || providerKeys.Length == 0)
-                continue;
-            var compositionPath = reference["path"]?.GetValue<string>()
-                ?? throw AgentSuiteExportIntegrityError("A generated composition has no content path.");
-            var composition = ParseJsonObject(files[compositionPath], "A generated composition is invalid.");
-            var platform = composition["platform"] as JsonObject
-                ?? throw AgentSuiteExportIntegrityError("A generated composition has no platform.");
-            var resolvedProviders = new JsonArray();
-            foreach (var providerKey in providerKeys)
-            {
-                var providerReference = providerReferences[providerKey];
-                var providerPath = providerReference["path"]!.GetValue<string>();
-                var provider = ParseJsonObject(files[providerPath], "An exported tool provider is invalid.");
-                var variant = (provider["variants"] as JsonArray ?? new JsonArray())
-                    .OfType<JsonObject>()
-                    .SingleOrDefault(item =>
-                        JsonNode.DeepEquals(item["platform"], platform));
-                if (variant is null)
-                    throw TeamExportRejected(
-                        $"Tool provider '{providerKey}' has no portable variant for {platform["os"]}/{platform["architecture"]}.");
-                resolvedProviders.Add(new JsonObject
-                {
-                    ["id"] = providerReference["id"]!.DeepClone(),
-                    ["version"] = providerReference["version"]!.DeepClone(),
-                    ["manifestDigest"] = providerReference["descriptor"]!["digest"]!.DeepClone(),
-                    ["variantDigest"] = variant["variantDigest"]!.DeepClone(),
-                    ["executionMode"] = AgentSuiteTypes.ExecutionSharedSandbox,
-                });
-            }
-            composition["toolProviders"] = resolvedProviders;
-            files[compositionPath] = Canonical(composition);
-        }
 
-        // The catalog is a suite-level index; each imported provider's connection slots are scrubbed above.
+        // Remote provider manifests are catalog entries; imported project-team metadata carries their dependencies.
         var catalogPath = "tool-providers/catalog.json";
         var catalog = new JsonObject
         {
@@ -392,7 +372,7 @@ public sealed partial class ProjectsConfigService
             .Select(item => new AgentSuiteFile(item.Key, ImmutableArray.Create(item.Value)))
             .ToImmutableArray();
         var archive = AgentSuiteBlueprintConverter.WriteContentArchive(
-            outputFiles, fileModes, retainedEntries.Values);
+            outputFiles, fileModes, null);
         return package with
         {
             Files = outputFiles,
@@ -403,7 +383,8 @@ public sealed partial class ProjectsConfigService
 
     private static Dictionary<string, byte[]> RemapConvertedBlueprintRoles(
         AgentSuiteBlueprintPackage package,
-        IReadOnlyDictionary<string, string> exportIdByRole)
+        IReadOnlyDictionary<string, string> exportIdByRole,
+        IReadOnlyCollection<(ProjectAgentCast Cast, ProjectAgentCharter Charter)> active)
     {
         // Rebuild the converted files under the current project roles, not the converter-only safe aliases.
         var files = package.Files.ToDictionary(
@@ -411,6 +392,7 @@ public sealed partial class ProjectsConfigService
             item => item.Content.ToArray(),
             StringComparer.Ordinal);
         var roleByExportId = exportIdByRole.ToDictionary(item => item.Value, item => item.Key, StringComparer.Ordinal);
+        var charterByRole = active.ToDictionary(item => item.Cast.Role, item => item.Charter, StringComparer.Ordinal);
         var output = files
             .Where(item => !item.Key.StartsWith("agents/", StringComparison.Ordinal) &&
                 !item.Key.StartsWith("instructions/", StringComparison.Ordinal) &&
@@ -427,17 +409,22 @@ public sealed partial class ProjectsConfigService
                 ?? throw AgentSuiteExportIntegrityError("A generated agent has no ID.");
             if (!roleByExportId.TryGetValue(exportId, out var role))
                 throw AgentSuiteExportIntegrityError("A generated agent ID has no project role.");
+            if (!charterByRole.TryGetValue(role, out var charter))
+                throw AgentSuiteExportIntegrityError("A generated agent has no project charter.");
             var oldAgentPath = reference["path"]?.GetValue<string>()
                 ?? throw AgentSuiteExportIntegrityError("A generated agent has no content path.");
             var agent = ParseJsonObject(files[oldAgentPath], "A generated agent manifest is invalid.");
             agent["id"] = role;
             var instructions = agent["instructions"] as JsonObject
                 ?? throw AgentSuiteExportIntegrityError("A generated agent has no instructions.");
-            var oldInstructionsPath = instructions["path"]?.GetValue<string>()
-                ?? throw AgentSuiteExportIntegrityError("Generated instructions have no content path.");
             var newInstructionsPath = $"instructions/{role}.md";
-            output[newInstructionsPath] = files[oldInstructionsPath];
+            var instructionBytes = new UTF8Encoding(false, true).GetBytes(charter.Charter);
+            output[newInstructionsPath] = instructionBytes;
             instructions["path"] = newInstructionsPath;
+            UpdateDescriptor(
+                instructions["descriptor"] as JsonObject,
+                instructionBytes,
+                AgentSuiteBlueprintConverter.InstructionsMediaType);
             var agentBytes = Canonical(agent);
             var newAgentPath = $"agents/{role}.json";
             output[newAgentPath] = agentBytes;
@@ -508,8 +495,7 @@ public sealed partial class ProjectsConfigService
         string id,
         string version,
         Dictionary<string, byte[]> outputFiles,
-        Dictionary<string, int> outputFileModes,
-        Dictionary<string, AgentSuiteArchiveEntryMetadata> retainedEntries)
+        Dictionary<string, int> outputFileModes)
     {
         // Locate the provider through its checked suite catalog instead of guessing a content path.
         var suite = ParseJsonObject(GetContentFile(source, "agentsuite.json"),
@@ -530,47 +516,13 @@ public sealed partial class ProjectsConfigService
         var remote = provider["remote"] as JsonObject
             ?? throw TeamExportRejected($"Tool provider '{id}@{version}' has no remote MCP connection.");
 
-        // Replace every endpoint, network and secret binding slot with portable placeholders.
+        // Replace endpoint and network references; source header names and values are not portable.
         remote["endpointRef"] = "target-environment-mcp";
         remote["headers"] = new JsonArray();
         remote["network"] = new JsonArray(new JsonObject { ["destinationRef"] = "target-environment-mcp" });
-        // Copy validated provider payloads and replace source network declarations with Environment-owned bindings.
-        if (provider["variants"] is JsonArray { Count: 0 })
-        {
-            provider.Remove("variants");
-        }
-        else if (provider["variants"] is JsonArray variants)
-        {
-            foreach (var variant in variants.OfType<JsonObject>())
-            {
-                var payloadRoot = variant["payloadRoot"]?.GetValue<string>()
-                    ?? throw AgentSuiteExportIntegrityError($"Tool provider '{id}@{version}' has an invalid payload root.");
-                var payloadPrefix = payloadRoot + "/";
-                foreach (var entry in source.Entries.Where(item =>
-                             item.Path == payloadRoot ||
-                             item.Path.StartsWith(payloadPrefix, StringComparison.Ordinal)))
-                {
-                    if (entry.Type == "file")
-                    {
-                        AddFileWithoutConflict(
-                            outputFiles,
-                            outputFileModes,
-                            entry.Path,
-                            entry.Bytes ?? throw AgentSuiteExportIntegrityError(
-                                $"Tool provider '{id}@{version}' has a missing payload file."),
-                            checked((int)entry.Mode));
-                    }
-                    else if (entry.Type is "directory" or "symlink" or "hardlink")
-                    {
-                        AddRetainedEntry(retainedEntries, new(
-                            entry.Path, entry.Type, checked((int)entry.Mode), entry.Uid, entry.Gid, entry.LinkTarget));
-                    }
-                }
-                variant["network"] = new JsonArray();
-                variant["variantDigest"] = string.Empty;
-                variant["variantDigest"] = AgentSuiteBlueprintConverter.Digest(Canonical(variant));
-            }
-        }
+        // Bundled payloads and literal launcher arguments are source-authored and cannot be proven portable.
+        provider.Remove("variants");
+        provider["retained"] = true;
         foreach (var tool in (provider["tools"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
         {
             var authorization = tool["delegatedAuthorization"] as JsonObject;
@@ -649,21 +601,6 @@ public sealed partial class ProjectsConfigService
         }
         files.Add(path, content);
         fileModes[path] = mode;
-    }
-
-    private static void AddRetainedEntry(
-        Dictionary<string, AgentSuiteArchiveEntryMetadata> entries,
-        AgentSuiteArchiveEntryMetadata entry)
-    {
-        // Shared provider payloads may repeat a path only when the tar metadata agrees exactly.
-        var key = entry.Type == "directory" ? entry.Path.TrimEnd('/') : entry.Path;
-        if (entries.TryGetValue(key, out var existing))
-        {
-            if (existing != entry)
-                throw TeamExportRejected($"Conflicting AgentSuite content was found at '{entry.Path}'.");
-            return;
-        }
-        entries.Add(key, entry);
     }
 
     private static byte[] GetContentFile(ContentSet content, string path) =>

@@ -13,8 +13,13 @@ The generated archive passes the AgentSuite validator before it is returned. Sou
 header values, connection IDs, and destination names are not copied. Remote providers use portable
 endpoint and network binding slots, and delegated authorization uses a target-environment slot.
 The existing import flow binds tool dependencies to the target project's Environment connections.
-The package contains no secrets. Export rejects a non-empty policy egress allow list because it can
-contain source-environment destinations.
+Bundled provider variants, payloads, and launcher arguments are not copied. A digest-bound,
+non-critical Agentweaver extension preserves custom role titles and remote-only provider
+requirements, which AgentSuite compositions cannot represent. The existing importer reads the
+extension to restore titles and bind remote dependencies. Export does not copy provider connection
+credentials. Project instructions are preserved verbatim and
+should be reviewed before sharing. Export rejects a non-empty policy egress allow list because it
+can contain source-environment destinations.
 
 ## Import a package
 

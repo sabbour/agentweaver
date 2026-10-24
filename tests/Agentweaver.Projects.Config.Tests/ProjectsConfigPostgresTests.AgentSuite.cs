@@ -125,8 +125,21 @@ public sealed partial class ProjectsConfigPostgresTests
             db, authorityStore, "agentsuite-export-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
             ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
         var source = await service.CreateProjectAsync(owner, "Export source", CancellationToken.None);
+        var longCharter = new string('x', 20_000);
         var initial = await SeedHistoricalConfigurationAsync(
-            db, source, owner.ActorId, CastingConfiguration("existing-agent", "Existing charter"));
+            db,
+            source,
+            owner.ActorId,
+            CastingConfiguration("existing-agent", longCharter) with
+            {
+                AgentCharters =
+                [
+                    new ProjectAgentCharter("existing-agent", "Existing member", "builder", longCharter)
+                    {
+                        CustomRoleTitle = "Senior builder",
+                    },
+                ],
+            });
         var sourceConnectionId = Guid.NewGuid().ToString("D");
         var sourceRequest = AgentSuiteTeamWithRemoteDependency(initial.Revision);
         var sourceValidation = AgentSuiteValidator.Validate(
@@ -185,12 +198,17 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal("target-environment-authorization",
             provider.RootElement.GetProperty("tools").EnumerateArray().First()
                 .GetProperty("delegatedAuthorization").GetProperty("credential").GetProperty("bindingRef").GetString());
+        Assert.False(provider.RootElement.TryGetProperty("variants", out _));
         var packageText = string.Join('\n', files.Values.Select(Encoding.UTF8.GetString));
         Assert.DoesNotContain("search-mcp-endpoint", packageText, StringComparison.Ordinal);
         Assert.DoesNotContain("search-mcp-auth", packageText, StringComparison.Ordinal);
         Assert.DoesNotContain("search-mcp-egress", packageText, StringComparison.Ordinal);
         Assert.DoesNotContain("search-delegated-connection", packageText, StringComparison.Ordinal);
         Assert.DoesNotContain("10.0.0.2", packageText, StringComparison.Ordinal);
+        Assert.DoesNotContain("source-bundled-secret", packageText, StringComparison.Ordinal);
+        Assert.DoesNotContain("source-launcher-token", packageText, StringComparison.Ordinal);
+        Assert.DoesNotContain("source-private.example", packageText, StringComparison.Ordinal);
+        Assert.DoesNotContain(files.Keys, path => path.StartsWith("tool-providers/search/1.0.0/payload/", StringComparison.Ordinal));
 
         // Import the exported package through the existing service and bind its tool provider to the target project.
         var target = await service.CreateProjectAsync(owner, "Export target", CancellationToken.None);
@@ -204,6 +222,10 @@ public sealed partial class ProjectsConfigPostgresTests
         }, store, CancellationToken.None);
         var targetProposal = Assert.IsType<ProjectCastingProposal>(roundTrip.Proposal);
         Assert.Equal(graph.Agents.Select(item => item.Id), targetProposal.Draft.Casting.Select(item => item.Role));
+        var targetCharter = Assert.Single(targetProposal.Draft.AgentCharters, item => item.Role == "builder");
+        Assert.Equal("Existing member", targetCharter.Name);
+        Assert.Equal("Senior builder", targetCharter.CustomRoleTitle);
+        Assert.Equal(longCharter, targetCharter.Charter);
         var dependencies = roundTrip.Import.Agents.SelectMany(item => item.ToolDependencies)
             .Where(item => item.ToolProvider == "search@1.0.0").ToArray();
         Assert.NotEmpty(dependencies);
@@ -215,6 +237,24 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(
             writerPolicyDigest,
             Assert.Single(roundTrip.Import.Agents, item => item.NativeId == "writer").PolicyDigest);
+
+        var targetConfirmed = await service.ConfirmCastingProposalAsync(
+            owner, target.ProjectId, targetProposal.ProposalId, targetProposal.DraftRevision, CancellationToken.None);
+        var applied = await service.GetProjectConfigurationAsync(
+            owner, target.ProjectId, targetConfirmed.ConfirmedConfigurationRevision, CancellationToken.None);
+        var expectedTeam = current.Configuration.Casting.OrderBy(item => item.Order)
+            .Select(cast =>
+            {
+                var charter = current.Configuration.AgentCharters.Single(item => item.AgentId == cast.AgentId);
+                return (cast.Role, cast.Order, charter.Name, charter.CustomRoleTitle, charter.Charter);
+            });
+        var actualTeam = applied.Configuration.Casting.OrderBy(item => item.Order)
+            .Select(cast =>
+            {
+                var charter = applied.Configuration.AgentCharters.Single(item => item.AgentId == cast.AgentId);
+                return (cast.Role, cast.Order, charter.Name, charter.CustomRoleTitle, charter.Charter);
+            });
+        Assert.Equal(expectedTeam, actualTeam);
     }
 
     [Fact]
@@ -728,11 +768,11 @@ public sealed partial class ProjectsConfigPostgresTests
 
     private static ImportProjectAgentSuiteRequest AgentSuiteTeamWithRemoteDependency(long revision)
     {
-        // Give the remote provider a harmless executable variant so AgentSuite compositions can pin it.
+        // Give the imported fixture a variant so the export can prove it omits source-authored payloads and arguments.
         var files = AgentSuiteArchives.FixtureContent("team");
         const string providerPath = "tool-providers/search/1.0.0/tool-provider.json";
         const string payloadRoot = "tool-providers/search/1.0.0/payload";
-        var executable = Encoding.UTF8.GetBytes("#!/bin/sh\nexit 0\n");
+        var executable = Encoding.UTF8.GetBytes("#!/bin/sh\n# source-bundled-secret\nexit 0\n");
         files[$"{payloadRoot}/bin/search"] = executable;
         var providerFiles = new JsonArray
         {
@@ -781,7 +821,7 @@ public sealed partial class ProjectsConfigPostgresTests
             ["relocatable"] = true,
             ["payloadRoot"] = payloadRoot,
             ["entrypoint"] = "/opt/search/bin/search",
-            ["arguments"] = new JsonArray(),
+            ["arguments"] = new JsonArray("https://source-private.example", "source-launcher-token"),
             ["searchPath"] = new JsonArray(),
             ["environment"] = new JsonArray(),
             ["writablePaths"] = new JsonArray(),

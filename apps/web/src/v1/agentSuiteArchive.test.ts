@@ -50,6 +50,21 @@ describe('inspectAgentSuiteArchive', () => {
     });
   });
 
+  it('accepts an OCI index descriptor without artifactType when its manifest identifies AgentSuite', async () => {
+    stubDecompressionStream();
+    await expect(inspectAgentSuiteArchive(ociArchive(false))).resolves.toEqual({
+      format: 'oci-layout-tar',
+      toolProviders: ['search@1.0.0'],
+    });
+  });
+
+  it('checks the OCI manifest artifact type when the index descriptor omits it', async () => {
+    stubDecompressionStream();
+    await expect(inspectAgentSuiteArchive(
+      ociArchive(false, 'application/vnd.example.other.v1'),
+    )).rejects.toThrow('The OCI manifest is not an AgentSuite artifact.');
+  });
+
   it('accepts a package with no remote provider dependencies', async () => {
     stubDecompressionStream();
     await expect(inspectAgentSuiteArchive(contentArchive(false))).resolves.toEqual({
@@ -69,6 +84,24 @@ describe('inspectAgentSuiteArchive', () => {
   it('accepts valid tar entries with a leading current-directory prefix', async () => {
     stubDecompressionStream();
     await expect(inspectAgentSuiteArchive(contentArchive(true, true))).resolves.toEqual({
+      format: 'content-tar-gzip',
+      toolProviders: ['search@1.0.0'],
+    });
+  });
+
+  it('skips the root directory entry in a content tar', async () => {
+    stubDecompressionStream();
+    await expect(inspectAgentSuiteArchive(contentArchive(true, false, true, false, true))).resolves.toEqual({
+      format: 'content-tar-gzip',
+      toolProviders: ['search@1.0.0'],
+    });
+  });
+
+  it('discovers extension providers when the native requirement list is absent', async () => {
+    stubDecompressionStream();
+    await expect(inspectAgentSuiteArchive(
+      contentArchive(true, false, false, false, false, true),
+    )).resolves.toEqual({
       format: 'content-tar-gzip',
       toolProviders: ['search@1.0.0'],
     });

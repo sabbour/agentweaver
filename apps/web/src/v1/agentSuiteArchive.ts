@@ -4,6 +4,9 @@ const MAX_ARCHIVE_BYTES = 16 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 64 * 1024 * 1024;
 const MAX_TAR_ENTRIES = 10_000;
 const CONTENT_MEDIA_TYPE = 'application/vnd.agentsuite.content.v1.tar+gzip';
+const OCI_MANIFEST_MEDIA_TYPE = 'application/vnd.oci.image.manifest.v1+json';
+const SUITE_ARTIFACT_TYPE = 'application/vnd.agentsuite.suite.v1';
+const PROJECT_TEAM_EXTENSION = 'agentweaver.project-team.v1';
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 
@@ -46,19 +49,44 @@ export async function inspectAgentSuiteArchive(file: File): Promise<InspectedAge
     const reference = value as Record<string, unknown>;
     const path = requiredString(reference.path, 'An agent manifest path is missing.');
     const agent = parseJsonFile(contentFiles, path);
-    if (agent.toolProviders === undefined) continue;
-    if (!Array.isArray(agent.toolProviders)) {
-      throw new Error('An agent tool provider list is invalid.');
-    }
-    for (const requirement of agent.toolProviders) {
-      if (!requirement || typeof requirement !== 'object' || Array.isArray(requirement)) {
-        throw new Error('An agent tool provider requirement is invalid.');
+    if (agent.toolProviders !== undefined) {
+      if (!Array.isArray(agent.toolProviders)) {
+        throw new Error('An agent tool provider list is invalid.');
       }
-      const toolProvider = requirement as Record<string, unknown>;
-      requiredProviders.add(
-        `${requiredString(toolProvider.id, 'A tool provider ID is missing.')}@` +
-        requiredString(toolProvider.version, 'A tool provider version is missing.'),
-      );
+      for (const requirement of agent.toolProviders) {
+        if (!requirement || typeof requirement !== 'object' || Array.isArray(requirement)) {
+          throw new Error('An agent tool provider requirement is invalid.');
+        }
+        const toolProvider = requirement as Record<string, unknown>;
+        requiredProviders.add(
+          `${requiredString(toolProvider.id, 'A tool provider ID is missing.')}@` +
+          requiredString(toolProvider.version, 'A tool provider version is missing.'),
+        );
+      }
+    }
+    if (agent.extensions !== undefined && !Array.isArray(agent.extensions)) {
+      throw new Error('The agent extension list is invalid.');
+    }
+    for (const value of (agent.extensions as unknown[] | undefined) ?? []) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const extension = value as Record<string, unknown>;
+      if (extension.name !== PROJECT_TEAM_EXTENSION) continue;
+      // Agentweaver exports remote dependencies in this digest-bound extension because they have no variant to compose.
+      const agentId = requiredString(agent.id, 'The project-team agent ID is missing.');
+      const metadata = parseJsonFile(contentFiles, `agentweaver/project-team/${agentId}.json`);
+      if (!Array.isArray(metadata.remoteToolProviders)) {
+        throw new Error('The project-team remote tool provider list is invalid.');
+      }
+      for (const requirement of metadata.remoteToolProviders) {
+        if (!requirement || typeof requirement !== 'object' || Array.isArray(requirement)) {
+          throw new Error('A project-team tool provider requirement is invalid.');
+        }
+        const toolProvider = requirement as Record<string, unknown>;
+        requiredProviders.add(
+          `${requiredString(toolProvider.id, 'A tool provider ID is missing.')}@` +
+          requiredString(toolProvider.version, 'A tool provider version is missing.'),
+        );
+      }
     }
   }
   const catalogPath = requiredString(
@@ -135,7 +163,9 @@ async function readOciContent(bytes: Uint8Array): Promise<Map<string, Uint8Array
   }
   const descriptor = index.manifests.find((value) =>
     value && typeof value === 'object' && !Array.isArray(value) &&
-    (value as Record<string, unknown>).artifactType === 'application/vnd.agentsuite.suite.v1');
+    (value as Record<string, unknown>).mediaType === OCI_MANIFEST_MEDIA_TYPE &&
+    ((value as Record<string, unknown>).artifactType === undefined ||
+      (value as Record<string, unknown>).artifactType === SUITE_ARTIFACT_TYPE));
   if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) {
     throw new Error('The OCI layout does not contain an AgentSuite artifact.');
   }
@@ -145,6 +175,9 @@ async function readOciContent(bytes: Uint8Array): Promise<Map<string, Uint8Array
   );
   const manifestPath = `blobs/sha256/${manifestDigest.slice(7)}`;
   const manifest = parseJsonFile(layoutFiles, manifestPath);
+  if (manifest.artifactType !== SUITE_ARTIFACT_TYPE) {
+    throw new Error('The OCI manifest is not an AgentSuite artifact.');
+  }
   if (!Array.isArray(manifest.layers)) {
     throw new Error('The OCI artifact does not contain content layers.');
   }
@@ -187,12 +220,16 @@ function readTar(bytes: Uint8Array): Map<string, Uint8Array> {
     const path = rawPath.replace(/^(?:\.\/)+/, '');
     const type = header[156] === 0 ? '0' : String.fromCharCode(header[156]);
     const size = readTarOctal(decoder, header.subarray(124, 136));
+    if (size > MAX_EXPANDED_BYTES || offset + 512 + size > bytes.byteLength) {
+      throw new Error('The AgentSuite archive contains an invalid file size.');
+    }
+    if (!path && type === '5' && size === 0) {
+      offset += 512;
+      continue;
+    }
     if (!path || path.startsWith('/') || path.includes('\\') ||
         path.split('/').some(segment => segment === '.' || segment === '..')) {
       throw new Error('The AgentSuite archive contains an unsafe path.');
-    }
-    if (size > MAX_EXPANDED_BYTES || offset + 512 + size > bytes.byteLength) {
-      throw new Error('The AgentSuite archive contains an invalid file size.');
     }
     if ((type === '1' || type === '2') && size !== 0) {
       throw new Error('The AgentSuite archive contains an invalid link entry.');
