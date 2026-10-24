@@ -7,16 +7,17 @@
  * not available in v1.
  */
 import {
-  Accordion, AccordionHeader, AccordionItem, AccordionPanel, Button, Checkbox, MessageBar, MessageBarBody,
+  Accordion, AccordionHeader, AccordionItem, AccordionPanel, Button, Checkbox, Field, Input, MessageBar, MessageBarBody,
   Radio, RadioGroup, Select, Spinner, Text, Title3, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import { CheckmarkRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { AppDialog } from '../components/ui/AppDialog';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
 import { gatewayClient } from './api';
-import { agentsPath, castableRoles, castingError, draftMembers, draftWithRoles, draftWithoutMember, isConflict } from './castingData';
+import { agentsPath, castableRoles, castingError, draftMembers, draftWithRoles, draftWithoutMember, isConflict, type DraftMember } from './castingData';
 import type {
   ProjectCastingProposal, ProjectCastingRoleDefinition, ProjectCastingTemplateDefinition, VersionedProjectConfiguration,
 } from './contracts';
@@ -75,6 +76,62 @@ function sameRoleSet(left: string[], right: string[]): boolean {
   if (left.length !== right.length) return false;
   const set = new Set(right);
   return left.every((id) => set.has(id));
+}
+
+/** Reuses the 0.x Re-role fields while applying changes to the open proposal draft. */
+function ProposalMemberRoleDialog({ member, roles, disabled, error, onSave }: {
+  member: DraftMember;
+  roles: ProjectCastingRoleDefinition[];
+  disabled: boolean;
+  error: string | null;
+  onSave: (roleId: string, customRoleTitle: string | null) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [roleId, setRoleId] = useState('');
+  const [customRoleTitle, setCustomRoleTitle] = useState('');
+
+  const save = async () => {
+    if (!roleId) return;
+    // Close only after the owner accepts the revision-bound draft update.
+    if (await onSave(roleId, customRoleTitle.trim() || null)) setOpen(false);
+  };
+
+  return (
+    <AppDialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) {
+          setRoleId(roles.some((role) => role.id === member.role) ? member.role : '');
+          setCustomRoleTitle(member.customRoleTitle ?? '');
+        }
+      }}
+      trigger={<Button appearance="subtle" size="small" disabled={disabled}>Re-role</Button>}
+      title={`Re-role ${member.name}`}
+      description="Choose a catalog role. A custom title changes its label only."
+      primaryAction={{ label: disabled ? 'Saving…' : 'Re-role', onClick: () => void save(), disabled: !roleId || disabled, loading: disabled }}
+      modalType="alert"
+    >
+      <div>
+        <Field label="New role" required>
+          <Select value={roleId} disabled={disabled} onChange={(_, data) => setRoleId(data.value)}>
+            <option value="">Select a role</option>
+            {roles.map((role) => <option key={role.id} value={role.id}>{role.title}</option>)}
+          </Select>
+        </Field>
+        <Field label="Custom role title (optional)">
+          <Input
+            value={customRoleTitle}
+            maxLength={120}
+            disabled={disabled}
+            placeholder="Override the role title"
+            onChange={(_, data) => setCustomRoleTitle(data.value)}
+          />
+        </Field>
+        {error && <ErrorNotice>{error}</ErrorNotice>}
+      </div>
+    </AppDialog>
+  );
 }
 
 /** Route page for `/projects/:projectId/team/cast`. `?proposal=` opens a proposal for review. */
@@ -168,17 +225,19 @@ export function CastTeamPage() {
   };
 
   /** Runs one write. On a revision conflict it re-reads the data, then shows the message. */
-  const write = async (operation: () => Promise<void>, onConflict: () => Promise<unknown>) => {
+  const write = async (operation: () => Promise<void>, onConflict: () => Promise<unknown>): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
       await operation();
+      return true;
     } catch (reason) {
       if (isConflict(reason)) {
         // Re-read first, so the message about the latest version is true.
         try { await onConflict(); } catch { /* the conflict message below still applies */ }
       }
       setError(castingError(reason, true));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -222,6 +281,21 @@ export function CastTeamPage() {
       expectedDraftRevision: proposal.draftRevision,
       draft: draftWithoutMember(proposal.draft, agentId),
     }, tenant), null);
+    setProposal(updated);
+  }, () => readProposal(proposal!.proposalId));
+
+  /** Updates only the selected member and advances the proposal's draft revision. */
+  const reroleMember = (agentId: string, roleId: string, customRoleTitle: string | null) => write(async () => {
+    if (!proposal) return;
+    // The role endpoint keeps the catalog ID and optional display title separate in the proposal.
+    const updated = await apiCall((token, tenant) => gatewayClient.updateCastingProposalMemberRole(
+      token,
+      projectId,
+      proposal.proposalId,
+      agentId,
+      { expectedDraftRevision: proposal.draftRevision, roleId, customRoleTitle },
+      tenant,
+    ), null);
     setProposal(updated);
   }, () => readProposal(proposal!.proposalId));
 
@@ -390,12 +464,23 @@ export function CastTeamPage() {
                       <div className={styles.memberHeader}>
                         <div>
                           <Text className={styles.memberName}>{member.name}</Text>
-                          <Text className={styles.muted}> — {member.role}</Text>
+                          <Text className={styles.muted}> — {member.customRoleTitle || roles.find((role) => role.id === member.role)?.title || member.role}</Text>
                         </div>
-                        {pending && (!augmentProposal || !existingAgentIds.has(member.agentId)) && (
-                          <Button appearance="subtle" size="small" disabled={busy} aria-label={`Remove ${member.name}`} onClick={() => void removeMember(member.agentId)}>
-                            Remove
-                          </Button>
+                        {pending && (
+                          <div className={styles.navRow}>
+                            <ProposalMemberRoleDialog
+                              member={member}
+                              roles={roles}
+                              disabled={busy}
+                              error={error}
+                              onSave={(roleId, customRoleTitle) => reroleMember(member.agentId, roleId, customRoleTitle)}
+                            />
+                            {(!augmentProposal || !existingAgentIds.has(member.agentId)) && (
+                              <Button appearance="subtle" size="small" disabled={busy} aria-label={`Remove ${member.name}`} onClick={() => void removeMember(member.agentId)}>
+                                Remove
+                              </Button>
+                            )}
+                          </div>
                         )}
                       </div>
                       {member.charter && (
