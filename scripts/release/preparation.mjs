@@ -12,6 +12,20 @@ import { validateManifest, WEB_LOCK_PATH, WEB_PROJECT_PATH } from './validate.mj
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`release preparation: ${message}`); };
 
+function ensureSourceCommitAvailable(git, sourceSha) {
+  try {
+    git('cat-file', '-e', `${sourceSha}^{commit}`);
+  } catch (localError) {
+    try {
+      // Closed pull-request refs keep the exact source commit fetchable after its branch is deleted.
+      git('fetch', '--quiet', '--no-tags', 'origin', sourceSha);
+      git('cat-file', '-e', `${sourceSha}^{commit}`);
+    } catch (fetchError) {
+      fail(`source commit ${sourceSha} is unavailable locally and cannot be fetched from origin: ${fetchError.message || localError.message}`);
+    }
+  }
+}
+
 /** Produces the updated manifest and preparation receipt for an applied draft release plan. */
 export function preparationFiles(manifestText, plan, appliedAt, readSource) {
   const manifest = JSON.parse(manifestText);
@@ -90,24 +104,39 @@ export function preparationFiles(manifestText, plan, appliedAt, readSource) {
  * Returns verified preparation data or throws on a missing, altered, or invalid receipt.
  */
 export function verifyPreparation(root, receipt, { readFile = readFileSync, verifyArchives = true } = {}) {
-  if (!receipt || receipt.schemaVersion !== 1 ||
+  const rebound = receipt?.schemaVersion === 2;
+  if (!receipt || ![1, 2].includes(receipt.schemaVersion) ||
       !/^[a-f0-9]{40}$/.test(receipt.sourceSha ?? '') ||
       !/^releases\/[a-z0-9][a-z0-9-]*\.json$/.test(receipt.manifestPath ?? '') ||
       typeof receipt.appliedAt !== 'string' || !Number.isFinite(Date.parse(receipt.appliedAt))) {
     fail('malformed source-bound receipt');
   }
+  const planSourceSha = rebound ? receipt.planSourceSha : receipt.sourceSha;
+  if (!/^[a-f0-9]{40}$/.test(planSourceSha ?? '')) fail('malformed plan source SHA');
   const git = (...args) => execFileSync('git', args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
-  git('cat-file', '-e', `${receipt.sourceSha}^{commit}`);
-  const sourcePaths = new Set(git('ls-tree', '-r', '--name-only', receipt.sourceSha).toString('utf8').trim().split('\n'));
+  if (rebound) {
+    if (!/^[a-f0-9]{40}$/.test(receipt.preparationBaseSha ?? '') ||
+        !/^[a-f0-9]{64}$/.test(receipt.originalReceiptSha256 ?? '')) {
+      fail('malformed squash-rebind evidence');
+    }
+    try {
+      git('cat-file', '-e', `${receipt.sourceSha}^{commit}`);
+      git('merge-base', '--is-ancestor', receipt.sourceSha, 'HEAD');
+    } catch {
+      fail('squash-rebind source is not in the integrated history');
+    }
+  }
+  ensureSourceCommitAvailable(git, planSourceSha);
+  const sourcePaths = new Set(git('ls-tree', '-r', '--name-only', planSourceSha).toString('utf8').trim().split('\n'));
   const sourceBytes = (file) => {
     if (!sourcePaths.has(file)) throw Object.assign(new Error(`missing source file ${file}`), { code: 'ENOENT' });
-    return git('show', `${receipt.sourceSha}:${file}`);
+    return git('show', `${planSourceSha}:${file}`);
   };
   const readSource = (file) => sourceBytes(file).toString('utf8');
   const sourceManifest = readSource(receipt.manifestPath);
   const plan = createPlan(JSON.parse(sourceManifest), {
     root,
-    git: () => receipt.sourceSha,
+    git: () => planSourceSha,
     readdirSync: () => [...sourcePaths].filter((file) => /^\.changeset\/[^/]+$/.test(file)).map((file) => path.posix.basename(file)),
     readFileSync: (file) => readSource(path.relative(root, file).replaceAll('\\', '/')),
   });
@@ -122,6 +151,43 @@ export function verifyPreparation(root, receipt, { readFile = readFileSync, veri
     sha256: hash(sourceBytes(sourcePath)),
   }));
   if (JSON.stringify(receipt.changesets) !== JSON.stringify(expectedArchives)) fail('receipt archives do not match genuine source changeset bytes');
+  if (rebound) {
+    let commonBase;
+    try {
+      git('cat-file', '-e', `${receipt.preparationBaseSha}^{commit}`);
+      commonBase = git('merge-base', '--all', receipt.sourceSha, planSourceSha).toString('utf8').trim();
+    } catch {
+      fail('squash-rebind preparation base is not available in the integrated history');
+    }
+    if (commonBase !== receipt.preparationBaseSha) {
+      fail('squash-rebind preparation base is not the unique source common ancestor');
+    }
+
+    const originalPath = `releases/receipts/${planSourceSha}.json`;
+    let originalReceiptBytes;
+    try {
+      originalReceiptBytes = readFile(path.join(root, originalPath));
+    } catch (error) {
+      fail(`${originalPath}: cannot read original preparation receipt: ${error.message}`);
+    }
+    if (hash(originalReceiptBytes) !== receipt.originalReceiptSha256) {
+      fail(`${originalPath}: original preparation receipt does not match the squash-rebind hash`);
+    }
+    let originalReceipt;
+    try {
+      originalReceipt = JSON.parse(originalReceiptBytes.toString('utf8'));
+    } catch (error) {
+      fail(`${originalPath}: original preparation receipt is not valid JSON: ${error.message}`);
+    }
+    if (originalReceipt.schemaVersion !== 1 || originalReceipt.sourceSha !== planSourceSha ||
+        originalReceipt.manifestPath !== receipt.manifestPath ||
+        originalReceipt.planChecksum !== receipt.planChecksum ||
+        originalReceipt.appliedAt !== receipt.appliedAt ||
+        JSON.stringify(originalReceipt.components) !== JSON.stringify(receipt.components) ||
+        JSON.stringify(originalReceipt.changesets) !== JSON.stringify(receipt.changesets)) {
+      fail(`${originalPath}: original preparation receipt does not match the squash-rebound receipt`);
+    }
+  }
   const prepared = preparationFiles(sourceManifest, plan, receipt.appliedAt, readSource);
   prepared.files.set(receipt.manifestPath, prepared.manifestText);
   for (const { sourcePath, archivedPath } of expectedArchives) {
@@ -130,6 +196,44 @@ export function verifyPreparation(root, receipt, { readFile = readFileSync, veri
       if (!Buffer.from(archived).equals(sourceBytes(sourcePath))) fail(`archive ${archivedPath} differs from source Git note bytes`);
     }
     prepared.files.set(archivedPath, sourceBytes(sourcePath));
+  }
+  if (rebound) {
+    const currentBytes = (file) => {
+      try {
+        return readFile(path.join(root, file));
+      } catch (error) {
+        if (error.code === 'ENOENT') return undefined;
+        throw error;
+      }
+    };
+    for (const [file, expected] of prepared.files) {
+      const current = currentBytes(file);
+      if (!current || !Buffer.from(current).equals(Buffer.from(expected))) {
+        fail(`${file}: integrated artifact does not match the source-derived release preparation`);
+      }
+    }
+    const sourceChanges = git('diff', '--name-status', '-z', '--no-renames',
+      receipt.preparationBaseSha, planSourceSha).toString('utf8').split('\0');
+    const changedSources = [];
+    for (let index = 0; index < sourceChanges.length - 1; index += 2) {
+      changedSources.push({ status: sourceChanges[index], file: sourceChanges[index + 1] });
+    }
+    for (const { status, file } of changedSources) {
+      if (prepared.files.has(file)) continue;
+      const current = currentBytes(file);
+      if (notes.includes(file)) {
+        if (current) fail(`${file}: consumed source changeset is still present after squash integration`);
+        continue;
+      }
+      if (status === 'D') {
+        if (current) fail(`${file}: source deletion is missing from the integrated squash result`);
+        continue;
+      }
+      const expected = sourceBytes(file);
+      if (!current || !Buffer.from(current).equals(expected)) {
+        fail(`${file}: preparation source change is missing or differs in the integrated squash result`);
+      }
+    }
   }
   return { plan, files: prepared.files, deleted: notes };
 }

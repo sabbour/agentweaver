@@ -345,10 +345,37 @@ packages and images.
   `release:apply`-produced archival as equivalent to a fresh top-level
   changeset note for exact version-mirror edits only.
   The receipt includes the manifest path and the source-derived plan checksum.
-  Its source commit must be at or after the compared diff's merge base and
-  reachable from the tested head. It may be later than the merge base when
+  Its bound source commit must be at or after the compared diff's merge base
+  and reachable from the tested head. It may be later than the merge base when
   committed compatibility declarations are required before planning; all
   source changes remain subject to normal changeset coverage.
+  A squash merge does not preserve the original plan-source commit in v1
+  history. Before publication, rebind the original receipt to the resulting v1
+  integration commit from a clean checkout based on the current v1 tip:
+
+  ```powershell
+  npm run release:rebind-receipt -- `
+    releases/receipts/<plan-source-sha>.json `
+    <integrated-v1-source-sha>
+  ```
+
+  The command adds `releases/receipts/<integrated-v1-source-sha>.json`; it
+  never changes the original receipt. The rebound receipt retains the exact
+  plan-source SHA and original-receipt hash, and records their common base.
+  Validation recomputes the plan from the original source commit and checks its
+  checksum, decisions, changeset bytes, and original receipt hash. It also
+  requires the consumed notes to be absent and the archived notes, preplanning
+  edits, and generated artifacts—including compatibility declarations, version
+  mirrors, and changelog—to match the integrated tree. If the plan-source
+  commit is absent from the checkout, validation fetches that exact commit SHA
+  from `origin`. GitHub keeps the closed pull-request head ref available after
+  its source branch is deleted, so the source remains fetchable without relying
+  on the branch name.
+  Commit this new receipt in a follow-up v1 PR. The follow-up PR may also be
+  squash-merged: its push diff starts at the preceding v1 tip, and the rebound
+  source commit is checked against that history. The fresh receipt addition
+  triggers publication; wait for its source CI and documentation checks before
+  publishing. Never change the old receipt's source SHA or bypass these checks.
   The guard compares archives with genuine Git source notes, then verifies preparation decisions.
   Extra edits in the same component or another component still require fresh top-level notes.
   A self-reported archive hash or an empty component list cannot grant coverage.
