@@ -22,6 +22,7 @@ import type {
   ProjectCastingTemplateDefinition,
   ProjectCastingTransfer,
   UpdateProjectCastingProposalRequest,
+  UpdateProjectCastingProposalMemberRoleRequest,
   BacklogGraph,
   CaptureBacklogTaskRequest,
   EditBacklogTaskContentRequest,
@@ -2282,6 +2283,25 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId)}`,
       { method: 'PATCH', body: JSON.stringify({ ...request, draft: withoutProviderOverrides(request.draft) }) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Changes one member within a pending proposal without replacing its other draft edits. */
+  updateCastingProposalMemberRole(
+    token: string,
+    projectId: string,
+    proposalId: string,
+    agentId: string,
+    request: UpdateProjectCastingProposalMemberRoleRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    // Encode each identifier as one segment so the member stays under the proposal route.
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', proposalId, 'members', agentId, 'role')}`,
+      { method: 'PATCH', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
     );

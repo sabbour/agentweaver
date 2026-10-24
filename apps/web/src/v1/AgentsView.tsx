@@ -73,6 +73,8 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
   const historyItems = currentHistory?.items ?? [];
   // An agent is "in the team" only when it has a casting entry.
   const casting = configuration.casting.find((item) => item.agentId === agent.agentId);
+  // Keep the catalog role ID in configuration while showing its optional custom label.
+  const roleTitle = agent.customRoleTitle || agent.role;
   // A skill applies if it is enabled and either lists no agents (all agents) or lists this one.
   const skills = configuration.skills.filter((skill) => skill.enabled && (!skill.agentIds?.length || skill.agentIds.includes(agent.agentId)));
   // Save is enabled only after a real change.
@@ -130,7 +132,7 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
         <DrawerHeaderTitle action={<Button appearance="subtle" aria-label="Close panel" icon={<Dismiss24Regular />} onClick={onClose} />}>
           {agent.name}
         </DrawerHeaderTitle>
-        <Text size={200}>{agent.role}</Text>
+        <Text size={200}>{roleTitle}</Text>
       </DrawerHeader>
       <TabList selectedValue={tab} onTabSelect={(_, data) => {
         const nextTab = data.value as 'overview' | 'charter';
@@ -151,7 +153,7 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
               </div>
               <div>
                 <Text className={styles.label}>Team</Text>
-                <Text>{casting ? `In the team as ${casting.role}, position ${casting.order}` : 'Not in the team'}</Text>
+                <Text>{casting ? `In the team as ${roleTitle}, position ${casting.order}` : 'Not in the team'}</Text>
               </div>
               <div>
                 <Text className={styles.label}>Skills</Text>

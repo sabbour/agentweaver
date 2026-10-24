@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import { access, readdir, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runInNewContext } from 'node:vm';
 import {
@@ -12,15 +14,18 @@ import {
   createP1AuthorizationRequest,
   getValidatedP1BrokerTokenActorId,
   isAuthorizeUrl,
+  openP1AuthorizedUiPage,
   validateP1BrokerToken,
   withFreshP1BrowserContext,
 } from '../p1-signin.mjs';
+import { createP1AcceptanceResult } from '../p1-acceptance-result.mjs';
 import {
   createP1SigninIdentityProvider,
   parseP1SigninArguments,
   p1SigninSurfaceArguments,
   runP1SigninCli,
 } from '../p1-signin-run.mjs';
+import { runP1Cli } from '../run-p1.mjs';
 
 const ISSUER = 'https://agentweaver.cluster.aksapp.io/';
 const AUDIENCE = 'https://agentweaver.cluster.aksapp.io/';
@@ -667,6 +672,98 @@ test('fresh browser user-data directory is empty and deleted after success, fail
   }
 });
 
+test('built-in UI page adapter waits for a same-origin authorized Gateway response without reading browser tokens', async () => {
+  let location = 'about:blank';
+  let initialized;
+  let checkedResponse;
+  const navigationSteps = [];
+  const page = {
+    url: () => location,
+    async addInitScript(script, argument) {
+      initialized = { script, argument };
+      navigationSteps.push('init');
+    },
+    async goto(url) {
+      location = url;
+      navigationSteps.push('goto');
+    },
+    async evaluate(_callback, key) {
+      assert.equal(key, 'agentweaver.auth.signed-in-before');
+      return true;
+    },
+    async waitForResponse(predicate, options) {
+      assert.equal(options.timeout, 1000);
+      checkedResponse = {
+        url: () => `${new URL(ENVIRONMENT.baseUrl).origin}/api/v1/projects`,
+        status: () => 200,
+      };
+      assert.equal(predicate(checkedResponse), true);
+      return checkedResponse;
+    },
+  };
+  const context = { pages: () => [page], async newPage() { return page; } };
+  const output = [];
+  const result = await openP1AuthorizedUiPage({
+    context,
+    baseUrl: ENVIRONMENT.baseUrl,
+    timeoutMs: 1000,
+    io: { log: message => output.push(message) },
+  });
+
+  assert.equal(result, page);
+  assert.equal(location, ENVIRONMENT.baseUrl);
+  assert.deepEqual(navigationSteps, ['init', 'goto']);
+  assert.deepEqual(initialized.argument, {
+    origin: new URL(ENVIRONMENT.baseUrl).origin,
+    key: 'agentweaver.auth.signed-in-before',
+  });
+  assert.match(initialized.script.toString(), /sessionStorage\.setItem/);
+  assert.ok(checkedResponse);
+  assert.match(output.join('\n'), /does not read browser token storage/);
+});
+
+test('built-in UI page adapter rejects a foreign or unauthenticated Gateway response', async () => {
+  for (const response of [
+    { url: () => 'https://foreign.test/api/v1/projects', status: () => 200 },
+    { url: () => `${new URL(ENVIRONMENT.baseUrl).origin}/api/v1/projects`, status: () => 401 },
+  ]) {
+    const page = {
+      url: () => ENVIRONMENT.baseUrl,
+      async addInitScript() {},
+      async goto() {},
+      async evaluate() { return true; },
+      async waitForResponse(predicate) {
+        assert.equal(predicate(response), false);
+        throw new Error('controlled response did not match');
+      },
+    };
+    await assert.rejects(openP1AuthorizedUiPage({
+      context: { pages: () => [page], async newPage() { return page; } },
+      baseUrl: ENVIRONMENT.baseUrl,
+      timeoutMs: 1000,
+      io: { log() {} },
+    }), /did not reach an authorized Gateway response/);
+  }
+});
+
+test('built-in UI page adapter fails clearly when it cannot start silent authorization', async () => {
+  const page = {
+    url: () => ENVIRONMENT.baseUrl,
+    async addInitScript() {},
+    async goto() {},
+    async evaluate() { return false; },
+    async waitForResponse() {
+      throw new Error('must not wait when silent authorization could not start');
+    },
+  };
+  await assert.rejects(openP1AuthorizedUiPage({
+    context: { pages: () => [page], async newPage() { return page; } },
+    baseUrl: ENVIRONMENT.baseUrl,
+    timeoutMs: 1000,
+    io: { log() {} },
+  }), /could not start silent authorization/);
+});
+
 test('launcher excludes external module inputs and reuses one signed-in account for setup and run scope', async () => {
   assert.throws(() => parseP1SigninArguments([
     '--surface', 'api', '--input', 'input.json', '--output', 'evidence.jsonl',
@@ -737,23 +834,230 @@ test('launcher excludes external module inputs and reuses one signed-in account 
   }
 });
 
-test('UI P1 launcher blocks on #1859 without starting a browser sign-in', async () => {
+test('UI launcher reuses one browser context and supplies its built-in authorized page', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-ui-'));
+  const manifestPath = path.join(directory, 'input.json');
+  await writeFile(manifestPath, JSON.stringify(validInput()), 'utf8');
+  class LauncherPage extends EventEmitter {
+    constructor() {
+      super();
+      this.location = 'about:blank';
+      this.waiters = [];
+      this.roleQueries = [];
+      this.token = null;
+    }
+
+    url() { return this.location; }
+    async addInitScript() {}
+    async evaluate() { return true; }
+
+    async goto(url) {
+      this.location = url;
+      if (url === ENVIRONMENT.baseUrl) await this.reply('/api/v1/projects', {});
+    }
+
+    waitForResponse(predicate) {
+      return new Promise((resolveResponse, rejectResponse) => {
+        this.waiters.push({ predicate, resolve: resolveResponse, reject: rejectResponse });
+      });
+    }
+
+    getByRole(role, options) {
+      this.roleQueries.push({ role, ...options });
+      const page = this;
+      return {
+        async click() {
+          if (role === 'button' && options.name === 'Refresh run') {
+            await page.reply(`/api/v1/projects/${PROJECT_ID}/runs/${RUN_ID}/coordination/status`, {
+              projectId: PROJECT_ID,
+              runId: RUN_ID,
+              executionFence: 7,
+            });
+          }
+        },
+      };
+    }
+
+    async reply(path, body) {
+      const url = `${new URL(ENVIRONMENT.baseUrl).origin}${path}`;
+      const request = {
+        url: () => url,
+        method: () => 'GET',
+        allHeaders: async () => ({
+          authorization: `Bearer ${this.token}`,
+          'x-agentweaver-tenant': ENVIRONMENT.tenantId,
+        }),
+        postData: () => null,
+      };
+      const response = {
+        url: () => url,
+        request: () => request,
+        status: () => 200,
+        allHeaders: async () => ({ 'content-type': 'application/json' }),
+        text: async () => JSON.stringify(body),
+      };
+      this.emit('response', response);
+      for (const waiter of [...this.waiters]) {
+        try {
+          if (await waiter.predicate(response)) {
+            this.waiters.splice(this.waiters.indexOf(waiter), 1);
+            waiter.resolve(response);
+          }
+        } catch (error) {
+          this.waiters.splice(this.waiters.indexOf(waiter), 1);
+          waiter.reject(error);
+        }
+      }
+    }
+  }
+  const page = new LauncherPage();
+  const context = { pages: () => [page], async newPage() { return page; } };
+  const signIns = [];
+  const output = [];
+  let browserContexts = 0;
+  let fixtureCleanups = 0;
+  const sourceEvidence = {
+    services: { status: 'passed' },
+    agentHostImageMeasurement: { status: 'passed' },
+  };
+  try {
+    const code = await runP1SigninCli([
+      '--surface', 'ui',
+      '--input', manifestPath,
+      '--output', path.join(directory, 'evidence.jsonl'),
+    ], { AGENTWEAVER_P1_SETUP_TOKEN: 'ignored-existing-value' }, {
+      log: message => output.push(message),
+      error: message => output.push(message),
+    }, {
+      signIn: async request => {
+        assert.equal(request.context, context);
+        signIns.push(request);
+        return jwt(request);
+      },
+      chromium: {},
+      withBrowserContext: async (_options, useContext) => {
+        browserContexts += 1;
+        return useContext(context);
+      },
+      runP1: (argv, env, io, { identityProvider, pageProvider }) => runP1Cli(argv, env, io, {
+        identityProvider,
+        pageProvider,
+        async prepareDeploymentEvidence() { return sourceEvidence; },
+        async createFixture(validated, { invocationId, acquireRunIdentity }) {
+          const identity = await acquireRunIdentity({ projectId: PROJECT_ID, runId: RUN_ID });
+          page.token = identity.token;
+          return {
+            input: validated,
+            identity,
+            state: {
+              invocationId,
+              setup: {
+                invocationId,
+                projectId: PROJECT_ID,
+                projectRevision: 1,
+                ownerAssignmentId: 'controlled-owner-assignment',
+                ownerAssignmentRevision: 1,
+                assignmentId: 'controlled-orchestrator-assignment',
+                assignmentRevision: 1,
+                complete: true,
+              },
+              requestFailures: [],
+            },
+            async cleanup() {
+              fixtureCleanups += 1;
+              return { invocationId, state: 'cleaned', projectState: 'archived' };
+            },
+          };
+        },
+        async runSurfaceJourney(surface, _input, { ui, sourceEvidence: verifiedEvidence }) {
+          assert.equal(surface, 'ui');
+          await ui.openRun({ projectId: PROJECT_ID, runId: RUN_ID });
+          await ui.selectView('Approvals');
+          await ui.refresh();
+          await ui.close();
+          return createP1AcceptanceResult({
+            surface,
+            surfaceStatus: 'blocked',
+            steps: [{ id: 'ui-controls', status: 'passed' }],
+            sourceEvidence: verifiedEvidence,
+            observations: { adapterCleanup: { mcp: 'not-required', ui: 'closed' } },
+            failure: { message: 'The controlled run does not provide distinct-actor evidence.' },
+          });
+        },
+      }),
+    });
+
+    assert.equal(code, 2, output.join('\n'));
+    assert.equal(browserContexts, 1);
+    assert.equal(signIns.length, 2);
+    assert.ok(signIns.every(request => request.context === context));
+    assert.equal(signIns[0].projectId, undefined);
+    assert.equal(signIns[1].projectId, PROJECT_ID);
+    assert.equal(page.location, `${ENVIRONMENT.baseUrl}projects/${PROJECT_ID}/runs/${RUN_ID}`);
+    const approvalsTab = page.roleQueries.find(query => query.role === 'tab');
+    assert.ok(approvalsTab.name instanceof RegExp);
+    assert.equal(approvalsTab.name.test('Approvals (2)'), true);
+    assert.ok(page.roleQueries.some(query => query.role === 'button'
+      && query.name === 'Refresh run' && query.exact === true));
+    assert.equal(fixtureCleanups, 1);
+    const result = JSON.parse(output.at(-1));
+    assert.equal(result.surfaceStatus, 'blocked');
+    assert.equal(result.observations.fixtureSetup.cleanup.state, 'cleaned');
+    assert.doesNotMatch(output.join('\n'), /eyJ|accessToken|Bearer/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('launcher dry-run validates the manifest without opening a browser or writing output', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-dry-run-'));
+  const manifestPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  await writeFile(manifestPath, JSON.stringify(validInput()), 'utf8');
+  const output = [];
+  let browserLoads = 0;
   let signIns = 0;
-  let received = false;
+  let runs = 0;
+  try {
+    const code = await runP1SigninCli([
+      '--surface', 'api',
+      '--input', manifestPath,
+      '--output', outputPath,
+      '--dry-run',
+    ], {}, {
+      log: message => output.push(message),
+      error: message => output.push(message),
+    }, {
+      loadChromium: async () => { browserLoads += 1; throw new Error('browser must not load'); },
+      signIn: async () => { signIns += 1; },
+      async runP1() { runs += 1; },
+    });
+
+    assert.equal(code, 0);
+    assert.equal(browserLoads, 0);
+    assert.equal(signIns, 0);
+    assert.equal(runs, 0);
+    assert.match(output.join('\n'), /Owner and Orchestrator/);
+    assert.match(output.join('\n'), /No browser, network request, evidence file, project, or assignment is created/);
+    await assert.rejects(access(outputPath), { code: 'ENOENT' });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('launcher reports missing input before loading the browser', async () => {
+  const errors = [];
+  let browserLoads = 0;
   const code = await runP1SigninCli([
-    '--surface', 'ui',
-    '--input', 'manifest.json',
+    '--surface', 'api',
     '--output', 'evidence.jsonl',
-  ], {}, { log() {}, error() {} }, {
-    signIn: async () => { signIns += 1; },
-    async runP1() {
-      received = true;
-      return 2;
-    },
+  ], {}, { log() {}, error: message => errors.push(message) }, {
+    loadChromium: async () => { browserLoads += 1; },
   });
+
   assert.equal(code, 2);
-  assert.equal(received, true);
-  assert.equal(signIns, 0);
+  assert.equal(browserLoads, 0);
+  assert.match(errors.join('\n'), /input manifest/i);
 });
 
 test('launcher refuses a fixture that asks it to sign in a second actor', async () => {

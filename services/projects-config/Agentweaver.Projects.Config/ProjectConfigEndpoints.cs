@@ -629,6 +629,36 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        projects.MapPatch("/{projectId}/casting/proposals/{proposalId:guid}/members/{agentId}/role", async (
+            string projectId,
+            Guid proposalId,
+            string agentId,
+            UpdateProjectCastingProposalMemberRoleRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                // The owner updates only the stored proposal draft; confirmation remains a separate revision-bound action.
+                return Results.Ok(await service.UpdateCastingProposalMemberRoleAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    proposalId,
+                    agentId,
+                    request.ExpectedDraftRevision,
+                    request.RoleId,
+                    request.CustomRoleTitle,
+                    cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
         projects.MapPost("/{projectId}/casting/proposals/{proposalId:guid}/confirm", async (
             string projectId,
             Guid proposalId,

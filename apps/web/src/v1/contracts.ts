@@ -571,7 +571,7 @@ export interface ProjectConfiguration {
   modelAgentOverrides?: ModelAgentOverride[];
   providerOverrides: Array<{ seam: string; providerId: string }>;
   orderedProviderOverrides: Array<{ seam: string; providerIds: string[] }>;
-  agentCharters: Array<{ agentId: string; name: string; role: string; charter: string }>;
+  agentCharters: Array<{ agentId: string; name: string; role: string; charter: string; customRoleTitle?: string | null }>;
   casting: Array<{ agentId: string; role: string; order: number }>;
   castingUniverse?: string | null;
   blueprintWorkflowReferences: Array<{ blueprintId: string; workflowId: string }>;
@@ -635,6 +635,13 @@ export interface ProjectCastingUniverseList {
 export interface UpdateProjectCastingProposalRequest {
   expectedDraftRevision: number;
   draft: ProjectConfiguration;
+}
+
+/** Changes one proposal member's catalog role and optional display title. */
+export interface UpdateProjectCastingProposalMemberRoleRequest {
+  expectedDraftRevision: number;
+  roleId: string;
+  customRoleTitle?: string | null;
 }
 
 /** Expected draft revision used for confirmation or rejection. */
