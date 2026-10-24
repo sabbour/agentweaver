@@ -301,6 +301,7 @@ export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: 
     setBusy('import');
     setError(null);
     try {
+      // Bind the import to the revision shown when it started so the server rejects stale project state.
       const request: AgentSuiteImportRequest = {
         expectedConfigurationRevision: configurationRevision,
         format: inspected.format,
@@ -310,8 +311,10 @@ export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: 
       const result = await apiCall((token, tenant) => gatewayClient.importProjectAgentSuite(token, projectId, request, tenant), null);
       setSelectedArchive(null);
       if (result.proposal?.proposalId) {
+        // A successful import stages a proposal; only an explicit confirmation applies the team.
         navigate(reviewPath(projectId, result.proposal.proposalId));
       } else {
+        // No proposal means the imported package caused no configuration changes to review.
         setNotice('The package was imported. No team changes need review.');
       }
     } catch (reason) {

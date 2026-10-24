@@ -531,10 +531,10 @@ public sealed partial class ProjectsConfigService
                 credential["bindingRef"] = "target-environment-authorization";
         }
 
-        // Schema files remain byte-identical, while their new paths avoid collisions between source packages.
+        // Separate provider content from the catalog file and keep IDs and versions in distinct segments.
         var tools = provider["tools"] as JsonArray
             ?? throw AgentSuiteExportIntegrityError($"Tool provider '{id}@{version}' has no tools.");
-        var schemaDirectory = $"tool-providers/{id}-{version}/schemas";
+        var schemaDirectory = $"tool-providers/by-id/{id}/{version}/schemas";
         for (var index = 0; index < tools.Count; index++)
         {
             if (tools[index] is not JsonObject tool)
@@ -545,7 +545,7 @@ public sealed partial class ProjectsConfigService
                 source, tool, "outputSchema", $"{schemaDirectory}/{index}-output.json", outputFiles, outputFileModes);
         }
 
-        var manifestPath = $"tool-providers/{id}-{version}/manifest.json";
+        var manifestPath = $"tool-providers/by-id/{id}/{version}/manifest.json";
         var manifestBytes = Canonical(provider);
         AddFileWithoutConflict(outputFiles, outputFileModes, manifestPath, manifestBytes);
         var descriptor = new JsonObject

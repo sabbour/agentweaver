@@ -258,6 +258,93 @@ public sealed partial class ProjectsConfigPostgresTests
     }
 
     [Fact]
+    public async Task AgentSuiteExportKeepsProviderPathsUnambiguousForCollidingIdentities()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var store = new SkillTestObjectStore();
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "agentsuite-export-paths-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, "agentsuite-export-paths-owner-" + suffix, tenantId, ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var source = await service.CreateProjectAsync(owner, "Provider path source", CancellationToken.None);
+        var sourceConnections = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["catalog.json@1.0.0"] = Guid.NewGuid().ToString("D"),
+            ["foo-1.0.0@2.0.0"] = Guid.NewGuid().ToString("D"),
+            ["foo@1.0.0-2.0.0"] = Guid.NewGuid().ToString("D"),
+        };
+        var imported = await service.ImportAgentSuiteAsync(
+            owner,
+            source.ProjectId,
+            AgentSuiteTeamWithCollidingProviderIdentities(source.ConfigurationRevision) with
+            {
+                ToolConnections = [.. sourceConnections.OrderBy(item => item.Key, StringComparer.Ordinal)
+                    .Select(item => new ProjectAgentSuiteToolConnection(item.Key, item.Value))],
+            },
+            store,
+            CancellationToken.None);
+        var proposal = Assert.IsType<ProjectCastingProposal>(imported.Proposal);
+        var confirmed = await service.ConfirmCastingProposalAsync(
+            owner, source.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+        var exported = await service.ExportAgentSuiteTeamAsync(
+            owner, source.ProjectId, confirmed.ConfirmedConfigurationRevision, store, CancellationToken.None);
+        var archive = Convert.FromBase64String(exported.Archive);
+        var validation = AgentSuiteValidator.Validate(AgentSuiteArchiveFormat.ContentTarGzip, archive);
+        Assert.True(validation.Accepted,
+            string.Join("\n", validation.NativeErrors.Concat(validation.ProfileErrors.Select(item => item.Message))));
+
+        var files = ReadAgentSuiteContentArchive(archive);
+        using var suite = JsonDocument.Parse(files["agentsuite.json"]);
+        var catalogPath = suite.RootElement.GetProperty("toolProviderCatalog").GetProperty("path").GetString()!;
+        using var catalog = JsonDocument.Parse(files[catalogPath]);
+        var providerReferences = catalog.RootElement.GetProperty("toolProviders").EnumerateArray().ToArray();
+        Assert.Equal(3, providerReferences.Length);
+        var manifestPaths = providerReferences.ToDictionary(
+            item => $"{item.GetProperty("id").GetString()}@{item.GetProperty("version").GetString()}",
+            item => item.GetProperty("path").GetString()!,
+            StringComparer.Ordinal);
+        Assert.Equal("tool-providers/by-id/catalog.json/1.0.0/manifest.json", manifestPaths["catalog.json@1.0.0"]);
+        Assert.Equal("tool-providers/by-id/foo-1.0.0/2.0.0/manifest.json", manifestPaths["foo-1.0.0@2.0.0"]);
+        Assert.Equal("tool-providers/by-id/foo/1.0.0-2.0.0/manifest.json", manifestPaths["foo@1.0.0-2.0.0"]);
+        var schemaPaths = providerReferences.Select(reference =>
+        {
+            using var provider = JsonDocument.Parse(files[reference.GetProperty("path").GetString()!]);
+            return provider.RootElement.GetProperty("tools").EnumerateArray().First()
+                .GetProperty("inputSchema").GetProperty("path").GetString()!;
+        }).ToArray();
+        Assert.Equal(3, schemaPaths.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(schemaPaths, path => Assert.Contains(path, files.Keys));
+
+        var target = await service.CreateProjectAsync(owner, "Provider path target", CancellationToken.None);
+        var targetConnections = sourceConnections.Keys.ToDictionary(
+            key => key,
+            _ => Guid.NewGuid().ToString("D"),
+            StringComparer.Ordinal);
+        var roundTrip = await service.ImportAgentSuiteAsync(
+            owner,
+            target.ProjectId,
+            new ImportProjectAgentSuiteRequest
+            {
+                ExpectedConfigurationRevision = target.ConfigurationRevision,
+                Format = ImportProjectAgentSuiteRequest.ContentTarGzipFormat,
+                Archive = exported.Archive,
+                ToolConnections = [.. targetConnections.OrderBy(item => item.Key, StringComparer.Ordinal)
+                    .Select(item => new ProjectAgentSuiteToolConnection(item.Key, item.Value))],
+            },
+            store,
+            CancellationToken.None);
+        Assert.IsType<ProjectCastingProposal>(roundTrip.Proposal);
+        var dependencies = roundTrip.Import.Agents.SelectMany(item => item.ToolDependencies).ToArray();
+        Assert.Equal(
+            targetConnections.Keys.Order(StringComparer.Ordinal),
+            dependencies.Select(item => item.ToolProvider).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        Assert.All(dependencies, item => Assert.Equal(targetConnections[item.ToolProvider], item.ConnectionId));
+    }
+
+    [Fact]
     public async Task AgentSuiteExportRejectsEnvironmentSpecificPolicyDestinations()
     {
         await using var db = CreateDbContext();
@@ -766,7 +853,17 @@ public sealed partial class ProjectsConfigPostgresTests
         Archive = Convert.ToBase64String(AgentSuiteLayoutTar(Path.Combine(AgentSuiteFixtureRoot, fixture))),
     };
 
-    private static ImportProjectAgentSuiteRequest AgentSuiteTeamWithRemoteDependency(long revision)
+    private static ImportProjectAgentSuiteRequest AgentSuiteTeamWithRemoteDependency(long revision) =>
+        AgentSuiteTeamWithRemoteProviders(revision, new[] { ("search", "1.0.0") });
+
+    private static ImportProjectAgentSuiteRequest AgentSuiteTeamWithCollidingProviderIdentities(long revision) =>
+        AgentSuiteTeamWithRemoteProviders(
+            revision,
+            new[] { ("catalog.json", "1.0.0"), ("foo-1.0.0", "2.0.0"), ("foo", "1.0.0-2.0.0") });
+
+    private static ImportProjectAgentSuiteRequest AgentSuiteTeamWithRemoteProviders(
+        long revision,
+        IReadOnlyCollection<(string Id, string Version)> providerIdentities)
     {
         // Give the imported fixture a variant so the export can prove it omits source-authored payloads and arguments.
         var files = AgentSuiteArchives.FixtureContent("team");
@@ -840,18 +937,45 @@ public sealed partial class ProjectsConfigPostgresTests
         var provider = JsonNode.Parse(files[providerPath])?.AsObject()
             ?? throw new InvalidOperationException("The AgentSuite search provider is invalid.");
         provider["variants"] = new JsonArray(variant);
-        files[providerPath] = CanonicalJson.Canonicalize(Encoding.UTF8.GetBytes(provider.ToJsonString()));
 
         var catalog = JsonNode.Parse(files["tool-providers/catalog.json"])?.AsObject()
             ?? throw new InvalidOperationException("The AgentSuite provider catalog is invalid.");
-        var providerReference = (catalog["toolProviders"]?.AsArray()
-            ?? throw new InvalidOperationException("The AgentSuite provider catalog has no providers."))
-            .OfType<JsonObject>()
-            .Single(item => item["id"]?.GetValue<string>() == "search");
-        var providerDescriptor = providerReference["descriptor"]?.AsObject()
-            ?? throw new InvalidOperationException("The AgentSuite provider descriptor is invalid.");
-        providerDescriptor["digest"] = AgentSuiteArchives.Digest(files[providerPath]);
-        providerDescriptor["size"] = files[providerPath].Length;
+        var providerReferences = catalog["toolProviders"]?.AsArray()
+            ?? throw new InvalidOperationException("The AgentSuite provider catalog has no providers.");
+        var templateReference = providerReferences.OfType<JsonObject>()
+            .Single(item => item["id"]?.GetValue<string>() == "search")
+            .DeepClone()
+            .AsObject();
+        var orderedProviderIdentities = providerIdentities
+            .OrderBy(item => item.Id, StringComparer.Ordinal)
+            .ThenBy(item => item.Version, StringComparer.Ordinal)
+            .ToArray();
+        if (orderedProviderIdentities.Length == 0)
+            throw new ArgumentException("At least one remote provider identity is required.", nameof(providerIdentities));
+        providerReferences.Clear();
+        var providerDigests = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var identity in orderedProviderIdentities)
+        {
+            var manifest = (JsonObject)provider.DeepClone();
+            manifest["id"] = identity.Id;
+            manifest["version"] = identity.Version;
+            var manifestPath = $"tool-providers/by-id/{identity.Id}/{identity.Version}/tool-provider.json";
+            var manifestBytes = CanonicalJson.Canonicalize(Encoding.UTF8.GetBytes(manifest.ToJsonString()));
+            files[manifestPath] = manifestBytes;
+            var manifestDigest = AgentSuiteArchives.Digest(manifestBytes);
+            var reference = (JsonObject)templateReference.DeepClone();
+            reference["id"] = identity.Id;
+            reference["version"] = identity.Version;
+            reference["path"] = manifestPath;
+            var descriptor = reference["descriptor"]?.AsObject()
+                ?? throw new InvalidOperationException("The AgentSuite provider descriptor is invalid.");
+            descriptor["digest"] = manifestDigest;
+            descriptor["size"] = manifestBytes.Length;
+            providerReferences.Add(reference);
+            providerDigests[$"{identity.Id}@{identity.Version}"] = manifestDigest;
+        }
+        if (!orderedProviderIdentities.Contains(("search", "1.0.0")))
+            files.Remove(providerPath);
         files["tool-providers/catalog.json"] =
             CanonicalJson.Canonicalize(Encoding.UTF8.GetBytes(catalog.ToJsonString()));
         AgentSuiteContentLayerTests.Rebind(files, "tool-providers/catalog.json");
@@ -861,26 +985,25 @@ public sealed partial class ProjectsConfigPostgresTests
         // Keep the filesystem-only writer policy while excluding the source egress destination from this fixture.
         lead.Remove("policy");
         files.Remove("policies/lead.json");
-        lead["toolProviders"] = new JsonArray(new JsonObject
+        lead["toolProviders"] = new JsonArray(orderedProviderIdentities.Select(identity => (JsonNode)new JsonObject
         {
-            ["id"] = "search",
-            ["version"] = "1.0.0",
+            ["id"] = identity.Id,
+            ["version"] = identity.Version,
             ["executionMode"] = "shared-sandbox",
-        });
+        }).ToArray());
         files["agents/lead.json"] = CanonicalJson.Canonicalize(Encoding.UTF8.GetBytes(lead.ToJsonString()));
         AgentSuiteContentLayerTests.Rebind(files, "agents/lead.json");
 
-        var providerDigest = AgentSuiteArchives.Digest(files[providerPath]);
         var composition = JsonNode.Parse(files["compositions/lead-linux-amd64.json"])?.AsObject()
             ?? throw new InvalidOperationException("The AgentSuite lead composition is invalid.");
-        composition["toolProviders"] = new JsonArray(new JsonObject
+        composition["toolProviders"] = new JsonArray(orderedProviderIdentities.Select(identity => (JsonNode)new JsonObject
         {
-            ["id"] = "search",
-            ["version"] = "1.0.0",
-            ["manifestDigest"] = providerDigest,
+            ["id"] = identity.Id,
+            ["version"] = identity.Version,
+            ["manifestDigest"] = providerDigests[$"{identity.Id}@{identity.Version}"],
             ["variantDigest"] = variant["variantDigest"]!.GetValue<string>(),
             ["executionMode"] = "shared-sandbox",
-        });
+        }).ToArray());
         files["compositions/lead-linux-amd64.json"] =
             CanonicalJson.Canonicalize(Encoding.UTF8.GetBytes(composition.ToJsonString()));
         AgentSuiteContentLayerTests.Rebind(files, "compositions/lead-linux-amd64.json");

@@ -20,6 +20,9 @@ extension to restore titles and bind remote dependencies. Export does not copy p
 credentials. Project instructions are preserved verbatim and
 should be reviewed before sharing. Export rejects a non-empty policy egress allow list because it
 can contain source-environment destinations.
+Provider manifests and schemas are stored under a `by-id` directory with separate ID and version
+segments. This keeps them separate from the catalog file and prevents distinct provider identities
+from mapping to the same archive path.
 
 ## Import a package
 
