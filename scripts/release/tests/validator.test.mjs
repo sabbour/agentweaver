@@ -171,22 +171,22 @@ test('the AgentHost collector dependency is present in the fixture and still req
 test('the Orchestrator host is registered as a prepared service with all project dependencies pinned', () => {
   const host = fixture.components.find(component => component.id === 'Agentweaver.Orchestrator');
   assert.equal(host.kind, 'service');
-  assert.equal(host.version, '1.5.0');
+  assert.equal(host.version, '1.6.0');
   assert.equal(host.project, 'services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj');
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
     .map(({ dependency, versions }) => [dependency, versions]), [
-    ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0']],
-    ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0']],
-    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.3.0', '1.4.0']],
-    ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.1.1', '1.2.0']],
+    ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0']],
+    ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.3.0']],
+    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1', '1.2.0', '1.3.0', '1.4.0', '1.5.0']],
+    ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.1.1', '1.2.0', '1.2.1']],
     ['Agentweaver.Providers', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0']],
-    ['Agentweaver.SourceControl', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0']],
+    ['Agentweaver.SourceControl', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2', '1.1.0', '1.2.0']],
   ]);
   assert.equal(check(fixture).stage, 'draft');
 });
 
-test('current Abstractions consumers declare 1.3.0 and predeclare 1.4.0 compatibility', () => {
+test('current Abstractions consumers declare 1.4.0 and predeclare 1.5.0 compatibility', () => {
   const consumers = ['Agentweaver.AgentRuntime', 'Agentweaver.FoundationProbe',
     'Agentweaver.Providers', 'Agentweaver.SourceControl', 'Agentweaver.Orchestrator.Core',
     'Agentweaver.Orchestrator', 'Agentweaver.Secrets.AzureKeyVault', 'Agentweaver.Identity',
@@ -197,19 +197,18 @@ test('current Abstractions consumers declare 1.3.0 and predeclare 1.4.0 compatib
   const relationships = fixture.compatibility
     .filter(({ dependency }) => dependency === 'Agentweaver.Abstractions');
   assert.deepEqual(relationships.map(({ consumer }) => consumer), consumers);
-  assert.ok(relationships.every(({ versions }) => versions.includes('1.3.0')));
   assert.ok(relationships.every(({ versions }) => versions.includes('1.4.0')));
+  assert.ok(relationships.every(({ versions }) => versions.includes('1.5.0')));
 });
 
-test('current Persistence.Postgres consumers retain 1.1.0 and 1.1.1 and predeclare 1.2.0 compatibility', () => {
+test('current Persistence.Postgres consumers predeclare 1.2.1 compatibility', () => {
   const consumers = ['Agentweaver.FoundationProbe', 'Agentweaver.Orchestrator',
     'Agentweaver.EventsAndSessions', 'Agentweaver.Environment', 'Agentweaver.Knowledge'];
   const relationships = fixture.compatibility
     .filter(({ dependency }) => dependency === 'Agentweaver.Persistence.Postgres');
   assert.deepEqual(relationships.map(({ consumer }) => consumer), consumers);
-  assert.ok(relationships.every(({ versions }) => versions.includes('1.1.0')));
-  assert.ok(relationships.every(({ versions }) => versions.includes('1.1.1')));
   assert.ok(relationships.every(({ versions }) => versions.includes('1.2.0')));
+  assert.ok(relationships.every(({ versions }) => versions.includes('1.2.1')));
 });
 
 test('the acceptance-only Probe is tracked as its exact image artifact, not an arbitrary tools project', () => {
