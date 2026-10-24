@@ -249,11 +249,14 @@ file to find the Gateway route, Identity Broker issuer, and audience. If
 `AGENTWEAVER_GATEWAY_TOKEN` is not set, it opens a fresh temporary Chrome
 profile and uses the P1 sign-in flow with run scopes. The browser may reuse
 available SSO; the command does not copy a browser profile or type credentials.
-Complete any sign-in or consent prompt in the browser. The command validates
-the token, reads the signed-in actor's authorization context to select a tenant,
-and chooses an active project from that actor's project list. The existing
-Gateway, tenant, token environment variable, issuer, audience, actor, and project
-flags are optional overrides.
+Complete any sign-in or consent prompt in the browser. Before it changes
+anything, the command validates the token's issuer, audience, scopes, and actor.
+It does not call Gateway APIs at this stage, because those APIs depend on
+Projects & Config, which may be the service this release repairs. After the
+rollout passes readiness and Pod checks, the smoke step reads the signed-in
+actor's authorization context to select a tenant and chooses an active project
+from that actor's project list. The existing Gateway, tenant, token environment
+variable, issuer, audience, actor, and project flags are optional overrides.
 
 The shared command runner captures up to 64 MiB of output by default, enough
 for the namespace Pod and ReplicaSet inventory. A command can override the
@@ -261,8 +264,10 @@ for the namespace Pod and ReplicaSet inventory. A command can override the
 instead of returning partial output.
 
 The token stays in memory and is not written to the receipt. If the live
-settings, sign-in, authorization context, or project list cannot be verified,
-the command stops before changing Deployments and writes a partial receipt.
+settings, sign-in, or token cannot be verified, the command stops before
+changing Deployments and writes a partial receipt. If the authorization
+context, project list, or any smoke request fails after rollout, the receipt
+records the failed smoke and has status `partial`.
 The command writes one receipt with status `deployed` only when every check
 passes. Any failed service or check writes a `partial` receipt and exits
 non-zero.

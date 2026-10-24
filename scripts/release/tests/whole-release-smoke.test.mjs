@@ -112,7 +112,11 @@ function baseOptions(overrides = {}) {
   };
 }
 
-test('automatic P1 sign-in derives actor, tenant, and active project from live Gateway context', async () => {
+function gatewayApiRequests(requests) {
+  return requests.filter(request => request.url.pathname !== '/env-config.js');
+}
+
+test('automatic P1 sign-in validates the token before rollout and defers Gateway reads to smoke', async () => {
   const { fetchImpl, requests } = makeFetch();
   const context = { disposable: true };
   let browserStarts = 0;
@@ -138,21 +142,23 @@ test('automatic P1 sign-in derives actor, tenant, and active project from live G
   });
 
   assert.equal(browserStarts, 1);
-  assert.equal(prepared.projectId, 'alpha');
+  assert.equal(prepared.actorId, 'signed-in-actor');
   assert.equal(Object.hasOwn(prepared, 'token'), false);
+  assert.equal(JSON.stringify(prepared).includes(token), false);
+  assert.deepEqual(gatewayApiRequests(requests), []);
+
+  const checks = await runGatewaySmokeChecks(prepared);
+  assert.deepEqual(checks.map(check => check.operationId), [
+    'listProjects', 'listChiefOfStaffPriorities', 'listProjectRuns', 'readProjectMetrics',
+  ]);
   const contextRequest = requests.find(request => request.url.pathname === '/api/v1/authorization/context');
   assert.equal(contextRequest.init.headers.Authorization, `Bearer ${token}`);
   assert.equal(contextRequest.init.headers['X-Agentweaver-Tenant'], undefined);
   const projectRequest = requests.find(request => request.url.pathname === '/api/v1/projects');
   assert.equal(projectRequest.init.headers.get('X-Agentweaver-Tenant'), 'signed-in-tenant');
   assert.equal(projectRequest.init.headers.get('Authorization'), `Bearer ${token}`);
-
-  const checks = await runGatewaySmokeChecks(prepared);
-  assert.deepEqual(checks.map(check => check.operationId), [
-    'listProjects', 'listChiefOfStaffPriorities', 'listProjectRuns', 'readProjectMetrics',
-  ]);
-  assert.equal(requests.filter(request => request.url.pathname === '/openapi/v1.json').length, 2);
-  assert.equal(requests.filter(request => request.url.pathname === '/api/v1/projects').length, 2);
+  assert.ok(requests.some(request => request.url.pathname === '/api/v1/projects/alpha/runs'));
+  assert.equal(requests.filter(request => request.url.pathname === '/openapi/v1.json').length, 1);
 });
 
 test('a supplied token and explicit overrides skip browser sign-in and require a listed active project', async () => {
@@ -173,13 +179,15 @@ test('a supplied token and explicit overrides skip browser sign-in and require a
   });
 
   assert.equal(prepared.projectId, 'zeta');
+  assert.equal(JSON.stringify(prepared).includes(token), false);
+  await runGatewaySmokeChecks(prepared);
   assert.ok(requests.some(request => request.url.origin === 'https://gateway.override.test'));
+  assert.ok(requests.some(request => request.url.pathname === '/api/v1/projects/zeta/runs'));
   const contextRequest = requests.find(request => request.url.pathname === '/api/v1/authorization/context');
   assert.equal(contextRequest.init.headers['X-Agentweaver-Tenant'], 'signed-in-tenant');
-  assert.equal(JSON.stringify(prepared).includes(token), false);
 });
 
-test('live configuration or authorization mismatch fails before browser sign-in or project discovery', async () => {
+test('live configuration or token mismatch fails before browser sign-in or any Gateway request', async () => {
   const requests = [];
   let browserStarts = 0;
   await assert.rejects(prepareGatewaySmokeContext({
@@ -198,38 +206,72 @@ test('live configuration or authorization mismatch fails before browser sign-in 
   assert.equal(browserStarts, 0);
   assert.deepEqual(requests.map(url => url.pathname), ['/env-config.js']);
 
-  const { fetchImpl: mismatchedFetch, requests: mismatchedRequests } = makeFetch({
-    contextActorId: 'different-actor',
-  });
+  const { fetchImpl, requests: tokenRequests } = makeFetch();
   await assert.rejects(prepareGatewaySmokeContext({
+    gatewayRuntimeConfig,
+    options: baseOptions({ actorId: 'different-actor' }),
+    env: { TEST_GATEWAY_TOKEN: token },
+    fetchImpl,
+  }));
+  assert.deepEqual(gatewayApiRequests(tokenRequests), []);
+});
+
+test('an authorization context mismatch fails the smoke before project discovery', async () => {
+  const { fetchImpl, requests } = makeFetch({ contextActorId: 'different-actor' });
+  const prepared = await prepareGatewaySmokeContext({
     gatewayRuntimeConfig,
     options: baseOptions(),
     env: { TEST_GATEWAY_TOKEN: token },
-    fetchImpl: mismatchedFetch,
-  }), /invalid authorization context/);
-  assert.equal(mismatchedRequests.some(request => request.url.pathname === '/api/v1/projects'), false);
+    fetchImpl,
+  });
+  await assert.rejects(runGatewaySmokeChecks(prepared), /invalid authorization context/);
+  assert.equal(requests.some(request => request.url.pathname === '/api/v1/projects'), false);
+});
+
+test('a Gateway authorization outage does not block preparation and is checked after rollout', async () => {
+  const base = makeFetch();
+  let gatewayDown = true;
+  const fetchImpl = async (input, init) => {
+    const url = new URL(input);
+    if (gatewayDown && url.pathname.startsWith('/api/')) {
+      return jsonResponse({ detail: 'upstream timeout' }, 504);
+    }
+    return base.fetchImpl(input, init);
+  };
+  const prepared = await prepareGatewaySmokeContext({
+    gatewayRuntimeConfig,
+    options: baseOptions(),
+    env: { TEST_GATEWAY_TOKEN: token },
+    fetchImpl,
+  });
+  assert.deepEqual(gatewayApiRequests(base.requests), []);
+
+  await assert.rejects(runGatewaySmokeChecks(prepared), /authorization context returned HTTP 504/);
+  gatewayDown = false;
+  const checks = await runGatewaySmokeChecks(prepared);
+  assert.equal(checks.length, 4);
 });
 
 test('identity setup fails closed when the signed-in actor has no active projects', async () => {
   const { fetchImpl } = makeFetch({
     projects: [{ projectId: 'archived', name: 'Archived', state: 'archived', revision: 1 }],
   });
-  await assert.rejects(prepareGatewaySmokeContext({
+  const prepared = await prepareGatewaySmokeContext({
     gatewayRuntimeConfig,
     options: baseOptions(),
     env: { TEST_GATEWAY_TOKEN: token },
     fetchImpl,
-  }), /no active project/);
+  });
+  await assert.rejects(runGatewaySmokeChecks(prepared), /no active project/);
 });
 
-test('post-rollout smoke checks rediscover OpenAPI and repeat the project request', async t => {
+test('post-rollout smoke checks fail when discovery or the project request fails', async t => {
   for (const failedPath of ['/openapi/v1.json', '/api/v1/projects']) {
     await t.test(`${failedPath} failure`, async () => {
       const base = makeFetch();
-      let afterPreparation = false;
       const fetchImpl = async (input, init) => {
         const url = new URL(input);
-        if (afterPreparation && url.pathname === failedPath) {
+        if (url.pathname === failedPath) {
           return jsonResponse({ detail: 'post-rollout service unavailable' }, 503);
         }
         return base.fetchImpl(input, init);
@@ -240,8 +282,11 @@ test('post-rollout smoke checks rediscover OpenAPI and repeat the project reques
         env: { TEST_GATEWAY_TOKEN: token },
         fetchImpl,
       });
-      afterPreparation = true;
       await assert.rejects(runGatewaySmokeChecks(prepared), /returned HTTP 503|OpenAPI document/);
     });
   }
+});
+
+test('smoke checks reject an incomplete preparation', async () => {
+  await assert.rejects(runGatewaySmokeChecks({ projectId: 'alpha' }), /context is incomplete/);
 });

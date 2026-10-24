@@ -413,7 +413,8 @@ function selectSmokeProject(projects, requestedProjectId) {
 }
 
 /**
- * Establish a P1 run-scope identity and discover an authorized project before any image is patched.
+ * Establish and validate a P1 run-scope identity before any image is patched.
+ * Gateway authorization and project discovery wait for runGatewaySmokeChecks.
  */
 export async function prepareGatewaySmokeContext({
   gatewayRuntimeConfig,
@@ -448,6 +449,21 @@ export async function prepareGatewaySmokeContext({
     actorId: options.actorId,
     requiredScopes: REQUIRED_RUN_SCOPES,
   });
+  // Only sign-in and token checks run here. Gateway's authorization context
+  // depends on Projects & Config, which may be the service this rollout
+  // repairs, so `connect` defers that read until after readiness. The token
+  // stays inside the closure so it never reaches the receipt.
+  const connect = () => connectGatewaySmokeClient({
+    environment, token, actorId, options, fetchImpl,
+  });
+  return Object.freeze({ actorId, projectId: options.projectId, connect });
+}
+
+/**
+ * Read the signed-in actor's authorization context and build the Gateway
+ * client. This runs after rollout because Gateway asks Projects & Config.
+ */
+async function connectGatewaySmokeClient({ environment, token, actorId, options, fetchImpl }) {
   // Tenant membership is confirmed by the live Projects owner, not inferred from Broker token claims.
   const contextUrl = new URL('/api/v1/authorization/context', environment.gatewayUrl);
   const contextHeaders = {
@@ -487,31 +503,28 @@ export async function prepareGatewaySmokeContext({
   const client = new AgentweaverClient({
     baseUrl: environment.gatewayUrl, authProvider, tenantId, fetchImpl,
   });
-  await client.discover();
-  const projectCall = await client.invoke('listProjects');
-  if (projectCall.status < 200 || projectCall.status >= 300) {
-    wholeReleaseFail(`listProjects returned HTTP ${projectCall.status}.`);
-  }
-  const projectId = selectSmokeProject(projectCall.transientResponseBody, options.projectId);
-  return { client, projectId };
+  return client;
 }
 
 /**
- * Use the existing authenticated Gateway client for non-mutating route smoke
+ * Connect with the pre-rollout sign-in, then run non-mutating route smoke
  * checks. Every operation is discovered from the live OpenAPI document.
  */
-export async function runGatewaySmokeChecks({ client, projectId }) {
-  if (!client || typeof projectId !== 'string' || !projectId) {
+export async function runGatewaySmokeChecks(prepared) {
+  if (!prepared || typeof prepared.connect !== 'function') {
     wholeReleaseFail('authenticated Gateway smoke check context is incomplete.');
   }
-  // Fresh discovery and Projects reads ensure the receipt describes the newly deployed images.
+  // The authorization context, discovery, and project reads all run against
+  // the newly deployed images, so a failure here is a failed smoke check on
+  // the deployed installation rather than a pre-change abort.
+  const client = await prepared.connect();
   await client.discover();
   const checks = [];
   const projectCall = await client.invoke('listProjects');
   if (projectCall.status < 200 || projectCall.status >= 300) {
     wholeReleaseFail(`listProjects returned HTTP ${projectCall.status}.`);
   }
-  selectSmokeProject(projectCall.transientResponseBody, projectId);
+  const projectId = selectSmokeProject(projectCall.transientResponseBody, prepared.projectId);
   checks.push({ operationId: 'listProjects', status: projectCall.status, path: projectCall.path });
   const calls = [
     ['listChiefOfStaffPriorities', {}],
