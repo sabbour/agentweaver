@@ -248,6 +248,12 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/skills",
             "listProjectSkillInventory", "Read current project skill inventory",
             ["cursor", "pageSize"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-exports",
+            "/api/projects/{projectId}/agentsuite-exports",
+            "exportProjectAgentSuite", "Export the current project team as an AgentSuite package",
+            ["revision"], forwardTenantSelector: true,
+            // Base64 expands the bounded 5 MiB archive but remains within the MCP response limit.
+            maximumResponseBytes: 8 * 1024 * 1024);
         Add("POST", GatewayOwner.Projects, "/projects/{projectId}/agentsuite-imports",
             "/api/projects/{projectId}/agentsuite-imports",
             "importProjectAgentSuite", "Validate an AgentSuite archive and stage a casting proposal", body: true,

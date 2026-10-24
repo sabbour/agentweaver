@@ -119,6 +119,18 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
             Assert.Contains(tool.GetProperty("inputSchema").GetProperty("required").EnumerateArray(),
                 field => field.GetString() == "projectId");
         }
+        foreach (var operation in new[] { "exportProjectAgentSuite", "importProjectAgentSuite" })
+        {
+            var tool = Assert.Single(tools.EnumerateArray(),
+                candidate => candidate.GetProperty("name").GetString() == "agentweaver_" + operation);
+            var schema = tool.GetProperty("inputSchema");
+            Assert.Contains(schema.GetProperty("required").EnumerateArray(),
+                field => field.GetString() == "projectId");
+            Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
+            if (operation == "importProjectAgentSuite")
+                Assert.Contains(schema.GetProperty("required").EnumerateArray(),
+                    field => field.GetString() == "body");
+        }
 
         foreach (var operation in new[]
         {

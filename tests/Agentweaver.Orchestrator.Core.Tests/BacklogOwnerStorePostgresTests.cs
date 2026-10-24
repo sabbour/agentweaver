@@ -185,6 +185,76 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task QueuePositionMigrationWaitsForCaptureAndQueueWritesAppendAfterExistingPositions()
+    {
+        var graph = await AddTaskAsync(TaskRef("ready-a"));
+        foreach (var taskId in new[] { "ready-b", "backlog-a", "backlog-b" })
+        {
+            var added = await _backlog.AddTaskAsync(TaskRef(taskId), graph.Revision, CancellationToken.None);
+            Assert.True(added.IsSuccess);
+            graph = added.Value!;
+        }
+        foreach (var taskId in new[] { "ready-a", "ready-b" })
+        {
+            var task = graph.Tasks.Single(item => item.Reference.TaskId == taskId);
+            var readied = await _backlog.SetTaskStateAsync(
+                task.Reference, BacklogTaskState.Ready, graph.Revision, task.Revision, CancellationToken.None);
+            Assert.True(readied.IsSuccess);
+            graph = readied.Value!;
+        }
+        await RemoveQueuePositionMigrationAsync();
+
+        // Keep the capture between its capability check and task read while migration 035 starts.
+        await using var blockerConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var blockerTransaction = await blockerConnection.BeginTransactionAsync();
+        await using (var blockProject = new NpgsqlCommand($"""
+            SELECT graph_revision
+            FROM "{_schema}".backlog_projects
+            WHERE project_id = @project
+            FOR UPDATE
+            """, blockerConnection, blockerTransaction))
+        {
+            blockProject.Parameters.AddWithValue("project", "backlog-project");
+            Assert.NotNull(await blockProject.ExecuteScalarAsync());
+        }
+
+        var capture = _backlog.AddTaskAsync(
+            TaskRef("z-race-capture"), graph.Revision, CancellationToken.None);
+        var captureWaitObserved = await WaitForGraphRowLockWaitAsync(_fixture.DataSource);
+        var migration = CoordinationOwnerMigrator.MigrateAsync(_fixture.DataSource, _schema);
+        var migrationWaitObserved = await WaitForMigrationLockWaitAsync(_fixture.DataSource);
+        var migrationStayedBlocked = !migration.IsCompleted;
+        await blockerTransaction.CommitAsync();
+        var captured = await capture.WaitAsync(TimeSpan.FromSeconds(10));
+        await migration.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(captureWaitObserved,
+            "capture should pause after checking migration 035 and before reading task rows");
+        Assert.True(migrationWaitObserved,
+            "migration should wait for the active backlog transaction's shared schema lock");
+        Assert.True(migrationStayedBlocked);
+        Assert.True(captured.IsSuccess);
+
+        var migrated = (await _backlog.ReadGraphAsync("backlog-project", CancellationToken.None)).Value!;
+        Assert.Equal(2L, migrated.Tasks.Single(task => task.Reference.TaskId == "z-race-capture").Position);
+        var capturedAfterMigration = await _backlog.AddTaskAsync(
+            TaskRef("z-after-migration"), migrated.Revision, CancellationToken.None);
+        Assert.True(capturedAfterMigration.IsSuccess);
+        Assert.Equal(3L, capturedAfterMigration.Value!.Tasks
+            .Single(task => task.Reference.TaskId == "z-after-migration").Position);
+
+        var readiedBacklog = await _backlog.SetAllEligibleTasksReadyAsync(
+            "backlog-project", capturedAfterMigration.Value.Revision, CancellationToken.None);
+        Assert.True(readiedBacklog.IsSuccess);
+        Assert.Equal(
+            ["ready-a", "ready-b", "backlog-a", "backlog-b", "z-race-capture", "z-after-migration"],
+            readiedBacklog.Value!.Tasks
+                .Where(task => task.State == BacklogTaskState.Ready)
+                .OrderBy(task => task.Position)
+                .Select(task => task.Reference.TaskId));
+    }
+
+    [Fact]
     public async Task IssueSyncedTaskCannotBeDeleted()
     {
         var task = TaskRef("issue-synced");
@@ -841,6 +911,57 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
         await using var command = new NpgsqlCommand(
             $"SELECT count(*) FROM \"{_schema}\".{table} WHERE {predicate}", connection);
         return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private async Task RemoveQueuePositionMigrationAsync()
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            DROP INDEX "{_schema}".ix_backlog_tasks_project_state_position;
+            ALTER TABLE "{_schema}".backlog_tasks
+                DROP CONSTRAINT ck_backlog_tasks_queue_position_nonnegative,
+                DROP COLUMN queue_position;
+            DELETE FROM "{_schema}".coordination_schema_migrations WHERE version = 35;
+            """, connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<bool> WaitForGraphRowLockWaitAsync(NpgsqlDataSource dataSource) =>
+        await WaitForLockWaitAsync(
+            dataSource,
+            "transactionid",
+            "%SELECT graph_revision%backlog_projects%FOR UPDATE%");
+
+    private static async Task<bool> WaitForMigrationLockWaitAsync(NpgsqlDataSource dataSource) =>
+        await WaitForLockWaitAsync(
+            dataSource,
+            "advisory",
+            "%agentweaver.coordination.migrate%");
+
+    private static async Task<bool> WaitForLockWaitAsync(
+        NpgsqlDataSource dataSource,
+        string waitEvent,
+        string queryPattern)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            await using var connection = await dataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND wait_event_type = 'Lock'
+                      AND wait_event = @waitEvent
+                      AND query LIKE @queryPattern)
+                """, connection);
+            command.Parameters.AddWithValue("waitEvent", waitEvent);
+            command.Parameters.AddWithValue("queryPattern", queryPattern);
+            if ((bool)(await command.ExecuteScalarAsync())!)
+                return true;
+            await Task.Delay(TimeSpan.FromMilliseconds(25));
+        }
+        return false;
     }
 
     private async Task InstallClaimRejectionTriggerAsync()

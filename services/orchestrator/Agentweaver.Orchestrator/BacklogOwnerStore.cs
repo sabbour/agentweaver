@@ -78,6 +78,8 @@ internal sealed class BacklogOwnerStore
             return projectValidation;
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(
             System.Data.IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
         var graph = await ReadGraphInTransactionAsync(
@@ -118,6 +120,8 @@ internal sealed class BacklogOwnerStore
         if (!taskValidation.IsSuccess)
             return taskValidation;
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await EnsureProjectAsync(connection, transaction, task.ProjectId, cancellationToken).ConfigureAwait(false);
         var graph = await ReadGraphInTransactionAsync(
@@ -168,6 +172,8 @@ internal sealed class BacklogOwnerStore
         if (!validation.IsSuccess)
             return validation;
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var graph = await ReadGraphInTransactionAsync(
             connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
@@ -237,6 +243,8 @@ internal sealed class BacklogOwnerStore
         if (!taskValidation.IsSuccess)
             return taskValidation;
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var graph = await ReadGraphInTransactionAsync(
             connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
@@ -283,6 +291,8 @@ internal sealed class BacklogOwnerStore
         Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var graph = await ReadGraphInTransactionAsync(
             connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
@@ -325,6 +335,8 @@ internal sealed class BacklogOwnerStore
         if (!taskValidation.IsSuccess)
             return taskValidation;
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var graph = await ReadGraphInTransactionAsync(
             connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
@@ -363,6 +375,8 @@ internal sealed class BacklogOwnerStore
         Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var graph = await ReadGraphInTransactionAsync(
             connection, transaction, projectId, lockRows: true, cancellationToken).ConfigureAwait(false);
@@ -415,6 +429,8 @@ internal sealed class BacklogOwnerStore
             ]);
         try
         {
+            await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+                syncConnection, cancellationToken).ConfigureAwait(false);
             await using var transaction = await syncConnection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
             var graph = await ReadGraphInTransactionAsync(
                 syncConnection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
@@ -597,6 +613,8 @@ internal sealed class BacklogOwnerStore
         }
 
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -774,6 +792,8 @@ internal sealed class BacklogOwnerStore
                 "backlog_promotion_idempotency_conflict", StatusCodes.Status409Conflict);
 
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
         // Lock the project graph rows first. Every other graph writer takes this lock, so it serializes
@@ -932,6 +952,8 @@ internal sealed class BacklogOwnerStore
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         // One snapshot for both queries, so a concurrent promotion can't appear without its tasks.
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(
             System.Data.IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
         var promotions = await ReadPromotionsInTransactionAsync(
@@ -1255,6 +1277,8 @@ internal sealed class BacklogOwnerStore
         if (!taskValidation.IsSuccess)
             return taskValidation;
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var migrationLock = await AcquireMigrationSchemaLockAsync(
+            connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var graph = await ReadGraphInTransactionAsync(
             connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
@@ -1298,6 +1322,34 @@ internal sealed class BacklogOwnerStore
             )
             """, connection, transaction);
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? false);
+    }
+
+    private async Task<IAsyncDisposable> AcquireMigrationSchemaLockAsync(
+        NpgsqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        // Acquire before opening the transaction so repeatable-read snapshots cannot predate a waiting migration.
+        await using var acquire = new NpgsqlCommand(
+            "SELECT pg_advisory_lock_shared(hashtext('agentweaver.coordination.migrate'), hashtext(@schema))",
+            connection);
+        acquire.Parameters.AddWithValue("schema", NpgsqlDbType.Text, _schema);
+        await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return new MigrationSchemaLock(connection, _schema);
+    }
+
+    private sealed class MigrationSchemaLock(
+        NpgsqlConnection connection,
+        string schema) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            await using var release = new NpgsqlCommand(
+                "SELECT pg_advisory_unlock_shared(hashtext('agentweaver.coordination.migrate'), hashtext(@schema))",
+                connection);
+            release.Parameters.AddWithValue("schema", NpgsqlDbType.Text, schema);
+            if (await release.ExecuteScalarAsync(CancellationToken.None).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException("The coordination migration advisory lock was not held.");
+        }
     }
 
     /// <summary>

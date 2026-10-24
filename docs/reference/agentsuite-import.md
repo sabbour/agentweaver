@@ -1,6 +1,30 @@
-# AgentSuite import
+# AgentSuite import and export
 
 > Agentweaver reads AgentSuite as defined by [agent-primitives/suite](https://github.com/agent-primitives/suite) commit `a09950a75359cdc7de4d3361694582613f24c732` (spec version `1.0.0-draft`). A suite with another `schemaVersion` is rejected.
+
+## Export a project team
+
+`GET /api/projects/{projectId}/agentsuite-exports` exports the current team. The optional
+`revision` selects a positive configuration revision; when omitted, the current revision is used.
+The `200 OK` response includes `format`, `suiteName`, `sourceConfigurationRevision`, and a
+base64-encoded `archive`. The format is `content-tar-gzip`, and the archive is limited to 5 MiB.
+
+The generated archive passes the AgentSuite validator before it is returned. Source endpoints,
+header values, connection IDs, and destination names are not copied. Remote providers use portable
+endpoint and network binding slots, and delegated authorization uses a target-environment slot.
+The existing import flow binds tool dependencies to the target project's Environment connections.
+Bundled provider variants, payloads, and launcher arguments are not copied. A digest-bound,
+non-critical Agentweaver extension preserves custom role titles and remote-only provider
+requirements, which AgentSuite compositions cannot represent. The existing importer reads the
+extension to restore titles and bind remote dependencies. Export does not copy provider connection
+credentials. Project instructions are preserved verbatim and
+should be reviewed before sharing. Export rejects a non-empty policy egress allow list because it
+can contain source-environment destinations.
+Provider manifests and schemas are stored under a `by-id` directory with separate ID and version
+segments. This keeps them separate from the catalog file and prevents distinct provider identities
+from mapping to the same archive path.
+
+## Import a package
 
 `POST /api/projects/{projectId}/agentsuite-imports` validates a native AgentSuite archive offline
 and stages its agents as one pending casting proposal. Import is inert: it doesn't activate,
@@ -153,5 +177,6 @@ The command writes each layout and the Go verdicts to `parity.json`. Commit them
 
 ## Web client
 
-The web client methods `importProjectAgentSuite`, `getProjectAgentSuiteImport`, and
-`getProjectAgentSuiteAgentPolicy` in `apps/web/src/v1/api.ts` call the same routes.
+The web client methods `exportProjectAgentSuite`, `importProjectAgentSuite`,
+`getProjectAgentSuiteImport`, and `getProjectAgentSuiteAgentPolicy` in
+`apps/web/src/v1/api.ts` call the same routes.

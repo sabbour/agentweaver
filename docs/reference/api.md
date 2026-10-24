@@ -317,6 +317,7 @@ authorization cache, or a grant.
 | POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | Yes |
 | GET | `/{projectId}/casting/export` | Admin | Export current casting or optional positive `revision`. | Yes |
 | POST | `/{projectId}/casting/import` | Admin | Stage a digest-checked transfer; request body limit 1 MiB. | Yes |
+| GET | `/{projectId}/agentsuite-exports` | Admin | Export the current or requested positive configuration revision as a validator-checked AgentSuite package; archive limit 5 MiB. | Yes |
 | POST | `/{projectId}/agentsuite-imports` | Admin | Validate a native AgentSuite archive and stage its agents as a casting proposal; request body limit 24 MiB. | Yes |
 | GET | `/{projectId}/agentsuite-imports/{sourceIdentity}` | Read | Read a retained AgentSuite import record. | Yes |
 | GET | `/{projectId}/agentsuite-agents/{effectiveAgentId}/policy` | Read | Read the policy bound to an imported agent. | Yes |
