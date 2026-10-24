@@ -6,6 +6,10 @@ import { OverviewPage } from './OverviewPage';
 
 const mocks = vi.hoisted(() => ({
   projects: [] as unknown[],
+  metricsLoading: false,
+  metricsReloadPromise: undefined as Promise<void> | undefined,
+  deferMetricsReload: false,
+  resolveMetricsReload: undefined as (() => void) | undefined,
   useProjectMetrics: vi.fn(),
   metricsReload: vi.fn(),
   attentionReload: vi.fn(async () => undefined),
@@ -18,6 +22,7 @@ const gatewayMocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
   getProjectConfiguration: vi.fn(),
   getProjectMetrics: vi.fn(),
+  getProjectUsage: vi.fn(),
   readProjectBacklog: vi.fn(),
 }));
 
@@ -49,21 +54,35 @@ vi.mock('./runListData', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('./projectMetrics', async (importOriginal) => ({
-  ...await importOriginal<typeof import('./projectMetrics')>(),
-  useProjectMetrics: (projectId: string | null, range: string) => {
-    mocks.useProjectMetrics(projectId, range);
-    return {
-      metrics: projectId ? { projectId, from: 'a', to: 'b', activeRuns: 4, blockedRuns: 2, runsInRange: 7, runsTotal: 20, completedRuns: 0, succeededRuns: 0, series: [] } : null,
-      usage: null,
-      metricsError: null,
-      usageError: null,
-      loading: false,
-      loadedAt: null,
-      reload: mocks.metricsReload,
-    };
-  },
-}));
+vi.mock('./projectMetrics', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./projectMetrics')>();
+  return {
+    ...actual,
+    useProjectMetrics: (projectId: string | null, range: string) => {
+      mocks.useProjectMetrics(projectId, range);
+      if (!projectId) {
+        mocks.metricsLoading = false;
+        mocks.resolveMetricsReload?.();
+      }
+      return {
+        metrics: projectId ? { projectId, from: 'a', to: 'b', activeRuns: 4, blockedRuns: 2, runsInRange: 7, runsTotal: 20, completedRuns: 0, succeededRuns: 0, series: [] } : null,
+        usage: null,
+        metricsError: null,
+        usageError: null,
+        loading: projectId != null && mocks.metricsLoading,
+        loadedAt: null,
+        reload: () => {
+          if (!mocks.deferMetricsReload || !projectId) return mocks.metricsReload();
+          mocks.metricsLoading = true;
+          mocks.metricsReloadPromise = new Promise<void>((resolve) => {
+            mocks.resolveMetricsReload = resolve;
+          });
+          return mocks.metricsReloadPromise;
+        },
+      };
+    },
+  };
+});
 
 vi.mock('./pageParts', async () => {
   const actual = await vi.importActual<typeof import('./pageParts')>('./pageParts');
@@ -89,6 +108,10 @@ function renderPage(initialEntry = '/overview') {
 
 describe('OverviewPage metrics', () => {
   beforeEach(() => {
+    mocks.metricsLoading = false;
+    mocks.metricsReloadPromise = undefined;
+    mocks.deferMetricsReload = false;
+    mocks.resolveMetricsReload = undefined;
     mocks.useProjectMetrics.mockClear();
     mocks.metricsReload.mockClear();
     mocks.attentionReload.mockClear();
@@ -114,6 +137,13 @@ describe('OverviewPage metrics', () => {
       succeededRuns: 2,
       series: [],
     }));
+    gatewayMocks.getProjectUsage.mockResolvedValue({
+      projectId: 'p1',
+      from: '2026-01-01T00:00:00Z',
+      to: '2026-01-31T00:00:00Z',
+      usageByModel: [],
+      usageByAgent: [],
+    });
     gatewayMocks.readProjectBacklog.mockImplementation(async (_token: string, projectId: string) => ({
       projectId,
       revision: 1,
@@ -247,6 +277,46 @@ describe('OverviewPage metrics', () => {
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
       vi.useRealTimers();
+    }
+  });
+
+  it('resumes scheduled refreshes when the last active project is archived during a metrics refresh', async () => {
+    const setIntervalSpy = vi.spyOn(window, 'setInterval');
+    mocks.projects = [project('p1', 'Alpha', '2026-01-01T00:00:00Z')];
+    const activeProject = mocks.projects[0] as ProjectSummary;
+    gatewayMocks.listProjects.mockImplementation(async () => [activeProject]);
+    const view = renderPage();
+    try {
+      await waitFor(() => expect(
+        (screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled,
+      ).toBe(false));
+      mocks.deferMetricsReload = true;
+      const archivedProject = { ...activeProject, state: 'archived' };
+      gatewayMocks.listProjects.mockImplementationOnce(async () => [archivedProject]);
+      gatewayMocks.listProjects.mockImplementation(async () => [archivedProject]);
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+      await waitFor(() => expect(mocks.useProjectMetrics).toHaveBeenLastCalledWith(null, '30d'));
+      await waitFor(() => expect(mocks.metricsLoading).toBe(false));
+      await waitFor(() => expect(mocks.resolveMetricsReload).toBeDefined());
+      await act(async () => {
+        await mocks.metricsReloadPromise;
+      });
+      await waitFor(() => expect(mocks.metricsLoading).toBe(false));
+      await waitFor(() => expect(
+        (screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled,
+      ).toBe(false));
+
+      const projectListReads = gatewayMocks.listProjects.mock.calls.length;
+      const intervalCallback = setIntervalSpy.mock.calls.find(([, delay]) => delay === 10_000)?.[0];
+      expect(typeof intervalCallback).toBe('function');
+      await act(async () => {
+        if (typeof intervalCallback === 'function') intervalCallback();
+      });
+      expect(gatewayMocks.listProjects).toHaveBeenCalledTimes(projectListReads + 1);
+    } finally {
+      view.unmount();
+      setIntervalSpy.mockRestore();
     }
   });
 

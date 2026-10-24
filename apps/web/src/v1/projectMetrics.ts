@@ -180,13 +180,20 @@ export function useProjectMetrics(projectId: string | null, range: MetricsRangeK
   // Each load gets a number. A response from an older load is dropped, so a
   // slow reply for an old project or range cannot replace newer data.
   const requestRef = useRef(0);
+  const invalidateRequestRef = useRef<(() => void) | null>(null);
   // The project the shown data belongs to. Data from another project is
   // cleared before the new load, so it is never shown under the wrong name.
   const loadedProjectRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     if (!projectId) return;
+    invalidateRequestRef.current?.();
     const request = ++requestRef.current;
+    let invalidateRequest!: () => void;
+    const invalidated = new Promise<null>((resolve) => {
+      invalidateRequest = () => resolve(null);
+    });
+    invalidateRequestRef.current = invalidateRequest;
     if (loadedProjectRef.current !== projectId) {
       setMetrics(null);
       setUsage(null);
@@ -194,11 +201,17 @@ export function useProjectMetrics(projectId: string | null, range: MetricsRangeK
     }
     setLoading(true);
     const span = metricsRange(range);
-    const [metricsResult, usageResult] = await Promise.allSettled([
-      apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, projectId, span, tenant), null),
-      apiCall((token, tenant) => gatewayClient.getProjectUsage(token, projectId, span, tenant), null),
+    const results = await Promise.race([
+      Promise.allSettled([
+        apiCall((token, tenant) => gatewayClient.getProjectMetrics(token, projectId, span, tenant), null),
+        apiCall((token, tenant) => gatewayClient.getProjectUsage(token, projectId, span, tenant), null),
+      ]),
+      // Stop waiting for a read as soon as its project or range is invalidated.
+      invalidated,
     ]);
-    if (request !== requestRef.current) return;
+    if (results === null || request !== requestRef.current) return;
+    if (invalidateRequestRef.current === invalidateRequest) invalidateRequestRef.current = null;
+    const [metricsResult, usageResult] = results;
     // A failed call clears its data, so old numbers are not shown as current.
     if (metricsResult.status === 'fulfilled') { setMetrics(metricsResult.value); setMetricsError(null); }
     else { setMetrics(null); setMetricsError(metricsResult.reason); }
@@ -211,13 +224,32 @@ export function useProjectMetrics(projectId: string | null, range: MetricsRangeK
   // Start the load in a zero-delay timer so no state changes inside the effect
   // body. The cleanup cancels the timer and marks any running load as old.
   useEffect(() => {
+    if (projectId == null) {
+      // Invalidate obsolete reads while exposing no loading state without a project.
+      return () => {
+        requestRef.current += 1;
+        invalidateRequestRef.current?.();
+        invalidateRequestRef.current = null;
+      };
+    }
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => {
       window.clearTimeout(timer);
       requestRef.current += 1;
+      invalidateRequestRef.current?.();
+      invalidateRequestRef.current = null;
     };
-  }, [load]);
+  }, [load, projectId]);
 
   const reload = useCallback(() => load(), [load]);
-  return { metrics, usage, metricsError, usageError, loading, loadedAt, reload };
+  const hasProject = projectId != null;
+  return {
+    metrics: hasProject ? metrics : null,
+    usage: hasProject ? usage : null,
+    metricsError: hasProject ? metricsError : null,
+    usageError: hasProject ? usageError : null,
+    loading: hasProject && loading,
+    loadedAt,
+    reload,
+  };
 }
