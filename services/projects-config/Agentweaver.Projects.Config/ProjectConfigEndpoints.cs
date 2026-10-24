@@ -308,13 +308,14 @@ public static class ProjectConfigEndpoints
             string agentId,
             HttpContext context,
             ProjectsConfigService service,
-            KnowledgeAgentHistoryClient historyClient,
+            [FromServices] KnowledgeAgentHistoryClient historyClient,
             ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             try
             {
+                // The owner client is a service dependency; this GET route has no request body.
                 // Check the current charter before asking Knowledge so removed or unknown agents stay hidden.
                 if (context.Request.Query.Count != 0)
                     throw ProjectConfigException.Invalid(
