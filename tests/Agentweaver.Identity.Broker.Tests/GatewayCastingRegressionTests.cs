@@ -26,6 +26,7 @@ public sealed class GatewayCastingRegressionTests
         ("GET", "/projects/{projectId}/casting/proposals", "listProjectCastingProposals", null, "ProjectCastingProposalList", "200"),
         ("GET", "/projects/{projectId}/casting/proposals/{proposalId:guid}", "getProjectCastingProposal", null, "ProjectCastingProposal", "200"),
         ("PATCH", "/projects/{projectId}/casting/proposals/{proposalId:guid}", "updateProjectCastingProposal", "UpdateProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
+        ("PATCH", "/projects/{projectId}/casting/proposals/{proposalId:guid}/members/{agentId}/role", "updateProjectCastingProposalMemberRole", "UpdateProjectCastingProposalMemberRoleRequest", "ProjectCastingProposal", "200"),
         ("POST", "/projects/{projectId}/casting/proposals/{proposalId:guid}/confirm", "confirmProjectCastingProposal", "TransitionProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
         ("POST", "/projects/{projectId}/casting/proposals/{proposalId:guid}/reject", "rejectProjectCastingProposal", "TransitionProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
         ("GET", "/projects/{projectId}/casting/export", "exportProjectCasting", null, "ProjectCastingTransfer", "200"),
@@ -101,6 +102,7 @@ public sealed class GatewayCastingRegressionTests
         {
             "CreateProjectCastingProposalRequest", "CreateScenarioProjectCastingProposalRequest",
             "CreateManualProjectCastingProposalRequest", "UpdateProjectCastingProposalRequest",
+            "UpdateProjectCastingProposalMemberRoleRequest",
             "TransitionProjectCastingProposalRequest", "ImportProjectCastingTransferRequest",
             "ProjectCastingProposal", "ProjectCastingTransfer", "ProjectCastingTransferProvenance",
             "ProjectCastingUniverseList", "ProjectCastingTemplateDefinition", "ProjectCastingRoleDefinition",
@@ -109,6 +111,15 @@ public sealed class GatewayCastingRegressionTests
         Assert.Equal(["pending", "confirmed", "rejected"], schemas.GetProperty("ProjectCastingProposal")
             .GetProperty("properties").GetProperty("state").GetProperty("enum").EnumerateArray()
             .Select(item => item.GetString()!).ToArray());
+        var memberRoleRequest = schemas.GetProperty("UpdateProjectCastingProposalMemberRoleRequest");
+        // The optional title stays outside the required catalog-role and revision fence.
+        Assert.Equal(["expectedDraftRevision", "roleId"], memberRoleRequest.GetProperty("required")
+            .EnumerateArray().Select(item => item.GetString()!).ToArray());
+        Assert.True(memberRoleRequest.GetProperty("properties").TryGetProperty("customRoleTitle", out _));
+        Assert.DoesNotContain("customRoleTitle", memberRoleRequest.GetProperty("required")
+            .EnumerateArray().Select(item => item.GetString()!));
+        Assert.True(schemas.GetProperty("ProjectAgentCharter").GetProperty("properties")
+            .TryGetProperty("customRoleTitle", out _));
         Assert.Equal(1, schemas.GetProperty("ProjectCastingTransfer").GetProperty("properties")
             .GetProperty("formatVersion").GetProperty("const").GetInt32());
         Assert.Equal("array", schemas.GetProperty("ProjectCastingUniverseList").GetProperty("properties")
@@ -151,7 +162,8 @@ public sealed class GatewayCastingRegressionTests
         foreach (var route in Routes)
         {
             var suffix = route.Suffix.Replace("{projectId}", "project-1", StringComparison.Ordinal)
-                .Replace("{proposalId:guid}", "11111111-1111-1111-1111-111111111111", StringComparison.Ordinal);
+                .Replace("{proposalId:guid}", "11111111-1111-1111-1111-111111111111", StringComparison.Ordinal)
+                .Replace("{agentId}", "agent-1", StringComparison.Ordinal);
             var query = route.Operation switch
             {
                 "listProjectCastingProposals" => "?limit=7",
@@ -161,8 +173,14 @@ public sealed class GatewayCastingRegressionTests
             using var request = new HttpRequestMessage(new HttpMethod(route.Method), "/api/v1" + suffix + query);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
             request.Headers.Add("X-Agentweaver-Tenant", "tenant-1");
+            var body = route.Operation switch
+            {
+                "updateProjectCastingProposalMemberRole" =>
+                    """{"expectedDraftRevision":3,"roleId":"docs-writer","customRoleTitle":"Staff Writer"}""",
+                _ => """{"expectedDraftRevision":3}""",
+            };
             if (route.Request is not null)
-                request.Content = new StringContent("""{"expectedDraftRevision":3}""", Encoding.UTF8, "application/json");
+                request.Content = new StringContent(body, Encoding.UTF8, "application/json");
             using var response = await gateway.Client.SendAsync(request);
             Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
             Assert.True(response.Headers.CacheControl?.NoStore);
@@ -172,7 +190,7 @@ public sealed class GatewayCastingRegressionTests
             Assert.Equal("/api" + suffix + query, call.Path);
             Assert.Equal("Bearer " + bearer, call.Bearer);
             Assert.Equal("tenant-1", call.Tenant);
-            Assert.Equal(route.Request is null ? null : """{"expectedDraftRevision":3}""", call.Body);
+            Assert.Equal(route.Request is null ? null : body, call.Body);
         }
         Assert.Equal(Routes.Length, calls.Count);
         using var anonymous = await gateway.Client.GetAsync("/api/v1/casting/templates");

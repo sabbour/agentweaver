@@ -61,6 +61,33 @@ describe('Gateway API client', () => {
     expect(configuration.providerOverrides).toHaveLength(1);
   });
 
+  it('patches one proposal member role with its expected draft revision and title', async () => {
+    // Keep the catalog identifier and optional display title in the same fenced request.
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await client.updateCastingProposalMemberRole(
+      'token',
+      'p1',
+      'proposal-1',
+      'agent-1',
+      { expectedDraftRevision: 7, roleId: 'docs-writer', customRoleTitle: 'Staff Writer' },
+      'tenant-1',
+    );
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe('https://gateway.example.test/api/v1/projects/p1/casting/proposals/proposal-1/members/agent-1/role');
+    expect(init?.method).toBe('PATCH');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      expectedDraftRevision: 7,
+      roleId: 'docs-writer',
+      customRoleTitle: 'Staff Writer',
+    });
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+  });
+
   it('does not send a request without a Broker access token', async () => {
     const fetcher = vi.fn<typeof fetch>();
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);

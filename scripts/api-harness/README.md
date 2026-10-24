@@ -222,6 +222,11 @@ For a one-account operator run, use the sign-in launcher:
 npm run harness:p1:signin-run -- --surface api --input <manifest.json> --output <evidence.jsonl>
 ```
 
+The [P1 operator guide](../harness-shared/P1-operator.md) lists the required
+release evidence, safe dry run, one-account sign-in, and automatic fixture
+cleanup steps. This is the supported operator route; it does not require a
+token location or an identity-provider module.
+
 To run API and MCP journeys after one sign-in, use `--surface api,mcp`:
 
 ```powershell
@@ -237,23 +242,15 @@ run keeps the supplied output path unchanged. Both surfaces run even if the
 first returns a blocked or failed result; the command returns the highest exit
 code. Cancellation stops remaining work. UI cannot be combined with API or MCP.
 
-The launcher uses the existing public `agentweaver-web` client and one
-interactive TenantAdmin sign-in. It creates a fresh empty headed-Chrome profile
-and removes it on success, failure, or cancellation; it never reads or copies
-an existing browser profile, cookie store, or credential cache. The same
-in-memory browser session authorizes the unbound setup token and the subsequent
-run-bound tokens. Chrome request-stage interception blocks the registered Portal
-callback before its document loads, including callbacks reached through
-server-side redirect hops. The launcher validates the callback state and issuer,
-then redeems the code with its PKCE verifier. The Portal does not consume it.
-Token values stay in memory and are not written to output,
-logs, or evidence. Omit `fixturePlan.deniedActor` when using this launcher; it
-does not ask for a second Broker account. Distinct-actor coverage is
-unavailable in this one-account operator flow, so the denied-actor
-authorization check remains blocked while the remaining API steps run.
-The Host-caller probe-provider gap is also still blocked; this launcher does
-not provide Host-caller probe adapters, and missing native probes continue to
-block full P1 acceptance. The UI surface remains blocked until the 0.x UI is restored onto v1.
+The launcher uses the registered public client and one interactive sign-in.
+It creates a fresh empty headed-Chrome profile and removes it on success,
+failure, or cancellation. It never reads or copies an existing browser profile,
+cookie store, or credential cache. The same in-memory browser session
+authorizes the setup and run-bound tokens. The launcher validates the callback
+and redeems its code with a PKCE verifier before the Portal can consume it.
+Token values stay in memory and are not written to output, logs, or evidence.
+The one-account route does not create a distinct denied actor; that check and
+any missing native or recovery evidence remain blocked.
 
 Advanced invocations may continue to use the lower-level runner with an
 already-authorized identity provider. It requires the setup token in the
