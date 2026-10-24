@@ -592,7 +592,7 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
           ['get', 'jobs', NAMESPACE],
           ['delete', 'jobs', NAMESPACE],
           ['list', 'pods', NAMESPACE],
-          ...(bootstrapFirstPlatformAdmin ? [['get', 'pods/log', NAMESPACE]] : []),
+          ...(bootstrapFirstPlatformAdmin ? [['get', 'pods', NAMESPACE, 'log']] : []),
         ] : []),
       ],
       permissionContext: 'Projects & Config database migration',

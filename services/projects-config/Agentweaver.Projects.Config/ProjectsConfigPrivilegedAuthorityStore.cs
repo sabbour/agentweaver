@@ -961,16 +961,22 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                           existingAssignment.Role == ProjectAuthorityRole.PlatformAdmin &&
                           existingAssignment.State == ProjectAuthorityRecordState.Active &&
                           existingMembership.State == ProjectAuthorityRecordState.Active
-                    select new { existingMembership.Issuer, existingMembership.Subject })
+                    select new
+                    {
+                        existingMembership.Issuer,
+                        existingMembership.Subject,
+                        existingMembership.TenantId,
+                    })
                     .ToArrayAsync(cancellationToken)
                     .ConfigureAwait(false);
 
                 if (activeAdmins.Length > 0)
                 {
-                    // Treat only the exact sole approved identity as an idempotent retry.
+                    // Tenant membership is part of the approved identity; the same subject in another tenant must conflict.
                     if (activeAdmins.Length == 1 &&
                         string.Equals(activeAdmins[0].Issuer, issuer, StringComparison.Ordinal) &&
-                        string.Equals(activeAdmins[0].Subject, subject, StringComparison.Ordinal))
+                        string.Equals(activeAdmins[0].Subject, subject, StringComparison.Ordinal) &&
+                        string.Equals(activeAdmins[0].TenantId, tenantId, StringComparison.Ordinal))
                     {
                         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                         return false;

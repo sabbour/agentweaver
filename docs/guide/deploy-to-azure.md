@@ -795,7 +795,9 @@ After the bootstrap succeeds, write the reviewed defaults in
 Gateway API. The script opens the existing P1 browser sign-in flow and requests
 the `P1_SETUP_SCOPES`, including `api.read` and `projects.admin`. Review and
 approve the scopes for the signed-in PlatformAdmin. Tokens remain in memory
-and are never displayed.
+and are never displayed. Pass the tenant ID from the P1 harness manifest's
+`environment.tenantId` field with `--tenant`; the script sends it as
+`X-Agentweaver-Tenant` on every API request.
 
 Run a comparison first:
 
@@ -803,24 +805,30 @@ Run a comparison first:
 npm run platform:runtime-defaults -- `
   --base-url https://<gateway-host> `
   --issuer https://<identity-broker-host>/ `
-  --audience https://<api-audience>/
+  --audience https://<api-audience>/ `
+  --tenant <tenant-id>
 ```
 
 Exit code `2` means the current defaults differ from the reviewed file. To
-write them, add `--execute`. The script uses the current platform revision as
-`expectedRevision`, then reads the configuration again and requires an exact
-readback before reporting the new revision:
+write them, add `--execute`. If the defaults already match, `--execute` is a
+no-op and reports the current revision. Otherwise, the script uses the current
+platform revision as `expectedRevision`, then reads the configuration again
+and requires an exact readback before reporting the new revision:
 
 ```powershell
 npm run platform:runtime-defaults -- `
   --base-url https://<gateway-host> `
   --issuer https://<identity-broker-host>/ `
   --audience https://<api-audience>/ `
+  --tenant <tenant-id> `
   --execute
 ```
 
 Run selection is ready only after the script confirms a configured platform
-revision and exact defaults readback.
+revision and exact defaults readback. Before rerunning the P1 harness, set
+`fixturePlan.expectedPlatformRuntimeRevision` in its manifest to the verified
+revision reported by the script. A stale expected revision still causes run
+selection to return `409`.
 
 3. Check readiness, the deployed image digests, and the exact ServiceAccount
    on each workload. Review only the affected pod's logs if a rollout fails.

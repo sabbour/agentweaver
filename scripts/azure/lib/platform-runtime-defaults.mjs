@@ -9,15 +9,16 @@ import {
 const DEFAULT_INPUT = 'deploy/k8s/runtime-configs/platform-runtime-defaults.json';
 const REQUIRED_SCOPES = P1_SETUP_SCOPES.filter(scope =>
   !['openid', 'profile', 'email', 'offline_access'].includes(scope));
-export const PLATFORM_RUNTIME_DEFAULTS_USAGE = `Usage: npm run platform:runtime-defaults -- --base-url <gateway-url> --issuer <https-issuer> --audience <token-audience> [options]
+export const PLATFORM_RUNTIME_DEFAULTS_USAGE = `Usage: npm run platform:runtime-defaults -- --base-url <gateway-url> --issuer <https-issuer> --audience <token-audience> --tenant <tenant-id> [options]
 
 Without --execute the script signs in, reads current defaults, and compares them with the reviewed input.
 
   --base-url <url>      Gateway origin for the deployed API. Required.
   --issuer <url>        Identity Broker issuer. Required.
   --audience <value>    Public API token audience. Required.
+  --tenant <id>         Tenant selector from the P1 harness manifest. Required.
   --input <file>        Reviewed defaults JSON. Default: ${DEFAULT_INPUT}
-  --execute             Append the reviewed defaults using the current revision, then verify exact readback.
+  --execute             Write differing defaults; no-op when they already match.
   --help                Show this help.
 
 The script uses the P1 browser sign-in flow with P1_SETUP_SCOPES. Tokens are never written or displayed.`;
@@ -48,6 +49,7 @@ export function parsePlatformRuntimeDefaultsArgs(argv = []) {
     baseUrl: undefined,
     issuer: undefined,
     audience: undefined,
+    tenantId: undefined,
     inputPath: DEFAULT_INPUT,
     execute: false,
     help: false,
@@ -56,6 +58,7 @@ export function parsePlatformRuntimeDefaultsArgs(argv = []) {
     ['--base-url', 'baseUrl'],
     ['--issuer', 'issuer'],
     ['--audience', 'audience'],
+    ['--tenant', 'tenantId'],
     ['--input', 'inputPath'],
   ]);
   const seen = new Set();
@@ -87,6 +90,10 @@ export function parsePlatformRuntimeDefaultsArgs(argv = []) {
   if (typeof options.audience !== 'string' || !options.audience.trim() ||
       options.audience.trim() !== options.audience) {
     fail('--audience is required and must not contain surrounding whitespace.');
+  }
+  if (typeof options.tenantId !== 'string' || !options.tenantId.trim() ||
+      options.tenantId.trim() !== options.tenantId) {
+    fail('--tenant is required and must not contain surrounding whitespace.');
   }
   return options;
 }
@@ -125,15 +132,16 @@ function requireVersionedDefaults(response, description) {
   return response;
 }
 
-async function readJsonResponse(fetchImpl, url, token, description, options = {}) {
+async function readJsonResponse(fetchImpl, url, token, tenantId, description, options = {}) {
   let response;
   try {
     response = await fetchImpl(url, {
       ...options,
       headers: {
-        Authorization: `Bearer ${token}`,
-        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
         ...options.headers,
+        ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        Authorization: `Bearer ${token}`,
+        'X-Agentweaver-Tenant': tenantId,
       },
     });
   } catch {
@@ -186,7 +194,8 @@ export async function runPlatformRuntimeDefaults(options, overrides = {}) {
 
   const endpoint = new URL('/api/v1/platform/runtime-defaults', options.baseUrl).toString();
   const current = requireVersionedDefaults(
-    await readJsonResponse(deps.fetch, endpoint, token, 'Platform runtime defaults GET'),
+    await readJsonResponse(
+      deps.fetch, endpoint, token, options.tenantId, 'Platform runtime defaults GET'),
     'Platform runtime defaults GET');
   const currentMatches = current.defaults !== null && sameJson(current.defaults, expected);
   if (!options.execute) {
@@ -198,17 +207,25 @@ export async function runPlatformRuntimeDefaults(options, overrides = {}) {
     return { result: 'differs', revision: current.revision, exitCode: 2 };
   }
 
+  // Avoid appending a revision when the reviewed configuration is already live.
+  if (currentMatches) {
+    deps.log(`Platform runtime defaults already match the reviewed input at revision ${current.revision}; no update was needed.`);
+    return { result: 'exact', revision: current.revision, exitCode: 0 };
+  }
+
   const update = requireVersionedDefaults(
-    await readJsonResponse(deps.fetch, endpoint, token, 'Platform runtime defaults PUT', {
-      method: 'PUT',
-      body: JSON.stringify({ expectedRevision: current.revision, defaults: expected }),
-    }),
+    await readJsonResponse(
+      deps.fetch, endpoint, token, options.tenantId, 'Platform runtime defaults PUT', {
+        method: 'PUT',
+        body: JSON.stringify({ expectedRevision: current.revision, defaults: expected }),
+      }),
     'Platform runtime defaults PUT');
   if (update.revision !== current.revision + 1) {
     fail('the PUT response did not append exactly one platform revision.');
   }
   const readback = requireVersionedDefaults(
-    await readJsonResponse(deps.fetch, endpoint, token, 'Platform runtime defaults readback'),
+    await readJsonResponse(
+      deps.fetch, endpoint, token, options.tenantId, 'Platform runtime defaults readback'),
     'Platform runtime defaults readback');
   // The revision fence detects races; the canonical comparison checks the complete server-normalized payload.
   if (readback.revision !== update.revision || !sameJson(readback.defaults, expected)) {

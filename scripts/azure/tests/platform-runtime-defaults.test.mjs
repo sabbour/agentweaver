@@ -45,6 +45,7 @@ function options(overrides = {}) {
     baseUrl: 'https://gateway.example/',
     issuer,
     audience,
+    tenantId: 'controlled-tenant',
     inputPath: 'deploy/k8s/runtime-configs/platform-runtime-defaults.json',
     execute: false,
     ...overrides,
@@ -86,7 +87,11 @@ test('arguments require an HTTPS Gateway, issuer, and audience', () => {
   ]), /--issuer must be an absolute HTTPS URL/);
   assert.equal(parsePlatformRuntimeDefaultsArgs([
     '--base-url', 'https://gateway.example/', '--issuer', issuer, '--audience', audience,
+    '--tenant', 'controlled-tenant',
   ]).execute, false);
+  assert.throws(() => parsePlatformRuntimeDefaultsArgs([
+    '--base-url', 'https://gateway.example/', '--issuer', issuer, '--audience', audience,
+  ]), /--tenant is required/);
 });
 
 test('dry run reports exact current defaults without writing', async () => {
@@ -110,6 +115,18 @@ test('dry run returns exit code two when current defaults differ', async () => {
   assert.equal(dependencies.calls[0].request.method, undefined);
 });
 
+test('execute is a no-op when current defaults already match', async () => {
+  const dependencies = createDependencies({
+    responses: [{ status: 200, body: { revision: 8, defaults } }],
+  });
+  const result = await runPlatformRuntimeDefaults(options({ execute: true }), dependencies.overrides);
+  assert.deepEqual(result, { result: 'exact', revision: 8, exitCode: 0 });
+  assert.equal(dependencies.calls.length, 1);
+  assert.equal(dependencies.calls[0].request.method, undefined);
+  assert.equal(dependencies.logs.at(-1),
+    'Platform runtime defaults already match the reviewed input at revision 8; no update was needed.');
+});
+
 test('execute uses the current expected revision and verifies exact readback', async () => {
   const dependencies = createDependencies({
     responses: [
@@ -125,6 +142,8 @@ test('execute uses the current expected revision and verifies exact readback', a
   assert.equal(put.method, 'PUT');
   assert.deepEqual(JSON.parse(put.body), { expectedRevision: 6, defaults });
   assert.equal(put.headers.Authorization, `Bearer ${testToken}`);
+  assert.deepEqual(dependencies.calls.map(call => call.request.headers['X-Agentweaver-Tenant']),
+    ['controlled-tenant', 'controlled-tenant', 'controlled-tenant']);
   assert.equal(dependencies.logs.at(-1), 'Platform runtime defaults were written and verified at revision 7.');
 });
 

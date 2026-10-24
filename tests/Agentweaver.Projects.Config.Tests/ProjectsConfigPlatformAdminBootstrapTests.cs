@@ -116,6 +116,33 @@ public sealed class ProjectsConfigPlatformAdminBootstrapTests(
     }
 
     [Fact]
+    public async Task RefusesIdempotentBootstrapWhenApprovedIdentityUsesAnotherTenant()
+    {
+        var options = CreateDbContextOptions();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var subject = "cross-tenant-platform-admin-" + suffix;
+        var tenantId = "approved-platform-tenant-" + suffix;
+
+        Assert.True(await store.BootstrapFirstPlatformAdminAsync(TestIssuer, subject, tenantId));
+        try
+        {
+            // The PlatformAdmin is global, but its approved membership still must match the configured tenant.
+            await Assert.ThrowsAsync<PlatformAdminBootstrapConflictException>(() =>
+                store.BootstrapFirstPlatformAdminAsync(
+                    TestIssuer, subject, "different-approved-tenant-" + suffix));
+
+            await using var db = new ProjectsConfigDbContext(options);
+            Assert.Equal(1, await db.TenantMemberships.CountAsync(item =>
+                item.Issuer == TestIssuer && item.Subject == subject));
+        }
+        finally
+        {
+            await CleanupPlatformAdminAsync(subject, tenantId);
+        }
+    }
+
+    [Fact]
     public async Task ReusesApprovedActiveMembershipWithoutDuplicatingMembershipAudit()
     {
         var options = CreateDbContextOptions();

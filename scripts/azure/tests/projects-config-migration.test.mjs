@@ -61,6 +61,7 @@ function createWorld({
 } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), 'projects-config-migration-test-'));
   const calls = [];
+  const kubeconfigOptions = [];
   const objects = new Map();
   const receipts = [];
   const exec = (command, args, settings = {}) => {
@@ -120,7 +121,7 @@ function createWorld({
     throw new Error(`unexpected kubectl ${args.join(' ')}`);
   };
   return {
-    calls, objects, receipts,
+    calls, kubeconfigOptions, objects, receipts,
     options: parseProjectsConfigMigrationArgs([
       '--publication', 'publication.json', '--receipt-dir', directory,
     ]),
@@ -133,7 +134,10 @@ function createWorld({
       verifyImage: async () => ({
         digest: imageDigest, sourceSha: publicationSourceSha, sourceTree, version: '1.0.9',
       }),
-      withKubeconfig: async (_target, action) => action(['--kubeconfig', 'offline']),
+      withKubeconfig: async (_target, action, settings) => {
+        kubeconfigOptions.push(settings);
+        return action(['--kubeconfig', 'offline']);
+      },
       // Record the grant step in the same call log so tests can check its order against kubectl calls.
       applyRuntimeGrants: async root => {
         calls.push({ command: 'grants', args: [root], lockHeld: objects.has(`lease/${LOCK_NAME}`) });
@@ -214,6 +218,10 @@ test('PlatformAdmin bootstrap creates one pinned Job, parses the stable outcome,
       assert.equal(receipt.grants, undefined);
       assert.deepEqual(receipt.cleanup, { job: true, secret: true, lock: true });
       assert.equal(world.calls.some(call => call.command === 'grants'), false);
+      assert.deepEqual(
+        world.kubeconfigOptions[0].requiredPermissions.find(permission =>
+          permission[0] === 'get' && permission[1] === 'pods' && permission[3] === 'log'),
+        ['get', 'pods', DB_MAINTENANCE_TARGET.namespace, 'log']);
       const jobCreate = world.calls.find(call =>
         call.command === 'kubectl' && call.args.includes('create') &&
         JSON.parse(call.settings.input ?? '{}').kind === 'Job');

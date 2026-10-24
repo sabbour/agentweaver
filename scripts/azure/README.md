@@ -398,14 +398,18 @@ npm run db:maintenance:projects-config -- --publication .\artifacts\release\publ
 `npm run platform:runtime-defaults` signs in through the P1 browser helper with
 `P1_SETUP_SCOPES`, reads `/api/v1/platform/runtime-defaults`, and compares it
 with the reviewed `deploy/k8s/runtime-configs/platform-runtime-defaults.json`.
-The default invocation is read-only. Add `--execute` to append the reviewed
-defaults with the current expected revision. The script reads them back and
-requires an exact normalized configuration and revision before it succeeds.
-It never writes or prints the access token.
+Pass the selected `environment.tenantId` from the P1 harness manifest with
+`--tenant`; every API request carries it in `X-Agentweaver-Tenant`.
+The default invocation is read-only. Add `--execute` to write differing
+reviewed defaults with the current expected revision. If the current defaults
+already match, execute mode is a no-op and reports the current revision.
+After a write, the script reads the values back and requires an exact
+normalized configuration and revision before it succeeds. It never writes or
+prints the access token.
 
 ```powershell
-npm run platform:runtime-defaults -- --base-url https://<gateway-host> --issuer https://<identity-broker-host>/ --audience https://<api-audience>/
-npm run platform:runtime-defaults -- --base-url https://<gateway-host> --issuer https://<identity-broker-host>/ --audience https://<api-audience>/ --execute
+npm run platform:runtime-defaults -- --base-url https://<gateway-host> --issuer https://<identity-broker-host>/ --audience https://<api-audience>/ --tenant <tenant-id>
+npm run platform:runtime-defaults -- --base-url https://<gateway-host> --issuer https://<identity-broker-host>/ --audience https://<api-audience>/ --tenant <tenant-id> --execute
 ```
 
 #### Applying the Projects & Config runtime grants
