@@ -440,6 +440,87 @@ public static class ProjectConfigEndpoints
             }
         }).WithName("ListProjectCastingUniverses");
 
+        projects.MapPost("/{projectId}/casting/proposal-generations", async (
+            string projectId,
+            StartProjectCastingGenerationRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                // The generation owner stores only request identity and proposal state; model execution stays in Orchestrator.
+                var generation = await service.StartCastingGenerationAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    request,
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Created(
+                    $"/api/projects/{projectId}/casting/proposal-generations/{generation.RequestId:D}",
+                    generation);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("StartProjectCastingGeneration");
+
+        projects.MapPost("/{projectId}/casting/proposal-generations/{requestId:guid}/complete", async (
+            string projectId,
+            Guid requestId,
+            CompleteProjectCastingGenerationRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                // Projects rechecks the request run, proposal state, and base revision inside its PostgreSQL transaction.
+                var generation = await service.CompleteCastingGenerationAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    requestId,
+                    request,
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(generation);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("CompleteProjectCastingGeneration");
+
+        projects.MapPost("/{projectId}/casting/proposal-generations/{requestId:guid}/fail", async (
+            string projectId,
+            Guid requestId,
+            FailProjectCastingGenerationRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                // Persist a bounded code only, so raw model output and exception text never enter proposal metadata.
+                var generation = await service.FailCastingGenerationAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    requestId,
+                    request,
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(generation);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("FailProjectCastingGeneration");
+
         projects.MapPost("/{projectId}/casting/proposals", async (
             string projectId,
             CreateProjectCastingProposalRequest request,

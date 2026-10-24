@@ -50,7 +50,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/NewChatComposer.tsx` | Message composer with a stable idempotency key per draft. The run Chat tab uses it. |
 | `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
 | `src/v1/AgentsView.tsx`, `src/v1/AgentsTeamControls.tsx` | Agents roster, filters, the charter drawer, **Cast team**, **Add member**, pending team proposals, and team export and import. |
-| `src/v1/CastTeamPage.tsx`, `src/v1/castingData.ts` | Cast a team from a template or roles, choose a server-supported universe, review the proposal, and confirm or reject it. |
+| `src/v1/CastTeamPage.tsx`, `src/v1/castingData.ts` | Formulate roles from a project goal, analyze read-only repository signals, or start from a template. Choose a server-supported universe, review and edit the pending proposal, then confirm or reject it. |
 | `src/v1/PlatformSettingsPage.tsx` | Read-only status of the 16 platform component areas for tenant and platform administrators. |
 | `src/v1/ProjectSettingsSections.tsx`, `src/v1/settingsSections.ts`, `src/v1/projectReadiness.ts` | Project settings rail, General, Access, Repository, Run limits, and Danger zone sections. |
 | `src/v1/ProjectMembers.tsx` | Access > Members on the project role-assignment API. Only tenant administrators see add and remove. |
@@ -101,14 +101,21 @@ data hooks are not mounted.
 
 ## Cast a team
 
-The Cast a team page lists universe names from the Projects & Config owner.
-Choose a name or keep **Random (any universe)**. The page sends the choice with
-the template or role selection when it creates a proposal at the displayed
-configuration revision. Projects & Config stores the choice in the pending
-draft; it becomes project configuration only after confirmation. During
-review, use **Re-role** to change one member's catalog role and optional
-display title. The title remains separate from the role ID and is saved only
-in the proposal until confirmation.
+The Cast a team page offers **Formulate**, **Template**, and **Analyze**.
+Formulate uses a project goal and optional preferred roles. Analyze uses
+repository signals and does not accept manual role preferences. Both AI modes
+run through the accepted project run and create a pending proposal; they do
+not change the live team. Choose a team size and, when a team already exists,
+choose **Augment** or **Recast**.
+
+The page lists universe names from the Projects & Config owner. Choose a name
+or keep **Random (any universe)**. The page sends the choice with the proposal
+at the displayed configuration revision. Projects & Config stores the choice
+in the pending draft; it becomes project configuration only after
+confirmation. During review, use **Re-role** to change one member's catalog
+role and optional display title, or remove a proposed member. The title
+remains separate from the role ID and is saved only in the proposal until
+confirmation.
 
 The production host serves `index.html` for client routes. Missing `/assets`
 files return `404`, not the SPA fallback.

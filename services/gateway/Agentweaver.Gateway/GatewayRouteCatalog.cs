@@ -160,6 +160,14 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, casting + "/universes", "/api" + casting + "/universes",
             "listProjectCastingUniverses", "List supported casting universes for a project",
             forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, casting + "/proposals/formulate",
+            "/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/casting-generation",
+            "formulateCastingProposal", "Generate a Formulate casting proposal",
+            body: true, maximumRequestBodyBytes: 64 * 1024, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, casting + "/proposals/analyze",
+            "/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/casting-generation",
+            "analyzeCastingProposal", "Generate an Analyze casting proposal",
+            body: true, maximumRequestBodyBytes: 64 * 1024, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, casting + "/proposals", "/api" + casting + "/proposals",
             "createProjectCastingProposal", "Stage a complete casting draft", body: true, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, casting + "/proposals/scenario", "/api" + casting + "/proposals/scenario",

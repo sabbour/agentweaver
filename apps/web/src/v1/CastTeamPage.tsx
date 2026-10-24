@@ -3,12 +3,12 @@
  * roles and stages a proposal. When a team exists, the user can add members or
  * replace it. Step 2 reviews the proposed agents and can remove members. Step 3
  * confirms it. The Universe picker uses the Projects & Config catalog and saves
- * its choice in the revision-bound proposal. AI Formulate and Analyze modes are
- * not available in v1.
+ * its choice in the revision-bound proposal. Formulate and Analyze use accepted
+ * project runs and remain pending until the user confirms them.
  */
 import {
   Accordion, AccordionHeader, AccordionItem, AccordionPanel, Button, Checkbox, Field, Input, MessageBar, MessageBarBody,
-  Radio, RadioGroup, Select, Spinner, Text, Title3, makeStyles, mergeClasses, tokens,
+  Radio, RadioGroup, Select, Spinner, SpinButton, Tab, TabList, Text, Textarea, Title3, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import { CheckmarkRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
@@ -16,15 +16,31 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AppDialog } from '../components/ui/AppDialog';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
-import { gatewayClient } from './api';
-import { agentsPath, castableRoles, castingError, draftMembers, draftWithRoles, draftWithoutMember, isConflict, type DraftMember } from './castingData';
+import { GatewayError, gatewayClient } from './api';
+import { agentsPath, castableRoles, castingError, castingGenerationPrompt, draftMembers, draftWithRoles, draftWithoutMember, isConflict, type DraftMember } from './castingData';
 import type {
-  ProjectCastingProposal, ProjectCastingRoleDefinition, ProjectCastingTemplateDefinition, VersionedProjectConfiguration,
+  AnalyzeCastingProposalRequest, FormulateCastingProposalRequest, ProjectCastingProposal,
+  ProjectCastingRoleDefinition, ProjectCastingTemplateDefinition, VersionedProjectConfiguration,
 } from './contracts';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
 
 type Step = 'cast' | 'review' | 'confirm';
 type CastingIntent = 'augment' | 'recast';
+type CastingSource = 'formulate' | 'template' | 'analyze';
+type CastingGenerationAttempt = {
+  mode: 'formulate' | 'analyze';
+  expectedConfigurationRevision: number;
+  prompt: string;
+  goal: string | null;
+  teamSize: number;
+  intent: CastingIntent;
+  preferredRoleIds: string[];
+  universe: string | null;
+  createRunIdempotencyKey: string;
+  idempotencyKey: string;
+  runId?: string;
+  sessionId?: string;
+};
 const STEPS: Step[] = ['cast', 'review', 'confirm'];
 const STEP_LABELS: Record<Step, string> = { cast: 'Cast', review: 'Review proposal', confirm: 'Confirm' };
 
@@ -141,9 +157,10 @@ export function CastTeamPage() {
   const [searchParams] = useSearchParams();
   const linkedProposalId = searchParams.get('proposal');
   const navigate = useNavigate();
-  const { apiCall } = useAuth();
+  const { apiCall, ensureSession, authorize } = useAuth();
 
   const [step, setStep] = useState<Step>('cast');
+  const [source, setSource] = useState<CastingSource>('formulate');
   const [templates, setTemplates] = useState<ProjectCastingTemplateDefinition[]>([]);
   const [roles, setRoles] = useState<ProjectCastingRoleDefinition[]>([]);
   const [configuration, setConfiguration] = useState<VersionedProjectConfiguration | null>(null);
@@ -151,11 +168,15 @@ export function CastTeamPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [goal, setGoal] = useState('');
+  const [teamSize, setTeamSize] = useState(4);
   const [universes, setUniverses] = useState<string[]>([]);
   const [universe, setUniverse] = useState('');
   const [castingIntent, setCastingIntent] = useState<CastingIntent>('augment');
   const [proposalIntent, setProposalIntent] = useState<CastingIntent | null>(null);
   const [proposal, setProposal] = useState<ProjectCastingProposal | null>(null);
+  const [generationAttempt, setGenerationAttempt] = useState<CastingGenerationAttempt | null>(null);
+  const [needsRunSignIn, setNeedsRunSignIn] = useState(false);
   // True when this page created the proposal, so Back may discard it.
   const [createdHere, setCreatedHere] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -188,6 +209,8 @@ export function CastTeamPage() {
         setLoadError(null);
         // Keep a prior project's explicit universe from carrying into this project.
         setUniverse('');
+        setGenerationAttempt(null);
+        setNeedsRunSignIn(false);
         try {
           const [templateList, roleList, , universeList] = await Promise.all([
             apiCall((token, tenant) => gatewayClient.listCastingTemplates(token, tenant), null),
@@ -233,8 +256,13 @@ export function CastTeamPage() {
       return true;
     } catch (reason) {
       if (isConflict(reason)) {
-        // Re-read first, so the message about the latest version is true.
-        try { await onConflict(); } catch { /* the conflict message below still applies */ }
+        // Re-read before claiming the latest version is visible; report both failures if that read also fails.
+        try {
+          await onConflict();
+        } catch (refreshReason) {
+          setError(`The project or proposal changed, and its latest version could not be loaded. ${castingError(refreshReason, false)}`);
+          return false;
+        }
       }
       setError(castingError(reason, true));
       return false;
@@ -242,6 +270,149 @@ export function CastTeamPage() {
       setBusy(false);
     }
   };
+
+  /** Creates or resumes the accepted run, then asks Gateway to stage its output as a proposal. */
+  const executeGeneration = (attempt: CastingGenerationAttempt) => write(async () => {
+    try {
+      let activeAttempt = attempt;
+      if (!activeAttempt.runId || !activeAttempt.sessionId) {
+        // Save the exact prompt first; the owner later checks that this is the run's first message.
+        const created = await apiCall((token, tenant) => gatewayClient.createProjectRun(
+          token,
+          projectId,
+          {
+            firstMessage: activeAttempt.prompt,
+            expectedProjectConfigRevision: activeAttempt.expectedConfigurationRevision,
+          },
+          activeAttempt.createRunIdempotencyKey,
+          tenant,
+        ), null);
+        if (created.binding.projectId !== projectId ||
+            created.binding.runId !== created.runId ||
+            !created.rootSessionId)
+          throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned a different casting run.');
+        activeAttempt = { ...activeAttempt, runId: created.runId, sessionId: created.rootSessionId };
+        setGenerationAttempt(activeAttempt);
+      }
+
+      const runId = activeAttempt.runId;
+      const sessionId = activeAttempt.sessionId;
+      if (!runId || !sessionId)
+        throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The casting run is not ready.');
+      const binding = { projectId, runId };
+      // Keep the run-bound session separate from the unbound project-writer token.
+      if (!await ensureSession(binding, false)) {
+        setNeedsRunSignIn(true);
+        return;
+      }
+      setNeedsRunSignIn(false);
+
+      const requestBase = {
+        expectedConfigurationRevision: activeAttempt.expectedConfigurationRevision,
+        runId,
+        sessionId,
+        idempotencyKey: activeAttempt.idempotencyKey,
+        prompt: activeAttempt.prompt,
+        teamSize: activeAttempt.teamSize,
+        intent: activeAttempt.intent,
+        preferredRoleIds: activeAttempt.preferredRoleIds,
+        universe: activeAttempt.universe,
+      };
+      // Gateway uses the run token for Orchestrator and the unbound token only for Projects & Config.
+      const generated = await apiCall((projectToken) => apiCall((runToken, tenant) =>
+        activeAttempt.mode === 'formulate'
+          ? gatewayClient.formulateCastingProposal(
+            runToken,
+            projectToken,
+            projectId,
+            { ...requestBase, goal: activeAttempt.goal ?? '' } satisfies FormulateCastingProposalRequest,
+            tenant,
+          )
+          : gatewayClient.analyzeCastingProposal(
+            runToken,
+            projectToken,
+            projectId,
+            requestBase satisfies AnalyzeCastingProposalRequest,
+            tenant,
+          ), binding), null);
+      if (generated.projectId !== projectId ||
+          generated.baseConfigurationRevision !== activeAttempt.expectedConfigurationRevision ||
+          generated.state !== 'pending' ||
+          generated.generation?.mode !== activeAttempt.mode ||
+          generated.generation.state !== 'completed')
+        throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned a proposal that is not ready for review.');
+      // Display only a completed, still-pending owner proposal; confirmation remains a separate action.
+      setProposal(generated);
+      setProposalIntent(activeAttempt.intent);
+      setCreatedHere(true);
+      setGenerationAttempt(null);
+      setStep('review');
+    } catch (reason) {
+      // A received HTTP failure is final for this key; network errors keep the same key for safe replay.
+      if (reason instanceof GatewayError) {
+        setGenerationAttempt(null);
+        setNeedsRunSignIn(false);
+      }
+      throw reason;
+    }
+  }, readConfiguration);
+
+  /** Starts one AI mode with a prompt shared by the browser and Gateway. */
+  const startGeneration = (mode: 'formulate' | 'analyze') => {
+    if (!configuration || generationAttempt) return;
+    // A blank goal is invalid only for Formulate; Analyze gets its signals from the repository.
+    const trimmedGoal = mode === 'formulate' ? goal.trim() : null;
+    if (mode === 'formulate' && !trimmedGoal) return;
+    const intent: CastingIntent = currentCount > 0 ? castingIntent : 'recast';
+    // Analyze does not accept hand-picked role preferences in the 0.x flow.
+    const existingRoleIds = configuration.configuration.casting
+      .slice()
+      .sort((left, right) => left.order - right.order)
+      .map((item) => item.role)
+      .filter((roleId, index, all) => all.indexOf(roleId) === index);
+    const preferredRoleIds = mode === 'formulate' ? [...selectedRoleIds] : [];
+    const prompt = castingGenerationPrompt({
+      mode,
+      teamSize,
+      intent,
+      preferredRoleIds,
+      universe: universe || null,
+      goal: trimmedGoal,
+      existingRoleIds,
+      roles,
+    });
+    const attempt: CastingGenerationAttempt = {
+      mode,
+      expectedConfigurationRevision: configuration.revision,
+      prompt,
+      goal: trimmedGoal,
+      teamSize,
+      intent,
+      preferredRoleIds,
+      universe: universe || null,
+      createRunIdempotencyKey: crypto.randomUUID(),
+      idempotencyKey: crypto.randomUUID(),
+    };
+    setGenerationAttempt(attempt);
+    void executeGeneration(attempt);
+  };
+
+  /** Cancels a run created for an unfinished generation attempt. */
+  const cancelGenerationAttempt = () => write(async () => {
+    const runId = generationAttempt?.runId;
+    // A run that was never created needs no owner-side cancellation.
+    if (runId)
+      await apiCall((token, tenant) => gatewayClient.cancelProjectRun(
+        token,
+        projectId,
+        runId,
+        crypto.randomUUID(),
+        'Casting proposal generation was cancelled.',
+        tenant,
+      ), null);
+    setGenerationAttempt(null);
+    setNeedsRunSignIn(false);
+  }, readConfiguration);
 
   /** Stages either a complete augment draft or the owner-built replacement proposal. */
   const createProposal = () => write(async () => {
@@ -326,6 +497,9 @@ export function CastTeamPage() {
 
   const members = proposal ? draftMembers(proposal.draft) : [];
   const currentCount = configuration?.configuration.casting.length ?? 0;
+  const canStartGeneration = configuration !== null &&
+    (source === 'analyze' || (source === 'formulate' && goal.trim().length > 0)) &&
+    !generationAttempt;
   const existingAgentIds = new Set(configuration?.configuration.casting.map((item) => item.agentId) ?? []);
   const addedMembers = members.filter((member) => !existingAgentIds.has(member.agentId));
   // Linked proposals do not retain their original action, so recognize an augment by its unchanged roster plus additions.
@@ -363,38 +537,128 @@ export function CastTeamPage() {
           <div className={styles.pane}>
             {step === 'cast' && (
               <>
-                <PageSection title="Template" description="Start from a built-in team. You can change its roles below.">
-                  {templates.length === 0 ? <Text className={styles.muted}>No templates available.</Text> : (
-                    <div className={styles.templateGrid}>
-                      {templates.map((template) => (
-                        <button
-                          key={template.id}
-                          type="button"
-                          className={mergeClasses(styles.templateCard, selectedTemplateId === template.id && styles.templateCardSelected)}
-                          aria-pressed={selectedTemplateId === template.id}
-                          onClick={() => chooseTemplate(template)}
-                        >
-                          <Text className={styles.templateTitle}>{template.title}</Text>
-                          <Text className={styles.muted}>{template.description}</Text>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </PageSection>
-                <PageSection title="Roles" description="Tune the role mix before reviewing the proposal.">
-                  <div className={styles.rolesGrid}>
-                    {roles.map((role) => (
-                      <Checkbox
-                        key={role.id}
-                        label={role.title}
-                        checked={selectedRoleIds.includes(role.id)}
-                        onChange={(_, data) => setSelectedRoleIds((previous) => data.checked
-                          ? [...previous, role.id]
-                          : previous.filter((id) => id !== role.id))}
+                <TabList
+                  selectedValue={source}
+                  onTabSelect={(_, data) => {
+                    if (data.value === 'formulate' || data.value === 'template' || data.value === 'analyze')
+                      setSource(data.value);
+                  }}
+                  aria-label="Casting mode"
+                >
+                  <Tab value="formulate" disabled={busy || Boolean(generationAttempt)}>Formulate</Tab>
+                  <Tab value="template" disabled={busy || Boolean(generationAttempt)}>Template</Tab>
+                  <Tab value="analyze" disabled={busy || Boolean(generationAttempt)}>Analyze</Tab>
+                </TabList>
+
+                {source === 'formulate' && (
+                  <>
+                    <PageSection title="Formulate" description="Describe the project goal. The AI suggests roles for a team.">
+                      <Field label="Project goal" required>
+                        <Textarea
+                          value={goal}
+                          rows={3}
+                          maxLength={4000}
+                          disabled={busy || Boolean(generationAttempt)}
+                          placeholder="For example, build a small team to ship a SaaS MVP."
+                          onChange={(_, data) => setGoal(data.value)}
+                        />
+                      </Field>
+                      <Field label="Team size">
+                        <SpinButton
+                          min={2}
+                          max={10}
+                          step={1}
+                          value={teamSize}
+                          disabled={busy || Boolean(generationAttempt)}
+                          onChange={(_, data) => {
+                            if (data.value !== undefined && data.value !== null) setTeamSize(data.value);
+                            else if (data.displayValue) {
+                              const parsed = Number.parseInt(data.displayValue, 10);
+                              if (!Number.isNaN(parsed)) setTeamSize(Math.min(10, Math.max(2, parsed)));
+                            }
+                          }}
+                        />
+                      </Field>
+                      <div>
+                        <Text>Preferred roles (optional)</Text>
+                        <Text className={styles.muted}>The AI can choose other roles too.</Text>
+                        <div className={styles.rolesGrid}>
+                          {roles.map((role) => (
+                            <Checkbox
+                              key={role.id}
+                              label={role.title}
+                              checked={selectedRoleIds.includes(role.id)}
+                              disabled={busy || Boolean(generationAttempt)}
+                              onChange={(_, data) => setSelectedRoleIds((previous) => data.checked
+                                ? [...previous, role.id]
+                                : previous.filter((id) => id !== role.id))}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </PageSection>
+                  </>
+                )}
+
+                {source === 'analyze' && (
+                  <PageSection title="Analyze" description="Use project files to suggest roles. File access is read-only.">
+                    <Field label="Team size">
+                      <SpinButton
+                        min={2}
+                        max={10}
+                        step={1}
+                        value={teamSize}
+                        disabled={busy || Boolean(generationAttempt)}
+                        onChange={(_, data) => {
+                          if (data.value !== undefined && data.value !== null) setTeamSize(data.value);
+                          else if (data.displayValue) {
+                            const parsed = Number.parseInt(data.displayValue, 10);
+                            if (!Number.isNaN(parsed)) setTeamSize(Math.min(10, Math.max(2, parsed)));
+                          }
+                        }}
                       />
-                    ))}
-                  </div>
-                </PageSection>
+                    </Field>
+                  </PageSection>
+                )}
+
+                {source === 'template' && (
+                  <>
+                    <PageSection title="Template" description="Start from a built-in team. You can change its roles below.">
+                      {templates.length === 0 ? <Text className={styles.muted}>No templates available.</Text> : (
+                        <div className={styles.templateGrid}>
+                          {templates.map((template) => (
+                            <button
+                              key={template.id}
+                              type="button"
+                              className={mergeClasses(styles.templateCard, selectedTemplateId === template.id && styles.templateCardSelected)}
+                              aria-pressed={selectedTemplateId === template.id}
+                              disabled={busy}
+                              onClick={() => chooseTemplate(template)}
+                            >
+                              <Text className={styles.templateTitle}>{template.title}</Text>
+                              <Text className={styles.muted}>{template.description}</Text>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </PageSection>
+                    <PageSection title="Roles" description="Tune the role mix before reviewing the proposal.">
+                      <div className={styles.rolesGrid}>
+                        {roles.map((role) => (
+                          <Checkbox
+                            key={role.id}
+                            label={role.title}
+                            checked={selectedRoleIds.includes(role.id)}
+                            disabled={busy}
+                            onChange={(_, data) => setSelectedRoleIds((previous) => data.checked
+                              ? [...previous, role.id]
+                              : previous.filter((id) => id !== role.id))}
+                          />
+                        ))}
+                      </div>
+                    </PageSection>
+                  </>
+                )}
                 <Accordion collapsible>
                   <AccordionItem value="universe">
                     <AccordionHeader>Universe</AccordionHeader>
@@ -402,6 +666,7 @@ export function CastTeamPage() {
                       <Select
                         aria-label="Universe"
                         value={universe}
+                        disabled={busy || Boolean(generationAttempt)}
                         onChange={(_, data) => setUniverse(data.value)}
                       >
                         <option value="">Random (any universe)</option>
@@ -414,6 +679,7 @@ export function CastTeamPage() {
                   <PageSection title="Current team" description="Choose what this proposal will do when confirmed.">
                     <RadioGroup
                       value={castingIntent}
+                      disabled={busy || Boolean(generationAttempt)}
                       onChange={(_, data) => {
                         if (data.value === 'augment' || data.value === 'recast') setCastingIntent(data.value);
                       }}
@@ -424,6 +690,37 @@ export function CastTeamPage() {
                     </RadioGroup>
                   </PageSection>
                 )}
+                {generationAttempt && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      {needsRunSignIn
+                        ? `Sign in to continue this ${generationAttempt.mode === 'formulate' ? 'Formulate' : 'Analyze'} request.`
+                        : `${generationAttempt.mode === 'formulate' ? 'Formulate' : 'Analyze'} is preparing a proposal. The team will not change until you confirm it.`}
+                    </MessageBarBody>
+                    {needsRunSignIn && generationAttempt.runId && (
+                      <Button
+                        appearance="primary"
+                        size="small"
+                        disabled={busy}
+                        onClick={() => {
+                          // Open sign-in from the user gesture, then resume the same idempotent attempt.
+                          const runId = generationAttempt.runId;
+                          if (!runId) return;
+                          void authorize({ projectId, runId })
+                            .then(() => executeGeneration(generationAttempt))
+                            .catch((reason: unknown) => setError(castingError(reason, true)));
+                        }}
+                      >
+                        Sign in and continue
+                      </Button>
+                    )}
+                    {!busy && (
+                      <Button appearance="secondary" size="small" onClick={() => void cancelGenerationAttempt()}>
+                        Cancel
+                      </Button>
+                    )}
+                  </MessageBar>
+                )}
                 {currentCount > 0 && (
                   <Text className={styles.muted}>
                     This project has {currentCount} team member{currentCount === 1 ? '' : 's'}. Runs that already started keep their accepted team.
@@ -431,12 +728,20 @@ export function CastTeamPage() {
                 )}
                 {errorBar}
                 <div className={styles.castNavRow}>
-                  <Button appearance="secondary" onClick={() => navigate(agentsPath(projectId))}>Cancel</Button>
+                  <Button appearance="secondary" disabled={busy || Boolean(generationAttempt)} onClick={() => navigate(agentsPath(projectId))}>Cancel</Button>
                   <div className={styles.navRow}>
                     {busy && <Spinner size="extra-tiny" aria-hidden="true" />}
-                    <Button appearance="primary" disabled={!canReview || busy} onClick={() => void createProposal()}>
-                      {busy ? 'Casting' : 'Review'}
-                    </Button>
+                    {source === 'template'
+                      ? <Button appearance="primary" disabled={!canReview || busy} onClick={() => void createProposal()}>
+                        {busy ? 'Casting' : 'Review proposal'}
+                      </Button>
+                      : <Button
+                        appearance="primary"
+                        disabled={!canStartGeneration || busy}
+                        onClick={() => startGeneration(source)}
+                      >
+                        {busy ? 'Preparing proposal' : source === 'formulate' ? 'Formulate' : 'Analyze'}
+                      </Button>}
                   </div>
                 </div>
               </>
@@ -445,6 +750,14 @@ export function CastTeamPage() {
             {step === 'review' && proposal && (
               <div className={styles.card}>
                 <Title3>Review proposal</Title3>
+                {proposal.generation && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      {proposal.generation.mode === 'formulate' ? 'Formulate' : 'Analyze'} proposal ·
+                      {' '}{proposal.generation.state === 'completed' ? 'ready to review' : proposal.generation.state}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 {!pending && (
                   <MessageBar intent="info"><MessageBarBody>This proposal was already {proposal.state}. It can no longer be changed.</MessageBarBody></MessageBar>
                 )}

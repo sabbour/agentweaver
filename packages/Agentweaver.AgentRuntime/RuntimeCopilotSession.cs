@@ -431,15 +431,20 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
 
     /// <summary>Sends a bounded text prompt and returns the assistant response.</summary>
     internal async Task<string> SendTurnAsync(
-        string prompt, CancellationToken cancellationToken, Guid? a2aMessageId = null) =>
-        (await SendTurnCoreAsync(prompt, captureNativeReceipt: false, cancellationToken, a2aMessageId)
+        string prompt,
+        CancellationToken cancellationToken,
+        Guid? a2aMessageId = null,
+        bool readOnlyToolsOnly = false) =>
+        (await SendTurnCoreAsync(
+            prompt, captureNativeReceipt: false, cancellationToken, a2aMessageId, readOnlyToolsOnly)
             .ConfigureAwait(false)).Response;
 
     /// <summary>Sends a turn and returns the SDK event evidence tied to its native message ID.</summary>
     internal async Task<RuntimeCopilotNativeTurnResult> SendTurnWithNativeReceiptAsync(
         string prompt, CancellationToken cancellationToken, Guid? a2aMessageId = null)
     {
-        var result = await SendTurnCoreAsync(prompt, captureNativeReceipt: true, cancellationToken, a2aMessageId)
+        var result = await SendTurnCoreAsync(
+            prompt, captureNativeReceipt: true, cancellationToken, a2aMessageId, readOnlyToolsOnly: false)
             .ConfigureAwait(false);
         return new(result.Response, result.Receipt ??
             throw new RuntimeAuthorizationException("runtime_native_turn_receipt_unavailable"));
@@ -450,7 +455,11 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     /// an unconfirmed drain marks the session unusable.
     /// </summary>
     private async Task<(string Response, RuntimeNativeTurnObservation? Receipt)> SendTurnCoreAsync(
-        string prompt, bool captureNativeReceipt, CancellationToken cancellationToken, Guid? a2aMessageId)
+        string prompt,
+        bool captureNativeReceipt,
+        CancellationToken cancellationToken,
+        Guid? a2aMessageId,
+        bool readOnlyToolsOnly)
     {
         if (string.IsNullOrWhiteSpace(prompt) ||
             prompt.Length > AddressedMessageValidation.MaximumTextLength ||
@@ -467,7 +476,8 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
             if (captureNativeReceipt)
                 startCursor = await RuntimeCopilotNativeTurnJournal.CaptureCursorAsync(_session, active.Token)
                     .ConfigureAwait(false);
-            var completion = _turns.Begin(active.Token, a2aMessageId);
+            // Bind the requested tool restriction to this exact active native turn.
+            var completion = _turns.Begin(active.Token, a2aMessageId, readOnlyToolsOnly);
             try
             {
                 var nativeMessageId = await _session.SendAsync(new MessageOptions { Prompt = prompt }, active.Token)
@@ -674,9 +684,13 @@ internal sealed class RuntimeCopilotTurnObserver
     private CancellationToken _cancellationToken;
     private TaskCompletionSource? _idle;
     private Guid? _a2aMessageId;
+    private bool _readOnlyToolsOnly;
 
     /// <summary>Starts collecting one turn and returns the task completed by idle or error events.</summary>
-    public Task<string> Begin(CancellationToken cancellationToken, Guid? a2aMessageId = null)
+    public Task<string> Begin(
+        CancellationToken cancellationToken,
+        Guid? a2aMessageId = null,
+        bool readOnlyToolsOnly = false)
     {
         lock (_gate)
         {
@@ -685,6 +699,7 @@ internal sealed class RuntimeCopilotTurnObserver
             _content = new StringBuilder();
             _cancellationToken = cancellationToken;
             _a2aMessageId = a2aMessageId;
+            _readOnlyToolsOnly = readOnlyToolsOnly;
             _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             return _completion.Task;
@@ -698,6 +713,16 @@ internal sealed class RuntimeCopilotTurnObserver
         {
             lock (_gate)
                 return _completion is { Task.IsCompleted: false } ? _a2aMessageId : null;
+        }
+    }
+
+    /// <summary>Indicates whether the active message is limited to read-only tools.</summary>
+    public bool ReadOnlyToolsOnly
+    {
+        get
+        {
+            lock (_gate)
+                return _completion is { Task.IsCompleted: false } && _readOnlyToolsOnly;
         }
     }
 
@@ -772,6 +797,7 @@ internal sealed class RuntimeCopilotTurnObserver
             _cancellationToken = default;
             _idle = null;
             _a2aMessageId = null;
+            _readOnlyToolsOnly = false;
         }
     }
 }

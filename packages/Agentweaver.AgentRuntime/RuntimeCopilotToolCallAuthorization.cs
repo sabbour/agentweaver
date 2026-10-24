@@ -29,6 +29,9 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
         if (input.SessionId != sessionId || invocation.SessionId != sessionId ||
             ActionForTool(input.ToolName) is not { } action)
             return Deny("runtime_tool_not_registered");
+        // Generation may inspect files, but it must not inherit this run's write or shell capabilities.
+        if (turns.ReadOnlyToolsOnly && input.ToolName != "view")
+            return Deny("runtime_tool_read_only");
         try
         {
             var context = ReadContext();
@@ -64,6 +67,9 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
                 IsValidCallId(hook.ToolCallId) &&
                 ActionForTool(hook.ToolName) is { } action)
             {
+                // Recheck the restriction at permission time; a prior pre-tool hook is not an approval.
+                if (context.ReadOnlyToolsOnly && hook.ToolName != "view")
+                    return PermissionDecision.Reject("runtime_tool_read_only");
                 var ownerRequest = CreateRequest(
                     CreateEventId(context.MessageId, hook.ToolCallId!, "invocation"),
                     action,
@@ -74,6 +80,8 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
             else if (TryReadSecondary(request, out var kind, out var callId) && IsValidCallId(callId))
             {
                 call = ReadCall(context, callId!);
+                if (context.ReadOnlyToolsOnly && call.Request.ActionId != "tool.read")
+                    return PermissionDecision.Reject("runtime_tool_read_only");
                 if (!MatchesPermission(call.Request.ActionId, kind))
                     return PermissionDecision.Reject("runtime_permission_not_registered");
                 secondary = GetSecondary(call, kind, RuntimeContractValidation.Hash(
@@ -177,7 +185,7 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
         if (turns.ActiveA2AMessageId is not { } messageId || messageId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_native_turn_unavailable");
         token.ThrowIfCancellationRequested();
-        return new(messageId, token);
+        return new(messageId, token, turns.ReadOnlyToolsOnly);
     }
 
     private void RequireContext(ActiveContext expected)
@@ -259,7 +267,7 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
     private static PreToolUseHookOutput Deny(string reason) =>
         new() { PermissionDecision = "deny", PermissionDecisionReason = reason };
 
-    private sealed record ActiveContext(Guid MessageId, CancellationToken Token);
+    private sealed record ActiveContext(Guid MessageId, CancellationToken Token, bool ReadOnlyToolsOnly);
 
     private sealed record NativeToolCall(Guid MessageId, string CallId, RuntimeActionRequest Request)
     {

@@ -50,6 +50,8 @@ internal static partial class GatewayOpenApi
             ["exportProjectAgentSuite"] = C(null, "ProjectAgentSuiteExport", "200"),
             ["importProjectCasting"] = C("ImportProjectCastingTransferRequest", "ProjectCastingProposal", "201"),
             ["listProjectCastingUniverses"] = C(null, "ProjectCastingUniverseList", "200"),
+            ["formulateCastingProposal"] = C("FormulateCastingProposalRequest", "ProjectCastingProposal", "200"),
+            ["analyzeCastingProposal"] = C("AnalyzeCastingProposalRequest", "ProjectCastingProposal", "200"),
             ["listProjectCastingTemplates"] = C(null, "ProjectCastingTemplateList", "200"),
             ["listProjectCastingRoles"] = C(null, "ProjectCastingRoleList", "200"),
             ["listMarketplaceDefinitions"] = C(null, "SkillMarketplaceDefinitionList", "200"),
@@ -271,6 +273,15 @@ internal static partial class GatewayOpenApi
                 required = route.RequiresTenantSelector,
                 schema = new { type = "string" },
             }).ToArray();
+        if (route.OperationId is "formulateCastingProposal" or "analyzeCastingProposal")
+            parameters = parameters.Append(new
+            {
+                name = "X-Agentweaver-Project-Authorization",
+                @in = "header",
+                required = true,
+                description = "Unbound project-writer bearer used only for Projects & Config. Authorization remains the exact run-bound bearer used by Orchestrator.",
+                schema = new { type = "string", pattern = "^Bearer .+$" },
+            }).ToArray();
 
         if (route.OperationId is
             "createProjectRun" or
@@ -391,6 +402,11 @@ internal static partial class GatewayOpenApi
             {
                 responses["413"] = ProblemResponse("The casting import request exceeds 1 MiB.");
                 responses["422"] = ProblemResponse("The transfer version or imported team is incompatible.");
+            }
+            if (route.OperationId is "formulateCastingProposal" or "analyzeCastingProposal")
+            {
+                responses["502"] = ProblemResponse("The accepted run returned invalid generation output or an owner contract failed.");
+                responses["503"] = ProblemResponse("An owner is unavailable or the accepted run cannot execute generation.");
             }
         }
         else if (route.OperationId == "listProjectSkillInventory")
@@ -623,6 +639,11 @@ else if (route.OperationId is
         {
             description += route.OperationId switch
             {
+                "formulateCastingProposal" or "analyzeCastingProposal" =>
+                    " This operation uses the Authorization bearer only for the exact accepted run in Orchestrator and " +
+                    "the X-Agentweaver-Project-Authorization bearer only for the current Projects & Config write. " +
+                    "Both must belong to the same caller. It stages a pending, revision-bound proposal; it never " +
+                    "updates live configuration. Only the existing proposal confirmation operation can do that.",
                 "listProjectCastingTemplates" or "listProjectCastingRoles" =>
                     " Catalog reads require an authenticated Broker bearer.",
                 "listProjectCastingProposals" or "getProjectCastingProposal" =>
@@ -1124,6 +1145,25 @@ else if (route.OperationId is
             ("expectedConfigurationRevision", Int()), ("templateId", Str()), ("universe", NullableStr())),
         ["CreateManualProjectCastingProposalRequest"] = StrictObj(["expectedConfigurationRevision", "roleIds"],
             ("expectedConfigurationRevision", Int()), ("roleIds", Arr(Str())), ("universe", NullableStr())),
+        ["FormulateCastingProposalRequest"] = StrictObj(
+            ["expectedConfigurationRevision", "runId", "sessionId", "idempotencyKey", "prompt", "goal",
+                "teamSize", "intent", "preferredRoleIds"],
+            ("expectedConfigurationRevision", Int()), ("runId", Str()), ("sessionId", Str()),
+            ("idempotencyKey", new { type = "string", minLength = 1, maxLength = 128, pattern = "^[A-Za-z0-9._:-]+$" }),
+            ("prompt", new { type = "string", minLength = 1, maxLength = 16000 }),
+            ("goal", new { type = "string", minLength = 1, maxLength = 4000 }),
+            ("teamSize", new { type = "integer", minimum = 2, maximum = 10 }),
+            ("intent", Enum("augment", "recast")), ("preferredRoleIds", Arr(Str())),
+            ("universe", NullableStr())),
+        ["AnalyzeCastingProposalRequest"] = StrictObj(
+            ["expectedConfigurationRevision", "runId", "sessionId", "idempotencyKey", "prompt",
+                "teamSize", "intent", "preferredRoleIds"],
+            ("expectedConfigurationRevision", Int()), ("runId", Str()), ("sessionId", Str()),
+            ("idempotencyKey", new { type = "string", minLength = 1, maxLength = 128, pattern = "^[A-Za-z0-9._:-]+$" }),
+            ("prompt", new { type = "string", minLength = 1, maxLength = 16000 }),
+            ("teamSize", new { type = "integer", minimum = 2, maximum = 10 }),
+            ("intent", Enum("augment", "recast")), ("preferredRoleIds", Arr(Str())),
+            ("universe", NullableStr())),
         ["UpdateProjectCastingProposalRequest"] = StrictObj(["expectedDraftRevision", "draft"],
             ("expectedDraftRevision", Int()), ("draft", Ref("ProjectConfiguration"))),
         ["UpdateProjectCastingProposalMemberRoleRequest"] = StrictObj(
@@ -1135,12 +1175,18 @@ else if (route.OperationId is
         ["ProjectCastingProposal"] = StrictObj(
             ["proposalId", "projectId", "baseConfigurationRevision", "draftRevision", "state", "draft",
                 "confirmedConfigurationRevision", "result", "transferProvenance", "createdByActorId", "createdAt",
-                "updatedByActorId", "updatedAt"],
+                "updatedByActorId", "updatedAt", "generation"],
             ("proposalId", Uuid()), ("projectId", Str()), ("baseConfigurationRevision", Int()),
             ("draftRevision", Int()), ("state", Enum("pending", "confirmed", "rejected")),
             ("draft", Ref("ProjectConfiguration")), ("confirmedConfigurationRevision", Nullable(Int())),
             ("result", NullableRef("ProjectConfiguration")), ("transferProvenance", NullableRef("ProjectCastingTransferProvenance")),
-            ("createdByActorId", Str()), ("createdAt", Date()), ("updatedByActorId", Str()), ("updatedAt", Date())),
+            ("createdByActorId", Str()), ("createdAt", Date()), ("updatedByActorId", Str()), ("updatedAt", Date()),
+            ("generation", NullableRef("ProjectCastingGenerationStatus"))),
+        ["ProjectCastingGenerationStatus"] = StrictObj(
+            ["requestId", "mode", "state", "failureCode", "createdAt", "updatedAt"],
+            ("requestId", Uuid()), ("mode", Enum("formulate", "analyze")),
+            ("state", Enum("pending", "completed", "failed", "stale", "cancelled")),
+            ("failureCode", NullableStr()), ("createdAt", Date()), ("updatedAt", Date())),
         ["ProjectCastingProposalList"] = Arr(Ref("ProjectCastingProposal")),
         ["ProjectCastingTransfer"] = StrictObj(
             ["formatVersion", "sourceProjectId", "sourceConfigurationRevision", "agentCharters", "casting", "contentDigest"],

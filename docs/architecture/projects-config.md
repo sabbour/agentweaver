@@ -112,6 +112,9 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `POST /api/projects/{projectId}/casting/proposals` | Create a reviewed proposal from a complete project configuration draft. |
 | `POST /api/projects/{projectId}/casting/proposals/scenario` | Create a version-bound proposal from a scenario template. |
 | `POST /api/projects/{projectId}/casting/proposals/manual` | Create a version-bound proposal from selected role IDs. |
+| `POST /api/projects/{projectId}/casting/proposal-generations` | Create or replay a run-bound generation request and its pending proposal. |
+| `POST /api/projects/{projectId}/casting/proposal-generations/{requestId}/complete` | Complete a generation request by updating its proposal draft, if the run and configuration revision are still current. |
+| `POST /api/projects/{projectId}/casting/proposal-generations/{requestId}/fail` | Mark a pending generation request failed with a bounded failure code. |
 | `POST /api/projects/{projectId}/casting/proposals/blueprint` | Create a version-bound proposal from a built-in blueprint ID or an inline blueprint. |
 | `GET /api/projects/{projectId}/casting/proposals` | List casting proposals for an authorized project. |
 | `GET /api/projects/{projectId}/casting/proposals/{proposalId}` | Read a proposal and its draft for review. |
@@ -259,11 +262,14 @@ runs in AgentHost with that run's Identity credential; Projects & Config owns
 the proposal and never receives the credential.
 
 Generation uses the existing accepted project-run lifecycle rather than a
-separate scheduler or model-execution path. The client creates or resumes the
-normal project run through the Gateway with the caller's project authorization,
-then obtains the run-bound Identity session. The generation request accepts
-that run ID, and the owner returns it with the proposal as the immutable result
-binding.
+separate scheduler or model-execution path. The client saves the canonical
+prompt as the run's first message, then obtains the run-bound Identity session.
+It sends the run-bound bearer to Orchestrator and a separate, unbound
+project-writer bearer to Projects & Config through the Gateway. The Gateway
+checks that both owner-issued authorization contexts have the same issuer,
+actor, and tenant, that the run bearer is bound to the exact project and run,
+and that the project bearer is unbound and has current write authority. It
+does not forward the project bearer to Orchestrator.
 
 Orchestrator accepts `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/casting-generation`
 only for the active coordinator root of that accepted run. It checks the
@@ -277,6 +283,10 @@ model-turn admission is an append-only owner record bound to the generation
 request ID, exact prompt digest, accepted selection, execution fence, and
 accepted decision version. The AgentHost action must match that record before
 the root grant is issued; an arbitrary root event or changed prompt is denied.
+The generation message is marked `readOnlyToolsOnly`; AgentHost permits only
+the SDK `view` tool for that turn, while every ordinary run keeps its accepted
+tool policy. This lets Analyze inspect files without granting it file writes or
+shell execution.
 Root grants and child-work dispatches share one run-wide model-turn reservation
 count and execution lock, so neither path can spend a turn left by the other.
 The root action path remains separate; child-work dispatch admission stays
@@ -319,7 +329,11 @@ sequenceDiagram
     Orchestrator->>Projects: Validate accepted selection and current authority
     Orchestrator-->>AgentHost: Root binding with accepted model and tool limits
     Client->>Identity: Obtain run-bound session
-    Client->>Gateway: Formulate or Analyze (run ID, expected revision, idempotency key)
+    Client->>Gateway: Formulate or Analyze (run bearer, project bearer, expected revision)
+    Gateway->>Projects: Check unbound project write context
+    Gateway->>Projects: Check exact run-bound context and matching actor and tenant
+    Gateway->>Projects: Read configuration, role catalog, and universe catalog
+    Gateway->>Gateway: Rebuild and validate the exact mode-specific prompt
     Gateway->>Projects: Start generation request (run ID, request digest)
     Projects->>DB: Check current write authority and revision; store pending proposal
     Gateway->>Orchestrator: Execute generation (request ID, prompt, run-bound token)
@@ -336,10 +350,15 @@ sequenceDiagram
     Orchestrator-->>Gateway: Result bound to request ID and run ID
     Gateway->>Projects: Complete request (same run ID, generated roster)
     Projects->>DB: Recheck authority and revision; update proposal only
-    Gateway-->>Client: 202 Accepted (run ID, proposal ID, request ID)
-    Client->>Gateway: Poll proposal for review
-    Client->>Gateway: Confirm proposal (expected draft revision)
-    Projects->>DB: Append live configuration only after confirmation
+    Gateway-->>Client: 200 pending proposal with completed generation status
+    Client->>Client: Review generated roles and charters; edit or remove members
+    alt User confirms
+        Client->>Gateway: Confirm proposal (expected draft revision)
+        Projects->>DB: Recheck authority and revisions; append live configuration
+    else User rejects
+        Client->>Gateway: Reject proposal (expected draft revision)
+        Projects->>DB: Record rejection; leave live configuration unchanged
+    end
 ```
 
 Charter/casting transfer is a separate explicit owner operation. Export

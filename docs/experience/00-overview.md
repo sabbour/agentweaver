@@ -55,7 +55,7 @@ first, and load more rows with **Load more**.
 | `/projects/:projectId/orchestrations` | List this project's **Active** and **Recent** runs and open a run. |
 | `/projects/:projectId/board` | Read the project backlog in **Backlog**, **Ready**, **Active**, and **Done** columns, capture a task, and edit a task's title and description. |
 | `/projects/:projectId/team` | Review the project's agents, edit a charter, add a member, and export or import the team. |
-| `/projects/:projectId/team/cast` | Cast a team from a template or a list of roles, then review and confirm it. |
+| `/projects/:projectId/team/cast` | Formulate a team from a project goal, analyze repository signals, or start from a template. Review and edit the pending proposal before confirming it. |
 | `/projects/:projectId/skills` | Browse, preview, import, and assign Skills. |
 | `/projects/:projectId/memories` | Search, write, review, version, and transfer memories for a run and an agent. `/knowledge` opens the same page. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section. |

@@ -122,10 +122,12 @@ for the owner transaction boundary.
 | `CreateProjectCastingProposalRequest` | `expectedConfigurationRevision`, complete `draft`. |
 | `CreateScenarioProjectCastingProposalRequest` | `expectedConfigurationRevision`, catalog `templateId`, optional supported `universe`. |
 | `CreateManualProjectCastingProposalRequest` | `expectedConfigurationRevision`, non-empty catalog `roleIds`, optional supported `universe`. |
+| `FormulateCastingProposalRequest` | `expectedConfigurationRevision`, `runId`, `sessionId`, `idempotencyKey`, canonical `prompt`, required `goal`, `teamSize` (2–10), `intent`, `preferredRoleIds`, and optional `universe`. Uses separate run-bound and unbound project-writer bearers at the Gateway. |
+| `AnalyzeCastingProposalRequest` | The same run, revision, prompt, team-size, intent, and universe fields as Formulate, without `goal`; the prompt requests read-only repository analysis. |
 | `UpdateProjectCastingProposalRequest` | `expectedDraftRevision`, replacement `draft`. |
 | `UpdateProjectCastingProposalMemberRoleRequest` | `expectedDraftRevision`, catalog `roleId`, optional `customRoleTitle`; edits only the proposal draft. |
 | `TransitionProjectCastingProposalRequest` | `expectedDraftRevision` for confirm or reject. |
-| `ProjectCastingProposal` | `proposalId`, `projectId`, `baseConfigurationRevision`, `draftRevision`, `state` (`pending`, `confirmed`, or `rejected`), `draft`, nullable `confirmedConfigurationRevision`, nullable `result`, nullable `transferProvenance`, and creation/update actor IDs and timestamps. |
+| `ProjectCastingProposal` | `proposalId`, `projectId`, `baseConfigurationRevision`, `draftRevision`, `state` (`pending`, `confirmed`, or `rejected`), `draft`, nullable `generation` mode and state, nullable `confirmedConfigurationRevision`, nullable `result`, nullable `transferProvenance`, and creation/update actor IDs and timestamps. |
 | `ProjectCastingTransfer` | `formatVersion` (1), `sourceProjectId`, `sourceConfigurationRevision`, `agentCharters`, `casting`, `contentDigest`. Contains no unrelated project settings. |
 | `ProjectCastingTransferProvenance` | Verified transfer format, source project/revision, and content digest retained on an imported proposal. |
 | `ImportProjectCastingTransferRequest` | Target `expectedConfigurationRevision` and `transfer`; creates a pending proposal. Request body limit is 1 MiB at Gateway and owner. |
@@ -136,7 +138,10 @@ The owner rejects unknown request fields and preserves revision conflicts as
 `409`. A selected universe is validated against the server catalog and remains
 inside the revision-bound proposal draft. The Gateway publishes these schemas
 in `GET /openapi/v1.json`, and the web contract module supplies types only.
-There is no new casting permission or idempotency header.
+Generated proposals remain pending until the existing confirmation operation
+rechecks the writer's authority and both revision fences. No generated request
+writes live configuration, and no new casting permission or idempotency header
+is introduced.
 
 ## Cost and usage storage contracts
 
@@ -985,7 +990,7 @@ All runtime responses are no-store.
 | `POST /runtime/v1/configure/activate` | `RuntimeHostConfigureRequest`: version 1, exact registration, consume/exchange operation IDs, and delivered configuration. Exact replay returns the existing immutable session. Workflow-bound Hosted Copilot supports a hard credit limit through prepared-dispatch and native-begin admission. An unbound positive hard limit still fails with `runtime_usage_affinity_unavailable`; the prepared session is cleaned up and readiness is withheld. |
 | `POST /runtime/v1/refresh` | `RuntimeHostRefreshRequest`: exact `RuntimeHostSessionProof` and operation ID. Current Identity and owner authority control rotation and replay. |
 | `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after it revalidates the caller, current registration, session, Observe grant, and readiness evidence. Ordinary configuration includes source-derived recovery mode and evidence bound to the current Host instance; NativeCache reports the exact source acknowledgment, while JournalRebuild reports the authenticated journal position/hash. It does not start an SDK session or send a turn. |
-| `POST /runtime/v1/a2a/message:send` | `RuntimeA2ASendRequest`: one user text message, GUID message ID, native context ID, exact runtime proof, and delivery mode. `immediate` precedes pending `enqueue` work only at the next native idle boundary. A hard-cap denial returns only after the Host records the complete empty native range as source-owned no-send evidence. |
+| `POST /runtime/v1/a2a/message:send` | `RuntimeA2ASendRequest`: one user text message, GUID message ID, native context ID, exact runtime proof, and delivery mode. Optional `readOnlyToolsOnly` metadata restricts that turn to the SDK `view` tool. `immediate` precedes pending `enqueue` work only at the next native idle boundary. A hard-cap denial returns only after the Host records the complete empty native range as source-owned no-send evidence. |
 | `GET /health/live` | Process liveness. It does not prove permission or readiness. |
 | `GET /health/ready` | Fresh registration/source/lease/isolation/workspace/egress evidence plus authenticated configuration and measured startup ceilings. Missing evidence returns `503`. |
 

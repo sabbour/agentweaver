@@ -328,6 +328,30 @@ request bodies, not an `Idempotency-Key` header.
 The owner returns `403` when the caller lacks current `WriteProjects`
 authority for a casting write, including confirm, reject, and import.
 
+### Generate a casting proposal
+
+The **Cast a team** page also offers **Formulate** and **Analyze**. Formulate
+uses a project goal and optional role preferences. Analyze uses read-only
+repository signals. Both modes let you choose team size and universe and keep
+the current **Augment** or **Recast** choice.
+
+The Gateway operations are
+`POST /api/v1/projects/{projectId}/casting/proposals/formulate` and
+`POST /api/v1/projects/{projectId}/casting/proposals/analyze`. Each accepts a
+strict, mode-specific JSON body and returns a pending proposal. The request is
+bound to the current configuration revision and an accepted project run.
+
+Send the run-bound bearer in `Authorization` and a separate, unbound
+project-writer bearer in `X-Agentweaver-Project-Authorization`. Gateway checks
+that both belong to the same actor and tenant and that the run bearer matches
+the exact project and run. The project bearer is used only for the
+Projects & Config write; Orchestrator receives only the run bearer.
+
+Review the returned roles and charters. You can change roles or remove
+members before you confirm or reject the proposal. Confirmation rechecks
+current authority, the proposal draft revision, and the base configuration
+revision. Until it succeeds, the live team remains unchanged.
+
 To transfer a team, read `/casting/export` under the project path, optionally
 with a positive `revision`. Send the returned transfer to `/casting/import`
 with the target `expectedConfigurationRevision`. Import checks the format and
