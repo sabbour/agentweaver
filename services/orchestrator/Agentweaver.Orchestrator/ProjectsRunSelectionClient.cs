@@ -89,6 +89,49 @@ internal sealed class ProjectsRunSelectionClient(
         return authority;
     }
 
+    internal async Task<IssueSyncProjectProof> ReadTeamSyncProjectProofAsync(
+        HttpContext context,
+        string projectId,
+        ProjectsAuthorizationContext authorization,
+        CancellationToken cancellationToken)
+    {
+        // Resolve the current repository from Projects instead of trusting repo identity supplied by the caller.
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(RequireOwnerUri(options.ProjectsOwnerBaseAddress),
+                $"/api/projects/{Uri.EscapeDataString(projectId)}/issue-sync-authority"));
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+            throw new CoordinationException("team_sync_project_permission_denied", StatusCodes.Status403Forbidden);
+        if (response.StatusCode != HttpStatusCode.OK || response.Headers.CacheControl?.NoStore != true)
+            throw new CoordinationException("team_sync_project_unavailable", StatusCodes.Status502BadGateway);
+
+        try
+        {
+            await response.Content.LoadIntoBufferAsync(64 * 1024, cancellationToken).ConfigureAwait(false);
+            var proof = await response.Content.ReadFromJsonAsync<IssueSyncProjectProof>(
+                JsonOptions, cancellationToken).ConfigureAwait(false);
+            if (proof is null ||
+                proof.ProjectId != projectId ||
+                proof.TenantId != authorization.TenantId ||
+                proof.CreatorId != authorization.ActorId ||
+                string.IsNullOrWhiteSpace(proof.ConnectionId) ||
+                proof.Repository is null)
+                throw new CoordinationException(
+                    "team_sync_project_contract_invalid", StatusCodes.Status502BadGateway);
+            return proof;
+        }
+        catch (JsonException exception)
+        {
+            throw new CoordinationException(
+                "team_sync_project_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+    }
+
     /// <summary>Resolves fresh project authority before creating a run without a run-bound token.</summary>
     internal async Task<ProjectsAuthorizationContext> ReadProjectRunAuthorityAsync(
         HttpContext context, string projectId, CancellationToken cancellationToken,

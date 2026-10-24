@@ -1663,6 +1663,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         kestrelBuilder.Services.AddSingleton(
             sourceControlOwnerServices.GetRequiredService<ISourceControlAdapter>());
         kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<ISourceControlTeamSyncAdapter>());
+        kestrelBuilder.Services.AddScoped<ProjectTeamSyncTokenClient>();
+        kestrelBuilder.Services.AddScoped<IProjectTeamSyncTokenClient>(services =>
+            services.GetRequiredService<ProjectTeamSyncTokenClient>());
+        kestrelBuilder.Services.AddSingleton(
             kestrelActionGuardScope.ServiceProvider.GetRequiredService<ExecutableActionGuard>());
         kestrelBuilder.Services.AddSingleton(sourceControlOwnerServices.GetRequiredService<AgtPolicyProvider>());
         kestrelBuilder.Services.AddSingleton(TimeProvider.System);

@@ -94,6 +94,57 @@ public sealed class GitHubAppInstallationTokenIssuerTests
     }
 
     [Theory]
+    [InlineData(false, "read")]
+    [InlineData(true, "write")]
+    public async Task TeamSyncMintRequestsOnlyTheSelectedContentsPermission(
+        bool writeRequested,
+        string expectedPermission)
+    {
+        // Both read and commit credentials must exclude issue and pull-request scopes.
+        var handler = new StubHandler(async (request, _) =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var permissions = body.RootElement.GetProperty("permissions");
+            Assert.Single(permissions.EnumerateObject());
+            Assert.Equal(expectedPermission, permissions.GetProperty("contents").GetString());
+            return JsonResponse(
+                "{\"token\":\"team-sync-token\",\"expires_at\":\"2026-10-08T09:47:00Z\"," +
+                $"\"permissions\":{{\"contents\":\"{expectedPermission}\",\"metadata\":\"read\"}}}}");
+        });
+        var time = new FrozenTimeProvider(Now);
+        var key = NewKey(time);
+
+        var issued = await CreateIssuer(handler, time).MintTeamSyncAsync(
+            456, 789, key, writeRequested, CancellationToken.None);
+
+        Assert.Equal(expectedPermission, issued.ContentsPermission);
+        Assert.False(issued.IssueWriteGranted);
+        Assert.False(key.IsUsable());
+        Assert.DoesNotContain("team-sync-token", issued.ToString(), StringComparison.Ordinal);
+        issued.Credential.Invalidate();
+    }
+
+    [Theory]
+    [InlineData("\"pull_requests\":\"read\",")]
+    [InlineData("\"issues\":\"write\",")]
+    public async Task TeamSyncMintRejectsPermissionsOutsideContents(string extraPermission)
+    {
+        // Treat any unexpected GitHub grant as an unusable, non-retryable token response.
+        var handler = new StubHandler((_, _) => Task.FromResult(JsonResponse(
+            "{\"token\":\"team-sync-token\",\"expires_at\":\"2026-10-08T09:47:00Z\",\"permissions\":{" +
+            "\"contents\":\"write\"," + extraPermission + "\"metadata\":\"read\"}}")));
+        var time = new FrozenTimeProvider(Now);
+        var key = NewKey(time);
+
+        var error = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+            CreateIssuer(handler, time).MintTeamSyncAsync(456, 789, key, true, CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.RemoteOutcomeUncertain, error.Code);
+        Assert.False(key.IsUsable());
+        Assert.DoesNotContain("team-sync-token", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("\"contents\":\"read\",")]
     [InlineData("\"contents\":\"write\",")]
     [InlineData("\"pull_requests\":\"write\",")]

@@ -32,3 +32,30 @@ public sealed record IssueSyncSettings(bool Enabled, Guid GrantId, int IntervalS
             throw new ArgumentException("Issue sync settings exceed their bounds.");
     }
 }
+
+/// <summary>Internal project-authorized request for a short-lived contents-only GitHub App token.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ProjectTeamSyncTokenRequest(
+    string ProjectId,
+    string TenantId,
+    string CreatorId,
+    string ConnectionId,
+    SourceControlRepositoryIdentity Repository,
+    string SelectionCode,
+    bool WriteRequested)
+{
+    public override string ToString() => nameof(ProjectTeamSyncTokenRequest) + " [REDACTED]";
+}
+
+/// <summary>Internal token response; callers must invalidate the credential after one bounded operation.</summary>
+public sealed record ProjectTeamSyncTokenResponse(
+    string AccessToken,
+    DateTimeOffset ExpiresAt,
+    string ConnectionId,
+    string RepositoryFullName,
+    string DefaultBranch,
+    string PermissionDigest,
+    string ContentsPermission)
+{
+    public override string ToString() => nameof(ProjectTeamSyncTokenResponse) + " [REDACTED]";
+}

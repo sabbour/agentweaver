@@ -54,6 +54,8 @@ internal static partial class SourceControlEndpoints
         sourceControl.MapPost("/merge-intents/{intentId}/execute", ExecuteMergeIntentAsync);
         sourceControl.MapPost("/webhook-relay", ReceiveRelayedGitHubWebhookAsync)
             .WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
+        // Project-scoped synchronization has its own current-authority contract.
+        MapProjectTeamSyncEndpoints(app);
         app.MapGet(
                 "/internal/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/proof",
                 ReadOutputCaptureProofForEventsAsync)
@@ -61,6 +63,178 @@ internal static partial class SourceControlEndpoints
         app.MapPost("/api/source-control/github/webhook", RejectDirectGitHubWebhookAsync)
             .RequireAuthorization();
         return app;
+    }
+
+    internal static IEndpointRouteBuilder MapProjectTeamSyncEndpoints(this IEndpointRouteBuilder app)
+    {
+        // Keep the project-scoped team-sync routes separable for focused owner contract tests.
+        var teamSync = app.MapGroup("/internal/projects/{projectId}/source-control/team-sync")
+            .RequireAuthorization();
+        teamSync.MapPost("/tree", ReadProjectTeamSyncTreeAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(4096));
+        // A 6 MiB transport bound accommodates base64-encoded files and request metadata;
+        // the adapter enforces a stricter 4 MiB aggregate file-content bound.
+        teamSync.MapPost("/commit", CommitProjectTeamSyncAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(6 * 1024 * 1024));
+        return app;
+    }
+
+    private static Task<IResult> ReadProjectTeamSyncTreeAsync(
+        string projectId,
+        ProjectTeamSyncReadRequest request,
+        HttpContext context,
+        [FromServices] ProjectsRunSelectionClient projects,
+        [FromServices] IProjectTeamSyncTokenClient tokens,
+        [FromServices] ISourceControlTeamSyncAdapter teamSyncAdapter,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            // This project-scoped read requires current authority and the configured repository proof.
+            context.Response.Headers.CacheControl = "no-store";
+            if (request is null)
+                throw new CoordinationException("team_sync_request_invalid", StatusCodes.Status400BadRequest);
+            ValidateProjectTeamSyncSelectionCode(request.SelectionCode);
+            var (proof, reference, credential) = await MintProjectTeamSyncCredentialAsync(
+                context, projectId, request.SelectionCode, false,
+                projects, tokens, timeProvider, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var snapshot = await teamSyncAdapter.ReadTeamSyncTreeAsync(
+                    proof.Repository, request.Reference ?? reference, credential, cancellationToken)
+                    .ConfigureAwait(false);
+                await RevalidateProjectTeamSyncAuthorityAsync(
+                    context, projectId, proof, false, projects, cancellationToken).ConfigureAwait(false);
+                return Results.Json(snapshot, ProviderSelectionJsonOptions);
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }, cancellationToken);
+
+    private static Task<IResult> CommitProjectTeamSyncAsync(
+        string projectId,
+        ProjectTeamSyncCommitRequest request,
+        HttpContext context,
+        [FromServices] ProjectsRunSelectionClient projects,
+        [FromServices] IProjectTeamSyncTokenClient tokens,
+        [FromServices] ISourceControlTeamSyncAdapter teamSyncAdapter,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            // Commit authority is checked before minting a write-scoped token or touching GitHub.
+            context.Response.Headers.CacheControl = "no-store";
+            if (request is null)
+                throw new CoordinationException("team_sync_request_invalid", StatusCodes.Status400BadRequest);
+            ValidateProjectTeamSyncSelectionCode(request.SelectionCode);
+            var (proof, branch, credential) = await MintProjectTeamSyncCredentialAsync(
+                context, projectId, request.SelectionCode, true,
+                projects, tokens, timeProvider, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var commit = await teamSyncAdapter.CommitTeamSyncChangesAsync(
+                    proof.Repository,
+                    credential,
+                    new SourceControlTeamSyncCommitRequest(
+                        branch, request.ExpectedBaseSha, request.Message, request.Changes),
+                    ct => RevalidateProjectTeamSyncAuthorityAsync(
+                        context, projectId, proof, true, projects, ct),
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Json(commit, ProviderSelectionJsonOptions);
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }, cancellationToken);
+
+    private static async Task<(IssueSyncProjectProof Proof, string Branch, SecretCredential Credential)>
+        MintProjectTeamSyncCredentialAsync(
+            HttpContext context,
+            string projectId,
+            string selectionCode,
+            bool writeRequested,
+            ProjectsRunSelectionClient projects,
+            IProjectTeamSyncTokenClient tokens,
+            TimeProvider timeProvider,
+            CancellationToken cancellationToken)
+    {
+        // Bind the token to the caller's current project authority and repository configuration.
+        var authority = await projects.ReadBacklogProjectAuthorityAsync(
+            context, projectId, writeRequested, cancellationToken).ConfigureAwait(false);
+        var proof = await projects.ReadTeamSyncProjectProofAsync(
+            context, projectId, authority, cancellationToken).ConfigureAwait(false);
+        var token = await tokens.MintAsync(
+            new ProjectTeamSyncTokenRequest(
+                proof.ProjectId,
+                proof.TenantId,
+                proof.CreatorId,
+                proof.ConnectionId,
+                proof.Repository,
+                selectionCode,
+                writeRequested),
+            cancellationToken).ConfigureAwait(false);
+        SecretCredential? credential = null;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(token.AccessToken) ||
+                token.ExpiresAt.Offset != TimeSpan.Zero ||
+                token.ExpiresAt <= timeProvider.GetUtcNow() ||
+                token.ConnectionId != proof.ConnectionId ||
+                !string.Equals(token.RepositoryFullName, proof.Repository.FullName,
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(token.DefaultBranch) ||
+                !IsTeamSyncDigest(token.PermissionDigest) ||
+                token.ContentsPermission != (writeRequested ? "write" : "read"))
+                throw new CoordinationException(
+                    "team_sync_identity_contract_invalid", StatusCodes.Status502BadGateway);
+
+            credential = new SecretCredential(token.AccessToken, token.ExpiresAt, timeProvider);
+            await RevalidateProjectTeamSyncAuthorityAsync(
+                context, projectId, proof, writeRequested, projects, cancellationToken).ConfigureAwait(false);
+
+            var result = (proof, token.DefaultBranch, credential);
+            credential = null;
+            return result;
+        }
+        finally
+        {
+            credential?.Invalidate();
+        }
+    }
+
+    private static async Task RevalidateProjectTeamSyncAuthorityAsync(
+        HttpContext context,
+        string projectId,
+        IssueSyncProjectProof expectedProof,
+        bool writeRequested,
+        ProjectsRunSelectionClient projects,
+        CancellationToken cancellationToken)
+    {
+        // Each result and branch update must still match current project authority and repository configuration.
+        var currentAuthority = await projects.ReadBacklogProjectAuthorityAsync(
+            context, projectId, writeRequested, cancellationToken).ConfigureAwait(false);
+        var currentProof = await projects.ReadTeamSyncProjectProofAsync(
+            context, projectId, currentAuthority, cancellationToken).ConfigureAwait(false);
+        if (currentProof != expectedProof)
+            throw new CoordinationException(
+                "team_sync_project_authority_changed", StatusCodes.Status409Conflict);
+    }
+
+    private static void ValidateProjectTeamSyncSelectionCode(string? value)
+    {
+        // Selection codes are opaque secrets and must never be accepted through a URL or an unbounded body.
+        if (value is null || !IsExactIdentityRepositorySelectionCode(value))
+            throw new CoordinationException(
+                "team_sync_selection_invalid", StatusCodes.Status400BadRequest);
+    }
+
+    private static bool IsTeamSyncDigest(string? value)
+    {
+        // Permission digests are hexadecimal SHA-256 values and may be malformed on the internal wire.
+        return value is { Length: 64 } && value.All(Uri.IsHexDigit);
     }
 
     /// <summary>

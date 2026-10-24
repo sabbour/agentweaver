@@ -3,6 +3,7 @@ using Agentweaver.Identity;
 using Agentweaver.Secrets.AzureKeyVault;
 using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
 
@@ -61,6 +62,62 @@ internal static class IssueSyncGrantEndpoints
                 IssueSyncServiceTransport.RequirePeer(context, IssueSyncGrantAuthority.WorkerChannel);
                 return IssueSyncGrantAuthority.Receipt(await authority.RequireAsync(grantId, context.RequestAborted));
             })).AllowAnonymous();
+        app.MapPost("/internal/source-control/github-app/project-team-sync/token",
+            (ProjectTeamSyncTokenRequest request, HttpContext context,
+                IIssueSyncProjectAuthority projects,
+                GitHubRepoAppConnectionService connections,
+                GitHubAppInstallationTokenIssuer issuer) =>
+            ExecuteAsync(context, async () =>
+            {
+                // Only the certificate-pinned Orchestrator worker can receive this internal credential.
+                IssueSyncServiceTransport.RequirePeer(context, IssueSyncGrantAuthority.WorkerChannel);
+                if (request.Repository is null ||
+                    request.SelectionCode is not { Length: >= 32 and <= 256 } ||
+                    request.SelectionCode.Any(char.IsWhiteSpace) ||
+                    string.IsNullOrWhiteSpace(request.ProjectId) ||
+                    string.IsNullOrWhiteSpace(request.TenantId) ||
+                    string.IsNullOrWhiteSpace(request.CreatorId) ||
+                    string.IsNullOrWhiteSpace(request.ConnectionId))
+                    throw new RuntimeAuthorizationException("team_sync_request_invalid");
+
+                var proof = await projects.ReadAsync(
+                    new IssueSyncAuthorityQuery(request.ProjectId, request.TenantId, request.CreatorId),
+                    context.RequestAborted);
+                if (proof.ProjectId != request.ProjectId ||
+                    proof.TenantId != request.TenantId ||
+                    proof.CreatorId != request.CreatorId ||
+                    proof.ConnectionId != request.ConnectionId ||
+                    !string.Equals(proof.Repository.FullName, request.Repository.FullName,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new RuntimeAuthorizationException("team_sync_project_binding_changed");
+
+                // Revalidate current project ownership after token minting before releasing the credential.
+                var token = await connections.MintTeamSyncTokenAsync(
+                    proof, request.SelectionCode, issuer, request.WriteRequested, context.RequestAborted);
+                try
+                {
+                    var current = await projects.ReadAsync(
+                        new IssueSyncAuthorityQuery(request.ProjectId, request.TenantId, request.CreatorId),
+                        context.RequestAborted);
+                    if (current != proof)
+                        throw new RuntimeAuthorizationException("team_sync_project_binding_changed");
+                    var contentsPermission = token.Credential.ContentsPermission;
+                    if (contentsPermission != (request.WriteRequested ? "write" : "read"))
+                        throw new RuntimeAuthorizationException("team_sync_permission_invalid");
+                    return new ProjectTeamSyncTokenResponse(
+                        token.Credential.Credential.GetValue(),
+                        token.Credential.Credential.ExpiresAt,
+                        token.ConnectionId,
+                        token.RepositoryFullName,
+                        token.DefaultBranch,
+                        token.Credential.PermissionDigest,
+                        contentsPermission);
+                }
+                finally
+                {
+                    token.Credential.Credential.Invalidate();
+                }
+            })).AllowAnonymous().WithMetadata(new RequestSizeLimitAttribute(4096));
     }
 
     private static async Task<T> ReadOwnerAsync<T>(HttpContext context, string projectId, string proofRoute) where T : class
