@@ -76,12 +76,14 @@ totals, but in-flight, queued-work, and done-today values are unavailable
 because `GET /api/v1/overview` is not published. The same route is needed for
 the old aggregate metrics, usage, service health, and full activity feed.
 Overview therefore shows metrics for one selected project and recent run
-summaries rather than global activity. Dashboard uses project, metric, and
-usage reads for its summary, selected range, model and agent panels, and quick
-actions. Neither page calls the old global overview or project dashboard
-endpoint. The notification bell and project switcher use the same published
-Gateway routes. When a read fails, its value is unavailable, not zero or
-healthy.
+summaries rather than global activity. Dashboard reads `GET /api/v1/projects/{projectId}`,
+`GET /api/v1/projects/{projectId}/configuration`, `GET /api/v1/projects/{projectId}/runs`,
+`GET /api/v1/projects/{projectId}/metrics`, and `GET /api/v1/projects/{projectId}/usage`
+for its summary, setup checks, team, recent runs, selected range, model and
+per-agent usage panels, and quick actions.
+Neither page calls the old global overview or project dashboard endpoint. The
+notification bell and project switcher use the same published Gateway routes.
+When a read fails, its value is unavailable, not zero or healthy.
 
 ## Page comparison checklist
 
@@ -92,8 +94,8 @@ they are not live acceptance evidence and do not claim pixel parity.
 
 | Page | 0.x section order and density | Card, table, and detail treatment | Controls and navigation | v1 data and gaps |
 | --- | --- | --- | --- | --- |
-| Overview | **Operations**, **Recent projects**, **AI usage & performance**, then **Activity feed** beside **Needs attention**. Recent projects shows one current-focus panel and up to four compact project rows. | One Operations card has a health badge and four counters. The project area is a split focus/list card. Five small usage cards follow. Activity and attention use bordered panels; there is no detail drawer or data table. | **Refresh**, a 7-, 30-, or 90-day range, **View all projects**, project links, and attention actions. The project list becomes one column below 900px; the lower panels stack below 980px. The approved v1-only **Chief of Staff** group appears before these sections. | Project card **Issues** counts only non-archived tasks linked to repository issues; other card stats use configuration and metrics. Operations keeps the four 0.x counters; only **Active projects** is measurable. `GET /api/v1/overview` is missing for the other totals, global health, aggregate usage, and full activity. v1 selects one project for metrics and shows recent run summaries. |
-| Dashboard | Status and four summary tiles lead; **Activity** range controls follow; a two-column area holds the run chart, run totals, and invocation chart; model and agent panels follow. | A status card pairs health and actions with four metric tiles. Activity uses bordered chart and total cards. Model metrics use compact panels; the agent leaderboard and response percentiles use tables. There is no detail drawer. | **Refresh** and automatic refresh; 7-, 30-, and 90-day range selector; status-based links to Board, Flow, and Orchestrations. The header shows the current project role when the owner returns it. The activity columns stack below 980px. | Project summary, metrics, and usage power the supported panels and role badge. Live health needs `GET /api/v1/projects/{projectId}/health`; task completions need `GET /api/v1/projects/{projectId}/task-metrics`; the leaderboard needs `GET /api/v1/projects/{projectId}/agent-metrics`; response percentiles need the `responseDuration` and `timeToFirstToken` fields on `GET /api/v1/projects/{projectId}/metrics`. |
+| Overview | **Operations**, **Recent projects**, **AI usage & performance**, then **Activity feed** beside **Needs attention**. Recent projects shows one current-focus panel and up to four compact project rows. | One Operations card has a health badge and four counters. The project area is a split focus/list card. Five small usage cards follow. Activity and attention use bordered panels; there is no detail drawer or data table. | **Refresh**, automatic refresh every 10 seconds while mounted, a 7-, 30-, or 90-day range, **View all projects**, project links, and attention actions. The project list becomes one column below 900px; the lower panels stack below 980px. The approved v1-only **Chief of Staff** group appears before these sections. | Project card **Issues** counts only non-archived tasks linked to repository issues; other card stats use configuration and metrics. Operations keeps the four 0.x counters; only **Active projects** is measurable. `GET /api/v1/overview` is missing for the other totals, global health, aggregate usage, and full activity. v1 selects one project for metrics and shows recent run summaries. |
+| Dashboard | Status and four summary tiles lead; **Setup checks** and **Team** follow; **Recent runs** link to run details; **Activity** range controls and charts come next; model and agent panels finish the page. | The status card pairs project state and next actions with four metric tiles. Setup checks link to saved model, repository, team, and skills settings. Team and recent runs use compact lists. Activity uses a bordered chart and run-total panel. Model and per-agent usage use tables; unavailable agent scores and response percentiles stay explicit. There is no detail drawer. | **Refresh** and automatic refresh; 7-, 30-, and 90-day range selector; setup links, Team navigation, direct run links, and status-based links to Board, Flow, Orchestrations, or settings for archived projects. The header shows the current project role when the owner returns it. The activity columns stack below 980px. | Project summary, configuration, run-list, metrics, and usage routes supply the supported panels. A failed separate weekly-count request leaves only that tile unavailable. Live health needs `GET /api/v1/projects/{projectId}/health`; task completions need `GET /api/v1/projects/{projectId}/task-metrics`; the leaderboard needs `GET /api/v1/projects/{projectId}/agent-metrics`; response percentiles need the `responseDuration` and `timeToFirstToken` fields on `GET /api/v1/projects/{projectId}/metrics`. |
 
 ## Matched screenshots
 
@@ -108,6 +110,11 @@ and do not claim pixel parity.
 | Overview, activity | <img src="./images/parity/overview-0x-activity.png" alt="0.x Overview activity section" width="400"> | <img src="./images/parity/overview-v1-activity.png" alt="v1 Overview activity section" width="400"> |
 | Dashboard, top | <img src="./images/parity/dashboard-0x-top.png" alt="0.x Dashboard at the top of the page" width="400"> | <img src="./images/parity/dashboard-v1-top.png" alt="v1 Dashboard at the top of the page" width="400"> |
 | Dashboard, model metrics | <img src="./images/parity/dashboard-0x-models.png" alt="0.x Dashboard model metrics section" width="400"> | <img src="./images/parity/dashboard-v1-models.png" alt="v1 Dashboard model metrics section" width="400"> |
+
+The restored setup, Team, and recent-run panels are also shown in a v1
+supporting capture:
+
+![v1 Dashboard setup checks, Team, and recent runs](./images/parity/dashboard-v1-support.png)
 
 ## Surfaces
 
@@ -127,7 +134,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Projects gallery | 0.x tiles with state and your access. | Nothing. |
 | Create blank project | Dialog with a project name. | Nothing. |
 | Create from GitHub | Creates the project, then saves the repository with GitHub App sign-in. | Owner grant on create (behavior limit). |
-| Dashboard | Run-based status and metric tiles, **Activity** chart, run totals, model and agent usage, and quick actions. Unavailable values are named instead of filled with guesses. | Live project health, completed-task counts, agent leaderboard, and response-duration percentiles. |
+| Dashboard | Run-based status and metric tiles, saved setup checks and next actions, archived-project guidance, recent runs with direct links, Team, **Activity** chart, run totals, model usage, and per-agent usage. Unavailable values are named instead of filled with guesses. | Live project health, completed-task counts, agent leaderboard scores, and response-duration percentiles. |
 | Orchestrations | **Active** and **Recent** sections with **Load more**, a state summary, and **Refresh**. | Run delete and archive. |
 | Run page | Two-pane layout with status strip, **Run tree**, and tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. **Stop run** while the run is open. | Terminal diagnostic and retry. |
 | Run Chat | Journal and a composer for the coordinator or the selected session. | Nothing. |

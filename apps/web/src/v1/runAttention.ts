@@ -45,7 +45,7 @@ export interface RunAttention {
   loading: boolean;
   error: unknown;
   /** Reads the list again right away. */
-  reload: () => void;
+  reload: () => Promise<void>;
   /** Hides one notification for this user. The list is read again afterwards. */
   dismiss: (notificationId: string) => Promise<void>;
   /** Error from the last failed dismiss, or null. */
@@ -136,6 +136,7 @@ export function useRunAttention({ projectId, includeDismissed = false }: { proje
   const [dismissError, setDismissError] = useState<unknown>(null);
   // Bumped by `reload` to restart the poll right away.
   const [generation, setGeneration] = useState(0);
+  const reloadWaitersRef = useRef<Array<() => void>>([]);
   // Signed-in state readable from async code, so a result that lands after
   // sign-out is dropped.
   const signedInRef = useRef(signedIn);
@@ -149,6 +150,7 @@ export function useRunAttention({ projectId, includeDismissed = false }: { proje
         setState(EMPTY_STATE);
         setHidden(new Set());
         setDismissError(null);
+        reloadWaitersRef.current.splice(0).forEach((resolve) => resolve());
       }, 0);
       return () => window.clearTimeout(timer);
     }
@@ -186,7 +188,10 @@ export function useRunAttention({ projectId, includeDismissed = false }: { proje
       }
       reading = false;
       // Schedule the next read only after this one finishes, so reads never overlap.
-      if (active) schedule(ATTENTION_POLL_MS);
+      if (active) {
+        reloadWaitersRef.current.splice(0).forEach((resolve) => resolve());
+        schedule(ATTENTION_POLL_MS);
+      }
     };
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible' && !reading) schedule(0);
@@ -201,7 +206,14 @@ export function useRunAttention({ projectId, includeDismissed = false }: { proje
     };
   }, [apiCall, signedIn, generation, projectId, includeDismissed]);
 
-  const reload = useCallback(() => setGeneration((value) => value + 1), []);
+  const reload = useCallback(() => {
+    if (!signedIn) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      // Resolve only after the restarted poll finishes so the caller can serialize refresh cycles.
+      reloadWaitersRef.current.push(resolve);
+      setGeneration((value) => value + 1);
+    });
+  }, [signedIn]);
 
   const dismiss = useCallback(async (notificationId: string) => {
     // Hide the item at once; restore it if the request fails.
@@ -219,7 +231,7 @@ export function useRunAttention({ projectId, includeDismissed = false }: { proje
       setDismissError(reason);
     }
     // Read the list again so the count matches the service.
-    reload();
+    void reload();
   }, [apiCall, reload]);
 
   // A dismissed notification is still a pending gate in Flow until its owner resolves it.

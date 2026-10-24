@@ -1,7 +1,7 @@
 /**
  * Builds the Dashboard status card from the project's saved configuration.
- * Every check reads a real configuration field; nothing is estimated. Run
- * counts and success rates are not shown because the server has no metrics API yet.
+ * Every check reads a real configuration field; nothing is estimated. The
+ * Dashboard renders run counts and success rates from the separate metrics route.
  */
 import type { ProjectConfiguration } from './contracts';
 

@@ -161,7 +161,7 @@ export interface ProjectMetricsData {
   /** True while a request is running. */
   loading: boolean;
   loadedAt: Date | null;
-  reload: () => void;
+  reload: () => Promise<void>;
 }
 
 /**
@@ -218,6 +218,6 @@ export function useProjectMetrics(projectId: string | null, range: MetricsRangeK
     };
   }, [load]);
 
-  const reload = useCallback(() => { void load(); }, [load]);
+  const reload = useCallback(() => load(), [load]);
   return { metrics, usage, metricsError, usageError, loading, loadedAt, reload };
 }

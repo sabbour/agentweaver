@@ -8,7 +8,7 @@
  */
 import { Badge, Button, Select, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowSyncRegular, ClockRegular, FolderRegular, Pulse24Regular } from '@fluentui/react-icons';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { AttentionList } from './AttentionList';
 import { useAuth } from './AuthContext';
@@ -140,6 +140,7 @@ const useStyles = makeStyles({
 });
 
 const RECENT_PROJECT_LIMIT = 4;
+const OVERVIEW_REFRESH_MS = 10_000;
 
 interface OverviewProjectDetails {
   projectId: string;
@@ -168,6 +169,7 @@ export function OverviewPage() {
   const runs = useCrossProjectRunList(projects, 5);
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<unknown>(null);
   // Project chosen for the metrics section, or null for the default project.
   const [metricsProjectId, setMetricsProjectId] = useState<string | null>(null);
@@ -248,11 +250,47 @@ export function OverviewPage() {
   const shownProjectId = chosen ?? recent[0]?.projectId ?? null;
   const metrics = useProjectMetrics(shownProjectId, range);
   const tiles = metricTiles(metrics.metrics, range, metrics.loading);
+  const reloadAttention = attention.reload;
+  const reloadMetrics = metrics.reload;
+  const reloadConversations = conversations.reload;
+  const reloadPriorities = priorities.reload;
+  const pendingInitialReads = attention.loading || metrics.loading || runs.loading
+    || conversations.loading || priorities.loading;
   // Project names for the attention list. Unknown projects show their ID.
   const projectNames = new Map((projects ?? []).map((project) => [project.projectId, project.name]));
   // Refresh re-reads the project list, which also re-reads the runs, the
   // notifications, and the shown project's metrics.
-  const refresh = () => { void load(); attention.reload(); metrics.reload(); conversations.reload(); void priorities.reload(); };
+  const refreshInFlightRef = useRef(false);
+  const refresh = useCallback(async () => {
+    if (refreshInFlightRef.current || loading || pendingInitialReads) return;
+    refreshInFlightRef.current = true;
+    setRefreshing(true);
+    try {
+      // Keep the cycle locked until every refreshed panel has settled.
+      const results = await Promise.allSettled([
+        load(),
+        reloadAttention(),
+        reloadMetrics(),
+        reloadConversations(),
+        reloadPriorities(),
+      ]);
+      const failedRead = results.find((result) => result.status === 'rejected');
+      if (failedRead?.status === 'rejected') setError(failedRead.reason);
+    } finally {
+      refreshInFlightRef.current = false;
+      setRefreshing(false);
+    }
+  }, [load, loading, pendingInitialReads, reloadAttention, reloadConversations, reloadMetrics, reloadPriorities]);
+  const refreshRef = useRef(refresh);
+  useEffect(() => { refreshRef.current = refresh; }, [refresh]);
+
+  useEffect(() => {
+    // Skip ticks during initial reads or until the previous full cycle settles.
+    const interval = window.setInterval(() => {
+      if (!refreshInFlightRef.current) void refreshRef.current();
+    }, OVERVIEW_REFRESH_MS);
+    return () => window.clearInterval(interval);
+  }, []);
 
   return (
     <div className={styles.root}>
@@ -263,7 +301,14 @@ export function OverviewPage() {
         actions={(
           <div className={styles.headerActions}>
             {loadedAt && <Text className={styles.generated}>Updated {loadedAt.toLocaleTimeString()}</Text>}
-            <Button appearance="subtle" icon={<ArrowSyncRegular />} disabled={loading} onClick={refresh}>Refresh</Button>
+            <Button
+              appearance="subtle"
+              icon={<ArrowSyncRegular />}
+              disabled={loading || refreshing || pendingInitialReads}
+              onClick={refresh}
+            >
+              Refresh
+            </Button>
           </div>
         )}
       />

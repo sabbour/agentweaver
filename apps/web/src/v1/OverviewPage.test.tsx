@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectSummary } from './contracts';
@@ -8,6 +8,10 @@ const mocks = vi.hoisted(() => ({
   projects: [] as unknown[],
   useProjectMetrics: vi.fn(),
   metricsReload: vi.fn(),
+  attentionReload: vi.fn(async () => undefined),
+  conversationsReload: vi.fn(async () => undefined),
+  prioritiesReload: vi.fn(async (): Promise<void> => undefined),
+  runsReload: vi.fn(),
   apiCall: vi.fn(),
 }));
 const gatewayMocks = vi.hoisted(() => ({
@@ -24,21 +28,23 @@ vi.mock('./AuthContext', () => ({
 vi.mock('./api', () => ({ gatewayClient: gatewayMocks }));
 
 vi.mock('./RunAttentionContext', () => ({
-  useSharedRunAttention: () => ({ items: [], reload: vi.fn() }),
+  useSharedRunAttention: () => ({ items: [], loading: false, reload: mocks.attentionReload }),
 }));
 
 vi.mock('./AttentionList', () => ({ AttentionList: () => <p>No attention items</p> }));
 // Metrics tests isolate planning hooks; their owner reads are exercised in the planning suites.
 vi.mock('./chiefOfStaff', async (importOriginal) => ({
   ...await importOriginal<typeof import('./chiefOfStaff')>(),
-  useChiefOfStaffConversations: () => ({ items: [], loading: false, error: null, reload: vi.fn() }),
-  useChiefOfStaffPriorities: () => ({ list: { items: [], orderRevision: 1 }, loading: false, error: null, reload: vi.fn() }),
+  useChiefOfStaffConversations: () => ({ items: [], loading: false, error: null, reload: mocks.conversationsReload }),
+  useChiefOfStaffPriorities: () => ({
+    list: { items: [], orderRevision: 1 }, loading: false, error: null, reload: mocks.prioritiesReload,
+  }),
 }));
 
 vi.mock('./runListData', async (importOriginal) => ({
   ...await importOriginal<typeof import('./runListData')>(),
   useCrossProjectRunList: () => ({
-    items: [], loading: false, error: null, hasMore: false, loadingMore: false, loadMore: vi.fn(), reload: vi.fn(),
+    items: [], loading: false, error: null, hasMore: false, loadingMore: false, loadMore: vi.fn(), reload: mocks.runsReload,
     projectNames: new Map(), unreadableProjects: [],
   }),
 }));
@@ -85,6 +91,10 @@ describe('OverviewPage metrics', () => {
   beforeEach(() => {
     mocks.useProjectMetrics.mockClear();
     mocks.metricsReload.mockClear();
+    mocks.attentionReload.mockClear();
+    mocks.conversationsReload.mockClear();
+    mocks.prioritiesReload.mockReset().mockResolvedValue(undefined);
+    mocks.runsReload.mockClear();
     mocks.apiCall.mockImplementation((operation: (token: string, tenant: null) => Promise<unknown>) => operation('token', null));
     gatewayMocks.listProjects.mockImplementation(async () => mocks.projects);
     gatewayMocks.getProjectConfiguration.mockImplementation(async (_token: string, projectId: string) => ({
@@ -185,6 +195,59 @@ describe('OverviewPage metrics', () => {
     await waitFor(() => expect(screen.getByLabelText('Project metric summary')).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(mocks.metricsReload).toHaveBeenCalled();
+  });
+
+  it('refreshes owner data every ten seconds without overlap and stops after unmount', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    gatewayMocks.listProjects.mockClear();
+    const setIntervalSpy = vi.spyOn(window, 'setInterval');
+    const clearIntervalSpy = vi.spyOn(window, 'clearInterval');
+    const view = renderPage();
+    try {
+      await waitFor(() => expect(
+        (screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled,
+      ).toBe(false));
+      expect(gatewayMocks.listProjects).toHaveBeenCalledTimes(1);
+      gatewayMocks.listProjects.mockClear();
+
+      const intervalIndex = setIntervalSpy.mock.calls.findIndex(([, delay]) => delay === 10_000);
+      expect(intervalIndex).toBeGreaterThanOrEqual(0);
+      const intervalId = setIntervalSpy.mock.results[intervalIndex]?.value;
+
+      let finishPriorityReload: (() => void) | undefined;
+      mocks.prioritiesReload.mockImplementationOnce(() => new Promise<void>((resolve) => {
+        finishPriorityReload = resolve;
+      }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(gatewayMocks.listProjects).toHaveBeenCalledTimes(1);
+      expect(mocks.attentionReload).toHaveBeenCalledTimes(1);
+      expect(mocks.metricsReload).toHaveBeenCalledTimes(1);
+      expect(mocks.conversationsReload).toHaveBeenCalledTimes(1);
+      expect(mocks.prioritiesReload).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(
+        (screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled,
+      ).toBe(true));
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(gatewayMocks.listProjects).toHaveBeenCalledTimes(1);
+
+      await act(async () => { finishPriorityReload?.(); });
+      await waitFor(() => expect(
+        (screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled,
+      ).toBe(false));
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(gatewayMocks.listProjects).toHaveBeenCalledTimes(2);
+      view.unmount();
+      expect(clearIntervalSpy).toHaveBeenCalledWith(intervalId);
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(gatewayMocks.listProjects).toHaveBeenCalledTimes(2);
+    } finally {
+      view.unmount();
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('explains that metrics need an active project', async () => {

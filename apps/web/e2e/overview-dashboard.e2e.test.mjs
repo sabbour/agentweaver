@@ -37,7 +37,9 @@ function projectReads(method, path) {
       projectId: 'p1', revision: 3, updatedByActorId: 'me', createdAt: '2026-10-20T12:00:00Z',
       configuration: {
         modelSelection: null, providerOverrides: [], orderedProviderOverrides: [],
-        agentCharters: [], casting: [], blueprintWorkflowReferences: [], skills: [], runLimits: {},
+        agentCharters: [{ agentId: 'agent-ada', name: 'Ada Lovelace', role: 'Engineer', charter: 'Build the project.' }],
+        casting: [], blueprintWorkflowReferences: [], skills: [], runLimits: {},
+        sourceControl: { repository: { owner: 'sabbour', name: 'agentweaver' } },
       },
     });
   // The selected project's metrics and usage are separate reads for the same date range.
@@ -57,7 +59,7 @@ function projectReads(method, path) {
         unpricedRequestCount: 0, cost: [{ priceUnit: 'AIC', disposition: 'estimate', amount: 1 }],
       }],
       usageByAgent: [{
-        id: 'Ada', requestCount: 1, inputTokens: 10, outputTokens: 20, cachedTokens: 0,
+        id: 'agent-ada', requestCount: 1, inputTokens: 10, outputTokens: 20, cachedTokens: 0,
         cacheWriteTokens: 0, reasoningTokens: 0, avgDurationMs: 45000, runs: 1,
         unpricedRequestCount: 0, cost: [{ priceUnit: 'AIC', disposition: 'estimate', amount: 1 }],
       }],
@@ -116,14 +118,23 @@ test('Overview and project dashboard make only versioned, existing Gateway reads
     assert.ok(!overview.has('/api/v1/overview'), 'the legacy global overview route is not published');
 
     // Navigation mounts the project summary, metrics, usage and shared shell.
+    const dashboardStart = requests.length;
     await app.page.goto(`${server.origin}/projects/p1`);
     await app.page.getByText('Live project health is unavailable. This status uses run counts only.').waitFor();
     await app.page.getByText('Runs, last 7 days').waitFor();
+    await app.page.getByRole('heading', { name: 'Setup checks' }).waitFor();
+    await app.page.getByRole('heading', { name: 'Recent runs' }).waitFor();
+    await app.page.getByRole('link', { name: 'Open run Process payments' }).waitFor();
+    await app.page.getByRole('link', { name: 'Choose a model' }).waitFor();
+    await app.page.getByRole('link', { name: 'Open Team' }).waitFor();
+    await app.page.getByRole('table', { name: 'Agent usage' }).getByText('Ada Lovelace').waitFor();
     await capture('dashboard-v1-top.png', app.page);
+    await capture('dashboard-v1-support.png', app.page, 'Setup checks');
     await capture('dashboard-v1-models.png', app.page, 'Model and agent metrics');
-    const dashboard = new Set(requests.map(({ path }) => path));
+    const dashboard = new Set(requests.slice(dashboardStart).map(({ path }) => path));
     for (const path of [
-      '/api/v1/projects/p1', '/api/v1/projects/p1/metrics', '/api/v1/projects/p1/usage',
+      '/api/v1/projects/p1', '/api/v1/projects/p1/configuration', '/api/v1/projects/p1/runs',
+      '/api/v1/projects/p1/metrics', '/api/v1/projects/p1/usage',
     ]) assert.ok(dashboard.has(path), `Dashboard should read ${path}`);
     assert.ok(!dashboard.has('/api/v1/projects/p1/dashboard'), 'the legacy dashboard route is not published');
     assert.deepEqual(failed, [], 'no page or shell request may fail');

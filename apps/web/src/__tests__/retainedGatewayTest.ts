@@ -19,14 +19,32 @@ export function gatewayFixtureFetch(input: RequestInfo | URL): Promise<Response>
       cachedTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
       avgDurationMs: 100, runs: 1, unpricedRequestCount: 0, cost: [],
     }],
-    usageByAgent: [],
+    usageByAgent: [{
+      id: 'agent-ada', requestCount: 2, inputTokens: 12, outputTokens: 24,
+      cachedTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0,
+      avgDurationMs: 250, runs: 2, unpricedRequestCount: 0, cost: [],
+    }],
   };
   const responses: Record<string, unknown> = {
     '/api/v1/projects': [project],
     '/api/v1/projects/p1': project,
     '/api/v1/projects/p1/configuration': {
+      projectId: 'p1',
       revision: 1,
-      configuration: { sourceControl: { repository: { owner: 'sabbour', name: 'demo' } }, agentCharters: [{ name: 'Ada' }] },
+      updatedByActorId: 'test',
+      createdAt: now,
+      configuration: {
+        modelSelection: null,
+        providerOverrides: [],
+        orderedProviderOverrides: [],
+        agentCharters: [{ agentId: 'agent-ada', name: 'Ada Lovelace', role: 'Engineer', charter: 'Build the project.' }],
+        casting: [],
+        blueprintWorkflowReferences: [],
+        defaultWorkflowId: null,
+        skills: [],
+        runLimits: {},
+        sourceControl: { repository: { owner: 'sabbour', name: 'demo' } },
+      },
     },
     '/api/v1/projects/p1/runs': {
       projectId: 'p1',
