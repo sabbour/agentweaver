@@ -116,6 +116,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/projects/{projectId}/casting/proposals` | List casting proposals for an authorized project. |
 | `GET /api/projects/{projectId}/casting/proposals/{proposalId}` | Read a proposal and its draft for review. |
 | `PATCH /api/projects/{projectId}/casting/proposals/{proposalId}` | Amend a pending proposal against its expected draft revision. |
+| `PATCH /api/projects/{projectId}/casting/proposals/{proposalId}/members/{agentId}/role` | Change one member's catalog role and optional display title in a pending proposal draft. |
 | `POST /api/projects/{projectId}/casting/proposals/{proposalId}/confirm` | Atomically confirm a current proposal as a new configuration revision. |
 | `POST /api/projects/{projectId}/casting/proposals/{proposalId}/reject` | Reject a proposal without changing project configuration or run state. |
 | `GET /api/projects/{projectId}/casting/export?revision={n}` | Export charter/casting configuration from the current or a retained revision. |
@@ -209,11 +210,12 @@ Casting templates, roles, and supported universe names are server-owned catalog 
 The retained web client uses that full-draft route for team changes that must
 preserve the current roster. **Augment** stages the existing members plus the
 selected roles; **Recast** uses a scenario or manual proposal to replace the
-roster. Removing or re-roling a member also stages a complete draft. These
-actions do not change the configuration until the proposal is confirmed.
-Re-roling uses a catalog role and updates the matching charter and cast entry.
-The configuration stores one role identifier, so it does not yet support the
-optional separate display title from the older interface.
+roster. Removing a member stages a complete draft. A role change updates one member
+inside the pending draft using its expected draft revision. The catalog role ID
+stays in the role field, while an optional custom title is stored separately on
+the member's charter. The title is display metadata and does not change role
+permissions. Neither edit changes the configuration until the proposal is
+confirmed.
 
 ### Blueprints
 

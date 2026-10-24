@@ -282,6 +282,7 @@ authorization cache, or a grant.
 | GET | `/{projectId}/casting/proposals` | Read | List proposals with optional `limit` (1–100, default 50). | Yes |
 | GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | Yes |
 | PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | Yes |
+| PATCH | `/{projectId}/casting/proposals/{proposalId:guid}/members/{agentId}/role` | Admin | Change a member's catalog role and optional display title in a pending draft. | Yes |
 | POST | `/{projectId}/casting/proposals/{proposalId:guid}/confirm` | Admin | Confirm reviewed casting. | Yes |
 | POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | Yes |
 | GET | `/{projectId}/casting/export` | Admin | Export current casting or optional positive `revision`. | Yes |
@@ -374,6 +375,7 @@ Owner.
 | Status | Problem code | Meaning |
 | --- | --- | --- |
 | `400` | `invalid_request`, `invalid_project_role`, `invalid_principal_id`, `invalid_expected_revision` | The query, role, principal ID, or revision isn't valid. |
+| `400` | `email_principal_not_supported` | Email is profile data, not a member ID. Sign in and use the member's Broker subject ID. |
 | `403` | `forbidden` | The token or current role doesn't allow the operation. |
 | `404` | `not_found`, `principal_not_found` | The project, assignment, or tenant member doesn't exist for the caller. |
 | `409` | `role_assignment_exists`, `project_archived`, `last_project_owner`, `revision_conflict` | The current state doesn't allow the change. |

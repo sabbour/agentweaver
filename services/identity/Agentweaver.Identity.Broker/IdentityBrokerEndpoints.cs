@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Antiforgery;
@@ -186,11 +187,36 @@ public static class IdentityBrokerEndpoints
         HttpContext context, string? handle, string? error, IdentityBrokerDbContext db,
         TimeProvider timeProvider, CancellationToken ct)
     {
-        if (context.Request.Query.ContainsKey("error"))
+        if (context.Request.Query.ContainsKey("error") ||
+            context.Request.Query.ContainsKey("external_error"))
         {
-            if (context.Request.Query["error"].Count != 1 ||
-                !TryMapInteractionError(error, out var mappedError) ||
-                string.IsNullOrWhiteSpace(handle))
+            var query = context.Request.Query;
+            string mappedError;
+            string description;
+            if (query.ContainsKey("external_error"))
+            {
+                var externalErrors = query["external_error"];
+                var aadstsValues = query["aadsts"];
+                var aadstsCode = aadstsValues.Count == 1 ? aadstsValues[0]?.ToUpperInvariant() : null;
+                if (query.ContainsKey("error") || externalErrors.Count != 1 ||
+                    !TryMapExternalAuthenticationError(externalErrors[0], out mappedError) ||
+                    aadstsValues.Count > 1 ||
+                    aadstsValues.Count == 1 && !IsAadstsCode(aadstsCode))
+                    return Results.BadRequest(new { error = Errors.InvalidRequest });
+
+                // Rebuild fixed guidance from safe codes; never reflect provider-supplied text.
+                description = ExternalAuthenticationFailureDescriptionForCode(mappedError, aadstsCode);
+            }
+            else if (query["error"].Count != 1 ||
+                !TryMapInteractionError(error, out mappedError))
+            {
+                return Results.BadRequest(new { error = Errors.InvalidRequest });
+            }
+            else
+            {
+                description = InteractionErrorDescription(mappedError);
+            }
+            if (string.IsNullOrWhiteSpace(handle))
                 return Results.BadRequest(new { error = Errors.InvalidRequest });
 
             var errorHash = OpaqueHandle.Hash(handle);
@@ -205,7 +231,7 @@ public static class IdentityBrokerEndpoints
             var pendingError = await db.PendingAuthorizations.AsNoTracking()
                 .SingleAsync(p => p.HandleHash == errorHash, ct);
             return RedirectAuthorizationError(pendingError.RedirectUri, pendingError.State,
-                mappedError, InteractionErrorDescription(mappedError));
+                mappedError, description);
         }
 
         var local = await context.AuthenticateAsync(LocalCookieScheme);
@@ -488,33 +514,127 @@ public static class IdentityBrokerEndpoints
     {
         context.HandleResponse();
         var properties = context.Properties;
-        var upstreamError = await ReadExternalInteractionErrorAsync(
+        var failure = await ReadExternalAuthenticationFailureAsync(
             context.Request, context.HttpContext.RequestAborted);
         if (properties?.Items.TryGetValue(SilentAuthorizationProperty, out var silent) == true &&
             silent == "true" &&
-            TryMapInteractionError(upstreamError, out var mappedError) &&
+            TryMapInteractionError(failure.Error, out var mappedError) &&
             properties.RedirectUri is { } redirectUri)
         {
             context.Response.Redirect(QueryHelpers.AddQueryString(redirectUri, "error", mappedError));
         }
+        else if (IsAuthorizationResumeUri(properties?.RedirectUri))
+        {
+            // Resume through the one-use transaction so Web receives safe, actionable callback errors.
+            var aadstsCode = ExtractAadstsCode(failure.Description);
+            context.Response.Redirect(QueryHelpers.AddQueryString(
+                properties!.RedirectUri!,
+                new Dictionary<string, string?>
+                {
+                    ["external_error"] = MapExternalAuthenticationError(failure.Error),
+                    ["aadsts"] = aadstsCode,
+                }));
+        }
         else
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = MapExternalAuthenticationError(failure.Error),
+                error_description = ExternalAuthenticationFailureDescription(failure.Error, failure.Description),
+            }, context.HttpContext.RequestAborted).ConfigureAwait(false);
         }
     }
 
-    private static async Task<string?> ReadExternalInteractionErrorAsync(
+    private sealed record ExternalAuthenticationFailure(string? Error, string? Description);
+
+    private static async Task<ExternalAuthenticationFailure> ReadExternalAuthenticationFailureAsync(
         HttpRequest request, CancellationToken cancellationToken)
     {
         var queryErrors = request.Query["error"];
         if (!request.HasFormContentType)
-            return queryErrors.Count == 1 ? queryErrors[0] : null;
+        {
+            var queryDescriptions = request.Query["error_description"];
+            return new ExternalAuthenticationFailure(
+                queryErrors.Count == 1 ? queryErrors[0] : null,
+                queryDescriptions.Count == 1 ? queryDescriptions[0] : null);
+        }
 
-        var formErrors = (await request.ReadFormAsync(cancellationToken).ConfigureAwait(false))["error"];
+        var form = await request.ReadFormAsync(cancellationToken).ConfigureAwait(false);
+        var formErrors = form["error"];
+        var formDescriptions = form["error_description"];
         if (queryErrors.Count != 0 || formErrors.Count != 1)
-            return null;
-        return formErrors[0];
+            return new ExternalAuthenticationFailure(null, null);
+        return new ExternalAuthenticationFailure(
+            formErrors[0],
+            formDescriptions.Count == 1 ? formDescriptions[0] : null);
     }
+
+    private static string MapExternalAuthenticationError(string? upstreamError) => upstreamError switch
+    {
+        "access_denied" => "access_denied",
+        "invalid_client" => "invalid_client",
+        "unauthorized_client" => "unauthorized_client",
+        "invalid_request" => "invalid_request",
+        "temporarily_unavailable" => "temporarily_unavailable",
+        "server_error" => "server_error",
+        "login_required" => "login_required",
+        "consent_required" => "consent_required",
+        "interaction_required" or "account_selection_required" or "session_selection_required" =>
+            "interaction_required",
+        _ => "external_sign_in_failed",
+    };
+
+    private static string ExternalAuthenticationFailureDescription(string? upstreamError, string? providerDescription) =>
+        ExternalAuthenticationFailureDescriptionForCode(upstreamError, ExtractAadstsCode(providerDescription));
+
+    private static string ExternalAuthenticationFailureDescriptionForCode(
+        string? upstreamError,
+        string? aadstsCode)
+    {
+        var description = aadstsCode switch
+        {
+            "AADSTS650057" => "Microsoft Entra rejected the requested resource. The Broker requests only openid, profile, and email; no Agentweaver API permission is required.",
+            "AADSTS50011" => "Microsoft Entra rejected the callback URL. Register the exact route-derived Broker /signin-oidc URL.",
+            "AADSTS700016" => "Microsoft Entra could not find this client in the selected tenant. Check the exact tenant and client ID.",
+            "AADSTS7000218" => "Microsoft Entra requires the public-client flow for this application. Enable the public-client setting.",
+            "AADSTS50105" => "This user is not assigned to the Microsoft Entra application. Check its enterprise application assignments.",
+            "AADSTS50020" => "This account is not available in the selected tenant. Check the tenant and user membership.",
+            _ => upstreamError switch
+            {
+                "access_denied" => "Microsoft Entra sign-in was canceled or access was denied.",
+                "invalid_client" => "Microsoft Entra rejected the client application. Check the exact tenant, client ID, and public-client setting.",
+                "unauthorized_client" => "Microsoft Entra does not allow this client to use the requested sign-in flow.",
+                "invalid_request" => "Microsoft Entra rejected the request. Check the exact route-derived callback and OpenID Connect scopes.",
+                "temporarily_unavailable" or "server_error" => "Microsoft Entra could not complete sign-in right now. Try again later.",
+                "login_required" => "An active sign-in is required.",
+                "consent_required" => "Consent is required for the requested permissions.",
+                "interaction_required" => "More sign-in interaction is required.",
+                _ => "Microsoft Entra could not complete sign-in. Check the exact tenant, client ID, and route-derived callback.",
+            },
+        };
+        return aadstsCode is null ? description : $"{description} ({aadstsCode}).";
+    }
+
+    private static string? ExtractAadstsCode(string? providerDescription)
+    {
+        var safeDescription = providerDescription is { Length: > 4096 }
+            ? providerDescription[..4096]
+            : providerDescription ?? string.Empty;
+        // Provider text may contain account data; return only the numeric AADSTS identifier.
+        var match = Regex.Match(safeDescription, @"\bAADSTS\d{5,10}\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success ? match.Value.ToUpperInvariant() : null;
+    }
+
+    private static bool IsAadstsCode(string? value) =>
+        value is not null && Regex.IsMatch(value, @"^AADSTS\d{5,10}$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool IsAuthorizationResumeUri(string? value) =>
+        value is not null &&
+        value.StartsWith("/connect/authorize/resume?", StringComparison.Ordinal) &&
+        Uri.TryCreate(value, UriKind.Relative, out _);
 
     private static bool TryMapInteractionError(string? upstreamError, out string mappedError)
     {
@@ -524,6 +644,25 @@ public static class IdentityBrokerEndpoints
             "consent_required" => "consent_required",
             "interaction_required" or "account_selection_required" or "session_selection_required" =>
                 "interaction_required",
+            _ => string.Empty,
+        };
+        return mappedError.Length > 0;
+    }
+
+    private static bool TryMapExternalAuthenticationError(string? upstreamError, out string mappedError)
+    {
+        mappedError = upstreamError switch
+        {
+            "access_denied" => "access_denied",
+            "invalid_client" => "invalid_client",
+            "unauthorized_client" => "unauthorized_client",
+            "invalid_request" => "invalid_request",
+            "temporarily_unavailable" => "temporarily_unavailable",
+            "server_error" => "server_error",
+            "login_required" => "login_required",
+            "consent_required" => "consent_required",
+            "interaction_required" => "interaction_required",
+            "external_sign_in_failed" => "external_sign_in_failed",
             _ => string.Empty,
         };
         return mappedError.Length > 0;
