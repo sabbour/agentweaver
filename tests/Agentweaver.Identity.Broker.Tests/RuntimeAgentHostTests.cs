@@ -2528,7 +2528,7 @@ public sealed class RuntimeAgentHostTests
         return suspend;
     }
 
-    private sealed class HostFixture : IAsyncDisposable
+    internal sealed class HostFixture : IAsyncDisposable
     {
         internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
         {
@@ -2570,7 +2570,8 @@ public sealed class RuntimeAgentHostTests
             string sessionId = "session",
             long executionFence = 1,
             bool hostedCatalogIdentityAvailable = true,
-            bool coordinatorRoot = false)
+            bool coordinatorRoot = false,
+            RuntimeRegistration? registrationOverride = null)
         {
             Time = new() { Now = DateTimeOffset.UtcNow };
             Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
@@ -2578,34 +2579,37 @@ public sealed class RuntimeAgentHostTests
                 signingCredentials: new(_key, SecurityAlgorithms.HmacSha256)));
             Actor = new(new SecretCredential(Token, Time.Now.AddMinutes(5), Time), "tenant");
             Image = new("sha256:" + new string('a', 64), "linux/amd64", 123456789);
-            Registration = RuntimeCopilotSessionTests.Registration();
-            Registration = Registration with
+            Registration = registrationOverride ?? RuntimeCopilotSessionTests.Registration();
+            if (registrationOverride is null)
             {
-                ExpiresAt = Time.Now.AddMinutes(5),
-                Binding = Registration.Binding with
+                Registration = Registration with
                 {
-                    SessionId = sessionId,
-                    AgentId = coordinatorRoot
-                        ? RuntimeActionContract.CoordinatorRootStepId
-                        : Registration.Binding.AgentId,
-                    ExecutionFence = executionFence,
-                    ConfigureEndpoint = new("https://runtime.test/runtime/v1/configure"),
-                    PlacementProviderId = "sandbox-test", EnvironmentLifecycleGeneration = 1,
-                    EnvironmentLeaseRevision = 1, Image = Image,
-                    ModelSourceMode = sourceMode,
-                    ModelCredentialReference = sourceMode == ModelSourceMode.Byok
-                        ? new SecretRef("accepted-model-key", "v1") : null,
-                    ModelConnectionId = sourceMode == ModelSourceMode.HostedCopilot
-                        ? Guid.NewGuid() : null,
-                    ModelConnectionScope = sourceMode == ModelSourceMode.HostedCopilot
-                        ? ProjectAuthorityResourceType.Project : null,
-                    WorkflowStepId = workflowBound ? "implement" : null,
-                    MaxModelTurns = maxModelTurns,
-                    MaxToolCalls = maxToolCalls,
-                    MaxPromptTokens = maxPromptTokens,
-                    CopilotHardCreditLimit = hardCreditLimit
-                }
-            };
+                    ExpiresAt = Time.Now.AddMinutes(5),
+                    Binding = Registration.Binding with
+                    {
+                        SessionId = sessionId,
+                        AgentId = coordinatorRoot
+                            ? RuntimeActionContract.CoordinatorRootStepId
+                            : Registration.Binding.AgentId,
+                        ExecutionFence = executionFence,
+                        ConfigureEndpoint = new("https://runtime.test/runtime/v1/configure"),
+                        PlacementProviderId = "sandbox-test", EnvironmentLifecycleGeneration = 1,
+                        EnvironmentLeaseRevision = 1, Image = Image,
+                        ModelSourceMode = sourceMode,
+                        ModelCredentialReference = sourceMode == ModelSourceMode.Byok
+                            ? new SecretRef("accepted-model-key", "v1") : null,
+                        ModelConnectionId = sourceMode == ModelSourceMode.HostedCopilot
+                            ? Guid.NewGuid() : null,
+                        ModelConnectionScope = sourceMode == ModelSourceMode.HostedCopilot
+                            ? ProjectAuthorityResourceType.Project : null,
+                        WorkflowStepId = workflowBound ? "implement" : null,
+                        MaxModelTurns = maxModelTurns,
+                        MaxToolCalls = maxToolCalls,
+                        MaxPromptTokens = maxPromptTokens,
+                        CopilotHardCreditLimit = hardCreditLimit
+                    }
+                };
+            }
             Sdk = new()
             {
                 EmitUsageAfterCreate = false, ExpectedAvailableToolsCount = 7, PersistNativeSessionState = true,
@@ -2689,6 +2693,7 @@ public sealed class RuntimeAgentHostTests
         public string ConfigurationHash => _hash;
         public ConcurrentQueue<SessionMaterialWriteRequest> Material { get; } = new();
         public ConcurrentQueue<RuntimeActionRequest> ModelTurnActions { get; } = new();
+        public Func<RuntimeActionRequest, CancellationToken, Task>? ActionGrantOwner { get; set; }
         public ConcurrentQueue<string> NativePathEvents { get; } = new();
         public ImmutableArray<SessionEventEnvelope> SessionEvents { get; private set; } = [];
         public int PositionIncrement { get; set; } = 1;
@@ -2968,9 +2973,11 @@ public sealed class RuntimeAgentHostTests
                 _http, new("https://orchestrator.test/"), "/internal/runtime/suspend/require-current",
                 Actor, request, token));
         public RuntimeA2ASendRequest Message(RuntimeHostSessionProof proof,
-            AddressedMessageDeliveryMode mode = AddressedMessageDeliveryMode.Enqueue) =>
-            new(new("message", Guid.NewGuid(), RuntimeContractValidation.NativeSessionId(proof.Registration.Binding),
-                "user", [new("text", "A bounded user request.")], new(proof, mode)));
+            AddressedMessageDeliveryMode mode = AddressedMessageDeliveryMode.Enqueue,
+            string text = "A bounded user request.", Guid? messageId = null) =>
+            new(new("message", messageId ?? Guid.NewGuid(),
+                RuntimeContractValidation.NativeSessionId(proof.Registration.Binding),
+                "user", [new("text", text)], new(proof, mode)));
 
         public Task<IHost> StartHttpAsync() => new HostBuilder().ConfigureWebHost(web =>
         {
@@ -3152,6 +3159,8 @@ public sealed class RuntimeAgentHostTests
                     var action = await ReadAsync<RuntimeActionRequest>(request, token);
                     if (action.ActionId == "model.turn")
                     {
+                        if (ActionGrantOwner is { } actionGrantOwner)
+                            await actionGrantOwner(action, token);
                         ModelTurnActions.Enqueue(action);
                         NativePathEvents.Enqueue("action-authorize");
                     }
@@ -3161,7 +3170,11 @@ public sealed class RuntimeAgentHostTests
                         PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed);
                 }
                 else if (_admission?.Request.ActionId == "model.turn")
+                {
+                    if (ActionGrantOwner is { } actionGrantOwner)
+                        await actionGrantOwner(_admission.Request, token);
                     NativePathEvents.Enqueue("action-verify");
+                }
                 return Response(request, _admission!);
             }
             if (path.EndsWith("/cost-preflight", StringComparison.Ordinal))
@@ -3630,7 +3643,7 @@ public sealed class RuntimeAgentHostTests
             }
         }
     }
-    private sealed class TestClock : TimeProvider
+    internal sealed class TestClock : TimeProvider
     {
         public DateTimeOffset Now { get; set; }
         public override DateTimeOffset GetUtcNow() => Now;

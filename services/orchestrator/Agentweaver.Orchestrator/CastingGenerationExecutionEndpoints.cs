@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -35,6 +36,7 @@ public static partial class CoordinationEndpoints
         EventsAddressedMessageClient events,
         CoordinatorDecisionOwnerStore decisions,
         RuntimeRegistrationOwner registrations,
+        ExecutableActionGrantOwnerStore actionGrants,
         IHttpClientFactory clients,
         TimeProvider timeProvider,
         CancellationToken cancellationToken) =>
@@ -100,6 +102,16 @@ public static partial class CoordinationEndpoints
                 context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false);
             CastingGenerationExecutionContract.RequireCurrentRegistration(
                 registration, projectId, runId, sessionId, status.ExecutionFence, selectionHash, timeProvider);
+            var decision = await decisions.ReadCurrentAsync(
+                actor, identity, selection, cancellationToken).ConfigureAwait(false);
+            // Persist the exact request against this root decision before AgentHost can ask for model authority.
+            await actionGrants.AdmitCoordinatorRootModelTurnAsync(
+                context,
+                registration,
+                request.RequestId,
+                RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(request.Prompt)),
+                decision.StateVersion,
+                cancellationToken).ConfigureAwait(false);
             var actorForReadiness = await CreateRuntimeActorAsync(context, actor, timeProvider)
                 .ConfigureAwait(false);
             RuntimeHostReadinessReceipt? readiness;

@@ -271,8 +271,14 @@ ID. Before returning `{ requestId, runId, output }`, it checks that the run
 selection and registration are still current. Orchestrator does not persist the
 proposal result; the Gateway completes the request through Projects & Config.
 The coordinator root uses the accepted model-turn and tool-call limits. Its
-model-turn admission is bound to the generation message ID and uses a distinct
-root action path; child-work dispatch admission remains step-bound.
+model-turn admission is an append-only owner record bound to the generation
+request ID, exact prompt digest, accepted selection, execution fence, and
+accepted decision version. The AgentHost action must match that record before
+the root grant is issued; an arbitrary root event or changed prompt is denied.
+Root grants and child-work dispatches share one run-wide model-turn reservation
+count and execution lock, so neither path can spend a turn left by the other.
+The root action path remains separate; child-work dispatch admission stays
+step-bound.
 AgentHost obtains the model credential from Identity using the run-bound
 registration, so it never passes through Orchestrator or Projects.
 Runtime registration may read the active coordinator root using its accepted
@@ -317,9 +323,10 @@ sequenceDiagram
     Gateway->>Orchestrator: Execute generation (request ID, prompt, run-bound token)
     Orchestrator->>Orchestrator: Accept and start the saved run through the normal path
     Orchestrator->>Orchestrator: Recheck accepted root and current registration
+    Orchestrator->>DB: Persist request, prompt digest, selection, fence, and decision-bound root admission
     Orchestrator->>AgentHost: Immediate turn (message ID = request ID)
-    AgentHost->>Orchestrator: Admit model.turn (dispatch ID = message ID)
-    Orchestrator->>DB: Validate root decision and reserve within model-turn limit
+    AgentHost->>Orchestrator: Request model.turn admission (dispatch ID = message ID)
+    Orchestrator->>DB: Match persisted admission; count root grants and workflow dispatches under one run lock
     Orchestrator-->>AgentHost: Root model.turn admission
     AgentHost->>Identity: Redeem the run-bound model credential
     Identity-->>AgentHost: Run-scoped credential

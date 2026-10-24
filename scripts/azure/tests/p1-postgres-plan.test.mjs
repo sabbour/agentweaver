@@ -3,18 +3,20 @@ import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { buildP1PostgresPlan, p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 
-test('Image compatibility permits rolling the reviewed 032-to-033 migrations', () => {
+test('Image compatibility permits rolling reviewed migrations across reserved gaps', () => {
   const compatibility = JSON.parse(readFileSync(new URL(
     '../../../services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json', import.meta.url)));
   const plan = buildP1PostgresPlan();
   const core = plan.coreVersions;
   // The runner can read this source-owned contract before choosing deployment and migration order.
   assert.deepEqual(compatibility.applyByDefault, core);
-  assert.deepEqual(compatibility.currentImage.requiredCoreVersions, core.filter(version => version !== 32 && version !== 33));
-  assert.deepEqual(compatibility.currentImage.optionalCoreVersions, [32, 33]);
+  assert.deepEqual(compatibility.currentImage.requiredCoreVersions,
+    core.filter(version => ![32, 33, 36].includes(version)));
+  assert.deepEqual(compatibility.currentImage.optionalCoreVersions, [32, 33, 36]);
   assert.equal(compatibility.currentImage.repositoryIdentityWriteVersion, 33);
   assert.equal(compatibility.currentImage.beforeRepositoryIdentityUpdateError, 'database_update_pending');
-  assert.deepEqual(compatibility.rolloutOrder, ['deployCurrentImages', 'applyCore032And033']);
+  assert.equal(compatibility.rootModelTurnAdmissionsVersion, 36);
+  assert.deepEqual(compatibility.rolloutOrder, ['deployCurrentImages', 'applyCore032And033And036']);
   assert.deepEqual(compatibility.separateApprovalRequired, []);
   assert.equal(compatibility.preRepositoryIdentityImage.acceptsCore033, false);
   assert.equal(core.includes(32), true);
@@ -81,7 +83,7 @@ test('Row locks use one column, never blanket UPDATE on append-only tables', () 
   const plan = buildP1PostgresPlan();
   const locks = plan.services.flatMap(service =>
     service.tables.filter(table => table.lockColumn).map(table => ({ service, table })));
-  assert.equal(locks.length, 8);
+  assert.equal(locks.length, 9);
   for (const { service, table } of locks) {
     assert.deepEqual(table.privileges, ['SELECT', 'INSERT']);
     assert.equal(table.mutationDenialRequired, true);
@@ -104,6 +106,7 @@ test('Row locks use one column, never blanket UPDATE on append-only tables', () 
     'events_sessions.usage_rate_cards:usage_rate_cards_immutable:reject_usage_history_mutation():27',
     'orchestrator.coordinator_decisions:coordinator_decisions_no_update:reject_row_lock_record_update():19',
     'orchestrator.maf_workflow_checkpoints:maf_workflow_checkpoints_no_update:reject_row_lock_record_update():19',
+    'orchestrator.maf_root_model_turn_admissions:maf_root_model_turn_admissions_no_update:reject_row_lock_record_update():27',
     'orchestrator.session_consistency_manifests:session_consistency_manifests_immutable:reject_session_consistency_manifest_mutation():27',
   ].sort());
 });
@@ -115,18 +118,20 @@ test('Only the existing casting authority function receives direct runtime EXECU
     ['projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)']);
 });
 
-// Migration 032 and its table grants are part of the same reviewed plan.
-test('Core plan includes 032 and 033, skips 017, and grants only the PR-record operations', () => {
+// The Core catalog, including reserved migration gaps, is part of the reviewed plan.
+test('Core plan includes migrations through 036, skips reserved gaps, and grants only append-only admission operations', () => {
   // The plan must include every shipped resource without granting mutation of caller receipts.
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 36]);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'source_control_pull_requests').privileges, ['SELECT', 'INSERT', 'UPDATE']);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'user_notification_dismissals').privileges, ['SELECT', 'INSERT']);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'guardrails_evaluations').privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
+    .find(table => table.table === 'maf_root_model_turn_admissions').privileges, ['SELECT', 'INSERT']);
   for (const name of ['backlog_plan_promotions', 'backlog_task_origins', 'user_notification_promotion_dismissals'])
     assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
       .find(table => table.table === name).privileges, ['SELECT', 'INSERT']);
@@ -194,7 +199,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 36])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
       assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(23) && !applied.Contains(22))'));
@@ -209,6 +214,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.ok(source.includes('(applied.Contains(31) && (!applied.Contains(30) || !applied.Contains(25)))'));
       assert.ok(source.includes('Enumerable.Range(57, 45)'));
       assert.ok(source.includes('(applied.Contains(33) && !applied.Contains(24))'));
+      assert.ok(source.includes('(applied.Contains(36) && !applied.Contains(33))'));
       assert.ok(plan.coreVersions.includes(32));
     } else {
       assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));
@@ -254,7 +260,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 113);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 114);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
@@ -302,6 +308,7 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     'orchestrator.coordinator_decisions.decision_id',
     'orchestrator.maf_workflow_checkpoints.checkpoint_id',
     'orchestrator.session_consistency_manifests.manifest_id',
+    'orchestrator.maf_root_model_turn_admissions.request_id',
   ]);
   const directories = [
     'projects-config/Agentweaver.Projects.Config',

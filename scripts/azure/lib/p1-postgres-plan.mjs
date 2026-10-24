@@ -64,9 +64,10 @@ const GROUPS = {
     // their guard triggers also reject deletes and allow only forward updates.
     // Migration 030 grants append-only plan promotion and task origin rows.
     // Migration 031 grants caller dismissals of promotion notices insert-only; a dismissal is never undone.
+    // Migration 036 grants root model-turn admissions insert-only; their rows are immutable.
     'SELECT,INSERT,UPDATE': 'accepted_runs coordination_sessions coordination_messages coordination_requests parent_notifications coordinator_gates executable_action_grants coordination_tree_commands coordination_idle_subscriptions coordination_execution_operations runtime_registration_heads source_control_merge_intents source_control_output_captures maf_execution_run_guards maf_execution_dispatches outbox_streams outbox_events backlog_projects backlog_tasks project_run_requests chief_of_staff_priority_lists chief_of_staff_priorities issue_sync_projects issue_sync_receipts source_control_pull_requests spend_budget_reservations spend_budget_accounting_cursors',
     'SELECT,INSERT,DELETE': 'backlog_dependencies chief_of_staff_priority_links',
-    'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots project_run_cancellations chief_of_staff_conversations user_notification_dismissals guardrails_evaluations backlog_plan_promotions backlog_task_origins user_notification_promotion_dismissals',
+    'SELECT,INSERT': 'coordinator_decision_outbox policy_evaluation_receipts coordinator_run_selection_contexts coordinator_run_selection_context_versions coordination_idle_notifications runtime_registration_revisions runtime_sdk_sources runtime_usage_observations source_control_repository_pins source_control_webhook_deliveries maf_execution_output_witnesses consumer_inbox_receipts coordinator_decisions maf_workflow_checkpoints session_consistency_manifests reviewed_remote_tool_snapshots project_run_cancellations chief_of_staff_conversations user_notification_dismissals guardrails_evaluations backlog_plan_promotions backlog_task_origins user_notification_promotion_dismissals maf_root_model_turn_admissions',
   },
 };
 
@@ -111,6 +112,11 @@ const LOCK_GUARDS = {
       column: 'manifest_id', trigger: 'session_consistency_manifests_immutable',
       function: 'reject_session_consistency_manifest_mutation()', triggerType: 27,
       message: 'session consistency manifests are immutable', sqlState: null,
+    },
+    maf_root_model_turn_admissions: {
+      column: 'request_id', trigger: 'maf_root_model_turn_admissions_no_update',
+      function: 'reject_row_lock_record_update()', triggerType: 27,
+      message: 'Coordinator decision and MAF checkpoint records cannot be updated.', sqlState: '55000',
     },
   },
 };
@@ -210,8 +216,8 @@ export function buildP1PostgresPlan() {
     // 028 adds the append-only guardrails_evaluations table. 029 adds the spend budget tables.
     // 030 adds append-only plan promotion and task origin rows with SELECT,INSERT grants.
     // 031 adds caller dismissals of promotion notices with SELECT,INSERT grants.
-    // 032 adds pull-request records with SELECT,INSERT,UPDATE; 033 extends Priority links without new grants.
-    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
+    // 032 adds pull-request records with SELECT,INSERT,UPDATE; 033 extends Priority links; 036 adds insert-only turn admissions.
+    coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 36],
     // Bind each owner migration catalog into the reviewed plan hash.
     environmentVersions: Array.from({ length: 11 }, (_, index) => index + 1),
     eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),

@@ -10,11 +10,13 @@ The runner applies these migrations, in this order:
 
 1. Identity Broker EF Core migrations, when you pass a Broker digest.
 2. Environment EF Core migrations 1 to 11.
-3. Orchestrator (Core) migrations 1 to 16 and 18 to 33.
+3. Orchestrator (Core) migrations 1 to 16, 18 to 33, and 36. Reserved gaps are not applied.
 4. Events & Sessions migrations 1 to 9.
 
 The reviewed plan fixes these versions by hash. Core migration 017 is not in the
-plan, while 032 is included with its exact runtime table grants. An image that
+plan, while 032 is included with its exact runtime table grants and 036 adds
+append-only coordinator-root model-turn admissions. Reserved migrations 034 and
+035 remain outside this plan until their owner changes are integrated. An image that
 would apply a version outside the plan fails before it connects.
 
 ## What one run does
@@ -203,8 +205,10 @@ For every target image and each different running image, the runner:
 3. Reads the range from the readiness check in that source. The highest
    version the check requires is the lowest accepted version. The highest
    version it allows is the highest accepted version. For example, the current
-   Orchestrator image accepts 31 to 33. It accepts the complete schema before
-   and after migration 033, and migration 032 remains optional.
+   Orchestrator image accepts schema versions 31 through 36. It accepts the
+   complete schema before and after migrations 032, 033, and 036; the root
+   model-turn admission table is optional until 036 is applied. Reserved
+   migrations 034 and 035 are not accepted by this source revision.
 
 Environment uses EF Core timestamp migration IDs. The source assigns their
 catalog order to schema versions 1 through 11, and startup rejects pending
@@ -220,10 +224,10 @@ another registry, it assumes nothing about that image, so the run takes the
 planned-gap path. The runner records each schema version in its state after a
 run, and uses it to decide whether a new image accepts the current schema.
 
-For the Core 031 to 033 upgrade, the old owner accepts only 31 to 32. The new
-owner accepts 31 to 33, so it can become ready before 032 and 033 are applied.
+For the Core 031 to 036 upgrade, the old owner accepts only 31 to 32. The new
+owner accepts 31 to 36, so it can become ready before 032, 033, and 036 are applied.
 When the state records schema 31, `--deploy-apps` deploys the new owner first,
-waits for readiness, then applies both planned migrations. If no schema version
+waits for readiness, then applies the planned migrations. If no schema version
 is recorded, the runner cannot prove that order is safe and uses a planned
 readiness gap instead. Both paths keep 017 out of the migration plan.
 

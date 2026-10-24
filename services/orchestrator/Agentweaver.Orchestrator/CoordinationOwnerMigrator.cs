@@ -18,7 +18,8 @@ public static class CoordinationOwnerMigrator
     /// </summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33])];
+        // Reserved migration numbers are not inferred; version 036 can apply after 033 with gaps.
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 36])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -66,7 +67,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Version 032 is in the reviewed default catalog. Readiness still accepts its complete
         // pre-migration shape so a compatible owner can start before the maintenance Job runs.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 36)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -104,7 +105,8 @@ public static class CoordinationOwnerMigrator
             // 032 records reference repository pins, which migration 012 adds.
             (applied.Contains(32) && !applied.Contains(12)) ||
             // Repository identity extends the private links from 024, not optional PR recording.
-            (applied.Contains(33) && !applied.Contains(24)))
+            (applied.Contains(33) && !applied.Contains(24)) ||
+            (applied.Contains(36) && !applied.Contains(33)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
@@ -147,6 +149,7 @@ public static class CoordinationOwnerMigrator
                 // 032 adds stored pull-request records before the independent Priority-link update in 033.
                 32 => "source_control_pull_request_records",
                 33 => "priority_link_repository_identity",
+                36 => "maf_root_model_turn_admissions",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -185,8 +188,8 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // 032 remains optional to readiness so the owner can start before maintenance applies the
-        // reviewed plan; accept only its complete table-and-ledger shape when it is present.
+        // Additive migrations 032 and 036 remain optional to readiness so the owner can start before
+        // maintenance applies the reviewed plan; accept only their complete table-and-ledger shapes.
         await using var command = new NpgsqlCommand($"""
             SELECT
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),
@@ -205,7 +208,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 36)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -348,7 +351,17 @@ public static class CoordinationOwnerMigrator
                     AND to_regclass(@sourceControlPullRequests) IS NULL) OR
                 ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32) = 1
                     AND to_regclass(@sourceControlPullRequests) IS NOT NULL
-                    AND to_regclass(@sourceControlPullRequestsIndex) IS NOT NULL)
+                    AND to_regclass(@sourceControlPullRequestsIndex) IS NOT NULL),
+                -- 036 is additive; runtime action admission fails closed until its durable owner table is applied.
+                ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 36) = 0
+                    AND to_regclass(@rootModelTurnAdmissions) IS NULL) OR
+                ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 36) = 1
+                    AND to_regclass(@rootModelTurnAdmissions) IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM pg_trigger
+                        WHERE tgrelid = to_regclass(@rootModelTurnAdmissions)
+                          AND tgname = 'maf_root_model_turn_admissions_no_update'
+                          AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 27
+                          AND tgenabled = 'O' AND NOT tgisinternal))
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");
@@ -426,6 +439,8 @@ public static class CoordinationOwnerMigrator
             $"{schema}.source_control_pull_requests");
         command.Parameters.AddWithValue("sourceControlPullRequestsIndex", NpgsqlDbType.Text,
             $"{schema}.ix_source_control_pull_requests_project_recorded");
+        command.Parameters.AddWithValue("rootModelTurnAdmissions", NpgsqlDbType.Text,
+            $"{schema}.maf_root_model_turn_admissions");
         command.Parameters.AddWithValue("backlogIssueUnique", NpgsqlDbType.Text,
             $"{schema}.backlog_tasks_repository_issue_unique");
         command.Parameters.AddWithValue("backlogDependencies", NpgsqlDbType.Text, $"{schema}.backlog_dependencies");

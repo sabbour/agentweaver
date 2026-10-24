@@ -32,6 +32,7 @@ internal sealed class RuntimeUsageSourceStore(
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+    private readonly string _schema = $"\"{options.Schema}\"";
     private readonly string _sources = $"\"{options.Schema}\".runtime_sdk_sources";
     private readonly string _observations = $"\"{options.Schema}\".runtime_usage_observations";
     private readonly string _dispatches = $"\"{options.Schema}\".maf_execution_dispatches";
@@ -801,16 +802,11 @@ internal sealed class RuntimeUsageSourceStore(
         }
         if (registration.Binding.MaxModelTurns is { } maxModelTurns)
         {
-            // Native limit: count the cost-producing dispatches already stored for the run. The current
-            // message is excluded so a retry of the same dispatch does not count twice.
-            await using var count = new NpgsqlCommand($"""
-                SELECT count(*) FROM {_dispatches}
-                WHERE project_id = @project AND run_id = @run AND is_cost_producing
-                    AND dispatch_id <> @message
-                """, connection, transaction);
-            AddNativeScope(count, registration, intent.MessageId);
             RuntimeActionContract.RequireInvocationCapacity(maxModelTurns,
-                (long)(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!,
+                await RuntimeModelTurnReservationStore.CountRunWideAsync(
+                    connection, transaction, _schema, registration.Binding.ProjectId,
+                    registration.Binding.RunId, root.SessionId, intent.MessageId, cancellationToken)
+                    .ConfigureAwait(false),
                 "runtime_model_turn_limit_exhausted");
         }
         if (RequiresCopilotCreditSnapshot(registration.Binding))

@@ -206,7 +206,7 @@ test('grant markers must match the reviewed plan exactly', () => {
   }), /versions=1,2/);
   assert.throws(() => verifyGrantsMarker('migrated\n', expected), /0 grant markers/);
   assert.throws(() => verifyGrantsMarker(`${goodLogs.orchestrator}\n${goodLogs.orchestrator}`, expected), /2 grant markers/);
-  assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', [...plan.coreVersions, 34]), expected),
+  assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', [...plan.coreVersions, 35]), expected),
     /differs from the reviewed plan/);
   assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', plan.coreVersions.slice(0, -1)), expected),
     /differs from the reviewed plan/);
@@ -215,11 +215,14 @@ test('grant markers must match the reviewed plan exactly', () => {
   assert.throws(() => verifyGrantsMarker(goodLogs['events-and-sessions'], expected), /does not match/);
 });
 
-test('the reviewed plan includes 032 and matches the pinned hash', () => {
+test('the reviewed plan includes 032 and 036 and matches the pinned hash', () => {
   assert.equal(p1PostgresPlanHash(), REVIEWED_PLAN_SHA256);
   assert.ok(!plan.coreVersions.includes(17));
   assert.ok(plan.coreVersions.includes(32));
-  assert.equal(Math.max(...plan.coreVersions), 33);
+  assert.ok(!plan.coreVersions.includes(34));
+  assert.ok(!plan.coreVersions.includes(35));
+  assert.ok(plan.coreVersions.includes(36));
+  assert.equal(Math.max(...plan.coreVersions), 36);
   assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
   assert.deepEqual(plan.environmentVersions, Array.from({ length: 11 }, (_, index) => index + 1));
 });
@@ -402,7 +405,7 @@ test('a failed Job still removes Jobs, releases the lock, and writes a failed re
 });
 
 test('a ledger past the reviewed plan fails the run', async () => {
-  const fake = world({ logs: { ...goodLogs, orchestrator: marker('orchestrator', 'orchestrator', [...plan.coreVersions, 34]) },
+  const fake = world({ logs: { ...goodLogs, orchestrator: marker('orchestrator', 'orchestrator', [...plan.coreVersions, 35]) },
     state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } } });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
@@ -742,11 +745,11 @@ test('the service order follows the schema ranges of the running and target imag
 });
 
 test('the schema range comes from the readiness check in the migrator source', () => {
-  // Orchestrator requires 31 at startup and accepts optional 032 and rollout-compatible 033.
+  // Orchestrator requires 31 at startup and accepts optional 032-036 during rollout, with reserved gaps.
   // Git output passes through redaction, which must not change the parsed text.
   const read = (path, component) => schemaRangeFromSource(redact(readFileSync(path, 'utf8')), component);
   assert.deepEqual(read('services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs',
-    'Agentweaver.Orchestrator'), range(31, 33));
+    'Agentweaver.Orchestrator'), range(31, 36));
   assert.deepEqual(read('services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs',
     'Agentweaver.EventsAndSessions'), range(Math.max(...plan.eventsVersions), Math.max(...plan.eventsVersions)));
   const environmentSource = readFileSync(
@@ -805,8 +808,12 @@ test('pinned owner readiness shapes derive 31-32 before repository identity and 
   // requiring the parser to depend on metadata that older images do not have.
   const compatibility = JSON.parse(readFileSync(
     'services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json', 'utf8'));
-  assert.equal(newRange.minSchema, Math.max(...compatibility.currentImage.requiredCoreVersions));
-  assert.equal(newRange.maxSchema, Math.max(...compatibility.currentImage.optionalCoreVersions));
+  const currentSource = readFileSync(
+    'services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs', 'utf8');
+  const currentRange = schemaRangeFromSource(currentSource, 'Agentweaver.Orchestrator');
+  assert.equal(newRange.maxSchema, 33);
+  assert.equal(currentRange.minSchema, Math.max(...compatibility.currentImage.requiredCoreVersions));
+  assert.equal(currentRange.maxSchema, Math.max(...compatibility.currentImage.optionalCoreVersions));
   assert.equal(oldRange.maxSchema, compatibility.preRepositoryIdentityImage.maximumKnownCoreVersion);
   assert.ok(oldRange.maxSchema < 33);
   assert.deepEqual(plan.coreVersions, compatibility.applyByDefault);

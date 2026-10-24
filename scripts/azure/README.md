@@ -22,10 +22,11 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`c27bc525b1549ccc6716f74b1a5c15993321cf3d6fe9711fb1eaf80fd2287a90`.
+`160e76be2a82f33e60aeda9445e88e4d64e9ed3dd1355f89bafef9fa5b919886`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16 and 18-33. Version 027 requires 026 only.
+placeholder. The Core list is 1-16, 18-33, and 036; reserved versions 034 and
+035 may be skipped. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
 027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
 plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
@@ -38,8 +39,8 @@ DELETE. It is an **unapplied code-only migration**.
 Orchestrator migration `032_source_control_pull_request_records.sql` adds the
 `source_control_pull_requests` table for the project pull request list. It
 requires migration 012 and is part of the reviewed Core catalog and default P1
-maintenance plan. The source-bound plan hash covers both migration 032 and the
-exact `SELECT, INSERT, UPDATE` grant on
+maintenance plan. The source-bound plan hash covers migration 032 and its exact `SELECT, INSERT,
+UPDATE` grant on
 `orchestrator.source_control_pull_requests`. The Orchestrator migration Job
 applies it before 033 and verifies the complete ledger and table. Startup still
 accepts a complete pre-032 schema during rollout, but the pull request list
@@ -59,8 +60,14 @@ instead of losing repository identity; existing operations continue.
 On 033 those saves work. Older images reject 033 and are not a rollback target.
 The source-owned machine-readable compatibility list is
 `services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json`.
-The Core catalog and plan include both 032 and 033; the maintenance Job applies
-them in version order.
+Migration `036_maf_root_model_turn_admissions.sql` adds an append-only owner
+record for coordinator-root model-turn admission. Root generation fails closed
+until the table and its immutability trigger are applied. It is optional to
+readiness during rollout and has no mutation grant; the runtime role receives
+only `SELECT, INSERT`. The migration runner applies the registered catalog in
+ascending order and permits the gaps at 034 and 035.
+The Core catalog and plan include 032, 033, and 036; the maintenance Job applies
+the included versions in order.
 Existing grants on the Priority link table cover the added columns.
 
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
@@ -241,7 +248,7 @@ The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
 Events requires versions 1 through 9 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 112 tables and eight exact row-lock columns.
+The plan lists 114 tables and nine exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

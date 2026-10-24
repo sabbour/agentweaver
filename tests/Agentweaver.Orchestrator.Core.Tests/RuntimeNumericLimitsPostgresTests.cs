@@ -227,25 +227,40 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         {
             DispatchId = generationEventId
         };
+        var rootGrantStore = GrantStore();
+        Assert.Equal("runtime_model_turn_admission_required",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                IssueAsync(0, modelRequest))).Code);
+        await rootGrantStore.AdmitCoordinatorRootModelTurnAsync(
+            rootRequestContext, _registrations[0], generationEventId, promptHash,
+            rootContext.DecisionStateVersion, default);
+        Assert.Equal("runtime_model_turn_admission_required",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                IssueAsync(0, modelRequest with { InputHash = new string('b', 64) }))).Code);
         var modelGrant = await IssueAsync(0, modelRequest);
-        var grantStore = GrantStore();
         Assert.Equal(ExecutableActionGrantLookupStatus.Current,
-            (await grantStore.GetCurrentAsync(modelGrant)).Status);
+            (await rootGrantStore.GetCurrentAsync(modelGrant)).Status);
+        Assert.Equal("runtime_model_turn_limit_exhausted",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareAsync(1))).Code);
+        Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
         var nextModelEventId = Guid.NewGuid();
         var nextModelRequest = modelRequest with
         {
             EventId = nextModelEventId,
             DispatchId = nextModelEventId
         };
+        await rootGrantStore.AdmitCoordinatorRootModelTurnAsync(
+            rootRequestContext, _registrations[0], nextModelEventId, promptHash,
+            rootContext.DecisionStateVersion, default);
         Assert.Equal("runtime_model_turn_limit_exhausted",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 IssueAsync(0, nextModelRequest))).Code);
 
         var toolRequest = Action(0, toolInvocation: true);
         var toolGrant = await IssueAsync(0, toolRequest);
-        await grantStore.RequireToolInvocationReservationAsync(_registrations[0], toolRequest, default);
+        await rootGrantStore.RequireToolInvocationReservationAsync(_registrations[0], toolRequest, default);
         Assert.Equal(ExecutableActionGrantLookupStatus.Current,
-            (await grantStore.GetCurrentAsync(toolGrant)).Status);
+            (await rootGrantStore.GetCurrentAsync(toolGrant)).Status);
         Assert.Equal("runtime_tool_call_limit_exhausted",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 IssueAsync(0, Action(0, toolInvocation: true)))).Code);

@@ -50,6 +50,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(31)]
     [InlineData(32)]
     [InlineData(33)]
+    [InlineData(34)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -89,11 +90,11 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var insert = new NpgsqlCommand($"""
-            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (34)
+            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (35)
             """, connection))
             await insert.ExecuteNonQueryAsync();
 
-        // Version 34 is intentionally outside the set accepted by the readiness verifier.
+        // Version 35 is intentionally outside the set accepted by the readiness verifier.
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
         var sink = new ReadinessCapturingLogger();
@@ -150,7 +151,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                     WHERE link_id = 'legacy' AND item_number = 42 AND provider_id IS NULL
                       AND repository_owner IS NULL AND repository_name IS NULL
                       AND created_at = '2026-10-20T00:00:00Z'),
-                -- Frozen version gate from the pre-033 owner: any unknown version rejects readiness.
+                -- A pre-033 owner rejects both the repository-identity and root-admission versions.
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations
                     WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32)),
                 to_regclass(@obsolete) IS NULL
@@ -161,8 +162,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(0));
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
-        // Old owner images cannot accept 033; migrating and deploying must be coordinated.
-        Assert.Equal(1L, reader.GetInt64(3));
+        // Old owner images cannot accept 033 or 036; migrating and deploying must be coordinated.
+        Assert.Equal(2L, reader.GetInt64(3));
         Assert.True(reader.GetBoolean(4));
     }
 
@@ -379,7 +380,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (30, "030_backlog_task_origin.sql"),
             (31, "031_user_notification_promotion_dismissals.sql"),
             (32, "032_source_control_pull_request_records.sql"),
-            (33, "033_priority_link_repository_identity.sql")
+            (33, "033_priority_link_repository_identity.sql"),
+            (36, "036_maf_root_model_turn_admissions.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -466,6 +468,11 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                  WHERE tgrelid IN (to_regclass(@reservations), to_regclass(@cursors))
                    AND tgname IN ('spend_budget_reservations_guard', 'spend_budget_reservations_no_truncate',
                        'spend_budget_accounting_cursors_guard', 'spend_budget_accounting_cursors_no_truncate')
+                   AND tgenabled = 'O' AND NOT tgisinternal),
+                to_regclass(@rootModelTurnAdmissions) IS NOT NULL,
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid = to_regclass(@rootModelTurnAdmissions)
+                   AND tgname = 'maf_root_model_turn_admissions_no_update'
                    AND tgenabled = 'O' AND NOT tgisinternal)
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
@@ -487,6 +494,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         // The two spend budget tables whose guard triggers the last column counts.
         command.Parameters.AddWithValue("reservations", $"{_schema}.spend_budget_reservations");
         command.Parameters.AddWithValue("cursors", $"{_schema}.spend_budget_accounting_cursors");
+        command.Parameters.AddWithValue("rootModelTurnAdmissions", $"{_schema}.maf_root_model_turn_admissions");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -508,8 +516,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        // The default history includes every reviewed version through 033.
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]), reader.GetFieldValue<int[]>(9));
+        // The default history includes the latest supported migration, allowing reserved gaps.
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 36]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));
@@ -527,6 +535,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(reader.GetBoolean(24));
         // Both spend budget tables have an enabled guard trigger and no-truncate trigger: 2 tables x 2 = 4.
         Assert.Equal(4L, reader.GetInt64(25));
+        Assert.True(reader.GetBoolean(26));
+        Assert.Equal(1L, reader.GetInt64(27));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)
