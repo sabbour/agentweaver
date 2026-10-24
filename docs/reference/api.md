@@ -282,6 +282,7 @@ authorization cache, or a grant.
 | GET | `/{projectId}/casting/proposals` | Read | List proposals with optional `limit` (1–100, default 50). | Yes |
 | GET | `/{projectId}/casting/proposals/{proposalId:guid}` | Read | Read a proposal. | Yes |
 | PATCH | `/{projectId}/casting/proposals/{proposalId:guid}` | Admin | Revise a proposal. | Yes |
+| PATCH | `/{projectId}/casting/proposals/{proposalId:guid}/members/{agentId}/role` | Admin | Change a member's catalog role and optional display title in a pending draft. | Yes |
 | POST | `/{projectId}/casting/proposals/{proposalId:guid}/confirm` | Admin | Confirm reviewed casting. | Yes |
 | POST | `/{projectId}/casting/proposals/{proposalId:guid}/reject` | Admin | Reject a proposal. | Yes |
 | GET | `/{projectId}/casting/export` | Admin | Export current casting or optional positive `revision`. | Yes |

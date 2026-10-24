@@ -123,6 +123,7 @@ for the owner transaction boundary.
 | `CreateScenarioProjectCastingProposalRequest` | `expectedConfigurationRevision`, catalog `templateId`, optional supported `universe`. |
 | `CreateManualProjectCastingProposalRequest` | `expectedConfigurationRevision`, non-empty catalog `roleIds`, optional supported `universe`. |
 | `UpdateProjectCastingProposalRequest` | `expectedDraftRevision`, replacement `draft`. |
+| `UpdateProjectCastingProposalMemberRoleRequest` | `expectedDraftRevision`, catalog `roleId`, optional `customRoleTitle`; edits only the proposal draft. |
 | `TransitionProjectCastingProposalRequest` | `expectedDraftRevision` for confirm or reject. |
 | `ProjectCastingProposal` | `proposalId`, `projectId`, `baseConfigurationRevision`, `draftRevision`, `state` (`pending`, `confirmed`, or `rejected`), `draft`, nullable `confirmedConfigurationRevision`, nullable `result`, nullable `transferProvenance`, and creation/update actor IDs and timestamps. |
 | `ProjectCastingTransfer` | `formatVersion` (1), `sourceProjectId`, `sourceConfigurationRevision`, `agentCharters`, `casting`, `contentDigest`. Contains no unrelated project settings. |
