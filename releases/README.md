@@ -1182,6 +1182,17 @@ npm run release:deploy-bootstrap -- v1.0.7 `
   --provider-catalog-source-commit b002620bd8cb53a971b6d5b082d6ab43dbf11fb7
 ```
 
+### v1.0.9 P1 evidence pin
+
+The [v1.0.9 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.9)
+are published at source `f21632d48f606da215cf37e70921c85c2d604f1d`. The
+whole-release deployment script deployed v1.0.9, so v1.0.9 has no
+pre-acceptance bootstrap command. `release:deploy-bootstrap -- v1.0.9` is
+refused. The pin exists only so the P1 acceptance harness can verify the live
+v1.0.9 installation. The harness checks the annotated tag, the exact source
+commit, and the immutable publication result before it records evidence. A
+lightweight tag or a publication from another source fails this check.
+
 `npm run release:deploy` is the operator-hosted, image-only Kubernetes rollout
 tool. It consumes an already published `v1.x.y` GitHub Release, the release-stage
 composition manifest, the matching immutable publication receipt, and the
