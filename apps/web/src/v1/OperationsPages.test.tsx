@@ -100,7 +100,7 @@ function runPage(items: ProjectRunSummary[]) {
 function task(taskId: string, title: string, extra: Partial<BacklogTaskSnapshot> = {}): BacklogTaskSnapshot {
   return {
     reference: { projectId: 'p1', taskId }, revision: 1, state: 'backlog', isArchived: false,
-    isAutomationInvocationPending: false, title, description: null, lifecycle: 'open', repositoryIssue: null, ...extra,
+    isAutomationInvocationPending: false, title, description: null, lifecycle: 'open', repositoryIssue: null, position: 0, ...extra,
   };
 }
 

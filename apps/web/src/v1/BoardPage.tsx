@@ -36,12 +36,15 @@ import {
   captureTask,
   editTaskContent,
   setTaskState,
+  setTaskPosition,
+  setAllEligibleTasksReady,
   archiveTask,
   addPrerequisite,
   removePrerequisite,
   isStaleRevision,
   MOVE_UNAVAILABLE_COPY,
   prerequisiteTitles,
+  queueInsertionPosition,
   useProjectBoard,
 } from './boardData';
 import type { BoardColumn } from './boardData';
@@ -276,6 +279,8 @@ function issueReference(task: BacklogTaskSnapshot, issue: ProjectIssueSummary | 
 interface BoardTaskCardProps {
   graph: BacklogGraph;
   task: BacklogTaskSnapshot;
+  earlierPosition: number | null;
+  laterPosition: number | null;
   issue: ProjectIssueSummary | undefined;
   canEdit: boolean;
   onSaved: (graph: BacklogGraph, message: string) => void;
@@ -287,7 +292,7 @@ interface BoardTaskCardProps {
  * and queue state. Users with edit access can update task content; queue and
  * prerequisite actions are available only while the task is unclaimed.
  */
-function BoardTaskCard({ graph, task, issue, canEdit, onSaved, onConflict }: BoardTaskCardProps) {
+function BoardTaskCard({ graph, task, earlierPosition, laterPosition, issue, canEdit, onSaved, onConflict }: BoardTaskCardProps) {
   const styles = useStyles();
   const { apiCall } = useAuth();
   const [editing, setEditing] = useState(false);
@@ -460,6 +465,34 @@ function BoardTaskCard({ graph, task, issue, canEdit, onSaved, onConflict }: Boa
                 {task.state === 'ready' ? 'Move to Backlog' : 'Mark Ready'}
               </Button>
             )}
+            {canChangeQueue && earlierPosition !== null && (
+              <Button
+                appearance="subtle"
+                size="small"
+                disabled={busy}
+                onClick={() => void mutate(
+                  () => setTaskPosition(apiCall, graph, task,
+                    task.state === 'ready' ? 'ready' : 'backlog', earlierPosition),
+                  'Task moved earlier.',
+                )}
+              >
+                Move earlier
+              </Button>
+            )}
+            {canChangeQueue && laterPosition !== null && (
+              <Button
+                appearance="subtle"
+                size="small"
+                disabled={busy}
+                onClick={() => void mutate(
+                  () => setTaskPosition(apiCall, graph, task,
+                    task.state === 'ready' ? 'ready' : 'backlog', laterPosition),
+                  'Task moved later.',
+                )}
+              >
+                Move later
+              </Button>
+            )}
             <Button
               appearance="subtle"
               size="small"
@@ -552,12 +585,14 @@ function BoardColumnView({ column, graph, issues, canEdit, onSaved, onConflict }
         <div className={styles.emptyColumn} data-testid={`empty-${column.id}`}>No tasks in this state.</div>
       ) : (
         <div className={styles.cards}>
-          {column.tasks.map((task) => (
+          {column.tasks.map((task, visibleIndex) => (
             <BoardTaskCard
               // The revision is part of the key so a saved or reloaded task resets its local draft.
               key={`${task.reference.taskId}:${task.revision}`}
               graph={graph}
               task={task}
+              earlierPosition={queueInsertionPosition(graph, task, column.tasks[visibleIndex - 1], 'before')}
+              laterPosition={queueInsertionPosition(graph, task, column.tasks[visibleIndex + 1], 'after')}
               issue={issues.get(task.reference.taskId)}
               canEdit={canEdit}
               onSaved={onSaved}
@@ -591,6 +626,8 @@ export function BoardPage() {
   const authorization = useAuthorizationContext();
   const { zoom, zoomIn, zoomOut, viewportRef } = useCtrlScrollZoom();
   const [notice, setNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [batchReadyBusy, setBatchReadyBusy] = useState(false);
   const captured = (location.state as BoardLocationState | null)?.capturedTaskTitle;
 
   // Capture and edit need write access. Until the access check loads, or if it
@@ -621,8 +658,26 @@ export function BoardPage() {
   const onSaved = useCallback((next: BacklogGraph, message: string) => {
     replaceGraph(next);
     setNotice(message);
+    setActionError(null);
   }, [replaceGraph]);
 
+  const sendAllToReady = useCallback(async () => {
+    if (!board.graph) return;
+    setBatchReadyBusy(true);
+    setActionError(null);
+    try {
+      onSaved(await setAllEligibleTasksReady(apiCall, board.graph), 'Eligible tasks moved to Ready.');
+    } catch (reason) {
+      setActionError(boardErrorMessage(reason, 'mutate'));
+      if (reason instanceof GatewayError && (reason.status === 409 || reason.status === 404)) reload();
+    } finally {
+      setBatchReadyBusy(false);
+    }
+  }, [apiCall, board.graph, onSaved, reload]);
+
+  const eligibleBacklogCount = board.graph?.tasks.filter((task) =>
+    task.state === 'backlog' && task.lifecycle === 'open' &&
+    !task.isArchived && !task.isAutomationInvocationPending).length ?? 0;
   const readError = board.error;
   const forbidden = readError instanceof GatewayError && readError.status === 403;
 
@@ -654,6 +709,7 @@ export function BoardPage() {
         <MessageBar intent="success"><MessageBarBody>{`Added "${captured}" to Backlog.`}</MessageBarBody></MessageBar>
       )}
       {notice && <MessageBar intent="success"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
+      {actionError && <MessageBar intent="error"><MessageBarBody>{actionError}</MessageBarBody></MessageBar>}
 
       {board.loading && !board.graph && <Loading label="Loading board" />}
 
@@ -717,7 +773,19 @@ export function BoardPage() {
               </div>
               <Text className={styles.moveNote} data-testid="board-move-unavailable">{MOVE_UNAVAILABLE_COPY}</Text>
             </div>
-            <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
+            <div className={styles.cardActions}>
+              {canWrite && eligibleBacklogCount > 0 && (
+                <Button
+                  appearance="secondary"
+                  size="small"
+                  disabled={batchReadyBusy || board.loading}
+                  onClick={() => void sendAllToReady()}
+                >
+                  Send all to Ready
+                </Button>
+              )}
+              <ZoomControls zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} />
+            </div>
           </div>
           <div className={styles.boardSurface}>
             <div className={styles.columnsViewport} ref={viewportRef}>

@@ -86,14 +86,25 @@ public sealed class BacklogEndpointMetadataTests
 
         AssertRoute(routes, "/api/projects/{projectId}/backlog/tasks/{taskId}/state",
             "PUT", typeof(SetBacklogTaskStateRequest));
+        AssertRoute(routes, "/api/projects/{projectId}/backlog/tasks/{taskId}/position",
+            "PUT", typeof(SetBacklogTaskPositionRequest));
         AssertRoute(routes, "/api/projects/{projectId}/backlog/tasks/{taskId}/archive",
             "POST", typeof(BacklogTaskRevisionRequest));
+        AssertRoute(routes, "/api/projects/{projectId}/backlog/tasks/{taskId}",
+            "DELETE", typeof(BacklogTaskRevisionRequest));
         AssertRoute(routes,
             "/api/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
             "PUT", typeof(BacklogGraphRevisionRequest));
         AssertRoute(routes,
             "/api/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
             "DELETE", typeof(BacklogGraphRevisionRequest));
+        var readyAll = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => route.RoutePattern.RawText == "/api/projects/{projectId}/backlog/ready-all");
+        Assert.Equal(typeof(BacklogGraphRevisionRequest),
+            readyAll.Metadata.GetMetadata<IAcceptsMetadata>()!.RequestType);
+        Assert.False(readyAll.Metadata.GetMetadata<IAcceptsMetadata>()!.IsOptional);
     }
 
     private static void AssertRoute(

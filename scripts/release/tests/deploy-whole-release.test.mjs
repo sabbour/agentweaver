@@ -7,7 +7,7 @@ import { parseWholeReleaseArgs, runWholeRelease } from '../deploy-whole-release.
 import { componentImageRepository } from '../pack.mjs';
 import { waitForDeploymentPods } from '../image-rollout-common.mjs';
 import {
-  resolveWholeReleaseImages, WHOLE_RELEASE_SERVICES, writeWholeReleaseReceipt,
+  checkSchemaCompatibility, resolveWholeReleaseImages, WHOLE_RELEASE_SERVICES, writeWholeReleaseReceipt,
 } from '../whole-release.mjs';
 
 const sourceSha = 'a'.repeat(40);
@@ -224,6 +224,32 @@ test('whole-release arguments require the target while smoke identity flags rema
   assert.equal(overridden.projectId, 'project');
   assert.throws(() => parseWholeReleaseArgs([...target, '--gateway-token-env', 'NOT A NAME']),
     /valid environment variable name/);
+});
+
+test('whole-release rejects a schema skipped by the target migrator', async () => {
+  const service = WHOLE_RELEASE_SERVICES.find(item => item.componentId === 'Agentweaver.Orchestrator');
+  const image = `ghcr.io/sabbour/${componentImageRepository(service.componentId)}@${digest(0)}`;
+  const sourceSha = 'e'.repeat(40);
+  const root = process.cwd();
+  const exec = (command, args) => {
+    if (command !== 'git') throw new Error(`unexpected command ${command}`);
+    if (args[0] === 'cat-file') return { status: 0, stdout: '', stderr: '' };
+    if (args[0] === 'show') {
+      const sourcePath = args[1].slice(sourceSha.length + 1);
+      return { status: 0, stdout: readFileSync(path.resolve(root, sourcePath), 'utf8'), stderr: '' };
+    }
+    throw new Error(`unexpected git ${args.join(' ')}`);
+  };
+
+  await assert.rejects(checkSchemaCompatibility({
+    services: [{ ...service, image }],
+    kubectl: () => ({
+      status: 0, stdout: JSON.stringify({ data: { 'orchestrator.schema': '34' } }), stderr: '',
+    }),
+    deps: { readImage: async () => ({ sourceSha }) },
+    root,
+    exec,
+  }), /incompatible with recorded schema 34/);
 });
 
 test('dry run compares every service and performs no cluster write', async () => {

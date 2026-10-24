@@ -194,8 +194,9 @@ public sealed class UserNotificationStorePostgresTests(CoordinationPostgresFixtu
                  task_count, created_at)
             VALUES (@promotion, @project, @run, 'root', @plan, 'workflow', '1', 1, 1, 1, @plan, @hash,
                 @tasks, @created);
-            INSERT INTO "{_schema}".backlog_tasks (project_id, task_id, title, is_archived)
-            SELECT @project, @plan || '-' || n, 'Task ' || n, n <= @archived FROM generate_series(1, @tasks) n;
+            INSERT INTO "{_schema}".backlog_tasks (project_id, task_id, title, is_archived, queue_position)
+            SELECT @project, @plan || '-' || n, 'Task ' || n, n <= @archived, n - 1
+            FROM generate_series(1, @tasks) n;
             INSERT INTO "{_schema}".backlog_task_origins
                 (project_id, task_id, promotion_id, run_id, root_session_id, work_plan_id, work_item_id)
             SELECT @project, @plan || '-' || n, @promotion, @run, 'root', @plan, 'item-' || n
@@ -222,7 +223,8 @@ public sealed class UserNotificationStorePostgresTests(CoordinationPostgresFixtu
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             INSERT INTO "{_schema}".backlog_projects (project_id) VALUES (@project) ON CONFLICT DO NOTHING;
-            INSERT INTO "{_schema}".backlog_tasks (project_id, task_id, title) VALUES (@project, @task, 'Captured');
+            INSERT INTO "{_schema}".backlog_tasks (project_id, task_id, title, queue_position)
+            VALUES (@project, @task, 'Captured', 0);
             """, connection);
         command.Parameters.AddWithValue("project", project);
         command.Parameters.AddWithValue("task", task);

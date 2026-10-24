@@ -574,10 +574,18 @@ public static class GatewayRouteCatalog
             "readProjectBacklog", "Read project backlog tasks and dependencies", forwardTenantSelector: true);
         Add("POST", GatewayOwner.Orchestrator, projectBacklog + "/tasks", "/api" + projectBacklog + "/tasks",
             "captureBacklogTask", "Capture project backlog work", body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Orchestrator, projectBacklog + "/ready-all",
+            "/api" + projectBacklog + "/ready-all",
+            "setAllProjectBacklogTasksReady", "Move eligible backlog tasks to Ready", body: true,
+            forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Orchestrator, projectBacklog + "/tasks/{taskId}/content",
             "/api" + projectBacklog + "/tasks/{taskId}/content",
             "editBacklogTaskContent", "Replace backlog task content and lifecycle",
             body: true, forwardTenantSelector: true);
+        Add("PUT", GatewayOwner.Orchestrator, projectBacklog + "/tasks/{taskId}/position",
+            "/api" + projectBacklog + "/tasks/{taskId}/position",
+            "setProjectBacklogTaskPosition", "Move a backlog task within its queue", body: true,
+            forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Orchestrator, projectBacklog + "/tasks/{taskId}/state",
             "/api" + projectBacklog + "/tasks/{taskId}/state",
             "setProjectBacklogTaskState", "Queue or return a project backlog task", body: true,
@@ -585,6 +593,10 @@ public static class GatewayRouteCatalog
         Add("POST", GatewayOwner.Orchestrator, projectBacklog + "/tasks/{taskId}/archive",
             "/api" + projectBacklog + "/tasks/{taskId}/archive",
             "archiveProjectBacklogTask", "Archive a project backlog task", body: true,
+            forwardTenantSelector: true);
+        Add("DELETE", GatewayOwner.Orchestrator, projectBacklog + "/tasks/{taskId}",
+            "/api" + projectBacklog + "/tasks/{taskId}",
+            "deleteProjectBacklogTask", "Delete an unclaimed backlog task", body: true,
             forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Orchestrator,
             projectBacklog + "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
