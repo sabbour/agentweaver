@@ -8,16 +8,18 @@
  */
 import {
   Badge, Button, DrawerBody, DrawerHeader, DrawerHeaderTitle, Field, Input, OverlayDrawer,
-  Tab, TabList, Text, Textarea, makeStyles, tokens,
+  Spinner, Tab, TabList, Text, Textarea, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Dismiss24Regular, People24Regular } from '@fluentui/react-icons';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { MetricRow } from '../components/ui/Metric';
 import { PageSection } from '../components/ui/PageSection';
 import { EmptyState } from '../components/ui/States';
 import { Tile, TileGrid } from '../components/ui/TileGrid';
+import { useAuth } from './AuthContext';
+import { GatewayError, gatewayClient } from './api';
 import { AddMemberDialog, PendingProposals, TeamMemberActions, TeamSyncPanel } from './AgentsTeamControls';
 import { castPath } from './castingData';
 import type { ProjectConfiguration } from './contracts';
@@ -32,6 +34,11 @@ const useStyles = makeStyles({
   mono: { fontFamily: tokens.fontFamilyMonospace, overflowWrap: 'anywhere' },
   list: { margin: 0, paddingLeft: tokens.spacingHorizontalL },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  history: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  historyList: { display: 'grid', gap: tokens.spacingVerticalM, margin: 0, paddingLeft: tokens.spacingHorizontalL },
+  historyEntry: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  historyHeading: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalNone },
+  historyContent: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' },
 });
 
 /** Drawer content for one agent. Saving replaces only this agent's charter entry. */
@@ -46,6 +53,7 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
   onConflict?: () => void;
 }) {
   const styles = useStyles();
+  const { apiCall } = useAuth();
   // Form fields start from the agent's saved values. The parent remounts this
   // component (by key) when another agent is opened, so values never carry over.
   const [tab, setTab] = useState<'overview' | 'charter'>('overview');
@@ -53,6 +61,16 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
   const [charter, setCharter] = useState(agent.charter);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [historyResult, setHistoryResult] = useState<{
+    requestKey: string;
+    status: 'empty' | 'loaded' | 'permission' | 'error';
+    items: Awaited<ReturnType<typeof gatewayClient.getProjectAgentHistory>>['items'];
+  }>({ requestKey: '', status: 'empty', items: [] });
+  const [historyAttempt, setHistoryAttempt] = useState(0);
+  const historyRequestKey = JSON.stringify([projectId, agent.agentId, historyAttempt]);
+  const currentHistory = historyResult.requestKey === historyRequestKey ? historyResult : null;
+  const historyStatus = currentHistory?.status ?? 'loading';
+  const historyItems = currentHistory?.items ?? [];
   // An agent is "in the team" only when it has a casting entry.
   const casting = configuration.casting.find((item) => item.agentId === agent.agentId);
   // Keep the catalog role ID in configuration while showing its optional custom label.
@@ -75,6 +93,39 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
     // Show "Charter saved." only when onSave reports success.
     setSaved(ok);
   };
+
+  useEffect(() => {
+    if (tab !== 'overview')
+      return;
+
+    let current = true;
+    // Ignore late responses after the drawer closes, changes tabs, or opens another agent.
+    void apiCall((token, tenantSelector) => gatewayClient.getProjectAgentHistory(
+      token, projectId, agent.agentId, tenantSelector))
+      .then((history) => {
+        if (!current)
+          return;
+        setHistoryResult({
+          requestKey: historyRequestKey,
+          status: history.items.length === 0 ? 'empty' : 'loaded',
+          items: history.items,
+        });
+      })
+      .catch((error: unknown) => {
+        if (!current)
+          return;
+        setHistoryResult({
+          requestKey: historyRequestKey,
+          status: error instanceof GatewayError && error.status === 403 ? 'permission' : 'error',
+          items: [],
+        });
+      });
+
+    return () => {
+      current = false;
+    };
+  }, [apiCall, agent.agentId, historyAttempt, historyRequestKey, projectId, tab]);
+
   return (
     <>
       <DrawerHeader>
@@ -83,7 +134,12 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
         </DrawerHeaderTitle>
         <Text size={200}>{roleTitle}</Text>
       </DrawerHeader>
-      <TabList selectedValue={tab} onTabSelect={(_, data) => setTab(data.value as 'overview' | 'charter')} aria-label="Agent detail sections">
+      <TabList selectedValue={tab} onTabSelect={(_, data) => {
+        const nextTab = data.value as 'overview' | 'charter';
+        setTab(nextTab);
+        if (nextTab === 'overview')
+          setHistoryAttempt((attempt) => attempt + 1);
+      }} aria-label="Agent detail sections">
         <Tab value="overview">Overview</Tab>
         <Tab value="charter">Charter</Tab>
       </TabList>
@@ -105,6 +161,35 @@ function AgentDetail({ projectId, agent, configuration, configurationRevision, r
                   <ul className={styles.list}>{skills.map((skill) => <li key={skill.skillId}>{skill.skillId}</li>)}</ul>
                 )}
               </div>
+              <section className={styles.history} aria-label="Agent history" aria-live="polite">
+                <Text weight="semibold">Recent history</Text>
+                {historyStatus === 'loading' && <Spinner size="tiny" label="Loading history…" />}
+                {historyStatus === 'empty' && <Text>No history yet.</Text>}
+                {historyStatus === 'permission' && <Text role="status">You do not have permission to view this history.</Text>}
+                {historyStatus === 'error' && (
+                  <>
+                    <Text role="alert">History could not be loaded.</Text>
+                    <Button appearance="secondary" onClick={() => setHistoryAttempt((attempt) => attempt + 1)}>Retry</Button>
+                  </>
+                )}
+                {historyStatus === 'loaded' && (
+                  <ol className={styles.historyList}>
+                    {historyItems.map((item) => (
+                      <li className={styles.historyEntry} key={`${item.recordId}:${item.updatedAt}`}>
+                        <div className={styles.historyHeading}>
+                          <Text weight="semibold">{item.title?.trim() || item.type}</Text>
+                          <Text size={200}>
+                            <time dateTime={item.updatedAt}>{new Date(item.updatedAt).toLocaleString()}</time>
+                          </Text>
+                        </div>
+                        <Text className={styles.historyContent}>
+                          {item.content.length > 1000 ? `${item.content.slice(0, 1000)}…` : item.content}
+                        </Text>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
               {casting && !readOnly && (
                 <TeamMemberActions
                   projectId={projectId}

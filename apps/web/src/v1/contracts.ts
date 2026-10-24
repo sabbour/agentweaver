@@ -1999,6 +1999,22 @@ export interface ProjectKnowledgeRecordPage {
   pageSize: number;
 }
 
+/** Recent private Memory records shown in a project agent's details drawer. */
+export interface ProjectAgentHistoryEntry {
+  recordId: string;
+  type: string;
+  title?: string | null;
+  content: string;
+  updatedAt: string;
+}
+
+/** Caller-visible history for one configured project agent. */
+export interface ProjectAgentHistoryResponse {
+  projectId: string;
+  agentId: string;
+  items: ProjectAgentHistoryEntry[];
+}
+
 /** Immutable snapshot of one knowledge-record revision and its provenance. */
 export interface KnowledgeRecordRevision {
   recordId: string;

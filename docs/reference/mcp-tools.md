@@ -90,6 +90,7 @@ There is no separate Chief of Staff notification store or bell. See
 | `listProjects` | List visible projects. |
 | `createProject` | Create a project; does not assign an Owner. |
 | `getProject` | Read project metadata. |
+| `getProjectAgentHistory` | Read an agent's bounded history using current caller authority. |
 | `updateProject` | Update metadata at an expected revision. |
 | `listProjectRoleAssignments` | Read project role assignments. |
 | `assignProjectRole` | Assign a project role through owner authorization. |

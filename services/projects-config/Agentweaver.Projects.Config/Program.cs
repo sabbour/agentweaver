@@ -88,6 +88,14 @@ if (runMigrations)
 
 var runtimeConnectionString = builder.Configuration.GetConnectionString("ProjectsConfig")
     ?? throw new InvalidOperationException("Missing required configuration 'ConnectionStrings:ProjectsConfig'.");
+// The history route depends on the Knowledge owner even though the rest of Projects & Config does not.
+var knowledgeBaseAddressValue = builder.Configuration["ProjectsConfig:Knowledge:BaseAddress"];
+if (!Uri.TryCreate(knowledgeBaseAddressValue, UriKind.Absolute, out var knowledgeBaseAddress) ||
+    knowledgeBaseAddress is null)
+    throw new InvalidOperationException(
+        "Projects & Config requires an absolute HTTPS Knowledge owner address.");
+var knowledgeOwnerAddress = Agentweaver.Identity.RuntimeOwnerHttpTransport.RequireOwnerAddress(
+    knowledgeBaseAddress);
 var runtimeIdentity = ProjectsConfigPostgresDataSource.ReadWorkloadIdentityOptions(
     builder.Configuration, "ProjectsConfig:Database:WorkloadIdentity");
 builder.Services.AddSingleton<TokenCredential>(_ => new WorkloadIdentityCredential(runtimeIdentity));
@@ -105,6 +113,14 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
 // model choices are reported as unavailable.
 builder.Services.AddSingleton(ModelBindingCapabilities.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectsConfigService>();
+// History stays in Knowledge, so use the mounted backend CA and forward only the request caller.
+builder.Services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
+{
+    client.BaseAddress = knowledgeOwnerAddress;
+    client.Timeout = TimeSpan.FromSeconds(15);
+})
+    .RedactLoggedHeaders(["Authorization", "X-Agentweaver-Tenant"])
+    .ConfigurePrimaryHttpMessageHandler(Agentweaver.Identity.RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddScoped<ProjectRoleAssignmentService>();
 builder.Services.AddScoped<MarketplaceSourceStore>();
 builder.Services.AddScoped<IProjectMarketplaceSourceStore>(
