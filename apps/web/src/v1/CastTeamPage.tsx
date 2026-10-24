@@ -94,6 +94,14 @@ function sameRoleSet(left: string[], right: string[]): boolean {
   return left.every((id) => set.has(id));
 }
 
+/** Keep uncertain server failures replayable; completed invalid output is terminal for this attempt. */
+function canRetryGeneration(reason: unknown): boolean {
+  // Network errors and transient server responses may hide an accepted request; invalid output cannot succeed on replay.
+  if (!(reason instanceof GatewayError)) return true;
+  return reason.status === 408 || reason.status === 429 ||
+    (reason.status >= 500 && reason.code !== 'casting_generation_output_invalid');
+}
+
 /** Reuses the 0.x Re-role fields while applying changes to the open proposal draft. */
 function ProposalMemberRoleDialog({ member, roles, disabled, error, onSave }: {
   member: DraftMember;
@@ -319,21 +327,21 @@ export function CastTeamPage() {
         universe: activeAttempt.universe,
       };
       // Gateway uses the run token for Orchestrator and the unbound token only for Projects & Config.
-      const generated = await apiCall((projectToken) => apiCall((runToken, tenant) =>
+      const generated = await apiCall((projectToken, projectTenant) => apiCall((runToken) =>
         activeAttempt.mode === 'formulate'
           ? gatewayClient.formulateCastingProposal(
             runToken,
             projectToken,
             projectId,
             { ...requestBase, goal: activeAttempt.goal ?? '' } satisfies FormulateCastingProposalRequest,
-            tenant,
+            projectTenant,
           )
           : gatewayClient.analyzeCastingProposal(
             runToken,
             projectToken,
             projectId,
             requestBase satisfies AnalyzeCastingProposalRequest,
-            tenant,
+            projectTenant,
           ), binding), null);
       if (generated.projectId !== projectId ||
           generated.baseConfigurationRevision !== activeAttempt.expectedConfigurationRevision ||
@@ -348,11 +356,11 @@ export function CastTeamPage() {
       setGenerationAttempt(null);
       setStep('review');
     } catch (reason) {
-      // A received HTTP failure is final for this key; network errors keep the same key for safe replay.
+      // Preserve the same request key whenever the server may have accepted work before the response was lost.
       if (reason instanceof GatewayError) {
-        setGenerationAttempt(null);
         setNeedsRunSignIn(false);
       }
+      if (!canRetryGeneration(reason)) setGenerationAttempt(null);
       throw reason;
     }
   }, readConfiguration);
@@ -695,6 +703,8 @@ export function CastTeamPage() {
                     <MessageBarBody>
                       {needsRunSignIn
                         ? `Sign in to continue this ${generationAttempt.mode === 'formulate' ? 'Formulate' : 'Analyze'} request.`
+                        : error
+                          ? 'The request did not finish here. Retry uses the same request while the service may still be working.'
                         : `${generationAttempt.mode === 'formulate' ? 'Formulate' : 'Analyze'} is preparing a proposal. The team will not change until you confirm it.`}
                     </MessageBarBody>
                     {needsRunSignIn && generationAttempt.runId && (
@@ -712,6 +722,15 @@ export function CastTeamPage() {
                         }}
                       >
                         Sign in and continue
+                      </Button>
+                    )}
+                    {error && !needsRunSignIn && !busy && (
+                      <Button
+                        appearance="primary"
+                        size="small"
+                        onClick={() => void executeGeneration(generationAttempt)}
+                      >
+                        Retry
                       </Button>
                     )}
                     {!busy && (

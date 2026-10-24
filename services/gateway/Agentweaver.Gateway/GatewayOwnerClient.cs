@@ -286,50 +286,39 @@ public sealed partial class GatewayOwnerClient(
             if (generation.State != "pending")
                 throw CastingGenerationConflict("casting_generation_not_pending");
 
+            // Replays use the same owner request; a timeout or lost response must not make it terminally failed.
+            var executionBody = JsonSerializer.SerializeToUtf8Bytes(
+                new { requestId = generation.RequestId, prompt = input.Prompt },
+                JsonOptions);
+            var executionBytes = await SendCastingOwnerJsonAsync(
+                context,
+                GatewayOwner.Orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(input.RunId)}/coordination/sessions/{Uri.EscapeDataString(input.SessionId)}/casting-generation",
+                runBearer,
+                executionBody,
+                HttpStatusCode.OK,
+                timeout.Token).ConfigureAwait(false);
+            var execution = ParseCastingGenerationExecutionResponse(executionBytes);
+            if (execution.RequestId != generation.RequestId || execution.RunId != input.RunId)
+                throw OwnerContractFailure("casting_generation_owner_contract_invalid");
+
+            var selectableRoleIds = roles
+                .Where(role => !GatewayCastingGenerationContract.IsReservedRole(role.Id))
+                .Select(role => role.Id)
+                .Where(roleId => input.Intent != "augment" || !existingRoleIds.Contains(roleId, StringComparer.Ordinal))
+                .ToImmutableHashSet(StringComparer.Ordinal);
             GatewayCastingGenerationModelOutput modelOutput;
             try
             {
-                // Orchestrator revalidates the exact run, accepted root, registration, and current authority.
-                var executionBody = JsonSerializer.SerializeToUtf8Bytes(
-                    new { requestId = generation.RequestId, prompt = input.Prompt },
-                    JsonOptions);
-                var executionBytes = await SendCastingOwnerJsonAsync(
-                    context,
-                    GatewayOwner.Orchestrator,
-                    HttpMethod.Post,
-                    $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(input.RunId)}/coordination/sessions/{Uri.EscapeDataString(input.SessionId)}/casting-generation",
-                    runBearer,
-                    executionBody,
-                    HttpStatusCode.OK,
-                    timeout.Token).ConfigureAwait(false);
-                var execution = ParseCastingGenerationExecutionResponse(executionBytes);
-                if (execution.RequestId != generation.RequestId || execution.RunId != input.RunId)
-                    throw OwnerContractFailure("casting_generation_owner_contract_invalid");
-
-                var selectableRoleIds = roles
-                    .Where(role => !GatewayCastingGenerationContract.IsReservedRole(role.Id))
-                    .Select(role => role.Id)
-                    .Where(roleId => input.Intent != "augment" || !existingRoleIds.Contains(roleId, StringComparer.Ordinal))
-                    .ToImmutableHashSet(StringComparer.Ordinal);
                 modelOutput = GatewayCastingGenerationContract.ParseModelOutput(
                     execution.Output, input.TeamSize, selectableRoleIds);
             }
             catch (GatewayOwnerFailureException)
             {
+                // A received but invalid model result is definitive; transport failures remain replayable.
                 await MarkCastingGenerationFailedAsync(
-                    context, projectBearer, projectId, generation, cancellationToken).ConfigureAwait(false);
-                throw;
-            }
-            catch (HttpRequestException)
-            {
-                await MarkCastingGenerationFailedAsync(
-                    context, projectBearer, projectId, generation, cancellationToken).ConfigureAwait(false);
-                throw;
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                await MarkCastingGenerationFailedAsync(
-                    context, projectBearer, projectId, generation, cancellationToken).ConfigureAwait(false);
+                    context, projectBearer, projectId, generation, timeout.Token).ConfigureAwait(false);
                 throw;
             }
 
@@ -712,37 +701,44 @@ public sealed partial class GatewayOwnerClient(
         if (!HasRequiredAllowedPropertyNames(document.RootElement, required, allowed))
             throw CastingGenerationRequestFailure("casting_generation_request_invalid");
 
-        if (formulate)
+        try
         {
-            var request = document.RootElement.Deserialize<FormulateCastingProposalRequest>(
+            if (formulate)
+            {
+                var request = document.RootElement.Deserialize<FormulateCastingProposalRequest>(
+                    GatewayCastingGenerationContract.StrictJsonOptions)
+                    ?? throw CastingGenerationRequestFailure("casting_generation_request_invalid");
+                return new(
+                    request.ExpectedConfigurationRevision,
+                    request.RunId,
+                    request.SessionId,
+                    request.IdempotencyKey,
+                    request.Prompt,
+                    request.Goal,
+                    request.TeamSize,
+                    request.Intent,
+                    request.PreferredRoleIds,
+                    request.Universe);
+            }
+            var analyzeRequest = document.RootElement.Deserialize<AnalyzeCastingProposalRequest>(
                 GatewayCastingGenerationContract.StrictJsonOptions)
                 ?? throw CastingGenerationRequestFailure("casting_generation_request_invalid");
             return new(
-                request.ExpectedConfigurationRevision,
-                request.RunId,
-                request.SessionId,
-                request.IdempotencyKey,
-                request.Prompt,
-                request.Goal,
-                request.TeamSize,
-                request.Intent,
-                request.PreferredRoleIds,
-                request.Universe);
+                analyzeRequest.ExpectedConfigurationRevision,
+                analyzeRequest.RunId,
+                analyzeRequest.SessionId,
+                analyzeRequest.IdempotencyKey,
+                analyzeRequest.Prompt,
+                null,
+                analyzeRequest.TeamSize,
+                analyzeRequest.Intent,
+                analyzeRequest.PreferredRoleIds,
+                analyzeRequest.Universe);
         }
-        var analyzeRequest = document.RootElement.Deserialize<AnalyzeCastingProposalRequest>(
-            GatewayCastingGenerationContract.StrictJsonOptions)
-            ?? throw CastingGenerationRequestFailure("casting_generation_request_invalid");
-        return new(
-            analyzeRequest.ExpectedConfigurationRevision,
-            analyzeRequest.RunId,
-            analyzeRequest.SessionId,
-            analyzeRequest.IdempotencyKey,
-            analyzeRequest.Prompt,
-            null,
-            analyzeRequest.TeamSize,
-            analyzeRequest.Intent,
-            analyzeRequest.PreferredRoleIds,
-            analyzeRequest.Universe);
+        catch (JsonException)
+        {
+            throw CastingGenerationRequestFailure("casting_generation_request_invalid");
+        }
         }
     }
 

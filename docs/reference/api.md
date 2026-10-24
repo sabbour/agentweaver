@@ -499,6 +499,9 @@ the run bearer is sent to Orchestrator. Confirm or reject the returned proposal
 with its current `expectedDraftRevision`; confirmation also rechecks the base
 configuration revision.
 
+These operations are browser-only and are excluded from MCP discovery. The
+separate project-writer bearer is never exposed as an MCP tool argument.
+
 Create requests carry `expectedConfigurationRevision` and either `draft`,
 `templateId`, or `roleIds`. Scenario and manual requests may also include
 `universe`, one of the names returned by the project-scoped universe route;

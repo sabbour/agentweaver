@@ -168,6 +168,8 @@ internal static class GatewayCastingGenerationContract
     {
         MaxDepth = 16,
         PropertyNameCaseInsensitive = false,
+        // OpenAPI numeric fields accept JSON numbers, not string coercions such as "4".
+        NumberHandling = JsonNumberHandling.Strict,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 

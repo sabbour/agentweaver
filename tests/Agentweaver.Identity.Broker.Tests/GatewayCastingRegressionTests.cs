@@ -175,6 +175,8 @@ public sealed class GatewayCastingRegressionTests
             Assert.Equal(operationId, operation.GetProperty("operationId").GetString());
             Assert.Equal("Orchestrator", operation.GetProperty("x-agentweaver-owner").GetString());
             Assert.Equal(route.OwnerPath, operation.GetProperty("x-agentweaver-owner-path").GetString());
+            Assert.True(route.ExcludeFromMcp);
+            Assert.True(operation.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
             Assert.Equal($"#/components/schemas/{requestSchema}",
                 SchemaReference(operation.GetProperty("requestBody")));
             Assert.Equal("#/components/schemas/ProjectCastingProposal",
@@ -237,6 +239,8 @@ public sealed class GatewayCastingRegressionTests
             ("formulate", """{"expectedConfigurationRevision":1,"runId":"run-1","sessionId":"session-1","idempotencyKey":"key-1","prompt":"prompt","teamSize":4,"intent":"recast","preferredRoleIds":[]}"""),
             ("formulate", """{"expectedConfigurationRevision":1,"runId":"run-1","sessionId":"session-1","idempotencyKey":"key-1","prompt":"prompt","goal":"goal","teamSize":4,"intent":"recast","preferredRoleIds":[],"unexpected":true}"""),
             ("analyze", """{"expectedConfigurationRevision":1,"runId":"run-1","sessionId":"session-1","idempotencyKey":"key-1","prompt":"prompt","goal":"goal","teamSize":4,"intent":"recast","preferredRoleIds":[]}"""),
+            ("formulate", """{"expectedConfigurationRevision":1,"runId":"run-1","sessionId":"session-1","idempotencyKey":"key-1","prompt":"prompt","goal":"goal","teamSize":"4","intent":"recast","preferredRoleIds":[]}"""),
+            ("analyze", """{"expectedConfigurationRevision":1,"runId":"run-1","sessionId":"session-1","idempotencyKey":"key-1","prompt":"prompt","teamSize":4,"intent":"recast","preferredRoleIds":null}"""),
         };
         foreach (var (mode, body) in invalidRequests)
         {
@@ -433,6 +437,7 @@ public sealed class GatewayCastingRegressionTests
                 return JsonResponse(HttpStatusCode.OK, proposalResponse);
             throw new InvalidOperationException($"Unexpected Projects request {request.Method} {path}.");
         });
+        var firstExecution = true;
         await using var gateway = await GatewayResourceServer.StartAsync(
             signingKey,
             () => projectHandler,
@@ -449,6 +454,12 @@ public sealed class GatewayCastingRegressionTests
                 using var execution = JsonDocument.Parse(body!);
                 Assert.Equal(requestId, execution.RootElement.GetProperty("requestId").GetGuid());
                 Assert.Equal(prompt, execution.RootElement.GetProperty("prompt").GetString());
+                if (firstExecution)
+                {
+                    // Simulate a lost response after Orchestrator accepted the exact request.
+                    firstExecution = false;
+                    throw new TaskCanceledException("Simulated lost owner response.");
+                }
                 return JsonResponse(HttpStatusCode.OK, JsonSerializer.Serialize(new
                 {
                     requestId,
@@ -457,28 +468,44 @@ public sealed class GatewayCastingRegressionTests
                 }));
             });
 
-        using var publicRequest = new HttpRequestMessage(
-            HttpMethod.Post, "/api/v1/projects/project-1/casting/proposals/formulate")
+        var publicRequestBody = JsonSerializer.Serialize(new
         {
-            Content = new StringContent(JsonSerializer.Serialize(new
-            {
-                expectedConfigurationRevision = 1,
-                runId,
-                sessionId,
-                idempotencyKey = "key-1",
-                prompt,
-                goal = "Ship a demo.",
-                teamSize = 2,
-                intent = "recast",
-                preferredRoleIds = Array.Empty<string>(),
-                universe = (string?)null,
-            }), Encoding.UTF8, "application/json"),
+            expectedConfigurationRevision = 1,
+            runId,
+            sessionId,
+            idempotencyKey = "key-1",
+            prompt,
+            goal = "Ship a demo.",
+            teamSize = 2,
+            intent = "recast",
+            preferredRoleIds = Array.Empty<string>(),
+            universe = (string?)null,
+        });
+        // Each retry needs a fresh HttpRequestMessage but the same serialized request and idempotency key.
+        HttpRequestMessage CreatePublicRequest() => new(
+            HttpMethod.Post,
+            "/api/v1/projects/project-1/casting/proposals/formulate")
+        {
+            Content = new StringContent(publicRequestBody, Encoding.UTF8, "application/json"),
         };
-        publicRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", runToken);
-        publicRequest.Headers.Add("X-Agentweaver-Project-Authorization", "Bearer " + projectToken);
-        publicRequest.Headers.Add("X-Agentweaver-Tenant", "tenant-1");
+        void AddCastingHeaders(HttpRequestMessage request)
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", runToken);
+            request.Headers.Add("X-Agentweaver-Project-Authorization", "Bearer " + projectToken);
+            request.Headers.Add("X-Agentweaver-Tenant", "tenant-1");
+        }
 
-        using var publicResponse = await gateway.Client.SendAsync(publicRequest);
+        using var publicRequest = CreatePublicRequest();
+        AddCastingHeaders(publicRequest);
+        using var timeoutResponse = await gateway.Client.SendAsync(publicRequest);
+        Assert.Equal(HttpStatusCode.GatewayTimeout, timeoutResponse.StatusCode);
+        using var timeoutProblem = JsonDocument.Parse(await timeoutResponse.Content.ReadAsStringAsync());
+        Assert.Equal("owner_timeout", timeoutProblem.RootElement.GetProperty("code").GetString());
+        Assert.DoesNotContain(projectCalls, call => call.Path.EndsWith("/fail", StringComparison.Ordinal));
+
+        using var replayRequest = CreatePublicRequest();
+        AddCastingHeaders(replayRequest);
+        using var publicResponse = await gateway.Client.SendAsync(replayRequest);
         Assert.Equal(HttpStatusCode.OK, publicResponse.StatusCode);
         Assert.True(publicResponse.Headers.CacheControl?.NoStore);
         using var result = JsonDocument.Parse(await publicResponse.Content.ReadAsStringAsync());
@@ -486,12 +513,12 @@ public sealed class GatewayCastingRegressionTests
         Assert.Equal("pending", result.RootElement.GetProperty("state").GetString());
         Assert.Equal("formulate", result.RootElement.GetProperty("generation").GetProperty("mode").GetString());
         Assert.Equal("completed", result.RootElement.GetProperty("generation").GetProperty("state").GetString());
-        Assert.Single(orchestratorCalls);
+        Assert.Equal(2, orchestratorCalls.Count);
         Assert.All(projectCalls, call => Assert.Equal("tenant-1", call.Tenant));
-        Assert.Single(projectCalls, call =>
-            call.Path == "/api/authorization/context" && call.Bearer == "Bearer " + projectToken);
-        Assert.Single(projectCalls, call =>
-            call.Path == "/api/authorization/context" && call.Bearer == "Bearer " + runToken);
+        Assert.Equal(2, projectCalls.Count(call =>
+            call.Path == "/api/authorization/context" && call.Bearer == "Bearer " + projectToken));
+        Assert.Equal(2, projectCalls.Count(call =>
+            call.Path == "/api/authorization/context" && call.Bearer == "Bearer " + runToken));
         Assert.All(projectCalls.Where(call => call.Path != "/api/authorization/context"),
             call => Assert.Equal("Bearer " + projectToken, call.Bearer));
     }

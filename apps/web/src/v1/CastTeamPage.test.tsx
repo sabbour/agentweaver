@@ -24,8 +24,8 @@ const api = vi.hoisted(() => ({
 }));
 // One stable apiCall, like the real provider, so effects that depend on it run once.
 const auth = vi.hoisted(() => ({
-  apiCall: (operation: (token: string, tenant: string) => unknown, binding?: { projectId: string; runId: string } | null) =>
-    operation(binding ? 'run-token' : 'token', 'tenant-1'),
+  apiCall: (operation: (token: string, tenant: string | null) => unknown, binding?: { projectId: string; runId: string } | null) =>
+    operation(binding ? 'run-token' : 'token', binding ? null : 'tenant-1'),
   ensureSession: vi.fn(async () => true),
   authorize: vi.fn(async () => undefined),
 }));
@@ -149,6 +149,7 @@ describe('CastTeamPage', () => {
       expect.any(String),
       'tenant-1',
     );
+    expect(api.formulateCastingProposal.mock.calls[0][4]).toBe('tenant-1');
     expect(auth.ensureSession).toHaveBeenCalledWith({ projectId: 'p1', runId: 'run-1' }, false);
     expect(await screen.findByText(/Formulate proposal · ready to review/)).toBeTruthy();
     expect(api.transitionCastingProposal).not.toHaveBeenCalled();
@@ -198,6 +199,44 @@ describe('CastTeamPage', () => {
     await waitFor(() => expect(api.formulateCastingProposal).toHaveBeenCalledTimes(1));
     expect(auth.authorize).toHaveBeenCalledWith({ projectId: 'p1', runId: 'run-1' });
     expect(api.createProjectRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a request after a lost response with the same run and idempotency keys', async () => {
+    api.formulateCastingProposal.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    renderPage();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Project goal' }), {
+      target: { value: 'Ship a small SaaS MVP.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Formulate' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await screen.findByText(/Formulate proposal · ready to review/);
+
+    expect(api.createProjectRun).toHaveBeenCalledTimes(1);
+    expect(api.formulateCastingProposal).toHaveBeenCalledTimes(2);
+    const first = api.formulateCastingProposal.mock.calls[0];
+    const retry = api.formulateCastingProposal.mock.calls[1];
+    expect(retry.slice(0, 3)).toEqual(first.slice(0, 3));
+    expect(retry[3]).toEqual(first[3]);
+    expect(retry[4]).toBe(first[4]);
+    expect(retry[3].idempotencyKey).toBe(first[3].idempotencyKey);
+    expect(retry[3].runId).toBe(first[3].runId);
+  });
+
+  it('keeps a Gateway timeout attempt available for exact retry', async () => {
+    api.formulateCastingProposal.mockRejectedValueOnce(
+      new GatewayError(504, { code: 'owner_timeout' }, 'The request timed out.'),
+    );
+    renderPage();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Project goal' }), {
+      target: { value: 'Ship a small SaaS MVP.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Formulate' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await screen.findByText(/Formulate proposal · ready to review/);
+
+    expect(api.formulateCastingProposal).toHaveBeenCalledTimes(2);
+    expect(api.formulateCastingProposal.mock.calls[1][3].idempotencyKey)
+      .toBe(api.formulateCastingProposal.mock.calls[0][3].idempotencyKey);
   });
 
   it('casts from a template, reviews, and confirms', async () => {
