@@ -1,0 +1,400 @@
+{
+  "schemaVersion": 2,
+  "sourceSha": "7417f034da721fcb542292f817f89513a6cf31d3",
+  "planSourceSha": "058de67cc33e2e71c0e6a41dd9046ff62b192563",
+  "preparationBaseSha": "1a8ce0869f3d52a8e0fd477f9bf08a0ae6349779",
+  "originalReceiptSha256": "3c23702354a2ab5a7f9ec194477d98af99a48aa03bb2af5b1515bf6940beddd7",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "3526029630a50a78e04ba5b3a318b128b16d68ebd42d12c1877a4db0110d6689",
+  "appliedAt": "2026-10-24T07:43:02.561Z",
+  "components": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "fromVersion": "1.4.0",
+      "toVersion": "1.5.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.AgentHost",
+      "fromVersion": "1.0.3",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.AgentRuntime",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Environment",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.3.2",
+      "toVersion": "1.4.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.5.0",
+      "toVersion": "1.6.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity",
+      "fromVersion": "1.4.0",
+      "toVersion": "1.5.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "fromVersion": "1.2.1",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Knowledge",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Mcp",
+      "fromVersion": "1.0.4",
+      "toVersion": "1.0.5",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "1.5.0",
+      "toVersion": "1.6.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Orchestrator.Core",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.3.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "fromVersion": "1.2.0",
+      "toVersion": "1.2.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.5.0",
+      "toVersion": "1.6.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.SourceControl",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.4.0",
+      "toVersion": "1.5.0",
+      "bump": "minor"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/agent-history-abstractions.md",
+      "archivedPath": ".changeset/archive/agent-history-abstractions.md",
+      "sha256": "1471c93f90c1b5391b09fb5fd76098bc7ee10004a0f7a06330fd61276b104041"
+    },
+    {
+      "sourcePath": ".changeset/agent-history-gateway.md",
+      "archivedPath": ".changeset/archive/agent-history-gateway.md",
+      "sha256": "4f3d6c3bdf6e95572bd620b964ab0e1765c7bfca86602e680e1c8072b6346137"
+    },
+    {
+      "sourcePath": ".changeset/agent-history-knowledge.md",
+      "archivedPath": ".changeset/archive/agent-history-knowledge.md",
+      "sha256": "e3d41bb2bbdb90b2c4766ef9b4195509fa5371b22888cb592dc6e089d7c0ad01"
+    },
+    {
+      "sourcePath": ".changeset/agent-history-projects-config.md",
+      "archivedPath": ".changeset/archive/agent-history-projects-config.md",
+      "sha256": "834a73f3985a8fb126365505b05e934046c0812077d19918dc133604b5b1b49a"
+    },
+    {
+      "sourcePath": ".changeset/agent-history-web.md",
+      "archivedPath": ".changeset/archive/agent-history-web.md",
+      "sha256": "9c7e34fc6eca67ee5a2f979b02339293bf0799fc99d81c0451eb4105ecddcc28"
+    },
+    {
+      "sourcePath": ".changeset/agenthost-hosted-catalog-identity.md",
+      "archivedPath": ".changeset/archive/agenthost-hosted-catalog-identity.md",
+      "sha256": "25be43949257b6ce755bf89958e75207af56869a157e2f18db45da32ec4b0bdf"
+    },
+    {
+      "sourcePath": ".changeset/agenthost-hosted-catalog-mtls.md",
+      "archivedPath": ".changeset/archive/agenthost-hosted-catalog-mtls.md",
+      "sha256": "82a46d8f56709d1461b37a8d77042f003ba6582a3fc7c7b6c310a82fef89f46a"
+    },
+    {
+      "sourcePath": ".changeset/agentsuite-project-team-exchange.md",
+      "archivedPath": ".changeset/archive/agentsuite-project-team-exchange.md",
+      "sha256": "4b7788d0d1f92b120a90747b5a1db276bfe156995a0bd3e8a795fbb4a1a788e8"
+    },
+    {
+      "sourcePath": ".changeset/backlog-graph-response-snapshot-20261023.md",
+      "archivedPath": ".changeset/archive/backlog-graph-response-snapshot-20261023.md",
+      "sha256": "e9ccbefec44d75ba0050544a8fcff22fb75d94051a7c4dee9944bb9e6696b522"
+    },
+    {
+      "sourcePath": ".changeset/backlog-project-mutations-gateway.md",
+      "archivedPath": ".changeset/archive/backlog-project-mutations-gateway.md",
+      "sha256": "1aee2bf58e800da3e871d12aceb0ef010bf05d506082fa7e42873a93ae315e5d"
+    },
+    {
+      "sourcePath": ".changeset/backlog-project-mutations-orchestrator.md",
+      "archivedPath": ".changeset/archive/backlog-project-mutations-orchestrator.md",
+      "sha256": "b310a7bab078136e2f87b1833fdeb35fb68214849bc1f239f2c60cdb099e9cb4"
+    },
+    {
+      "sourcePath": ".changeset/backlog-project-mutations-web.md",
+      "archivedPath": ".changeset/archive/backlog-project-mutations-web.md",
+      "sha256": "3d7d8a46e4075aeb5e3c3380fa4f93ee132c5d58cc976ddfe43321d2c0e21aef"
+    },
+    {
+      "sourcePath": ".changeset/backlog-queue-order-core.md",
+      "archivedPath": ".changeset/archive/backlog-queue-order-core.md",
+      "sha256": "5cd466359766f5d53422c9be20f429231738389db16457e2a41b9314f6d2e507"
+    },
+    {
+      "sourcePath": ".changeset/backlog-queue-order-gateway.md",
+      "archivedPath": ".changeset/archive/backlog-queue-order-gateway.md",
+      "sha256": "7628c879b1da64a329159613eab877c9a677e955bc8de7b5516bf7978a9ca443"
+    },
+    {
+      "sourcePath": ".changeset/backlog-queue-order-orchestrator.md",
+      "archivedPath": ".changeset/archive/backlog-queue-order-orchestrator.md",
+      "sha256": "17b94ad8d81431219fd52b994525c0cd5e135a54ed70f7b20502d1baf6561686"
+    },
+    {
+      "sourcePath": ".changeset/backlog-queue-order-web.md",
+      "archivedPath": ".changeset/archive/backlog-queue-order-web.md",
+      "sha256": "63287b4f3c433f0ccb7c7f50d405b3c656f2e63e34c14e113b91f1caa0efbde1"
+    },
+    {
+      "sourcePath": ".changeset/backlog-schema-migration-lock.md",
+      "archivedPath": ".changeset/archive/backlog-schema-migration-lock.md",
+      "sha256": "49f4dc1c2ebd592747ad4996706eda74f5ca0b9decc7e1a6242b147dece13a48"
+    },
+    {
+      "sourcePath": ".changeset/casting-generation-agent-runtime-retry.md",
+      "archivedPath": ".changeset/archive/casting-generation-agent-runtime-retry.md",
+      "sha256": "a7e460e66aceae1f07095433fb9091e0185aa685ad861b9df09e2f64e1c434bc"
+    },
+    {
+      "sourcePath": ".changeset/casting-generation-orchestrator-20261024.md",
+      "archivedPath": ".changeset/archive/casting-generation-orchestrator-20261024.md",
+      "sha256": "4f8eb672bdb0ece7d866b6be09e082082b2d91f127e0f943b3f458bee4716e3f"
+    },
+    {
+      "sourcePath": ".changeset/casting-generation-requests-20261023.md",
+      "archivedPath": ".changeset/archive/casting-generation-requests-20261023.md",
+      "sha256": "8eb9315e0ea6a68a900b36d8140f1775e3bbb626cf9174830c9f583f2698ed3d"
+    },
+    {
+      "sourcePath": ".changeset/coordinator-root-action-contract.md",
+      "archivedPath": ".changeset/archive/coordinator-root-action-contract.md",
+      "sha256": "4c8cf1a748732ef7cfcd964a52f151e41791ba6811e3f288e2c4b98a6528877d"
+    },
+    {
+      "sourcePath": ".changeset/coordinator-root-action-owner.md",
+      "archivedPath": ".changeset/archive/coordinator-root-action-owner.md",
+      "sha256": "5309dc495041f3d162a6338bc62c57af9ff65f524a939d93839994e466fec6b9"
+    },
+    {
+      "sourcePath": ".changeset/coordinator-root-hard-spend-guard.md",
+      "archivedPath": ".changeset/archive/coordinator-root-hard-spend-guard.md",
+      "sha256": "cba6bc2024bed27ff8a23e330171d57dd3eabda9f883e96dcc95be7b7010892a"
+    },
+    {
+      "sourcePath": ".changeset/coordinator-root-model-admission.md",
+      "archivedPath": ".changeset/archive/coordinator-root-model-admission.md",
+      "sha256": "964c31dc0d1c10e67a4246ffc7caa5e59f203b17efc49ca625f7a265b9ae58a0"
+    },
+    {
+      "sourcePath": ".changeset/coordinator-root-runtime-admission.md",
+      "archivedPath": ".changeset/archive/coordinator-root-runtime-admission.md",
+      "sha256": "eebbd1be51c1f294a96c548783ef24b0e5a15e6c5116fb058295c5aa3935440d"
+    },
+    {
+      "sourcePath": ".changeset/core-schema-gap-readiness.md",
+      "archivedPath": ".changeset/archive/core-schema-gap-readiness.md",
+      "sha256": "cd7085b825652762aa83bcb63d33ed47b6f27eff258fa71921985a89a69047ec"
+    },
+    {
+      "sourcePath": ".changeset/dashboard-overview-refresh-and-panels.md",
+      "archivedPath": ".changeset/archive/dashboard-overview-refresh-and-panels.md",
+      "sha256": "65a1a01eb9875bf3ac1320acd286991f28201488f53491893ced9077433ec390"
+    },
+    {
+      "sourcePath": ".changeset/entra-broker-onboarding-prerequisites.md",
+      "archivedPath": ".changeset/archive/entra-broker-onboarding-prerequisites.md",
+      "sha256": "997367aa51aaf0242269a1e7066db894cd32df7c24f72bb9560dfe6acd5b099a"
+    },
+    {
+      "sourcePath": ".changeset/hosted-catalog-client-chain.md",
+      "archivedPath": ".changeset/archive/hosted-catalog-client-chain.md",
+      "sha256": "dda543c84e5c8fa19b13d9dc46ec3c84a9b80afc8a8c05a48f7cce3310dd5db6"
+    },
+    {
+      "sourcePath": ".changeset/hosted-catalog-kestrel-composition.md",
+      "archivedPath": ".changeset/archive/hosted-catalog-kestrel-composition.md",
+      "sha256": "32c03223a18f2160a9c66848575f9d98b2f281d1ff49597aa7f63e09856073c4"
+    },
+    {
+      "sourcePath": ".changeset/hosted-catalog-network-path.md",
+      "archivedPath": ".changeset/archive/hosted-catalog-network-path.md",
+      "sha256": "aeb10f52f5453891d8369d770609ac1d0885a73432e5fc5a126b0f54600490df"
+    },
+    {
+      "sourcePath": ".changeset/hosted-catalog-platform-default-ui.md",
+      "archivedPath": ".changeset/archive/hosted-catalog-platform-default-ui.md",
+      "sha256": "18a3ceade5a1c88ddb297c4320a03c9d18151b5bf23c3e2b2e292e1657640a9d"
+    },
+    {
+      "sourcePath": ".changeset/hosted-catalog-publication-client.md",
+      "archivedPath": ".changeset/archive/hosted-catalog-publication-client.md",
+      "sha256": "3d4f010f0dfb61f577cbc3db5075bc4948b51f75238802169daaf1c16983f6d1"
+    },
+    {
+      "sourcePath": ".changeset/hosted-catalog-publication-tls.md",
+      "archivedPath": ".changeset/archive/hosted-catalog-publication-tls.md",
+      "sha256": "48c91cf5f5a49b010d8f878f71caca57689710d60be5fef2c2e38ef0ec0c6cce"
+    },
+    {
+      "sourcePath": ".changeset/hosted-model-reasoning-catalog.md",
+      "archivedPath": ".changeset/archive/hosted-model-reasoning-catalog.md",
+      "sha256": "e5461c59fb78eaba85cd6080bd4822f11724a235f8bb8785579bd367c32f4cb3"
+    },
+    {
+      "sourcePath": ".changeset/knowledge-project-discovery-abstractions.md",
+      "archivedPath": ".changeset/archive/knowledge-project-discovery-abstractions.md",
+      "sha256": "5c71d7cc361fd6ccf243693e7afaa2ca8de055430c0fde14a96dbb18be7979e8"
+    },
+    {
+      "sourcePath": ".changeset/knowledge-project-discovery-gateway.md",
+      "archivedPath": ".changeset/archive/knowledge-project-discovery-gateway.md",
+      "sha256": "7b1f0d767d002e9a0064e59266b480eaa06ffac056f8ff19b6a0f5f459a17def"
+    },
+    {
+      "sourcePath": ".changeset/knowledge-project-discovery-service.md",
+      "archivedPath": ".changeset/archive/knowledge-project-discovery-service.md",
+      "sha256": "e00eb9e1a0cecc7f45c91e93e0510fa746ef384b7ab327c3641ad222985c4940"
+    },
+    {
+      "sourcePath": ".changeset/knowledge-project-discovery-web.md",
+      "archivedPath": ".changeset/archive/knowledge-project-discovery-web.md",
+      "sha256": "757d8bc5b85fadfa28bf4cf6fb6b30141233bbfc485ed6b33fbf18b4d99ad7e9"
+    },
+    {
+      "sourcePath": ".changeset/maf-hard-credit-pricing-gate.md",
+      "archivedPath": ".changeset/archive/maf-hard-credit-pricing-gate.md",
+      "sha256": "d5d423f816bc9cb8773faf364fe4a09ad1e2ecdece34647992c7dda256fe0688"
+    },
+    {
+      "sourcePath": ".changeset/overview-dashboard-v1-parity.md",
+      "archivedPath": ".changeset/archive/overview-dashboard-v1-parity.md",
+      "sha256": "2608eb6acf4ef377d3666b8672040d71fd16ec9000c475c5845c00e27aa68076"
+    },
+    {
+      "sourcePath": ".changeset/p1-canonical-plan-hash.md",
+      "archivedPath": ".changeset/archive/p1-canonical-plan-hash.md",
+      "sha256": "baf82eed4543ab7755c0952f370100c7502613b45bb7869e8b0f2cf9bed5fd7f"
+    },
+    {
+      "sourcePath": ".changeset/p1-environment-migration-job.md",
+      "archivedPath": ".changeset/archive/p1-environment-migration-job.md",
+      "sha256": "6fec0420402f48b42bc843bdc2ae4aced66dd66f2c982d02e62c25c717e8f544"
+    },
+    {
+      "sourcePath": ".changeset/p1-plan-root-admissions.md",
+      "archivedPath": ".changeset/archive/p1-plan-root-admissions.md",
+      "sha256": "0ce8eb8037b141dd94e5bdc349989e0875830997ed874f6ef7274b5ff3151ba1"
+    },
+    {
+      "sourcePath": ".changeset/project-history-events-access.md",
+      "archivedPath": ".changeset/archive/project-history-events-access.md",
+      "sha256": "7a045392e7d7f260e090efab7d55814d419a045908ca744734cf829e943f09ee"
+    },
+    {
+      "sourcePath": ".changeset/project-history-gateway-routes.md",
+      "archivedPath": ".changeset/archive/project-history-gateway-routes.md",
+      "sha256": "cd7fbcacd55d0b8fb69efc3fef9f4b3a8dfcfe471ba920419c602d97ff172b56"
+    },
+    {
+      "sourcePath": ".changeset/project-history-knowledge-dedupe.md",
+      "archivedPath": ".changeset/archive/project-history-knowledge-dedupe.md",
+      "sha256": "889c98956cb9c46850b1c97a79266cc160b2af95615205129b46e3bfd3fde5d1"
+    },
+    {
+      "sourcePath": ".changeset/project-history-orchestrator-access.md",
+      "archivedPath": ".changeset/archive/project-history-orchestrator-access.md",
+      "sha256": "10620dfff74331a06cd8c1a8ebb2f2c57cb8d66fd858aac70d73664d897ab5d0"
+    },
+    {
+      "sourcePath": ".changeset/project-history-tenant-scope.md",
+      "archivedPath": ".changeset/archive/project-history-tenant-scope.md",
+      "sha256": "f7ad12830630047bc172683fb0e227865d42f5dc3105e288770c3452ca0b99a3"
+    },
+    {
+      "sourcePath": ".changeset/project-history-web-navigation.md",
+      "archivedPath": ".changeset/archive/project-history-web-navigation.md",
+      "sha256": "1d28d124b618d0d42d114fb72d8caa3893314f0333b4829e034541a4dbd75006"
+    },
+    {
+      "sourcePath": ".changeset/project-team-sync-repository-content.md",
+      "archivedPath": ".changeset/archive/project-team-sync-repository-content.md",
+      "sha256": "883cdb8c9e3788b6b8f3665c4bb70559be83ca58d3926f3aad01149482cbf7b3"
+    },
+    {
+      "sourcePath": ".changeset/proposal-role-title-editing.md",
+      "archivedPath": ".changeset/archive/proposal-role-title-editing.md",
+      "sha256": "2fc9f47a4c07edc465c2829f205763c2acc972d20bc9b7898587b7465fc46e79"
+    },
+    {
+      "sourcePath": ".changeset/remote-mcp-adapter-pin.md",
+      "archivedPath": ".changeset/archive/remote-mcp-adapter-pin.md",
+      "sha256": "5466a1fd98e6b702a784d8536236d1a4a8365bd79df388cff81179d6ef348e60"
+    },
+    {
+      "sourcePath": ".changeset/remote-mcp-trusted-l7-deferral.md",
+      "archivedPath": ".changeset/archive/remote-mcp-trusted-l7-deferral.md",
+      "sha256": "c73269f6b4041ea00fc147293958a6ce83b4e2c0c81b4928d98a6f432c3bc226"
+    },
+    {
+      "sourcePath": ".changeset/reviewed-ai-casting-proposals.md",
+      "archivedPath": ".changeset/archive/reviewed-ai-casting-proposals.md",
+      "sha256": "1d06bba621aa0e1df8e04f29296f774e0cf27331551cfa52ad4583c4d9282e1f"
+    },
+    {
+      "sourcePath": ".changeset/runtime-a2a-default-wire-compat.md",
+      "archivedPath": ".changeset/archive/runtime-a2a-default-wire-compat.md",
+      "sha256": "0e5a15f659de039c119f1724b2c8ec560617feae9763673d78f2d8201287ed44"
+    },
+    {
+      "sourcePath": ".changeset/session-object-inventory-retention.md",
+      "archivedPath": ".changeset/archive/session-object-inventory-retention.md",
+      "sha256": "4dbd90b1be1f2a3a8df46f133710c0dc25c766d4a7b732b6315763c122adb491"
+    },
+    {
+      "sourcePath": ".changeset/team-sync-preview-and-gateway.md",
+      "archivedPath": ".changeset/archive/team-sync-preview-and-gateway.md",
+      "sha256": "58e474a4d5919cf0ec5f62450b7ac83d4735b71aa5f4b9b7ea26ad1d55050ba3"
+    }
+  ]
+}
