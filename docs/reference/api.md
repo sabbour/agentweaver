@@ -375,6 +375,7 @@ Owner.
 | Status | Problem code | Meaning |
 | --- | --- | --- |
 | `400` | `invalid_request`, `invalid_project_role`, `invalid_principal_id`, `invalid_expected_revision` | The query, role, principal ID, or revision isn't valid. |
+| `400` | `email_principal_not_supported` | Email is profile data, not a member ID. Sign in and use the member's Broker subject ID. |
 | `403` | `forbidden` | The token or current role doesn't allow the operation. |
 | `404` | `not_found`, `principal_not_found` | The project, assignment, or tenant member doesn't exist for the caller. |
 | `409` | `role_assignment_exists`, `project_archived`, `last_project_owner`, `revision_conflict` | The current state doesn't allow the change. |

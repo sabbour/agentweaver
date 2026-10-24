@@ -32,6 +32,8 @@ function changeError(reason: unknown): string {
   if (reason instanceof GatewayError) {
     // 503 means the member store cannot be reached or is not configured.
     if (reason.status === 503) return 'Member changes are not available right now. Try again later.';
+    if (reason.code === 'email_principal_not_supported')
+      return "Email addresses cannot identify project members. Use the member's Agentweaver sign-in subject ID.";
     if (reason.code === 'principal_not_found') return 'No user or service account has this ID. Check the ID and try again.';
     if (reason.code === 'invalid_principal_id') return 'Enter a valid user or service account ID.';
     if (reason.code === 'invalid_project_role') return 'Pick one of the listed roles.';
@@ -176,7 +178,7 @@ export function ProjectMembersPanel({ projectId, canManage }: { projectId: strin
       )}
       {canManage && (
         <form className="v1-form v1-inline-form" onSubmit={(event) => void add(event)}>
-          <Field label="Member ID" hint="The member's sign-in subject ID.">
+          <Field label="Member ID" hint="Use the member's Agentweaver sign-in subject ID, not an email address.">
             <Input value={principalId} onChange={(_, data) => setPrincipalId(data.value)} />
           </Field>
           <Field label="Role">
