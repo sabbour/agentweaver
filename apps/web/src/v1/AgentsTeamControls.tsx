@@ -11,13 +11,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import { AppDialog } from '../components/ui/AppDialog';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
-import { gatewayClient } from './api';
+import { GatewayError, gatewayClient } from './api';
+import { inspectAgentSuiteArchive, type InspectedAgentSuiteArchive } from './agentSuiteArchive';
 import { castableRoles, castingError, draftWithMember, draftWithRole, draftWithoutMember, isConflict, reviewPath } from './castingData';
-import type { ProjectCastingProposal, ProjectCastingRoleDefinition, ProjectCastingTransfer, ProjectConfiguration } from './contracts';
+import type { AgentSuiteExport, AgentSuiteImportRequest, ProjectCastingProposal, ProjectCastingRoleDefinition, ProjectConfiguration, RemoteMcpConnectionDirectoryEntry } from './contracts';
 import { ErrorNotice } from './pageParts';
 
-/** The Gateway rejects casting imports larger than this many bytes. */
-const MAX_IMPORT_BYTES = 1024 * 1024;
+const CONNECTION_DIRECTORY_PAGE_SIZE = 50;
 
 const useStyles = makeStyles({
   stack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
@@ -192,21 +192,50 @@ export function TeamMemberActions({ projectId, configuration, configurationRevis
   );
 }
 
-/** Starts a browser download of `transfer` as a JSON file. */
-function downloadTransfer(projectId: string, transfer: ProjectCastingTransfer) {
-  const blob = new Blob([JSON.stringify(transfer, null, 2)], { type: 'application/json' });
+/** Starts a browser download of the exported AgentSuite content archive. */
+function downloadAgentSuite(projectId: string, result: AgentSuiteExport) {
+  // Convert the response's base64 archive in bounded chunks to avoid a large argument list.
+  const binary = atob(result.archive);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  const blob = new Blob([bytes], { type: 'application/gzip' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `${projectId}-team-revision-${transfer.sourceConfigurationRevision}.json`;
+  const safeName = result.suiteName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || projectId;
+  link.download = `${safeName}-team.tar.gz`;
   link.click();
-  // Free the object URL once the click has started the download.
+  // Release the temporary URL after the browser starts the download.
   URL.revokeObjectURL(url);
 }
 
+/** Encodes the chosen archive without spreading a large byte array into one call. */
+async function encodeArchive(file: File): Promise<string> {
+  // Convert slices so the browser's argument limit stays well above each call's size.
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/** Maps native import failures to the same permission and conflict copy as other team actions. */
+function agentSuiteError(reason: unknown): string {
+  if (reason instanceof GatewayError && reason.status === 422) {
+    return 'The AgentSuite package is invalid or incompatible with this project.';
+  }
+  if (reason instanceof GatewayError && reason.status === 413) {
+    return 'Choose an AgentSuite archive no larger than 16 MiB.';
+  }
+  if (reason instanceof GatewayError) return castingError(reason, true);
+  if (reason instanceof Error) return reason.message;
+  return castingError(reason, true);
+}
+
 /**
- * 0.x "Sync" panel on v1: exports this project's team as a checked file and
- * imports a team file from another project as a pending proposal.
+ * 0.x "Sync" panel on v1: exports this project's team as an AgentSuite package
+ * and stages an imported package as a proposal for review.
  */
 export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: {
   projectId: string;
@@ -217,9 +246,12 @@ export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: 
   const { apiCall } = useAuth();
   const navigate = useNavigate();
   const fileInput = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState<'export' | 'import' | null>(null);
+  const [busy, setBusy] = useState<'export' | 'inspect' | 'import' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedArchive, setSelectedArchive] = useState<(InspectedAgentSuiteArchive & { file: File }) | null>(null);
+  const [connections, setConnections] = useState<RemoteMcpConnectionDirectoryEntry[]>([]);
+  const [providerBindings, setProviderBindings] = useState<Record<string, string>>({});
 
   /** Downloads the team at the configuration revision shown on the page. */
   const exportTeam = async () => {
@@ -227,9 +259,9 @@ export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: 
     setError(null);
     setNotice(null);
     try {
-      const transfer = await apiCall((token, tenant) => gatewayClient.exportCastingTransfer(token, projectId, configurationRevision, tenant), null);
-      downloadTransfer(projectId, transfer);
-      setNotice(`Exported the team from configuration revision ${transfer.sourceConfigurationRevision}.`);
+      const result = await apiCall((token, tenant) => gatewayClient.exportProjectAgentSuite(token, projectId, configurationRevision, tenant), null);
+      downloadAgentSuite(projectId, result);
+      setNotice(`Exported ${result.suiteName} from configuration revision ${result.sourceConfigurationRevision}.`);
     } catch (reason) {
       setError(castingError(reason, true));
     } finally {
@@ -237,61 +269,148 @@ export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: 
     }
   };
 
-  /** Reads the chosen file and stages it as a proposal, then opens it for review. */
-  const importTeam = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    // Clear the input so choosing the same file again fires another change.
-    event.target.value = '';
-    if (!file) return;
-    setError(null);
-    setNotice(null);
-    // Check the size here too, so a large file is not uploaded only to be refused.
-    if (file.size > MAX_IMPORT_BYTES) {
-      setError('The file is larger than 1 MiB.');
-      return;
+  /** Loads every usable target Environment connection without exposing endpoint data in the UI. */
+  const loadUsableConnections = async () => {
+    // Follow the opaque cursor and reject a repeated cursor instead of looping on a bad response.
+    const result: RemoteMcpConnectionDirectoryEntry[] = [];
+    const seenCursors = new Set<string>();
+    let after: string | undefined;
+    while (true) {
+      const page = await apiCall((token, tenant) => gatewayClient.listRemoteMcpConnections(
+        token,
+        projectId,
+        after ? { pageSize: CONNECTION_DIRECTORY_PAGE_SIZE, after } : { pageSize: CONNECTION_DIRECTORY_PAGE_SIZE },
+        tenant,
+      ), null);
+      result.push(...page.connections.filter((entry) =>
+        entry.state === 'enabled' && (entry.authenticationMode === 'none' || entry.identityBound)));
+      const next = page.nextConnectionId;
+      if (!next) return result;
+      if (seenCursors.has(next)) throw new Error('The Remote MCP connection list could not be paged.');
+      seenCursors.add(next);
+      after = next;
     }
+  };
+
+  /** Validates and records the selected package, then opens its casting proposal for review. */
+  const stageImport = async (
+    archive: File,
+    inspected: InspectedAgentSuiteArchive,
+    toolConnections: AgentSuiteImportRequest['toolConnections'],
+  ) => {
     setBusy('import');
+    setError(null);
     try {
-      let transfer: ProjectCastingTransfer;
-      try {
-        transfer = JSON.parse(await file.text()) as ProjectCastingTransfer;
-      } catch {
-        throw new Error('The file is not valid JSON.');
-      }
-      // The service checks the format version and digest; the browser only sends the file.
-      const proposal = await apiCall((token, tenant) => gatewayClient.importCastingTransfer(token, projectId, {
+      const request: AgentSuiteImportRequest = {
         expectedConfigurationRevision: configurationRevision,
-        transfer,
-      }, tenant), null);
-      navigate(reviewPath(projectId, proposal.proposalId));
+        format: inspected.format,
+        archive: await encodeArchive(archive),
+        toolConnections,
+      };
+      const result = await apiCall((token, tenant) => gatewayClient.importProjectAgentSuite(token, projectId, request, tenant), null);
+      setSelectedArchive(null);
+      if (result.proposal?.proposalId) {
+        navigate(reviewPath(projectId, result.proposal.proposalId));
+      } else {
+        setNotice('The package was imported. No team changes need review.');
+      }
     } catch (reason) {
-      setError(castingError(reason, true));
+      setError(agentSuiteError(reason));
       if (isConflict(reason)) onConflict?.();
     } finally {
       setBusy(null);
     }
   };
 
+  /** Inspects the archive for remote providers and collects target-environment bindings. */
+  const importTeam = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    // Clear the input so choosing the same archive again fires another change.
+    event.target.value = '';
+    if (!file) return;
+    setSelectedArchive(null);
+    setProviderBindings({});
+    setError(null);
+    setNotice(null);
+    setBusy('inspect');
+    try {
+      const inspected = await inspectAgentSuiteArchive(file);
+      if (inspected.toolProviders.length === 0) {
+        await stageImport(file, inspected, []);
+        return;
+      }
+      const usable = await loadUsableConnections();
+      setConnections(usable);
+      setSelectedArchive({ ...inspected, file });
+    } catch (reason) {
+      setError(agentSuiteError(reason));
+      if (isConflict(reason)) onConflict?.();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const bindingsComplete = selectedArchive !== null &&
+    selectedArchive.toolProviders.every((provider) => Boolean(providerBindings[provider]));
+
   return (
-    <PageSection title="Sync" description="Export this team to a file, or import a team file from another project. An import becomes a proposal you review before it applies.">
+    <PageSection title="Sync" description="Export this team as an AgentSuite package, or import a package as a proposal you review before it applies.">
       <div className={styles.stack}>
         <div className={styles.row} role="toolbar" aria-label="Sync actions">
           <Button icon={<ArrowDownloadRegular />} disabled={busy !== null} onClick={() => void exportTeam()}>
             {busy === 'export' ? 'Exporting…' : 'Export team'}
           </Button>
-          <Button icon={<ArrowUploadRegular />} disabled={busy !== null} onClick={() => fileInput.current?.click()}>
-            {busy === 'import' ? 'Importing…' : 'Import team'}
+          <Button icon={<ArrowUploadRegular />} disabled={busy !== null || selectedArchive !== null} onClick={() => fileInput.current?.click()}>
+            {busy === 'inspect' ? 'Checking archive…' : 'Import team'}
           </Button>
           <input
             ref={fileInput}
             type="file"
-            accept="application/json,.json"
+            accept=".tar.gz,.tar,application/gzip,application/x-tar"
             hidden
-            aria-label="Team file"
+            aria-label="AgentSuite archive"
             onChange={(event) => void importTeam(event)}
           />
         </div>
-        <Text size={200} className={styles.muted}>Team files hold agent charters and casting only. Other project settings are not included.</Text>
+        {selectedArchive && (
+          <div className={styles.stack}>
+            <Text>Choose a target connection for each remote tool provider.</Text>
+            {selectedArchive.toolProviders.map((provider) => (
+              <Field key={provider} label={provider} required>
+                <Select
+                  value={providerBindings[provider] ?? ''}
+                  disabled={busy !== null}
+                  onChange={(_, data) => setProviderBindings((current) => ({ ...current, [provider]: data.value }))}
+                >
+                  <option value="">Select a connection</option>
+                  {connections.map((connection) => (
+                    <option key={connection.connectionId} value={connection.connectionId}>{connection.displayName}</option>
+                  ))}
+                </Select>
+              </Field>
+            ))}
+            {connections.length === 0 && (
+              <Text size={200} className={styles.muted}>Enable a Remote MCP connection in this project before importing.</Text>
+            )}
+            <div className={styles.row}>
+              <Button
+                disabled={!bindingsComplete || busy !== null}
+                onClick={() => void stageImport(
+                  selectedArchive.file,
+                  selectedArchive,
+                  selectedArchive.toolProviders.map((toolProvider) => ({
+                    toolProvider,
+                    connectionId: providerBindings[toolProvider],
+                  })),
+                )}
+              >
+                {busy === 'import' ? 'Importing…' : 'Review import'}
+              </Button>
+              <Button appearance="secondary" disabled={busy !== null} onClick={() => setSelectedArchive(null)}>Cancel</Button>
+            </div>
+          </div>
+        )}
+        <Text size={200} className={styles.muted}>The package includes team agents and their tool dependencies. Project settings and connection endpoints are not included.</Text>
         {error && <ErrorNotice>{error}</ErrorNotice>}
         {notice && <Text>{notice}</Text>}
       </div>

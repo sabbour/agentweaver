@@ -671,6 +671,34 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        // Export only the checked team archive; the response is bounded for both Gateway and MCP callers.
+        projects.MapGet("/{projectId}/agentsuite-exports", async (
+            string projectId,
+            long? revision,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                if (context.Request.Query.Keys.Any(key => key != "revision") ||
+                    context.Request.Query["revision"].Count > 1)
+                    throw ProjectConfigException.Forbidden();
+                context.Response.Headers.CacheControl = "no-store";
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var store = context.RequestServices.GetService<IObjectStore>()
+                    ?? throw AgentSuiteStoreUnavailable();
+                return Results.Ok(await service.ExportAgentSuiteTeamAsync(
+                    caller, projectId, revision, store, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
         // Match the public Gateway bound before binding a transfer payload.
         projects.MapPost("/{projectId}/casting/import", async (
             string projectId,

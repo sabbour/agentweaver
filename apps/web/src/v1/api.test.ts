@@ -476,6 +476,28 @@ describe('Gateway API client', () => {
     ]);
   });
 
+  it('routes AgentSuite package export to the project owner with the selected revision', async () => {
+    const response = {
+      format: 'content-tar-gzip',
+      suiteName: 'Team One',
+      sourceConfigurationRevision: 8,
+      archive: 'H4sIAAAAAAAA',
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify(response), { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.exportProjectAgentSuite('token', 'project/1', 8, 'tenant-1')).resolves.toEqual(response);
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe(
+      'https://gateway.example.test/api/v1/projects/project%2F1/agentsuite-exports?revision=8',
+    );
+    expect(init?.method ?? 'GET').toBe('GET');
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+  });
+
   it('reads suggested marketplaces and rejects a malformed list', async () => {
     const definition = { name: 'Public', repository: 'example/skills', requestedRef: 'main', subpath: null, layoutNote: null, sourceId: null };
     const fetcher = vi.fn<typeof fetch>()

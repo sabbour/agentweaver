@@ -2,6 +2,7 @@ import { gatewayBaseUrl } from './config';
 import { isProjectAuthorizationContextResponse, isRemoteMcpConnectionDirectoryPage } from './contracts';
 import type {
   AgentSuiteAgentPolicy,
+  AgentSuiteExport,
   AgentSuiteImport,
   AgentSuiteImportRequest,
   AgentSuiteImportResult,
@@ -705,6 +706,24 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'skills')}${suffix ? `?${suffix}` : ''}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Exports one project configuration revision as a portable AgentSuite content archive. */
+  exportProjectAgentSuite(
+    token: string,
+    projectId: string,
+    revision: number,
+    tenantSelector?: string | null,
+  ): Promise<AgentSuiteExport> {
+    // The revision query keeps a download bound to the configuration currently shown in the team page.
+    const query = new URLSearchParams({ revision: String(revision) });
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'agentsuite-exports')}?${query}`,
       {},
       this.baseUrl,
       tenantSelector,

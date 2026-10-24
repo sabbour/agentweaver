@@ -273,10 +273,15 @@ proposal first. Nothing changes until someone confirms the proposal.
   configuration revision. **Reject** discards it.
 - **Add member** stages a proposal that adds one catalog role to the current
   team, then opens it for review.
-- **Sync** has **Export team** and **Import team**. Export downloads the team
-  as a checked JSON file. Import accepts a team file from another project, up
-  to 1 MiB, and stages it as a proposal. The service checks the file format
-  and digest.
+- **Sync** has **Export team** and **Import team**. Export downloads the current
+  team as a validated AgentSuite archive. Import accepts a content archive or
+  OCI layout up to 16 MiB and stages its agents as a proposal. If the package
+  declares remote tools, choose an enabled Remote MCP connection in the target
+  project's Environment. The package does not include source connection
+  endpoints or secret headers. Policies without source-specific egress
+  destinations are retained. Export rejects policies that include egress
+  destinations instead of removing those restrictions. Review and confirm the
+  proposal to apply it.
 
 **Pending team proposals** lists proposals that are not confirmed yet, with a
 link to review each one. If someone saved the configuration meanwhile, the

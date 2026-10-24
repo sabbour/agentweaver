@@ -29,6 +29,7 @@ public sealed class GatewayCastingRegressionTests
         ("POST", "/projects/{projectId}/casting/proposals/{proposalId:guid}/confirm", "confirmProjectCastingProposal", "TransitionProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
         ("POST", "/projects/{projectId}/casting/proposals/{proposalId:guid}/reject", "rejectProjectCastingProposal", "TransitionProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
         ("GET", "/projects/{projectId}/casting/export", "exportProjectCasting", null, "ProjectCastingTransfer", "200"),
+        ("GET", "/projects/{projectId}/agentsuite-exports", "exportProjectAgentSuite", null, "ProjectAgentSuiteExport", "200"),
         ("POST", "/projects/{projectId}/casting/import", "importProjectCasting", "ImportProjectCastingTransferRequest", "ProjectCastingProposal", "201"),
         ("GET", "/casting/templates", "listProjectCastingTemplates", null, "ProjectCastingTemplateList", "200"),
         ("GET", "/catalog/roles", "listProjectCastingRoles", null, "ProjectCastingRoleList", "200"),
@@ -60,7 +61,7 @@ public sealed class GatewayCastingRegressionTests
             var expectedQuery = expected.Operation switch
             {
                 "listProjectCastingProposals" => new[] { "limit" },
-                "exportProjectCasting" => ["revision"],
+                "exportProjectCasting" or "exportProjectAgentSuite" => ["revision"],
                 _ => [],
             };
             Assert.Equal(expectedQuery, route.QueryParameters.ToArray());
@@ -96,6 +97,11 @@ public sealed class GatewayCastingRegressionTests
         Assert.Equal(1_048_576L, gateway.GetRequestSizeLimit("/api/v1/projects/{projectId}/casting/import")?.MaxRequestBodySize);
         Assert.True(import.GetProperty("responses").TryGetProperty("413", out _));
         Assert.True(import.GetProperty("responses").TryGetProperty("422", out _));
+        var exportRoute = Assert.Single(GatewayRouteCatalog.Routes, item => item.OperationId == "exportProjectAgentSuite");
+        Assert.Equal(8 * 1_048_576, exportRoute.MaximumResponseBytes);
+        var export = paths.GetProperty("/api/v1/projects/{projectId}/agentsuite-exports").GetProperty("get");
+        Assert.Equal(8 * 1_048_576, export.GetProperty("x-agentweaver-max-response-bytes").GetInt32());
+        Assert.True(export.GetProperty("responses").TryGetProperty("422", out _));
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
         foreach (var name in new[]
         {
@@ -103,6 +109,7 @@ public sealed class GatewayCastingRegressionTests
             "CreateManualProjectCastingProposalRequest", "UpdateProjectCastingProposalRequest",
             "TransitionProjectCastingProposalRequest", "ImportProjectCastingTransferRequest",
             "ProjectCastingProposal", "ProjectCastingTransfer", "ProjectCastingTransferProvenance",
+            "ProjectAgentSuiteExport",
             "ProjectCastingUniverseList", "ProjectCastingTemplateDefinition", "ProjectCastingRoleDefinition",
         })
             Assert.False(schemas.GetProperty(name).GetProperty("additionalProperties").GetBoolean());
@@ -155,7 +162,7 @@ public sealed class GatewayCastingRegressionTests
             var query = route.Operation switch
             {
                 "listProjectCastingProposals" => "?limit=7",
-                "exportProjectCasting" => "?revision=3",
+                "exportProjectCasting" or "exportProjectAgentSuite" => "?revision=3",
                 _ => "",
             };
             using var request = new HttpRequestMessage(new HttpMethod(route.Method), "/api/v1" + suffix + query);

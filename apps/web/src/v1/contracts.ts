@@ -864,6 +864,14 @@ export interface AgentSuiteToolConnection {
   connectionId: string;
 }
 
+/** Base64-encoded AgentSuite content archive exported from one project configuration revision. */
+export interface AgentSuiteExport {
+  format: 'content-tar-gzip';
+  suiteName: string;
+  sourceConfigurationRevision: number;
+  archive: string;
+}
+
 /** Blueprint data that travels with an AgentSuite import. Omitted fields use defaults. */
 export interface AgentSuiteBlueprint {
   sourceBlueprintId?: string | null;
