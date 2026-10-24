@@ -47,10 +47,30 @@ supplied private-key credential after the attempt.
 
 ## Read and commit team files explicitly
 
-Project team synchronization is an explicit user action. It reads the
-configured repository's `.squad/` files at a selected ref and commits only
-those paths after the user reviews the preview. It does not mirror local Squad
-files automatically and does not create a second team roster or loader.
+Project team synchronization is an explicit user action on the Agents page.
+The Gateway exposes `GET` and `POST /api/v1/projects/{projectId}/team/sync`;
+both require a current project Owner and a short-lived GitHub App repository
+selection code in `X-Agentweaver-Team-Sync-Selection`. The GET operation
+compares the configured repository with the current Projects cast and returns
+a no-store preview containing the configuration revision, a change-set hash,
+and added, modified, or removed `.squad/` paths. The user reviews that preview
+before the POST operation can commit it.
+The hash binds the selected installation ID and provider repository ID as well
+as the configured name, branch head, configuration revision, file paths, and
+file content. A renamed or replaced repository cannot reuse an earlier preview.
+
+Projects & Config remains the only roster owner. Orchestrator renders
+`.squad/team.md` and the active cast members' charter files from its current
+configuration; it does not load repository files as a second team registry.
+Only canonical active charter paths and the generated team file are changed.
+Alumni and unrelated `.squad/` content remain untouched. No files are mirrored
+automatically.
+
+The commit request carries both the preview hash and configuration revision.
+Orchestrator recomputes the preview, rejects a changed repository head, file
+set, or project revision before writing, and rechecks project/repository
+authority and the revision immediately before the branch update. A conflict
+requires a fresh preview; it is not retried as a write.
 
 The read operation requests a repository-scoped `contents:read` token. A
 commit requests `contents:write` only. Identity verifies the current project
@@ -70,11 +90,11 @@ including replacements and deletions. A mismatch returns a conflict without
 sending a write request. The final branch update is non-forced, so a concurrent
 change cannot be overwritten.
 
-Repository synchronization is different from the digest-checked JSON export
-and import. Repository sync reads and writes the selected `.squad/` files in a
-configured GitHub repository. JSON export and import transfer a reviewed
-portable snapshot and verify its digest; they do not read or write a
-repository.
+Repository synchronization is separate from the digest-checked AgentSuite
+export and import. Repository sync reads and writes the selected `.squad/`
+files in a configured GitHub repository. AgentSuite export and import transfer
+a reviewed portable archive and verify its digest; import stages a casting
+proposal for confirmation. They do not read or write a repository.
 
 ## Prepare and recover a workspace
 

@@ -582,7 +582,8 @@ internal static class SkillMarketplaceEndpointHost
     public static async Task<IHost> StartAsync(
         NpgsqlDataSource dataSource,
         Func<HttpRequestMessage, HttpResponseMessage> respondFromGitHub,
-        IObjectStore? objectStore)
+        IObjectStore? objectStore,
+        bool mapTeamSyncProjection = false)
     {
         return await new HostBuilder()
             .ConfigureWebHost(web =>
@@ -630,7 +631,12 @@ internal static class SkillMarketplaceEndpointHost
                     app.UseRouting();
                     app.UseAuthentication();
                     app.UseAuthorization();
-                    app.UseEndpoints(endpoints => endpoints.MapSkillMarketplaceEndpoints());
+                    app.UseEndpoints(endpoints =>
+                    {
+                        endpoints.MapSkillMarketplaceEndpoints();
+                        if (mapTeamSyncProjection)
+                            endpoints.MapIssueSyncAuthority(internalEnabled: false);
+                    });
                 });
             })
             .StartAsync();

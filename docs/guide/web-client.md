@@ -528,8 +528,11 @@ The Repo App account control uses Identity Broker status and an opaque
 `connectionId`. Project configuration selects the connection with
 `sourceControl.authMode: "githubApp"` and
 `sourceControl.appConnectionId`. Configurations without `authMode` retain
-legacy secret mode. Provider tokens, numeric installation and repository IDs,
-and permission grants remain owner-held.
+legacy secret mode. Provider tokens and permission grants remain owner-held.
+Repository listing exposes installation and repository IDs to the authenticated
+browser only as selection metadata. Project configuration stores the connection
+ID and repository name; a short-lived Broker selection code, not the numeric
+IDs alone, authorizes the later owner request.
 
 Repo App authorization uses a popup, an antiforgery cookie, a native form
 post, and a host-only transaction cookie. The callback

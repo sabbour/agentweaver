@@ -182,13 +182,9 @@ public sealed class GatewayGitHubRepoAppBffTests
             (HttpMethod.Get, "/api/auth/github/repo-app/authorizations/tx-1"),
             (HttpMethod.Post, "/api/auth/github/repo-app/authorization/refresh"),
             (HttpMethod.Delete, "/api/auth/github/repo-app/authorization"),
-            (HttpMethod.Get, "/api/github/repository-selections"),
-            (HttpMethod.Post, "/api/github/repository-selections"),
         })
         {
             using var request = new HttpRequestMessage(route.Item1, route.Item2);
-            if (route.Item2 == "/api/github/repository-selections" && route.Item1 == HttpMethod.Post)
-                request.Content = JsonContent.Create(new { fullName = "octo/agentweaver" });
             AddCallerHeaders(request, token, includeTenant: true);
             using var response = await gateway.Client.SendAsync(request);
             Assert.True(response.StatusCode is HttpStatusCode.OK or HttpStatusCode.NoContent);
@@ -240,7 +236,7 @@ public sealed class GatewayGitHubRepoAppBffTests
         }
 
         var forwarded = requests.ToArray();
-        Assert.Equal(10, forwarded.Length);
+        Assert.Equal(8, forwarded.Length);
         Assert.Equal(
             new[]
             {
@@ -249,37 +245,33 @@ public sealed class GatewayGitHubRepoAppBffTests
                 "/api/auth/github/repo-app/authorizations/tx-1",
                 "/api/auth/github/repo-app/authorization/refresh",
                 "/api/auth/github/repo-app/authorization",
-                "/api/github/repository-selections",
-                "/api/github/repository-selections",
                 "/auth/github/repo-app/callback",
                 "/auth/github/repo-app/installation/callback",
                 "/api/projects/project-a/runs/run-a/source-control/sessions/root-a/pin",
             },
             forwarded.Select(request => request.Uri.AbsolutePath));
-        Assert.All(forwarded.Take(7), request =>
+        Assert.All(forwarded.Take(5), request =>
         {
             Assert.Equal(GatewayOwner.IdentityBroker, request.Owner);
             Assert.Equal(token, AuthenticationHeaderValue.Parse(request.Authorization!).Parameter);
             Assert.Null(request.Tenant);
             Assert.Null(request.Cookie);
         });
-        Assert.Null(forwarded[7].Authorization);
-        Assert.Null(forwarded[7].Tenant);
-        Assert.Equal("__Host-agentweaver-repo-app-auth=oauth-nonce", forwarded[7].Cookie);
-        Assert.Equal("?code=oauth-code&state=state-token", forwarded[7].Uri.Query);
-        Assert.Null(forwarded[8].Authorization);
-        Assert.Null(forwarded[8].Tenant);
+        Assert.Null(forwarded[5].Authorization);
+        Assert.Null(forwarded[5].Tenant);
+        Assert.Equal("__Host-agentweaver-repo-app-auth=oauth-nonce", forwarded[5].Cookie);
+        Assert.Equal("?code=oauth-code&state=state-token", forwarded[5].Uri.Query);
+        Assert.Null(forwarded[6].Authorization);
+        Assert.Null(forwarded[6].Tenant);
         Assert.Equal(
             "__Host-agentweaver-repo-app-install-auth=install-nonce",
-            forwarded[8].Cookie);
-        Assert.Equal(GatewayOwner.Orchestrator, forwarded[9].Owner);
-        Assert.Equal(HttpMethod.Post, forwarded[9].Method);
-        Assert.Equal(token, AuthenticationHeaderValue.Parse(forwarded[9].Authorization!).Parameter);
-        Assert.Equal("tenant-1", forwarded[9].Tenant);
-        Assert.Null(forwarded[9].Cookie);
-        Assert.Equal("""{"selectionCode":"opaque-selection-code"}""", forwarded[9].Body);
+            forwarded[6].Cookie);
+        Assert.Equal(GatewayOwner.Orchestrator, forwarded[7].Owner);
+        Assert.Equal(HttpMethod.Post, forwarded[7].Method);
+        Assert.Equal(token, AuthenticationHeaderValue.Parse(forwarded[7].Authorization!).Parameter);
+        Assert.Equal("tenant-1", forwarded[7].Tenant);
+        Assert.Null(forwarded[7].Cookie);
         Assert.Equal("""{"returnRouteKey":"settings"}""", forwarded[0].Body);
-        Assert.Equal("""{"fullName":"octo/agentweaver"}""", forwarded[6].Body);
     }
 
     private static void AddCallerHeaders(

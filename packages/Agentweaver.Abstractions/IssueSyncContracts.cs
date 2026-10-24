@@ -52,6 +52,8 @@ public sealed record ProjectTeamSyncTokenResponse(
     string AccessToken,
     DateTimeOffset ExpiresAt,
     string ConnectionId,
+    long InstallationId,
+    long RepositoryId,
     string RepositoryFullName,
     string DefaultBranch,
     string PermissionDigest,

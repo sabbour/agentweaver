@@ -252,6 +252,8 @@ export function AgentsView({ projectId, configuration, configurationRevision, re
   const cast = new Set(configuration.casting.map((item) => item.agentId));
   const agents = configuration.agentCharters;
   const teamCount = agents.filter((agent) => cast.has(agent.agentId)).length;
+  const repository = configuration.sourceControl?.repository;
+  const repositoryFullName = repository ? `${repository.owner}/${repository.name}` : null;
   // "all" shows everyone. "team" keeps cast agents and "other" keeps the rest.
   const visible = agents.filter((agent) => filter === 'all' || (filter === 'team') === cast.has(agent.agentId));
   // Look the agent up by ID on every render, so the drawer shows the latest saved
@@ -283,7 +285,13 @@ export function AgentsView({ projectId, configuration, configurationRevision, re
     <>
       {header}
       {status}
-      {showSync && <TeamSyncPanel projectId={projectId} configurationRevision={configurationRevision} onConflict={onReload} />}
+      {showSync && <TeamSyncPanel
+        projectId={projectId}
+        configurationRevision={configurationRevision}
+        repositoryFullName={repositoryFullName}
+        disabled={readOnly}
+        onConflict={onReload}
+      />}
       <PendingProposals projectId={projectId} />
     </>
   );

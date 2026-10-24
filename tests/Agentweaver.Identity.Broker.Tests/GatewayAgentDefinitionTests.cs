@@ -89,6 +89,10 @@ public sealed class GatewayAgentDefinitionTests
                 if (method.Value.TryGetProperty("x-agentweaver-stream", out var stream) &&
                     stream.ValueKind == JsonValueKind.String)
                     continue;
+                // Explicit browser-only actions have valid HTTP contracts but are deliberately absent from MCP.
+                if (method.Value.TryGetProperty("x-agentweaver-mcp-excluded", out var mcpExcluded) &&
+                    mcpExcluded.ValueKind == JsonValueKind.True)
+                    continue;
                 expected.Add("agentweaver_" + method.Value.GetProperty("operationId").GetString());
             }
         }

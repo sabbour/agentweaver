@@ -1242,8 +1242,7 @@ flowchart LR
     Core["Projects & Core"]
     Store["Source Control owner store"]
     ProjectUser["Project-scoped caller"]
-    Browser -->|"Current user bearer; safe repository selection"| Gateway
-    Gateway -->|"Same bearer; no tenant selector"| Identity
+    Browser -->|"Repo App session cookie + CSRF: list and select repository"| Identity
     Identity -->|"Metadata + single-use selectionCode"| Browser
     Config --> Source
     Browser -->|"Run bearer + tenant + selectionCode"| Gateway

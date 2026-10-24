@@ -108,6 +108,8 @@ internal static class IssueSyncGrantEndpoints
                         token.Credential.Credential.GetValue(),
                         token.Credential.Credential.ExpiresAt,
                         token.ConnectionId,
+                        token.InstallationId,
+                        token.RepositoryId,
                         token.RepositoryFullName,
                         token.DefaultBranch,
                         token.Credential.PermissionDigest,
