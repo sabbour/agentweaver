@@ -1,5 +1,6 @@
 ---
 "Agentweaver.Abstractions": minor
+"Agentweaver.Identity.Broker": patch
 "Agentweaver.Projects.Config": minor
 "Agentweaver.Orchestrator": minor
 "Agentweaver.Gateway": minor
