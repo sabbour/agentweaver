@@ -54,14 +54,8 @@ internal static partial class SourceControlEndpoints
         sourceControl.MapPost("/merge-intents/{intentId}/execute", ExecuteMergeIntentAsync);
         sourceControl.MapPost("/webhook-relay", ReceiveRelayedGitHubWebhookAsync)
             .WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
-        var teamSync = app.MapGroup("/internal/projects/{projectId}/source-control/team-sync")
-            .RequireAuthorization();
-        teamSync.MapPost("/tree", ReadProjectTeamSyncTreeAsync)
-            .WithMetadata(new RequestSizeLimitAttribute(4096));
-        // A 6 MiB transport bound accommodates base64-encoded files and request metadata;
-        // the adapter enforces a stricter 4 MiB aggregate file-content bound.
-        teamSync.MapPost("/commit", CommitProjectTeamSyncAsync)
-            .WithMetadata(new RequestSizeLimitAttribute(6 * 1024 * 1024));
+        // Project-scoped synchronization has its own current-authority contract.
+        MapProjectTeamSyncEndpoints(app);
         app.MapGet(
                 "/internal/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/proof",
                 ReadOutputCaptureProofForEventsAsync)
@@ -71,12 +65,26 @@ internal static partial class SourceControlEndpoints
         return app;
     }
 
+    internal static IEndpointRouteBuilder MapProjectTeamSyncEndpoints(this IEndpointRouteBuilder app)
+    {
+        // Keep the project-scoped team-sync routes separable for focused owner contract tests.
+        var teamSync = app.MapGroup("/internal/projects/{projectId}/source-control/team-sync")
+            .RequireAuthorization();
+        teamSync.MapPost("/tree", ReadProjectTeamSyncTreeAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(4096));
+        // A 6 MiB transport bound accommodates base64-encoded files and request metadata;
+        // the adapter enforces a stricter 4 MiB aggregate file-content bound.
+        teamSync.MapPost("/commit", CommitProjectTeamSyncAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(6 * 1024 * 1024));
+        return app;
+    }
+
     private static Task<IResult> ReadProjectTeamSyncTreeAsync(
         string projectId,
         ProjectTeamSyncReadRequest request,
         HttpContext context,
         [FromServices] ProjectsRunSelectionClient projects,
-        [FromServices] ProjectTeamSyncTokenClient tokens,
+        [FromServices] IProjectTeamSyncTokenClient tokens,
         [FromServices] ISourceControlTeamSyncAdapter teamSyncAdapter,
         TimeProvider timeProvider,
         CancellationToken cancellationToken) =>
@@ -95,6 +103,8 @@ internal static partial class SourceControlEndpoints
                 var snapshot = await teamSyncAdapter.ReadTeamSyncTreeAsync(
                     proof.Repository, request.Reference ?? reference, credential, cancellationToken)
                     .ConfigureAwait(false);
+                await RevalidateProjectTeamSyncAuthorityAsync(
+                    context, projectId, proof, false, projects, cancellationToken).ConfigureAwait(false);
                 return Results.Json(snapshot, ProviderSelectionJsonOptions);
             }
             finally
@@ -108,7 +118,7 @@ internal static partial class SourceControlEndpoints
         ProjectTeamSyncCommitRequest request,
         HttpContext context,
         [FromServices] ProjectsRunSelectionClient projects,
-        [FromServices] ProjectTeamSyncTokenClient tokens,
+        [FromServices] IProjectTeamSyncTokenClient tokens,
         [FromServices] ISourceControlTeamSyncAdapter teamSyncAdapter,
         TimeProvider timeProvider,
         CancellationToken cancellationToken) =>
@@ -129,6 +139,8 @@ internal static partial class SourceControlEndpoints
                     credential,
                     new SourceControlTeamSyncCommitRequest(
                         branch, request.ExpectedBaseSha, request.Message, request.Changes),
+                    ct => RevalidateProjectTeamSyncAuthorityAsync(
+                        context, projectId, proof, true, projects, ct),
                     cancellationToken).ConfigureAwait(false);
                 return Results.Json(commit, ProviderSelectionJsonOptions);
             }
@@ -145,7 +157,7 @@ internal static partial class SourceControlEndpoints
             string selectionCode,
             bool writeRequested,
             ProjectsRunSelectionClient projects,
-            ProjectTeamSyncTokenClient tokens,
+            IProjectTeamSyncTokenClient tokens,
             TimeProvider timeProvider,
             CancellationToken cancellationToken)
     {
@@ -180,14 +192,8 @@ internal static partial class SourceControlEndpoints
                     "team_sync_identity_contract_invalid", StatusCodes.Status502BadGateway);
 
             credential = new SecretCredential(token.AccessToken, token.ExpiresAt, timeProvider);
-            // Refresh permission and configuration after minting to reject credentials made stale in flight.
-            var currentAuthority = await projects.ReadBacklogProjectAuthorityAsync(
-                context, projectId, writeRequested, cancellationToken).ConfigureAwait(false);
-            var currentProof = await projects.ReadTeamSyncProjectProofAsync(
-                context, projectId, currentAuthority, cancellationToken).ConfigureAwait(false);
-            if (currentProof != proof)
-                throw new CoordinationException(
-                    "team_sync_project_authority_changed", StatusCodes.Status409Conflict);
+            await RevalidateProjectTeamSyncAuthorityAsync(
+                context, projectId, proof, writeRequested, projects, cancellationToken).ConfigureAwait(false);
 
             var result = (proof, token.DefaultBranch, credential);
             credential = null;
@@ -197,6 +203,24 @@ internal static partial class SourceControlEndpoints
         {
             credential?.Invalidate();
         }
+    }
+
+    private static async Task RevalidateProjectTeamSyncAuthorityAsync(
+        HttpContext context,
+        string projectId,
+        IssueSyncProjectProof expectedProof,
+        bool writeRequested,
+        ProjectsRunSelectionClient projects,
+        CancellationToken cancellationToken)
+    {
+        // Each result and branch update must still match current project authority and repository configuration.
+        var currentAuthority = await projects.ReadBacklogProjectAuthorityAsync(
+            context, projectId, writeRequested, cancellationToken).ConfigureAwait(false);
+        var currentProof = await projects.ReadTeamSyncProjectProofAsync(
+            context, projectId, currentAuthority, cancellationToken).ConfigureAwait(false);
+        if (currentProof != expectedProof)
+            throw new CoordinationException(
+                "team_sync_project_authority_changed", StatusCodes.Status409Conflict);
     }
 
     private static void ValidateProjectTeamSyncSelectionCode(string? value)

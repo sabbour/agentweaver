@@ -501,5 +501,6 @@ public interface ISourceControlTeamSyncAdapter
         SourceControlRepositoryIdentity repository,
         SecretCredential credential,
         SourceControlTeamSyncCommitRequest request,
+        Func<CancellationToken, Task> revalidateBeforeRefUpdate,
         CancellationToken cancellationToken);
 }

@@ -5,9 +5,16 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
-internal sealed class ProjectTeamSyncTokenClient(IServiceProvider services)
+internal interface IProjectTeamSyncTokenClient
 {
-    internal async Task<ProjectTeamSyncTokenResponse> MintAsync(
+    Task<ProjectTeamSyncTokenResponse> MintAsync(
+        ProjectTeamSyncTokenRequest request,
+        CancellationToken cancellationToken);
+}
+
+internal sealed class ProjectTeamSyncTokenClient(IServiceProvider services) : IProjectTeamSyncTokenClient
+{
+    public async Task<ProjectTeamSyncTokenResponse> MintAsync(
         ProjectTeamSyncTokenRequest request,
         CancellationToken cancellationToken)
     {

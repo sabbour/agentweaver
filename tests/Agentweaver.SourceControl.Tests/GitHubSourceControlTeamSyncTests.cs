@@ -120,13 +120,19 @@ public sealed partial class GitHubSourceControlAdapterTests
                 HeadSha,
                 "Sync team files",
                 [new SourceControlTeamSyncChange(".squad/team.md", originalSha, changed)]),
+            _ =>
+            {
+                calls.Add("REVALIDATE");
+                return Task.CompletedTask;
+            },
             CancellationToken.None);
 
         Assert.Equal(newCommitSha, commit.CommitSha);
         Assert.Equal("main", commit.Branch);
         Assert.Equal(new Uri($"https://github.com/octo/widget/commit/{newCommitSha}"), commit.HtmlUrl);
-        Assert.Equal(6, calls.Count);
+        Assert.Equal(7, calls.Count);
         Assert.Equal("POST /repos/octo/widget/git/blobs", calls[2]);
+        Assert.Equal("REVALIDATE", calls[^2]);
         Assert.Equal("PATCH /repos/octo/widget/git/refs/heads/main", calls[^1]);
     }
 
@@ -157,6 +163,7 @@ public sealed partial class GitHubSourceControlAdapterTests
                     BaseSha,
                     "Sync team files",
                     [new SourceControlTeamSyncChange(".squad/team.md", null, Encoding.UTF8.GetBytes("team"))]),
+                TeamSyncNoOpRevalidation,
                 CancellationToken.None));
 
         Assert.Equal(SourceControlFailureCode.Conflict, error.Code);
@@ -194,10 +201,143 @@ public sealed partial class GitHubSourceControlAdapterTests
                         ".squad/team.md",
                         GitBlobSha(Encoding.UTF8.GetBytes("preview")),
                         Encoding.UTF8.GetBytes("updated"))]),
+                TeamSyncNoOpRevalidation,
                 CancellationToken.None));
 
         Assert.Equal(SourceControlFailureCode.Conflict, error.Code);
         Assert.Equal(0, writes);
+    }
+
+    [Fact]
+    public async Task TeamSyncRejectsResultingTreeOverFileLimitBeforeAnyGitHubWrite()
+    {
+        // The resulting tree, not only the incoming changes, must remain within the file-count limit.
+        var entries = Enumerable.Range(0, 250)
+            .Select(index => (object)new
+            {
+                path = $".squad/file-{index:D3}",
+                mode = "100644",
+                type = "blob",
+                sha = BaseSha,
+                size = 1
+            }).ToArray();
+        var writes = 0;
+        var handler = new StubHandler((request, _) =>
+        {
+            if (request.Method != HttpMethod.Get)
+                writes++;
+            return Task.FromResult(request.RequestUri!.PathAndQuery switch
+            {
+                "/repos/octo/widget/commits/main" => CommitJson(HeadSha, BaseSha),
+                $"/repos/octo/widget/git/trees/{BaseSha}?recursive=1" => TreeJson(entries),
+                _ => throw new InvalidOperationException("Unexpected GitHub request.")
+            });
+        });
+
+        var error = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+            CreateAdapter(handler).CommitTeamSyncChangesAsync(
+                new SourceControlRepositoryIdentity("octo", "widget"),
+                NewCredential(),
+                new SourceControlTeamSyncCommitRequest(
+                    "main",
+                    HeadSha,
+                    "Sync team files",
+                    [new SourceControlTeamSyncChange(".squad/new", null, [1])]),
+                TeamSyncNoOpRevalidation,
+                CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.InvalidRequest, error.Code);
+        Assert.Equal(0, writes);
+    }
+
+    [Fact]
+    public async Task TeamSyncRejectsResultingTreeOverByteLimitBeforeAnyGitHubWrite()
+    {
+        // Adding a small file to an already full tree must not create an oversized repository state.
+        var entries = Enumerable.Range(0, 8)
+            .Select(index => (object)new
+            {
+                path = $".squad/file-{index:D3}",
+                mode = "100644",
+                type = "blob",
+                sha = BaseSha,
+                size = 512 * 1024
+            }).ToArray();
+        var writes = 0;
+        var handler = new StubHandler((request, _) =>
+        {
+            if (request.Method != HttpMethod.Get)
+                writes++;
+            return Task.FromResult(request.RequestUri!.PathAndQuery switch
+            {
+                "/repos/octo/widget/commits/main" => CommitJson(HeadSha, BaseSha),
+                $"/repos/octo/widget/git/trees/{BaseSha}?recursive=1" => TreeJson(entries),
+                _ => throw new InvalidOperationException("Unexpected GitHub request.")
+            });
+        });
+
+        var error = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+            CreateAdapter(handler).CommitTeamSyncChangesAsync(
+                new SourceControlRepositoryIdentity("octo", "widget"),
+                NewCredential(),
+                new SourceControlTeamSyncCommitRequest(
+                    "main",
+                    HeadSha,
+                    "Sync team files",
+                    [new SourceControlTeamSyncChange(".squad/new", null, [1])]),
+                TeamSyncNoOpRevalidation,
+                CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.InvalidRequest, error.Code);
+        Assert.Equal(0, writes);
+    }
+
+    [Fact]
+    public async Task TeamSyncCountsReplacementsAndDeletionsInFinalTreeLimits()
+    {
+        // A replacement and deletion can free capacity for a new path at both exact limits.
+        var entries = Enumerable.Range(0, 250)
+            .Select(index => (object)new
+            {
+                path = $".squad/file-{index:D3}",
+                mode = "100644",
+                type = "blob",
+                sha = BaseSha,
+                size = index < 8 ? 512 * 1024 : 0
+            }).ToArray();
+        var writes = 0;
+        var handler = new StubHandler((request, _) =>
+        {
+            if (request.Method != HttpMethod.Get)
+                writes++;
+            return Task.FromResult(request.RequestUri!.PathAndQuery switch
+            {
+                "/repos/octo/widget/commits/main" => CommitJson(HeadSha, BaseSha),
+                $"/repos/octo/widget/git/trees/{BaseSha}?recursive=1" => TreeJson(entries),
+                "/repos/octo/widget/git/blobs" =>
+                    new HttpResponseMessage(HttpStatusCode.Forbidden),
+                _ => throw new InvalidOperationException("Unexpected GitHub request.")
+            });
+        });
+
+        var error = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+            CreateAdapter(handler).CommitTeamSyncChangesAsync(
+                new SourceControlRepositoryIdentity("octo", "widget"),
+                NewCredential(),
+                new SourceControlTeamSyncCommitRequest(
+                    "main",
+                    HeadSha,
+                    "Sync team files",
+                    [
+                        new SourceControlTeamSyncChange(".squad/file-000", BaseSha, new byte[512 * 1024]),
+                        new SourceControlTeamSyncChange(".squad/file-001", BaseSha, null),
+                        new SourceControlTeamSyncChange(".squad/new", null, new byte[512 * 1024])
+                    ]),
+                TeamSyncNoOpRevalidation,
+                CancellationToken.None));
+
+        Assert.NotEqual(SourceControlFailureCode.InvalidRequest, error.Code);
+        Assert.Equal(1, writes);
     }
 
     [Fact]
@@ -226,6 +366,7 @@ public sealed partial class GitHubSourceControlAdapterTests
                     HeadSha,
                     "Sync team files",
                     [new SourceControlTeamSyncChange("../outside", null, Encoding.UTF8.GetBytes("x"))]),
+                TeamSyncNoOpRevalidation,
                 CancellationToken.None));
         Assert.Equal(SourceControlFailureCode.InvalidRequest, traversal.Code);
         Assert.Equal(0, calls);
@@ -298,6 +439,7 @@ public sealed partial class GitHubSourceControlAdapterTests
                     HeadSha,
                     "Sync team files",
                     [new SourceControlTeamSyncChange(".squad/a", null, Encoding.UTF8.GetBytes("parent"))]),
+                TeamSyncNoOpRevalidation,
                 CancellationToken.None));
         Assert.Equal(SourceControlFailureCode.InvalidRequest, existingConflict.Code);
         Assert.Equal(0, writesAgainstCurrentTree);
@@ -328,6 +470,7 @@ public sealed partial class GitHubSourceControlAdapterTests
                         new SourceControlTeamSyncChange(".squad/a", null, Encoding.UTF8.GetBytes("parent")),
                         new SourceControlTeamSyncChange(".squad/a/b", null, Encoding.UTF8.GetBytes("child"))
                     ]),
+                TeamSyncNoOpRevalidation,
                 CancellationToken.None));
         Assert.Equal(SourceControlFailureCode.InvalidRequest, requestConflict.Code);
         Assert.Equal(0, writesWithinRequest);
@@ -342,6 +485,8 @@ public sealed partial class GitHubSourceControlAdapterTests
         Buffer.BlockCopy(content, 0, blob, header.Length, content.Length);
         return Convert.ToHexStringLower(SHA1.HashData(blob));
     }
+
+    private static Task TeamSyncNoOpRevalidation(CancellationToken _) => Task.CompletedTask;
 
     private static HttpResponseMessage CommitJson(string commitSha, string treeSha) =>
         JsonResponse(JsonSerializer.Serialize(new { sha = commitSha, commit = new { tree = new { sha = treeSha } } }));

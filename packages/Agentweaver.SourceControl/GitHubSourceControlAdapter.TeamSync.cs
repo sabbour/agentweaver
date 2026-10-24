@@ -77,10 +77,12 @@ public sealed partial class GitHubSourceControlAdapter
         SourceControlRepositoryIdentity repository,
         SecretCredential credential,
         SourceControlTeamSyncCommitRequest request,
+        Func<CancellationToken, Task> revalidateBeforeRefUpdate,
         CancellationToken cancellationToken)
     {
         // Validate every proposed path and byte limit before the preflight reads or any GitHub write.
         ValidateTeamSyncCommitRequest(repository, credential, request);
+        ArgumentNullException.ThrowIfNull(revalidateBeforeRefUpdate);
         var index = await ReadTeamSyncIndexAsync(repository, request.Branch, credential, cancellationToken)
             .ConfigureAwait(false);
         if (!string.Equals(index.CommitSha, request.ExpectedBaseSha, StringComparison.OrdinalIgnoreCase))
@@ -97,6 +99,7 @@ public sealed partial class GitHubSourceControlAdapter
         }
 
         ValidateFinalTeamSyncPaths(index.Files, request.Changes);
+        ValidateFinalTeamSyncLimits(index.Files, request.Changes);
 
         // All rejectable path, size, base, and blob checks finish before the first write request.
         var treeEntries = new List<object>(request.Changes.Length);
@@ -160,6 +163,9 @@ public sealed partial class GitHubSourceControlAdapter
         EnsureSuccess(commitResponse, "Creating a GitHub team-sync commit", writeMayHaveChangedRemoteState: true);
         using var commitDocument = await ReadTeamSyncJsonAsync(commitResponse, cancellationToken).ConfigureAwait(false);
         var commitSha = ReadTeamSyncSha(commitDocument.RootElement, "sha");
+
+        // Recheck project authority after Git object creation and immediately before changing the branch ref.
+        await revalidateBeforeRefUpdate(cancellationToken).ConfigureAwait(false);
 
         // GitHub's non-forced ref update is the atomic branch write and rejects a concurrent advance.
         using var refResponse = await SendAsync(
@@ -406,6 +412,30 @@ public sealed partial class GitHubSourceControlAdapter
                 separator = path.IndexOf('/', separator + 1);
             }
         }
+    }
+
+    private static void ValidateFinalTeamSyncLimits(
+        IReadOnlyDictionary<string, TeamSyncTreeEntry> currentFiles,
+        ImmutableArray<SourceControlTeamSyncChange> changes)
+    {
+        // Apply replacements and deletions before enforcing limits on the complete post-commit tree.
+        var finalSizes = currentFiles.ToDictionary(
+            entry => entry.Key,
+            entry => entry.Value.Size,
+            StringComparer.Ordinal);
+        foreach (var change in changes)
+        {
+            if (change.Content is null)
+                finalSizes.Remove(change.Path);
+            else
+                finalSizes[change.Path] = change.Content.Length;
+        }
+
+        if (finalSizes.Count > TeamSyncMaximumFiles ||
+            finalSizes.Values.Sum(size => (long)size) > TeamSyncMaximumTotalBytes)
+            throw new SourceControlOperationException(
+                SourceControlFailureCode.InvalidRequest,
+                "The resulting .squad/ tree exceeds the permitted size.");
     }
 
     private static bool IsValidGitReference(string value)

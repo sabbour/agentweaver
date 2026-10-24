@@ -54,8 +54,9 @@ files automatically and does not create a second team roster or loader.
 
 The read operation requests a repository-scoped `contents:read` token. A
 commit requests `contents:write` only. Identity verifies the current project
-owner and repository selection before minting the token, and Orchestrator
-checks current project authority before calling Source Control. The token is
+owner and repository selection before minting the token. Orchestrator checks
+current authority after minting, after a read and before returning its
+snapshot, and immediately before a commit updates the branch. The token is
 returned only over the internal service channel and is invalidated after the
 provider operation. The internal path uses the existing certificate-pinned
 Issue Sync channels; it does not expose a public token-minting route.
@@ -63,9 +64,11 @@ Issue Sync channels; it does not expose a public token-minting route.
 Reads reject incomplete trees, symlinks, submodules, invalid paths, and files
 or trees over the configured limits. Commits accept only regular paths beneath
 `.squad/`. Before creating Git objects, the adapter checks both the expected
-branch head and every expected blob ID from the preview. A mismatch returns a
-conflict without sending a write request. The final branch update is
-non-forced, so a concurrent change cannot be overwritten.
+branch head and every expected blob ID from the preview. It also checks that
+the complete resulting tree stays within 250 files and 4 MiB of content,
+including replacements and deletions. A mismatch returns a conflict without
+sending a write request. The final branch update is non-forced, so a concurrent
+change cannot be overwritten.
 
 Repository synchronization is different from the digest-checked JSON export
 and import. Repository sync reads and writes the selected `.squad/` files in a

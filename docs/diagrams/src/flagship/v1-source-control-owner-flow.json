@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "Source Control owner flow",
-  "alt": "Agentweaver's Source Control owner flow. Accepted project configuration selects either exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. Run-scoped operations use the short-lived repository-selection code only for initial pinning, then Identity checks the run binding and returns a temporary repository token. Explicit project team sync uses current project write authority and a project-scoped token limited to contents:read or contents:write; reads and commits are restricted to regular .squad/ files and commits require the previewed branch and blob IDs. Tokens and App private-key values are not stored or returned to callers. IssueWrite is retained only when the GitHub token response confirms issues:write. Typed issue, pull-request, review, and checkout operations use the pinned provider binding. Workspaces isolate each run and return a bounded diff. GitHub webhooks are accepted only through an authenticated project/run relay, with raw-byte HMAC verification, pinned repository checks, and durable delivery deduplication; direct GitHub posts are rejected. Merge requires a server-read pull request, immutable intent, typed approval, current authority and grant, exact-head required checks, and a repository-scoped PostgreSQL lock. Pre-effect revocation is a persisted conflict without a merge write; post-effect revocation retains the true merge SHA for replay. Expected base is a preflight only, and uncertain remote outcomes remain explicit. Source Control persists exact pending output bytes for retry across restart; Events journal IDs and Object Store bytes provide provenance for admitted output. Admission and historical reads recheck current authority and run state; completed history is retained while failed, indeterminate, and pending captures are withheld.",
+  "alt": "Agentweaver's Source Control owner flow. Accepted project configuration selects either exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. Run-scoped operations use the short-lived repository-selection code only for initial pinning, then Identity checks the run binding and returns a temporary repository token. Explicit project team sync uses current project authority and a project-scoped token limited to contents:read or contents:write; Orchestrator rechecks authority before returning a snapshot and immediately before updating the branch. Reads and commits are restricted to regular .squad/ files, and commits enforce the file and content limits on the resulting tree after replacements and deletions. Tokens and App private-key values are not stored or returned to callers. IssueWrite is retained only when the GitHub token response confirms issues:write. Typed issue, pull-request, review, and checkout operations use the pinned provider binding. Workspaces isolate each run and return a bounded diff. GitHub webhooks are accepted only through an authenticated project/run relay, with raw-byte HMAC verification, pinned repository checks, and durable delivery deduplication; direct GitHub posts are rejected. Merge requires a server-read pull request, immutable intent, typed approval, current authority and grant, exact-head required checks, and a repository-scoped PostgreSQL lock. Pre-effect revocation is a persisted conflict without a merge write; post-effect revocation retains the true merge SHA for replay. Expected base is a preflight only, and uncertain remote outcomes remain explicit. Source Control persists exact pending output bytes for retry across restart; Events journal IDs and Object Store bytes provide provenance for admitted output. Admission and historical reads recheck current authority and run state; completed history is retained while failed, indeterminate, and pending captures are withheld.",
   "direction": "LR",
   "layoutSnapshot": {
     "canvasWidth": 1900,
@@ -166,7 +166,7 @@
         "id": "e8",
         "source": "project-caller",
         "target": "orchestrator",
-        "label": "Explicit team-sync request",
+        "label": "Explicit sync; recheck authority",
         "markerEnd": true,
         "data": {
           "points": [
@@ -315,7 +315,7 @@
     {
       "from": "project-caller",
       "to": "orchestrator",
-      "label": "Explicit team-sync request"
+      "label": "Explicit sync; recheck authority"
     }
   ]
 }
