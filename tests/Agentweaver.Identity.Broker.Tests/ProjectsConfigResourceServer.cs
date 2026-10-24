@@ -162,6 +162,10 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 services.AddPlatformComponentCollector(new ConfigurationBuilder().Build());
                 services.AddScoped<ProjectsConfigService>();
                 services.AddScoped<ProjectRoleAssignmentService>();
+                // Preserve service binding while failing fast if the test host reaches a remote Knowledge owner.
+                services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
+                    client.BaseAddress = new Uri("https://knowledge.test/"))
+                    .ConfigurePrimaryHttpMessageHandler(() => new NoNetworkHttpMessageHandler());
                 if (skillContentObjects is not null)
                     services.AddScoped(_ => new SkillContentObjectStore(skillContentObjects));
                 services.AddScoped<SkillContentService>(provider => new SkillContentService(
@@ -344,5 +348,14 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             await using var grant = new NpgsqlCommand(statement, connection);
             await grant.ExecuteNonQueryAsync();
         }
+    }
+
+    private sealed class NoNetworkHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(
+                $"Unexpected Knowledge request in Projects Config test host: {request.Method} {request.RequestUri}.");
     }
 }

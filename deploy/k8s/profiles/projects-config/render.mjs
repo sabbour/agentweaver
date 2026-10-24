@@ -6,11 +6,13 @@ import { fileURLToPath } from 'node:url';
 const tenantId = '72f988bf-86f1-41af-91ab-2d7cd011db47';
 const clientId = 'b65f060f-364b-45ea-adf4-f704c176f33e';
 const postgresHost = 'agentweaver-pg.postgres.database.azure.com';
+const knowledgeBaseAddress = 'https://knowledge.agentweaver.svc.cluster.local:8443/';
 const fixedConfiguration = {
   ConnectionStrings__ProjectsConfig: `Host=${postgresHost};Port=5432;Database=agentweaver;Username=agentweaver-id-projects-config;SSL Mode=VerifyFull`,
   ProjectsConfig__Database__WorkloadIdentity__TenantId: tenantId,
   ProjectsConfig__Database__WorkloadIdentity__ClientId: clientId,
   ProjectsConfig__Database__WorkloadIdentity__TokenFilePath: '/var/run/secrets/azure/tokens/azure-identity-token',
+  ProjectsConfig__Knowledge__BaseAddress: knowledgeBaseAddress,
 };
 const requiredConfiguration = [
   ...Object.keys(fixedConfiguration),
@@ -97,6 +99,23 @@ function issuerHost(value) {
   return uri.hostname;
 }
 
+/** Require Knowledge calls to use the pinned in-cluster HTTPS owner root. */
+function validateKnowledgeOwnerAddress(value) {
+  let uri;
+  try { uri = new URL(value); } catch {
+    throw new Error('Projects Knowledge address must be a valid HTTPS owner root.');
+  }
+  if (uri.protocol !== 'https:' ||
+      uri.hostname !== 'knowledge.agentweaver.svc.cluster.local' ||
+      uri.port !== '8443' ||
+      uri.pathname !== '/' ||
+      uri.username ||
+      uri.password ||
+      uri.search ||
+      uri.hash)
+    throw new Error('Projects Knowledge address requires the in-cluster HTTPS owner root on port 8443.');
+}
+
 /** Validate explicitly approved setup settings without elevating or reusing the runtime principal. */
 function privilegedConfiguration(input, runtime) {
   exactFields(input, privilegedConfigurationFields, 'Privileged setup configuration');
@@ -140,6 +159,7 @@ export function renderProjectsProfile(input) {
         data[key] !== data[key].trim() || /[\u0000-\u001f\u007f]/.test(data[key]))
       throw new Error(`Projects configuration: '${key}' requires an explicit nonempty string.`);
   }
+  validateKnowledgeOwnerAddress(data.ProjectsConfig__Knowledge__BaseAddress);
   for (const [key, value] of Object.entries(fixedConfiguration)) {
     if (data[key] !== value) throw new Error(`Projects configuration: '${key}' differs from the admitted Projects runtime mapping.`);
   }

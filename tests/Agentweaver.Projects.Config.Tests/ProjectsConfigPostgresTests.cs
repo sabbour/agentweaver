@@ -3434,7 +3434,7 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
 
-    private static ProviderCatalog CreateProviderCatalog(bool sandboxEnabled = true)
+    private static ProviderCatalog CreateProviderCatalog(bool sandboxEnabled = true, bool includeMemory = false)
     {
         static ProviderRegistration Registration(string id, string revision, bool enabled = true) => new(
             new ProviderDescriptor(
@@ -3448,29 +3448,52 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             revision,
             1);
 
-        var networkCapabilities = ImmutableHashSet.Create(
-            StringComparer.Ordinal,
-            "networkpolicy.l3l4",
-            "networkpolicy.fqdn",
-            "networkpolicy.cidr",
-            "networkpolicy.dns");
+        var registrations = new List<ProviderRegistration>
+        {
+            Registration("sandbox-platform", "options-v1", sandboxEnabled),
+            Registration("sandbox-project", "options-v3"),
+            new ProviderRegistration(
+                new ProviderDescriptor(
+                    ProviderSeam.NetworkPolicy,
+                    "cilium",
+                    new Version(1, 0, 0),
+                    1,
+                    ProviderHostingPattern.KubernetesController,
+                    ImmutableHashSet.Create(
+                        StringComparer.Ordinal,
+                        "networkpolicy.l3l4",
+                        "networkpolicy.fqdn",
+                        "networkpolicy.cidr",
+                        "networkpolicy.dns")),
+                true,
+                "cilium-options-v1",
+                1)
+        };
+        var defaults = new List<ProviderSelection>
+        {
+            new(ProviderSeam.Sandbox, "sandbox-platform")
+        };
+        // History authorization tests need a real accepted Memory provider selection.
+        if (includeMemory)
+        {
+            const string memoryProviderId = "postgres.native-memory";
+            registrations.Add(new ProviderRegistration(
+                new ProviderDescriptor(
+                    ProviderSeam.Memory,
+                    memoryProviderId,
+                    new Version(1, 0, 0),
+                    1,
+                    ProviderHostingPattern.RemoteService,
+                    MemoryProviderCapabilities.All),
+                true,
+                "native-postgres-memory-v1",
+                1));
+            defaults.Add(new ProviderSelection(ProviderSeam.Memory, memoryProviderId));
+        }
+
         return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
-            [
-                Registration("sandbox-platform", "options-v1", sandboxEnabled),
-                Registration("sandbox-project", "options-v3"),
-                new ProviderRegistration(
-                    new ProviderDescriptor(
-                        ProviderSeam.NetworkPolicy,
-                        "cilium",
-                        new Version(1, 0, 0),
-                        1,
-                        ProviderHostingPattern.KubernetesController,
-                        networkCapabilities),
-                    true,
-                    "cilium-options-v1",
-                    1)
-            ],
-            [new ProviderSelection(ProviderSeam.Sandbox, "sandbox-platform")],
+            registrations,
+            defaults,
             [new ProviderOverridePermission(ProviderSeam.Sandbox, "sandbox-project")],
             layerSelections: [new ProviderLayerSelection(NetworkPolicyLayer.L3L4, "cilium")]).Value);
     }
@@ -3645,7 +3668,10 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         return options;
     }
 
-    private static AcceptRunSelectionRequest RunRequest(long projectRevision, long platformRevision) => new()
+    private static AcceptRunSelectionRequest RunRequest(
+        long projectRevision,
+        long platformRevision,
+        bool includeMemory = false) => new()
     {
         ExpectedProjectConfigRevision = projectRevision,
         ExpectedPlatformRuntimeRevision = platformRevision,
@@ -3680,6 +3706,19 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                         "networkpolicy.cidr",
                         "networkpolicy.dns"),
                 },
+                // History coverage adds the Memory provider that production uses for durable records.
+                ..(includeMemory
+                    ? new[]
+                    {
+                        new ProviderRequirement
+                        {
+                            Seam = ProviderSeam.Memory,
+                            RequiredAdapterVersion = "1.0.0",
+                            RequiredOptionsSchemaVersion = 1,
+                            RequiredCapabilities = MemoryProviderCapabilities.All,
+                        },
+                    }
+                    : Array.Empty<ProviderRequirement>())
             ],
             RequiredEgress = [Fqdn(NetworkEgressPurpose.ModelEndpoint, "api.example.com")],
         },

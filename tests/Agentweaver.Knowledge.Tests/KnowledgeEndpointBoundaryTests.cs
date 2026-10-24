@@ -166,6 +166,84 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
     }
 
     [Fact]
+    public async Task AgentHistoryReturnsOnlyMemoryForTheRequestedAgent()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(
+            database.Options, writeAllowed: true, bindCaller: false);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+
+        async Task CreateRecordAsync(string runId, string agentId, string key, string kind, string content)
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/projects/project-a/runs/{runId}/agents/{agentId}/records")
+            {
+                Content = JsonContent.Create(
+                    new
+                    {
+                        kind,
+                        type = "note",
+                        content,
+                        importance = "medium",
+                        tags = new[] { "agent-history" }
+                    },
+                    options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+
+        // Real PostgreSQL-backed records prove that the route filters by agent and Memory kind.
+        await CreateRecordAsync("run-a", "agent-a", "agent-history-a1", "memory", "Agent A memory");
+        await CreateRecordAsync("run-a", "agent-b", "agent-history-b1", "memory", "Agent B memory");
+        await CreateRecordAsync("run-b", "agent-a", "agent-history-a2", "sessionContext", "Agent A session");
+        owner.DenyRunSelectionPermission();
+        owner.ClearPaths();
+        using var historyRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/internal/projects/project-a/agents/agent-a/history");
+        historyRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+        historyRequest.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", "tenant-a");
+
+        using var historyResponse = await client.SendAsync(historyRequest);
+        using var body = JsonDocument.Parse(await historyResponse.Content.ReadAsStringAsync());
+        var root = body.RootElement;
+        var entries = root.GetProperty("items").EnumerateArray().ToArray();
+
+        Assert.Equal(HttpStatusCode.OK, historyResponse.StatusCode);
+        Assert.Equal("project-a", root.GetProperty("projectId").GetString());
+        Assert.Equal("agent-a", root.GetProperty("agentId").GetString());
+        Assert.Equal(["Agent A memory"], entries.Select(item => item.GetProperty("content").GetString()));
+        Assert.DoesNotContain("accessRunId", entries[0].EnumerateObject().Select(property => property.Name));
+        Assert.Contains("/internal/projects/project-a/runs/run-a/knowledge-selection", owner.Paths);
+        Assert.Contains("/internal/projects/project-a/runs/run-b/knowledge-selection", owner.Paths);
+        Assert.DoesNotContain(owner.Paths, path => path.EndsWith("/selection", StringComparison.Ordinal));
+        Assert.Equal("no-store", historyResponse.Headers.CacheControl?.ToString());
+    }
+
+    [Fact]
+    public async Task AgentHistoryRequiresCurrentPrivateKnowledgePermission()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: false, bindCaller: false);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/internal/projects/project-a/agents/agent-a/history");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(["/api/authorization/context"], owner.Paths);
+    }
+
+    [Fact]
     public async Task ProjectSearchPagesGloballyAcrossDistinctProviderResources()
     {
         await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
@@ -1480,17 +1558,26 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         int? maxPromptTokens = 1000,
         Func<string, (ProviderDescriptor Descriptor, int OptionsSchemaVersion, string OptionsRevision,
             ImmutableArray<string>? RequiredCapabilities)?>?
-            selectedMemoryByRun = null) : HttpMessageHandler
+            selectedMemoryByRun = null,
+        bool readRunSelectionAllowed = true) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<string> _paths = new();
         private readonly ConcurrentQueue<string?> _authorizationHeaders = new();
         private readonly ConcurrentQueue<string?> _cacheControlHeaders = new();
         private int _writeAllowed = writeAllowed ? 1 : 0;
+        private int _readRunSelectionAllowed = readRunSelectionAllowed ? 1 : 0;
         private int _selectionCount;
 
         public IReadOnlyCollection<string> Paths => _paths;
         public IReadOnlyCollection<string?> AuthorizationHeaders => _authorizationHeaders;
         public IReadOnlyCollection<string?> CacheControlHeaders => _cacheControlHeaders;
+        public void DenyRunSelectionPermission() => Interlocked.Exchange(ref _readRunSelectionAllowed, 0);
+        public void ClearPaths()
+        {
+            while (_paths.TryDequeue(out _))
+            {
+            }
+        }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -1503,6 +1590,15 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             object payload;
             if (path == "/api/authorization/context")
                 payload = Authority();
+            else if (path.StartsWith("/internal/projects/project-a/runs/", StringComparison.Ordinal) &&
+                     path.EndsWith("/knowledge-selection", StringComparison.Ordinal))
+            {
+                var runId = path["/internal/projects/project-a/runs/".Length..^"/knowledge-selection".Length];
+                payload = Selection(runId);
+                if (revokeWriteAfterFirstSelection &&
+                    Interlocked.Increment(ref _selectionCount) == 1)
+                    Interlocked.Exchange(ref _writeAllowed, 0);
+            }
             else if (path.StartsWith("/api/projects/project-a/runs/", StringComparison.Ordinal) &&
                      path.EndsWith("/selection", StringComparison.Ordinal))
             {
@@ -1525,8 +1621,9 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             var permissions = ImmutableArray.CreateBuilder<ProjectAuthorizationPermissionGrant>();
             permissions.Add(new ProjectAuthorizationPermissionGrant(
                 ProjectAuthorizationPermission.ReadProjects, 1));
-            permissions.Add(new ProjectAuthorizationPermissionGrant(
-                ProjectAuthorizationPermission.ReadRunSelection, 1));
+            if (Volatile.Read(ref _readRunSelectionAllowed) != 0)
+                permissions.Add(new ProjectAuthorizationPermissionGrant(
+                    ProjectAuthorizationPermission.ReadRunSelection, 1));
             if (Volatile.Read(ref _writeAllowed) != 0)
             {
                 permissions.Add(new ProjectAuthorizationPermissionGrant(
