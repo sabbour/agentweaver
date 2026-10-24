@@ -12,6 +12,8 @@ import type {
   CopilotAuthorizationCallback,
   CreateProjectRunRequest,
   CreateProjectRunResponse,
+  FormulateCastingProposalRequest,
+  AnalyzeCastingProposalRequest,
   CreateManualProjectCastingProposalRequest,
   CreateScenarioProjectCastingProposalRequest,
   CreateProjectCastingProposalRequest,
@@ -156,6 +158,39 @@ function problemMessage(problem: Record<string, unknown>, status: number): strin
 /** Encodes each path segment independently so identifiers cannot alter route structure. */
 export function encodeSegments(...segments: string[]): string {
   return segments.map((part) => encodeURIComponent(part)).join('/');
+}
+
+/** Accepts only a pending proposal whose stored generation mode matches the requested operation. */
+function isGeneratedCastingProposalResponse(
+  value: unknown,
+  projectId: string,
+  mode: 'formulate' | 'analyze',
+  expectedRevision: number,
+): value is ProjectCastingProposal {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proposal = value as Record<string, unknown>;
+  const proposalKeys = [
+    'proposalId', 'projectId', 'baseConfigurationRevision', 'draftRevision', 'state', 'draft',
+    'confirmedConfigurationRevision', 'result', 'transferProvenance', 'createdByActorId', 'createdAt',
+    'updatedByActorId', 'updatedAt', 'generation',
+  ];
+  if (Object.keys(proposal).length !== proposalKeys.length ||
+      proposalKeys.some((key) => !Object.hasOwn(proposal, key)) ||
+      proposal.projectId !== projectId ||
+      proposal.baseConfigurationRevision !== expectedRevision ||
+      !['pending', 'confirmed', 'rejected'].includes(String(proposal.state)) ||
+      !proposal.draft ||
+      typeof proposal.draft !== 'object' ||
+      !proposal.generation ||
+      typeof proposal.generation !== 'object' ||
+      Array.isArray(proposal.generation))
+    return false;
+  const generation = proposal.generation as Record<string, unknown>;
+  const generationKeys = ['requestId', 'mode', 'state', 'failureCode', 'createdAt', 'updatedAt'];
+  return Object.keys(generation).length === generationKeys.length &&
+    generationKeys.every((key) => Object.hasOwn(generation, key)) &&
+    generation.mode === mode &&
+    generation.state === 'completed';
 }
 
 /**
@@ -2260,6 +2295,71 @@ export class AgentweaverGatewayClient {
   /** Lists the built-in roles that a manual casting proposal can pick from. */
   listCatalogRoles(token: string, tenantSelector?: string | null): Promise<ProjectCastingRoleDefinition[]> {
     return this.request(token, '/catalog/roles', {}, this.baseUrl, tenantSelector);
+  }
+
+  /** Runs Formulate in the accepted project run and stages its output for review. */
+  formulateCastingProposal(
+    runToken: string,
+    projectToken: string,
+    projectId: string,
+    request: FormulateCastingProposalRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.createGeneratedCastingProposal(
+      runToken,
+      projectToken,
+      projectId,
+      'formulate',
+      request,
+      tenantSelector,
+    );
+  }
+
+  /** Runs Analyze in the accepted project run and stages its output for review. */
+  analyzeCastingProposal(
+    runToken: string,
+    projectToken: string,
+    projectId: string,
+    request: AnalyzeCastingProposalRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    return this.createGeneratedCastingProposal(
+      runToken,
+      projectToken,
+      projectId,
+      'analyze',
+      request,
+      tenantSelector,
+    );
+  }
+
+  private async createGeneratedCastingProposal(
+    runToken: string,
+    projectToken: string,
+    projectId: string,
+    mode: 'formulate' | 'analyze',
+    request: FormulateCastingProposalRequest | AnalyzeCastingProposalRequest,
+    tenantSelector?: string | null,
+  ): Promise<ProjectCastingProposal> {
+    // The run token authenticates Orchestrator; the separate unbound token is used only by Projects & Config.
+    const result = await this.request<unknown>(
+      runToken,
+      `/projects/${encodeSegments(projectId, 'casting', 'proposals', mode)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+        headers: { 'X-Agentweaver-Project-Authorization': `Bearer ${projectToken}` },
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (!isGeneratedCastingProposalResponse(result, projectId, mode, request.expectedConfigurationRevision))
+      throw new GatewayError(
+        502,
+        { code: 'owner_contract_invalid' },
+        'The service returned an invalid casting proposal.',
+      );
+    return result;
   }
 
   /** Lists the project's casting proposals, newest first, up to `limit` (1–100). */

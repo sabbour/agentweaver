@@ -259,6 +259,11 @@ public static class GatewayEndpoints
                         route.PublicPath,
                         (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
                             owner.ProxyAuthorizationContextAsync(context, route, cancellationToken))
+                    : route.OperationId is "formulateCastingProposal" or "analyzeCastingProposal"
+                        ? endpoints.MapPost(
+                            route.PublicPath,
+                            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                                owner.ProxyCastingGenerationAsync(context, route, cancellationToken))
                     : endpoints.MapMethods(
                         route.PublicPath,
                         [route.Method],

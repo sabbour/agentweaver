@@ -169,6 +169,38 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
     }
 
     [Fact]
+    public async Task ReadOnlyTurnAllowsViewAndRejectsEveryOtherEnabledTool()
+    {
+        var calls = new List<RuntimeActionRequest>();
+        var turns = ActiveTurn(readOnlyToolsOnly: true);
+        var authorization = Authorization((request, _) =>
+        {
+            calls.Add(request);
+            return Task.CompletedTask;
+        }, turns);
+        var hookInvocation = CreateHookInvocation(SessionId());
+        var permissionInvocation = CurrentInvocation();
+
+        var viewHook = await authorization.OnPreToolUseAsync(
+            Create<PreToolUseHookInput>(HookInput(SessionId(), "view")), hookInvocation);
+        Assert.Equal("ask", viewHook?.PermissionDecision);
+        Approved(await authorization.OnPermissionRequestAsync(
+            PermissionRequest("view", "read-only-view"), permissionInvocation));
+        Approved(await authorization.OnPermissionRequestAsync(
+            SecondaryPermission("view", "read-only-view"), permissionInvocation));
+
+        var writeHook = await authorization.OnPreToolUseAsync(
+            Create<PreToolUseHookInput>(HookInput(SessionId(), "edit")), hookInvocation);
+        Assert.Equal("deny", writeHook?.PermissionDecision);
+        Assert.Equal("runtime_tool_read_only", writeHook?.PermissionDecisionReason);
+        var writePermission = await authorization.OnPermissionRequestAsync(
+            PermissionRequest("edit", "read-only-edit"), permissionInvocation);
+        Assert.Equal(PermissionDecision.Reject("runtime_tool_read_only").Kind, writePermission.Kind);
+        Assert.All(calls, request => Assert.Equal("tool.read", request.ActionId));
+        Assert.Equal(4, calls.Count);
+    }
+
+    [Fact]
     public async Task RepeatedInvocationCannotReuseAllowAfterAuthorityRevocation()
     {
         var checks = 0;
@@ -274,10 +306,10 @@ public sealed class RuntimeCopilotToolCallAuthorizationTests
         Func<RuntimeActionRequest, CancellationToken, Task> authority, RuntimeCopilotTurnObserver? turns = null) =>
         new(RuntimeCopilotSessionTests.Registration(), SessionId(), authority, turns ?? ActiveTurn());
 
-    private static RuntimeCopilotTurnObserver ActiveTurn()
+    private static RuntimeCopilotTurnObserver ActiveTurn(bool readOnlyToolsOnly = false)
     {
         var turns = new RuntimeCopilotTurnObserver();
-        _ = turns.Begin(CancellationToken.None, Guid.NewGuid());
+        _ = turns.Begin(CancellationToken.None, Guid.NewGuid(), readOnlyToolsOnly);
         return turns;
     }
 

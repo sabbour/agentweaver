@@ -88,7 +88,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     /// <exception cref="RuntimeAuthorizationException">The turn lacks action authority or the session is stale.</exception>
     public async Task<string> SendTurnAsync(
         string prompt, RuntimeSessionMaterialHttpClient material, CancellationToken cancellationToken,
-        Guid? userEventId = null)
+        Guid? userEventId = null, bool readOnlyToolsOnly = false)
     {
         if (Registration.Binding.WorkflowStepId is not null)
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_required");
@@ -123,7 +123,9 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 Registration, "model.turn", turnId, System.Text.Encoding.UTF8.GetBytes(prompt),
                 RequireCurrentAsync, cancellationToken,
                 dispatchId: coordinatorRoot ? turnId : null).ConfigureAwait(false);
-            var answer = await _session.SendTurnAsync(prompt, cancellationToken, userEventId).ConfigureAwait(false);
+            // Preserve the A2A caller's read-only restriction through the authorized runtime wrapper.
+            var answer = await _session.SendTurnAsync(
+                prompt, cancellationToken, userEventId, readOnlyToolsOnly).ConfigureAwait(false);
             await CommitTurnContentAsync(material, Guid.NewGuid(), "assistant", answer, cancellationToken).ConfigureAwait(false);
             await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
             return answer;

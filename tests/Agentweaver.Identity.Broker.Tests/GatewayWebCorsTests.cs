@@ -41,6 +41,27 @@ public sealed class GatewayWebCorsTests
         Assert.Contains("x-agentweaver-tenant", allowedHeaders, StringComparison.OrdinalIgnoreCase);
         Assert.False(preflightResponse.Headers.Contains("Access-Control-Allow-Credentials"));
 
+        // Generated proposals need both the run bearer and the separate project-writer bearer.
+        using var castingPreflight = new HttpRequestMessage(
+            HttpMethod.Options,
+            "/api/v1/projects/project-1/casting/proposals/analyze");
+        castingPreflight.Headers.TryAddWithoutValidation("Origin", "https://web.test");
+        castingPreflight.Headers.TryAddWithoutValidation("Access-Control-Request-Method", "POST");
+        castingPreflight.Headers.TryAddWithoutValidation(
+            "Access-Control-Request-Headers",
+            "authorization,content-type,x-agentweaver-project-authorization,x-agentweaver-tenant");
+        using var castingPreflightResponse = await gateway.Client.SendAsync(castingPreflight);
+        Assert.Equal(HttpStatusCode.NoContent, castingPreflightResponse.StatusCode);
+        var castingAllowedHeaders = string.Join(
+            ",", castingPreflightResponse.Headers.GetValues("Access-Control-Allow-Headers"));
+        Assert.Contains("authorization", castingAllowedHeaders, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("content-type", castingAllowedHeaders, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "x-agentweaver-project-authorization",
+            castingAllowedHeaders,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("x-agentweaver-tenant", castingAllowedHeaders, StringComparison.OrdinalIgnoreCase);
+
         using var copilotPreflight = new HttpRequestMessage(
             HttpMethod.Options, "/api/connections/copilot-user/v1/begin");
         copilotPreflight.Headers.TryAddWithoutValidation("Origin", "https://web.test");

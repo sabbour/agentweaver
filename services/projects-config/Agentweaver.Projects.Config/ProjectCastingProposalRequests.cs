@@ -71,6 +71,7 @@ public sealed record CompleteProjectCastingGenerationRequest
     public required string RunId { get; init; }
     public required ImmutableArray<ProjectAgentCharter> AgentCharters { get; init; }
     public required ImmutableArray<ProjectAgentCast> Casting { get; init; }
+    public string? CastingUniverse { get; init; }
 }
 
 /// <summary>Records a safe failure code for a generation run without persisting its raw exception or output.</summary>

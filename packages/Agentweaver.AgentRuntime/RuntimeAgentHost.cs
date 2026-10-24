@@ -1322,8 +1322,13 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                         (answer, recorded) = await session.SendNativeTurnAsync(
                             pending.Request, _material!, _usageSource!, turn.Token).ConfigureAwait(false);
                     else
+                        // The per-message restriction is checked by the tool hook and permission owner path.
                         answer = await session.SendTurnAsync(
-                            pending.Request.Message.Parts[0].Text, _material!, turn.Token, pending.MessageId)
+                            pending.Request.Message.Parts[0].Text,
+                            _material!,
+                            turn.Token,
+                            pending.MessageId,
+                            pending.Request.Message.Metadata.ReadOnlyToolsOnly)
                             .ConfigureAwait(false);
                     await session.FlushUsageAsync(turn.Token).ConfigureAwait(false);
                     RequireAvailable();

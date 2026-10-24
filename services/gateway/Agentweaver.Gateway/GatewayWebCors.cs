@@ -37,6 +37,8 @@ public static class GatewayWebCors
                 var headers = new List<string> { "Authorization", "Accept" };
                 if (route.HasJsonBody) headers.Add("Content-Type");
                 if (route.ForwardTenantSelector) headers.Add("X-Agentweaver-Tenant");
+                if (route.OperationId is "formulateCastingProposal" or "analyzeCastingProposal")
+                    headers.Add("X-Agentweaver-Project-Authorization");
                 if (!route.ForwardRequestHeaders.IsDefaultOrEmpty)
                     headers.AddRange(route.ForwardRequestHeaders);
                 if (RequiresIdempotencyKey(route.OperationId)) headers.Add("Idempotency-Key");

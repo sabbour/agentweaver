@@ -69,7 +69,12 @@ internal static class CastingGenerationExecutionContract
             RuntimeContractValidation.NativeSessionId(registration.Binding),
             "user",
             [new("text", request.Prompt)],
-            new(proof, AddressedMessageDeliveryMode.Immediate, ContinueAfterCallerDisconnect: true));
+            new(
+                proof,
+                AddressedMessageDeliveryMode.Immediate,
+                ContinueAfterCallerDisconnect: true,
+                // The generated result is a proposal; this turn may inspect files but cannot modify them.
+                ReadOnlyToolsOnly: true));
         return new(message);
     }
 

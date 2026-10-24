@@ -78,7 +78,7 @@ The client uses these routes:
 | `/projects/:projectId/orchestrations` | List this project's active and finished runs and open a run. |
 | `/projects/:projectId/board` | Read the project **Board**: backlog tasks in **Backlog**, **Ready**, **Active**, and **Done** columns. Capture a task and edit a task's title and description. |
 | `/projects/:projectId/team` | Read agents, edit an agent's role and charter, add a member, and export or import the team. |
-| `/projects/:projectId/team/cast` | Cast a team from a template or chosen roles, then review and confirm the proposal. |
+| `/projects/:projectId/team/cast` | Formulate a team from a goal, analyze read-only project signals, or start from a template; review a pending proposal before confirmation. |
 | `/projects/:projectId/settings?section=<key>` | Edit project settings by section, manage members, read history, and manage connections. |
 | `/projects/:projectId/skills` | Manage Skill sources, imported revisions, and agent assignments. |
 | `/projects/:projectId/memories` | Search and manage Knowledge records and transfer bundles for a run and an agent. `/knowledge` opens the same page. |
@@ -267,9 +267,9 @@ A measurement that the service didn't record shows a dash, not 0.
 **Agents** has three team controls. Each change becomes a pending team
 proposal first. Nothing changes until someone confirms the proposal.
 
-- **Cast team** opens the **Cast a team** page. Pick a built-in template or
-  choose roles, then review the proposed agents. You can remove members before
-  you confirm. Use **Re-role** to change a proposed member's catalog role and
+- **Cast team** opens the **Cast a team** page. Choose **Formulate**,
+  **Analyze**, or **Template**, then review the proposed agents. You can remove
+  members before you confirm. Use **Re-role** to change a proposed member's catalog role and
   optional display title. The title does not change the role ID. Each edit is
   saved against the proposal draft revision. **Cast team** confirms the
   proposal and saves a new configuration revision. **Reject** discards it.
@@ -677,8 +677,6 @@ These 0.x features are not in this version:
 - Dragging or reordering tasks on the **Board**. Queue state, archive, and
   prerequisite actions are available from each card; cards can't be dragged.
 - The **Human Review** and **Problems** columns on the **Board**.
-- The **AI Formulate** and **Analyze** casting modes and the **Universe**
-  picker on **Cast a team**.
 - The count strip on **Memories**.
 - Metrics totaled across projects. **Overview** shows one project at a time.
 - Deleting, archiving, and retrying runs.

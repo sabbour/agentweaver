@@ -218,7 +218,9 @@ public sealed record RuntimeA2AMetadata(
     RuntimeHostSessionProof Runtime,
     AddressedMessageDeliveryMode DeliveryMode,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-    bool ContinueAfterCallerDisconnect = false);
+    bool ContinueAfterCallerDisconnect = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    bool ReadOnlyToolsOnly = false);
 
 /// <summary>Validated A2A text message shape sent to the runtime.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

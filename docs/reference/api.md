@@ -470,12 +470,37 @@ Owner.
 
 ### Casting through the Gateway
 
-All casting routes forward the original bearer and optional
-`X-Agentweaver-Tenant` selector to Projects & Config. The owner enforces
-`ReadProjects` for proposal reads and `WriteProjects` for mutations **and
-export**. Writes and export require `api.read`, `projects.admin`, and current
-TenantAdmin or project Owner authority. Catalog reads require authentication.
-No new roles or idempotency headers are introduced.
+Casting routes use Projects & Config as the only configuration authority. The
+owner enforces `ReadProjects` for proposal reads and `WriteProjects` for
+mutations **and export**. Writes and export require `api.read`, `projects.admin`,
+and current TenantAdmin or project Owner authority. Catalog reads require
+authentication. No new roles or idempotency headers are introduced.
+
+| Method | Gateway path | Authorization | Result |
+| --- | --- | --- | --- |
+| POST | `/api/v1/projects/{projectId}/casting/proposals/formulate` | Run-bound bearer and separate project-writer bearer | Pending proposal with completed Formulate status. |
+| POST | `/api/v1/projects/{projectId}/casting/proposals/analyze` | Run-bound bearer and separate project-writer bearer | Pending proposal with completed Analyze status. |
+
+Formulate and Analyze are strict Gateway operations with separate request
+shapes: Formulate requires a goal, while Analyze has no goal and uses
+read-only repository signals. Both requests include the expected configuration
+revision, accepted run and root session, idempotency key, canonical prompt,
+team size, intent, preferred role IDs, and optional universe. They return a
+pending `ProjectCastingProposal` with its generation mode and completed status.
+The generated team remains reviewable; neither operation updates live
+configuration.
+
+These operations require two bearer credentials. Send the exact run-bound
+bearer in `Authorization` and the unbound project-writer bearer in
+`X-Agentweaver-Project-Authorization`. Gateway checks that both resolve to the
+same issuer, actor, and tenant, that the run bearer matches the request's
+project and run, and that the project bearer has current write authority. Only
+the run bearer is sent to Orchestrator. Confirm or reject the returned proposal
+with its current `expectedDraftRevision`; confirmation also rechecks the base
+configuration revision.
+
+These operations are browser-only and are excluded from MCP discovery. The
+separate project-writer bearer is never exposed as an MCP tool argument.
 
 Create requests carry `expectedConfigurationRevision` and either `draft`,
 `templateId`, or `roleIds`. Scenario and manual requests may also include

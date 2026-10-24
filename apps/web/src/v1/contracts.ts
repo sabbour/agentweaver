@@ -604,7 +604,39 @@ export interface ProjectCastingProposal {
   createdAt: string;
   updatedByActorId: string;
   updatedAt: string;
+  generation: ProjectCastingGenerationStatus | null;
 }
+
+/** Run-bound generation mode and lifecycle attached to a generated proposal. */
+export interface ProjectCastingGenerationStatus {
+  requestId: string;
+  mode: 'formulate' | 'analyze';
+  state: 'pending' | 'completed' | 'failed' | 'stale' | 'cancelled';
+  failureCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Shared run and proposal fences for AI-generated casting modes. */
+export interface CastingGenerationRequestBase {
+  expectedConfigurationRevision: number;
+  runId: string;
+  sessionId: string;
+  idempotencyKey: string;
+  prompt: string;
+  teamSize: number;
+  intent: 'augment' | 'recast';
+  preferredRoleIds: string[];
+  universe?: string | null;
+}
+
+/** User goal for the Formulate proposal mode. */
+export interface FormulateCastingProposalRequest extends CastingGenerationRequestBase {
+  goal: string;
+}
+
+/** Repository-signal analysis for the Analyze proposal mode. */
+export type AnalyzeCastingProposalRequest = CastingGenerationRequestBase;
 
 /** Complete configuration staged for review without applying it. */
 export interface CreateProjectCastingProposalRequest {

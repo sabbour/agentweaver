@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -134,6 +135,7 @@ public sealed partial class ProjectsConfigService
         {
             agentCharters = request.AgentCharters,
             casting = request.Casting,
+            castingUniverse = request.CastingUniverse,
         });
 
         return ExecuteCastingProposalTransactionAsync(async (context, token) =>
@@ -183,12 +185,23 @@ public sealed partial class ProjectsConfigService
                 .ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
             var current = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+            var configuredRoles = request.Casting.Select(item => item.Role).ToHashSet(StringComparer.Ordinal);
+            var configuredAgents = request.AgentCharters.Select(item => item.AgentId)
+                .Concat(request.Casting.Select(item => item.AgentId))
+                .ToHashSet(StringComparer.Ordinal);
             var draft = ProjectConfigurationValidator.ValidateTransition(
                 current,
                 current with
                 {
                     AgentCharters = request.AgentCharters,
                     Casting = request.Casting,
+                    CastingUniverse = request.CastingUniverse,
+                    ModelRoleOverrides = current.ModelRoleOverrides
+                        .Where(item => configuredRoles.Contains(item.RoleId))
+                        .ToImmutableArray(),
+                    ModelAgentOverrides = current.ModelAgentOverrides
+                        .Where(item => configuredAgents.Contains(item.AgentId))
+                        .ToImmutableArray(),
                 });
             await EnsureCastingProjectNarrowingAsync(context, draft, token).ConfigureAwait(false);
 

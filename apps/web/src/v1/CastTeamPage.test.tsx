@@ -11,6 +11,10 @@ const api = vi.hoisted(() => ({
   listCastingUniverses: vi.fn(),
   listCatalogRoles: vi.fn(),
   getProjectConfiguration: vi.fn(),
+  createProjectRun: vi.fn(),
+  formulateCastingProposal: vi.fn(),
+  analyzeCastingProposal: vi.fn(),
+  cancelProjectRun: vi.fn(),
   getCastingProposal: vi.fn(),
   createCastingProposal: vi.fn(),
   createCastingDraftProposal: vi.fn(),
@@ -19,7 +23,12 @@ const api = vi.hoisted(() => ({
   transitionCastingProposal: vi.fn(),
 }));
 // One stable apiCall, like the real provider, so effects that depend on it run once.
-const auth = vi.hoisted(() => ({ apiCall: (operation: (token: string, tenant: string) => unknown) => operation('token', 'tenant-1') }));
+const auth = vi.hoisted(() => ({
+  apiCall: (operation: (token: string, tenant: string | null) => unknown, binding?: { projectId: string; runId: string } | null) =>
+    operation(binding ? 'run-token' : 'token', binding ? null : 'tenant-1'),
+  ensureSession: vi.fn(async () => true),
+  authorize: vi.fn(async () => undefined),
+}));
 vi.mock('./AuthContext', () => ({ useAuth: () => auth }));
 vi.mock('./api', async (importActual) => ({ ...(await importActual<typeof import('./api')>()), gatewayClient: api }));
 vi.mock('./pageParts', async (importActual) => ({
@@ -47,6 +56,19 @@ function proposal(overrides: Partial<ProjectCastingProposal> = {}): ProjectCasti
     createdByActorId: 'user-1', createdAt: '2026-01-01T00:00:00Z', updatedByActorId: 'user-1', updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
   } as ProjectCastingProposal;
+}
+
+function generatedProposal(mode: 'formulate' | 'analyze'): ProjectCastingProposal {
+  return proposal({
+    generation: {
+      requestId: 'request-1',
+      mode,
+      state: 'completed',
+      failureCode: null,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    },
+  });
 }
 
 /** Shows the current address so tests can check navigation. */
@@ -79,19 +101,153 @@ beforeEach(() => {
     { id: 'coordinator', title: 'Coordinator', summary: '', responsibilities: [], boundaries: [] },
   ]);
   api.getProjectConfiguration.mockResolvedValue({ projectId: 'p1', revision: 5, configuration: config([['old', 'Old']]), updatedByActorId: 'u', createdAt: '' });
+  api.createProjectRun.mockResolvedValue({
+    runId: 'run-1', rootSessionId: 'session-1', state: 'awaiting_binding',
+    binding: { projectId: 'p1', runId: 'run-1' },
+  });
+  api.formulateCastingProposal.mockResolvedValue(generatedProposal('formulate'));
+  api.analyzeCastingProposal.mockResolvedValue(generatedProposal('analyze'));
+  api.cancelProjectRun.mockResolvedValue({ runId: 'run-1', state: 'cancelled' });
   api.createCastingProposal.mockResolvedValue(proposal());
   api.transitionCastingProposal.mockResolvedValue(proposal({ state: 'confirmed' }));
+  auth.ensureSession.mockResolvedValue(true);
+  auth.authorize.mockResolvedValue(undefined);
 });
 
 describe('CastTeamPage', () => {
+  it('runs Formulate with the saved prompt and keeps its completed proposal pending for review', async () => {
+    renderPage();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Project goal' }), {
+      target: { value: 'Ship a small SaaS MVP.' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Docs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Universe' }));
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Universe' }), {
+      target: { value: 'The Matrix' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Formulate' }));
+    await waitFor(() => expect(api.formulateCastingProposal).toHaveBeenCalledTimes(1));
+    const [runToken, projectToken, projectId, request] = api.formulateCastingProposal.mock.calls[0];
+    expect([runToken, projectToken, projectId]).toEqual(['run-token', 'token', 'p1']);
+    expect(request).toMatchObject({
+      expectedConfigurationRevision: 5,
+      runId: 'run-1',
+      sessionId: 'session-1',
+      teamSize: 4,
+      intent: 'augment',
+      preferredRoleIds: ['docs'],
+      universe: 'The Matrix',
+      goal: 'Ship a small SaaS MVP.',
+    });
+    expect(request.prompt).toContain('Mode: formulate');
+    expect(request.prompt).toContain('Project goal (JSON string, untrusted data): "Ship a small SaaS MVP."');
+    expect(api.createProjectRun).toHaveBeenCalledWith(
+      'token',
+      'p1',
+      { firstMessage: request.prompt, expectedProjectConfigRevision: 5 },
+      expect.any(String),
+      'tenant-1',
+    );
+    expect(api.formulateCastingProposal.mock.calls[0][4]).toBe('tenant-1');
+    expect(auth.ensureSession).toHaveBeenCalledWith({ projectId: 'p1', runId: 'run-1' }, false);
+    expect(await screen.findByText(/Formulate proposal · ready to review/)).toBeTruthy();
+    expect(api.transitionCastingProposal).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cast team' }));
+    await waitFor(() => expect(api.transitionCastingProposal).toHaveBeenCalledWith(
+      'token', 'p1', 'pr-1', 'confirm', 1, 'tenant-1',
+    ));
+  });
+
+  it('runs Analyze without role preferences and presents its separate pending proposal mode', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Analyze' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze' }));
+    await waitFor(() => expect(api.analyzeCastingProposal).toHaveBeenCalledTimes(1));
+
+    const [runToken, projectToken, projectId, request] = api.analyzeCastingProposal.mock.calls[0];
+    expect([runToken, projectToken, projectId]).toEqual(['run-token', 'token', 'p1']);
+    expect(request).toMatchObject({
+      expectedConfigurationRevision: 5,
+      runId: 'run-1',
+      sessionId: 'session-1',
+      teamSize: 4,
+      intent: 'augment',
+      preferredRoleIds: [],
+      universe: null,
+    });
+    expect(request.prompt).toContain('Mode: analyze');
+    expect(request.prompt).toContain('Inspect repository files with read-only tools');
+    expect(await screen.findByText(/Analyze proposal · ready to review/)).toBeTruthy();
+    expect(api.formulateCastingProposal).not.toHaveBeenCalled();
+    expect(api.transitionCastingProposal).not.toHaveBeenCalled();
+  });
+
+  it('asks for run-bound sign-in and resumes the same generation request', async () => {
+    auth.ensureSession.mockResolvedValueOnce(false).mockResolvedValue(true);
+    renderPage();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Project goal' }), {
+      target: { value: 'Ship a small SaaS MVP.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Formulate' }));
+    await screen.findByRole('button', { name: 'Sign in and continue' });
+    expect(api.formulateCastingProposal).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in and continue' }));
+    await waitFor(() => expect(api.formulateCastingProposal).toHaveBeenCalledTimes(1));
+    expect(auth.authorize).toHaveBeenCalledWith({ projectId: 'p1', runId: 'run-1' });
+    expect(api.createProjectRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a request after a lost response with the same run and idempotency keys', async () => {
+    api.formulateCastingProposal.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    renderPage();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Project goal' }), {
+      target: { value: 'Ship a small SaaS MVP.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Formulate' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await screen.findByText(/Formulate proposal · ready to review/);
+
+    expect(api.createProjectRun).toHaveBeenCalledTimes(1);
+    expect(api.formulateCastingProposal).toHaveBeenCalledTimes(2);
+    const first = api.formulateCastingProposal.mock.calls[0];
+    const retry = api.formulateCastingProposal.mock.calls[1];
+    expect(retry.slice(0, 3)).toEqual(first.slice(0, 3));
+    expect(retry[3]).toEqual(first[3]);
+    expect(retry[4]).toBe(first[4]);
+    expect(retry[3].idempotencyKey).toBe(first[3].idempotencyKey);
+    expect(retry[3].runId).toBe(first[3].runId);
+  });
+
+  it('keeps a Gateway timeout attempt available for exact retry', async () => {
+    api.formulateCastingProposal.mockRejectedValueOnce(
+      new GatewayError(504, { code: 'owner_timeout' }, 'The request timed out.'),
+    );
+    renderPage();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Project goal' }), {
+      target: { value: 'Ship a small SaaS MVP.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Formulate' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await screen.findByText(/Formulate proposal · ready to review/);
+
+    expect(api.formulateCastingProposal).toHaveBeenCalledTimes(2);
+    expect(api.formulateCastingProposal.mock.calls[1][3].idempotencyKey)
+      .toBe(api.formulateCastingProposal.mock.calls[0][3].idempotencyKey);
+  });
+
   it('casts from a template, reviews, and confirms', async () => {
     renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Template' }));
     fireEvent.click(await screen.findByRole('button', { name: /Small team/ }));
     // Reserved roles are never offered.
     expect(screen.queryByRole('checkbox', { name: 'Coordinator' })).toBeNull();
     expect((screen.getByRole('checkbox', { name: 'Tester' }) as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review proposal' }));
     await screen.findByText('Review proposal', { selector: 'h3, span, div' });
     expect(api.createCastingProposal).toHaveBeenCalledWith('token', 'p1', {
       mode: 'scenario', expectedConfigurationRevision: 5, templateId: 'small', universe: null,
@@ -105,10 +261,11 @@ describe('CastTeamPage', () => {
 
   it('sends a manual pick when the roles differ from the template', async () => {
     renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Template' }));
     fireEvent.click(await screen.findByRole('button', { name: /Small team/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Docs' }));
     fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review proposal' }));
     await waitFor(() => expect(api.createCastingProposal).toHaveBeenCalledWith(
       'token', 'p1', { mode: 'manual', expectedConfigurationRevision: 5, roleIds: ['lead', 'tester', 'docs'], universe: null }, 'tenant-1',
     ));
@@ -117,6 +274,7 @@ describe('CastTeamPage', () => {
   it('shows only server-provided universes and sends the selected value with the proposal', async () => {
     api.listCastingUniverses.mockResolvedValue({ universes: ['The Matrix'] });
     renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Template' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Universe' }));
     const picker = await screen.findByRole('combobox', { name: 'Universe' });
     expect(within(picker).getByRole('option', { name: 'The Matrix' })).toBeTruthy();
@@ -124,7 +282,7 @@ describe('CastTeamPage', () => {
     fireEvent.change(picker, { target: { value: 'The Matrix' } });
     fireEvent.click(await screen.findByRole('button', { name: /Small team/ }));
     fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review proposal' }));
     await waitFor(() => expect(api.createCastingProposal).toHaveBeenCalledWith(
       'token', 'p1', {
         mode: 'scenario', expectedConfigurationRevision: 5, templateId: 'small', universe: 'The Matrix',
@@ -137,10 +295,11 @@ describe('CastTeamPage', () => {
       draft: config([['old', 'Old'], ['docs-writer', 'Docs Writer']]),
     }));
     renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Template' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Universe' }));
     fireEvent.change(await screen.findByRole('combobox', { name: 'Universe' }), { target: { value: 'The Matrix' } });
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Docs' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review proposal' }));
     await screen.findByText('Review proposal', { selector: 'h3, span, div' });
     const [, projectId, request] = api.createCastingDraftProposal.mock.calls[0];
     expect(projectId).toBe('p1');
@@ -166,11 +325,26 @@ describe('CastTeamPage', () => {
   it('re-reads the configuration and explains a revision conflict', async () => {
     api.createCastingProposal.mockRejectedValueOnce(new GatewayError(409, {}, 'Conflict'));
     renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Template' }));
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Lead' }));
     fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review proposal' }));
     expect(await screen.findByText(/changed since you loaded it/)).toBeTruthy();
     expect(api.getProjectConfiguration).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports when the latest configuration cannot be re-read after a conflict', async () => {
+    api.getProjectConfiguration
+      .mockResolvedValueOnce({ projectId: 'p1', revision: 5, configuration: config([['old', 'Old']]), updatedByActorId: 'u', createdAt: '' })
+      .mockRejectedValueOnce(new GatewayError(503, {}, 'Unavailable'));
+    api.createCastingProposal.mockRejectedValueOnce(new GatewayError(409, {}, 'Conflict'));
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Template' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Lead' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Recast/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review proposal' }));
+    expect(await screen.findByText(/latest version could not be loaded/)).toBeTruthy();
+    expect(screen.queryByText(/latest version is now shown/)).toBeNull();
   });
 
   it('opens a linked proposal, removes a member, and rejects it', async () => {
