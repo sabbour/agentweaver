@@ -46,8 +46,11 @@ existing run to a new provider.
 The journal stores typed references and retention metadata; Object Store holds
 the bytes. Events first commits an inventory row for each generated object key,
 then persists bytes before the journal transaction commits its reference and
-retention deadline. A failed journal commit leaves an unreferenced inventory
-entry and does not acknowledge the material.
+retention deadline. Every committed object reference extends the inventory
+deadline in the journal transaction, including ordinary appends that do not
+write bytes. A failed journal commit leaves an unreferenced inventory entry and
+does not acknowledge the material. An append cannot create a reference to an
+object that cleanup has already deleted.
 
 An Events-owned worker checks inventory hourly. It removes an unreferenced
 object after a 24-hour grace period and removes referenced bytes after their

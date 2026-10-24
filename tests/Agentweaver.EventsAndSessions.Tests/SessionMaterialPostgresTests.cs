@@ -196,6 +196,134 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
     }
 
     [Fact]
+    public async Task OrdinaryAppendExtendsObjectRetentionAndCleanupRespectsLiveReferences()
+    {
+        var material = await Store.WriteAsync(
+            Principal, "session", Request(), _registration, Source, Current, default);
+        var key = material.Reference.Key;
+
+        // Simulate migration inventory with an expired deadline before a later ordinary reference commits.
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var expire = new NpgsqlCommand($"""
+            UPDATE "{_schema}".session_object_inventory
+            SET retain_until = clock_timestamp() - interval '1 second'
+            WHERE object_key = @key;
+            UPDATE "{_schema}".session_object_references
+            SET retain_until = clock_timestamp() - interval '1 second'
+            WHERE object_key = @key
+            """, connection))
+        {
+            expire.Parameters.AddWithValue("key", key.Value);
+            Assert.Equal(2, await expire.ExecuteNonQueryAsync());
+        }
+
+        var ordinaryReference = new SessionObjectReference(
+            key, material.Reference.Purpose, material.Reference.ByteLength);
+        var appended = await _journal.AppendAsync(Principal, "session", new(
+            Guid.NewGuid(), 1, 2, new TurnSessionPayload("assistant", ordinaryReference)));
+        var storedReference = Assert.Single(appended.Event.ObjectReferences);
+
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var readDeadline = new NpgsqlCommand($"""
+            SELECT retain_until FROM "{_schema}".session_object_inventory
+            WHERE object_key = @key
+            """, connection))
+        {
+            readDeadline.Parameters.AddWithValue("key", key.Value);
+            Assert.Equal(storedReference.Retention.RetainUntil.UtcDateTime,
+                (DateTime)(await readDeadline.ExecuteScalarAsync())!);
+        }
+
+        // An expired inventory deadline must not override a newer committed reference deadline.
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var staleInventory = new NpgsqlCommand($"""
+            UPDATE "{_schema}".session_object_inventory
+            SET retain_until = clock_timestamp() - interval '1 second'
+            WHERE object_key = @key
+            """, connection))
+        {
+            staleInventory.Parameters.AddWithValue("key", key.Value);
+            Assert.Equal(1, await staleInventory.ExecuteNonQueryAsync());
+        }
+
+        var retention = new SessionObjectRetentionService(fixture.DataSource, _options, _objects);
+        Assert.Equal(0, await retention.CleanupAsync(default));
+        Assert.Contains(key, _objects.Values.Keys);
+
+        var newKey = new ObjectKey($"ordinary/{Guid.NewGuid():N}");
+        await using (var content = new MemoryStream(Encoding.UTF8.GetBytes("ordinary artifact")))
+            await _objects.WriteAsync(newKey, content);
+        await _journal.AppendAsync(Principal, "session", new(
+            Guid.NewGuid(), 1, 2,
+            new TurnSessionPayload("assistant", new SessionObjectReference(newKey, "transcript", 17))));
+
+        await using var inventoryConnection = await fixture.DataSource.OpenConnectionAsync();
+        await using var readNewInventory = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".session_object_inventory
+            WHERE object_key = @key AND retain_until > clock_timestamp()
+            """, inventoryConnection);
+        readNewInventory.Parameters.AddWithValue("key", newKey.Value);
+        Assert.Equal(1L, (long)(await readNewInventory.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
+    public async Task OrdinaryAppendCannotCreateReferenceAfterObjectWasDeleted()
+    {
+        var material = await Store.WriteAsync(
+            Principal, "session", Request(), _registration, Source, Current, default);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var markDeleted = new NpgsqlCommand($"""
+            UPDATE "{_schema}".session_object_inventory
+            SET deleted_at = clock_timestamp()
+            WHERE object_key = @key
+            """, connection))
+        {
+            markDeleted.Parameters.AddWithValue("key", material.Reference.Key.Value);
+            Assert.Equal(1, await markDeleted.ExecuteNonQueryAsync());
+        }
+        Assert.True(await _objects.DeleteAsync(material.Reference.Key));
+
+        var exception = await Assert.ThrowsAsync<SessionMaterialIntegrityException>(() =>
+            _journal.AppendAsync(Principal, "session", new(
+                Guid.NewGuid(), 1, 2,
+                new TurnSessionPayload("assistant", new SessionObjectReference(
+                    material.Reference.Key, material.Reference.Purpose, material.Reference.ByteLength)))));
+
+        Assert.Equal("session_material_retention_expired", exception.Code);
+        Assert.Single((await _journal.ReplayAsync(Principal, new("session"))).Events);
+    }
+
+    [Fact]
+    public async Task ConcurrentMaterialAppendsCompleteWithMaximumPoolSizeTwo()
+    {
+        var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+        {
+            MaxPoolSize = 2,
+            Timeout = 3
+        }.ConnectionString;
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var journal = new PostgresSessionsJournal(dataSource, _options);
+        var store = new SessionMaterialStore(journal, _objects);
+        var bothWritesReachedObjectStore = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var writeCount = 0;
+        _objects.AfterWrite = () =>
+        {
+            if (Interlocked.Increment(ref writeCount) == 2)
+                bothWritesReachedObjectStore.TrySetResult(true);
+            return bothWritesReachedObjectStore.Task.WaitAsync(TimeSpan.FromSeconds(6));
+        };
+
+        var results = await Task.WhenAll(
+            store.WriteAsync(Principal, "session", Request(), _registration, Source, Current, default),
+            store.WriteAsync(Principal, "session", Request(), _registration, Source, Current, default))
+            .WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Equal(2, results.Select(result => result.EventId).Distinct().Count());
+        Assert.Equal(2, (await journal.ReplayAsync(Principal, new("session"))).Events.Length);
+    }
+
+    [Fact]
     public async Task ExpiredReferencedMaterialIsDeletedAndCannotBeRecreatedByRetry()
     {
         var input = Request();

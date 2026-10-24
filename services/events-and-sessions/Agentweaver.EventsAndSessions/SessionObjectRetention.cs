@@ -61,14 +61,22 @@ internal sealed class SessionObjectRetentionService(
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var keys = new List<ObjectKey>(BatchSize);
         // Row locks serialize object deletion against producer retries and let other replicas skip this batch.
+        // The reference check also protects bytes if an older inventory deadline was not extended correctly.
         await using (var select = new NpgsqlCommand($"""
             SELECT item.object_key
             FROM {inventory} item
             WHERE item.deleted_at IS NULL
                 AND (
+                (
                     item.retain_until <= clock_timestamp()
-                    OR (
-                        item.retain_until IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM {references} stored_reference
+                        WHERE stored_reference.object_key = item.object_key
+                            AND stored_reference.retain_until > clock_timestamp()
+                    )
+                )
+                OR (
+                    item.retain_until IS NULL
                         AND item.tracked_at <= clock_timestamp() - @grace
                         AND NOT EXISTS (
                             SELECT 1 FROM {references} stored_reference

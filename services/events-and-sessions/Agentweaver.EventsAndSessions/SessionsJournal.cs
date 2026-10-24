@@ -386,6 +386,10 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         var references = SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload);
         var scopedEvent = CreateScopedEventIdentity(identity, input.EventId);
 
+        // Release the inventory registration connection before acquiring the journal connection to avoid pool deadlocks.
+        if (persistMaterial is not null)
+            await RegisterObjectInventoryForWriteAsync(references, cancellationToken).ConfigureAwait(false);
+
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var session = await ReadSessionAsync(connection, transaction, identity, lockRow: false, cancellationToken);
@@ -416,7 +420,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             // A duplicate acknowledgment is returned only for identical canonical content; a changed retry conflicts.
             if (persistMaterial is not null)
             {
-                await PrepareObjectInventoryForWriteAsync(
+                await LockObjectInventoryForWriteAsync(
                     connection, transaction, references, cancellationToken).ConfigureAwait(false);
                 await persistMaterial(cancellationToken).ConfigureAwait(false);
                 await RecordObjectRetentionAsync(
@@ -431,7 +435,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         // The caller stores external bytes before this transaction commits the journal reference to those bytes.
         if (persistMaterial is not null)
         {
-            await PrepareObjectInventoryForWriteAsync(
+            await LockObjectInventoryForWriteAsync(
                 connection, transaction, references, cancellationToken).ConfigureAwait(false);
             await persistMaterial(cancellationToken).ConfigureAwait(false);
         }
@@ -490,9 +494,8 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             insertReference.Parameters.AddWithValue("retain", NpgsqlDbType.TimestampTz, reference.Retention.RetainUntil);
             await insertReference.ExecuteNonQueryAsync(cancellationToken);
         }
-        if (persistMaterial is not null)
-            await RecordObjectRetentionAsync(
-                connection, transaction, storedReferences, cancellationToken).ConfigureAwait(false);
+        await RecordObjectRetentionAsync(
+            connection, transaction, storedReferences, cancellationToken).ConfigureAwait(false);
 
         var outboxPayload = JsonSerializer.SerializeToElement(envelope, JsonOptions);
         await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
@@ -511,8 +514,21 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return new SessionAppendResult(envelope, IsDuplicate: false);
     }
 
-    /// <summary>Persists inventory before an object write, then locks it until the journal transaction ends.</summary>
-    private async Task PrepareObjectInventoryForWriteAsync(
+    /// <summary>Commits inventory before a material write without holding a journal connection.</summary>
+    private async Task RegisterObjectInventoryForWriteAsync(
+        IEnumerable<SessionObjectReference> references,
+        CancellationToken cancellationToken)
+    {
+        foreach (var reference in references
+                     .DistinctBy(reference => reference.Key)
+                     .OrderBy(reference => reference.Key.Value, StringComparer.Ordinal))
+        {
+            await TrackSessionObjectForWriteAsync(reference.Key, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Locks and revalidates pre-registered keys until the journal transaction ends.</summary>
+    private async Task LockObjectInventoryForWriteAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         IEnumerable<SessionObjectReference> references,
@@ -522,8 +538,6 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
                      .DistinctBy(reference => reference.Key)
                      .OrderBy(reference => reference.Key.Value, StringComparer.Ordinal))
         {
-            // The separate inventory commit survives a later journal rollback, so a failed write stays discoverable.
-            await TrackSessionObjectForWriteAsync(reference.Key, cancellationToken).ConfigureAwait(false);
             await using var command = new NpgsqlCommand($"""
                 SELECT retain_until, deleted_at,
                     retain_until IS NOT NULL AND retain_until <= clock_timestamp()
@@ -543,28 +557,32 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         }
     }
 
-    /// <summary>Records each committed reference deadline in the same transaction as its journal event.</summary>
+    /// <summary>Upserts each committed reference deadline with its journal event, serialized against cleanup locks.</summary>
     private async Task RecordObjectRetentionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         IEnumerable<StoredSessionObjectReference> references,
         CancellationToken cancellationToken)
     {
-        foreach (var reference in references)
+        foreach (var reference in references
+                     .DistinctBy(reference => reference.Reference.Key)
+                     .OrderBy(reference => reference.Reference.Key.Value, StringComparer.Ordinal))
         {
-            // Max retention protects a key referenced by more than one committed event.
+            // The conflict update locks the row, never shortens retention, and skips deleted objects.
             await using var command = new NpgsqlCommand($"""
-                UPDATE {_objectInventory}
-                SET retain_until = CASE
-                    WHEN retain_until IS NULL OR retain_until < @retain THEN @retain
-                    ELSE retain_until
-                END
-                WHERE object_key = @key AND deleted_at IS NULL
+                INSERT INTO {_objectInventory} AS inventory (object_key, retain_until)
+                VALUES (@key, @retain)
+                ON CONFLICT (object_key) DO UPDATE
+                SET retain_until = GREATEST(
+                    COALESCE(inventory.retain_until, EXCLUDED.retain_until),
+                    EXCLUDED.retain_until)
+                WHERE inventory.deleted_at IS NULL
                 """, connection, transaction);
             command.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, reference.Reference.Key.Value);
             command.Parameters.AddWithValue("retain", NpgsqlDbType.TimestampTz, reference.Retention.RetainUntil);
-            if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
-                throw new SessionMaterialIntegrityException("session_object_inventory_conflict");
+                // A tombstone means cleanup won the row lock; roll back instead of committing a dangling reference.
+                if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new SessionMaterialIntegrityException("session_material_retention_expired");
         }
     }
 

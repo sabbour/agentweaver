@@ -57,8 +57,11 @@ Each object contains at most 1 MiB.
 Before writing bytes, Events commits an inventory row for the generated key.
 It stores the bytes before the journal transaction commits the event and
 reference, and records the reference's retention deadline in that same
-transaction. A journal failure leaves the object unreferenced and its inventory
-row available for cleanup; it does not acknowledge the material.
+transaction. Every committed object reference extends the inventory deadline,
+including references committed by ordinary journal appends. A journal failure
+leaves the object unreferenced and its inventory row available for cleanup; it
+does not acknowledge the material. An append cannot create a reference to an
+object that cleanup has already deleted.
 It rechecks current authority after storage and database waits, including exact retries.
 The same event and material return the original acknowledgment.
 Changed material for the same event conflicts.
