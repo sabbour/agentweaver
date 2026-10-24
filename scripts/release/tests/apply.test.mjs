@@ -769,7 +769,9 @@ function createPushCheckout(t, dir, { planSourceSha, pushSha }) {
   git(dir, 'remote', 'add', 'origin', remote);
   git(dir, 'push', '--quiet', 'origin', `${pushSha}:refs/heads/v1`);
   git(dir, 'push', '--quiet', 'origin', `${planSourceSha}:refs/pull/source/head`);
-  execFileSync('git', ['clone', '--no-local', '--quiet', '--branch', 'v1', remote, checkout]);
+  // Pin byte-exact checkouts like the other fixtures. A machine-wide autocrlf setting would
+  // rewrite archived changesets and break their receipt hashes.
+  execFileSync('git', ['clone', '-c', 'core.autocrlf=false', '--no-local', '--quiet', '--branch', 'v1', remote, checkout]);
   assert.equal(git(checkout, 'rev-parse', 'HEAD'), pushSha);
   assert.throws(() => execFileSync('git', ['cat-file', '-e', `${planSourceSha}^{commit}`], {
     cwd: checkout, stdio: ['ignore', 'pipe', 'ignore'],
