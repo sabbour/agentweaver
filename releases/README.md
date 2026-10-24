@@ -345,6 +345,10 @@ packages and images.
   `release:apply`-produced archival as equivalent to a fresh top-level
   changeset note for exact version-mirror edits only.
   The receipt includes the manifest path and the source-derived plan checksum.
+  Its source commit must be at or after the compared diff's merge base and
+  reachable from the tested head. It may be later than the merge base when
+  committed compatibility declarations are required before planning; all
+  source changes remain subject to normal changeset coverage.
   The guard compares archives with genuine Git source notes, then verifies preparation decisions.
   Extra edits in the same component or another component still require fresh top-level notes.
   A self-reported archive hash or an empty component list cannot grant coverage.
