@@ -42,6 +42,14 @@ public sealed record AgentSuiteBuildInputs
 /// <summary>One file in a suite content layer.</summary>
 public sealed record AgentSuiteFile(string Path, ImmutableArray<byte> Content);
 
+internal sealed record AgentSuiteArchiveEntryMetadata(
+    string Path,
+    string Type,
+    int Mode,
+    long Uid,
+    long Gid,
+    string LinkTarget);
+
 /// <summary>
 /// A converted blueprint: native AgentSuite content files, the deterministic <c>content-tar-gzip</c> archive that
 /// the AgentSuite import accepts, and the blueprint projection that travels with the import.
@@ -278,38 +286,82 @@ public static class AgentSuiteBlueprintConverter
     /// directories, compressed with gzip with no modification time.
     /// </summary>
     public static byte[] WriteContentArchive(IEnumerable<AgentSuiteFile> files)
+        => WriteContentArchive(files, null, null);
+
+    internal static byte[] WriteContentArchive(
+        IEnumerable<AgentSuiteFile> files,
+        IReadOnlyDictionary<string, int>? fileModes,
+        IEnumerable<AgentSuiteArchiveEntryMetadata>? retainedEntries)
     {
         ArgumentNullException.ThrowIfNull(files);
-        // A null value marks a directory entry. Ordinal sorting fixes the entry order, so equal input gives equal bytes.
-        var entries = new SortedDictionary<string, AgentSuiteFile?>(StringComparer.Ordinal);
+        // Ordinal sorting fixes the entry order, so equal input gives equal bytes.
+        var entries = new SortedDictionary<string, (AgentSuiteFile? File, AgentSuiteArchiveEntryMetadata? Metadata)>(
+            StringComparer.Ordinal);
+        var preservedEntries = retainedEntries?.ToArray() ?? [];
         foreach (var file in files)
         {
-            entries[file.Path] = file;
+            entries[file.Path] = (file, null);
             // Add an entry for every parent directory. Directory names end in '/', as tar expects.
             for (var slash = file.Path.LastIndexOf('/'); slash > 0; slash = file.Path.LastIndexOf('/', slash - 1))
-                entries.TryAdd(file.Path[..slash] + "/", null);
+                entries.TryAdd(file.Path[..slash] + "/", (null, null));
+        }
+        foreach (var metadata in preservedEntries)
+        {
+            if (metadata.Type is not ("directory" or "symlink" or "hardlink"))
+                throw new InvalidOperationException($"AgentSuite archive entry type '{metadata.Type}' is unsupported.");
+            var path = metadata.Type == "directory" ? metadata.Path.TrimEnd('/') + "/" : metadata.Path;
+            if (entries.TryGetValue(path, out var existing))
+            {
+                if (existing.File is not null || existing.Metadata is not null)
+                    throw new InvalidOperationException($"AgentSuite archive entry '{path}' is duplicated.");
+                entries[path] = (null, metadata);
+            }
+            else
+            {
+                entries.Add(path, (null, metadata));
+            }
+            for (var slash = path.TrimEnd('/').LastIndexOf('/'); slash > 0;
+                 slash = path.TrimEnd('/').LastIndexOf('/', slash - 1))
+                entries.TryAdd(path.TrimEnd('/')[..slash] + "/", (null, null));
         }
 
         // Write an uncompressed ustar archive first, then gzip it.
         using var tar = new MemoryStream();
         using (var writer = new TarWriter(tar, TarEntryFormat.Ustar, leaveOpen: true))
         {
-            foreach (var (path, file) in entries)
+            IEnumerable<KeyValuePair<string, (AgentSuiteFile? File, AgentSuiteArchiveEntryMetadata? Metadata)>> orderedEntries =
+                preservedEntries.Any(item => item.Type == "hardlink")
+                    ? entries.OrderBy(item => item.Value.Metadata?.Type == "hardlink" ? 1 : 0)
+                        .ThenBy(item => item.Key, StringComparer.Ordinal)
+                    : entries;
+            foreach (var (path, archiveEntry) in orderedEntries)
             {
                 // Fixed time, owner and mode keep machine-specific metadata out of the archive.
-                var entry = new UstarTarEntry(file is null ? TarEntryType.Directory : TarEntryType.RegularFile, path)
+                var metadata = archiveEntry.Metadata;
+                var type = metadata?.Type switch
+                {
+                    "directory" => TarEntryType.Directory,
+                    "symlink" => TarEntryType.SymbolicLink,
+                    "hardlink" => TarEntryType.HardLink,
+                    _ => archiveEntry.File is null ? TarEntryType.Directory : TarEntryType.RegularFile,
+                };
+                var entry = new UstarTarEntry(type, path)
                 {
                     ModificationTime = DateTimeOffset.UnixEpoch,
-                    Mode = file is null
-                        ? UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-                          UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
-                          UnixFileMode.OtherRead | UnixFileMode.OtherExecute
-                        : UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead,
-                    Uid = 0,
-                    Gid = 0,
+                    Mode = metadata is not null
+                        ? (UnixFileMode)metadata.Mode
+                        : archiveEntry.File is null
+                            ? UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                              UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                              UnixFileMode.OtherRead | UnixFileMode.OtherExecute
+                            : (UnixFileMode)(fileModes?.GetValueOrDefault(path.TrimEnd('/')) ?? 0x1A4),
+                    Uid = checked((int)(metadata?.Uid ?? 0)),
+                    Gid = checked((int)(metadata?.Gid ?? 0)),
                 };
-                // Only regular files have content; directory entries carry no data.
-                if (file is not null)
+                if (type is TarEntryType.SymbolicLink or TarEntryType.HardLink)
+                    entry.LinkName = metadata!.LinkTarget;
+                // Only regular files have content; directories and links carry no data.
+                if (archiveEntry.File is { } file)
                     entry.DataStream = new MemoryStream(file.Content.ToArray(), writable: false);
                 writer.WriteEntry(entry);
             }
