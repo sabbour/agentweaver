@@ -812,10 +812,10 @@
       "agentweaver.eventsandsessions": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
-          "Agentweaver.Identity": "[1.4.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
+          "Agentweaver.Identity": "[1.5.0, )",
           "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.1, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
@@ -827,15 +827,15 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )"
+          "Agentweaver.Abstractions": "[1.5.0, )"
         }
       },
       "agentweaver.knowledge": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
-          "Agentweaver.Identity": "[1.4.0, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
+          "Agentweaver.Identity": "[1.5.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.1, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
@@ -848,7 +848,7 @@
       "agentweaver.objectstore.azureblob": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
           "Azure.Storage.Blobs": "[12.26.0, )"
         }
       },
@@ -861,7 +861,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
         }

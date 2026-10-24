@@ -136,7 +136,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
         }
@@ -144,7 +144,7 @@
       "agentweaver.sourcecontrol": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
           "Agentweaver.Providers": "[1.1.0, )"
         }
       }

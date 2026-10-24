@@ -240,27 +240,27 @@
       "agentweaver.agentruntime": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
-          "Agentweaver.Identity": "[1.4.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
+          "Agentweaver.Identity": "[1.5.0, )",
           "GitHub.Copilot.SDK": "[1.0.18, )"
         }
       },
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )"
+          "Agentweaver.Abstractions": "[1.5.0, )"
         }
       },
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )"
+          "Agentweaver.Abstractions": "[1.5.0, )"
         }
       },
       "agentweaver.sourcecontrol": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
           "Agentweaver.Providers": "[1.1.0, )"
         }
       },

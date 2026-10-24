@@ -472,9 +472,9 @@
       "agentweaver.environment": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
-          "Agentweaver.Identity": "[1.4.0, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
+          "Agentweaver.Identity": "[1.5.0, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.1, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Providers.Sandbox.AgentSandbox": "[1.1.4, )",
           "Agentweaver.Providers.Storage.AzureFiles": "[1.0.4, )",
@@ -487,7 +487,7 @@
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )"
+          "Agentweaver.Abstractions": "[1.5.0, )"
         }
       },
       "agentweaver.persistence.postgres": {
@@ -499,7 +499,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )",
+          "Agentweaver.Abstractions": "[1.5.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
         }
@@ -507,13 +507,13 @@
       "agentweaver.providers.sandbox.agentsandbox": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )"
+          "Agentweaver.Abstractions": "[1.5.0, )"
         }
       },
       "agentweaver.providers.storage.azurefiles": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.4.0, )"
+          "Agentweaver.Abstractions": "[1.5.0, )"
         }
       }
     }
