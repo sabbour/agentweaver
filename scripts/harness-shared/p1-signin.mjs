@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateP1RunnerPlanInput } from './p1-journey-input.mjs';
 import { createFreshChromeUserDataDir, buildFreshChromeLaunchOptions } from '../ui-harness/lib/fresh-chrome-profile.mjs';
+import { validateNetworkTarget } from './target-guard.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const P1_SIGNIN_PROFILE_ROOT = path.resolve(HERE, '..', 'ui-harness', '.auth');
@@ -14,6 +15,7 @@ export const P1_SETUP_SCOPES = [
 ];
 export const P1_RUN_SCOPES = P1_SETUP_SCOPES.filter(scope => scope !== 'projects.admin');
 const DEFAULT_TIMEOUT_MS = 600_000;
+const WEB_SIGNED_IN_BEFORE_KEY = 'agentweaver.auth.signed-in-before';
 function deferred() {
   let resolve;
   let reject;
@@ -202,6 +204,80 @@ export async function withFreshP1BrowserContext({
   if (cleanupFailure) throw new Error('The disposable P1 browser profile could not be removed.');
   if (failure) throw failure;
   return result;
+}
+
+/** Borrow the selected UI origin only after the existing sign-in session authorizes a Gateway request. */
+export async function openP1AuthorizedUiPage({
+  context,
+  baseUrl,
+  signal,
+  io = console,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+} = {}) {
+  const target = validateNetworkTarget(baseUrl, { exactPath: '/' });
+  if (!context || typeof context.pages !== 'function' || typeof context.newPage !== 'function') {
+    throw new Error('The P1 UI browser context is unavailable.');
+  }
+  const page = context.pages()[0] ?? await context.newPage();
+  if (typeof page?.goto !== 'function' || typeof page.waitForResponse !== 'function'
+    || typeof page.url !== 'function' || typeof page.addInitScript !== 'function'
+    || typeof page.evaluate !== 'function') {
+    throw new Error('The P1 UI browser page is unavailable.');
+  }
+
+  io.log?.('Opening the selected UI with the existing sign-in session. The adapter does not read browser token storage.');
+  // Trigger the app's existing prompt=none restore flow without injecting or persisting a token.
+  await page.addInitScript(({ origin, key }) => {
+    if (window.location.origin === origin) {
+      window.sessionStorage.setItem(key, '1');
+    }
+  }, { origin: target.origin, key: WEB_SIGNED_IN_BEFORE_KEY });
+  // Wait for a successful same-origin Gateway response instead of reading a browser token or session store.
+  const authorizedResponse = page.waitForResponse(response => {
+    try {
+      const url = new URL(response.url());
+      const status = response.status();
+      return url.origin === target.origin
+        && (url.pathname === '/api/v1' || url.pathname.startsWith('/api/v1/'))
+        && Number.isInteger(status) && status >= 200 && status < 300;
+    } catch {
+      return false;
+    }
+  }, { timeout: timeoutMs });
+  authorizedResponse.catch(() => {});
+
+  try {
+    await page.goto(target.href, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+  } catch {
+    if (signal?.aborted) throw new Error('P1 sign-in was cancelled.');
+    throw new Error('The one-account browser session did not reach an authorized Gateway response for the selected target.');
+  }
+  let restoreStarted = false;
+  try {
+    restoreStarted = await page.evaluate(key => window.sessionStorage.getItem(key) === '1', WEB_SIGNED_IN_BEFORE_KEY);
+  } catch {
+    throw new Error('The selected UI could not start silent authorization with the existing browser session.');
+  }
+  if (!restoreStarted) {
+    throw new Error('The selected UI could not start silent authorization with the existing browser session.');
+  }
+  try {
+    await raceWithAbort(authorizedResponse, signal, timeoutMs);
+  } catch {
+    if (signal?.aborted) throw new Error('P1 sign-in was cancelled.');
+    throw new Error('The one-account browser session did not reach an authorized Gateway response for the selected target.');
+  }
+
+  let pageTarget;
+  try {
+    pageTarget = validateNetworkTarget(page.url());
+  } catch {
+    throw new Error('The authorized P1 UI page is not on the selected web origin.');
+  }
+  if (pageTarget.origin !== target.origin) {
+    throw new Error('The authorized P1 UI page is not on the selected web origin.');
+  }
+  return page;
 }
 
 function validateConsentPrompt(value, request) {

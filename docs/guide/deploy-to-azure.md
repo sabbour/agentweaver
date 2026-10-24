@@ -364,8 +364,17 @@ identities, operator-owned TLS resources, and runtime values are ready:
    [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting).
    It waits for both `DefaultDomainCertificate` resources to become Available
    and for AKS to create `identity-broker-tls`. It does not create routes and
-   does not require product Services. Use the returned managed hostname to
-   confirm that the approved runtime configuration uses the same issuer and
+   does not require product Services. Before any write, it checks the selected
+   tenant and client, single-tenant mode, public-client setting, and the exact
+   callback derived from the AKS managed domain. The Broker requests only
+   `openid`, `profile`, and `email`; no Agentweaver API permission or consent
+   grant is needed. If registration settings are missing, the command stops
+   before infrastructure changes and prints a supported reconciliation
+   command. After separate approval, run that command with
+   `--register-identity-broker-callback` and the exact callback confirmation.
+   This explicit option can be used with the certificate-only stage and only
+   updates the required registration fields. Use the returned managed hostname
+   to confirm that the approved runtime configuration uses the same issuer and
    Web origin.
 
 2. Apply the Identity Broker migration overlay after its migration identity,
@@ -597,6 +606,9 @@ database. Use the Identity Broker migration/schema-owner role, or another role
 with `SELECT` on `identity_broker.broker_users`. The Projects & Config
 migration role cannot read the `identity_broker` schema. `Email` is optional and
 can be empty, so confirm the row by display name and creation time:
+
+A separate live login check using a second account has not been completed and
+remains pending. Installation does not depend on that check.
 
 ```sql
 SELECT "Id", "Email", "DisplayName", "CreatedAt"

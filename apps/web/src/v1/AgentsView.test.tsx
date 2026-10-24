@@ -134,6 +134,24 @@ describe('AgentsView', () => {
     expect(within(drawer).getByRole('link', { name: 'View memories' }).getAttribute('href')).toBe('/projects/p1/memories?agentId=a2');
   });
 
+  it('shows a confirmed custom role title without replacing the catalog role ID', async () => {
+    // The title is a display override; the configured catalog role remains unchanged.
+    renderView({
+      configuration: config({
+        agentCharters: [
+          { agentId: 'a1', name: 'Ada', role: 'lead', charter: 'Lead the work.', customRoleTitle: 'Delivery Lead' },
+          { agentId: 'a2', name: 'Bo', role: 'Tester', charter: 'Test the work.' },
+        ],
+        casting: [{ agentId: 'a1', role: 'lead', order: 1 }],
+      }),
+    });
+
+    fireEvent.click(screen.getByText('Ada'));
+    const drawer = await screen.findByRole('dialog');
+    expect(within(drawer).getByText('Delivery Lead')).toBeTruthy();
+    expect(within(drawer).getByText('In the team as Delivery Lead, position 1')).toBeTruthy();
+  });
+
   it('stages a re-role proposal from the current team member details', async () => {
     api.listCatalogRoles.mockResolvedValue([
       { id: 'frontend-engineer', title: 'Frontend Engineer', summary: 'Builds user-facing experiences.', responsibilities: ['Implement accessible screens'], boundaries: ['Do not change backend services'] },

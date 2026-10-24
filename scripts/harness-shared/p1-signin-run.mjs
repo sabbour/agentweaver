@@ -5,6 +5,7 @@ import {
   P1_RUN_SCOPES,
   P1_SETUP_SCOPES,
   P1_SIGNIN_PROFILE_ROOT,
+  openP1AuthorizedUiPage,
   readP1SignInInput,
   validateP1BrokerToken,
   withFreshP1BrowserContext,
@@ -27,6 +28,11 @@ export function parseP1SigninArguments(argv) {
       result.help = true;
       continue;
     }
+    if (option === '--dry-run') {
+      if (result.dryRun) throw new Error('The --dry-run option can only be used once.');
+      result.dryRun = true;
+      continue;
+    }
     if (option === '--identity-module') {
       throw new Error('The sign-in launcher supplies its built-in identity provider; --identity-module is not accepted.');
     }
@@ -40,6 +46,19 @@ export function parseP1SigninArguments(argv) {
     result[key] = argv[++index];
   }
   return result;
+}
+
+function printP1OperatorSteps(io, { dryRun = false } = {}) {
+  io.log?.('Operator steps:');
+  io.log?.('1. Confirm the manifest matches one exact deployed release and source, publication and AgentHost archive measurements, live provider/runtime/storage receipts, and the current selection revision.');
+  io.log?.('2. Supply independent native and recovery evidence for any checks that need it. This one-account launcher does not create a second identity or invent missing evidence.');
+  io.log?.('3. Complete one interactive sign-in in the headed Chrome window with the approved account. Review and approve only the scopes shown for the registered client.');
+  io.log?.('4. Keep the redacted evidence output. The harness creates an invocation-owned project, grants Owner and Orchestrator, runs the selected journey, then revokes Orchestrator, archives the project, and revokes Owner.');
+  io.log?.('5. If setup or cleanup is indeterminate, stop and follow the evidence diagnosis. Do not retry mutations or remove unrelated resources.');
+  io.log?.('No token path, token environment variable, provider module, second account, or second sign-in is required.');
+  if (dryRun) {
+    io.log?.('Dry run only: the manifest shape is checked. No browser, network request, evidence file, project, or assignment is created.');
+  }
 }
 
 function tokenRequirements(environment, actorId, scopes, binding) {
@@ -116,9 +135,10 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     return 2;
   }
   if (options.help) {
-    io.log?.('Usage: npm run harness:p1:signin-run -- --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>]');
+    io.log?.('Usage: npm run harness:p1:signin-run -- --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run]');
     io.log?.('The launcher signs in with the registered agentweaver-web client. Broker tokens stay in memory and are not written to evidence.');
     io.log?.('Multiple surfaces run sequentially with separate evidence files: evidence.api.jsonl and evidence.mcp.jsonl for --output evidence.jsonl. All surfaces run even if one returns a blocked or failed result.');
+    printP1OperatorSteps(io);
     return 0;
   }
   const surfaces = options.surface?.split(',') ?? [];
@@ -129,17 +149,30 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     io.error?.('Select api, mcp, api,mcp, or ui and supply an input manifest and evidence output path.');
     return 2;
   }
-  if (options.surface === 'ui') {
-    return runP1(argv, env, io);
+  let setupToken;
+  if (options.dryRun) {
+    let validated;
+    try {
+      validated = await readP1SignInInput(argv);
+    } catch (error) {
+      io.error?.(error.message);
+      return 2;
+    }
+    if (Object.hasOwn(validated.fixturePlan, 'deniedActor')) {
+      io.error?.('This launcher uses one Broker account only. Omit fixturePlan.deniedActor; distinct-actor coverage remains unavailable with one account.');
+      return 2;
+    }
+    printP1OperatorSteps(io, { dryRun: true });
+    return 0;
   }
 
-  let setupToken;
   try {
     const validated = await readP1SignInInput(argv);
     if (Object.hasOwn(validated.fixturePlan, 'deniedActor')) {
-      io.error?.('This launcher uses one Broker account only. Omit fixturePlan.deniedActor; distinct-actor coverage remains unavailable without a second account.');
+      io.error?.('This launcher uses one Broker account only. Omit fixturePlan.deniedActor; distinct-actor coverage remains unavailable with one account.');
       return 2;
     }
+    printP1OperatorSteps(io);
     const browser = chromium ?? await loadChromium();
     return await withBrowserContext({
       chromium: browser,
@@ -177,10 +210,19 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
         const surfaceArgv = p1SigninSurfaceArguments(
           argv, surface, options.output, surfaces.length > 1,
         );
+        // Resolve the UI page only after source checks and owned fixture setup have succeeded.
+        const pageProvider = surface === 'ui'
+          ? async ({ baseUrl }) => openP1AuthorizedUiPage({
+            context,
+            baseUrl,
+            signal,
+            io,
+          })
+          : undefined;
         const result = await runP1(surfaceArgv, {
           ...env,
           AGENTWEAVER_P1_SETUP_TOKEN: setupToken,
-        }, io, { identityProvider });
+        }, io, { identityProvider, pageProvider });
         exitCode = Math.max(exitCode, result);
       }
       return exitCode;

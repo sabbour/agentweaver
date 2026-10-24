@@ -324,6 +324,81 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         Assert.Equal("upstream-state", query["state"].ToString());
     }
 
+    [Theory]
+    [InlineData("access_denied", "The user canceled; provider-private detail.", "access_denied",
+        "Microsoft Entra sign-in was canceled or access was denied.", "")]
+    [InlineData("invalid_request", "AADSTS50011: callback mismatch; private-value=secret.", "invalid_request",
+        "Microsoft Entra rejected the callback URL.", "AADSTS50011")]
+    [InlineData("invalid_client", "AADSTS700016: wrong app; private-value=secret.", "invalid_client",
+        "Microsoft Entra could not find this client in the selected tenant.", "AADSTS700016")]
+    public async Task ExternalSignInFailureReturnsSanitizedActionableDiagnostics(
+        string upstreamError, string providerDescription, string expectedError,
+        string expectedDescription, string expectedAadsts)
+    {
+        _fakeIdp.AuthorizationError = upstreamError;
+        _fakeIdp.AuthorizationErrorDescription = providerDescription;
+        try
+        {
+            using var anonymous = _factory.CreateClient(new WebApplicationFactoryClientOptions
+            {
+                AllowAutoRedirect = false,
+                BaseAddress = new Uri("https://broker.test.local"),
+            });
+            var (_, challenge) = Pkce.Create();
+            var authorize = await BrokerFlowDriver.StartAuthorizeAsync(
+                anonymous, IdentityBrokerWebApplicationFactory.TestClientId,
+                IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+                "openid profile email", challenge, "S256", state: "provider-error-state", prompt: "login");
+            Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
+
+            var external = await _fakeIdpClient.GetAsync(authorize.Headers.Location);
+            Assert.Equal(HttpStatusCode.Redirect, external.StatusCode);
+            var externalCallback = new Uri(new Uri("https://broker.test.local"), external.Headers.Location!);
+            var callbackQuery = QueryHelpers.ParseQuery(externalCallback.Query);
+            Assert.Equal(providerDescription, callbackQuery["error_description"].ToString());
+            var callback = await anonymous.PostAsync(
+                externalCallback.GetLeftPart(UriPartial.Path),
+                new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["error"] = callbackQuery["error"].ToString(),
+                    ["error_description"] = callbackQuery["error_description"].ToString(),
+                    ["state"] = callbackQuery["state"].ToString(),
+                }));
+
+            Assert.Equal(HttpStatusCode.Redirect, callback.StatusCode);
+            var resumeUri = new Uri(new Uri("https://broker.test.local"), callback.Headers.Location!);
+            var resumeQuery = QueryHelpers.ParseQuery(resumeUri.Query);
+            Assert.Equal(expectedError, resumeQuery["external_error"].ToString());
+            var observedAadsts = resumeQuery.TryGetValue("aadsts", out var aadsts)
+                ? aadsts.ToString()
+                : string.Empty;
+            Assert.Equal(expectedAadsts, observedAadsts);
+            Assert.DoesNotContain("private-value", callback.Headers.Location!.ToString(), StringComparison.Ordinal);
+            var resumedUri = QueryHelpers.AddQueryString(
+                callback.Headers.Location!.ToString(), "error_description", "caller-controlled detail");
+            var completed = await anonymous.GetAsync(resumedUri);
+            Assert.Equal(HttpStatusCode.Redirect, completed.StatusCode);
+            var authorizationError = new Uri(new Uri("https://broker.test.local"), completed.Headers.Location!);
+            var authorizationQuery = QueryHelpers.ParseQuery(authorizationError.Query);
+            Assert.Equal(expectedError, authorizationQuery["error"].ToString());
+            Assert.Equal("provider-error-state", authorizationQuery["state"].ToString());
+            var description = authorizationQuery["error_description"].ToString();
+            Assert.True(description.StartsWith(expectedDescription, StringComparison.Ordinal),
+                $"Unexpected sign-in diagnostic: {description}");
+            if (expectedAadsts.Length > 0)
+                Assert.Contains(expectedAadsts, description, StringComparison.Ordinal);
+            Assert.DoesNotContain("provider-private", description, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-value", description, StringComparison.Ordinal);
+            Assert.DoesNotContain("caller-controlled", description, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret", description, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            _fakeIdp.AuthorizationError = null;
+            _fakeIdp.AuthorizationErrorDescription = null;
+        }
+    }
+
     [Fact]
     public async Task ExternalLoginSupportsPublicPkceAndConfiguredConfidentialClient()
     {
@@ -491,12 +566,17 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
             _broker, _fakeIdpClient, IdentityBrokerWebApplicationFactory.TestClientId,
             IdentityBrokerWebApplicationFactory.TestClientRedirectUri, "openid", challenge);
 
-        // The broker's real OpenIdConnect middleware must reject the forged/wrong-issuer/
-        // wrong-signature/expired upstream id_token before ever completing a local sign-in —
-        // it must not be treated as a successful callback redirect into /connect/authorize/resume.
-        Assert.NotEqual(HttpStatusCode.Redirect, callbackResponse.StatusCode);
-        Assert.NotEqual(HttpStatusCode.Found, callbackResponse.StatusCode);
-        Assert.NotEqual(HttpStatusCode.OK, callbackResponse.StatusCode);
+        // The middleware must reject the invalid token, then return a safe error through the one-use continuation.
+        Assert.Equal(HttpStatusCode.Redirect, callbackResponse.StatusCode);
+        var resumeUri = new Uri(new Uri("https://broker.test.local"), callbackResponse.Headers.Location!);
+        var resumeQuery = QueryHelpers.ParseQuery(resumeUri.Query);
+        Assert.Equal("external_sign_in_failed", resumeQuery["external_error"].ToString());
+        var completed = await _broker.GetAsync(callbackResponse.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, completed.StatusCode);
+        var clientCallback = new Uri(new Uri("https://broker.test.local"), completed.Headers.Location!);
+        var callbackQuery = QueryHelpers.ParseQuery(clientCallback.Query);
+        Assert.Equal("external_sign_in_failed", callbackQuery["error"].ToString());
+        Assert.Equal("state-1", callbackQuery["state"].ToString());
         Assert.DoesNotContain(callbackResponse.Headers.TryGetValues("Set-Cookie", out var cookies)
             ? cookies : [], cookie => cookie.StartsWith(".AspNetCore.Identity.Local="));
         using var scope = _factory.Services.CreateScope();
@@ -535,7 +615,7 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         var rejected = await BrokerFlowDriver.AttemptExternalCallbackAsync(invalidLogin, _fakeIdpClient,
             IdentityBrokerWebApplicationFactory.TestClientId, IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
             "openid", challenge);
-        Assert.Equal(HttpStatusCode.Unauthorized, rejected.StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, rejected.StatusCode);
 
         var sensitiveValues = new[] { code, accessToken, refreshToken, idToken, verifier,
             "fake-idp-client-secret", "invalid-sensitive-refresh" }.Concat(_fakeIdp.SensitiveValues);

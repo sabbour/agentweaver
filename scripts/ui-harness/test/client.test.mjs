@@ -29,6 +29,7 @@ class ControlledPage extends EventEmitter {
     this.location = `${origin}/`;
     this.waiters = [];
     this.actions = [];
+    this.roleQueries = [];
     this.tenant = 'controlled-tenant';
     this.token = brokerToken();
     this.pendingGate = { requestId: 'controlled-request', kind: 'question',
@@ -105,7 +106,10 @@ class ControlledPage extends EventEmitter {
     await this.afterRefresh?.();
   }
 
-  getByRole(role, options) { return this.control(`${role}:${options.name}`); }
+  getByRole(role, options) {
+    this.roleQueries.push({ role, ...options });
+    return this.control(`${role}:${options.name}`);
+  }
   getByLabel(name) { return this.control(`label:${name}`); }
   getByText(text) { return { exactText: text }; }
   locator(selector) { return this.control(selector); }
@@ -135,7 +139,7 @@ class ControlledPage extends EventEmitter {
       async selectOption(value) { page.actions.push(['select', name, value]); page.values ??= {}; page.values[name] = value; },
       async click() {
         page.actions.push(['click', name]);
-        if (name === 'button:Refresh owner snapshots') return page.refresh();
+        if (name === 'button:Refresh run') return page.refresh();
         if (name === 'button:Continue') { page.choice = 'Continue'; return; }
         const action = { 'button:Answer exact request': 'answer', 'button:Approve': 'approve', 'button:Deny': 'reject' }[name];
         if (action) {
@@ -183,6 +187,12 @@ test('uses the current exact gate and actual owner receipt, not browser approval
     assert.doesNotMatch(JSON.stringify(client.calls), /credential-canary-ui|controlled-signature/);
     assert.equal(Object.keys(call).includes('transientResponseBody'), false);
     assert.ok(page.actions.some(item => item[0] === 'exact-request' && item[1] === gateInput.requestId));
+    const approvalsTab = page.roleQueries.find(query => query.role === 'tab');
+    assert.ok(approvalsTab.name instanceof RegExp);
+    assert.equal(approvalsTab.name.test('Approvals (2)'), true);
+    assert.equal(approvalsTab.name.test('Outcomes & approvals'), false);
+    assert.ok(page.roleQueries.some(query => query.role === 'button'
+      && query.name === 'Refresh run' && query.exact === true));
   } finally {
     await client.close();
   }
