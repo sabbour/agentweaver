@@ -72,8 +72,13 @@ semantic-version intent. Documentation-only changes do not require a changeset.
    base commit. CI runs validation against its verified source history.
    A version receipt may use a source commit after the diff merge base when
    compatibility declarations were committed before planning, but that source
-   must be reachable from the tested head. The complete diff remains subject
-   to normal changeset coverage.
+   must be reachable from the tested head. If the release PR is squash-merged,
+   rebind its receipt to the integrated v1 commit before publication. The
+   rebound receipt retains the original plan source and checksum; CI verifies
+   its original receipt, changeset bytes, preplanning edits, compatibility
+   declarations, and generated version artifacts against the integrated tree.
+   The original plan-source commit must remain available in Git. The complete
+   diff remains subject to normal changeset coverage.
 
 2. Generate the source-bound version plan:
 
@@ -94,6 +99,19 @@ semantic-version intent. Documentation-only changes do not require a changeset.
    source. It updates the manifest, project version mirrors, changelog, archived
    changesets, and a source-bound receipt. Review and commit those changes
    before you prepare artifacts.
+
+   For a squash-merged release PR, create a new source-bound receipt in a
+   follow-up PR from a clean checkout based on the current v1 tip:
+
+   ```powershell
+   npm run release:rebind-receipt -- `
+     releases/receipts/<plan-source-sha>.json `
+     <integrated-v1-source-sha>
+   ```
+
+   The command adds a receipt for the integrated source; it does not edit or
+   replace the original plan receipt. Wait for the new receipt's CI and docs
+   checks to pass before publication.
 
 After applying versions, restore the separate PostgreSQL initializer from the
 repository root and commit its generated lock file with the release changes:

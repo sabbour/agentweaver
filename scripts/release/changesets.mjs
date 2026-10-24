@@ -306,7 +306,7 @@ export function creditReceiptedComponents(root, changes, componentIds, ancestorS
       fail(file, `cannot read release receipt: ${error.message}`);
     }
     if (receipt === null || typeof receipt !== 'object' || Array.isArray(receipt)) fail(file, 'expected a release receipt object');
-    if (receipt.schemaVersion !== 1) fail(file, 'unsupported release receipt schemaVersion');
+    if (![1, 2].includes(receipt.schemaVersion)) fail(file, 'unsupported release receipt schemaVersion');
     if (typeof receipt.sourceSha !== 'string' || receipt.sourceSha !== shaInName) {
       fail(file, 'receipt sourceSha does not match its own filename');
     }
@@ -331,10 +331,10 @@ export function creditReceiptedComponents(root, changes, componentIds, ancestorS
       }
       if (!sourcePathPattern.test(entryRecord.sourcePath)) fail(file, `unsafe or unexpected original changeset path "${entryRecord.sourcePath}"`);
       if (!archivedPathPattern.test(entryRecord.archivedPath)) fail(file, `unsafe or unexpected archived changeset path "${entryRecord.archivedPath}"`);
-      if (statusByFile.get(entryRecord.archivedPath) !== 'A') {
+      if (receipt.schemaVersion === 1 && statusByFile.get(entryRecord.archivedPath) !== 'A') {
         fail(file, `archived changeset ${entryRecord.archivedPath} is not newly added in this diff; cannot credit`);
       }
-      if (statusByFile.get(entryRecord.sourcePath) !== 'D') {
+      if (receipt.schemaVersion === 1 && statusByFile.get(entryRecord.sourcePath) !== 'D') {
         fail(file, `original changeset ${entryRecord.sourcePath} was not actually removed in this diff; cannot credit`);
       }
       let archivedText;
@@ -360,7 +360,9 @@ export function creditReceiptedComponents(root, changes, componentIds, ancestorS
       fail(file, 'actual changelog does not match source-derived preparation');
     }
     for (const sourcePath of verified.deleted) {
-      if (statusByFile.get(sourcePath) !== 'D') fail(file, `source note ${sourcePath} was not deleted`);
+      if (receipt.schemaVersion === 1 && statusByFile.get(sourcePath) !== 'D') {
+        fail(file, `source note ${sourcePath} was not deleted`);
+      }
     }
     for (const [preparedPath, expected] of verified.files) {
       if (statusByFile.has(preparedPath) &&

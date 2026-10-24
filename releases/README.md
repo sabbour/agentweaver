@@ -349,6 +349,26 @@ packages and images.
   reachable from the tested head. It may be later than the merge base when
   committed compatibility declarations are required before planning; all
   source changes remain subject to normal changeset coverage.
+  A squash merge does not preserve that plan-source commit in v1 history. Before
+  publication, rebind the original receipt to the resulting v1 integration
+  commit from a clean checkout based on the current v1 tip:
+
+  ```powershell
+  npm run release:rebind-receipt -- `
+    releases/receipts/<plan-source-sha>.json `
+    <integrated-v1-source-sha>
+  ```
+
+  The command adds `releases/receipts/<integrated-v1-source-sha>.json`; it
+  never changes the original receipt. The rebound receipt retains the exact
+  plan-source SHA and original-receipt hash, and records their common base.
+  Validation rechecks the plan checksum and changeset bytes, then requires the
+  preplanning source edits and every generated artifact—including compatibility
+  declarations, version mirrors, changelog, and archives—to match the integrated
+  tree. The original plan-source commit must still be available locally to Git.
+  Commit this new receipt in a follow-up v1 PR. Its fresh receipt addition
+  triggers publication; wait for its source CI and documentation checks before
+  publishing. Never change the old receipt's source SHA or bypass these checks.
   The guard compares archives with genuine Git source notes, then verifies preparation decisions.
   Extra edits in the same component or another component still require fresh top-level notes.
   A self-reported archive hash or an empty component list cannot grant coverage.
