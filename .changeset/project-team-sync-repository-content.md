@@ -1,4 +1,5 @@
 ---
+"Agentweaver.Abstractions": minor
 "Agentweaver.SourceControl": minor
 "Agentweaver.Identity.Broker": minor
 "Agentweaver.Orchestrator": minor
