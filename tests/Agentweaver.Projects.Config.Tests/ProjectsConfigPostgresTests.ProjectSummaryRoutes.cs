@@ -97,7 +97,8 @@ public sealed partial class ProjectsConfigPostgresTests
 
     private static async Task<IHost> StartProjectSummaryEndpointHostAsync(
         Npgsql.NpgsqlDataSource dataSource,
-        HostedModelCatalogPublicationTls? publicationTls = null) =>
+        HostedModelCatalogPublicationTls? publicationTls = null,
+        HttpMessageHandler? knowledgeHistoryHandler = null) =>
         await new HostBuilder()
             .ConfigureWebHost(web =>
             {
@@ -120,6 +121,11 @@ public sealed partial class ProjectsConfigPostgresTests
                     services.AddSingleton(new ProjectsConfigIdentityOptions(TestIssuer));
                     services.AddScoped<ProjectAuthorizationOwner>();
                     services.AddScoped<ProjectsConfigService>();
+                    // The route client uses the test handler so endpoint tests never contact a live owner.
+                    services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
+                            client.BaseAddress = new Uri("https://knowledge.test/"))
+                        .ConfigurePrimaryHttpMessageHandler(
+                            () => knowledgeHistoryHandler ?? new HttpClientHandler());
                     services.ConfigureHttpJsonOptions(options =>
                         options.SerializerOptions.Converters.Add(
                             new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));

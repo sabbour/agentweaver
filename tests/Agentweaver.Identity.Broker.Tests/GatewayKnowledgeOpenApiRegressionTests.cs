@@ -1,8 +1,11 @@
+extern alias GatewayHost;
+
 using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.IdentityModel.Tokens;
 using Xunit;
@@ -83,6 +86,54 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         }
         AssertNullablePropertyType(schemas.GetProperty("ProjectUsageItem").GetProperty("properties"), "inputTokens", "number");
         AssertNullablePropertyType(schemas.GetProperty("ProjectUsageCost").GetProperty("properties"), "amount", "number");
+    }
+
+    [Fact]
+    public async Task AgentHistoryRouteIsPublishedByProjectsWithABoundedStrictContract()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call owners."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        var operation = root.GetProperty("paths")
+            .GetProperty("/api/v1/projects/{projectId}/agents/{agentId}/history")
+            .GetProperty("get");
+        Assert.Equal("getProjectAgentHistory", operation.GetProperty("operationId").GetString());
+        Assert.Equal("Projects", operation.GetProperty("x-agentweaver-owner").GetString());
+        Assert.True(operation.GetProperty("responses").TryGetProperty("403", out _));
+        Assert.True(operation.GetProperty("responses").TryGetProperty("404", out _));
+        Assert.True(operation.GetProperty("responses").TryGetProperty("503", out _));
+        Assert.Equal(
+            "#/components/schemas/ProjectAgentHistoryResponse",
+            operation.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        var cacheControl = operation.GetProperty("responses").GetProperty("200").GetProperty("headers")
+            .GetProperty("Cache-Control");
+        Assert.Equal("no-store", cacheControl.GetProperty("schema").GetProperty("example").GetString());
+
+        // The Gateway bound and OpenAPI schema keep the drawer response small and exclude owner-only metadata.
+        var route = Assert.Single(
+            GatewayHost::Agentweaver.Gateway.GatewayRouteCatalog.Routes,
+            item => item.OperationId == "getProjectAgentHistory");
+        Assert.Equal((long?)ProjectAgentHistoryContract.MaximumResponseBytes, route.MaximumResponseBytes);
+        var schemas = root.GetProperty("components").GetProperty("schemas");
+        var history = schemas.GetProperty("ProjectAgentHistoryResponse");
+        Assert.False(history.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            ["projectId", "agentId", "items"],
+            history.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal(
+            ProjectAgentHistoryContract.MaximumItems,
+            history.GetProperty("properties").GetProperty("items").GetProperty("maxItems").GetInt32());
+        var entry = schemas.GetProperty("ProjectAgentHistoryEntry");
+        Assert.False(entry.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            ["content", "recordId", "type", "updatedAt"],
+            entry.GetProperty("required").EnumerateArray().Select(item => item.GetString()).Order(StringComparer.Ordinal));
     }
 
     private static readonly string[] IdempotentWriteOperationIds =

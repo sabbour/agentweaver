@@ -60,6 +60,7 @@ import type {
   KnowledgeProposalPromotionResult,
   KnowledgeRecordPage,
   ProjectKnowledgeRecordPage,
+  ProjectAgentHistoryResponse,
   KnowledgeRecordRevisionPage,
   KnowledgeRecordTransferBundle,
   KnowledgeRecordUpdateInput,
@@ -2436,6 +2437,22 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'knowledge', 'records')}?${query.toString()}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Reads recent caller-visible history for one configured project agent. */
+  getProjectAgentHistory(
+    token: string,
+    projectId: string,
+    agentId: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectAgentHistoryResponse> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'agents', agentId, 'history')}`,
       {},
       this.baseUrl,
       tenantSelector,
