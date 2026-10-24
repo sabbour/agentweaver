@@ -1,4 +1,5 @@
 using System.Data;
+using System.Net.Mail;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
@@ -133,6 +134,12 @@ public sealed class ProjectRoleAssignmentService(
             throw ProjectConfigException.Invalid(
                 "invalid_principal_id",
                 "The principal ID must be the nonempty subject of a tenant member.");
+        // Broker email is profile data, not a stable identity key; never resolve it to a local subject here.
+        if (MailAddress.TryCreate(principalId, out var email) &&
+            string.Equals(email.Address, principalId, StringComparison.OrdinalIgnoreCase))
+            throw ProjectConfigException.Invalid(
+                "email_principal_not_supported",
+                "Email addresses cannot identify project members. Sign in to Agentweaver and use the member's Broker subject ID; email is not mapped to an identity.");
 
         return await RunSerializableAsync(async db =>
         {
