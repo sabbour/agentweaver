@@ -14,6 +14,7 @@
     "ProjectsConfig__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
     "ProjectsConfig__Authentication__Authority": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "ProjectsConfig__Authentication__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+    "ProjectsConfig__Knowledge__BaseAddress": "https://knowledge.agentweaver.svc.cluster.local:8443/",
     "ProjectsConfig__PrivilegedSetup__ApprovedIssuer": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "ProjectsConfig__PrivilegedSetup__ApprovedTenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
     "ProjectsConfig__PrivilegedSetup__ApprovedSubject": "518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0",
