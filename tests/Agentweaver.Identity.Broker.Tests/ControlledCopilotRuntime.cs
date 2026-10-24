@@ -66,6 +66,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public Guid NativeMessageId { get; private set; }
     public Guid NativeTurnEndEventId { get; private set; }
     public Guid NativeCompletionReceiptEventId { get; private set; }
+    public Func<Task>? BeforeNativeFileResponse { get; set; }
+    public Action? NativeFileResponseHandled { get; set; }
     public TaskCompletionSource TurnReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource AbortAcknowledged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource<JsonElement> PermissionResponded { get; } =
@@ -84,9 +86,12 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public async Task<JsonElement> InvokeSdkCallbackAsync(
         string method, object parameters, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var id = "native-files-" + Guid.NewGuid().ToString("N");
         var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         Assert.True(_nativeFileRequests.TryAdd(id, completion));
+        using var registration = cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
+        var sent = false;
         try
         {
             await WriteAsync(new
@@ -94,11 +99,14 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                 jsonrpc = "2.0", id, method,
                 @params = parameters
             });
-            return await completion.Task.WaitAsync(cancellationToken);
+            sent = true;
+            return await completion.Task;
         }
         finally
         {
-            _nativeFileRequests.TryRemove(id, out _);
+            // Keep sent IDs registered until a late peer response is consumed.
+            if (!sent)
+                _nativeFileRequests.TryRemove(id, out _);
         }
     }
 
@@ -247,11 +255,14 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                         continue;
                     if (!root.TryGetProperty("method", out var methodName))
                     {
-                        Assert.True(_nativeFileRequests.TryGetValue(id.GetString()!, out var completion));
+                        if (BeforeNativeFileResponse is not null)
+                            await BeforeNativeFileResponse();
+                        Assert.True(_nativeFileRequests.TryRemove(id.GetString()!, out var completion));
                         if (root.TryGetProperty("error", out var failure))
                             completion.TrySetException(new InvalidOperationException(failure.ToString()));
                         else
                             completion.TrySetResult(root.GetProperty("result").Clone());
+                        NativeFileResponseHandled?.Invoke();
                         continue;
                     }
                     var method = methodName.GetString()!;
@@ -593,6 +604,9 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                 {
                 }
             }
+            foreach (var request in _nativeFileRequests.Values)
+                request.TrySetCanceled(_stop.Token);
+            _nativeFileRequests.Clear();
         }
         finally
         {
