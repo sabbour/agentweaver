@@ -1,167 +1,58 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ProjectConfiguration } from './contracts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AzureFluentProvider } from '../copilot-fluent-system';
 import { DashboardPage } from './DashboardPage';
-import type { RunListItem } from './runListData';
+import { gatewayFixtureFetch } from '../__tests__/retainedGatewayTest';
 
-interface LoadedStub<T> { data: T | null; loading: boolean; error: unknown; loadedAt: Date | null; reload: () => void; replace: () => void }
-
-const mocks = vi.hoisted(() => ({
-  project: null as unknown,
-  configuration: null as unknown,
-  runs: [] as unknown[],
-  useProjectRunList: vi.fn(),
-  reloadRuns: vi.fn(),
-  useProjectMetrics: vi.fn(),
-  metricsData: null as unknown,
-}));
-
-vi.mock('./projectMetrics', async (importOriginal) => ({
-  ...await importOriginal<typeof import('./projectMetrics')>(),
-  useProjectMetrics: (projectId: string | null, range: string) => {
-    mocks.useProjectMetrics(projectId, range);
-    return mocks.metricsData;
-  },
-}));
-
-vi.mock('./projectData', () => ({
-  useProjectSummary: () => mocks.project,
-  useProjectConfiguration: () => mocks.configuration,
-}));
-
-vi.mock('./runListData', async (importOriginal) => ({
-  ...await importOriginal<typeof import('./runListData')>(),
-  useProjectRunList: (projectId: string, options?: { states?: string[] }) => {
-    mocks.useProjectRunList(projectId, options);
-    return { items: mocks.runs, loading: false, error: null, hasMore: false, loadingMore: false, loadMore: vi.fn(), reload: mocks.reloadRuns };
-  },
-}));
-
-vi.mock('./pageParts', async () => {
-  const actual = await vi.importActual<typeof import('./pageParts')>('./pageParts');
-  return {
-    ...actual,
-    PageHeading: ({ title, actions }: { title: string; actions?: React.ReactNode }) => <header><h1>{title}</h1>{actions}</header>,
-  };
+const mocks = vi.hoisted(() => ({ fetch: vi.fn(), apiCall: vi.fn() }));
+vi.mock('./AuthContext', () => ({ useAuth: () => ({ apiCall: mocks.apiCall }) }));
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api')>();
+  return { ...actual, gatewayClient: new actual.AgentweaverGatewayClient('/api/v1', mocks.fetch) };
 });
 
-/** Builds a fake load result in the same shape the project data hooks return. */
-function loaded<T>(data: T | null, overrides: Partial<LoadedStub<T>> = {}): LoadedStub<T> {
-  return { data, loading: false, error: null, loadedAt: null, reload: vi.fn(), replace: vi.fn(), ...overrides };
-}
-
-/** A fully set-up configuration: model, repository, one cast agent, one enabled skill. */
-function config(overrides: Partial<ProjectConfiguration> = {}): ProjectConfiguration {
-  return {
-    modelSelection: { reference: 'gpt-test' } as ProjectConfiguration['modelSelection'],
-    providerOverrides: [],
-    orderedProviderOverrides: [],
-    agentCharters: [{ agentId: 'a1', name: 'Ada', role: 'Lead', charter: '' }],
-    casting: [{ agentId: 'a1', role: 'Lead', order: 1 }],
-    blueprintWorkflowReferences: [],
-    skills: [{ skillId: 's1', enabled: true, order: 0 }, { skillId: 's2', enabled: false, order: 1 }],
-    runLimits: {},
-    sourceControl: { repository: { owner: 'octo', name: 'repo' } } as ProjectConfiguration['sourceControl'],
-    ...overrides,
-  };
-}
-
-function run(runId: string, executionState: string): RunListItem {
-  return { projectId: 'p1', runId, label: `Task ${runId}`, executionState, time: { label: 'Started', value: '2026-01-01T00:00:00Z' } };
-}
-
-function metricsData() {
-  return {
-    metrics: { projectId: 'p1', from: 'a', to: 'b', activeRuns: 2, blockedRuns: 1, runsInRange: 10, runsTotal: 40, completedRuns: 8, succeededRuns: 6, series: [] },
-    usage: { projectId: 'p1', from: 'a', to: 'b', usageByModel: [], usageByAgent: [{ id: 'a1', requestCount: 1, inputTokens: null, outputTokens: null, cachedTokens: null, cacheWriteTokens: null, reasoningTokens: null, avgDurationMs: null, runs: 1, unpricedRequestCount: null, cost: [] }] },
-    metricsError: null,
-    usageError: null,
-    loading: false,
-    loadedAt: null,
-    reload: vi.fn(),
-  };
-}
+beforeEach(() => {
+  mocks.fetch.mockImplementation(gatewayFixtureFetch);
+  mocks.apiCall.mockImplementation((operation: (token: string, tenant: null) => Promise<unknown>) => operation('test-token', null));
+});
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 function renderPage() {
-  return render(
-    <MemoryRouter initialEntries={['/projects/p1']}>
-      <Routes><Route path="/projects/:projectId" element={<DashboardPage />} /></Routes>
-    </MemoryRouter>,
-  );
+  return render(<AzureFluentProvider density="compact"><MemoryRouter initialEntries={['/projects/p1']}><Routes><Route path="/projects/:projectId" element={<DashboardPage />} /></Routes></MemoryRouter></AzureFluentProvider>);
+}
+function paths(): string[] {
+  return mocks.fetch.mock.calls.map(([input]) => String(input));
 }
 
-describe('DashboardPage', () => {
-  beforeEach(() => {
-    mocks.project = loaded({ projectId: 'p1', name: 'Alpha', state: 'active' });
-    mocks.configuration = loaded({ projectId: 'p1', revision: 12, configuration: config() });
-    mocks.runs = [];
-    mocks.useProjectRunList.mockClear();
-    mocks.reloadRuns.mockClear();
-    mocks.useProjectMetrics.mockClear();
-    mocks.metricsData = metricsData();
-  });
-
-  it('shows loading until the configuration arrives', () => {
-    mocks.configuration = loaded(null, { loading: true });
+describe('retained DashboardPage v1 reads', () => {
+  it('preserves the 0.x dashboard panels without calling its old dashboard path', async () => {
     renderPage();
-    expect(screen.getByText('Loading dashboard')).toBeTruthy();
-    expect(screen.queryByText('Setup checks')).toBeNull();
-  });
-
-  it('shows a load error', () => {
-    mocks.configuration = loaded(null, { error: new Error('Could not load') });
-    renderPage();
-    expect(screen.getByText('Could not load')).toBeTruthy();
-  });
-
-  it('shows a ready project with its checks, summary, and team', () => {
-    mocks.runs = [run('r1', 'blocked'), run('r2', 'active'), run('r3', 'idle')];
-    renderPage();
-    expect(mocks.useProjectRunList).toHaveBeenCalledWith('p1', { pageSize: 5 });
-    expect(mocks.useProjectMetrics).toHaveBeenCalledWith('p1', '30d');
-    expect(screen.getByRole('link', { name: 'Open run Task r1' }).getAttribute('href')).toBe('/projects/p1/runs/r1');
-    expect(screen.getByText('Ready')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Project is set up for runs' })).toBeTruthy();
-    const checks = within(screen.getByRole('list', { name: 'Setup checks' })).getAllByRole('listitem').map((entry) => entry.textContent);
-    expect(checks).toEqual(['Default model: gpt-test', 'Repository: octo/repo', '1 agent in the team', '1 skill assigned']);
-    const actions = screen.getByLabelText('Project actions');
-    expect(within(actions).getByRole('link', { name: 'Open Orchestrations' }).getAttribute('href')).toBe('/projects/p1/orchestrations');
-    expect(within(actions).getAllByRole('link', { name: 'Open Orchestrations' })).toHaveLength(1);
+    await screen.findByText('Runs over time');
     const summary = screen.getByLabelText('Project summary');
-    expect(summary.textContent).toContain('Active runs2');
-    expect(summary.textContent).toContain('Needs input1');
-    expect(summary.textContent).toContain('Runs in range10In the last 30 days · 40 total');
-    expect(summary.textContent).toContain('Success75%6 of 8 completed runs succeeded');
-    expect(screen.getByRole('table', { name: 'Usage by agent' }).textContent).toContain('Ada');
-    expect(summary.textContent).not.toContain('Configuration revision');
-    // Ada appears in the Team panel and in the agent usage table.
-    expect(screen.getAllByText('Ada')).toHaveLength(2);
+    expect(within(summary).getByText('Active runs')).toBeDefined();
+    expect(within(summary).getByText('Runs, last 7 days')).toBeDefined();
+    expect(within(summary).getByText('Completed tasks')).toBeDefined();
+    expect(within(summary).getByText('Run success')).toBeDefined();
+    expect(screen.getByText('Model and agent metrics')).toBeDefined();
+    expect(screen.getByText('Agent leaderboard')).toBeDefined();
+    expect(screen.getByText('gpt-5')).toBeDefined();
+    expect(screen.getByText(/Agent leaderboard and latency percentiles are unavailable/)).toBeDefined();
+    expect(paths().map((path) => new URL(path, 'http://localhost').pathname).sort()).toEqual([
+      '/api/v1/projects/p1', '/api/v1/projects/p1/metrics',
+      '/api/v1/projects/p1/metrics', '/api/v1/projects/p1/usage',
+    ].sort());
+    expect(paths().every((path) => !path.includes('/dashboard'))).toBe(true);
+    expect(paths().filter((path) => path.includes('/metrics?')).every((path) => new URL(path, 'http://localhost').searchParams.get('bucket') === 'day')).toBe(true);
   });
 
-  it('points setup at the first missing step', () => {
-    mocks.configuration = loaded({ projectId: 'p1', revision: 1, configuration: config({ modelSelection: null, agentCharters: [], casting: [] }) });
+  it('refreshes selected-range metrics and usage without losing weekly totals', async () => {
     renderPage();
-    expect(screen.getByText('Setup needed')).toBeTruthy();
-    const actions = screen.getByLabelText('Project actions');
-    expect(within(actions).getByRole('link', { name: 'Choose a model' }).getAttribute('href')).toBe('/projects/p1/settings?section=models');
-    expect(within(actions).getByRole('link', { name: 'Open Orchestrations' })).toBeTruthy();
-    expect(screen.getByText('No agents yet. Add agents in Agents.')).toBeTruthy();
-  });
-
-  it('shows the archived state', () => {
-    mocks.project = loaded({ projectId: 'p1', name: 'Alpha', state: 'archived' });
-    renderPage();
-    expect(screen.getByText('Archived')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'This project is archived' })).toBeTruthy();
-  });
-
-  it('reloads the project, configuration, and runs on Refresh', () => {
-    renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-    expect((mocks.project as LoadedStub<unknown>).reload).toHaveBeenCalled();
-    expect((mocks.configuration as LoadedStub<unknown>).reload).toHaveBeenCalled();
-    expect(mocks.reloadRuns).toHaveBeenCalledTimes(1);
-    expect((mocks.metricsData as { reload: () => void }).reload).toHaveBeenCalled();
+    await screen.findByText('Runs over time');
+    const initial = paths().filter((path) => path.includes('/metrics?')).map((path) => new URL(path, 'http://localhost').searchParams.get('from'));
+    fireEvent.change(screen.getByLabelText('Time range'), { target: { value: '7d' } });
+    await waitFor(() => expect(paths().filter((path) => path.includes('/metrics?')).length).toBe(3));
+    expect(new URL(paths().filter((path) => path.includes('/metrics?')).at(-1)!, 'http://localhost').searchParams.get('from')).toBe(initial[1]);
+    expect(paths().filter((path) => path.includes('/usage?')).length).toBe(2);
   });
 });

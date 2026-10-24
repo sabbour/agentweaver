@@ -69,15 +69,31 @@ flowchart LR
 
 The Overview groups Priorities, New chat, and My conversations under
 **Chief of Staff**. A v1-only rail link opens that section; 0.x navigation is
-unchanged. The active Overview and Dashboard load from Gateway project, run,
-metric, usage, configuration, and notification reads. The retained 0.x Overview and
-Dashboard source files also use only published Gateway reads. They preserve
-their panels but are not mounted in the v1 route tree. Overview shows usage and
-recent runs for the four most recently updated active projects; Dashboard
-shows project metrics, run totals, and model usage for the selected range.
-Neither page calls the old global overview or project dashboard endpoint. The
-notification bell and project switcher use the same published Gateway routes.
-When a read fails, its value is unavailable, not zero or healthy.
+unchanged. The active Overview and Dashboard use published Gateway reads.
+Overview lists the four most recently updated active projects and reads their
+configuration, metrics, and backlog. Its **Operations** card keeps the 0.x
+totals, but in-flight, queued-work, and done-today values are unavailable
+because `GET /api/v1/overview` is not published. The same route is needed for
+the old aggregate metrics, usage, service health, and full activity feed.
+Overview therefore shows metrics for one selected project and recent run
+summaries rather than global activity. Dashboard uses project, metric, and
+usage reads for its summary, selected range, model and agent panels, and quick
+actions. Neither page calls the old global overview or project dashboard
+endpoint. The notification bell and project switcher use the same published
+Gateway routes. When a read fails, its value is unavailable, not zero or
+healthy.
+
+## Page comparison checklist
+
+Use the mounted 0.x pages as the reference. Compare at the same viewport and
+with the same project, active run, agent, and model fixture. Each app renders
+only fields its API provides. The screenshots compare layout and data gaps;
+they are not live acceptance evidence and do not claim pixel parity.
+
+| Page | 0.x section order and density | Card, table, and detail treatment | Controls and navigation | v1 data and gaps |
+| --- | --- | --- | --- | --- |
+| Overview | **Operations**, **Recent projects**, **AI usage & performance**, then **Activity feed** beside **Needs attention**. Recent projects shows one current-focus panel and up to four compact project rows. | One Operations card has a health badge and four counters. The project area is a split focus/list card. Five small usage cards follow. Activity and attention use bordered panels; there is no detail drawer or data table. | **Refresh**, a 7-, 30-, or 90-day range, **View all projects**, project links, and attention actions. The project list becomes one column below 900px; the lower panels stack below 980px. The approved v1-only **Chief of Staff** group appears before these sections. | Project card **Issues** counts only non-archived tasks linked to repository issues; other card stats use configuration and metrics. Operations keeps the four 0.x counters; only **Active projects** is measurable. `GET /api/v1/overview` is missing for the other totals, global health, aggregate usage, and full activity. v1 selects one project for metrics and shows recent run summaries. |
+| Dashboard | Status and four summary tiles lead; **Activity** range controls follow; a two-column area holds the run chart, run totals, and invocation chart; model and agent panels follow. | A status card pairs health and actions with four metric tiles. Activity uses bordered chart and total cards. Model metrics use compact panels; the agent leaderboard and response percentiles use tables. There is no detail drawer. | **Refresh** and automatic refresh; 7-, 30-, and 90-day range selector; status-based links to Board, Flow, and Orchestrations. The activity columns stack below 980px. | Project metrics and usage power the supported panels. Live health needs `GET /api/v1/projects/{projectId}/health`; task completions need `GET /api/v1/projects/{projectId}/task-metrics`; the leaderboard needs `GET /api/v1/projects/{projectId}/agent-metrics`; response percentiles need the `responseDuration` and `timeToFirstToken` fields on `GET /api/v1/projects/{projectId}/metrics`. |
 
 ## Surfaces
 
@@ -90,14 +106,14 @@ Each row says what works and what is still missing. The missing parts link to
 | Consent | Permission explanations in the sign-in card. | Nothing. |
 | Shell and breadcrumbs | 0.x rail with **Overview**, the v1-only **Chief of Staff** section link, **Projects**, and **Sessions**, the **New session** button, project switcher, persona menu, and `Projects / project / page` breadcrumbs. Project pages list Flow, Workflows, Workspace, Observability, Diagnostics, Heartbeat, and Cluster. | Nothing. |
 | Notification bell | Your notifications across projects, with the pending count, links to the run Approvals tab or the Board, and **Dismiss**. | Nothing. |
-| Overview | **Chief of Staff** group with Priorities, New chat, and My conversations; **Operations** card, recent projects, metrics and usage for one chosen project, recent runs across projects, and **Needs attention**. A note in Operations explains that cross-project totals are unavailable. | Totals across all projects (cross-project overview). |
+| Overview | **Chief of Staff** group with Priorities, New chat, and My conversations; the 0.x **Operations** tiles; four recent project rows; metrics and usage for one chosen project; recent run summaries; and **Needs attention**. Missing global totals and full activity are named in the page. | Cross-project totals, aggregate metrics and usage, service health, and the full activity feed from `GET /api/v1/overview`. |
 | Sessions | Runs across your projects, newest first, with **Load more**, **Refresh**, and **New session**. | Nothing. |
 | New session | `/assistant` picks a project, creates the run with the first message, signs in silently for that run, starts it, and opens Chat. | A run without a project (operator assistant). |
 | Start task | Floating **Start task** button. Its dialog captures a task into the Backlog and opens the Board. | Nothing. |
 | Projects gallery | 0.x tiles with state and your access. | Nothing. |
 | Create blank project | Dialog with a project name. | Nothing. |
 | Create from GitHub | Creates the project, then saves the repository with GitHub App sign-in. | Owner grant on create (behavior limit). |
-| Dashboard | Readiness from saved configuration, metric tiles, **Activity** chart, run totals, model and agent usage, and quick actions. The status card explains that live project health is unavailable. | Live project health (behavior limit). |
+| Dashboard | Run-based status and metric tiles, **Activity** chart, run totals, model and agent usage, and quick actions. Unavailable values are named instead of filled with guesses. | Live project health, completed-task counts, agent leaderboard, and response-duration percentiles. |
 | Orchestrations | **Active** and **Recent** sections with **Load more**, a state summary, and **Refresh**. | Run delete and archive. |
 | Run page | Two-pane layout with status strip, **Run tree**, and tabs Chat, Topology, Approvals, Activity, Changes, Usage, and Run settings. **Stop run** while the run is open. | Terminal diagnostic and retry. |
 | Run Chat | Journal and a composer for the coordinator or the selected session. | Nothing. |
@@ -107,17 +123,17 @@ Each row says what works and what is still missing. The missing parts link to
 | Agents | Metrics row, filter, tiles, drawer with Overview and Charter, proposal-based **Remove from team** and **Re-role**, **Cast team**, **Add member**, explicit JSON **Sync** export/import, and **Pending team proposals**. | Recent agent history, repository-backed team sync, and optional custom role title during Re-role. |
 | Cast a team | Template or role picks, server-provided universe selection, **Augment** or **Recast** when a team exists, review with member removal, then confirm or reject. | The AI Formulate and Analyze modes. |
 | Skills | Stat strip, **Add skill**, **Import skill** with folder, files, or ZIP upload, **Browse marketplaces** with **Suggested marketplaces**, marketplace sources, browse, preview, import, **Catalog** with **Remove skill**, and **Assignments**. | Nothing. |
-| Memories | Run and agent pickers, kind tabs, search, revisions, and transfer. | The project-wide count strip (project memory). |
+| Memories | Run and agent pickers, kind tabs, search, revisions, and transfer. Project-wide Knowledge uses `GET /api/v1/projects/{projectId}/knowledge/records`. | No missing backend route for Knowledge records; the 0.x project-wide count strip still needs page work. |
 | Settings > General | Rename with the project revision. | Nothing. |
 | Settings > Access | Your permissions and **Members**: list, **Add member**, and **Remove**. | Effective role names (behavior limit). |
 | Settings > Repository, Platform components, Run limits, Connections, History, Advanced | Saved configuration fields and revisions. | Nothing. |
 | Settings > Models | Default model, reasoning effort, credential, and per-task models. | Model catalog (behavior limit). |
-| Settings > Danger zone | Archive and restore. | Project delete. |
+| Settings > Danger zone | Archive and restore. | Project delete: `DELETE /api/v1/projects/{projectId}`. |
 | Platform settings | All 16 platform component areas with owner, readiness, and implementations. | BYOK providers, platform-default Copilot status, account AI access. |
 | Board | **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, title and description edits, queue state, archive, and prerequisite controls. | Drag and reorder, send all to Ready, task delete, backlog settings, decompose, and the Human Review and Problems columns. |
 | Flow | Project task notifications, **Needs input** including dismissed gates, **Task stages**, and **Open**, **Working**, and **Done** run groups. | The live agent graph for the project and current provider-side PR state per run. |
 | Workflows | **Saved workflow references**: the default workflow and the workflow for each blueprint, from project configuration. | Workflow catalog, YAML, edit, run, generate, sync, default, and per-task override. |
-| Workspace | **Repository** from configuration, **Pull requests** that runs opened or reused, and **Issues** synced into the backlog. | Branches, the file tree, and file content. |
+| Workspace | **Repository** from configuration, **Pull requests** that runs opened or reused, and **Issues** synced into the backlog. | Branches: `GET /api/v1/projects/{projectId}/source-control/refs`; file tree: `GET /api/v1/projects/{projectId}/source-control/tree?ref=`; file content: `GET /api/v1/projects/{projectId}/source-control/files/{path}?ref=`. |
 | Observability | Metric tiles, **Activity** chart, run totals, model and agent usage, and **Recent runs**. | Per-run traces and response-duration percentiles. |
 | Diagnostics | **Areas that are not ready** from the platform component report, and **Failed runs**. | Service self-checks and project diagnostic reports. |
 | Heartbeat | Seven-day metric tiles and **Active and blocked runs**. | Heartbeat records for each service process. |
