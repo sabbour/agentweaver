@@ -540,6 +540,13 @@ internal sealed class RuntimeUsageSourceStore(
     {
         var observed = RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, new(1, registration, source));
         var binding = registration.Binding;
+        // A hard cap must hold new dispatches when the quote or any whole-run usage remains unpriced.
+        if (binding.CopilotHardCreditLimit is not null &&
+            (snapshot.Quote.Disposition == CostDisposition.Unpriced ||
+             !snapshot.CopilotTotals.IsFullyPriced ||
+             snapshot.RepresentedReceipts.Any(reference =>
+                 reference.Accounting.Disposition == CostDisposition.Unpriced)))
+            throw new RuntimeAuthorizationException("runtime_cost_budget_pricing_missing");
         var limits = EvaluateObservedCreditLimits(binding, observed);
         var costIdentity = CostRateScopeIdentity(snapshot);
         var digest = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(snapshot.CopilotTotals));

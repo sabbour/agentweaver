@@ -628,6 +628,41 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
     }
 
+    [Theory]
+    [InlineData("quote")]
+    [InlineData("usage")]
+    public async Task UnpricedCostEvidenceCannotPrepareHardCappedDispatch(string fault)
+    {
+        // Prepare must not create an outbox dispatch from a snapshot whose hard-cap cost is unknown.
+        await RegisterPositiveHardCreditAsync(0);
+        var snapshot = fault switch
+        {
+            "quote" => PricedSnapshot(0, 0m, 0, unpricedQuote: true),
+            "usage" => PricedSnapshot(0, 0m, 1, unpricedEventCount: 1),
+            _ => throw new ArgumentOutOfRangeException(nameof(fault))
+        };
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareAsync(0, snapshot));
+
+        Assert.Equal("runtime_cost_budget_pricing_missing", failure.Code);
+        Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
+    }
+
+    [Fact]
+    public async Task UnpricedCostEvidenceAtTurnBoundaryKeepsPreparedDispatchHeld()
+    {
+        // Reconcile again at native begin because pricing completeness can change after preparation.
+        await RegisterPositiveHardCreditAsync(0);
+        Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 4m, 1)));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            BeginAsync(0, PricedSnapshot(0, 0m, 0, unpricedQuote: true)));
+
+        Assert.Equal("runtime_cost_budget_pricing_missing", failure.Code);
+        Assert.Equal("prepared", await ReadDispatchStateAsync(_intents[0].MessageId));
+        Assert.Equal(0, await NativeDispatchCountAsync("sending"));
+    }
+
     [Fact]
     public async Task ChangedCostRateOrRevokedSourceGrantCannotBeginHardCappedDispatch()
     {
@@ -1284,12 +1319,15 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
 
     private Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>> PricedSnapshot(
         int index, decimal observedCredits, long ledgerEventCount, bool isFullyPriced = true,
-        string? sourceHash = null, string rateVersion = "1")
+        string? sourceHash = null, string rateVersion = "1", bool unpricedQuote = false,
+        long unpricedEventCount = 0)
     {
         var registration = _registrations[index];
         return (source, token) =>
         {
             token.ThrowIfCancellationRequested();
+            if (unpricedEventCount < 0 || unpricedEventCount > ledgerEventCount)
+                throw new ArgumentOutOfRangeException(nameof(unpricedEventCount));
             var card = new CostRateCard("numeric-rate-card", rateVersion, source.MeterSource, "AIC",
                 1_000_000_000m,
                 ImmutableDictionary<string, decimal>.Empty.WithComparers(StringComparer.Ordinal))
@@ -1312,16 +1350,21 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
                 "numeric-cost-options", "numeric-cost-resource", 1,
                 ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal), card);
             var scope = registration.Binding;
+            // Keep unknown events out of the priced count so the production snapshot validator sees an incomplete total.
             ImmutableArray<UsageAmountTotal> amounts = ledgerEventCount == 0
-                ? [] : [new(source.MeterSource, "AIC", observedCredits, ledgerEventCount, 0)];
+                ? [] : [new(source.MeterSource, "AIC", observedCredits,
+                    ledgerEventCount - unpricedEventCount, unpricedEventCount)];
+            var totalsFullyPriced = isFullyPriced && unpricedEventCount == 0;
             ImmutableArray<UsageAgentTotals> agents = ledgerEventCount == 0
                 ? [] : [new(scope.AgentId, ledgerEventCount, null, null, null, null, null, null,
-                    isFullyPriced, amounts)];
+                    totalsFullyPriced, amounts)];
             var totals = new UsageRunTotals(scope.TenantId, scope.ProjectId, scope.RunId,
-                ledgerEventCount, isFullyPriced, agents, amounts);
+                ledgerEventCount, totalsFullyPriced, agents, amounts);
             return Task.FromResult(new RuntimeUsageCostSnapshotReceipt(1,
                 sourceHash ?? RuntimeUsageSourceReceiptContract.HashSource(registration, source),
-                binding, new(0m, "AIC", CostDisposition.Estimate, card, null), totals)
+                binding, unpricedQuote
+                    ? new(null, "AIC", CostDisposition.Unpriced, card, "model-rate-unavailable")
+                    : new(0m, "AIC", CostDisposition.Estimate, card, null), totals)
             {
                 RateCardContentHash = card.ContentHash
             });

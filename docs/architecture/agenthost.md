@@ -40,7 +40,7 @@ Missing, ambiguous, expired, or changed registrations do not produce a current r
 Fixed-work sessions use their retained execution-checkpoint association instead of an open WorkPlan item.
 The association must match the parent, child, workflow, plan, agent, model, selection hash, fence, and decision version.
 Accepted numeric and credit limits propagate without changing legacy null configuration.
-Workflow-bound `MaxModelTurns`, `MaxToolCalls`, and positive Hosted Copilot hard
+Workflow-bound `MaxModelTurns`, `MaxToolCalls`, and configured Hosted Copilot hard
 credit limits use owner-controlled admission. The Orchestrator preserves an
 accepted `MaxPromptTokens` value in `RuntimeOwnerContext` and the runtime
 binding. AgentHost resolves the effective per-prompt/context capacity against
@@ -49,7 +49,8 @@ SDK. The SDK compacts removable conversation history and fails the turn if
 system context, tool definitions, and the latest input still cannot fit; it
 does not silently truncate input. This is not a cumulative token budget or a
 count of the SDK's internal model API calls.
-For a zero Hosted Copilot hard limit, startup remains allowed, but the host
+For a zero Hosted Copilot hard limit with a priceable source and fully priced
+existing usage, startup remains allowed, but the host
 denies model-turn dispatch and never calls the SDK's native Send. Before it
 returns the budget error, it reads the native event log and requires a complete
 empty range, then the owner stores a guard receipt and linked no-send evidence.
@@ -289,8 +290,10 @@ Unsupported control characters, such as NUL, deny before dispatch.
 `immediate` work takes priority over pending `enqueue` work at the next native idle boundary.
 It does not interrupt an active native turn.
 
-Hosted Copilot runs with no hard credit limit retain legacy startup and do not require a price quote.
-A zero hard limit permits startup but denies model-turn dispatch. Before returning the budget error, the host must record a complete-empty-range no-send proof; it never calls the SDK's native Send. A positive hard limit requires a priceable source and workflow-bound dispatch admission against observed whole-run usage; an unbound positive hard limit is rejected before readiness.
+Hosted Copilot runs with no configured credit limit retain legacy startup without cost admission.
+A soft-only limit can retain an `Unpriced` quote; its unknown amount remains visible but does not enter the priced subtotal.
+A fully priced run may start at the exact hard limit, but the owner denies the next model dispatch at the turn boundary.
+A zero hard limit permits startup only after run admission confirms a priceable source and fully priced existing usage; it then denies model-turn dispatch. Before returning the budget error, the host must record a complete-empty-range no-send proof; it never calls the SDK's native Send. A positive hard limit uses workflow-bound dispatch admission against observed whole-run usage; an unbound positive hard limit is rejected before readiness.
 BYOK remains token-metered and does not use the Copilot nano-AIU price preflight.
 An exact message replay shares the original completion; changed content under the same ID denies.
 Completed responses remain available for the configured host lifetime, independent of the pending-turn limit.

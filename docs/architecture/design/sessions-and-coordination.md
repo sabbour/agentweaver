@@ -43,9 +43,13 @@ The owner commits the accepted model, connection, selection hash, and Cost recei
 through its existing outbox with the root.
 Authority is rechecked after waits and before root or claim commit.
 Identical accepted-root replay retains the original receipt without repricing.
-An explicit `Unpriced` quote does not block root acceptance or backlog claim; only
-the known priced subtotal counts toward credit limits. A changed model pin still
-cannot authorize capped work.
+For a hard credit limit, an unpriced quote or unpriced existing usage rejects root
+acceptance or backlog claim instead of treating unknown cost as zero. A soft-only
+limit may retain an explicit `Unpriced` quote; the amount remains visible and is
+not included in the priced subtotal. A changed model pin still cannot authorize
+capped work.
+Fully priced usage at the exact hard limit can be accepted; the runtime owner
+holds the next model dispatch at its boundary.
 This source path does not claim live PostgreSQL or native model availability.
 
 Mapped child spawn checks the latest root decision envelope under the root-session
