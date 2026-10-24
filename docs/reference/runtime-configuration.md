@@ -111,28 +111,32 @@ ConfigMap. A Deployment also does not restart automatically when a referenced
 ConfigMap changes.
 
 For a first installation, resolve and review all settings before applying the
-bundle. For an existing installation, replace an immutable ConfigMap during an
-approved maintenance window:
+bundle. For an existing installation, use the owning deployment workflow when
+it supports the map. For a manual maintenance procedure:
 
 1. Update the reviewed JSON source and render the complete bundle. Confirm the
    rendered ConfigMap has the expected name, namespace, data, and
    `immutable: true`.
-2. Delete only the exact ConfigMap being replaced. For example:
+2. Stop every workload that references the map and wait until its Pods have
+   terminated. Kubelet caches immutable ConfigMap data for about one minute by
+   default; wait at least 70 seconds after the last Pod terminates before
+   replacing the map.
+3. Delete only the exact ConfigMap being replaced. For example:
 
    ```powershell
    kubectl delete configmap knowledge-runtime-config -n agentweaver
    ```
 
-3. Recreate it from the rendered bundle:
+4. Recreate it from the rendered bundle:
 
    ```powershell
    kubectl apply -k deploy\k8s
    ```
 
-4. Restart the affected Deployment and wait for its rollout:
+5. Restore the workload and wait for its rollout:
 
    ```powershell
-   kubectl rollout restart deployment/knowledge -n agentweaver
+   kubectl scale deployment/knowledge --replicas=<original-count> -n agentweaver
    kubectl rollout status deployment/knowledge -n agentweaver
    ```
 
@@ -140,16 +144,9 @@ Kubelet caches immutable ConfigMap data per node and does not watch it for
 changes. If a pod that references the ConfigMap keeps running on a node while
 you delete and recreate the ConfigMap under the same name, new pods on that
 node can still receive the old values. A `rollout restart` does not clear this
-cache. If the restarted pods still show old values, scale every workload that
-references the ConfigMap to `0` and wait for its pods to terminate. Then scale
-it back up. Before you rely on the new value, check it inside the new pod with
-`kubectl exec deployment/<name> -n agentweaver -- printenv` or by reading the
-mounted file.
-
-Deleting the ConfigMap creates a short interval when a replacement pod cannot
-start. Keep existing pods running, apply the bundle promptly, and verify the
-new ConfigMap before restarting the Deployment. Do not use a broad delete or
-remove the `immutable` setting to bypass the replacement process.
+cache. A short interval without the map is expected while workloads are
+stopped. Do not use a broad delete or remove the `immutable` setting to bypass
+the replacement process.
 
 ### Guarded pre-acceptance ConfigMap patch upgrades
 
@@ -167,9 +164,9 @@ live map. When a changed map is eligible for guarded replacement,
 any other immutable map differs, before server-side preflight can report an
 immutable-field error. With `--execute`, the command validates the rest of the
 rendered bundle, checks namespace-scoped ConfigMap create and name-scoped
-delete permissions for each eligible changed map, force-replaces only those
-maps from the source-rendered objects, and then applies the bundle. Unchanged
-data follows the normal apply path.
+delete permissions for each eligible changed map, and replaces only those maps
+from the source-rendered objects with a UID- and resource-version-guarded
+delete followed by a create. Unchanged data follows the normal apply path.
 
 This exception is limited to `agenthost-runtime-v1`,
 `projects-config-runtime-config`, and `gateway-runtime-config`. It never
@@ -185,6 +182,17 @@ AgentHost settings are used by Sandbox Pods rather than a long-lived
 Deployment. Recreating the ConfigMap does not restart existing Sandbox Pods;
 recreate an affected Sandbox through its owning Environment lifecycle before
 relying on changed AgentHost settings.
+
+The source-bound `release:deploy-whole` flow uses the same replacement
+allow-list and guarded delete/create. Before replacing the Projects & Config or
+Gateway runtime map, it checks create and exact-name delete permission, scales
+the owning Deployment to zero, waits for referencing Pods to terminate, and
+waits 70 seconds for kubelet's default immutable-map cache to expire. It then
+recreates and verifies the map before restoring the Deployment in the normal
+rollout order. It refuses changed immutable maps outside the allow-list and
+refuses to replace a map while an active Pod outside its managed Deployment
+set still references it. AgentHost Sandbox Pods remain owned by the Environment
+lifecycle and are not stopped by a whole-release rollout.
 
 `events-and-sessions-runtime-config` is mutable in the checked-in profile.
 Apply its reviewed data with the bundle, then restart the Events & Sessions

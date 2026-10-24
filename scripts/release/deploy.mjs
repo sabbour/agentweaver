@@ -31,6 +31,14 @@ import { verifyRegistryImage } from './registry.mjs';
 import { readRegistry } from './registry-read.mjs';
 import { verifyPartialPublicationCompletion } from './partial-publication.mjs';
 import { PARTIAL_PUBLICATION } from './partial-publication-contract.mjs';
+import {
+  findImmutableRuntimeConfigMapReplacements,
+  IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS,
+  IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENT_NAMES,
+  replaceImmutableRuntimeConfigMaps,
+  REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS,
+  verifyImmutableRuntimeConfigMapReplacementPermissions,
+} from './immutable-runtime-config-maps.mjs';
 import { run as runProcess } from '../azure/lib/exec.mjs';
 import {
   assertExistingP0BundleWebRoute, managedBrokerHostname, observeExistingP0BrokerRouting,
@@ -123,19 +131,6 @@ const INCOMPLETE_RUNTIME_CONFIG_MAPS = new Set([
   'web-runtime-config',
 ]);
 const INCOMPLETE_CONFIG_MAPS = new Set([...INCOMPLETE_RUNTIME_CONFIG_MAPS, 'agenthost-runtime-v1']);
-// Only these source-owned immutable runtime maps are eligible for pre-acceptance replacement.
-const REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS = new Set([
-  'agenthost-runtime-v1',
-  'projects-config-runtime-config',
-  'gateway-runtime-config',
-]);
-const IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS = new Map([
-  ['projects-config-runtime-config', ['projects-config']],
-  ['gateway-runtime-config', ['gateway']],
-]);
-const IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENT_NAMES = new Set(
-  [...IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS.values()].flat(),
-);
 /** Upstream AgentSandbox release asset pinned to its source commit and content digest. */
 export const AGENT_SANDBOX_RELEASE = Object.freeze({
   version: 'v1.0.7',
@@ -324,104 +319,6 @@ function parseJson(text, location) {
     return JSON.parse(text);
   } catch (error) {
     fail(`${location} is not valid JSON: ${error.message}`);
-  }
-}
-
-function configMapDataDigest(data) {
-  const entries = Object.entries(data ?? {}).sort(([left], [right]) => left.localeCompare(right));
-  return createHash('sha256').update(JSON.stringify(entries)).digest('hex');
-}
-
-function projectRuntimeConfigMap(resource) {
-  return {
-    kind: resource.kind,
-    name: resource.metadata?.name,
-    namespace: resource.metadata?.namespace,
-    immutable: resource.immutable,
-    dataDigest: configMapDataDigest(resource.data),
-    binaryDataDigest: configMapDataDigest(resource.binaryData),
-  };
-}
-
-function findImmutableRuntimeConfigMapReplacements(installationManifest, namespace, { root, run }) {
-  const replacements = [];
-  const unapprovedChanges = [];
-  const desiredMaps = installationManifest.items.filter((resource) =>
-    resource.kind === 'ConfigMap' && resource.immutable === true);
-
-  for (const name of REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS) {
-    const desired = desiredMaps.find((resource) => resource.metadata?.name === name);
-    if (!desired || desired.metadata?.namespace !== namespace) {
-      fail(`source bundle must include immutable ConfigMap/${name} in namespace ${namespace}`);
-    }
-  }
-
-  // Inspect every rendered immutable ConfigMap so dry-run cannot miss an unapproved replacement.
-  for (const desired of desiredMaps) {
-    const name = desired.metadata?.name;
-    if (typeof name !== 'string' || desired.metadata?.namespace !== namespace) {
-      fail(`source bundle contains an immutable ConfigMap outside namespace ${namespace}`);
-    }
-    const currentName = run('kubectl', [
-      'get', 'configmap', name, '--namespace', namespace, '--ignore-not-found', '--output=name',
-    ], { cwd: root });
-    if (!currentName) continue;
-    if (currentName !== `configmap/${name}`) {
-      fail(`live ConfigMap lookup returned an unexpected resource for ${name}`);
-    }
-    const currentText = run('kubectl', [
-      'get', 'configmap', name, '--namespace', namespace, '--output=json',
-    ], {
-      cwd: root,
-      // Project only identity and hashes so runtime settings are never surfaced by command output.
-      projectJson: projectRuntimeConfigMap,
-      preserveProjectedJson: true,
-    });
-    const current = parseJson(currentText, `ConfigMap/${name}`);
-    if (current.kind !== 'ConfigMap' || current.name !== name || current.namespace !== namespace ||
-        typeof current.dataDigest !== 'string' || typeof current.binaryDataDigest !== 'string') {
-      fail(`live ConfigMap/${name} does not match its explicitly managed namespace and name`);
-    }
-    const desiredProjection = projectRuntimeConfigMap(desired);
-    if (current.immutable !== true ||
-        (current.dataDigest === desiredProjection.dataDigest &&
-         current.binaryDataDigest === desiredProjection.binaryDataDigest)) continue;
-    if (!REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS.has(name)) {
-      unapprovedChanges.push(name);
-      continue;
-    }
-    replacements.push(desired);
-  }
-  if (unapprovedChanges.length > 0) {
-    const changedNames = [
-      ...replacements.map((resource) => resource.metadata.name),
-      ...unapprovedChanges,
-    ];
-    fail(
-      `changed immutable ConfigMaps: ${changedNames.join(', ')}. ` +
-        `Not eligible for guarded pre-acceptance replacement: ${unapprovedChanges.join(', ')}. ` +
-        'Follow the reviewed maintenance procedure in ' +
-        'docs/reference/runtime-configuration.md#update-an-immutable-configmap.',
-    );
-  }
-  return replacements;
-}
-
-function verifyImmutableRuntimeConfigMapReplacementPermissions(replacements, namespace, { root, run }) {
-  for (const { metadata } of replacements) {
-    const name = metadata.name;
-    // Check create before delete because force replacement removes the old object before creating the new one.
-    for (const [verb, resource] of [
-      ['create', 'configmaps'],
-      ['delete', `configmaps/${name}`],
-    ]) {
-      const allowed = run('kubectl', [
-        'auth', 'can-i', verb, resource, '--namespace', namespace,
-      ], { cwd: root }).trim().toLowerCase();
-      if (allowed !== 'yes') {
-        fail(`Kubernetes authorization must allow ${verb} ${resource} in namespace ${namespace} before replacing ConfigMap/${name}`);
-      }
-    }
   }
 }
 
@@ -2804,7 +2701,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
     }
     const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
     const immutableRuntimeConfigMapReplacements = parsed.preAcceptance
-      ? findImmutableRuntimeConfigMapReplacements(installationManifest, parsed.target.namespace, { root, run })
+      ? findImmutableRuntimeConfigMapReplacements(installationManifest, parsed.target.namespace, { root, run, fail })
       : [];
     const immutableRuntimeConfigMapReplacementNames = immutableRuntimeConfigMapReplacements
       .map((resource) => resource.metadata.name);
@@ -2812,7 +2709,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
       runtimeManifest, parsed.target, { root, run, managedResources: installationManifest });
     if (parsed.execute) {
       verifyImmutableRuntimeConfigMapReplacementPermissions(
-        immutableRuntimeConfigMapReplacements, parsed.target.namespace, { root, run });
+        immutableRuntimeConfigMapReplacements, parsed.target.namespace, { root, run, fail });
     }
     run('kubectl', ['apply', '--dry-run=client', '--filename', '-'], {
       cwd: root,
@@ -2942,10 +2839,8 @@ export async function deployRelease(options = {}, dependencies = {}) {
     verifyAgentSandboxInstallation(agentSandboxRelease, { root, run });
     if (!applied) {
       for (const configMap of immutableRuntimeConfigMapReplacements) {
-        // Force-replace only after all preflights, using the exact source-rendered map.
-        run('kubectl', [
-          'replace', '--force', '--filename', '-', '--namespace', parsed.target.namespace,
-        ], { cwd: root, input: JSON.stringify(configMap) });
+        replaceImmutableRuntimeConfigMaps(
+          [configMap], parsed.target.namespace, { root, run, fail });
       }
       run('kubectl', ['apply', '-k', kustomizeSource.path], { cwd: root });
       for (const deployment of pendingRuntimeConfigMapRollouts) {

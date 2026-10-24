@@ -512,7 +512,9 @@ application containers, waits for readiness, verifies every Pod image ID and
 ReplicaSet, and waits up to two minutes for terminating or older-ReplicaSet
 Pods to disappear before final verification. It then runs authenticated Gateway
 checks for Projects, Priorities, project runs, and project metrics. Database
-migrations remain a separate `db:maintenance` operation.
+migrations remain separate: run the Projects & Config migration runner first
+when the publication contains its new migrations, then pass that successful
+receipt to whole-release execute.
 
 ```powershell
 npm run release:deploy-whole -- `
@@ -523,11 +525,38 @@ npm run release:deploy-whole -- `
   --cluster <cluster-name>
 ```
 
+The whole-release dry run detects changed immutable runtime ConfigMaps and
+reports which managed Deployments will be restarted. Execute refuses changed
+immutable maps outside the source-owned replacement allow-list. For an
+approved change, it checks create and exact-name delete permission, stops the
+owning Deployment, waits for its Pods to terminate, and waits 70 seconds for
+the kubelet cache to expire before a guarded delete/create and readback. The
+Deployment is restored in the fixed rollout order with the publication image.
+
+For a publication with Projects & Config migrations, run
+`db:maintenance:projects-config` in dry-run mode first. After reviewing the
+plan, execute the migration and retain the receipt path printed by the runner.
+Then use the whole-release dry run above. Include the successful migration
+receipt for the execute command:
+
+```powershell
+npm run release:deploy-whole -- `
+  --publication artifacts\release\publication.json `
+  --previous-publication artifacts\release\previous-publication.json `
+  --projects-config-migration-receipt <migration-receipt.json> `
+  --subscription-id <subscription-id> `
+  --resource-group <resource-group> `
+  --cluster <cluster-name> `
+  --execute
+```
+
 The whole-release receipt is `deployed` only when all services and smoke
 checks pass. A failed or incomplete rollout writes `partial` and exits
 non-zero. Component-only rollout receipts also report the installation as
 partial. Wait for `db:maintenance` to finish before running the whole-release
-command, and do not start maintenance until the rollout has finished.
+command. If Projects & Config migrations are part of the release, run their
+dedicated migration runner first and pass its receipt to execute. Do not start
+another database maintenance run while the whole-release command is running.
 
 For a Web-only image update, use the separate `release:deploy-web` command with
 the publication receipt from the selected release. It always selects
