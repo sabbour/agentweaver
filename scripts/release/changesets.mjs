@@ -20,6 +20,18 @@ function fail(location, message) {
   throw new Error(`${location}: ${message}`);
 }
 
+function isCommitAncestor(root, ancestor, descendant) {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+      cwd: root, stdio: 'ignore',
+    });
+    return true;
+  } catch (error) {
+    if (error.status === 1 || error.status === 128) return false;
+    throw error;
+  }
+}
+
 /** Parses and validates frontmatter entries while preserving each entry's source line for diagnostics. */
 export function parseChangesetEntries(text, filename, componentIds) {
   const lines = text.replaceAll('\r\n', '\n').split('\n');
@@ -264,9 +276,9 @@ export function diffChanges(root, base) {
  *
  * A receipt only counts when ALL of the following hold:
  *  - its path is `releases/receipts/<sha>.json` and it is newly *added* (status `A`) in this diff;
- *  - the `<sha>` in its filename matches both its own `sourceSha` field and the diff's actual
- *    merge-base ancestor (so a receipt computed for a different commit, or copied/renamed from
- *    elsewhere, cannot be reused to claim coverage here);
+ *  - the `<sha>` in its filename matches its own `sourceSha` field, and that source commit is
+ *    between the diff's merge-base ancestor and HEAD (so a receipt from an unrelated or stale
+ *    source cannot be reused to claim coverage here);
  *  - for each archived changeset it claims, the archive destination is itself newly added in this
  *    diff and the original top-level note is actually deleted in this diff (so merely deleting a
  *    note, without a real corresponding archive, is never credited);
@@ -298,8 +310,15 @@ export function creditReceiptedComponents(root, changes, componentIds, ancestorS
     if (typeof receipt.sourceSha !== 'string' || receipt.sourceSha !== shaInName) {
       fail(file, 'receipt sourceSha does not match its own filename');
     }
-    if (receipt.sourceSha !== ancestorSha) {
-      fail(file, `receipt sourceSha ${receipt.sourceSha} does not match the diff's actual base ancestor ${ancestorSha}; stale or unrelated receipt`);
+    let sourceIsInDiffHistory;
+    try {
+      sourceIsInDiffHistory = isCommitAncestor(root, ancestorSha, receipt.sourceSha) &&
+        isCommitAncestor(root, receipt.sourceSha, 'HEAD');
+    } catch (error) {
+      fail(file, `cannot verify receipt source ancestry: ${error.message}`);
+    }
+    if (!sourceIsInDiffHistory) {
+      fail(file, `receipt sourceSha ${receipt.sourceSha} is not between the diff's actual base ancestor ${ancestorSha} and HEAD; stale or unrelated receipt`);
     }
     if (!Array.isArray(receipt.changesets) || receipt.changesets.length === 0) {
       fail(file, 'expected at least one archived changeset entry');

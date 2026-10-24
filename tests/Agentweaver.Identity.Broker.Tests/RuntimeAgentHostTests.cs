@@ -1332,6 +1332,40 @@ public sealed class RuntimeAgentHostTests
         }
     }
 
+    [Fact]
+    public async Task CancelledNativeFileCallbackKeepsItsLateResponseRegisteredUntilCleanup()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await using var session = await fixture.ConfigureSessionAsync(fixture.MaterialClient(), timeout.Token);
+        using var callbackCancellation = new CancellationTokenSource();
+        var responseRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseResponse = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var responseHandled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Sdk.BeforeNativeFileResponse = async () =>
+        {
+            responseRead.TrySetResult();
+            await releaseResponse.Task.WaitAsync(timeout.Token);
+        };
+        fixture.Sdk.NativeFileResponseHandled = () => responseHandled.TrySetResult();
+
+        var callback = fixture.Sdk.InvokeNativeFilesAsync(
+            "sessionFs.writeFile", "state/events.jsonl", "late response\n", callbackCancellation.Token);
+        try
+        {
+            await responseRead.Task.WaitAsync(timeout.Token);
+            callbackCancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => callback);
+        }
+        finally
+        {
+            callbackCancellation.Cancel();
+            releaseResponse.TrySetResult();
+        }
+
+        await responseHandled.Task.WaitAsync(timeout.Token);
+    }
+
     [Theory]
     [InlineData("denied", "runtime_owner_denied")]
     [InlineData("message", "runtime_native_turn_admission_invalid")]

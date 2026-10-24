@@ -528,6 +528,24 @@ test('a real plan -> apply -> commit round trip produces a receipt that satisfie
   assert.doesNotThrow(() => validateChangesets(readManifest(dir), { root: dir, changes, ancestorSha }));
 });
 
+test('a committed pre-planning change may precede the receipt source within the release diff', (t) => {
+  const dir = initRepo(t);
+  const baseSha = git(dir, 'rev-parse', 'HEAD');
+  writeFileSync(path.join(dir, 'release-preparation.txt'), 'Committed before planning.\n');
+  commit(dir, 'prepare release compatibility');
+  const sourceSha = git(dir, 'rev-parse', 'HEAD');
+
+  const plan = createPlan(readManifest(dir), { root: dir });
+  applyPlan(plan, manifestPath(dir), { root: dir });
+  commit(dir, 'apply release plan');
+
+  const changes = diffChanges(dir, baseSha);
+  const ancestorSha = resolveMergeBase(dir, baseSha);
+  assert.equal(ancestorSha, baseSha);
+  assert.notEqual(sourceSha, ancestorSha);
+  assert.doesNotThrow(() => validateChangesets(readManifest(dir), { root: dir, changes, ancestorSha }));
+});
+
 test('an unrelated product-code edit with no changeset or receipt still fails the coverage guard', (t) => {
   const dir = initRepo(t, { changeset: false });
   const baseSha = git(dir, 'rev-parse', 'HEAD');

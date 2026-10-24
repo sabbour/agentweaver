@@ -70,6 +70,10 @@ semantic-version intent. Documentation-only changes do not require a changeset.
 
    The base-aware command also checks changeset coverage against the selected
    base commit. CI runs validation against its verified source history.
+   A version receipt may use a source commit after the diff merge base when
+   compatibility declarations were committed before planning, but that source
+   must be reachable from the tested head. The complete diff remains subject
+   to normal changeset coverage.
 
 2. Generate the source-bound version plan:
 

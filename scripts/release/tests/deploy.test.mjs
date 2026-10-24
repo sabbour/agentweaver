@@ -821,7 +821,7 @@ test('pre-acceptance mode is explicit and requires its exact v1.0.0 inputs', () 
   assert.throws(() => parseArgs([...bootstrapArgsFor(), '--runtime-manifest', 'runtime.json']),
     /unknown argument "--runtime-manifest"/);
   const wrongTag = bootstrapArgsFor();
-  wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.8';
+  wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.9';
   assert.throws(() => parseArgs(wrongTag),
     /limited to the exact v1\.0\.0 and v1\.0\.1 and v1\.0\.2 and v1\.0\.3 and v1\.0\.4 and v1\.0\.5 and v1\.0\.6 and v1\.0\.7/);
 });
