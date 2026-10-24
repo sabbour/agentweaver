@@ -88,10 +88,15 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
-    public void MutationDenialPlanRequiresAllEightOneColumnGrantsToNameNonExecutableGuards()
+    public void MutationDenialPlanRequiresAllNineOneColumnGrantsToNameNonExecutableGuards()
     {
         var services = MutationServices();
         InitializerChecks.AssertMutationDenialPlan(services);
+
+        // Dropping any one protected table changes the reviewed count, so the plan is rejected.
+        var eightTables = MutationServices();
+        eightTables[4] = eightTables[4] with { Tables = eightTables[4].Tables[..^1] };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(eightTables));
 
         var missingGuard = MutationServices();
         missingGuard[3] = missingGuard[3] with
@@ -499,6 +504,35 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
+    public void RuntimeColumnGrantsAreAllowedOnlyAsUpdateOnPlannedLockColumns()
+    {
+        var service = Services()[0] with
+        {
+            Tables =
+            [
+                new TablePlan("requests", ["SELECT", "INSERT"], null, false, null),
+                new TablePlan("locks", ["SELECT"], "lock_owner", false, null),
+            ],
+            OwnerOnlyTables = ["setup"],
+        };
+        InitializerChecks.AssertRuntimeColumnGrants(service, []);
+        InitializerChecks.AssertRuntimeColumnGrants(service, [new("locks", "lock_owner", "UPDATE", false)]);
+
+        // Each of these passes table-level checks but would fail the service's startup authority check.
+        ColumnGrant[] unexpected =
+        [
+            new("requests", "status", "UPDATE", false),
+            new("locks", "other_column", "UPDATE", false),
+            new("locks", "lock_owner", "INSERT", false),
+            new("locks", "lock_owner", "UPDATE", true),
+            new("setup", "value", "SELECT", false),
+            new("unplanned", "value", "UPDATE", false),
+        ];
+        foreach (var grant in unexpected)
+            Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertRuntimeColumnGrants(service, [grant]));
+    }
+
+    [Fact]
     public void ExistingRelationsMustBePlannedOperatorOwnedAndWithinPlannedRuntimeAuthority()
     {
         var service = Services()[0] with
@@ -553,6 +587,19 @@ public sealed class P1PostgresInitializerTests
         foreach (var state in invalid)
             Assert.Throws<InvalidOperationException>(() =>
                 InitializerChecks.AssertServiceSchemaAcl(service, state, Owner, Runtime));
+
+        // The Projects & Config grant step also accepts owner grants alone, because it adds runtime USAGE
+        // itself. Every other invalid state still fails in that mode.
+        InitializerChecks.AssertServiceSchemaAcl(service, new SchemaAclState(Owner, exact[..2]), Owner, Runtime,
+            allowMissingRuntimeUsage: true);
+        InitializerChecks.AssertServiceSchemaAcl(service, new SchemaAclState(Owner, exact), Owner, Runtime,
+            allowMissingRuntimeUsage: true);
+        foreach (var state in invalid.Where(item => item is null || item.Grants.Length != 2 || item.OwnerOid != Owner))
+            Assert.Throws<InvalidOperationException>(() =>
+                InitializerChecks.AssertServiceSchemaAcl(service, state, Owner, Runtime, allowMissingRuntimeUsage: true));
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertServiceSchemaAcl(service,
+            new SchemaAclState(Owner, [exact[0], new(Owner, Runtime, "USAGE", false)]), Owner, Runtime,
+            allowMissingRuntimeUsage: true));
     }
 
     private static ServicePlan[] Services() => Enumerable.Range(0, 5).Select(index =>
@@ -641,6 +688,9 @@ public sealed class P1PostgresInitializerTests
                 LockTable("session_consistency_manifests", "manifest_id", "session_consistency_manifests_immutable",
                     "reject_session_consistency_manifest_mutation()", 27,
                     "session consistency manifests are immutable", null),
+                LockTable("maf_root_model_turn_admissions", "request_id", "maf_root_model_turn_admissions_no_update",
+                    "reject_row_lock_record_update()", 27,
+                    "Coordinator decision and MAF checkpoint records cannot be updated.", "55000"),
             ],
             Functions =
             [

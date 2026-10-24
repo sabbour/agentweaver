@@ -6,7 +6,8 @@
 import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import path, { join } from 'node:path';
 import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
 import {
@@ -19,21 +20,34 @@ import {
   p1PostgresPlanHash,
 } from './lib/p1-postgres-plan.mjs';
 import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
+import { collectGrantStageReceipts, isOutsideCheckout } from './lib/grant-stage-receipts.mjs';
 
 const CORE_MERGE_SHA_PATTERN = /^[0-9a-f]{40}$/;
-const MODES = new Set(['initialize', 'inspect', 'apply-pending', 'apply-pending-dry-run']);
+const MODES = new Set([
+  'initialize', 'inspect', 'apply-pending', 'apply-pending-dry-run',
+  'projects-config-grants', 'projects-config-grants-dry-run',
+]);
 const isVersion = value => Number.isSafeInteger(value) && value > 0 && value < 10_000;
 
 /** Maps CLI switches to one mode, rejecting ambiguous or partial combinations. */
 export function p1PostgresMode(values) {
-  // Inspection is its own read-only mode, so combining it with a write mode or its dry run is a usage error.
-  if (values.inspect && (values['apply-pending-migrations'] || values['dry-run'])) {
-    throw new Error('Use either --inspect or --apply-pending-migrations.');
+  // Each mode switch selects a different operation, so naming more than one is a usage error.
+  const selected = ['inspect', 'apply-pending-migrations', 'apply-projects-config-grants']
+    .filter(name => values[name]);
+  if (selected.length > 1) {
+    throw new Error('Use only one of --inspect, --apply-pending-migrations, or --apply-projects-config-grants.');
   }
+  // Inspection is already read-only, so a dry run on top of it is a usage error.
+  if (values.inspect && values['dry-run']) throw new Error('--dry-run does not apply to --inspect.');
   if (values.inspect) return 'inspect';
   if (values['apply-pending-migrations']) return values['dry-run'] ? 'apply-pending-dry-run' : 'apply-pending';
+  if (values['apply-projects-config-grants']) {
+    return values['dry-run'] ? 'projects-config-grants-dry-run' : 'projects-config-grants';
+  }
   // --dry-run alone would silently mean a fresh initialize plan, so reject it instead of guessing.
-  if (values['dry-run']) throw new Error('--dry-run applies only to --apply-pending-migrations.');
+  if (values['dry-run']) {
+    throw new Error('--dry-run applies only to --apply-pending-migrations or --apply-projects-config-grants.');
+  }
   // With no mode switch, keep the original behavior: the fresh-initialize path.
   return 'initialize';
 }
@@ -50,7 +64,9 @@ function parseVersion(value) {
  * Without execute, this returns the source-bound plan and does not call Azure or create temporary resources.
  * Mode initialize bootstraps Identity Broker and fresh-initializes an empty database. Mode inspect and the
  * apply-pending modes target an already initialized database: Identity Broker is verified read-only, and
- * apply-pending applies only planned Core/Events versions up to the explicit approved maxima.
+ * apply-pending applies only planned Core/Events versions up to the explicit approved maxima. The
+ * projects-config-grants modes apply only the planned Projects & Config runtime grants after its own
+ * migration has run; they take no Core merge and no maxima.
  */
 export async function bootstrapP1Postgres({
   repoRoot = process.cwd(),
@@ -69,11 +85,12 @@ export async function bootstrapP1Postgres({
   if (typeof execute !== 'boolean' || !MODES.has(mode)) {
     throw new Error('P1 PostgreSQL work requires a supported mode and explicit execution state.');
   }
-  // Inspection is not tied to a Core merge, so it must not take one. Every other mode is bound to the
-  // reviewed Core merge commit and needs its exact SHA.
+  // Inspection and the Projects & Config grant step do not touch Core, so they must not take a Core
+  // merge. Every other mode is bound to the reviewed Core merge commit and needs its exact SHA.
   const pending = mode.startsWith('apply-pending');
-  if (mode === 'inspect' ? coreMergeSha !== undefined : !CORE_MERGE_SHA_PATTERN.test(coreMergeSha ?? '')) {
-    throw new Error('P1 PostgreSQL initialization and continuation require an exact Core merge SHA; inspection takes none.');
+  const needsCoreMerge = mode !== 'inspect' && !mode.startsWith('projects-config-grants');
+  if (needsCoreMerge ? !CORE_MERGE_SHA_PATTERN.test(coreMergeSha ?? '') : coreMergeSha !== undefined) {
+    throw new Error('P1 PostgreSQL initialization and continuation require an exact Core merge SHA; inspection and the Projects & Config grant step take none.');
   }
   // Pending-migration modes must name the highest approved Core and Events versions. The initializer
   // later requires each to equal the end of the source catalog, so a newer source cannot apply more.
@@ -129,7 +146,7 @@ export async function bootstrapP1Postgres({
   const postgresValues = readPostgresValues(config, boundAz);
 
   // Only modes that write to the database get a receipt file. Read-only modes leave nothing behind.
-  const writesReceipt = mode === 'initialize' || mode === 'apply-pending';
+  const writesReceipt = ['initialize', 'apply-pending', 'projects-config-grants'].includes(mode);
   const receiptPath = writesReceipt
     ? join(repoRoot, 'Temp', `p1-postgres-${randomUUID().replaceAll('-', '')}.jsonl`) : undefined;
   const receipt = await initializePostgres({
@@ -157,27 +174,52 @@ export async function bootstrapP1Postgres({
   return { ...summary, executed: true, receipt };
 }
 
+// Default home for standalone grant receipts; the same place the migration runner keeps its receipts.
+const GRANT_RECEIPT_DIRECTORY = path.join(homedir(), '.agentweaver', 'db-maintenance');
+
 const cliOptions = {
   'core-merge-sha': { type: 'string' },
   execute: { type: 'boolean', default: false },
   inspect: { type: 'boolean', default: false },
   'apply-pending-migrations': { type: 'boolean', default: false },
+  'apply-projects-config-grants': { type: 'boolean', default: false },
   'dry-run': { type: 'boolean', default: false },
   'max-core-version': { type: 'string' },
   'max-events-version': { type: 'string' },
+  'receipt-dir': { type: 'string' },
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     const { values } = parseArgs({ options: cliOptions });
-    const result = await bootstrapP1Postgres({
-      coreMergeSha: values['core-merge-sha'],
-      execute: values.execute,
-      mode: p1PostgresMode(values),
-      maxCoreVersion: parseVersion(values['max-core-version']),
-      maxEventsVersion: parseVersion(values['max-events-version']),
-    });
-    console.log(JSON.stringify(result, null, 2));
+    const mode = p1PostgresMode(values);
+    const repoRoot = process.cwd();
+    // A grant run writes its receipt under the checkout's untracked Temp directory. Left there, it makes
+    // the checkout dirty, and the next maintenance or rollout command refuses to start. So the receipt
+    // is always moved to a directory outside the checkout, even when the run fails.
+    const movesGrantReceipt = values.execute && mode === 'projects-config-grants';
+    const receiptDirectory = path.resolve(values['receipt-dir'] ?? GRANT_RECEIPT_DIRECTORY);
+    if (values['receipt-dir'] !== undefined && !movesGrantReceipt) {
+      throw new Error('--receipt-dir applies only to --apply-projects-config-grants --execute.');
+    }
+    if (movesGrantReceipt && !isOutsideCheckout(repoRoot, receiptDirectory)) {
+      throw new Error('--receipt-dir must be outside the source checkout.');
+    }
+    try {
+      const result = await bootstrapP1Postgres({
+        coreMergeSha: values['core-merge-sha'],
+        execute: values.execute,
+        mode,
+        maxCoreVersion: parseVersion(values['max-core-version']),
+        maxEventsVersion: parseVersion(values['max-events-version']),
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } finally {
+      if (movesGrantReceipt) {
+        const moved = collectGrantStageReceipts(repoRoot, receiptDirectory, randomUUID().slice(0, 12));
+        for (const item of moved) console.log(`Grant receipt: ${item.path} sha256=${item.sha256}`);
+      }
+    }
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

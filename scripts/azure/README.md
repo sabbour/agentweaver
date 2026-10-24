@@ -370,6 +370,51 @@ node scripts\azure\bootstrap-p1-postgres.mjs --apply-pending-migrations --max-co
 Run `--inspect` again after applying, and prove each new version from the live
 history.
 
+#### Applying the Projects & Config runtime grants
+
+The Projects & Config migration Job runs as the schema owner and creates
+tables and functions with no runtime grants. Until the planned grants exist,
+the Projects & Config service can't read its own tables and fails to start.
+`--apply-projects-config-grants` applies only that service's planned runtime
+grants. It doesn't migrate, create roles, or change another service's schema,
+and it takes no Core merge SHA or maximum versions.
+
+Before any write, the mode checks:
+
+- the five runtime roles, object-ID mappings, operator memberships, and each
+  role's exact database `CONNECT`;
+- that the operator owns the Projects & Config schema and grants the runtime
+  role at most `USAGE`;
+- that every existing relation is planned, operator-owned, and holds no
+  runtime privilege beyond the plan;
+- that the runtime role and `PUBLIC` hold no column-level grants, except a
+  planned `UPDATE` on a table's lock column;
+- that the live migration history equals the source's compiled migrations and
+  the schema holds exactly the planned objects.
+
+Add `--dry-run` to stop after these checks. It prints the current grant state
+as `exact` or `incomplete` with the first difference, then
+`P1_POSTGRES_PROJECTS_CONFIG_GRANTS_DRY_RUN writes=false`. Without
+`--dry-run`, the mode grants schema `USAGE`, the planned table privileges, and
+`EXECUTE` on the casting authority function, and revokes `PUBLIC` execution
+from the schema's functions. It reads back every grant in the same
+transaction and commits only an exact match. It writes its receipt to
+`~/.agentweaver/db-maintenance`, outside the checkout, so the checkout stays
+clean for the next command. Use `--receipt-dir <path>` to choose another
+directory outside the checkout. It ends with `P1_POSTGRES_PROJECTS_CONFIG_GRANTS_APPLIED`. Running it again on
+an exact state changes nothing.
+
+```powershell
+node scripts\azure\bootstrap-p1-postgres.mjs --apply-projects-config-grants --dry-run --execute
+node scripts\azure\bootstrap-p1-postgres.mjs --apply-projects-config-grants --execute
+```
+
+`npm run db:maintenance:projects-config -- --execute` runs this step
+automatically after its migration Job, under the same maintenance Lease, and
+records the grant readback in its receipt. The whole-release rollout refuses a
+migration receipt without that readback. Run the mode on its own only to
+inspect or repair grants.
+
 The source preflight rejects incompatible PUBLIC privileges before the first write.
 It also rejects default grants to unrelated principals and an inherited-only
 database CONNECT grant option. It does not revoke existing privileges to proceed.

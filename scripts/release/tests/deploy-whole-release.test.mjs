@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { parseWholeReleaseArgs, runWholeRelease } from '../deploy-whole-release.mjs';
+import { p1PostgresPlanHash } from '../../azure/lib/p1-postgres-plan.mjs';
 import { componentImageRepository } from '../pack.mjs';
 import { waitForDeploymentPods } from '../image-rollout-common.mjs';
 import {
@@ -299,12 +300,14 @@ function makeFixture({
         if (!file.endsWith('migration.json')) return JSON.stringify(publication);
         const projectImage = publication.published.find(image => image.id === 'Agentweaver.Projects.Config').image;
         return JSON.stringify({
-          schemaVersion: 1, mode: 'execute', result: 'succeeded', runId: 'abcdef123456',
+          schemaVersion: 2, mode: 'execute', result: 'succeeded', runId: 'abcdef123456',
           sourceSha: headSha, publicationSourceSha: sourceSha,
           image: projectImage, imageSourceSha: sourceSha,
           target: {
             subscriptionId: 'sub', resourceGroup: 'rg', clusterName: 'cluster', namespace: 'agentweaver',
           },
+          steps: [{ name: 'migration-job-completed' }, { name: 'runtime-grants-applied' }],
+          grants: { status: 'exact', sourceSha: headSha, planSha256: p1PostgresPlanHash() },
         });
       },
       verifyImage: async image => images.get(image),
@@ -389,6 +392,29 @@ test('execute requires a matching successful Projects & Config migration receipt
   const options = { ...world.options, execute: true, projectsConfigMigrationReceiptPath: undefined };
   await assert.rejects(runWholeRelease(options, world.overrides), /migration-receipt is required/);
   assert.equal(world.calls.some(call => call.command === 'kubectl'), false);
+});
+
+test('execute rejects a migration receipt without exact runtime grants for the current plan', async () => {
+  const world = makeFixture();
+  const baseReadFile = world.overrides.readFile;
+  // Each variant is a successful migration that would still leave Projects & Config without usable grants.
+  const variants = [
+    receipt => ({ ...receipt, schemaVersion: 1, grants: undefined, steps: undefined }),
+    receipt => ({ ...receipt, grants: undefined }),
+    receipt => ({ ...receipt, grants: { ...receipt.grants, status: 'incomplete' } }),
+    receipt => ({ ...receipt, grants: { ...receipt.grants, planSha256: 'f'.repeat(64) } }),
+    receipt => ({ ...receipt, grants: { ...receipt.grants, sourceSha: 'e'.repeat(40) } }),
+    receipt => ({ ...receipt, steps: [{ name: 'migration-job-completed' }] }),
+  ];
+  for (const variant of variants) {
+    world.calls.length = 0;
+    const readFile = (file, encoding) => file.endsWith('migration.json')
+      ? JSON.stringify(variant(JSON.parse(baseReadFile(file, encoding))))
+      : baseReadFile(file, encoding);
+    await assert.rejects(runWholeRelease({ ...world.options, execute: true }, { ...world.overrides, readFile }),
+      /does not prove (a successful migration|the exact runtime grants)/);
+    assert.equal(world.calls.some(call => call.command === 'kubectl'), false);
+  }
 });
 
 test('whole-release replaces only approved immutable ConfigMaps after cache expiry and consumer drain', async () => {

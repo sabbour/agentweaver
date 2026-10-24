@@ -454,6 +454,12 @@ TenantAdmin command. They are not part of the runtime ConfigMap:
 | `ProjectsConfig__Migration__AccessToken` | Optional short-lived PostgreSQL Entra access token. The explicit command supplies it as the connection password. Store it in a short-lived Secret or environment variable. Do not put it in arguments or logs. |
 | `ProjectsConfig__Migration__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Alternative explicit workload identity for migration. Configure these settings or `AccessToken`, not both. |
 
+The migration grants the runtime principal nothing. The migration runner
+applies the planned runtime grants right after the migration, before the
+service restarts, with `bootstrap-p1-postgres.mjs --apply-projects-config-grants`.
+Without them, the service can't read its tables and fails at startup. See
+[Applying the Projects & Config runtime grants](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#applying-the-projects--config-runtime-grants).
+
 ### Runtime authority writes
 
 The runtime database principal can write project role assignments only

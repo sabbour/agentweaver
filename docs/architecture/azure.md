@@ -199,6 +199,10 @@ history, and grants without writing. `--apply-pending-migrations` applies only
 missing Core and Events versions up to explicit maximum versions, then the
 exact plan grants. It fails closed if the source catalog extends past those
 maximums.
+`--apply-projects-config-grants` applies only the planned Projects & Config
+runtime grants after that service's migration Job; the migration runner calls
+it automatically. It checks the live history and objects against the source
+first, and commits only an exact grant readback.
 The separate continuation mode admits only the exact Projects-only prefix,
 checks ordered EF migration histories and every service's migration inventory,
 and migrates the other schemas without runtime object grants. Its pre-grant

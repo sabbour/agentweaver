@@ -288,7 +288,7 @@ dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~
 
 These source checks include the migration catalog maximum, live-history prefix,
 runtime CONNECT, relation, and schema ACL checks used by
-`--apply-pending-migrations`.
+`--apply-pending-migrations` and `--apply-projects-config-grants`.
 
 Run the production catalog SQL cases and continuation checks against the
 disposable PostgreSQL fixture:

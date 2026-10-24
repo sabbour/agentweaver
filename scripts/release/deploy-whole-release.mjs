@@ -23,6 +23,7 @@ import {
 import { componentImageRepository } from './pack.mjs';
 import { verifyServiceRegistryImage } from './registry.mjs';
 import { LOCK_NAME } from '../azure/lib/db-maintenance.mjs';
+import { p1PostgresPlanHash } from '../azure/lib/p1-postgres-plan.mjs';
 import {
   findImmutableRuntimeConfigMapReplacements,
   IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS,
@@ -438,7 +439,7 @@ export async function runWholeRelease(options, overrides = {}) {
       const migration = parseJson(deps.readFile(
         path.resolve(root, options.projectsConfigMigrationReceiptPath), 'utf8',
       ), 'Projects & Config migration receipt');
-      if (migration.schemaVersion !== 1 || migration.mode !== 'execute' || migration.result !== 'succeeded' ||
+      if (migration.schemaVersion !== 2 || migration.mode !== 'execute' || migration.result !== 'succeeded' ||
           !/^[a-f0-9]{12}$/.test(migration.runId ?? '') || !SHA.test(migration.sourceSha ?? '') ||
           migration.publicationSourceSha !== publication.sourceSha ||
           migration.image !== projectsConfigImage.image ||
@@ -449,10 +450,20 @@ export async function runWholeRelease(options, overrides = {}) {
           migration.target?.subscriptionId !== options.subscriptionId) {
         wholeReleaseFail('Projects & Config migration receipt does not prove a successful migration of this publication for this target.');
       }
+      // A migration without its runtime grants leaves Projects & Config unable to start. Require the
+      // runner's grant readback, made from the migration source, for the plan this rollout tool carries.
+      // An older receipt, or one made for a different plan, must be refreshed by rerunning the migration.
+      const planSha256 = p1PostgresPlanHash();
+      if (migration.grants?.status !== 'exact' || migration.grants.sourceSha !== migration.sourceSha ||
+          migration.grants.planSha256 !== planSha256 ||
+          !migration.steps?.some(step => step?.name === 'runtime-grants-applied')) {
+        wholeReleaseFail('Projects & Config migration receipt does not prove the exact runtime grants for the current plan; rerun the migration runner from the current origin/v1 tip.');
+      }
       // The migration runner may be newer than the publication, but its source must still be on approved v1.
       requireAncestor(deps.exec, root, migration.sourceSha, 'origin/v1', 'Projects & Config migration source');
       receipt.migrations = {
         status: 'passed', runId: migration.runId, image: migration.image,
+        grants: { status: 'exact', planSha256 },
         receiptPath: path.resolve(root, options.projectsConfigMigrationReceiptPath),
       };
     } else if (!options.execute) {

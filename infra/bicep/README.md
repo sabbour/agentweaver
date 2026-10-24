@@ -154,7 +154,14 @@ assign roles, or connect to PostgreSQL. Its parameters are `namePrefix`,
 `npm run db:maintenance:setup` deploys the identity and checks the Azure
 assignments, then applies and reads back the Kubernetes authorization.
 
-Projects & Config applies migrations as its schema owner. After migration
+Projects & Config applies migrations as its schema owner. The migration Job
+grants the runtime role nothing. The Projects & Config migration runner then
+applies and reads back the planned runtime grants with
+`bootstrap-p1-postgres.mjs --apply-projects-config-grants`, as described in
+[Applying the Projects & Config runtime grants](../../scripts/azure/README.md#applying-the-projects--config-runtime-grants).
+
+The project role-assignment write grants below are separate from the plan.
+After migration
 `20261009021400_AddCastingAuthorityLockFunction` is applied, an approved
 operator can grant the runtime role `EXECUTE` on the exact casting
 authority-lock function and the project role-assignment write set:
