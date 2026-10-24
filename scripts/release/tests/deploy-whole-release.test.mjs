@@ -471,6 +471,48 @@ test('smoke identity failure writes a partial receipt before any Deployment patc
   assert.equal(world.calls.some(call => call.command === 'kubectl' && call.args.includes('patch')), false);
 });
 
+test('a Gateway outage after sign-in still replaces ConfigMaps and rolls out before smoke runs', async t => {
+  for (const outcome of ['recovered', 'still-down']) {
+    await t.test(outcome, async () => {
+      const world = makeFixture({ changedRuntimeConfigMap: 'projects-config-runtime-config' });
+      const order = [];
+      world.overrides.prepareSmoke = async () => {
+        order.push(['prepare', world.calls.length]);
+        return { connect: async () => {} };
+      };
+      world.overrides.smoke = async () => {
+        order.push(['smoke', world.calls.length]);
+        if (outcome === 'still-down') throw new Error('Gateway authorization context returned HTTP 504.');
+        return [{ operationId: 'listProjects', status: 200 }];
+      };
+      const run = runWholeRelease({ ...world.options, execute: true }, world.overrides);
+      if (outcome === 'still-down') await assert.rejects(run, /Gateway authorization context returned HTTP 504/);
+      else assert.equal((await run).result, 'succeeded');
+
+      const receipt = world.written.at(-1).receipt;
+      const firstWrite = world.calls.findIndex(call => call.command === 'kubectl'
+        && ['patch', 'delete', 'create'].some(verb => call.args.includes(verb)));
+      const lastPatch = world.calls.findLastIndex(call => call.command === 'kubectl' && call.args.includes('patch'));
+      // Sign-in happens before any write; Gateway reads happen after the final rollout patch.
+      assert.deepEqual(order.map(([step]) => step), ['prepare', 'smoke']);
+      assert.ok(order[0][1] <= firstWrite);
+      assert.ok(order[1][1] > lastPatch);
+      assert.equal(receipt.configMaps.status, 'replaced');
+      assert.equal(receipt.readiness.status, 'passed');
+      assert.equal(receipt.pods.status, 'passed');
+      if (outcome === 'still-down') {
+        assert.equal(receipt.status, 'partial');
+        assert.equal(receipt.result, 'failed');
+        assert.equal(receipt.smoke.status, 'failed');
+        assert.match(receipt.smoke.error, /HTTP 504/);
+      } else {
+        assert.equal(receipt.status, 'deployed');
+        assert.equal(receipt.smoke.status, 'passed');
+      }
+    });
+  }
+});
+
 test('whole-release waits for a terminating old ReplicaSet Pod to disappear before strict verification', async () => {
   const world = makeFixture({ terminatingOldReplicaSetPodOnce: true });
   const receipt = await runWholeRelease({ ...world.options, execute: true }, world.overrides);
