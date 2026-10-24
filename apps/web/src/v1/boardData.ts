@@ -9,9 +9,11 @@ import { GatewayError, gatewayClient } from './api';
 import { useAuth } from './AuthContext';
 import type {
   BacklogGraph,
+  BacklogGraphRevisionRequest,
   BacklogTaskRevisionRequest,
   BacklogTaskSnapshot,
   BacklogTaskState,
+  SetBacklogTaskPositionRequest,
   ProjectIssuePage,
   ProjectIssueSummary,
 } from './contracts';
@@ -37,7 +39,7 @@ export const BOARD_COLUMNS: ReadonlyArray<Omit<BoardColumn, 'tasks'>> = [
 ];
 
 /** Plain copy shown where 0.x let users drag tasks between columns. */
-export const MOVE_UNAVAILABLE_COPY = 'Drag and drop is unavailable; use task actions to change the queue.';
+export const MOVE_UNAVAILABLE_COPY = 'Drag and drop is unavailable. Use task actions to change queue and order.';
 
 /** Issue pages read per board load. 100 issues per page keeps one load to at most 1000 issues. */
 const ISSUE_PAGE_SIZE = 100;
@@ -63,7 +65,28 @@ export function boardColumns(graph: BacklogGraph): BoardColumn[] {
     // A null column means the task is hidden, for example because it is archived.
     if (id) columns.find((column) => column.id === id)?.tasks.push(task);
   }
+  for (const column of columns)
+    column.tasks.sort((left, right) =>
+      left.position - right.position || left.reference.taskId.localeCompare(right.reference.taskId));
   return columns;
+}
+
+/** Returns the insertion index before or after a visible neighbor in the full persisted state queue. */
+export function queueInsertionPosition(
+  graph: BacklogGraph,
+  task: BacklogTaskSnapshot,
+  neighbor: BacklogTaskSnapshot | undefined,
+  placement: 'before' | 'after',
+): number | null {
+  if (!neighbor || neighbor.state !== task.state) return null;
+  const queue = graph.tasks
+    .filter((candidate) => candidate.state === task.state &&
+      candidate.reference.taskId !== task.reference.taskId)
+    .sort((left, right) =>
+      left.position - right.position || left.reference.taskId.localeCompare(right.reference.taskId));
+  const neighborIndex = queue.findIndex((candidate) =>
+    candidate.reference.taskId === neighbor.reference.taskId);
+  return neighborIndex < 0 ? null : neighborIndex + (placement === 'after' ? 1 : 0);
 }
 
 /**
@@ -134,6 +157,8 @@ export function boardErrorMessage(error: unknown, action: 'read' | 'capture' | '
   }
   if (error instanceof GatewayError && error.status === 404 && (action === 'edit' || action === 'mutate'))
     return 'This task no longer exists. The board has been reloaded.';
+  if (error instanceof GatewayError && error.status === 503 && action === 'mutate')
+    return 'Queue ordering is unavailable right now. Try again after the service update.';
   return errorMessage(error);
 }
 
@@ -313,6 +338,34 @@ export function setTaskState(
       expectedTaskRevision: task.revision,
     }, tenant), null);
 }
+
+    /** Places one task within its current queue using both observed revisions. */
+    export function setTaskPosition(
+      apiCall: ApiCall,
+      graph: BacklogGraph,
+      task: BacklogTaskSnapshot,
+      state: Exclude<BacklogTaskState, 'claimed'>,
+      position: number,
+    ): Promise<BacklogGraph> {
+      const request: SetBacklogTaskPositionRequest = {
+        state,
+        position,
+        expectedGraphRevision: graph.revision,
+        expectedTaskRevision: task.revision,
+      };
+      return apiCall((token, tenant) => gatewayClient.setProjectBacklogTaskPosition(
+        token, graph.projectId, task.reference.taskId, request, tenant), null);
+    }
+
+    /** Moves all eligible Backlog tasks to Ready at the graph revision the user read. */
+    export function setAllEligibleTasksReady(
+      apiCall: ApiCall,
+      graph: BacklogGraph,
+    ): Promise<BacklogGraph> {
+      const request: BacklogGraphRevisionRequest = { expectedGraphRevision: graph.revision };
+      return apiCall((token, tenant) => gatewayClient.setAllProjectBacklogTasksReady(
+        token, graph.projectId, request, tenant), null);
+    }
 
 /** Archives one task using both observed revisions. */
 export function archiveTask(

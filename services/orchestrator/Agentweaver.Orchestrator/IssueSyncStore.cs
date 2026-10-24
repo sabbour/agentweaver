@@ -14,6 +14,7 @@ internal sealed record IssueSyncReceipt(string TaskId, string Repository, long? 
 
 internal sealed class IssueSyncStore
 {
+    private const string AdvisoryLockName = "agentweaver.issue-sync";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly NpgsqlDataSource _data;
     private readonly string _schema;
@@ -29,8 +30,10 @@ internal sealed class IssueSyncStore
     internal async Task<NpgsqlConnection?> TryLockAsync(string projectId, CancellationToken ct)
     {
         var connection = await _data.OpenConnectionAsync(ct);
+        // A cycle holds this project key while it reads tasks and records their issue receipts.
         await using var command = new NpgsqlCommand(
-            "SELECT pg_try_advisory_lock(hashtext('agentweaver.issue-sync'), hashtext(@project))", connection);
+            "SELECT pg_try_advisory_lock(hashtext(@lockName), hashtext(@project))", connection);
+        command.Parameters.AddWithValue("lockName", AdvisoryLockName);
         command.Parameters.AddWithValue("project", projectId);
         if (await command.ExecuteScalarAsync(ct) is true)
             return connection;
@@ -43,7 +46,8 @@ internal sealed class IssueSyncStore
         try
         {
             await using var command = new NpgsqlCommand(
-                "SELECT pg_advisory_unlock(hashtext('agentweaver.issue-sync'), hashtext(@project))", connection);
+                "SELECT pg_advisory_unlock(hashtext(@lockName), hashtext(@project))", connection);
+            command.Parameters.AddWithValue("lockName", AdvisoryLockName);
             command.Parameters.AddWithValue("project", projectId);
             await command.ExecuteNonQueryAsync(CancellationToken.None);
         }

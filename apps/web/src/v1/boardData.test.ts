@@ -7,6 +7,7 @@ import {
   isStaleRevision,
   newBacklogTaskId,
   prerequisiteTitles,
+  queueInsertionPosition,
 } from './boardData';
 import type { BacklogGraph, BacklogTaskSnapshot } from './contracts';
 
@@ -14,6 +15,7 @@ function task(taskId: string, extra: Partial<BacklogTaskSnapshot> = {}): Backlog
   return {
     reference: { projectId: 'p1', taskId }, revision: 1, state: 'backlog', isArchived: false,
     isAutomationInvocationPending: false, title: `Task ${taskId}`, description: null, lifecycle: 'open', repositoryIssue: null,
+    position: 0,
     ...extra,
   };
 }
@@ -30,12 +32,38 @@ describe('board data', () => {
     expect(boardColumnFor(task('a', { isArchived: true }))).toBeNull();
   });
 
-  it('keeps graph order inside each column', () => {
-    const graph: BacklogGraph = { projectId: 'p1', revision: 1, dependencies: [], tasks: [task('b'), task('a'), task('c', { state: 'ready' })] };
+  it('keeps owner queue order inside each column', () => {
+    const graph: BacklogGraph = {
+      projectId: 'p1', revision: 1, dependencies: [],
+      tasks: [task('a', { position: 1 }), task('b', { position: 0 }), task('c', { state: 'ready' })],
+    };
     const columns = boardColumns(graph);
     expect(columns.map((column) => column.id)).toEqual(['backlog', 'ready', 'active', 'done']);
     expect(columns[0].tasks.map((item) => item.reference.taskId)).toEqual(['b', 'a']);
     expect(columns[1].tasks).toHaveLength(1);
+  });
+
+  it('finds insertion indexes after excluding the moved task from a sparse queue', () => {
+    const first = task('first', { position: 0 });
+    const movedToReady = task('middle', { state: 'ready', position: 0 });
+    const last = task('last', { position: 2 });
+    const graph: BacklogGraph = {
+      projectId: 'p1', revision: 1, dependencies: [], tasks: [first, movedToReady, last],
+    };
+
+    expect(queueInsertionPosition(graph, first, last, 'after')).toBe(1);
+    expect(queueInsertionPosition(graph, last, first, 'before')).toBe(0);
+  });
+
+  it('finds visible neighbors across archived tasks in the state queue', () => {
+    const first = task('first', { position: 0 });
+    const hidden = task('hidden', { isArchived: true, position: 1 });
+    const last = task('last', { position: 2 });
+    const graph: BacklogGraph = {
+      projectId: 'p1', revision: 1, dependencies: [], tasks: [first, hidden, last],
+    };
+
+    expect(queueInsertionPosition(graph, first, last, 'after')).toBe(2);
   });
 
   it('names prerequisites by title and counts the ones not in the graph', () => {

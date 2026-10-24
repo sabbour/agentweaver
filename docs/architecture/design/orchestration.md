@@ -154,6 +154,9 @@ intent share one Orchestrator transaction. The Gateway publishes the project
 backlog operations and claim route through strict versioned contracts.
 The owner migrator applies the packaged 016 backlog resource during initialization.
 It also adds this resource to existing version-19 and version-20 schemas that lack it.
+Backlog transactions take a shared schema-scoped advisory lock before opening their
+database transaction. The migrator takes the exclusive form of the same lock, so a
+schema change cannot commit between the queue-position capability check and task read.
 Graph edits use table permissions, not schema ownership or migration-history writes.
 The restricted-role PostgreSQL test creates tasks and adds and removes a dependency.
 It rejects task deletion, table truncation, schema changes, and migration-history writes.

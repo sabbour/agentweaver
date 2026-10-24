@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   captureBacklogTask: vi.fn(),
   editBacklogTaskContent: vi.fn(),
   setProjectBacklogTaskState: vi.fn(),
+  setProjectBacklogTaskPosition: vi.fn(),
+  setAllProjectBacklogTasksReady: vi.fn(),
   archiveProjectBacklogTask: vi.fn(),
   addProjectBacklogDependency: vi.fn(),
   removeProjectBacklogDependency: vi.fn(),
@@ -31,6 +33,8 @@ vi.mock('./api', async (importOriginal) => ({
     captureBacklogTask: mocks.captureBacklogTask,
     editBacklogTaskContent: mocks.editBacklogTaskContent,
     setProjectBacklogTaskState: mocks.setProjectBacklogTaskState,
+    setProjectBacklogTaskPosition: mocks.setProjectBacklogTaskPosition,
+    setAllProjectBacklogTasksReady: mocks.setAllProjectBacklogTasksReady,
     archiveProjectBacklogTask: mocks.archiveProjectBacklogTask,
     addProjectBacklogDependency: mocks.addProjectBacklogDependency,
     removeProjectBacklogDependency: mocks.removeProjectBacklogDependency,
@@ -50,6 +54,7 @@ function task(taskId: string, title: string, extra: Partial<BacklogTaskSnapshot>
     description: null,
     lifecycle: 'open',
     repositoryIssue: null,
+    position: 0,
     ...extra,
   };
 }
@@ -94,6 +99,8 @@ beforeEach(() => {
   mocks.captureBacklogTask.mockReset();
   mocks.editBacklogTaskContent.mockReset();
   mocks.setProjectBacklogTaskState.mockReset();
+  mocks.setProjectBacklogTaskPosition.mockReset();
+  mocks.setAllProjectBacklogTasksReady.mockReset();
   mocks.archiveProjectBacklogTask.mockReset();
   mocks.addProjectBacklogDependency.mockReset();
   mocks.removeProjectBacklogDependency.mockReset();
@@ -131,10 +138,63 @@ describe('BoardPage', () => {
     expect(screen.queryByText('Archived work')).toBeNull();
     expect(screen.getByTestId('count-backlog').textContent).toBe('1');
     // Queue actions are available on cards; drag and drop remains unavailable.
-    expect(screen.getByTestId('board-move-unavailable').textContent).toBe('Drag and drop is unavailable; use task actions to change the queue.');
+    expect(screen.getByTestId('board-move-unavailable').textContent).toBe('Drag and drop is unavailable. Use task actions to change queue and order.');
     expect(document.querySelector('[draggable="true"]')).toBeNull();
     expect(within(screen.getByTestId('task-card-t3')).queryByRole('button', { name: 'Mark Ready' })).toBeNull();
     expect(mocks.listProjectIssues).toHaveBeenCalledWith('token', 'p1', { state: 'all', cursor: null, pageSize: 100 }, 'tenant-1');
+  });
+
+  it('reorders tasks and sends eligible backlog work to Ready', async () => {
+    const first = task('t1', 'First task', { position: 0 });
+    const second = task('t2', 'Second task', { position: 1 });
+    mocks.readProjectBacklog.mockResolvedValue(graph([first, second], 5));
+    mocks.setProjectBacklogTaskPosition.mockResolvedValue(graph([
+      task('t2', 'Second task', { position: 0 }),
+      task('t1', 'First task', { position: 1 }),
+    ], 6));
+    mocks.setAllProjectBacklogTasksReady.mockResolvedValue(graph([
+      task('t2', 'Second task', { state: 'ready', position: 0 }),
+      task('t1', 'First task', { state: 'ready', position: 1 }),
+    ], 7));
+    renderBoard();
+
+    fireEvent.click(await within(await screen.findByTestId('task-card-t1')).findByRole('button', { name: 'Move later' }));
+    await waitFor(() => expect(mocks.setProjectBacklogTaskPosition).toHaveBeenCalledWith(
+      'token', 'p1', 't1',
+      { state: 'backlog', position: 1, expectedGraphRevision: 5, expectedTaskRevision: 1 },
+      'tenant-1',
+    ));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Send all to Ready' }));
+    await waitFor(() => expect(mocks.setAllProjectBacklogTasksReady).toHaveBeenCalledWith(
+      'token', 'p1', { expectedGraphRevision: 6 }, 'tenant-1',
+    ));
+    expect(await screen.findByText('Eligible tasks moved to Ready.')).toBeTruthy();
+    expect(within(screen.getByTestId('column-ready')).getByTestId('task-card-t1')).toBeTruthy();
+  });
+
+  it('computes insertion indexes when a state change leaves a position gap', async () => {
+    const first = task('t1', 'First task', { position: 0 });
+    const ready = task('t0', 'Already ready', { state: 'ready', position: 0 });
+    const second = task('t2', 'Second task', { position: 2 });
+    mocks.readProjectBacklog.mockResolvedValue(graph([
+      first,
+      ready,
+      second,
+    ], 5));
+    mocks.setProjectBacklogTaskPosition.mockResolvedValue(graph([
+      task('t2', 'Second task', { position: 0 }),
+      task('t1', 'First task', { position: 1 }),
+      ready,
+    ], 6));
+    renderBoard();
+
+    fireEvent.click(await within(await screen.findByTestId('task-card-t1')).findByRole('button', { name: 'Move later' }));
+    await waitFor(() => expect(mocks.setProjectBacklogTaskPosition).toHaveBeenCalledWith(
+      'token', 'p1', 't1',
+      { state: 'backlog', position: 1, expectedGraphRevision: 5, expectedTaskRevision: 1 },
+      'tenant-1',
+    ));
   });
 
   it('reads every issue page by following the cursor', async () => {
