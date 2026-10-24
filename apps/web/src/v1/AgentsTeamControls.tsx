@@ -4,15 +4,16 @@
  * pending proposal first; nothing changes until someone confirms it on the
  * Cast a team page.
  */
-import { Button, Field, Select, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, Field, Input, Select, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowDownloadRegular, ArrowUploadRegular, PersonAddRegular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AppDialog } from '../components/ui/AppDialog';
 import { PageSection } from '../components/ui/PageSection';
 import { useAuth } from './AuthContext';
-import { GatewayError, gatewayClient } from './api';
+import { AgentweaverGatewayClient, GatewayError, gatewayClient } from './api';
 import { inspectAgentSuiteArchive, type InspectedAgentSuiteArchive } from './agentSuiteArchive';
+import { repoAppBrokerClient, type IdentityBrokerRepoAppClient } from './repoApp';
 import { castableRoles, castingError, draftWithMember, draftWithRole, draftWithoutMember, isConflict, reviewPath } from './castingData';
 import type {
   AgentSuiteExport,
@@ -254,12 +255,22 @@ function projectTeamSyncError(reason: unknown): string {
  * 0.x "Sync" panel on v1: explicitly previews and commits repository team files,
  * and keeps digest-checked AgentSuite export/import available as a separate transfer.
  */
-export function TeamSyncPanel({ projectId, configurationRevision, repositoryFullName = null, disabled = false, onConflict }: {
+export function TeamSyncPanel({
+  projectId,
+  configurationRevision,
+  repositoryFullName = null,
+  disabled = false,
+  onConflict,
+  brokerClient = repoAppBrokerClient,
+  gateway = gatewayClient,
+}: {
   projectId: string;
   configurationRevision: number;
   repositoryFullName?: string | null;
   disabled?: boolean;
   onConflict?: () => void;
+  brokerClient?: Pick<IdentityBrokerRepoAppClient, 'getRepositories' | 'createRepositorySelection'>;
+  gateway?: Pick<AgentweaverGatewayClient, 'previewProjectTeamSync' | 'commitProjectTeamSync'>;
 }) {
   const styles = useStyles();
   const { apiCall } = useAuth();
@@ -269,44 +280,70 @@ export function TeamSyncPanel({ projectId, configurationRevision, repositoryFull
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [repositoryPreview, setRepositoryPreview] = useState<ProjectTeamSyncStatus | null>(null);
+  const [commitMessage, setCommitMessage] = useState('');
   const [selectedArchive, setSelectedArchive] = useState<(InspectedAgentSuiteArchive & { file: File }) | null>(null);
   const [connections, setConnections] = useState<RemoteMcpConnectionDirectoryEntry[]>([]);
   const [providerBindings, setProviderBindings] = useState<Record<string, string>>({});
+  const automaticPreviewKey = useRef<string | null>(null);
 
-  /** Issues a short-lived code for the configured repository without exposing credentials. */
-  const issueRepositorySelection = async (): Promise<string> => {
+  /** Resolves the configured repository from Broker discovery before requesting its one-time selection code. */
+  const issueRepositorySelection = useCallback(async (): Promise<string> => {
     if (!repositoryFullName) throw new Error('Configure a GitHub App repository before syncing team files.');
-    const selection = await apiCall(
-      (token) => gatewayClient.issueRepoAppRepositorySelection(token, repositoryFullName),
-      null,
+    // Use the cookie-backed Broker selection route and its provider IDs; Gateway accepts only the resulting opaque code.
+    const { repositories } = await brokerClient.getRepositories();
+    const matches = repositories.filter((repository) =>
+      repository.fullName.toLowerCase() === repositoryFullName.toLowerCase());
+    // Do not guess when discovery returns zero or multiple installations for the configured repository.
+    if (matches.length !== 1)
+      throw new Error('The configured repository is not available through the connected GitHub App.');
+    const repository = matches[0];
+    const selection = await brokerClient.createRepositorySelection(
+      repository.installationId,
+      repository.repositoryId,
     );
-    return selection.selectionCode;
-  };
+    return selection.code;
+  }, [brokerClient, repositoryFullName]);
 
   /** Reads the current repository tree and stores the reviewable change set. */
-  const previewRepository = async () => {
+  const loadRepositoryPreview = useCallback(async (): Promise<ProjectTeamSyncStatus | null> => {
+    const selectionCode = await issueRepositorySelection();
+    const result = await apiCall((token, tenant) => gateway.previewProjectTeamSync(
+        token, projectId, selectionCode, tenant,
+      ), null);
+    // Keep the page and repository snapshots aligned before showing a preview as commit-ready.
+    if (result.configurationRevision !== configurationRevision) {
+      setRepositoryPreview(null);
+      setError('The project team changed while the preview was loading. Reload the team and preview again.');
+      onConflict?.();
+      return null;
+    }
+    setRepositoryPreview(result);
+    return result;
+  }, [apiCall, configurationRevision, gateway, issueRepositorySelection, onConflict, projectId]);
+
+  const previewRepository = useCallback(async () => {
     setBusy('repository-preview');
     setError(null);
     setNotice(null);
     setRepositoryPreview(null);
     try {
-      const selectionCode = await issueRepositorySelection();
-      const result = await apiCall((token, tenant) => gatewayClient.previewProjectTeamSync(
-        token, projectId, selectionCode, tenant,
-      ), null);
-      if (result.configurationRevision !== configurationRevision) {
-        setError('The project team changed while the preview was loading. Reload the team and preview again.');
-        onConflict?.();
-        return;
-      }
-      setRepositoryPreview(result);
+      await loadRepositoryPreview();
     } catch (reason) {
       setError(projectTeamSyncError(reason));
       if (isConflict(reason)) onConflict?.();
     } finally {
       setBusy(null);
     }
-  };
+  }, [loadRepositoryPreview, onConflict]);
+
+  useEffect(() => {
+    if (!repositoryFullName) return;
+    const previewKey = `${projectId}\n${configurationRevision}\n${repositoryFullName.toLowerCase()}`;
+    if (automaticPreviewKey.current === previewKey) return;
+    // The Sync panel mounts only while open, so this read restores the prior panel's status-on-open behavior.
+    automaticPreviewKey.current = previewKey;
+    void previewRepository();
+  }, [configurationRevision, previewRepository, projectId, repositoryFullName]);
 
   /** Reissues the repository selection code and commits only the exact displayed preview. */
   const commitRepositoryPreview = async () => {
@@ -315,19 +352,29 @@ export function TeamSyncPanel({ projectId, configurationRevision, repositoryFull
     setError(null);
     setNotice(null);
     try {
+      // Repo App selection codes are short-lived and single-use, so mint a fresh one for the write request.
       const selectionCode = await issueRepositorySelection();
-      const result = await apiCall((token, tenant) => gatewayClient.commitProjectTeamSync(
+      const result = await apiCall((token, tenant) => gateway.commitProjectTeamSync(
         token,
         projectId,
         selectionCode,
         {
           expectedChangeSetHash: repositoryPreview.changeSetHash,
           expectedConfigurationRevision: repositoryPreview.configurationRevision,
+          message: commitMessage.trim() || undefined,
         },
         tenant,
       ), null);
       setRepositoryPreview(null);
       setNotice(`Committed the team sync to ${result.branch} (${result.commitId}).`);
+      try {
+        // Refresh after the write so the open panel reflects the repository's new state.
+        await loadRepositoryPreview();
+      } catch (refreshReason) {
+        // Preserve the successful commit notice while reporting that status could not be refreshed.
+        setError(projectTeamSyncError(refreshReason));
+        if (isConflict(refreshReason)) onConflict?.();
+      }
     } catch (reason) {
       setError(projectTeamSyncError(reason));
       if (isConflict(reason)) {
@@ -459,13 +506,23 @@ export function TeamSyncPanel({ projectId, configurationRevision, repositoryFull
                 {busy === 'repository-preview' ? 'Previewing…' : 'Preview repository sync'}
               </Button>
               {repositoryPreview && repositoryPreview.changes.length > 0 && (
-                <Button
-                  appearance="primary"
-                  disabled={disabled || busy !== null}
-                  onClick={() => void commitRepositoryPreview()}
-                >
-                  {busy === 'repository-commit' ? 'Committing…' : 'Commit reviewed changes'}
-                </Button>
+                <>
+                  <Field label="Commit message (optional)">
+                    <Input
+                      value={commitMessage}
+                      maxLength={200}
+                      disabled={disabled || busy !== null}
+                      onChange={(_, data) => setCommitMessage(data.value)}
+                    />
+                  </Field>
+                  <Button
+                    appearance="primary"
+                    disabled={disabled || busy !== null}
+                    onClick={() => void commitRepositoryPreview()}
+                  >
+                    {busy === 'repository-commit' ? 'Committing…' : 'Commit reviewed changes'}
+                  </Button>
+                </>
               )}
             </div>
           )}
@@ -475,6 +532,7 @@ export function TeamSyncPanel({ projectId, configurationRevision, repositoryFull
                 ? <Text>No repository changes are needed for configuration revision {repositoryPreview.configurationRevision}.</Text>
                 : <>
                   <Text>Review these changes for configuration revision {repositoryPreview.configurationRevision} before committing:</Text>
+                  <Text>Preview hash: <code>{repositoryPreview.changeSetHash}</code></Text>
                   <ul className={styles.list} aria-label="Repository team sync preview">
                     {repositoryPreview.changes.map((change) => (
                       <li key={`${change.kind}:${change.path}`}>{change.kind}: {change.path}</li>

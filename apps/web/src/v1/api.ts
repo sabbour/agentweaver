@@ -108,8 +108,6 @@ import type {
   RepoAppAuthorizationStart,
   RepoAppAuthorizationStatus,
   RepoAppAuthorizationTransaction,
-  RepoAppRepositorySelectionCode,
-  RepoAppRepositorySelectionList,
   SessionEventEnvelope,
   SessionEventPage,
   SessionStatusSnapshot,
@@ -1106,29 +1104,6 @@ export class AgentweaverGatewayClient {
       token,
       '/api/auth/github/repo-app/authorization',
       { method: 'DELETE' },
-      this.gatewayRootUrl,
-    );
-  }
-
-  /** Lists repositories available for Repo App selection. */
-  listRepoAppRepositorySelections(token: string): Promise<RepoAppRepositorySelectionList> {
-    return this.request(
-      token,
-      '/api/github/repository-selections',
-      {},
-      this.gatewayRootUrl,
-    );
-  }
-
-  /** Issues a short-lived selection code for the named GitHub repository. */
-  issueRepoAppRepositorySelection(
-    token: string,
-    fullName: string,
-  ): Promise<RepoAppRepositorySelectionCode> {
-    return this.request(
-      token,
-      '/api/github/repository-selections',
-      { method: 'POST', body: JSON.stringify({ fullName }) },
       this.gatewayRootUrl,
     );
   }

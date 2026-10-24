@@ -55,6 +55,9 @@ compares the configured repository with the current Projects cast and returns
 a no-store preview containing the configuration revision, a change-set hash,
 and added, modified, or removed `.squad/` paths. The user reviews that preview
 before the POST operation can commit it.
+The hash binds the selected installation ID and provider repository ID as well
+as the configured name, branch head, configuration revision, file paths, and
+file content. A renamed or replaced repository cannot reuse an earlier preview.
 
 Projects & Config remains the only roster owner. Orchestrator renders
 `.squad/team.md` and the active cast members' charter files from its current

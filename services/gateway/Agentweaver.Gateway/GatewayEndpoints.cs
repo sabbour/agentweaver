@@ -86,29 +86,6 @@ public static class GatewayEndpoints
                     cookieErrorCode: "callback_cookie_invalid",
                     cancellationToken: cancellationToken));
 
-        var repositorySelections = endpoints.MapGroup("/api/github/repository-selections")
-            .RequireAuthorization();
-        repositorySelections.MapGet(
-            "",
-            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
-                owner.ProxyIdentityBrokerApiAsync(
-                    context, "GET", "/api/github/repository-selections",
-                    hasJsonBody: false,
-                    forwardTenantSelector: false,
-                    forwardCookieName: null,
-                    cookieErrorCode: "callback_cookie_invalid",
-                    cancellationToken: cancellationToken));
-        repositorySelections.MapPost(
-            "",
-            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
-                owner.ProxyIdentityBrokerApiAsync(
-                    context, "POST", "/api/github/repository-selections",
-                    hasJsonBody: true,
-                    forwardTenantSelector: false,
-                    forwardCookieName: null,
-                    cookieErrorCode: "callback_cookie_invalid",
-                    cancellationToken: cancellationToken));
-
         endpoints.MapGet(
                 "/auth/github/repo-app/callback",
                 (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>

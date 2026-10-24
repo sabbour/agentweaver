@@ -688,37 +688,6 @@ describe('Gateway API client', () => {
     expect(fetcher.mock.contexts[0]).toBe(globalThis);
   });
 
-  it('keeps Repo App authorization at the Gateway root and stores its callback cookie', async () => {
-    const fetcher = vi.fn<typeof fetch>().mockImplementation(
-      async () => new Response('{}', { status: 200 }),
-    );
-    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
-
-    await client.beginRepoAppAuthorization('broker-token');
-    await client.getRepoAppAuthorizationStatus('broker-token');
-    await client.listRepoAppRepositorySelections('broker-token');
-    await client.issueRepoAppRepositorySelection('broker-token', 'octo/agentweaver');
-
-    const [beginUrl, beginInit] = fetcher.mock.calls[0];
-    expect(String(beginUrl)).toBe(
-      'https://gateway.example.test/api/auth/github/repo-app/authorizations',
-    );
-    expect(JSON.parse(String(beginInit?.body))).toEqual({ returnRouteKey: 'projects' });
-    expect(beginInit?.credentials).toBe('include');
-    expect(new Headers(beginInit?.headers).get('X-Agentweaver-Tenant')).toBeNull();
-    expect(String(fetcher.mock.calls[1][0])).toBe(
-      'https://gateway.example.test/api/auth/github/repo-app/authorization/status',
-    );
-    expect(String(fetcher.mock.calls[2][0])).toBe(
-      'https://gateway.example.test/api/github/repository-selections',
-    );
-    expect(new Headers(fetcher.mock.calls[2][1]?.headers).get('X-Agentweaver-Tenant')).toBeNull();
-    expect(JSON.parse(String(fetcher.mock.calls[3][1]?.body))).toEqual({
-      fullName: 'octo/agentweaver',
-    });
-    expect(fetcher.mock.calls.slice(1).every(([, init]) => init?.credentials === 'omit')).toBe(true);
-  });
-
   it('sends only Remote MCP OAuth code and state through the authenticated Gateway route', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('{}', { status: 200 }),

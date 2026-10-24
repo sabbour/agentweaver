@@ -360,6 +360,18 @@ head, or file set returns `409`; get a new preview and review it again. The
 owner writes only the generated `.squad/team.md` and current cast-member
 charters. It does not read repository files as the project roster, mirror files
 automatically, or replace unrelated `.squad/` content.
+The preview hash binds the GitHub installation and numeric repository ID in
+addition to the repository name, so a rename or replacement invalidates it.
+The Sync panel loads the preview when opened, shows the hash and optional
+commit message, and refreshes the status after a commit. These user-triggered
+operations are intentionally omitted from the MCP tool catalog.
+Repository discovery and selection are direct Identity Broker browser calls,
+not Gateway BFF routes. The browser requests
+`GET /auth/github/repo-app/repositories` with its local session cookie, gets an
+antiforgery token from `/auth/github/repo-app/csrf`, and posts the discovered
+`installationId` and `repositoryId` to `/auth/github/repo-app/selection` with
+`X-CSRF-TOKEN`. The Gateway receives only the resulting short-lived selection
+code.
 
 This operation is distinct from AgentSuite export and import. Repository sync
 updates files in the selected GitHub repository. AgentSuite transfers a
@@ -413,8 +425,8 @@ Repo App routes require the compatible optional producer and owner
 configuration. The Copilot routes require the Copilot producer. A missing
 owner address or incompatible audience returns an owner failure.
 
-GitHub Repo App account authorization and repository discovery use the
-validated Broker bearer without a tenant selector:
+GitHub Repo App account authorization uses the validated Broker bearer without
+a tenant selector:
 
 - `POST /api/auth/github/repo-app/authorizations` starts authorization and
   returns an authorization URL, transaction ID, and expiry.
@@ -424,11 +436,18 @@ validated Broker bearer without a tenant selector:
   `POST /api/auth/github/repo-app/authorization/refresh`, and
   `DELETE /api/auth/github/repo-app/authorization` read, refresh, or revoke
   the connection.
-- `GET` and `POST /api/github/repository-selections` return redacted
-  repository metadata and issue a short-lived selection code.
 
-The browser does not receive provider tokens, numeric installation or
-repository IDs, or permission grants. OAuth and installation callbacks are
+Repository discovery and selection are direct Identity Broker browser routes,
+not Gateway BFF operations. The browser lists repositories at
+`GET /auth/github/repo-app/repositories`, obtains an antiforgery token from
+`GET /auth/github/repo-app/csrf`, then posts the selected `installationId` and
+`repositoryId` to `/auth/github/repo-app/selection` with `X-CSRF-TOKEN` and its
+local session cookie. The response contains a short-lived selection code.
+
+The browser does not receive provider tokens or permission grants. The direct
+repository listing exposes installation and repository IDs to the authenticated
+browser only so it can submit that selection; those IDs alone do not authorize a
+Gateway operation. OAuth and installation callbacks are
 bearerless browser requests; the Gateway forwards only allow-listed callback
 fields and the exact host-only transaction cookie to the owner. It preserves
 the owner's `Location` and `Set-Cookie` values. The owner validates and

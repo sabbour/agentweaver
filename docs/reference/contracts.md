@@ -286,13 +286,13 @@ These explicit Gateway-to-Identity Broker routes are outside the OpenAPI catalog
 and describe source mappings, not deployment availability. Repository App and
 Copilot connection operations depend on their Identity Broker handlers. Missing
 owner routes/configuration remain explicit failures.
-User-level authorization, status, refresh/revoke, and repository discovery require
-the current Broker bearer and no tenant selector. The status response exposes only
-`connected`, `githubLogin`, and the stable opaque Identity `connectionId`; provider
-tokens, numeric installation/repository IDs, and permissions remain owner-held.
-Repository discovery returns safe metadata, while `POST /api/github/repository-selections`
-accepts `{ "fullName": "owner/repository" }` and returns only a short-lived
-single-use `{ "selectionCode", "expiresAt" }`.
+User-level authorization, status, refresh, and revoke BFF routes use the current
+Broker bearer and no tenant selector. The status response exposes only
+`connected`, `githubLogin`, and the stable opaque Identity `connectionId`.
+Provider tokens and permission grants remain owner-held. Repository discovery
+and selection are direct Identity Broker browser operations, not Gateway BFF
+routes; the listing includes installation and repository IDs for the
+authenticated browser to select.
 
 | Method and path | Contract |
 | --- | --- |
@@ -300,8 +300,6 @@ single-use `{ "selectionCode", "expiresAt" }`.
 | `GET /api/auth/github/repo-app/authorization/status` | Read `{ connected, githubLogin, connectionId }`. |
 | `GET /api/auth/github/repo-app/authorizations/{transactionId}` | Read the transaction's `{ status }`. |
 | `POST /api/auth/github/repo-app/authorization/refresh` / `DELETE /api/auth/github/repo-app/authorization` | Refresh or revoke owner-held user authorization; no token payload. |
-| `GET /api/github/repository-selections` | Read repository and installation display metadata without provider IDs or permissions. |
-| `POST /api/github/repository-selections` | Exchange `{ fullName }` for an opaque short-lived `{ selectionCode, expiresAt }`. |
 | `GET /auth/github/repo-app/callback` | Bearerless OAuth callback; only `code`, `state`, and `error` are forwarded with the exact transaction cookie. |
 | `GET /auth/github/repo-app/installation/callback` | Bearerless installation callback; only `installation_id`, `setup_action`, and `state` are forwarded with the exact transaction cookie. |
 | `POST /api/connections/copilot-user/v1/{begin,complete,refresh,revoke}` / `GET /api/connections/copilot-user/v1/{connectionId}` | Copilot user-connection lifecycle; forwards the unchanged bearer and optional explicit tenant selector, and complete forwards only the exact `__Host-agentweaver-copilot-link` cookie. |
@@ -311,6 +309,13 @@ single-use `{ "selectionCode", "expiresAt" }`.
 | `POST /api/connections/remote-mcp/v1/{connectionId}/refresh` | Refresh an authorized connection using expected connection, credential, and configuration revisions; an uncertain provider result returns `503 remote_mcp_oauth_refresh_uncertain`, becomes indeterminate, and cannot be retried blindly. |
 | `POST /api/connections/remote-mcp/v1/{connectionId}/validity` | Check that the caller's delegated credential is valid now for an expected configuration revision and checksum. Returns `RemoteMcpCredentialValidity` with revisions, a denial reason, and the access token expiry; never token values or secret references. |
 | `POST /api/connections/remote-mcp/v1/{connectionId}/disconnect` | Clear Identity's protected token references after current binding and revision checks; provider revocation is not yet wired. |
+
+The browser lists repositories at
+`GET /auth/github/repo-app/repositories`. It gets an antiforgery token from
+`GET /auth/github/repo-app/csrf`, then posts the selected `installationId` and
+`repositoryId` to `/auth/github/repo-app/selection` with the local session cookie
+and `X-CSRF-TOKEN`. The response contains a short-lived `code`; the Gateway
+requires this code for project team sync.
 
 The OAuth and installation callbacks preserve the owner's `Location` and every
 `Set-Cookie` header. Their host-only cookies are

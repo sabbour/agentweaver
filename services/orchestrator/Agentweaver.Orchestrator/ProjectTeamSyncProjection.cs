@@ -16,6 +16,8 @@ internal sealed record ProjectTeamSyncPlan(
     public bool NothingToSync => Changes.IsDefaultOrEmpty;
 }
 
+internal sealed record ProjectTeamSyncRepositoryBinding(long InstallationId, long RepositoryId);
+
 /// <summary>Projects the Projects-owned roster into reviewable `.squad/` file changes.</summary>
 internal static class ProjectTeamSyncPlanner
 {
@@ -27,10 +29,15 @@ internal static class ProjectTeamSyncPlanner
     /// <summary>Builds a deterministic plan without loading repository files as a second team registry.</summary>
     public static ProjectTeamSyncPlan CreatePlan(
         ProjectTeamSyncProjection projection,
-        SourceControlTeamSyncSnapshot snapshot)
+        SourceControlTeamSyncSnapshot snapshot,
+        ProjectTeamSyncRepositoryBinding repositoryBinding)
     {
         ArgumentNullException.ThrowIfNull(projection);
         ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(repositoryBinding);
+        if (repositoryBinding.InstallationId <= 0 || repositoryBinding.RepositoryId <= 0)
+            throw new CoordinationException(
+                "team_sync_repository_contract_invalid", StatusCodes.Status502BadGateway);
         if (!string.Equals(snapshot.Repository, projection.Authority.Repository.FullName,
                 StringComparison.OrdinalIgnoreCase))
             throw new CoordinationException(
@@ -77,7 +84,7 @@ internal static class ProjectTeamSyncPlanner
             .ToImmutableArray();
         var changeSetHash = orderedChanges.IsDefaultOrEmpty
             ? string.Empty
-            : ComputeChangeSetHash(projection, snapshot, orderedChanges);
+            : ComputeChangeSetHash(projection, snapshot, repositoryBinding, orderedChanges);
         return new ProjectTeamSyncPlan(changeSetHash, orderedChanges, orderedSummaries);
     }
 
@@ -127,10 +134,11 @@ internal static class ProjectTeamSyncPlanner
         return files;
     }
 
-    /// <summary>Hashes the exact repository head, configuration revision, paths, old blobs, and target bytes.</summary>
+    /// <summary>Hashes repository identity, head, configuration revision, paths, old blobs, and target bytes.</summary>
     private static string ComputeChangeSetHash(
         ProjectTeamSyncProjection projection,
         SourceControlTeamSyncSnapshot snapshot,
+        ProjectTeamSyncRepositoryBinding repositoryBinding,
         ImmutableArray<SourceControlTeamSyncChange> changes)
     {
         // Length-stable JSON with sorted paths makes the preview token reproducible across request retries.
@@ -141,6 +149,11 @@ internal static class ProjectTeamSyncPlanner
             snapshot.Repository,
             snapshot.Reference,
             snapshot.CommitSha,
+            RepositoryBinding = new
+            {
+                repositoryBinding.InstallationId,
+                repositoryBinding.RepositoryId,
+            },
             Changes = changes.Select(change => new
             {
                 change.Path,

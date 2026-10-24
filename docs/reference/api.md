@@ -224,6 +224,9 @@ and rejects stale project configuration, repository head, or file content
 with `409` before creating a commit. It writes only `.squad/team.md` and
 canonical charter paths for current cast members; it does not load repository
 files as a team roster or mirror them automatically.
+The preview hash also binds the selected GitHub installation and numeric
+repository identity, so a repository rename or replacement requires a new
+preview even when its path and contents appear unchanged.
 The optional commit message is limited to 200 characters and cannot contain
 control characters. These routes are excluded from the MCP tool catalog so
 repository sync remains an explicit web action.
@@ -273,8 +276,6 @@ Prefix: `/api/auth/github/repo-app`.
 
 | Method | Full path | Auth | Purpose |
 | --- | --- | --- | --- |
-| GET | `/api/github/repository-selections` | Bearer; no tenant selector | Read safe repository metadata. |
-| POST | `/api/github/repository-selections` | Bearer; no tenant selector | Exchange a repository name for a selection code. |
 | GET | `/auth/github/repo-app/callback` | Public; exact `__Host-agentweaver-repo-app-auth` transaction cookie | Forward only `code`, `state`, and `error` to Identity. |
 | GET | `/auth/github/repo-app/installation/callback` | Public; exact `__Host-agentweaver-repo-app-install-auth` transaction cookie | Forward only installation callback fields. |
 
@@ -1360,6 +1361,10 @@ for registration and authentication configuration.
 
 Prefix: `/auth/github/repo-app`. Registered when the Repo App browser integration
 is configured. These routes differ from the Gateway bearer BFF.
+The browser lists repositories directly from Identity Broker and creates a
+selection using the discovered `installationId` and `repositoryId`. The POST
+uses the local session cookie and an antiforgery token from `/csrf`, sent in
+`X-CSRF-TOKEN`; it returns a short-lived selection code for the Gateway request.
 
 | Method | Suffix | Auth | Purpose |
 | --- | --- | --- | --- |
@@ -1370,7 +1375,7 @@ is configured. These routes differ from the Gateway bearer BFF.
 | GET | `/status` | Browser | Read connection and local credential readiness. |
 | POST | `/disconnect` | Browser; CSRF and expected connection revision | Disconnect local connection. |
 | GET | `/repositories` | Browser | Read installation/repository metadata. |
-| POST | `/selection` | Browser; CSRF and current connection revision | Create short-lived repository selection. |
+| POST | `/selection` | Browser; session cookie, CSRF, and current connection revision | Exchange installation and repository IDs for a short-lived selection code. |
 
 Native `POST /internal/source-control/github-app/installations/token` requires
 current bearer/grant and accepted Source Control binding. It mints a

@@ -1519,35 +1519,6 @@ export interface RepoAppAuthorizationTransaction {
   status: string;
 }
 
-/** Repository metadata offered for selection from a GitHub installation. */
-export interface RepoAppRepositoryCandidate {
-  fullName: string;
-  ownerLogin: string;
-  isPrivate: boolean;
-  defaultBranch: string;
-  pushedAt: string | null;
-}
-
-/** GitHub installation account and management destination. */
-export interface RepoAppInstallationCandidate {
-  accountLogin: string;
-  accountType: string;
-  repositorySelection: string;
-  managementUrl: string;
-}
-
-/** Repositories and installations available to the user's Repo App connection. */
-export interface RepoAppRepositorySelectionList {
-  repositories: RepoAppRepositoryCandidate[];
-  installations: RepoAppInstallationCandidate[];
-}
-
-/** Expiring code that lets the browser select a repository without sending credentials. */
-export interface RepoAppRepositorySelectionCode {
-  selectionCode: string;
-  expiresAt: string;
-}
-
 /** Owner-confirmed repository pin and resource generation for a run session. */
 export interface SourceControlRepositoryPinView {
   pinId: string;

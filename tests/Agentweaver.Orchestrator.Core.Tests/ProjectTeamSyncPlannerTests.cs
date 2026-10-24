@@ -9,6 +9,7 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 public sealed class ProjectTeamSyncPlannerTests
 {
     private const string CommitSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    private static readonly ProjectTeamSyncRepositoryBinding RepositoryBinding = new(101, 202);
 
     [Fact]
     public void PlanWritesCurrentCastAndPreservesUnrelatedAndAlumniFiles()
@@ -27,7 +28,7 @@ public sealed class ProjectTeamSyncPlannerTests
                 File(".squad/notes.md", "unrelated"),
             ]);
 
-        var plan = ProjectTeamSyncPlanner.CreatePlan(projection, snapshot);
+        var plan = ProjectTeamSyncPlanner.CreatePlan(projection, snapshot, RepositoryBinding);
 
         Assert.Equal(
             [
@@ -47,14 +48,22 @@ public sealed class ProjectTeamSyncPlannerTests
         Assert.Equal(64, plan.ChangeSetHash.Length);
 
         // The same preview binds exact files, revision, repository ref, and branch head on every retry.
-        var repeated = ProjectTeamSyncPlanner.CreatePlan(projection, snapshot);
+        var repeated = ProjectTeamSyncPlanner.CreatePlan(projection, snapshot, RepositoryBinding);
         Assert.Equal(plan.ChangeSetHash, repeated.ChangeSetHash);
         Assert.NotEqual(plan.ChangeSetHash, ProjectTeamSyncPlanner.CreatePlan(
             projection with { ConfigurationRevision = projection.ConfigurationRevision + 1 },
-            snapshot).ChangeSetHash);
+            snapshot,
+            RepositoryBinding).ChangeSetHash);
         Assert.NotEqual(plan.ChangeSetHash, ProjectTeamSyncPlanner.CreatePlan(
             projection,
-            snapshot with { CommitSha = "cccccccccccccccccccccccccccccccccccccccc" }).ChangeSetHash);
+            snapshot with { CommitSha = "cccccccccccccccccccccccccccccccccccccccc" },
+            RepositoryBinding).ChangeSetHash);
+        Assert.NotEqual(plan.ChangeSetHash, ProjectTeamSyncPlanner.CreatePlan(
+            projection, snapshot, new ProjectTeamSyncRepositoryBinding(RepositoryBinding.InstallationId + 1,
+                RepositoryBinding.RepositoryId)).ChangeSetHash);
+        Assert.NotEqual(plan.ChangeSetHash, ProjectTeamSyncPlanner.CreatePlan(
+            projection, snapshot, new ProjectTeamSyncRepositoryBinding(
+                RepositoryBinding.InstallationId, RepositoryBinding.RepositoryId + 1)).ChangeSetHash);
     }
 
     [Fact]
@@ -63,7 +72,8 @@ public sealed class ProjectTeamSyncPlannerTests
         var projection = CreateProjection();
         var firstPlan = ProjectTeamSyncPlanner.CreatePlan(
             projection,
-            new SourceControlTeamSyncSnapshot("octo/team", "main", CommitSha, []));
+            new SourceControlTeamSyncSnapshot("octo/team", "main", CommitSha, []),
+            RepositoryBinding);
         var matchingSnapshot = new SourceControlTeamSyncSnapshot(
             "octo/team",
             "main",
@@ -74,7 +84,7 @@ public sealed class ProjectTeamSyncPlannerTests
                 change.Content!,
                 false)).ToImmutableArray());
 
-        var plan = ProjectTeamSyncPlanner.CreatePlan(projection, matchingSnapshot);
+        var plan = ProjectTeamSyncPlanner.CreatePlan(projection, matchingSnapshot, RepositoryBinding);
 
         Assert.True(plan.NothingToSync);
         Assert.Empty(plan.Changes);
