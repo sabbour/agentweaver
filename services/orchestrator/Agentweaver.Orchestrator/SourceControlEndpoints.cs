@@ -75,9 +75,9 @@ internal static partial class SourceControlEndpoints
         string projectId,
         ProjectTeamSyncReadRequest request,
         HttpContext context,
-        ProjectsRunSelectionClient projects,
-        ProjectTeamSyncTokenClient tokens,
-        ISourceControlTeamSyncAdapter teamSyncAdapter,
+        [FromServices] ProjectsRunSelectionClient projects,
+        [FromServices] ProjectTeamSyncTokenClient tokens,
+        [FromServices] ISourceControlTeamSyncAdapter teamSyncAdapter,
         TimeProvider timeProvider,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
@@ -107,9 +107,9 @@ internal static partial class SourceControlEndpoints
         string projectId,
         ProjectTeamSyncCommitRequest request,
         HttpContext context,
-        ProjectsRunSelectionClient projects,
-        ProjectTeamSyncTokenClient tokens,
-        ISourceControlTeamSyncAdapter teamSyncAdapter,
+        [FromServices] ProjectsRunSelectionClient projects,
+        [FromServices] ProjectTeamSyncTokenClient tokens,
+        [FromServices] ISourceControlTeamSyncAdapter teamSyncAdapter,
         TimeProvider timeProvider,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
