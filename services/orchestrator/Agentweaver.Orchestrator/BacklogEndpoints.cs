@@ -20,9 +20,12 @@ public static partial class CoordinationEndpoints
             .RequireAuthorization();
         projectBacklog.MapGet("/", ReadProjectBacklogAsync);
         projectBacklog.MapPost("/tasks", CaptureProjectBacklogTaskAsync);
+        projectBacklog.MapPost("/ready-all", SetAllProjectBacklogTasksReadyAsync);
         projectBacklog.MapPut("/tasks/{taskId}/content", EditProjectBacklogTaskAsync);
+        projectBacklog.MapPut("/tasks/{taskId}/position", SetProjectBacklogTaskPositionAsync);
         projectBacklog.MapPut("/tasks/{taskId}/state", SetProjectBacklogTaskStateAsync);
         projectBacklog.MapPost("/tasks/{taskId}/archive", ArchiveProjectBacklogTaskAsync);
+        projectBacklog.MapDelete("/tasks/{taskId}", DeleteProjectBacklogTaskAsync);
         projectBacklog.MapPut(
             "/tasks/{taskId}/dependencies/{prerequisiteTaskId}",
             AddProjectBacklogDependencyAsync);
@@ -63,6 +66,14 @@ public static partial class CoordinationEndpoints
                 new BacklogTaskReference(projectId, request.TaskId), request.Content,
                 request.ExpectedGraphRevision, ct, revalidate).ConfigureAwait(false)));
 
+    /// <summary>Moves every eligible backlog task to Ready using one graph revision.</summary>
+    private static Task<IResult> SetAllProjectBacklogTasksReadyAsync(
+        string projectId, BacklogGraphRevisionRequest request, HttpContext context,
+        ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
+            async (revalidate, ct) => BacklogResult(await backlog.SetAllEligibleTasksReadyAsync(
+                projectId, request.ExpectedGraphRevision, ct, revalidate).ConfigureAwait(false)));
+
     /// <summary>Replaces task content without creating or changing an execution reservation.</summary>
     private static Task<IResult> EditProjectBacklogTaskAsync(
         string projectId, string taskId, EditBacklogTaskContentRequest request, HttpContext context,
@@ -70,6 +81,15 @@ public static partial class CoordinationEndpoints
         ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
             async (revalidate, ct) => BacklogResult(await backlog.SetTaskContentAsync(
                 new BacklogTaskReference(projectId, taskId), request.Content,
+                request.ExpectedGraphRevision, request.ExpectedTaskRevision, ct, revalidate).ConfigureAwait(false)));
+
+    /// <summary>Places an unclaimed task at a queue slot under graph and task revision checks.</summary>
+    private static Task<IResult> SetProjectBacklogTaskPositionAsync(
+        string projectId, string taskId, SetBacklogTaskPositionRequest request, HttpContext context,
+        ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
+            async (revalidate, ct) => BacklogResult(await backlog.SetTaskPositionAsync(
+                new BacklogTaskReference(projectId, taskId), request.State, request.Position,
                 request.ExpectedGraphRevision, request.ExpectedTaskRevision, ct, revalidate).ConfigureAwait(false)));
 
     /// <summary>Changes task queue state under current project authority and revision checks.</summary>
@@ -87,6 +107,15 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
         ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
             async (revalidate, ct) => BacklogResult(await backlog.ArchiveTaskAsync(
+                new BacklogTaskReference(projectId, taskId),
+                request.ExpectedGraphRevision, request.ExpectedTaskRevision, ct, revalidate).ConfigureAwait(false)));
+
+    /// <summary>Deletes an unclaimed task under current project authority and revision checks.</summary>
+    private static Task<IResult> DeleteProjectBacklogTaskAsync(
+        string projectId, string taskId, [FromBody] BacklogTaskRevisionRequest request, HttpContext context,
+        ProjectsRunSelectionClient projects, BacklogOwnerStore backlog) =>
+        ExecuteProjectBacklogOperationAsync(projectId, context, projects, write: true,
+            async (revalidate, ct) => BacklogResult(await backlog.DeleteTaskAsync(
                 new BacklogTaskReference(projectId, taskId),
                 request.ExpectedGraphRevision, request.ExpectedTaskRevision, ct, revalidate).ConfigureAwait(false)));
 
@@ -454,6 +483,7 @@ public static partial class CoordinationEndpoints
                 BacklogIssueCode.InvalidTaskReference or
                 BacklogIssueCode.InvalidGraphRevision or
                 BacklogIssueCode.InvalidTaskRevision or
+                BacklogIssueCode.InvalidTaskPosition or
                 BacklogIssueCode.InvalidTaskState or
                 BacklogIssueCode.InvalidTaskContent or
                 BacklogIssueCode.InvalidTaskCollection or
@@ -494,6 +524,13 @@ public sealed record EditBacklogTaskContentRequest(
 /// </summary>
 public sealed record SetBacklogTaskStateRequest(
     BacklogTaskState State,
+    long ExpectedGraphRevision,
+    long ExpectedTaskRevision);
+
+/// <summary>Request body for placing a task in a project queue with revision guards.</summary>
+public sealed record SetBacklogTaskPositionRequest(
+    BacklogTaskState State,
+    long Position,
     long ExpectedGraphRevision,
     long ExpectedTaskRevision);
 

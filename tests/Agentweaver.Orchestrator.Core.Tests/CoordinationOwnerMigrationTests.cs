@@ -50,6 +50,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(31)]
     [InlineData(32)]
     [InlineData(33)]
+    [InlineData(35)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -150,7 +151,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                     WHERE link_id = 'legacy' AND item_number = 42 AND provider_id IS NULL
                       AND repository_owner IS NULL AND repository_name IS NULL
                       AND created_at = '2026-10-20T00:00:00Z'),
-                -- Frozen version gate from the pre-033 owner: any unknown version rejects readiness.
+                -- Frozen version gate from the pre-033 owner: 033 and 035 are both unknown there.
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations
                     WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32)),
                 to_regclass(@obsolete) IS NULL
@@ -162,7 +163,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
         // Old owner images cannot accept 033; migrating and deploying must be coordinated.
-        Assert.Equal(1L, reader.GetInt64(3));
+        Assert.Equal(2L, reader.GetInt64(3));
         Assert.True(reader.GetBoolean(4));
     }
 
@@ -379,7 +380,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (30, "030_backlog_task_origin.sql"),
             (31, "031_user_notification_promotion_dismissals.sql"),
             (32, "032_source_control_pull_request_records.sql"),
-            (33, "033_priority_link_repository_identity.sql")
+            (33, "033_priority_link_repository_identity.sql"),
+            (35, "035_backlog_task_queue_position.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -508,8 +510,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        // The default history includes every reviewed version through 033.
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]), reader.GetFieldValue<int[]>(9));
+        // The default history includes every reviewed version through 035; 034 is reserved elsewhere.
+        Assert.Equal(
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35]),
+            reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));

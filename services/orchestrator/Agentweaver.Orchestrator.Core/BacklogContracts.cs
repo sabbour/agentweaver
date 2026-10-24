@@ -44,7 +44,8 @@ public sealed record BacklogTaskSnapshot(
     string Title = "",
     string? Description = null,
     BacklogTaskLifecycle Lifecycle = BacklogTaskLifecycle.Open,
-    BacklogRepositoryIssueLink? RepositoryIssue = null);
+    BacklogRepositoryIssueLink? RepositoryIssue = null,
+    long Position = 0);
 
 /// <summary>Directed prerequisite relation: <see cref="Task"/> cannot proceed before <see cref="Prerequisite"/>.</summary>
 public sealed record BacklogDependencyEdge(
@@ -65,6 +66,8 @@ public enum BacklogIssueCode
     InvalidTaskReference,
     InvalidGraphRevision,
     InvalidTaskRevision,
+    InvalidTaskPosition,
+    TaskPositionExhausted,
     InvalidTaskState,
     InvalidTaskContent,
     DuplicateRepositoryIssue,
@@ -72,6 +75,8 @@ public enum BacklogIssueCode
     InvalidDependencyCollection,
     DuplicateTask,
     MissingTask,
+    TaskHasDependents,
+    TaskDeletionUnavailable,
     CrossProjectDependency,
     SelfDependency,
     DuplicateDependency,

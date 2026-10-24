@@ -242,7 +242,8 @@ export async function checkSchemaCompatibility({ services, kubectl, deps, root, 
       exec,
       repoRoot: root,
     });
-    if (range.unknown || currentSchema < range.minSchema || currentSchema > range.maxSchema) {
+    if (range.unknown || currentSchema < range.minSchema || currentSchema > range.maxSchema ||
+        range.supportedVersions?.includes(currentSchema) !== true) {
       wholeReleaseFail(`${service.deployment} target image is incompatible with recorded schema ${currentSchema}.`);
     }
     checks.push({ deployment: service.deployment, schema: currentSchema, accepted: range });

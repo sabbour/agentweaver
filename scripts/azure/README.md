@@ -22,10 +22,12 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`4a8cfca52feb0b8a26d30e78ef04f8bb7937f95f486149fb9ebaf2f65b563397`.
+`d707f9e1af3c55e5da496e4185b5a64f9d2d0a594f00a5f7c6d2a505a86e1383`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16 and 18-33. Version 027 requires 026 only.
+placeholder. The Core list is 1-16, 18-33, and 35; 034 is not in the catalog.
+Readiness ordering checks the exact supported versions, not only the range endpoints.
+Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
 027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
 plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
@@ -41,7 +43,7 @@ requires migration 012 and is part of the reviewed Core catalog and default P1
 maintenance plan. The source-bound plan hash covers both migration 032 and the
 exact `SELECT, INSERT, UPDATE` grant on
 `orchestrator.source_control_pull_requests`. The Orchestrator migration Job
-applies it before 033 and verifies the complete ledger and table. Startup still
+applies it in catalog order and verifies the complete ledger and table. Startup still
 accepts a complete pre-032 schema during rollout, but the pull request list
 returns `503 pull_request_records_unavailable` until the maintenance Job applies
 the plan.
@@ -52,16 +54,25 @@ rows. In one transaction it checks the data, creates separate unique indexes
 for identified and number-only links, then drops only the obsolete target
 index. No rows, tables, columns, schemas or grants are removed.
 
-Deploy the compatible owner images first on schema 031, then apply 033.
+Deploy the compatible owner images first on schema 031, then apply 032, 033,
+and 035 in catalog order.
 The new owner accepts both complete shapes in startup and readiness verification.
 On 031, issue and pull request link saves return `database_update_pending`
 instead of losing repository identity; existing operations continue.
-On 033 those saves work. Older images reject 033 and are not a rollback target.
+On 033 those saves work. Position and batch-ready writes remain unavailable
+until 035 is applied. Older images reject 033 and are not a rollback target.
 The source-owned machine-readable compatibility list is
 `services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json`.
-The Core catalog and plan include both 032 and 033; the maintenance Job applies
+The Core catalog and plan include 032, 033, and 035; the maintenance Job applies
 them in version order.
 Existing grants on the Priority link table cover the added columns.
+
+Orchestrator migration `035_backlog_task_queue_position.sql` requires migration
+016, which creates `backlog_tasks`. It adds a nonnegative queue position,
+backfills order per project and task state, and adds an index for ordered reads.
+The runtime plan includes the exact `DELETE` grant on `backlog_tasks` for guarded
+task removal. The migration and grant are code-only until separately approved;
+source validation does not apply either one.
 
 Orchestrator migration `026_backlog_task_content.sql` adds task content,
 open/closed lifecycle and a unique repository issue identity. It requires
@@ -204,8 +215,9 @@ connections. The CLI arguments are technical guards, not approval.
 The source validates all planned row-lock mutation guards and, before
 committing grants, reads back each installed trigger and function to verify the
 exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
-The source catalog requires Core versions 1 through 16 and 18 through 33.
-These are 31 registered versions; versions 17 and 32 remain excluded.
+The source plan lists 33 Core versions: 1 through 16, 18 through 33, and 35.
+The current image requires 1 through 16 and 18 through 31. Versions 32, 33,
+and 35 are optional during rollout; version 17 remains intentionally absent.
 Version 22 adds the run completion time. It needs no new grant because the
 runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,
