@@ -1,0 +1,212 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import {
+  parseProjectsConfigMigrationArgs, runProjectsConfigMigration,
+} from '../lib/projects-config-migration.mjs';
+import { DB_MAINTENANCE_TARGET, LOCK_NAME } from '../lib/db-maintenance.mjs';
+
+const publicationSourceSha = 'f21632d48f606da215cf37e70921c85c2d604f1d';
+const deploymentSourceSha = 'c'.repeat(40);
+const sourceTree = 'b'.repeat(40);
+const imageDigest = `sha256:${'1'.repeat(64)}`;
+const componentId = 'Agentweaver.Projects.Config';
+const image = 'ghcr.io/sabbour/agentweaver.projects.config@' + imageDigest;
+const manifest = {
+  stage: 'draft',
+  components: [{ id: componentId, kind: 'service', version: '1.0.9' }],
+};
+const publication = {
+  schemaVersion: 1,
+  sourceSha: publicationSourceSha,
+  status: 'published',
+  provenanceSha256: 'd'.repeat(64),
+  planned: [{
+    id: componentId, kind: 'image', version: '1.0.9', sha256: 'e'.repeat(64),
+    destination: 'ghcr.io/sabbour/agentweaver.projects.config:1.0.9',
+  }],
+  published: [{
+    id: componentId, kind: 'image', version: '1.0.9', archiveSha256: 'e'.repeat(64), image,
+  }],
+};
+
+function createWorld({ jobOutcome = 'Complete' } = {}) {
+  const directory = mkdtempSync(path.join(tmpdir(), 'projects-config-migration-test-'));
+  const calls = [];
+  const objects = new Map();
+  const receipts = [];
+  const exec = (command, args, settings = {}) => {
+    calls.push({ command, args, settings });
+    if (command === 'git') {
+      if (['status', 'fetch', 'merge-base'].includes(args[0])) return { status: 0, stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+        return { status: 0, stdout: `${deploymentSourceSha}\n`, stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === `${publicationSourceSha}^{tree}`) {
+        return { status: 0, stdout: `${sourceTree}\n`, stderr: '' };
+      }
+      if (args[0] === 'show' && args[1] === `${publicationSourceSha}:releases/foundation.json`) {
+        return { status: 0, stdout: JSON.stringify(manifest), stderr: '' };
+      }
+      throw new Error(`unexpected git ${args.join(' ')}`);
+    }
+    if (command !== 'kubectl') throw new Error(`unexpected command ${command}`);
+    if (args.includes('create') && args.includes('--filename')) {
+      const object = JSON.parse(settings.input);
+      objects.set(`${object.kind.toLowerCase()}/${object.metadata.name}`, object);
+      return { status: 0, stdout: `${object.kind}/${object.metadata.name} created`, stderr: '' };
+    }
+    if (args.includes('get') && args.includes('lease')) {
+      if (args.some(arg => arg.startsWith('--output=jsonpath='))) {
+        return { status: 0, stdout: objects.get(`lease/${LOCK_NAME}`)?.spec?.holderIdentity ?? '', stderr: '' };
+      }
+      return objects.has(`lease/${LOCK_NAME}`)
+        ? { status: 0, stdout: JSON.stringify(objects.get(`lease/${LOCK_NAME}`)), stderr: '' }
+        : { status: 1, stdout: '', stderr: 'Error from server (NotFound): leases not found' };
+    }
+    if (args.includes('get') && args.includes('job')) {
+      const name = args[args.indexOf('job') + 1];
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          kind: 'Job', metadata: { name, namespace: DB_MAINTENANCE_TARGET.namespace },
+          spec: { template: { spec: { automountServiceAccountToken: false } } },
+          status: { conditions: [{ type: jobOutcome, status: 'True' }] },
+        }),
+        stderr: '',
+      };
+    }
+    if (args.includes('get') && args.includes('pods')) {
+      return { status: 0, stdout: JSON.stringify({ kind: 'List', items: [] }), stderr: '' };
+    }
+    if (args.includes('delete')) {
+      const kind = args[args.indexOf('delete') + 1];
+      const name = args[args.indexOf(kind) + 1];
+      objects.delete(`${kind}/${name}`);
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    throw new Error(`unexpected kubectl ${args.join(' ')}`);
+  };
+  return {
+    calls, objects, receipts,
+    options: parseProjectsConfigMigrationArgs([
+      '--publication', 'publication.json', '--receipt-dir', directory,
+    ]),
+    overrides: {
+      root: process.cwd(),
+      exec,
+      readFile: file => file.endsWith('publication.json')
+        ? JSON.stringify(publication)
+        : readFileSync(file, 'utf8'),
+      verifyImage: async () => ({
+        digest: imageDigest, sourceSha: publicationSourceSha, sourceTree, version: '1.0.9',
+      }),
+      withKubeconfig: async (_target, action) => action(['--kubeconfig', 'offline']),
+      newRunId: () => 'abcdef123456',
+      now: () => new Date('2026-10-23T00:00:00.000Z'),
+      sleep: async () => {},
+      log: () => {},
+      writeReceipt: (file, receipt) => receipts.push({ file, receipt: structuredClone(receipt) }),
+    },
+    dispose: () => rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+function withMigrationCredentials(callback, connection) {
+  const oldConnection = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION;
+  const oldToken = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN;
+  process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION = connection ??
+    `Host=${DB_MAINTENANCE_TARGET.postgresHost};Database=agentweaver;` +
+    'Username=agentweaver-id-projects-config-migration;SSL Mode=VerifyFull';
+  process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN = 'test-access-token';
+  return Promise.resolve().then(callback).finally(() => {
+    if (oldConnection === undefined) delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION;
+    else process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION = oldConnection;
+    if (oldToken === undefined) delete process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN;
+    else process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN = oldToken;
+  });
+}
+
+test('migration arguments are dry-run by default and require a publication', () => {
+  assert.equal(parseProjectsConfigMigrationArgs(['--help']).help, true);
+  assert.throws(() => parseProjectsConfigMigrationArgs([]), /--publication is required/);
+  assert.throws(() => parseProjectsConfigMigrationArgs(['--publication', 'x', '--reset']), /unknown argument/);
+  assert.equal(parseProjectsConfigMigrationArgs(['--publication', 'receipt.json']).execute, false);
+});
+
+test('dry run accepts the older publication from a newer v1 tool commit and makes no writes', async () => {
+  const world = createWorld();
+  try {
+    const receipt = await runProjectsConfigMigration(world.options, world.overrides);
+    assert.equal(receipt.result, 'dry-run-passed');
+    assert.equal(receipt.sourceSha, deploymentSourceSha);
+    assert.equal(receipt.publicationSourceSha, publicationSourceSha);
+    assert.equal(receipt.imageSourceSha, publicationSourceSha);
+    assert.equal(receipt.target.namespace, 'agentweaver');
+    assert.deepEqual(receipt.steps.map(step => step.name), ['publication-image-verified', 'migration-lock-checked']);
+    assert.equal(world.calls.some(call =>
+      call.command === 'kubectl' && ['create', 'delete', 'apply'].some(verb => call.args.includes(verb))), false);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('execute rejects TLS bypass and connection aliases before Kubernetes access', async () => {
+  const valid = `Host=${DB_MAINTENANCE_TARGET.postgresHost};Database=agentweaver;` +
+    'Username=agentweaver-id-projects-config-migration;SSL Mode=VerifyFull';
+  for (const connection of [
+    `${valid};Trust Server Certificate=true`,
+    `${valid};Server=attacker.example`,
+    `${valid};Host=attacker.example`,
+  ]) {
+    const world = createWorld();
+    try {
+      await assert.rejects(withMigrationCredentials(
+        () => runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides),
+        connection,
+      ), /migration connection may contain only unique/);
+      assert.equal(world.calls.some(call => call.command === 'kubectl'), false);
+    } finally {
+      world.dispose();
+    }
+  }
+});
+
+test('execute passes credentials only through Secret stdin, cleans up, and records a safe receipt', async () => {
+  const world = createWorld();
+  try {
+    const receipt = await withMigrationCredentials(() =>
+      runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides));
+    assert.equal(receipt.result, 'succeeded');
+    assert.deepEqual(receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.equal(receipt.target.subscriptionId, DB_MAINTENANCE_TARGET.subscriptionId);
+    assert.equal(receipt.target.resourceGroup, DB_MAINTENANCE_TARGET.resourceGroup);
+    assert.equal(JSON.stringify(receipt).includes('test-access-token'), false);
+    assert.equal(JSON.stringify(receipt).includes('Username='), false);
+    const secretCreate = world.calls.find(call =>
+      call.command === 'kubectl' && call.args.includes('create') &&
+      JSON.parse(call.settings.input ?? '{}').kind === 'Secret');
+    assert.ok(secretCreate);
+    assert.equal(secretCreate.args.includes('test-access-token'), false);
+    assert.equal(world.objects.size, 0);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('failed migration Job cleans up its resources and writes a failed receipt', async () => {
+  const world = createWorld({ jobOutcome: 'Failed' });
+  try {
+    await assert.rejects(withMigrationCredentials(() =>
+      runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides)),
+    /migration Job .* failed/);
+    assert.equal(world.receipts[0].receipt.result, 'failed');
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.equal(world.objects.size, 0);
+    assert.equal(JSON.stringify(world.receipts[0].receipt).includes('test-access-token'), false);
+  } finally {
+    world.dispose();
+  }
+});

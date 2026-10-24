@@ -50,6 +50,53 @@ as compatible between 033 and 035.
 Without `--execute`, the runner stops after the service image check. It prints
 the steps an execute run would take and changes nothing.
 
+## Migrate Projects & Config before a whole-release rollout
+
+Projects & Config migrations use a separate runner because the P1 database
+maintenance command covers Environment, Orchestrator, and Events & Sessions.
+The Projects & Config runner selects and verifies its image from a published
+release receipt. Its clean `v1` checkout may be newer than the publication
+source, as long as both commits are on `origin/v1`.
+
+Start with a dry run:
+
+```powershell
+npm run db:maintenance:projects-config -- `
+  --publication <publication.json>
+```
+
+For an execute run, set
+`AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION` to the password-free
+connection for the role that owns the Projects & Config schema and migration
+history. It must target the approved PostgreSQL host and `agentweaver`
+database, and use `SSL Mode=VerifyFull`. Set
+`AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN` to a short-lived
+PostgreSQL access token through a protected environment-variable mechanism.
+The connection may contain only the canonical `Host`, `Port`, `Database`,
+`Username`, and `SSL Mode` fields; aliases and additional options are rejected.
+Neither value is written to command arguments, logs, or the receipt.
+
+Then run:
+
+```powershell
+npm run db:maintenance:projects-config -- `
+  --publication <publication.json> `
+  --execute
+```
+
+The runner shares the database-maintenance Lease, creates a short-lived
+credential Secret and a single migration Job, waits for completion, removes
+the Job and Secret, releases the Lease, and writes a receipt. The receipt
+records the publication, image, target, and cleanup results without credentials.
+If the Job or cleanup fails, the runner writes a failed receipt and exits
+non-zero.
+
+Run the whole-release dry run after reviewing the migration result. Before an
+execute rollout, pass the successful migration receipt with
+`--projects-config-migration-receipt`; the rollout refuses a missing or
+mismatched receipt. This makes the Projects & Config migration complete before
+the dependent Deployment is restarted.
+
 ## Before you begin
 
 You need:

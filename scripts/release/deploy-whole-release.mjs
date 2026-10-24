@@ -7,11 +7,13 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { withP0UserKubeconfig } from '../azure/lib/namespace-bootstrap.mjs';
 import { run, redact } from '../azure/lib/exec.mjs';
 import {
   deploymentInventory, deploymentPodDrainReason, waitForDeploymentPods,
 } from './image-rollout-common.mjs';
+import { parseKustomizeResources } from './kustomize-runtime.mjs';
 import {
   WHOLE_RELEASE_RECEIPT_DIRECTORY, compareWholeReleaseState, checkSchemaCompatibility,
   plannedWholeReleaseInventory, prepareGatewaySmokeContext, resolveWholeReleaseImages,
@@ -21,11 +23,18 @@ import {
 import { componentImageRepository } from './pack.mjs';
 import { verifyServiceRegistryImage } from './registry.mjs';
 import { LOCK_NAME } from '../azure/lib/db-maintenance.mjs';
+import {
+  findImmutableRuntimeConfigMapReplacements,
+  IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS,
+  replaceImmutableRuntimeConfigMaps,
+  verifyImmutableRuntimeConfigMapReplacementPermissions,
+} from './immutable-runtime-config-maps.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const NAMESPACE = 'agentweaver';
 const SHA = /^[a-f0-9]{40}$/;
 const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
+const CONFIG_MAP_CACHE_EXPIRY_WAIT_MS = 70_000;
 const SAFE_ROLLOUT_ORDER = [
   'identity-broker', 'events-and-sessions', 'orchestrator', 'environment',
   'knowledge', 'projects-config', 'gateway', 'mcp', 'web',
@@ -37,6 +46,7 @@ Without --execute the command reads live state and writes a complete rollout pla
 
   --publication <file>                Current source-bound publication receipt. Required.
   --previous-publication <file>        Prior published receipt for unchanged images.
+  --projects-config-migration-receipt <file>  Successful Projects & Config migration receipt. Required with --execute.
   --subscription-id <id>               Azure subscription containing the P0 cluster. Required.
   --resource-group <name>              Resource group containing the P0 cluster. Required.
   --cluster <name>                     P0 AKS cluster name. Required.
@@ -64,6 +74,7 @@ function parseJson(text, name) {
 export function parseWholeReleaseArgs(argv = []) {
   const options = {
     execute: false, publicationPath: undefined, previousPublicationPath: undefined,
+    projectsConfigMigrationReceiptPath: undefined,
     subscriptionId: undefined, resourceGroup: undefined, clusterName: undefined,
     gatewayUrl: undefined, tenantId: undefined, gatewayTokenEnv: 'AGENTWEAVER_GATEWAY_TOKEN',
     issuer: undefined, audience: undefined, actorId: undefined, projectId: undefined,
@@ -71,6 +82,7 @@ export function parseWholeReleaseArgs(argv = []) {
   };
   const valued = new Map([
     ['--publication', 'publicationPath'], ['--previous-publication', 'previousPublicationPath'],
+    ['--projects-config-migration-receipt', 'projectsConfigMigrationReceiptPath'],
     ['--subscription-id', 'subscriptionId'], ['--resource-group', 'resourceGroup'],
     ['--cluster', 'clusterName'], ['--gateway-url', 'gatewayUrl'], ['--tenant-id', 'tenantId'],
     ['--gateway-token-env', 'gatewayTokenEnv'], ['--issuer', 'issuer'], ['--audience', 'audience'],
@@ -106,7 +118,10 @@ export function parseWholeReleaseArgs(argv = []) {
       options.readinessTimeoutSeconds < 60 || options.readinessTimeoutSeconds > 3600) {
     wholeReleaseFail('--readiness-timeout-seconds must be an integer from 60 to 3600.');
   }
-  for (const key of ['gatewayUrl', 'tenantId', 'gatewayTokenEnv', 'issuer', 'audience', 'actorId', 'projectId']) {
+  for (const key of [
+    'projectsConfigMigrationReceiptPath', 'gatewayUrl', 'tenantId', 'gatewayTokenEnv',
+    'issuer', 'audience', 'actorId', 'projectId',
+  ]) {
     const value = options[key];
     if (value !== undefined && (typeof value !== 'string' || !value || value.trim() !== value)) {
       wholeReleaseFail(`--${key.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)} must not be empty or contain surrounding whitespace.`);
@@ -122,6 +137,13 @@ function gitOutput(exec, root, args, action) {
   const result = exec('git', args, { cwd: root, check: false });
   if (result.status !== 0) wholeReleaseFail(`${action}: ${(result.stderr ?? '').trim()}`);
   return result.stdout;
+}
+
+function requireAncestor(exec, root, sourceSha, target, description) {
+  const result = exec('git', ['merge-base', '--is-ancestor', sourceSha, target], {
+    cwd: root, check: false,
+  });
+  if (result.status !== 0) wholeReleaseFail(`${description} ${sourceSha} is not an ancestor of ${target}.`);
 }
 
 function parseKubernetesObjects(result) {
@@ -162,6 +184,149 @@ function readGatewayRuntimeConfig(kubectl) {
     wholeReleaseFail('gateway-runtime-config is not the expected ConfigMap in the agentweaver namespace.');
   }
   return configMap.data;
+}
+
+function parsePodList(result) {
+  if (result.status !== 0) wholeReleaseFail(`could not read Pods: ${(result.stderr ?? '').trim()}`);
+  const list = parseJson(result.stdout, 'Kubernetes Pod list');
+  if (!list || list.kind !== 'List' || !Array.isArray(list.items) ||
+      list.items.some(pod => pod?.apiVersion !== 'v1' || pod.kind !== 'Pod' ||
+        pod.metadata?.namespace !== NAMESPACE)) {
+    wholeReleaseFail('Kubernetes Pod inventory is not a namespace-scoped Pod List.');
+  }
+  return list.items;
+}
+
+function podReferencesConfigMap(pod, name) {
+  const containers = [
+    ...(pod.spec?.initContainers ?? []), ...(pod.spec?.containers ?? []),
+    ...(pod.spec?.ephemeralContainers ?? []),
+  ];
+  return (pod.spec?.volumes ?? []).some(volume =>
+    volume.configMap?.name === name || (volume.projected?.sources ?? [])
+      .some(source => source.configMap?.name === name)) ||
+    containers.some(container =>
+      (container.envFrom ?? []).some(source => source.configMapRef?.name === name) ||
+      (container.env ?? []).some(entry => entry.valueFrom?.configMapKeyRef?.name === name));
+}
+
+function readSourceRuntimeConfigMaps(root, deps) {
+  const rendered = deps.exec('kubectl', [
+    'kustomize', path.join(root, 'deploy', 'k8s'),
+  ], { cwd: root, check: false });
+  if (rendered.status !== 0) {
+    wholeReleaseFail(`could not render source runtime ConfigMaps: ${(rendered.stderr ?? '').trim()}`);
+  }
+  return parseKustomizeResources(rendered.stdout).items;
+}
+
+function immutableConfigMapCommand(baseArgs, deps, root, args, settings = {}) {
+  const { projectJson, preserveProjectedJson: _preserveProjectedJson, ...execSettings } = settings;
+  const result = deps.exec('kubectl', [...baseArgs, ...args], {
+    cwd: root, check: false, ...execSettings,
+  });
+  if (result.status !== 0) {
+    wholeReleaseFail(`kubectl ${args.join(' ')} failed: ${(result.stderr ?? '').trim()}`);
+  }
+  if (typeof projectJson === 'function') {
+    const value = parseJson(result.stdout, 'Kubernetes ConfigMap response');
+    return JSON.stringify(projectJson(value));
+  }
+  return (result.stdout ?? '').trim();
+}
+
+function plannedConfigMapConsumers(replacements, pods, before) {
+  const deployments = new Map();
+  for (const resource of replacements) {
+    const name = resource.metadata.name;
+    const consumers = IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS.get(name) ?? [];
+    const activePods = pods.filter(pod => podReferencesConfigMap(pod, name));
+    // Refuse any consumer outside the known rollout set because this command cannot safely restart it.
+    if (consumers.length === 0 && activePods.length > 0) {
+      wholeReleaseFail(`ConfigMap/${name} has active Pod consumers outside the whole-release rollout set; ` +
+        'stop those consumers through their owning lifecycle before retrying.');
+    }
+    for (const pod of activePods) {
+      const deploymentName = pod.metadata.labels?.['app.kubernetes.io/name'];
+      if (!consumers.includes(deploymentName)) {
+        wholeReleaseFail(`Pod ${pod.metadata.name} references ConfigMap/${name} but is not owned by its approved Deployment.`);
+      }
+    }
+    for (const deploymentName of consumers) {
+      const deployment = before.byName.get(deploymentName);
+      const replicas = deployment?.spec?.replicas;
+      if (!deployment || !Number.isSafeInteger(replicas) || replicas < 1 ||
+          typeof deployment.metadata?.resourceVersion !== 'string' || !deployment.metadata.resourceVersion) {
+        wholeReleaseFail(`Deployment ${deploymentName} cannot be safely drained for ConfigMap/${name}.`);
+      }
+      deployments.set(deploymentName, replicas);
+    }
+  }
+  return deployments;
+}
+
+async function drainConfigMapConsumers(replacements, consumers, before, kubectl, options, deps, drained) {
+  // Stop every approved Deployment before waiting, so no old Pod can keep using cached ConfigMap data.
+  for (const [name, replicas] of consumers) {
+    const deployment = before.byName.get(name);
+    const patch = [
+      { op: 'test', path: '/metadata/resourceVersion', value: deployment.metadata.resourceVersion },
+      { op: 'test', path: '/spec/replicas', value: replicas },
+      { op: 'replace', path: '/spec/replicas', value: 0 },
+    ];
+    const result = kubectl(['patch', 'deployment', name, '--type=json', '--patch', JSON.stringify(patch)]);
+    if (result.status !== 0) {
+      wholeReleaseFail(`could not stop Deployment/${name} before replacing its immutable ConfigMap: ${(result.stderr ?? '').trim()}`);
+    }
+    drained.set(name, replicas);
+  }
+
+  await waitForDeploymentPods(
+    timeout => parsePodList(kubectl(['get', 'pods', '--output', 'json'], { timeout })),
+    pods => {
+      const remaining = replacements.find(resource =>
+        pods.some(pod => podReferencesConfigMap(pod, resource.metadata.name)));
+      return remaining ? `Pods still reference ConfigMap/${remaining.metadata.name}` : null;
+    },
+    {
+      label: 'immutable ConfigMap consumer', timeoutMs: options.readinessTimeoutSeconds * 1000,
+      intervalMs: 2_000, now: deps.nowMs, sleep: deps.sleep,
+    },
+  );
+}
+
+function restoreConfigMapConsumer(name, replicas, service, kubectl, options, onReplicasRestored) {
+  const readbackResult = kubectl(['get', 'deployment', name, '--output', 'json']);
+  if (readbackResult.status !== 0) {
+    wholeReleaseFail(`could not read drained Deployment/${name}: ${(readbackResult.stderr ?? '').trim()}`);
+  }
+  const current = parseJson(readbackResult.stdout, `Deployment/${name} after ConfigMap replacement`);
+  const original = service.deploymentObject;
+  // Restore only the Deployment generation this run drained; never overwrite another operator's edits.
+  if (current.kind !== 'Deployment' || current.metadata?.namespace !== NAMESPACE ||
+      current.metadata?.uid !== original.metadata.uid || current.spec?.replicas !== 0 ||
+      !isDeepStrictEqual(current.spec?.template, original.spec?.template)) {
+    wholeReleaseFail(`Deployment/${name} changed while its ConfigMap consumers were drained.`);
+  }
+  const patch = [
+    { op: 'test', path: '/metadata/resourceVersion', value: current.metadata.resourceVersion },
+    { op: 'test', path: '/spec/replicas', value: 0 },
+  ];
+  if (service.changed) {
+    patch.push(
+      { op: 'test', path: `/spec/template/spec/containers/${service.containerIndex}/image`, value: service.currentImage },
+      { op: 'replace', path: `/spec/template/spec/containers/${service.containerIndex}/image`, value: service.image },
+    );
+  }
+  patch.push({ op: 'replace', path: '/spec/replicas', value: replicas });
+  const updated = kubectl(['patch', 'deployment', name, '--type=json', '--patch', JSON.stringify(patch)]);
+  if (updated.status !== 0) wholeReleaseFail(`could not restore Deployment/${name}: ${(updated.stderr ?? '').trim()}`);
+  onReplicasRestored?.();
+  const rollout = kubectl(['rollout', 'status', `deployment/${name}`,
+    `--timeout=${options.readinessTimeoutSeconds}s`]);
+  if (rollout.status !== 0) {
+    wholeReleaseFail(`${name} did not become ready after its ConfigMap replacement: ${(rollout.stderr ?? '').trim()}`);
+  }
 }
 
 function verifyPods(items, services) {
@@ -208,6 +373,9 @@ export async function runWholeRelease(options, overrides = {}) {
     exec: run, readFile: readFileSync, verifyImage: verifyServiceRegistryImage,
     withKubeconfig: withP0UserKubeconfig, writeReceipt: writeWholeReleaseReceipt,
     now: () => new Date(), newRunId: randomUUID, log: message => console.log(message),
+    nowMs: Date.now,
+    sleep: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+    readRuntimeConfigMaps: (sourceRoot) => readSourceRuntimeConfigMaps(sourceRoot, deps),
     fetchImpl: globalThis.fetch, prepareSmoke: prepareGatewaySmokeContext,
     smoke: runGatewaySmokeChecks, ...overrides,
   };
@@ -220,6 +388,8 @@ export async function runWholeRelease(options, overrides = {}) {
     startedAt: deps.now().toISOString(), publicationSourceSha: null,
     comparison: [], schema: { status: 'not-run', checks: [] },
     deployments: { before: [], plannedAfter: [], after: [] },
+    migrations: { status: 'not-run' },
+    configMaps: { status: 'not-run', replacements: [] },
     readiness: { status: 'not-run' }, pods: { status: 'not-run', services: [] },
     smoke: { status: 'not-run', checks: [] }, installation: { status: 'partial' },
   };
@@ -259,6 +429,35 @@ export async function runWholeRelease(options, overrides = {}) {
       exec: deps.exec, root,
     });
     const images = await verifyWholeReleaseImages(resolved, deps.verifyImage);
+    const projectsConfigImage = images.find(image => image.componentId === 'Agentweaver.Projects.Config');
+    if (!projectsConfigImage) wholeReleaseFail('Projects & Config is missing from the verified publication images.');
+    if (options.execute && !options.projectsConfigMigrationReceiptPath) {
+      wholeReleaseFail('--projects-config-migration-receipt is required with --execute.');
+    }
+    if (options.projectsConfigMigrationReceiptPath) {
+      const migration = parseJson(deps.readFile(
+        path.resolve(root, options.projectsConfigMigrationReceiptPath), 'utf8',
+      ), 'Projects & Config migration receipt');
+      if (migration.schemaVersion !== 1 || migration.mode !== 'execute' || migration.result !== 'succeeded' ||
+          !/^[a-f0-9]{12}$/.test(migration.runId ?? '') || !SHA.test(migration.sourceSha ?? '') ||
+          migration.publicationSourceSha !== publication.sourceSha ||
+          migration.image !== projectsConfigImage.image ||
+          migration.imageSourceSha !== projectsConfigImage.imageSourceSha ||
+          migration.target?.clusterName !== options.clusterName ||
+          migration.target?.namespace !== NAMESPACE ||
+          migration.target?.resourceGroup !== options.resourceGroup ||
+          migration.target?.subscriptionId !== options.subscriptionId) {
+        wholeReleaseFail('Projects & Config migration receipt does not prove a successful migration of this publication for this target.');
+      }
+      // The migration runner may be newer than the publication, but its source must still be on approved v1.
+      requireAncestor(deps.exec, root, migration.sourceSha, 'origin/v1', 'Projects & Config migration source');
+      receipt.migrations = {
+        status: 'passed', runId: migration.runId, image: migration.image,
+        receiptPath: path.resolve(root, options.projectsConfigMigrationReceiptPath),
+      };
+    } else if (!options.execute) {
+      receipt.migrations = { status: 'required-before-execute', image: projectsConfigImage.image };
+    }
     receipt.images = images.map(image => ({
       componentId: image.componentId, deployment: image.deployment, image: image.image,
       digest: image.digest, sourceSha: image.imageSourceSha, sourceTree: image.imageSourceTree,
@@ -279,6 +478,20 @@ export async function runWholeRelease(options, overrides = {}) {
       receipt.comparison = wholeReleaseComparison(services);
       receipt.deployments.before = before.records;
       receipt.deployments.plannedAfter = plannedWholeReleaseInventory(before, services);
+      const sourceResources = deps.readRuntimeConfigMaps(root);
+      const immutableMapRun = (command, args, settings = {}) =>
+        immutableConfigMapCommand(baseArgs, deps, root, args, settings);
+      const replacements = findImmutableRuntimeConfigMapReplacements(
+        { items: sourceResources }, NAMESPACE, { root, run: immutableMapRun, fail: wholeReleaseFail },
+      );
+      receipt.configMaps = {
+        status: options.execute ? 'ready-to-replace' : 'planned',
+        replacements: replacements.map(resource => resource.metadata.name),
+        cacheDrainDeployments: [...new Set(replacements.flatMap(resource =>
+          IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS.get(resource.metadata.name) ?? []))].sort(),
+        cacheExpiryWaitSeconds: replacements.length > 0
+          ? Math.ceil(CONFIG_MAP_CACHE_EXPIRY_WAIT_MS / 1000) : 0,
+      };
       receipt.schema.checks = await (deps.schemaCheck
         ? deps.schemaCheck({ services, kubectl, root, exec: deps.exec })
         : checkSchemaCompatibility({ services, kubectl, deps, root, exec: deps.exec }));
@@ -297,26 +510,75 @@ export async function runWholeRelease(options, overrides = {}) {
       });
       receipt.smoke = { status: 'not-run', checks: [] };
       executionStarted = true;
+      const drainedConsumers = new Map();
       const updates = wholeReleaseUpdates(services);
-      // Roll out identity and data services first, then Gateway, MCP, and Web.
-      for (const deployment of SAFE_ROLLOUT_ORDER) {
-        const service = services.find(item => item.deployment === deployment);
-        if (!service?.changed) continue;
-        const resourceVersion = service.deploymentObject.metadata?.resourceVersion;
-        if (typeof resourceVersion !== 'string' || !resourceVersion) {
-          wholeReleaseFail(`${deployment} Deployment has no resourceVersion for a guarded update.`);
+      try {
+        if (replacements.length > 0) {
+          const pods = parsePodList(kubectl(['get', 'pods', '--output', 'json']));
+          const consumers = plannedConfigMapConsumers(replacements, pods, before);
+          verifyImmutableRuntimeConfigMapReplacementPermissions(replacements, NAMESPACE, {
+            root,
+            run: immutableMapRun,
+            fail: wholeReleaseFail,
+          });
+          await drainConfigMapConsumers(
+            replacements, consumers, before, kubectl, options, deps, drainedConsumers,
+          );
+          // Let each kubelet's default one-minute immutable ConfigMap cache expire before recreating the name.
+          await deps.sleep(CONFIG_MAP_CACHE_EXPIRY_WAIT_MS);
+          replaceImmutableRuntimeConfigMaps(replacements, NAMESPACE, {
+            root,
+            run: immutableMapRun,
+            fail: wholeReleaseFail,
+          });
+          receipt.configMaps.status = 'replaced';
         }
-        const imagePath = `/spec/template/spec/containers/${service.containerIndex}/image`;
-        const patch = [
-          { op: 'test', path: '/metadata/resourceVersion', value: resourceVersion },
-          { op: 'test', path: imagePath, value: service.currentImage },
-          { op: 'replace', path: imagePath, value: service.image },
-        ];
-        const result = kubectl(['patch', 'deployment', deployment, '--type=json', '--patch', JSON.stringify(patch)]);
-        if (result.status !== 0) wholeReleaseFail(`could not patch deployment/${deployment}: ${(result.stderr ?? '').trim()}`);
-        const rollout = kubectl(['rollout', 'status', `deployment/${deployment}`,
-          `--timeout=${options.readinessTimeoutSeconds}s`]);
-        if (rollout.status !== 0) wholeReleaseFail(`${deployment} did not become ready: ${(rollout.stderr ?? '').trim()}`);
+        // Roll out identity and data services first, then Gateway, MCP, and Web.
+        for (const deployment of SAFE_ROLLOUT_ORDER) {
+          const service = services.find(item => item.deployment === deployment);
+          const drainedReplicas = drainedConsumers.get(deployment);
+          if (drainedReplicas !== undefined) {
+            restoreConfigMapConsumer(deployment, drainedReplicas, service, kubectl, options,
+              () => drainedConsumers.delete(deployment));
+            continue;
+          }
+          if (!service?.changed) continue;
+          const resourceVersion = service.deploymentObject.metadata?.resourceVersion;
+          if (typeof resourceVersion !== 'string' || !resourceVersion) {
+            wholeReleaseFail(`${deployment} Deployment has no resourceVersion for a guarded update.`);
+          }
+          const imagePath = `/spec/template/spec/containers/${service.containerIndex}/image`;
+          const patch = [
+            { op: 'test', path: '/metadata/resourceVersion', value: resourceVersion },
+            { op: 'test', path: imagePath, value: service.currentImage },
+            { op: 'replace', path: imagePath, value: service.image },
+          ];
+          const result = kubectl(['patch', 'deployment', deployment, '--type=json', '--patch', JSON.stringify(patch)]);
+          if (result.status !== 0) wholeReleaseFail(`could not patch deployment/${deployment}: ${(result.stderr ?? '').trim()}`);
+          const rollout = kubectl(['rollout', 'status', `deployment/${deployment}`,
+            `--timeout=${options.readinessTimeoutSeconds}s`]);
+          if (rollout.status !== 0) wholeReleaseFail(`${deployment} did not become ready: ${(rollout.stderr ?? '').trim()}`);
+        }
+      } catch (error) {
+        const restoreErrors = [];
+        // Restore consumers drained earlier even when another service's rollout fails first.
+        for (const deployment of SAFE_ROLLOUT_ORDER) {
+          const replicas = drainedConsumers.get(deployment);
+          if (replicas === undefined) continue;
+          try {
+            restoreConfigMapConsumer(
+              deployment, replicas, services.find(item => item.deployment === deployment), kubectl, options,
+              () => drainedConsumers.delete(deployment),
+            );
+          } catch (restoreError) {
+            restoreErrors.push(restoreError);
+          }
+        }
+        if (restoreErrors.length > 0) {
+          throw new AggregateError([error, ...restoreErrors],
+            'Whole-release execution failed and one or more drained Deployments could not be restored and verified.');
+        }
+        throw error;
       }
 
       const after = inventory();

@@ -227,10 +227,11 @@ The default mode reads every Deployment through the temporary P0 user
 kubeconfig. It rejects unknown or missing services, compares intended and live
 digests in one table, and checks the recorded database schema against the
 schema range accepted by the Orchestrator and Events and Sessions images.
-Schema changes still run only through `db:maintenance`; this command does not
-run migrations or reset data. It stops if the database-maintenance lock is
-held. Wait for maintenance to finish before starting this command, and do not
-start maintenance until the whole-release command has finished.
+This command does not run database migrations or reset data. Run the
+Projects & Config migration runner before this command when the publication
+contains its migrations. Whole-release execute requires the successful
+migration receipt for the same publication, image, and target. It stops if the
+database-maintenance lock is held.
 
 Run the same command with `--execute` only after reviewing the plan. Execute
 mode patches only the named application containers, in a fixed safe order. It
@@ -238,6 +239,11 @@ waits for each rollout, checks Deployment readiness, checks every Pod image ID,
 and waits up to two minutes for terminating or older-ReplicaSet Pods to disappear
 before checking the final Pod inventory. It then runs authenticated Gateway
 smoke checks for Projects, Priorities, project runs, and project metrics.
+For an approved changed immutable runtime ConfigMap, it checks scoped
+permissions, drains the managed consumer Deployment, waits for its Pods to
+terminate and for kubelet's 70-second cache expiry, then performs a guarded
+delete/create and readback before restoring that Deployment in rollout order.
+Changed immutable maps outside the source-owned allow-list stop the rollout.
 Execute mode reads the deployed Gateway settings and the Web `/env-config.js`
 file to find the Gateway route, Identity Broker issuer, and audience. If
 `AGENTWEAVER_GATEWAY_TOKEN` is not set, it opens a fresh temporary Chrome

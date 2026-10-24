@@ -38,9 +38,25 @@ function makeDeployment(service, image) {
   };
 }
 
+function runtimeConfigMaps() {
+  return [
+    { kind: 'ConfigMap', metadata: { name: 'agenthost-runtime-v1', namespace: 'agentweaver' },
+      immutable: true, data: { 'appsettings.json': '{}' } },
+    { kind: 'ConfigMap', metadata: { name: 'projects-config-runtime-config', namespace: 'agentweaver' },
+      immutable: true, data: { ProjectsConfig__Knowledge__BaseAddress: 'https://knowledge.example.test/' } },
+    { kind: 'ConfigMap', metadata: { name: 'gateway-runtime-config', namespace: 'agentweaver' },
+      immutable: true, data: {
+        Gateway__WebOrigin: 'https://portal.example.test',
+        Identity__Issuer: 'https://agentweaver.example.test/',
+        Identity__Audience: 'https://agentweaver.example.test/',
+      } },
+  ];
+}
+
 function makeFixture({
   failDeployment, unknownDeployment, maintenanceLock, oldReplicaSetPod,
-  terminatingOldReplicaSetPodOnce,
+  terminatingOldReplicaSetPodOnce, changedRuntimeConfigMap, unapprovedRuntimeConfigMap,
+  mutableRuntimeConfigMap,
 } = {}) {
   const manifest = {
     stage: 'draft',
@@ -74,6 +90,36 @@ function makeFixture({
   };
   const state = WHOLE_RELEASE_SERVICES.map((service, index) =>
     makeDeployment(service, `ghcr.io/sabbour/${componentImageRepository(service.componentId)}@${digest(15 - index)}`));
+  const sourceMaps = runtimeConfigMaps();
+  const liveMaps = new Map(sourceMaps.map(resource => [resource.metadata.name, {
+    ...structuredClone(resource),
+    metadata: {
+      ...resource.metadata, uid: `uid-${resource.metadata.name}`,
+      resourceVersion: `rv-${resource.metadata.name}`,
+    },
+  }]));
+  if (changedRuntimeConfigMap) {
+    const live = liveMaps.get(changedRuntimeConfigMap);
+    if (live) delete live.data.ProjectsConfig__Knowledge__BaseAddress;
+  }
+  if (mutableRuntimeConfigMap) liveMaps.get(mutableRuntimeConfigMap).immutable = false;
+  if (unapprovedRuntimeConfigMap) {
+    const desired = {
+      kind: 'ConfigMap',
+      metadata: { name: unapprovedRuntimeConfigMap, namespace: 'agentweaver' },
+      immutable: true,
+      data: { value: 'source' },
+    };
+    sourceMaps.push(desired);
+    liveMaps.set(unapprovedRuntimeConfigMap, {
+      ...structuredClone(desired),
+      metadata: {
+        ...desired.metadata, uid: `uid-${unapprovedRuntimeConfigMap}`,
+        resourceVersion: `rv-${unapprovedRuntimeConfigMap}`,
+      },
+      data: { value: 'stale' },
+    });
+  }
   if (unknownDeployment) state.push(makeDeployment(
     { deployment: unknownDeployment, container: unknownDeployment },
     `ghcr.io/sabbour/unknown@${digest(1)}`));
@@ -93,21 +139,48 @@ function makeFixture({
     if (command !== 'kubectl') throw new Error(`unexpected command ${command}`);
     const action = args.includes('get') ? 'get' : args.includes('patch') ? 'patch'
       : args.includes('rollout') ? 'rollout' : undefined;
+    if (args.includes('auth') && args.includes('can-i')) return { status: 0, stdout: 'yes\n', stderr: '' };
     if (action === 'get' && args.includes('lease')) {
       return maintenanceLock
         ? { status: 0, stdout: JSON.stringify({ spec: { holderIdentity: 'active-maintenance-run' } }), stderr: '' }
         : { status: 1, stdout: '', stderr: 'Error from server (NotFound): leases not found' };
     }
     if (action === 'get' && args.includes('configmap')) {
-      return { status: 0, stdout: JSON.stringify({
-        kind: 'ConfigMap',
-        metadata: { name: 'gateway-runtime-config', namespace: 'agentweaver' },
-        data: {
-          Gateway__WebOrigin: 'https://portal.example.test',
-          Identity__Issuer: 'https://agentweaver.example.test/',
-          Identity__Audience: 'https://agentweaver.example.test/',
-        },
-      }), stderr: '' };
+      const name = args[args.indexOf('configmap') + 1];
+      const resource = liveMaps.get(name);
+      if (args.includes('--ignore-not-found') && args.includes('--output=name')) {
+        return { status: 0, stdout: resource ? `configmap/${name}\n` : '', stderr: '' };
+      }
+      return resource
+        ? { status: 0, stdout: JSON.stringify(resource), stderr: '' }
+        : { status: 1, stdout: '', stderr: `NotFound: configmap/${name}` };
+    }
+    if (action === 'get' && args.includes('deployment')) {
+      const name = args[args.indexOf('deployment') + 1];
+      const deployment = state.find(item => item.metadata.name === name);
+      return deployment
+        ? { status: 0, stdout: JSON.stringify(deployment), stderr: '' }
+        : { status: 1, stdout: '', stderr: `NotFound: deployment/${name}` };
+    }
+    if (action === 'get' && args.includes('pods')) {
+      const items = state.filter(deployment => deployment.spec.replicas > 0).map(deployment => {
+        const service = WHOLE_RELEASE_SERVICES.find(item => item.deployment === deployment.metadata.name);
+        const references = service.deployment === 'projects-config';
+        return {
+          apiVersion: 'v1', kind: 'Pod',
+          metadata: {
+            name: `${service.deployment}-pod`, namespace: 'agentweaver',
+            labels: { 'app.kubernetes.io/name': service.deployment },
+          },
+          spec: {
+            ...(references ? { volumes: [{
+              name: 'runtime', configMap: { name: 'projects-config-runtime-config' },
+            }] } : {}),
+            containers: [{ name: service.container, image: deployment.spec.template.spec.containers[0].image }],
+          },
+        };
+      });
+      return { status: 0, stdout: JSON.stringify({ kind: 'List', items }), stderr: '' };
     }
     if (action === 'get' && args.includes('deployments')) {
       return { status: 0, stdout: JSON.stringify({ kind: 'List', items: state }), stderr: '' };
@@ -117,14 +190,40 @@ function makeFixture({
       if (name === failDeployment) return { status: 1, stdout: '', stderr: 'controlled patch failure' };
       const deployment = state.find(item => item.metadata.name === name);
       const patch = JSON.parse(args[args.indexOf('--patch') + 1]);
-      deployment.spec.template.spec.containers[0].image = patch[2].value;
-      deployment.metadata.resourceVersion = `${name}-rv2`;
-      deployment.metadata.generation = 2;
-      deployment.metadata.annotations['deployment.kubernetes.io/revision'] = '2';
-      deployment.status.observedGeneration = 2;
+      for (const operation of patch) {
+        if (operation.op !== 'replace') continue;
+        if (operation.path === '/spec/replicas') deployment.spec.replicas = operation.value;
+        else if (operation.path.endsWith('/image')) {
+          const index = Number(/containers\/(\d+)\/image/.exec(operation.path)?.[1]);
+          deployment.spec.template.spec.containers[index].image = operation.value;
+          deployment.metadata.generation += 1;
+          deployment.metadata.annotations['deployment.kubernetes.io/revision'] = '2';
+          deployment.status.observedGeneration = 2;
+        }
+      }
+      deployment.metadata.resourceVersion = `${name}-rv${Number(deployment.metadata.resourceVersion.split('-rv')[1] ?? 1) + 1}`;
+      deployment.status.updatedReplicas = deployment.spec.replicas;
+      deployment.status.readyReplicas = deployment.spec.replicas;
+      deployment.status.availableReplicas = deployment.spec.replicas;
       return { status: 0, stdout: 'patched', stderr: '' };
     }
     if (action === 'rollout') return { status: 0, stdout: 'ready', stderr: '' };
+    if (args.includes('delete') && args.includes('configmap')) {
+      const name = args[args.indexOf('configmap') + 1];
+      liveMaps.delete(name);
+      return { status: 0, stdout: `configmap/${name} deleted`, stderr: '' };
+    }
+    if (args.includes('create') && args.includes('--filename')) {
+      const resource = JSON.parse(settings.input);
+      liveMaps.set(resource.metadata.name, {
+        ...resource,
+        metadata: {
+          ...resource.metadata, uid: `uid-${resource.metadata.name}`,
+          resourceVersion: `new-${resource.metadata.name}`,
+        },
+      });
+      return { status: 0, stdout: `configmap/${resource.metadata.name} created`, stderr: '' };
+    }
     if (action === 'get' && args.includes('replicasets,pods')) {
       const items = state.flatMap(deployment => {
         const service = WHOLE_RELEASE_SERVICES.find(item => item.deployment === deployment.metadata.name);
@@ -178,15 +277,29 @@ function makeFixture({
     throw new Error(`unexpected kubectl ${args.join(' ')}`);
   };
   return {
-    publication, manifest, images, state, calls, written,
+    publication, manifest, images, state, calls, written, sourceMaps, liveMaps,
     options: {
       publicationPath: 'publication.json', subscriptionId: 'sub', resourceGroup: 'rg',
       clusterName: 'cluster', receiptDir: 'receipts', readinessTimeoutSeconds: 60,
+      projectsConfigMigrationReceiptPath: 'migration.json',
       gatewayUrl: 'https://gateway.example/', tenantId: 'tenant', issuer: 'issuer',
       audience: 'audience', actorId: 'actor', projectId: 'project', gatewayTokenEnv: 'TEST_TOKEN',
     },
     overrides: {
-      root: process.cwd(), exec, readFile: () => JSON.stringify(publication),
+      root: process.cwd(),
+      exec,
+      readFile: file => {
+        if (!file.endsWith('migration.json')) return JSON.stringify(publication);
+        const projectImage = publication.published.find(image => image.id === 'Agentweaver.Projects.Config').image;
+        return JSON.stringify({
+          schemaVersion: 1, mode: 'execute', result: 'succeeded', runId: 'abcdef123456',
+          sourceSha: headSha, publicationSourceSha: sourceSha,
+          image: projectImage, imageSourceSha: sourceSha,
+          target: {
+            subscriptionId: 'sub', resourceGroup: 'rg', clusterName: 'cluster', namespace: 'agentweaver',
+          },
+        });
+      },
       verifyImage: async image => images.get(image),
       withKubeconfig: (target, action) => action(['--kubeconfig', 'offline']),
       schemaCheck: async () => [{ deployment: 'orchestrator', accepted: { minSchema: 1, maxSchema: 2 } }],
@@ -197,6 +310,7 @@ function makeFixture({
       ],
       writeReceipt: (file, receipt) => written.push({ file, receipt: structuredClone(receipt) }),
       now: () => new Date('2026-10-22T10:00:00.000Z'), newRunId: () => 'whole-test', log: () => {},
+      readRuntimeConfigMaps: () => sourceMaps,
       nowMs: () => clock.now, sleep: async milliseconds => { clock.now += milliseconds; },
       podDrainTimeoutMs: 4, podDrainPollIntervalMs: 2,
     },
@@ -258,7 +372,72 @@ test('dry run compares every service and performs no cluster write', async () =>
   assert.equal(receipt.result, 'planned');
   assert.equal(receipt.status, 'partial');
   assert.equal(receipt.comparison.length, WHOLE_RELEASE_SERVICES.length);
+  assert.equal(receipt.configMaps.status, 'planned');
+  assert.deepEqual(receipt.configMaps.replacements, []);
   assert.equal(world.calls.some(call => call.command === 'kubectl' && call.args.includes('patch')), false);
+});
+
+test('execute requires a matching successful Projects & Config migration receipt before cluster writes', async () => {
+  const world = makeFixture();
+  const options = { ...world.options, execute: true, projectsConfigMigrationReceiptPath: undefined };
+  await assert.rejects(runWholeRelease(options, world.overrides), /migration-receipt is required/);
+  assert.equal(world.calls.some(call => call.command === 'kubectl'), false);
+});
+
+test('whole-release replaces only approved immutable ConfigMaps after cache expiry and consumer drain', async () => {
+  const world = makeFixture({ changedRuntimeConfigMap: 'projects-config-runtime-config' });
+  const receipt = await runWholeRelease({ ...world.options, execute: true }, world.overrides);
+
+  assert.equal(receipt.result, 'succeeded');
+  assert.deepEqual(receipt.configMaps.replacements, ['projects-config-runtime-config']);
+  assert.equal(receipt.configMaps.status, 'replaced');
+  assert.equal(receipt.configMaps.cacheExpiryWaitSeconds, 70);
+  assert.equal(world.liveMaps.get('projects-config-runtime-config').data.ProjectsConfig__Knowledge__BaseAddress,
+    'https://knowledge.example.test/');
+  const permissionCheck = world.calls.findIndex(call =>
+    call.command === 'kubectl' && call.args.includes('can-i') && call.args.includes('create'));
+  const drain = world.calls.findIndex(call =>
+    call.command === 'kubectl' && call.args.includes('patch') &&
+    call.args[call.args.indexOf('deployment') + 1] === 'projects-config');
+  const deletion = world.calls.findIndex(call =>
+    call.command === 'kubectl' && call.args.includes('delete') && call.args.includes('configmap'));
+  const replacementCreate = world.calls.findIndex(call =>
+    call.command === 'kubectl' && call.args.includes('create') && call.args.includes('--filename'));
+  const restore = world.calls.findIndex((call, index) =>
+    index > replacementCreate && call.command === 'kubectl' && call.args.includes('patch') &&
+    call.args[call.args.indexOf('deployment') + 1] === 'projects-config');
+  assert.ok(permissionCheck >= 0 && permissionCheck < drain);
+  assert.ok(drain < deletion && deletion < replacementCreate && replacementCreate < restore);
+});
+
+test('whole-release refuses changed immutable ConfigMaps outside the replacement allow-list', async () => {
+  const world = makeFixture({ unapprovedRuntimeConfigMap: 'environment-cilium-config' });
+  await assert.rejects(runWholeRelease(world.options, world.overrides),
+    /Not eligible for guarded replacement: environment-cilium-config/);
+  assert.equal(world.calls.some(call => call.command === 'kubectl' && call.args.includes('patch')), false);
+  assert.equal(world.calls.some(call => call.command === 'kubectl' && call.args.includes('delete')), false);
+});
+
+test('whole-release refuses a live runtime ConfigMap that is no longer immutable', async () => {
+  const world = makeFixture({ mutableRuntimeConfigMap: 'projects-config-runtime-config' });
+  await assert.rejects(runWholeRelease(world.options, world.overrides),
+    /ConfigMap\/projects-config-runtime-config is not immutable/);
+  assert.equal(world.calls.some(call =>
+    call.command === 'kubectl' && ['patch', 'delete', 'create'].includes(call.args[0])), false);
+});
+
+test('whole-release restores drained ConfigMap consumers when an earlier rollout fails', async () => {
+  const world = makeFixture({
+    changedRuntimeConfigMap: 'projects-config-runtime-config',
+    failDeployment: 'identity-broker',
+  });
+  await assert.rejects(runWholeRelease({ ...world.options, execute: true }, world.overrides),
+    /could not patch deployment\/identity-broker/);
+  const projectsConfig = world.state.find(item => item.metadata.name === 'projects-config');
+  assert.equal(projectsConfig.spec.replicas, 1);
+  assert.equal(projectsConfig.spec.template.spec.containers[0].image,
+    world.publication.published.find(item => item.id === 'Agentweaver.Projects.Config').image);
+  assert.equal(world.written[0].receipt.result, 'failed');
 });
 
 test('a complete rollout writes deployed only after readiness, Pod, and Gateway checks pass', async () => {

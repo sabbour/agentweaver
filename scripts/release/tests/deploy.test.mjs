@@ -793,6 +793,31 @@ function renderedGatewayRuntimeConfigMap(fixtureRoot) {
   return renderedRuntimeConfigMap(fixtureRoot, 'gateway-runtime-config');
 }
 
+function liveRuntimeConfigMap(resource) {
+  return {
+    ...structuredClone(resource),
+    metadata: {
+      ...resource.metadata,
+      uid: resource.metadata.uid ?? `uid-${resource.metadata.name}`,
+      resourceVersion: resource.metadata.resourceVersion ?? '1',
+    },
+  };
+}
+
+function runConfigMapMutation(file, args, options, currentByName) {
+  if (file !== 'kubectl') return undefined;
+  if (args[0] === 'delete' && args[1] === 'configmap') {
+    currentByName.delete(args[2]);
+    return { operation: 'delete', result: '' };
+  }
+  if (args[0] === 'create' && args[1] === '--filename') {
+    const resource = JSON.parse(options.input);
+    currentByName.set(resource.metadata.name, liveRuntimeConfigMap(resource));
+    return { operation: 'create', result: '' };
+  }
+  return undefined;
+}
+
 test('P0 target and every required deployment target input are explicit and exact', () => {
   assert.deepEqual(validateTarget(target), target);
   assert.throws(() => validateTarget({ ...target, subscriptionId: '0'.repeat(36) }), /exact approved v1 P0/);
@@ -1022,7 +1047,7 @@ test('pre-acceptance dry-run reports a changed owned immutable runtime ConfigMap
   const fixture = bootstrapFixture();
   const dependencies = bootstrapDependencies(fixture);
   const desired = renderedAgentHostRuntimeConfigMap(dependencies.root);
-  const existing = structuredClone(desired);
+  const existing = liveRuntimeConfigMap(desired);
   const settings = JSON.parse(existing.data['appsettings.json']);
   settings.AgentHost.Image.Digest = `sha256:${'0'.repeat(64)}`;
   existing.data['appsettings.json'] = JSON.stringify(settings, null, 2);
@@ -1060,6 +1085,7 @@ test('pre-acceptance dry-run reports a changed owned immutable runtime ConfigMap
   assert.equal(reads[1].options.preserveProjectedJson, true);
   assert.deepEqual(Object.keys(reads[1].options.projectJson(existing)).sort(), [
     'binaryDataDigest', 'dataDigest', 'immutable', 'kind', 'name', 'namespace',
+    'resourceVersion', 'uid',
   ]);
   assert.equal(dependencies.commands.length, 2);
   assert.ok(dependencies.commands.every(({ args }) =>
@@ -1070,7 +1096,7 @@ test('pre-acceptance dry-run reports the changed Gateway runtime ConfigMap', asy
   const fixture = bootstrapFixture();
   const dependencies = bootstrapDependencies(fixture);
   const desired = renderedGatewayRuntimeConfigMap(dependencies.root);
-  const existing = structuredClone(desired);
+  const existing = liveRuntimeConfigMap(desired);
   delete existing.data['Gateway__Owners__Environment'];
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
@@ -1095,7 +1121,7 @@ test('pre-acceptance dry-run detects changed Projects.Config data without exposi
   const dependencies = bootstrapDependencies(fixture);
   const agentHost = renderedAgentHostRuntimeConfigMap(dependencies.root);
   const desired = renderedProjectsConfigRuntimeConfigMap(dependencies.root);
-  const existing = structuredClone(desired);
+  const existing = liveRuntimeConfigMap(desired);
   existing.data.ProjectsConfig__PrivilegedSetup__ApprovedSubject = 'changed-subject';
   const currentByName = new Map([
     ['agenthost-runtime-v1', agentHost],
@@ -1125,6 +1151,7 @@ test('pre-acceptance dry-run detects changed Projects.Config data without exposi
   ]);
   assert.deepEqual(Object.keys(reads[3].options.projectJson(reads[3].current)).sort(), [
     'binaryDataDigest', 'dataDigest', 'immutable', 'kind', 'name', 'namespace',
+    'resourceVersion', 'uid',
   ]);
   assert.equal(
     JSON.stringify(result).includes(desired.data.ProjectsConfig__PrivilegedSetup__ApprovedIssuer),
@@ -1185,19 +1212,25 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
   const fixture = bootstrapFixture();
   const dependencies = bootstrapDependencies(fixture);
   const desired = renderedAgentHostRuntimeConfigMap(dependencies.root);
-  const existing = structuredClone(desired);
+  const existing = liveRuntimeConfigMap(desired);
   const settings = JSON.parse(existing.data['appsettings.json']);
   settings.AgentHost.Image.Digest = `sha256:${'0'.repeat(64)}`;
   existing.data['appsettings.json'] = JSON.stringify(settings, null, 2);
   const calls = [];
+  const currentByName = new Map([['agenthost-runtime-v1', existing]]);
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
+    const mutation = runConfigMapMutation(file, args, options, currentByName);
+    if (mutation) {
+      calls.push({ operation: mutation.operation, args, input: options.input });
+      return mutation.result;
+    }
     if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       if (args[2] !== 'agenthost-runtime-v1') return originalRun(file, args, options);
       calls.push({ operation: args.includes('--output=name') ? 'get-name' : 'get-data', args });
       return args.includes('--output=name')
         ? 'configmap/agenthost-runtime-v1'
-        : JSON.stringify(options.projectJson(existing));
+        : JSON.stringify(options.projectJson(currentByName.get('agenthost-runtime-v1')));
     }
     if (file === 'kubectl' && args[0] === 'wait') {
       calls.push({ operation: 'crds-ready', args });
@@ -1236,10 +1269,6 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
       calls.push({ operation: `can-i-${args[2]}`, args });
       return 'yes';
     }
-    if (file === 'kubectl' && args[0] === 'replace') {
-      calls.push({ operation: 'replace', args, input: options.input });
-      return '';
-    }
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
         !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) {
       calls.push({ operation: 'apply' });
@@ -1266,7 +1295,8 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
     'can-i-get', 'can-i-create', 'can-i-patch',
     'can-i-get', 'can-i-create', 'can-i-patch',
     'agent-sandbox-server-preflight', 'server-preflight', 'agent-sandbox-apply',
-    'crds-ready', 'controller-ready', 'controller-image', 'replace', 'apply',
+    'crds-ready', 'controller-ready', 'controller-image',
+    'delete', 'create', 'get-data', 'apply',
   ]);
   const sandboxPermissionChecks = calls.filter(({ operation }) =>
     operation.startsWith('can-i-')).slice(2);
@@ -1302,12 +1332,12 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
     'rollout', 'status', 'deployment/agent-sandbox-controller',
     '--namespace', 'agent-sandbox-system', '--timeout=5m',
   ]);
-  const replacement = calls.find(({ operation }) => operation === 'replace');
-  assert.deepEqual(replacement.args, [
-    'replace', '--force', '--filename', '-', '--namespace', target.namespace,
-  ]);
-  assert.deepEqual(JSON.parse(replacement.input), desired);
-  assert.equal(calls.filter(({ operation }) => operation === 'replace').length, 1);
+  const replacement = calls.filter(({ operation }) => ['delete', 'create'].includes(operation));
+  assert.deepEqual(replacement.map(({ operation }) => operation), ['delete', 'create']);
+  assert.deepEqual(replacement[0].args.slice(0, 3), ['delete', 'configmap', 'agenthost-runtime-v1']);
+  assert.match(replacement[0].args.find(arg => arg.startsWith('--preconditions=')),
+    /^--preconditions=uid=uid-agenthost-runtime-v1,resourceVersion=1$/);
+  assert.deepEqual(JSON.parse(replacement[1].input), desired);
 });
 
 test('pre-acceptance execute replaces only changed Projects.Config runtime data after preflight', async () => {
@@ -1315,7 +1345,7 @@ test('pre-acceptance execute replaces only changed Projects.Config runtime data 
   const dependencies = bootstrapDependencies(fixture);
   const desiredAgentHost = renderedAgentHostRuntimeConfigMap(dependencies.root);
   const desired = renderedProjectsConfigRuntimeConfigMap(dependencies.root);
-  const existing = structuredClone(desired);
+  const existing = liveRuntimeConfigMap(desired);
   existing.data.ProjectsConfig__PrivilegedSetup__ApprovedSubject = 'changed-subject';
   const currentByName = new Map([
     ['agenthost-runtime-v1', desiredAgentHost],
@@ -1324,6 +1354,11 @@ test('pre-acceptance execute replaces only changed Projects.Config runtime data 
   const calls = [];
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
+    const mutation = runConfigMapMutation(file, args, options, currentByName);
+    if (mutation) {
+      calls.push({ operation: mutation.operation, name: args[2], args, input: options.input });
+      return mutation.result;
+    }
     if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       const name = args[2];
       const current = currentByName.get(name);
@@ -1335,9 +1370,6 @@ test('pre-acceptance execute replaces only changed Projects.Config runtime data 
     }
     if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') {
       calls.push({ operation: `can-i-${args[2]}`, args });
-    } else if (file === 'kubectl' && args[0] === 'replace') {
-      calls.push({ operation: 'replace', args, input: options.input });
-      return '';
     } else if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
         !args.some((arg) => arg.startsWith('--dry-run='))) {
       calls.push({ operation: 'apply', args });
@@ -1382,7 +1414,7 @@ test('pre-acceptance execute replaces only changed Projects.Config runtime data 
     ['delete', 'configmaps/projects-config-runtime-config'],
   ]);
   const firstWrite = calls.findIndex(({ operation }) =>
-    ['agent-sandbox-apply', 'replace', 'apply'].includes(operation));
+    ['agent-sandbox-apply', 'delete', 'create', 'apply'].includes(operation));
   assert.ok(permissionChecks.slice(0, 2).every(({ args }) =>
     calls.findIndex(({ operation, args: checked }) =>
       operation === `can-i-${args[2]}` && checked === args) < firstWrite));
@@ -1398,13 +1430,13 @@ test('pre-acceptance execute replaces only changed Projects.Config runtime data 
     assert.equal(preflightResources.items.some((resource) =>
       resource.kind === 'ConfigMap' && resource.metadata.name === name), name !== 'projects-config-runtime-config');
   }
-  const replacements = calls.filter(({ operation }) => operation === 'replace');
-  assert.equal(replacements.length, 1);
-  assert.deepEqual(replacements[0].args, [
-    'replace', '--force', '--filename', '-', '--namespace', target.namespace,
+  const replacements = calls.filter(({ operation }) => ['delete', 'create'].includes(operation));
+  assert.deepEqual(replacements.map(({ operation }) => operation), ['delete', 'create']);
+  assert.deepEqual(replacements[0].args.slice(0, 3), [
+    'delete', 'configmap', 'projects-config-runtime-config',
   ]);
-  assert.deepEqual(JSON.parse(replacements[0].input), desired);
-  assert.ok(calls.findIndex(({ operation }) => operation === 'replace') <
+  assert.deepEqual(JSON.parse(replacements[1].input), desired);
+  assert.ok(calls.findIndex(({ operation }) => operation === 'create') <
     calls.findIndex(({ operation }) => operation === 'apply'));
   assert.deepEqual(calls.filter(({ operation }) => operation === 'restart').map(({ args }) => args), [
     ['rollout', 'restart', 'deployment/projects-config', '--namespace', target.namespace],
@@ -1415,12 +1447,17 @@ test('pre-acceptance execute replaces the changed Gateway ConfigMap and restarts
   const fixture = bootstrapFixture();
   const dependencies = bootstrapDependencies(fixture);
   const desired = renderedGatewayRuntimeConfigMap(dependencies.root);
-  const existing = structuredClone(desired);
+  const existing = liveRuntimeConfigMap(desired);
   delete existing.data['Gateway__Owners__Environment'];
   const currentByName = new Map([['gateway-runtime-config', existing]]);
   const calls = [];
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
+    const mutation = runConfigMapMutation(file, args, options, currentByName);
+    if (mutation) {
+      calls.push({ operation: mutation.operation, args, input: options.input });
+      return mutation.result;
+    }
     if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       const name = args[2];
       const current = currentByName.get(name);
@@ -1445,10 +1482,6 @@ test('pre-acceptance execute replaces the changed Gateway ConfigMap and restarts
         args,
         input: options.input,
       });
-      return '';
-    }
-    if (file === 'kubectl' && args[0] === 'replace') {
-      calls.push({ operation: 'replace', args, input: options.input });
       return '';
     }
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
@@ -1486,26 +1519,26 @@ test('pre-acceptance execute replaces the changed Gateway ConfigMap and restarts
   const preflightResources = parseKustomizeResources(productPreflight.input);
   assert.equal(preflightResources.items.some((resource) =>
     resource.kind === 'ConfigMap' && resource.metadata.name === 'gateway-runtime-config'), false);
-  const replacement = calls.find(({ operation }) => operation === 'replace');
-  assert.deepEqual(replacement.args, [
-    'replace', '--force', '--filename', '-', '--namespace', target.namespace,
-  ]);
-  assert.deepEqual(JSON.parse(replacement.input), desired);
+  const replacement = calls.filter(({ operation }) => ['delete', 'create'].includes(operation));
+  assert.deepEqual(replacement.map(({ operation }) => operation), ['delete', 'create']);
+  assert.deepEqual(replacement[0].args.slice(0, 3), ['delete', 'configmap', 'gateway-runtime-config']);
+  assert.deepEqual(JSON.parse(replacement[1].input), desired);
   const applyIndex = calls.findIndex(({ operation }) => operation === 'apply');
   const restartIndex = calls.findIndex(({ operation }) => operation === 'restart');
-  assert.ok(calls.findIndex(({ operation }) => operation === 'replace') < applyIndex);
+  assert.ok(calls.findIndex(({ operation }) => operation === 'create') < applyIndex);
   assert.ok(applyIndex < restartIndex);
   assert.deepEqual(calls[restartIndex].args, [
     'rollout', 'restart', 'deployment/gateway', '--namespace', target.namespace,
   ]);
-  assert.equal(calls.filter(({ operation }) => operation === 'replace').length, 1);
+  assert.equal(calls.filter(({ operation }) => operation === 'delete').length, 1);
+  assert.equal(calls.filter(({ operation }) => operation === 'create').length, 1);
 });
 
 test('pre-acceptance resume retries a failed Gateway restart after replacement removed the drift', async () => {
   const fixture = bootstrapFixture();
   const dependencies = bootstrapDependencies(fixture);
   const desired = renderedGatewayRuntimeConfigMap(dependencies.root);
-  const existing = structuredClone(desired);
+  const existing = liveRuntimeConfigMap(desired);
   delete existing.data['Gateway__Owners__Environment'];
   const currentByName = new Map([['gateway-runtime-config', existing]]);
   const calls = [];
@@ -1513,6 +1546,12 @@ test('pre-acceptance resume retries a failed Gateway restart after replacement r
   const originalRun = dependencies.run;
   let restartAttempts = 0;
   dependencies.run = (file, args, options = {}) => {
+    const mutation = runConfigMapMutation(file, args, options, currentByName);
+    if (mutation) {
+      events.push(mutation.operation);
+      calls.push({ operation: mutation.operation, args, input: options.input });
+      return mutation.result;
+    }
     if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       const name = args[2];
       const current = currentByName.get(name);
@@ -1523,12 +1562,6 @@ test('pre-acceptance resume retries a failed Gateway restart after replacement r
     }
     if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') return 'yes';
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) return '';
-    if (file === 'kubectl' && args[0] === 'replace') {
-      events.push('replace');
-      calls.push({ operation: 'replace' });
-      currentByName.set('gateway-runtime-config', JSON.parse(options.input));
-      return '';
-    }
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
         !args.some((arg) => arg.startsWith('--dry-run='))) {
       calls.push({ operation: 'apply' });
@@ -1563,8 +1596,11 @@ test('pre-acceptance resume retries a failed Gateway restart after replacement r
   const interrupted = JSON.parse(checkpoint);
   assert.equal(interrupted.preAcceptanceApplyPending, true);
   assert.deepEqual(interrupted.pendingRuntimeConfigMapRollouts, ['gateway']);
-  assert.ok(events.indexOf('checkpoint') < events.indexOf('replace'));
-  assert.deepEqual(currentByName.get('gateway-runtime-config'), desired);
+  assert.ok(events.indexOf('checkpoint') < events.indexOf('delete'));
+  assert.deepEqual({
+    ...currentByName.get('gateway-runtime-config'),
+    metadata: desired.metadata,
+  }, desired);
 
   calls.length = 0;
   const resumed = await deployRelease({
@@ -1608,7 +1644,7 @@ test('pre-acceptance dry-run blocks changed immutable ConfigMaps outside the rep
 
     await assert.rejects(
       deployRelease({ argv: bootstrapArgsFor() }, dependencies),
-      new RegExp(`changed immutable ConfigMaps: .*${name}.*Not eligible for guarded pre-acceptance replacement: .*${name}.*reviewed maintenance procedure`),
+      new RegExp(`changed immutable ConfigMaps: .*${name}.*Not eligible for guarded replacement: .*${name}.*reviewed maintenance procedure`),
     );
     assert.deepEqual(writes, [], `${name} must not be replaced or applied on a dry-run`);
   }
@@ -1768,24 +1804,24 @@ test('pre-acceptance resume reapplies a completed bundle when the owned immutabl
   const fixture = bootstrapFixture();
   const dependencies = bootstrapDependencies(fixture);
   const desired = renderedAgentHostRuntimeConfigMap(dependencies.root);
-  let existing = structuredClone(desired);
+  const currentByName = new Map([['agenthost-runtime-v1', liveRuntimeConfigMap(desired)]]);
   const calls = [];
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
+    const mutation = runConfigMapMutation(file, args, options, currentByName);
+    if (mutation) {
+      calls.push(mutation.operation);
+      return mutation.result;
+    }
     if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       if (args[2] !== 'agenthost-runtime-v1') return originalRun(file, args, options);
       return args.includes('--output=name')
         ? 'configmap/agenthost-runtime-v1'
-        : JSON.stringify(options.projectJson(existing));
+        : JSON.stringify(options.projectJson(currentByName.get('agenthost-runtime-v1')));
     }
     if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') return 'yes';
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) {
       calls.push('server-preflight');
-      return '';
-    }
-    if (file === 'kubectl' && args[0] === 'replace') {
-      calls.push('replace');
-      existing = JSON.parse(options.input);
       return '';
     }
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
@@ -1807,6 +1843,7 @@ test('pre-acceptance resume reapplies a completed bundle when the owned immutabl
 
   await deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies);
   assert.equal(JSON.parse(checkpoint).stages.apply.completed, true);
+  const existing = currentByName.get('agenthost-runtime-v1');
   const settings = JSON.parse(existing.data['appsettings.json']);
   settings.AgentHost.Image.Digest = `sha256:${'0'.repeat(64)}`;
   existing.data['appsettings.json'] = JSON.stringify(settings, null, 2);
@@ -1814,8 +1851,11 @@ test('pre-acceptance resume reapplies a completed bundle when the owned immutabl
 
   await deployRelease({ argv: [...bootstrapArgsFor(), '--execute', '--resume'] }, dependencies);
 
-  assert.deepEqual(calls, ['server-preflight', 'server-preflight', 'replace', 'apply']);
-  assert.deepEqual(existing, desired);
+  assert.deepEqual(calls, ['server-preflight', 'server-preflight', 'delete', 'create', 'apply']);
+  assert.deepEqual({
+    ...currentByName.get('agenthost-runtime-v1'),
+    metadata: desired.metadata,
+  }, desired);
 });
 
 test('release execute stops with access guidance when server-side manifest preflight is denied', async () => {

@@ -1,0 +1,75 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: projects-config-migration
+  namespace: agentweaver
+  labels:
+    agentweaver.io/service: projects-config
+    agentweaver.io/migration: projects-config
+spec:
+  activeDeadlineSeconds: 900
+  backoffLimit: 0
+  completions: 1
+  parallelism: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: projects-config
+        agentweaver.io/service: projects-config
+        agentweaver.io/workload: projects-config
+        agentweaver.io/migration: projects-config
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migration
+          image: ghcr.io/sabbour/agentweaver.projects.config@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          command:
+            - dotnet
+            - Agentweaver.Projects.Config.dll
+            - --migrate
+          env:
+            - name: ConnectionStrings__ProjectsConfigMigration
+              valueFrom:
+                secretKeyRef:
+                  name: projects-config-migration-credentials
+                  key: migration-connection
+            - name: ProjectsConfig__Migration__AccessToken
+              valueFrom:
+                secretKeyRef:
+                  name: projects-config-migration-credentials
+                  key: access-token
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
