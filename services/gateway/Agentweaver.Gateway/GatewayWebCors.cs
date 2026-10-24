@@ -39,6 +39,8 @@ public static class GatewayWebCors
                 if (route.ForwardTenantSelector) headers.Add("X-Agentweaver-Tenant");
                 if (route.OperationId is "formulateCastingProposal" or "analyzeCastingProposal")
                     headers.Add("X-Agentweaver-Project-Authorization");
+                if (!route.ForwardRequestHeaders.IsDefaultOrEmpty)
+                    headers.AddRange(route.ForwardRequestHeaders);
                 if (RequiresIdempotencyKey(route.OperationId)) headers.Add("Idempotency-Key");
 
                 cors.AddPolicy(PolicyName(route), policy =>

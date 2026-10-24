@@ -76,8 +76,126 @@ internal static partial class SourceControlEndpoints
         // the adapter enforces a stricter 4 MiB aggregate file-content bound.
         teamSync.MapPost("/commit", CommitProjectTeamSyncAsync)
             .WithMetadata(new RequestSizeLimitAttribute(6 * 1024 * 1024));
+
+        var projectTeamSync = app.MapGroup("/api/projects/{projectId}/team/sync").RequireAuthorization();
+        projectTeamSync.MapGet("", ReadProjectTeamSyncStatusAsync);
+        projectTeamSync.MapPost("", CommitProjectTeamSyncPreviewAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(4096));
         return app;
     }
+
+    private static Task<IResult> ReadProjectTeamSyncStatusAsync(
+        string projectId,
+        HttpContext context,
+        [FromServices] ProjectsRunSelectionClient projects,
+        [FromServices] IProjectTeamSyncTokenClient tokens,
+        [FromServices] ISourceControlTeamSyncAdapter teamSyncAdapter,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (context.Request.Query.Count != 0 ||
+                context.Request.ContentLength is > 0 ||
+                context.Request.ContentType is not null ||
+                context.Request.Headers.ContainsKey("Transfer-Encoding"))
+                throw new CoordinationException("team_sync_request_invalid", StatusCodes.Status400BadRequest);
+            var selectionCode = ReadProjectTeamSyncSelectionCode(context);
+            ValidateProjectTeamSyncSelectionCode(selectionCode);
+            var (proof, branch, credential, installationId, repositoryId) = await MintProjectTeamSyncCredentialAsync(
+                context, projectId, selectionCode!, false, projects, tokens, timeProvider, cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                var authority = await projects.ReadBacklogProjectAuthorityAsync(
+                    context, projectId, false, cancellationToken).ConfigureAwait(false);
+                var projection = await projects.ReadTeamSyncProjectProjectionAsync(
+                    context, projectId, authority, proof, null, cancellationToken).ConfigureAwait(false);
+                var snapshot = await teamSyncAdapter.ReadTeamSyncTreeAsync(
+                    proof.Repository, branch, credential, cancellationToken).ConfigureAwait(false);
+                await RevalidateProjectTeamSyncAuthorityAsync(
+                    context, projectId, proof, false, projects, cancellationToken).ConfigureAwait(false);
+                var plan = ProjectTeamSyncPlanner.CreatePlan(
+                    projection, snapshot, new ProjectTeamSyncRepositoryBinding(installationId, repositoryId));
+                return Results.Json(new ProjectTeamSyncStatusResponse(
+                    projection.ConfigurationRevision,
+                    plan.ChangeSetHash,
+                    plan.NothingToSync,
+                    plan.ChangeSummaries));
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }, cancellationToken);
+
+    private static Task<IResult> CommitProjectTeamSyncPreviewAsync(
+        string projectId,
+        ProjectTeamSyncCommitCommand request,
+        HttpContext context,
+        [FromServices] ProjectsRunSelectionClient projects,
+        [FromServices] IProjectTeamSyncTokenClient tokens,
+        [FromServices] ISourceControlTeamSyncAdapter teamSyncAdapter,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (request is null ||
+                request.ExpectedConfigurationRevision < 1 ||
+                !IsTeamSyncDigest(request.ExpectedChangeSetHash) ||
+                request.Message is { Length: > 200 } ||
+                request.Message?.Any(char.IsControl) == true)
+                throw new CoordinationException("team_sync_request_invalid", StatusCodes.Status400BadRequest);
+            var selectionCode = ReadProjectTeamSyncSelectionCode(context);
+            ValidateProjectTeamSyncSelectionCode(selectionCode);
+            var (proof, branch, credential, installationId, repositoryId) = await MintProjectTeamSyncCredentialAsync(
+                context, projectId, selectionCode!, true, projects, tokens, timeProvider, cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                var authority = await projects.ReadBacklogProjectAuthorityAsync(
+                    context, projectId, true, cancellationToken).ConfigureAwait(false);
+                var projection = await projects.ReadTeamSyncProjectProjectionAsync(
+                    context, projectId, authority, proof,
+                    request.ExpectedConfigurationRevision, cancellationToken).ConfigureAwait(false);
+                var snapshot = await teamSyncAdapter.ReadTeamSyncTreeAsync(
+                    proof.Repository, branch, credential, cancellationToken).ConfigureAwait(false);
+                var plan = ProjectTeamSyncPlanner.CreatePlan(
+                    projection, snapshot, new ProjectTeamSyncRepositoryBinding(installationId, repositoryId));
+                if (plan.NothingToSync)
+                    throw new CoordinationException(
+                        "team_sync_nothing_to_commit", StatusCodes.Status400BadRequest);
+                if (!string.Equals(plan.ChangeSetHash, request.ExpectedChangeSetHash, StringComparison.Ordinal))
+                    throw new CoordinationException(
+                        "team_sync_change_set_changed", StatusCodes.Status409Conflict);
+
+                var message = string.IsNullOrWhiteSpace(request.Message)
+                    ? "sync: update .squad/ team definitions"
+                    : request.Message.Trim();
+                var commit = await teamSyncAdapter.CommitTeamSyncChangesAsync(
+                    proof.Repository,
+                    credential,
+                    new SourceControlTeamSyncCommitRequest(
+                        branch, snapshot.CommitSha, message, plan.Changes),
+                    async ct =>
+                    {
+                        // Recheck both the project/repository proof and roster revision before the branch update.
+                        await RevalidateProjectTeamSyncAuthorityAsync(
+                            context, projectId, proof, true, projects, ct).ConfigureAwait(false);
+                        _ = await projects.ReadTeamSyncProjectProjectionAsync(
+                            context, projectId, authority, proof,
+                            request.ExpectedConfigurationRevision, ct).ConfigureAwait(false);
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Json(new ProjectTeamSyncCommitResponse(
+                    commit.CommitSha, commit.Branch, commit.HtmlUrl));
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }, cancellationToken);
 
     private static Task<IResult> ReadProjectTeamSyncTreeAsync(
         string projectId,
@@ -95,7 +213,7 @@ internal static partial class SourceControlEndpoints
             if (request is null)
                 throw new CoordinationException("team_sync_request_invalid", StatusCodes.Status400BadRequest);
             ValidateProjectTeamSyncSelectionCode(request.SelectionCode);
-            var (proof, reference, credential) = await MintProjectTeamSyncCredentialAsync(
+            var (proof, reference, credential, _, _) = await MintProjectTeamSyncCredentialAsync(
                 context, projectId, request.SelectionCode, false,
                 projects, tokens, timeProvider, cancellationToken).ConfigureAwait(false);
             try
@@ -129,7 +247,7 @@ internal static partial class SourceControlEndpoints
             if (request is null)
                 throw new CoordinationException("team_sync_request_invalid", StatusCodes.Status400BadRequest);
             ValidateProjectTeamSyncSelectionCode(request.SelectionCode);
-            var (proof, branch, credential) = await MintProjectTeamSyncCredentialAsync(
+            var (proof, branch, credential, _, _) = await MintProjectTeamSyncCredentialAsync(
                 context, projectId, request.SelectionCode, true,
                 projects, tokens, timeProvider, cancellationToken).ConfigureAwait(false);
             try
@@ -150,7 +268,12 @@ internal static partial class SourceControlEndpoints
             }
         }, cancellationToken);
 
-    private static async Task<(IssueSyncProjectProof Proof, string Branch, SecretCredential Credential)>
+    private static async Task<(
+        IssueSyncProjectProof Proof,
+        string Branch,
+        SecretCredential Credential,
+        long InstallationId,
+        long RepositoryId)>
         MintProjectTeamSyncCredentialAsync(
             HttpContext context,
             string projectId,
@@ -183,6 +306,8 @@ internal static partial class SourceControlEndpoints
                 token.ExpiresAt.Offset != TimeSpan.Zero ||
                 token.ExpiresAt <= timeProvider.GetUtcNow() ||
                 token.ConnectionId != proof.ConnectionId ||
+                token.InstallationId <= 0 ||
+                token.RepositoryId <= 0 ||
                 !string.Equals(token.RepositoryFullName, proof.Repository.FullName,
                     StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrWhiteSpace(token.DefaultBranch) ||
@@ -195,7 +320,7 @@ internal static partial class SourceControlEndpoints
             await RevalidateProjectTeamSyncAuthorityAsync(
                 context, projectId, proof, writeRequested, projects, cancellationToken).ConfigureAwait(false);
 
-            var result = (proof, token.DefaultBranch, credential);
+            var result = (proof, token.DefaultBranch, credential, token.InstallationId, token.RepositoryId);
             credential = null;
             return result;
         }
@@ -221,6 +346,12 @@ internal static partial class SourceControlEndpoints
         if (currentProof != expectedProof)
             throw new CoordinationException(
                 "team_sync_project_authority_changed", StatusCodes.Status409Conflict);
+    }
+
+    private static string? ReadProjectTeamSyncSelectionCode(HttpContext context)
+    {
+        var values = context.Request.Headers[ProjectTeamSyncContract.SelectionCodeHeader];
+        return values.Count == 1 ? values[0] : null;
     }
 
     private static void ValidateProjectTeamSyncSelectionCode(string? value)

@@ -49,7 +49,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/App.tsx` (`ProjectRunHistoryPage`) | Project-authorized session tree and activity history for one run, using the shared tree and journal views. |
 | `src/v1/NewChatComposer.tsx` | Message composer with a stable idempotency key per draft. The run Chat tab uses it. |
 | `src/v1/PlatformComponentsTable.tsx` | Table of platform components and their allowed implementations for a run. |
-| `src/v1/AgentsView.tsx`, `src/v1/AgentsTeamControls.tsx` | Agents roster, filters, the charter drawer, **Cast team**, **Add member**, pending team proposals, and team export and import. |
+| `src/v1/AgentsView.tsx`, `src/v1/AgentsTeamControls.tsx` | Agents roster, filters, the charter drawer, **Cast team**, **Add member**, pending team proposals, explicit repository sync preview and commit, and digest-checked AgentSuite export and import. |
 | `src/v1/CastTeamPage.tsx`, `src/v1/castingData.ts` | Formulate roles from a project goal, analyze read-only repository signals, or start from a template. Choose a server-supported universe, review and edit the pending proposal, then confirm or reject it. |
 | `src/v1/PlatformSettingsPage.tsx` | Read-only status of the 16 platform component areas for tenant and platform administrators. |
 | `src/v1/ProjectSettingsSections.tsx`, `src/v1/settingsSections.ts`, `src/v1/projectReadiness.ts` | Project settings rail, General, Access, Repository, Run limits, and Danger zone sections. |

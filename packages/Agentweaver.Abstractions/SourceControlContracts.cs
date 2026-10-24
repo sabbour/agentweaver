@@ -470,6 +470,50 @@ public sealed record SourceControlTeamSyncCommitRequest(
 /// <summary>Commit created on the configured repository branch.</summary>
 public sealed record SourceControlTeamSyncCommit(string CommitSha, string Branch, Uri HtmlUrl);
 
+/// <summary>Public request contract for user-triggered project team synchronization.</summary>
+public static class ProjectTeamSyncContract
+{
+    /// <summary>Header carrying the short-lived GitHub repository selection code.</summary>
+    public const string SelectionCodeHeader = "X-Agentweaver-Team-Sync-Selection";
+}
+
+/// <summary>One current project team member projected for repository team-file synchronization.</summary>
+public sealed record ProjectTeamSyncMember(
+    string AgentId,
+    string Name,
+    string Role,
+    string Charter,
+    int Order);
+
+/// <summary>Current Projects-owned team state used to preview and fence repository synchronization.</summary>
+public sealed record ProjectTeamSyncProjection(
+    string ProjectId,
+    string ProjectName,
+    string? CastingUniverse,
+    long ConfigurationRevision,
+    IssueSyncProjectProof Authority,
+    ImmutableArray<ProjectTeamSyncMember> Members);
+
+/// <summary>One changed repository team-file path in the user review preview.</summary>
+public sealed record ProjectTeamSyncChangeSummary(string Path, string Kind);
+
+/// <summary>Current user-triggered repository team-sync preview.</summary>
+public sealed record ProjectTeamSyncStatusResponse(
+    long ConfigurationRevision,
+    string ChangeSetHash,
+    bool NothingToSync,
+    ImmutableArray<ProjectTeamSyncChangeSummary> Changes);
+
+/// <summary>Revision-fenced request to commit a reviewed repository team-sync preview.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ProjectTeamSyncCommitCommand(
+    string ExpectedChangeSetHash,
+    long ExpectedConfigurationRevision,
+    string? Message);
+
+/// <summary>Repository commit created from the reviewed team-sync preview.</summary>
+public sealed record ProjectTeamSyncCommitResponse(string CommitId, string Branch, Uri HtmlUrl);
+
 /// <summary>Authenticated request to read the configured repository at a ref.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectTeamSyncReadRequest(string SelectionCode, string? Reference)

@@ -1551,35 +1551,6 @@ export interface RepoAppAuthorizationTransaction {
   status: string;
 }
 
-/** Repository metadata offered for selection from a GitHub installation. */
-export interface RepoAppRepositoryCandidate {
-  fullName: string;
-  ownerLogin: string;
-  isPrivate: boolean;
-  defaultBranch: string;
-  pushedAt: string | null;
-}
-
-/** GitHub installation account and management destination. */
-export interface RepoAppInstallationCandidate {
-  accountLogin: string;
-  accountType: string;
-  repositorySelection: string;
-  managementUrl: string;
-}
-
-/** Repositories and installations available to the user's Repo App connection. */
-export interface RepoAppRepositorySelectionList {
-  repositories: RepoAppRepositoryCandidate[];
-  installations: RepoAppInstallationCandidate[];
-}
-
-/** Expiring code that lets the browser select a repository without sending credentials. */
-export interface RepoAppRepositorySelectionCode {
-  selectionCode: string;
-  expiresAt: string;
-}
-
 /** Owner-confirmed repository pin and resource generation for a run session. */
 export interface SourceControlRepositoryPinView {
   pinId: string;
@@ -1591,6 +1562,34 @@ export interface SourceControlRepositoryPinView {
   defaultBranch: string;
   isPrivate: boolean;
   pinnedAt: string;
+}
+
+/** One reviewable path change between the project roster and its repository files. */
+export interface ProjectTeamSyncChangeSummary {
+  path: string;
+  kind: 'added' | 'modified' | 'removed';
+}
+
+/** No-store preview of the configured project team against its repository files. */
+export interface ProjectTeamSyncStatus {
+  configurationRevision: number;
+  changeSetHash: string;
+  nothingToSync: boolean;
+  changes: ProjectTeamSyncChangeSummary[];
+}
+
+/** Revision-fenced request to commit the exact preview the user reviewed. */
+export interface ProjectTeamSyncCommitCommand {
+  expectedChangeSetHash: string;
+  expectedConfigurationRevision: number;
+  message?: string;
+}
+
+/** Repository commit created by the explicit team-sync action. */
+export interface ProjectTeamSyncCommitResult {
+  commitId: string;
+  branch: string;
+  htmlUrl: string;
 }
 
 /**

@@ -72,6 +72,8 @@ internal static partial class GatewayOpenApi
             ["importProjectAgentSuite"] = C("ImportProjectAgentSuiteRequest", "ProjectAgentSuiteImportResult", "200", "201"),
             ["getProjectAgentSuiteImport"] = C(null, "ProjectAgentSuiteImport", "200"),
             ["getProjectAgentSuiteAgentPolicy"] = C(null, "ProjectAgentSuiteAgentPolicy", "200"),
+            ["readProjectTeamSync"] = C(null, "ProjectTeamSyncStatusResponse", "200"),
+            ["commitProjectTeamSync"] = C("ProjectTeamSyncCommitCommand", "ProjectTeamSyncCommitResponse", "200"),
             ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
             ["acceptRunSelection"] = C("AcceptRunSelectionRequest", "EffectiveRunSelection", "200"),
             ["getRunSelection"] = C(null, "EffectiveRunSelection", "200"),
@@ -282,6 +284,16 @@ internal static partial class GatewayOpenApi
                 description = "Unbound project-writer bearer used only for Projects & Config. Authorization remains the exact run-bound bearer used by Orchestrator.",
                 schema = new { type = "string", pattern = "^Bearer .+$" },
             }).ToArray();
+        if (!route.ForwardRequestHeaders.IsDefaultOrEmpty)
+        {
+            parameters = parameters.Concat(route.ForwardRequestHeaders.Select(name => (object)new
+            {
+                name,
+                @in = "header",
+                required = true,
+                schema = new { type = "string", minLength = 64, maxLength = 256 },
+            })).ToArray();
+        }
 
         if (route.OperationId is
             "createProjectRun" or
@@ -340,7 +352,8 @@ internal static partial class GatewayOpenApi
                             ? "Accepted by the owner; this does not mean the requested work is complete."
                             : "Owner response; returned by the owning service.",
                         (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices" or
-                        "getHostedModelReasoningCatalog" or "getProjectAgentHistory") && status == "200"
+                        "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
+                        "readProjectTeamSync" or "commitProjectTeamSync") && status == "200"
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
                                 ["Cache-Control"] = new
@@ -353,6 +366,8 @@ internal static partial class GatewayOpenApi
                                             "Project configuration choice responses are not cacheable.",
                                         "getHostedModelReasoningCatalog" =>
                                             "Hosted reasoning catalog responses are not cacheable.",
+                                        "readProjectTeamSync" or "commitProjectTeamSync" =>
+                                            "Private repository team-sync responses are not cacheable.",
                                         _ => "Runtime evidence responses are not cacheable.",
                                     },
                                     schema = new { type = "string", example = "no-store" },
@@ -432,6 +447,18 @@ internal static partial class GatewayOpenApi
         else if (route.OperationId == "getHostedModelReasoningCatalog")
         {
             responses["503"] = ProblemResponse("AgentHost is not configured or is unavailable.");
+        }
+        else if (route.OperationId is "readProjectTeamSync" or "commitProjectTeamSync")
+        {
+            responses["400"] = ProblemResponse(
+                route.OperationId == "readProjectTeamSync"
+                    ? "The request contains a query, body, or invalid repository selection code."
+                    : "The preview hash, configuration revision, commit message, or current change set is invalid.");
+            responses["403"] = ProblemResponse("The caller lacks current project Owner authority.");
+            responses["409"] = ProblemResponse(
+                "The project configuration, repository selection, repository head, or preview changed.");
+            responses["429"] = ProblemResponse("The GitHub repository API rate limit was reached.");
+            responses["503"] = ProblemResponse("The repository or Identity owner is unavailable.");
         }
         else if (route.OperationId == "exportProjectAgentSuite")
         {
@@ -680,6 +707,16 @@ else if (route.OperationId is
                 " This read requires current project read authority. It returns the policy bound to one imported " +
                 "effective agent ID, or a null policy when none is bound. A policy is retained, not enforced.";
         }
+        else if (route.OperationId is "readProjectTeamSync" or "commitProjectTeamSync")
+        {
+            description +=
+                " Requires current project Owner authority, an active project with a GitHub App repository selection, " +
+                "and a short-lived repository selection code in the " + ProjectTeamSyncContract.SelectionCodeHeader +
+                " header. The preview derives `.squad/team.md` and current cast-member charter files from the " +
+                "Projects configuration; it does not load repository files as a team roster. Commit requires both " +
+                "the preview changeSetHash and configurationRevision and writes only the previewed `.squad/` paths. " +
+                "No repository files are mirrored automatically.";
+        }
         else if (route.OperationId.Contains("ChiefOfStaff", StringComparison.Ordinal))
         {
             description +=
@@ -726,6 +763,7 @@ else if (route.OperationId is
             ["x-agentweaver-stream"] = route.IsRunEventStream ? "server-sent-events" : null,
             ["x-agentweaver-max-request-body-bytes"] = route.MaximumRequestBodyBytes,
             ["x-agentweaver-max-response-bytes"] = route.MaximumResponseBytes,
+            ["x-agentweaver-mcp-excluded"] = route.ExcludeFromMcp,
         };
     }
 
@@ -969,6 +1007,20 @@ else if (route.OperationId is
             ("expectedRevision", Int()), ("settings", Ref("IssueSyncSettings"))),
         ["CreateIssueSyncGrant"] = Obj(["selectionCode"], ("selectionCode", Str())),
         ["IssueSyncGrantRevocation"] = Obj(["revoked"], ("revoked", Bool())),
+        ["ProjectTeamSyncChangeSummary"] = StrictObj(["path", "kind"],
+            ("path", Str()), ("kind", Enum("added", "modified", "removed"))),
+        ["ProjectTeamSyncStatusResponse"] = StrictObj(
+            ["configurationRevision", "changeSetHash", "nothingToSync", "changes"],
+            ("configurationRevision", new { type = "integer", minimum = 1 }),
+            ("changeSetHash", Str()), ("nothingToSync", Bool()),
+            ("changes", Arr(Ref("ProjectTeamSyncChangeSummary")))),
+        ["ProjectTeamSyncCommitCommand"] = StrictObj(
+            ["expectedChangeSetHash", "expectedConfigurationRevision"],
+            ("expectedChangeSetHash", new { type = "string", pattern = "^[a-f0-9]{64}$" }),
+            ("expectedConfigurationRevision", new { type = "integer", minimum = 1 }),
+            ("message", Nullable(new { type = "string", maxLength = 200 }))),
+        ["ProjectTeamSyncCommitResponse"] = StrictObj(["commitId", "branch", "htmlUrl"],
+            ("commitId", Str()), ("branch", Str()), ("htmlUrl", new { type = "string", format = "uri" })),
         ["BacklogRepositoryIdentity"] = StrictObj(["owner", "name"], ("owner", Str()), ("name", Str())),
         ["BacklogRepositoryIssueLink"] = StrictObj(["providerId", "repository", "issueNumber"],
             ("providerId", Str()), ("repository", Ref("BacklogRepositoryIdentity")), ("issueNumber", Int())),

@@ -3,6 +3,41 @@ import { AgentweaverGatewayClient } from './api';
 import type { KnowledgeRecordTransferBundle, ProjectConfiguration } from './contracts';
 
 describe('Gateway API client', () => {
+  it('uses one-shot repository selection codes for explicit team-sync preview and commit', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        configurationRevision: 7,
+        changeSetHash: 'a'.repeat(64),
+        nothingToSync: false,
+        changes: [{ path: '.squad/team.md', kind: 'modified' }],
+      })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        commitId: 'commit-1',
+        branch: 'main',
+        htmlUrl: 'https://github.com/octo/team/commit/commit-1',
+      })));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const preview = await client.previewProjectTeamSync('token', 'p1', 'selection-code', 'tenant');
+    await client.commitProjectTeamSync('token', 'p1', 'selection-code', {
+      expectedChangeSetHash: preview.changeSetHash,
+      expectedConfigurationRevision: preview.configurationRevision,
+    }, 'tenant');
+
+    expect(String(fetcher.mock.calls[0][0])).toBe('https://gateway.example.test/api/v1/projects/p1/team/sync');
+    expect(String(fetcher.mock.calls[1][0])).toBe('https://gateway.example.test/api/v1/projects/p1/team/sync');
+    for (const [, init] of fetcher.mock.calls) {
+      expect(new Headers(init?.headers).get('X-Agentweaver-Team-Sync-Selection')).toBe('selection-code');
+      expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant');
+      expect(init?.cache).toBe('no-store');
+    }
+    expect(fetcher.mock.calls[0][1]?.method).toBeUndefined();
+    expect(fetcher.mock.calls[1][1]?.method).toBe('POST');
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toEqual({
+      expectedChangeSetHash: 'a'.repeat(64),
+      expectedConfigurationRevision: 7,
+    });
+  });
+
   it('reads exact captured file bytes and the digest with the explicit tenant', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(new Uint8Array([0, 255, 65]), {
       headers: { 'X-Source-Control-Output-Sha256': 'digest' },
@@ -651,37 +686,6 @@ describe('Gateway API client', () => {
     expect(init?.credentials).toBe('omit');
     // window.fetch throws "Illegal invocation" unless it is called on the global object.
     expect(fetcher.mock.contexts[0]).toBe(globalThis);
-  });
-
-  it('keeps Repo App authorization at the Gateway root and stores its callback cookie', async () => {
-    const fetcher = vi.fn<typeof fetch>().mockImplementation(
-      async () => new Response('{}', { status: 200 }),
-    );
-    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
-
-    await client.beginRepoAppAuthorization('broker-token');
-    await client.getRepoAppAuthorizationStatus('broker-token');
-    await client.listRepoAppRepositorySelections('broker-token');
-    await client.issueRepoAppRepositorySelection('broker-token', 'octo/agentweaver');
-
-    const [beginUrl, beginInit] = fetcher.mock.calls[0];
-    expect(String(beginUrl)).toBe(
-      'https://gateway.example.test/api/auth/github/repo-app/authorizations',
-    );
-    expect(JSON.parse(String(beginInit?.body))).toEqual({ returnRouteKey: 'projects' });
-    expect(beginInit?.credentials).toBe('include');
-    expect(new Headers(beginInit?.headers).get('X-Agentweaver-Tenant')).toBeNull();
-    expect(String(fetcher.mock.calls[1][0])).toBe(
-      'https://gateway.example.test/api/auth/github/repo-app/authorization/status',
-    );
-    expect(String(fetcher.mock.calls[2][0])).toBe(
-      'https://gateway.example.test/api/github/repository-selections',
-    );
-    expect(new Headers(fetcher.mock.calls[2][1]?.headers).get('X-Agentweaver-Tenant')).toBeNull();
-    expect(JSON.parse(String(fetcher.mock.calls[3][1]?.body))).toEqual({
-      fullName: 'octo/agentweaver',
-    });
-    expect(fetcher.mock.calls.slice(1).every(([, init]) => init?.credentials === 'omit')).toBe(true);
   });
 
   it('sends only Remote MCP OAuth code and state through the authenticated Gateway route', async () => {

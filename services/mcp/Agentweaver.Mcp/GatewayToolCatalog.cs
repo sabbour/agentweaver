@@ -103,6 +103,15 @@ public sealed class GatewayToolCatalog(HttpClient client)
                     throw new InvalidDataException("The Gateway tool catalog contains an invalid operation.");
 
                 var operation = method.Value;
+                if (operation.TryGetProperty("x-agentweaver-mcp-excluded", out var mcpExcluded))
+                {
+                    if (mcpExcluded.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                        throw new InvalidDataException(
+                            "The Gateway tool catalog contains an invalid MCP exclusion flag.");
+                    // Explicit browser-only actions stay out of MCP, while every other route remains discoverable.
+                    if (mcpExcluded.GetBoolean())
+                        continue;
+                }
                 var operationId = RequiredString(operation, "operationId");
                 var operationDescription = OptionalString(operation, "description");
                 var streamKind = OptionalString(operation, "x-agentweaver-stream");

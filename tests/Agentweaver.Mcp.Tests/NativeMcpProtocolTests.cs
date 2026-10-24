@@ -102,6 +102,9 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
             @params = new { },
         });
         var tools = list.GetProperty("result").GetProperty("tools");
+        Assert.DoesNotContain(tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() is
+                "agentweaver_readProjectTeamSync" or "agentweaver_commitProjectTeamSync");
         // MCP advertises the same repository identity fields as the Gateway, without a second DTO.
         var priorityLinkTool = Assert.Single(tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_addChiefOfStaffPriorityLink");

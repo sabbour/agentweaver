@@ -124,6 +124,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `POST /api/projects/{projectId}/casting/proposals/{proposalId}/reject` | Reject a proposal without changing project configuration or run state. |
 | `GET /api/projects/{projectId}/casting/export?revision={n}` | Export charter/casting configuration from the current or a retained revision. |
 | `POST /api/projects/{projectId}/casting/import` | Stage an explicit owner-authorized charter/casting import for review. |
+| `GET /api/projects/{projectId}/team-sync-projection?expectedConfigurationRevision={n}` | Return the current cast and charters for an authorized repository-sync preview; reject a stale revision. |
 | `GET /api/platform/runtime-defaults` | Read the platform administrator's current defaults. |
 | `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
 | `GET /api/platform/components` | Report the active implementation and readiness of every platform component area for a current TenantAdmin or PlatformAdmin. Projects collects owner reports in parallel. See [Platform components](../guide/platform-components.md). |
@@ -209,6 +210,41 @@ sequenceDiagram
 ```
 
 Casting templates, roles, and supported universe names are server-owned catalog reads. The project-scoped universe route checks the caller's current project read access before returning the supported names. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both may include a selected `universe`, which Projects validates and stores in the pending draft at that same revision. The draft replaces only the proposed `AgentCharters`, `Casting`, and selected universe while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
+
+The authenticated team-sync projection is called by Orchestrator for an
+explicit repository preview. It requires an unbound current project Owner and
+the selected GitHub App repository. It returns the current configuration
+revision, repository authority proof, project name, cast order, and member
+charters. An optional expected revision rejects a stale preview without
+changing project state. Orchestrator uses this projection to render
+`.squad/team.md` and current charter files; repository content never becomes a
+second roster or loader. The commit path re-reads the projection at the
+previewed revision immediately before its branch update.
+
+```mermaid
+sequenceDiagram
+    actor Owner
+    participant Gateway
+    participant Orchestrator
+    participant Projects as Projects & Config
+    participant Identity
+    participant GitHub
+    Owner->>Gateway: GET /api/v1/projects/{projectId}/team/sync
+    Gateway->>Orchestrator: Forward bearer, tenant selector, and header
+    Orchestrator->>Projects: Read current Owner authority and team projection
+    Projects-->>Orchestrator: Current revision, cast, charters, and repository proof
+    Orchestrator->>Identity: Request project-scoped contents:read token
+    Identity-->>Orchestrator: Short-lived repository token
+    Orchestrator->>GitHub: Read configured .squad tree
+    GitHub-->>Orchestrator: Repository head and file snapshot
+    Orchestrator-->>Owner: Reviewable paths, configuration revision, and hash
+    Owner->>Gateway: POST /api/v1/projects/{projectId}/team/sync with preview fences
+    Gateway->>Orchestrator: Forward reviewed commit request
+    Orchestrator->>Projects: Recheck Owner authority and expected revision
+    Orchestrator->>GitHub: Commit only if head and preview still match
+    GitHub-->>Orchestrator: Commit receipt or conflict
+    Orchestrator-->>Owner: Commit receipt or no-write conflict
+```
 
 The retained web client uses that full-draft route for team changes that must
 preserve the current roster. **Augment** stages the existing members plus the
