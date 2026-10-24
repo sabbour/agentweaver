@@ -214,6 +214,33 @@ public sealed class P1PostgresInitializerPreflightPostgresTests(ProbePostgresFix
         await ExecuteAsync(connection, "GRANT UPDATE (lock_owner) ON projects_config.locks TO PUBLIC");
         var publicGrant = await ReadColumnGrantsAsync(connection, runtimeOid);
         Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertRuntimeColumnGrants(service, publicGrant));
+
+        // The exact-column readback passes only when the role can UPDATE every planned column and no other.
+        await ExecuteAsync(connection,
+            "CREATE TABLE projects_config.assignments (id int, state text, revision bigint, tenant_id text)");
+        await ExecuteAsync(connection, "GRANT SELECT, INSERT ON projects_config.assignments TO p1_projects_runtime");
+        string[] planned = ["state", "revision"];
+        Assert.False(await ExactUpdateColumnsAsync(connection, planned));
+        await ExecuteAsync(connection, "GRANT UPDATE (state) ON projects_config.assignments TO p1_projects_runtime");
+        Assert.False(await ExactUpdateColumnsAsync(connection, planned));
+        await ExecuteAsync(connection, "GRANT UPDATE (revision) ON projects_config.assignments TO p1_projects_runtime");
+        Assert.True(await ExactUpdateColumnsAsync(connection, planned));
+        await ExecuteAsync(connection, "GRANT UPDATE (tenant_id) ON projects_config.assignments TO p1_projects_runtime");
+        Assert.False(await ExactUpdateColumnsAsync(connection, planned));
+        await ExecuteAsync(connection, "REVOKE UPDATE (tenant_id) ON projects_config.assignments FROM p1_projects_runtime");
+        Assert.True(await ExactUpdateColumnsAsync(connection, planned));
+        // Table-level UPDATE covers every column, so it fails the "no other column" half too.
+        await ExecuteAsync(connection, "GRANT UPDATE ON projects_config.assignments TO p1_projects_runtime");
+        Assert.False(await ExactUpdateColumnsAsync(connection, planned));
+    }
+
+    private static async Task<bool> ExactUpdateColumnsAsync(NpgsqlConnection connection, string[] columns)
+    {
+        await using var command = new NpgsqlCommand(InitializerChecks.ExactUpdateColumnsQuery, connection);
+        command.Parameters.AddWithValue("role", "p1_projects_runtime");
+        command.Parameters.AddWithValue("table", "projects_config.assignments");
+        command.Parameters.AddWithValue("columns", columns);
+        return await command.ExecuteScalarAsync() is true;
     }
 
     private static async Task<uint> ScalarOidAsync(NpgsqlConnection connection, string sql) =>

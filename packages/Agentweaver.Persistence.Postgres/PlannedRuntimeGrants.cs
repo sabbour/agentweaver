@@ -10,7 +10,8 @@ namespace Agentweaver.Persistence.Postgres;
 public sealed record PlannedTableGrant(
     [property: JsonPropertyName("table")] string Table,
     [property: JsonPropertyName("privileges")] string[] Privileges,
-    [property: JsonPropertyName("lockColumn")] string? LockColumn);
+    [property: JsonPropertyName("lockColumn")] string? LockColumn,
+    [property: JsonPropertyName("updateColumns")] string[]? UpdateColumns = null);
 
 /// <summary>One planned function ACL for a runtime role, copied from the reviewed P1 PostgreSQL plan.</summary>
 public sealed record PlannedFunctionGrant(
@@ -117,13 +118,20 @@ public static class PlannedRuntimeGrants
                 $"The {service} migration catalog [{string.Join(',', supportedVersions)}] differs from the reviewed plan [{string.Join(',', versions)}].");
 
         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        var tables = entry.GetProperty("tables").Deserialize<PlannedTableGrant[]>(options) ?? [];
+        // Step 4: column-scoped UPDATE grants belong only to the Projects role-assignment tables, which the
+        // P1 initializer applies. These migration Jobs never grant them, so a plan that adds them to one of
+        // these services stops here rather than silently granting less than it reviewed.
+        if (tables.Any(table => table.UpdateColumns is { Length: > 0 }))
+            throw new InvalidOperationException(
+                $"The reviewed {service} plan has column-scoped UPDATE grants, which migration Jobs do not apply.");
         return new PlannedServiceGrants(
             actual,
             service,
             schema,
             runtimeRole,
             versions,
-            entry.GetProperty("tables").Deserialize<PlannedTableGrant[]>(options) ?? [],
+            tables,
             entry.GetProperty("functions").Deserialize<PlannedFunctionGrant[]>(options) ?? [],
             entry.GetProperty("ownerOnlyTables").Deserialize<string[]>(options) ?? [],
             entry.GetProperty("ownerOnlySequences").Deserialize<string[]>(options) ?? []);

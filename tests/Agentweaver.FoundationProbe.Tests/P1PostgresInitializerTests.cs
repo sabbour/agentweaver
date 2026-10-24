@@ -512,11 +512,17 @@ public sealed class P1PostgresInitializerTests
             [
                 new TablePlan("requests", ["SELECT", "INSERT"], null, false, null),
                 new TablePlan("locks", ["SELECT"], "lock_owner", false, null),
+                new TablePlan("assignments", ["SELECT", "INSERT"], null, false, null)
+                {
+                    UpdateColumns = ["state", "revision"],
+                },
             ],
             OwnerOnlyTables = ["setup"],
         };
         InitializerChecks.AssertRuntimeColumnGrants(service, []);
         InitializerChecks.AssertRuntimeColumnGrants(service, [new("locks", "lock_owner", "UPDATE", false)]);
+        InitializerChecks.AssertRuntimeColumnGrants(service,
+            [new("assignments", "state", "UPDATE", false), new("assignments", "revision", "UPDATE", false)]);
 
         // Each of these passes table-level checks but would fail the service's startup authority check.
         ColumnGrant[] unexpected =
@@ -525,11 +531,69 @@ public sealed class P1PostgresInitializerTests
             new("locks", "other_column", "UPDATE", false),
             new("locks", "lock_owner", "INSERT", false),
             new("locks", "lock_owner", "UPDATE", true),
+            new("assignments", "tenant_id", "UPDATE", false),
+            new("assignments", "state", "SELECT", false),
+            new("assignments", "state", "UPDATE", true),
             new("setup", "value", "SELECT", false),
             new("unplanned", "value", "UPDATE", false),
         ];
         foreach (var grant in unexpected)
             Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertRuntimeColumnGrants(service, [grant]));
+    }
+
+    [Fact]
+    public void ColumnUpdatePlanAllowsOnlyTheRoleAssignmentRevokeColumns()
+    {
+        InitializerChecks.AssertColumnUpdatePlan(ColumnUpdateServices());
+
+        // No planned column updates means the role-assignment write path was dropped from the plan.
+        var none = ColumnUpdateServices();
+        none[0] = none[0] with { Tables = [none[0].Tables[0] with { UpdateColumns = [] }] };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertColumnUpdatePlan(none));
+
+        TablePlan[] rejectedTables =
+        [
+            ColumnUpdateServices()[0].Tables[0] with { UpdateColumns = ["state", "revision", "revoked_by"] },
+            ColumnUpdateServices()[0].Tables[0] with { UpdateColumns = ["state", "revision", "revoked_by", "tenant_id"] },
+            ColumnUpdateServices()[0].Tables[0] with { Privileges = ["SELECT", "INSERT", "UPDATE"] },
+            ColumnUpdateServices()[0].Tables[0] with { LockColumn = "state" },
+            ColumnUpdateServices()[0].Tables[0] with { MutationDenialRequired = true },
+            ColumnUpdateServices()[0].Tables[0] with { Table = "authority_audit" },
+        ];
+        foreach (var table in rejectedTables)
+        {
+            var services = ColumnUpdateServices();
+            services[0] = services[0] with { Tables = [table] };
+            Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertColumnUpdatePlan(services));
+        }
+
+        // The same table in another schema, or a second column-scoped table, is outside the reviewed set.
+        var otherSchema = ColumnUpdateServices();
+        otherSchema[0] = otherSchema[0] with { Schema = "orchestrator" };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertColumnUpdatePlan(otherSchema));
+        var second = ColumnUpdateServices();
+        second[1] = second[1] with { Tables = [second[0].Tables[0] with { Table = "other" }] };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertColumnUpdatePlan(second));
+    }
+
+    [Fact]
+    public void TableGrantStatementsAddOneQuotedColumnUpdateForLockOrPlannedColumns()
+    {
+        var service = ColumnUpdateServices()[0];
+        Assert.Equal(
+        [
+            "GRANT SELECT, INSERT ON TABLE \"projects_config\".\"project_role_assignments\" TO \"runtime_0\"",
+            "GRANT UPDATE (\"state\", \"revision\", \"revoked_by\", \"revoked_at\") ON TABLE " +
+                "\"projects_config\".\"project_role_assignments\" TO \"runtime_0\"",
+        ], InitializerChecks.TableGrantStatements(service, service.Tables[0]));
+        Assert.Equal(
+        [
+            "GRANT SELECT ON TABLE \"projects_config\".\"locks\" TO \"runtime_0\"",
+            "GRANT UPDATE (\"lock_owner\") ON TABLE \"projects_config\".\"locks\" TO \"runtime_0\"",
+        ], InitializerChecks.TableGrantStatements(service, new TablePlan("locks", ["SELECT"], "lock_owner", false, null)));
+        Assert.Equal(
+            ["GRANT SELECT ON TABLE \"projects_config\".\"audit\" TO \"runtime_0\""],
+            InitializerChecks.TableGrantStatements(service, new TablePlan("audit", ["SELECT"], null, false, null)));
     }
 
     [Fact]
@@ -605,6 +669,24 @@ public sealed class P1PostgresInitializerTests
     private static ServicePlan[] Services() => Enumerable.Range(0, 5).Select(index =>
         new ServicePlan($"service-{index}", $"schema_{index}", $"runtime_{index}",
             $"00000000-0000-0000-0000-{index + 1:000000000000}", [], [])).ToArray();
+
+    private static ServicePlan[] ColumnUpdateServices()
+    {
+        var services = Services();
+        services[0] = services[0] with
+        {
+            Service = "projects-config",
+            Schema = "projects_config",
+            Tables =
+            [
+                new TablePlan("project_role_assignments", ["SELECT", "INSERT"], null, false, null)
+                {
+                    UpdateColumns = ["state", "revision", "revoked_by", "revoked_at"],
+                },
+            ],
+        };
+        return services;
+    }
 
     private static ServicePlan[] OwnerOnlyServices()
     {

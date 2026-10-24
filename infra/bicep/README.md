@@ -160,11 +160,11 @@ applies and reads back the planned runtime grants with
 `bootstrap-p1-postgres.mjs --apply-projects-config-grants`, as described in
 [Applying the Projects & Config runtime grants](../../scripts/azure/README.md#applying-the-projects--config-runtime-grants).
 
-The project role-assignment write grants below are separate from the plan.
-After migration
-`20261009021400_AddCastingAuthorityLockFunction` is applied, an approved
-operator can grant the runtime role `EXECUTE` on the exact casting
-authority-lock function and the project role-assignment write set:
+The reviewed plan includes the casting authority-lock function `EXECUTE` and
+the project role-assignment write set, so the grants step above applies them.
+`postgres-projectsconfig-runtime-grants.sql` holds the same grants as a
+standalone definition for a database whose grants are managed by hand. It
+needs migration `20261009021400_AddCastingAuthorityLockFunction`:
 
 ```powershell
 psql "$PROJECTS_CONFIG_DATABASE_URL" `

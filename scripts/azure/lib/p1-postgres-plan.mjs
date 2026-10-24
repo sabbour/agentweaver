@@ -32,10 +32,12 @@ const SERVICES = [
 
 const GROUPS = {
   projects_config: {
-    SELECT: 'tenant_memberships project_role_assignments authority_audit __ef_migrations_history',
+    // Memberships stay read-only. The role-assignment API adds assignments and audit rows, and revokes an
+    // assignment only through the column-scoped UPDATE in UPDATE_COLUMNS below.
+    SELECT: 'tenant_memberships __ef_migrations_history',
     'SELECT,UPDATE': 'platform_runtime_heads',
     'SELECT,INSERT,UPDATE': 'projects marketplace_sources project_casting_proposals casting_generation_requests hosted_model_reasoning_catalog',
-    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations',
+    'SELECT,INSERT': 'project_configuration_revisions platform_runtime_revisions project_run_selections project_skill_content_revisions project_skill_import_idempotency project_skill_content_revocations project_role_assignments authority_audit',
   },
   environment: {
     SELECT: '__ef_migrations_history',
@@ -171,6 +173,16 @@ const FUNCTIONS = {
   ],
 };
 
+// Column-scoped UPDATE for tables whose rows may change only in named columns. These tables have no
+// table-level UPDATE and no row-lock guard. Revoking a role assignment changes only its state, revision
+// and revocation fields, never who, what or where it applies. This is exactly the optional set that the
+// Projects & Config startup authority check accepts.
+const UPDATE_COLUMNS = {
+  projects_config: {
+    project_role_assignments: ['state', 'revision', 'revoked_by', 'revoked_at'],
+  },
+};
+
 const OWNER_ONLY_OBJECTS = {
   projects_config: {
     tables: ['project_setup_operations'],
@@ -191,6 +203,8 @@ export function buildP1PostgresPlan() {
       names.split(' ').map(table => ({
         table,
         privileges: privileges.split(','),
+        // Only tables with planned column updates carry this key, so every other table's plan entry is unchanged.
+        ...(UPDATE_COLUMNS[schema]?.[table] ? { updateColumns: [...UPDATE_COLUMNS[schema][table]] } : {}),
         ...(LOCK_GUARDS[schema]?.[table] ? {
           lockColumn: LOCK_GUARDS[schema][table].column,
           mutationDenialRequired: true,

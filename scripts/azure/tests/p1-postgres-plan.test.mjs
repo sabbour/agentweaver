@@ -58,7 +58,7 @@ test('P1 plan binds five service roles to the provisioned principal IDs', () => 
   assert.ok(!JSON.stringify(plan).includes('password'));
 });
 
-test('Only exact table DML is planned; history and authority remain SELECT-only', () => {
+test('Only exact table DML is planned; history and memberships stay SELECT-only', () => {
   const projectsConfig = buildP1PostgresPlan().services.find(item => item.schema === 'projects_config');
   assert.deepEqual(
     projectsConfig.tables.find(item => item.table === 'hosted_model_reasoning_catalog').privileges,
@@ -69,10 +69,25 @@ test('Only exact table DML is planned; history and authority remain SELECT-only'
       assert.match(table.table, /^[a-z_][a-z0-9_]*$/);
       assert.ok(table.privileges.every(item => ['SELECT', 'INSERT', 'UPDATE', 'DELETE'].includes(item)));
       if (table.table.endsWith('schema_migrations') || table.table === '__ef_migrations_history' ||
-          ['tenant_memberships', 'project_role_assignments', 'authority_audit'].includes(table.table))
+          table.table === 'tenant_memberships')
         assert.deepEqual(table.privileges, ['SELECT']);
     }
   }
+});
+
+test('Role assignment writes are insert-only plus the exact revoke columns', () => {
+  const projectsConfig = buildP1PostgresPlan().services.find(item => item.schema === 'projects_config');
+  const table = name => projectsConfig.tables.find(item => item.table === name);
+  // Projects Config accepts these grants only as a complete set: INSERT on both tables, UPDATE only on
+  // the revoke columns, and never table-level UPDATE, DELETE, or TRUNCATE.
+  assert.deepEqual(table('project_role_assignments').privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(table('project_role_assignments').updateColumns,
+    ['state', 'revision', 'revoked_by', 'revoked_at']);
+  assert.ok(!('lockColumn' in table('project_role_assignments')));
+  assert.deepEqual(table('authority_audit').privileges, ['SELECT', 'INSERT']);
+  const withUpdateColumns = buildP1PostgresPlan().services.flatMap(service =>
+    service.tables.filter(item => 'updateColumns' in item).map(item => `${service.schema}.${item.table}`));
+  assert.deepEqual(withUpdateColumns, ['projects_config.project_role_assignments']);
 });
 
 test('DELETE grants cover only source-owned rollback, backlog deletion, edge, and Priority link paths', () => {
@@ -170,8 +185,14 @@ test('Initializer validates planned and installed mutation guards before it comm
     .replace(/\r\n/g, '\n');
   const planGuard = source.indexOf('InitializerChecks.AssertMutationDenialPlan(plan.Services)');
   assert.ok(planGuard > 0 && planGuard < source.indexOf('new AzureCliCredential('));
+  const columnPlanGuard = source.indexOf('InitializerChecks.AssertColumnUpdatePlan(plan.Services)');
+  assert.ok(columnPlanGuard > 0 && columnPlanGuard < source.indexOf('new AzureCliCredential('));
   assert.ok(source.includes('InitializerChecks.AssertMutationDenialGuards(service, mutationGuards, ownerOid, runtimeOid)'));
-  assert.ok(source.includes("has_column_privilege(@role, @table, @column, 'UPDATE')"));
+  // Lock columns and planned update columns share one exact-column readback query.
+  assert.ok(source.includes('InitializerChecks.ExactUpdateColumnsQuery'));
+  const checks = readFileSync(new URL('../../../tools/P1PostgresInitializer/InitializerChecks.cs', import.meta.url), 'utf8');
+  assert.ok(checks.includes("has_column_privilege(@role, @table, c, 'UPDATE')"));
+  assert.ok(checks.includes('a.attname::text <> ALL(@columns::text[])'));
   assert.doesNotMatch(source, /plan\.Services\.Any\(service => service\.Tables\.Any\(table => table\.MutationDenialRequired\)\)/);
   assert.doesNotMatch(source, /One-column row-lock grants still require reviewed mutation-denial source/);
   // The plan catalog is compared with the compiled migrators, not regex-pinned source text.

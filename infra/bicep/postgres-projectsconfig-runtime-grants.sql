@@ -1,5 +1,7 @@
--- Definition only. Apply after Projects & Config migrations, as the schema owner.
--- A separate approval covers every live grant in this file.
+-- Standalone definition of the Projects & Config runtime grants. The reviewed P1 plan
+-- holds the same grants, and the Projects & Config grants step applies them. Use this
+-- file only for a database whose grants are managed by hand. Apply it after Projects &
+-- Config migrations, as the schema owner.
 \set ON_ERROR_STOP on
 SELECT format(
   'GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO %I',

@@ -475,8 +475,8 @@ the database grant:
   who, what, or where an assignment applies, and can't write tenant
   memberships or tenant-level roles.
 
-The runtime principal needs these grants, defined in
-[`infra/bicep/postgres-projectsconfig-runtime-grants.sql`](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/postgres-projectsconfig-runtime-grants.sql):
+The runtime principal needs these grants, which the reviewed P1 PostgreSQL
+plan includes:
 
 | Grant | Purpose |
 | --- | --- |
@@ -484,13 +484,17 @@ The runtime principal needs these grants, defined in
 | `UPDATE (state, revision, revoked_by, revoked_at)` on `projects_config.project_role_assignments` | Mark an assignment revoked at its expected revision. |
 | `INSERT` on `projects_config.authority_audit` | Record each assignment and revocation. |
 
-An operator applies these grants separately; deployment doesn't apply them.
+The Projects & Config grants step applies them with the other planned
+runtime grants, both during the deployment's Projects & Config migration and
+when an operator runs it on its own. See
+[Applying the Projects & Config runtime grants](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#applying-the-projects--config-runtime-grants).
 Until they're applied, assign and revoke requests return `503` with the
 `role_assignment_unavailable` problem code, and no authority row changes.
-Listing assignments needs only the existing read grants. At startup, the
-service accepts either no authority write grants or exactly this set. It
-fails closed on a partial set or any other write privilege on authority
-tables, including `DELETE`.
+Listing assignments needs only the existing read grants. The service checks
+privileges on each request, so it doesn't need a restart after the grants
+step. At startup, the service accepts either no authority write grants or
+exactly this set. It fails closed on a partial set or any other write
+privilege on authority tables, including `DELETE`.
 
 ### Privileged project setup
 

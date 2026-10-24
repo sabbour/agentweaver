@@ -175,6 +175,67 @@ internal static class InitializerChecks
         }
     }
 
+    /// <summary>
+    /// Requires the exact reviewed column-scoped UPDATE inventory: only the Projects role-assignment revoke
+    /// columns, on a table with no table-level UPDATE and no row-lock guard.
+    /// </summary>
+    internal static void AssertColumnUpdatePlan(ServicePlan[] services)
+    {
+        string[] revokeColumns = ["state", "revision", "revoked_by", "revoked_at"];
+        var planned = services.SelectMany(service => service.Tables
+            .Where(table => table.UpdateColumns is not { Length: 0 })
+            .Select(table => (Service: service, Table: table))).ToArray();
+        // One reviewed entry exists. Any other table gaining column updates means the plan changed without
+        // this check being reviewed with it, so stop before any connection.
+        if (planned.Length != 1 || planned[0].Service.Schema != "projects_config" ||
+            planned[0].Table.Table != "project_role_assignments" ||
+            !(planned[0].Table.UpdateColumns ?? []).SequenceEqual(revokeColumns, StringComparer.Ordinal))
+            throw new InvalidOperationException(
+                "The exact planned column-scoped UPDATE set is only the Projects role-assignment revoke columns.");
+        // Column updates replace table-level UPDATE. Mixing them with a table UPDATE would make the column list
+        // meaningless, and mixing them with a row lock would weaken the lock's single-column guarantee.
+        var table = planned[0].Table;
+        if (table.Privileges.Contains("UPDATE") || table.LockColumn is not null ||
+            table.MutationDenialRequired || table.MutationDenialGuard is not null)
+            throw new InvalidOperationException(
+                "Column-scoped UPDATE tables must have no table-level UPDATE and no row-lock guard.");
+    }
+
+    /// <summary>Returns every column the plan lets the runtime role UPDATE on a table without table-level UPDATE.</summary>
+    internal static string[] PlannedUpdateColumns(TablePlan table) =>
+        [.. (table.LockColumn is null ? [] : new[] { table.LockColumn }), .. table.UpdateColumns ?? []];
+
+    /// <summary>Builds the GRANT statements for one planned table: table privileges, then any column UPDATE.</summary>
+    internal static string[] TableGrantStatements(ServicePlan service, TablePlan table)
+    {
+        var relation = $"{Quote(service.Schema)}.{Quote(table.Table)}";
+        var statements = new List<string>
+        {
+            $"GRANT {string.Join(", ", table.Privileges)} ON TABLE {relation} TO {Quote(service.Role)}",
+        };
+        // A row-lock table and a column-scoped table each get one column-list UPDATE grant; no table gets both,
+        // because AssertColumnUpdatePlan rejects that shape before any connection.
+        var columns = PlannedUpdateColumns(table);
+        if (columns.Length != 0)
+            statements.Add(
+                $"GRANT UPDATE ({string.Join(", ", columns.Select(Quote))}) ON TABLE {relation} TO {Quote(service.Role)}");
+        return [.. statements];
+    }
+
+    /// <summary>
+    /// True only when the runtime role can UPDATE every planned column and no other column of the table.
+    /// Table-level UPDATE also passes has_column_privilege, so callers check table privileges separately.
+    /// </summary>
+    internal const string ExactUpdateColumnsQuery = """
+        SELECT (SELECT pg_catalog.bool_and(pg_catalog.has_column_privilege(@role, @table, c, 'UPDATE'))
+                FROM pg_catalog.unnest(@columns::text[]) AS c)
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_attribute a
+            WHERE a.attrelid = pg_catalog.to_regclass(@table)
+              AND a.attnum > 0 AND NOT a.attisdropped AND a.attname::text <> ALL(@columns::text[])
+              AND pg_catalog.has_column_privilege(@role, a.attrelid, a.attnum, 'UPDATE'))
+        """;
+
     /// <summary>Restricts the owner-only relation and sequence inventory to the reviewed Projects objects.</summary>
     internal static void AssertOwnerOnlyObjectPlan(ServicePlan[] services)
     {
@@ -254,15 +315,16 @@ internal static class InitializerChecks
         ORDER BY c.relname, a.attname, x.privilege_type
         """;
 
-    /// <summary>Allows a runtime column grant only as UPDATE on a planned lock column.</summary>
+    /// <summary>Allows a runtime column grant only as UPDATE on a planned lock column or planned update column.</summary>
     internal static void AssertRuntimeColumnGrants(ServicePlan service, IEnumerable<ColumnGrant> grants)
     {
         foreach (var grant in grants)
         {
             // PUBLIC column grants reach every role, so none is ever planned. A direct grant is planned
-            // only when it is UPDATE on the lock column the plan names for that table.
+            // only when it is UPDATE on a column the plan names for that table.
             var planned = !grant.Public && grant.Privilege == "UPDATE" &&
-                service.Tables.Any(table => table.Table == grant.Relation && table.LockColumn == grant.Column);
+                service.Tables.Any(table => table.Table == grant.Relation &&
+                    PlannedUpdateColumns(table).Contains(grant.Column, StringComparer.Ordinal));
             if (!planned)
                 throw new InvalidOperationException(
                     $"The {service.Service} runtime role has unexpected column {grant.Privilege} authority on {service.Schema}.{grant.Relation}.{grant.Column}.");
@@ -698,9 +760,13 @@ internal sealed record ServicePlan(string Service, string Schema, string Role, s
 }
 /// <summary>One column-level grant that reaches the runtime role directly or, when Public is true, through PUBLIC.</summary>
 internal sealed record ColumnGrant(string Relation, string Column, string Privilege, bool Public);
-/// <summary>Runtime table privileges and any one-column lock update allowed for the service.</summary>
+/// <summary>Runtime table privileges, any one-column lock update, and any planned column-scoped updates.</summary>
 internal sealed record TablePlan(string Table, string[] Privileges, string? LockColumn, bool MutationDenialRequired,
-    MutationDenialGuardPlan? MutationDenialGuard);
+    MutationDenialGuardPlan? MutationDenialGuard)
+{
+    /// <summary>Columns the runtime role may UPDATE on a table that has no table-level UPDATE; empty when none.</summary>
+    public string[] UpdateColumns { get; init; } = [];
+}
 /// <summary>Expected trigger and owner-only function that denies mutation of a protected row-lock table.</summary>
 internal sealed record MutationDenialGuardPlan(string Trigger, string Function, int TriggerType,
     string Message, string? SqlState);

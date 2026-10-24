@@ -9,7 +9,7 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "2782a5c49d8de6c33914376332cb80eb24ea9f8cba10b2a3a6d7c9dc5acfb0d7";
+    private const string ReviewedPlanSha256 = "2d23dae8dd58c37671fd196a13550907c244694c5a54b0ec51c1ffcde47ff1a1";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 10)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 11)];
@@ -101,6 +101,21 @@ public sealed class PlannedRuntimeGrantsTests
             "events-and-sessions", "events_sessions", "agentweaver-id-events-and-sessions", ReviewedPlanSha256, [.. Enumerable.Range(1, 9)]));
         Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(
             "environment", "environment", "agentweaver-id-environment", ReviewedPlanSha256, [.. Enumerable.Range(1, 10)]));
+    }
+
+    [Fact]
+    public void RejectsColumnScopedUpdatesForAMigrationJobService()
+    {
+        // These Jobs never apply column-scoped UPDATE grants, so a plan that names them must not load
+        // as if they were granted. The changed plan is re-hashed so only this gate can reject it.
+        var plan = System.Text.Json.Nodes.JsonNode.Parse(PlannedRuntimeGrants.ReadEmbeddedPlan())!;
+        var orchestrator = plan["services"]!.AsArray()
+            .Single(service => service!["service"]!.GetValue<string>() == "orchestrator")!;
+        orchestrator["tables"]![0]!["updateColumns"] = new System.Text.Json.Nodes.JsonArray("state");
+        var changed = Encoding.UTF8.GetBytes(plan.ToJsonString());
+        var error = Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Select(
+            changed, "orchestrator", "orchestrator", "agentweaver-id-orchestrator", CanonicalSha256(changed), CoreVersions));
+        Assert.Contains("column-scoped", error.Message);
     }
 
     [Fact]

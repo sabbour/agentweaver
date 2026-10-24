@@ -460,7 +460,8 @@ test('lock release removes only the named run lock', async () => {
 });
 
 test('the workflow runs only by dispatch from v1 and always uploads the receipt', () => {
-  const workflow = readFileSync('.github/workflows/v1-db-maintenance.yml', 'utf8');
+  // Normalize line endings so a Windows checkout with autocrlf reads the same text as CI.
+  const workflow = readFileSync('.github/workflows/v1-db-maintenance.yml', 'utf8').replace(/\r\n/g, '\n');
   assert.match(workflow, /^on:\n  workflow_dispatch:/m);
   assert.doesNotMatch(workflow, /^\s+(push|pull_request|schedule):/m);
   assert.match(workflow, /refs\/heads\/v1/);
