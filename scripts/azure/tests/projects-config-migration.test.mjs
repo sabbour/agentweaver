@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
-  parseProjectsConfigMigrationArgs, runProjectsConfigMigration,
+  collectGrantStageReceipts, parseProjectsConfigMigrationArgs, runProjectsConfigMigration,
 } from '../lib/projects-config-migration.mjs';
 import { DB_MAINTENANCE_TARGET, LOCK_NAME } from '../lib/db-maintenance.mjs';
 
@@ -32,7 +32,17 @@ const publication = {
   }],
 };
 
-function createWorld({ jobOutcome = 'Complete' } = {}) {
+const planSha256 = '9'.repeat(64);
+
+function grantResult(overrides = {}) {
+  return {
+    executed: true, mode: 'projects-config-grants', sourceSha: deploymentSourceSha, planSha256,
+    receipt: { p1Initializer: { verification: 'projects-config-grants-applied', planSha256 } },
+    ...overrides,
+  };
+}
+
+function createWorld({ jobOutcome = 'Complete', originV1 = deploymentSourceSha, grants = async () => grantResult() } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), 'projects-config-migration-test-'));
   const calls = [];
   const objects = new Map();
@@ -43,6 +53,9 @@ function createWorld({ jobOutcome = 'Complete' } = {}) {
       if (['status', 'fetch', 'merge-base'].includes(args[0])) return { status: 0, stdout: '', stderr: '' };
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
         return { status: 0, stdout: `${deploymentSourceSha}\n`, stderr: '' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === 'origin/v1') {
+        return { status: 0, stdout: `${originV1}\n`, stderr: '' };
       }
       if (args[0] === 'rev-parse' && args[1] === `${publicationSourceSha}^{tree}`) {
         return { status: 0, stdout: `${sourceTree}\n`, stderr: '' };
@@ -104,6 +117,15 @@ function createWorld({ jobOutcome = 'Complete' } = {}) {
         digest: imageDigest, sourceSha: publicationSourceSha, sourceTree, version: '1.0.9',
       }),
       withKubeconfig: async (_target, action) => action(['--kubeconfig', 'offline']),
+      // Record the grant step in the same call log so tests can check its order against kubectl calls.
+      applyRuntimeGrants: async root => {
+        calls.push({ command: 'grants', args: [root], lockHeld: objects.has(`lease/${LOCK_NAME}`) });
+        return grants();
+      },
+      collectGrantStageReceipts: (_root, destination, runId) => {
+        calls.push({ command: 'collect-grant-receipts', args: [destination, runId] });
+        return [{ path: path.join(destination, `projects-config-grants-${runId}-p1-postgres.jsonl`), sha256: 'a'.repeat(64) }];
+      },
       newRunId: () => 'abcdef123456',
       now: () => new Date('2026-10-23T00:00:00.000Z'),
       sleep: async () => {},
@@ -146,8 +168,10 @@ test('dry run accepts the older publication from a newer v1 tool commit and make
     assert.equal(receipt.imageSourceSha, publicationSourceSha);
     assert.equal(receipt.target.namespace, 'agentweaver');
     assert.deepEqual(receipt.steps.map(step => step.name), ['publication-image-verified', 'migration-lock-checked']);
+    assert.ok(receipt.plannedSteps.includes('apply-runtime-grants'));
     assert.equal(world.calls.some(call =>
       call.command === 'kubectl' && ['create', 'delete', 'apply'].some(verb => call.args.includes(verb))), false);
+    assert.equal(world.calls.some(call => call.command === 'grants'), false);
   } finally {
     world.dispose();
   }
@@ -180,7 +204,20 @@ test('execute passes credentials only through Secret stdin, cleans up, and recor
     const receipt = await withMigrationCredentials(() =>
       runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides));
     assert.equal(receipt.result, 'succeeded');
-    assert.deepEqual(receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.equal(receipt.schemaVersion, 2);
+    assert.deepEqual(receipt.cleanup, {
+      job: true, secret: true, lock: true, grantStageReceipts: true, sourceCheckout: true,
+    });
+    assert.deepEqual(receipt.grants, { status: 'exact', sourceSha: deploymentSourceSha, planSha256 });
+    assert.deepEqual(receipt.steps.map(step => step.name).slice(-2), ['migration-job-completed', 'runtime-grants-applied']);
+    assert.equal(receipt.grantStageReceipts.length, 1);
+    // Grants run after the Job completes, while the lock is held, and before the Job, Secret and lock are removed.
+    const grantIndex = world.calls.findIndex(call => call.command === 'grants');
+    const jobReadIndex = world.calls.findLastIndex(call =>
+      call.command === 'kubectl' && call.args.includes('get') && call.args.includes('job'));
+    const firstDeleteIndex = world.calls.findIndex(call => call.command === 'kubectl' && call.args.includes('delete'));
+    assert.ok(jobReadIndex < grantIndex && grantIndex < firstDeleteIndex);
+    assert.equal(world.calls[grantIndex].lockHeld, true);
     assert.equal(receipt.target.subscriptionId, DB_MAINTENANCE_TARGET.subscriptionId);
     assert.equal(receipt.target.resourceGroup, DB_MAINTENANCE_TARGET.resourceGroup);
     assert.equal(JSON.stringify(receipt).includes('test-access-token'), false);
@@ -208,5 +245,121 @@ test('failed migration Job cleans up its resources and writes a failed receipt',
     assert.equal(JSON.stringify(world.receipts[0].receipt).includes('test-access-token'), false);
   } finally {
     world.dispose();
+  }
+});
+test('failed migration Job does not apply grants', async () => {
+  const world = createWorld({ jobOutcome: 'Failed' });
+  try {
+    await assert.rejects(withMigrationCredentials(() =>
+      runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides)));
+    assert.equal(world.calls.some(call => call.command === 'grants'), false);
+    assert.equal(world.receipts[0].receipt.grants, undefined);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('a failed or unproven grant step fails the run, moves its receipt, and still cleans up', async () => {
+  for (const grants of [
+    async () => { throw new Error('grant readback incomplete'); },
+    async () => grantResult({ receipt: { p1Initializer: { verification: 'projects-config-grants-dry-run', planSha256 } } }),
+    async () => grantResult({ sourceSha: 'e'.repeat(40) }),
+    async () => grantResult({ planSha256: '8'.repeat(64) }),
+  ]) {
+    const world = createWorld({ grants });
+    try {
+      await assert.rejects(withMigrationCredentials(() =>
+        runProjectsConfigMigration({ ...world.options, execute: true }, world.overrides)),
+      /grant readback incomplete|did not prove exact Projects & Config grants/);
+      const receipt = world.receipts[0].receipt;
+      assert.equal(receipt.result, 'failed');
+      assert.equal(receipt.grants, undefined);
+      assert.equal(receipt.steps.some(step => step.name === 'runtime-grants-applied'), false);
+      assert.deepEqual(receipt.cleanup, {
+        job: true, secret: true, lock: true, grantStageReceipts: true, sourceCheckout: true,
+      });
+      assert.equal(receipt.grantStageReceipts.length, 1);
+      assert.equal(world.objects.size, 0);
+    } finally {
+      world.dispose();
+    }
+  }
+});
+
+test('a checkout left dirty by the grant step fails the run', async () => {
+  const world = createWorld();
+  try {
+    let grantsDone = false;
+    const exec = world.overrides.exec;
+    const overrides = {
+      ...world.overrides,
+      applyRuntimeGrants: async root => {
+        const result = await world.overrides.applyRuntimeGrants(root);
+        grantsDone = true;
+        return result;
+      },
+      exec: (command, args, settings) => command === 'git' && args[0] === 'status' && grantsDone
+        ? { status: 0, stdout: '?? Temp/unexpected.txt\n', stderr: '' }
+        : exec(command, args, settings),
+    };
+    await assert.rejects(withMigrationCredentials(() =>
+      runProjectsConfigMigration({ ...world.options, execute: true }, overrides)),
+    /source checkout left dirty/);
+    assert.equal(world.receipts[0].receipt.result, 'failed');
+    assert.equal(world.receipts[0].receipt.cleanup.sourceCheckout, false);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('execute and dry run require the fetched origin/v1 tip before any Kubernetes access', async () => {
+  for (const execute of [true, false]) {
+    const world = createWorld({ originV1: 'e'.repeat(40) });
+    try {
+      await assert.rejects(withMigrationCredentials(() =>
+        runProjectsConfigMigration({ ...world.options, execute }, world.overrides)),
+      /must be the fetched origin\/v1 tip/);
+      assert.equal(world.calls.some(call => call.command === 'kubectl' || call.command === 'grants'), false);
+    } finally {
+      world.dispose();
+    }
+  }
+});
+
+test('the receipt directory must be outside the source checkout', async () => {
+  const world = createWorld();
+  try {
+    const options = { ...world.options, receiptDir: path.join(process.cwd(), 'receipts') };
+    await assert.rejects(runProjectsConfigMigration(options, world.overrides), /--receipt-dir must be outside/);
+    assert.equal(world.calls.length, 0);
+    assert.equal(world.receipts.length, 0);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('grant stage receipts move out of Temp and leave unrelated files in place', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'projects-config-grants-root-'));
+  const destination = mkdtempSync(path.join(tmpdir(), 'projects-config-grants-receipts-'));
+  try {
+    assert.deepEqual(collectGrantStageReceipts(root, destination, 'abcdef123456'), []);
+    const temp = path.join(root, 'Temp');
+    mkdirSync(temp);
+    const name = `p1-postgres-${'a'.repeat(32)}.jsonl`;
+    writeFileSync(path.join(temp, name), '{"stage":"grants"}\n');
+    const moved = collectGrantStageReceipts(root, destination, 'abcdef123456');
+    assert.equal(moved.length, 1);
+    assert.equal(moved[0].path, path.join(destination, `projects-config-grants-abcdef123456-${name}`));
+    assert.match(moved[0].sha256, /^[a-f0-9]{64}$/);
+    assert.equal(readFileSync(moved[0].path, 'utf8'), '{"stage":"grants"}\n');
+    assert.equal(existsSync(temp), false);
+
+    mkdirSync(temp);
+    writeFileSync(path.join(temp, 'unrelated.txt'), 'keep');
+    assert.deepEqual(collectGrantStageReceipts(root, destination, 'abcdef123456'), []);
+    assert.equal(existsSync(path.join(temp, 'unrelated.txt')), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(destination, { recursive: true, force: true });
   }
 });

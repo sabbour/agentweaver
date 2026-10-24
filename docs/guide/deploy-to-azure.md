@@ -536,6 +536,8 @@ Deployment is restored in the fixed rollout order with the publication image.
 For a publication with Projects & Config migrations, run
 `db:maintenance:projects-config` in dry-run mode first. After reviewing the
 plan, execute the migration and retain the receipt path printed by the runner.
+The execute run also applies and reads back the planned Projects & Config
+runtime grants, and the rollout refuses a receipt without them.
 Then use the whole-release dry run above. Include the successful migration
 receipt for the execute command:
 

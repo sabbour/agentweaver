@@ -7,7 +7,9 @@ import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { selectPublishedComponentImage } from '../../release/publication-image.mjs';
 import { verifyServiceRegistryImage } from '../../release/registry.mjs';
+import { bootstrapP1Postgres } from '../bootstrap-p1-postgres.mjs';
 import { DB_MAINTENANCE_TARGET, LOCK_NAME } from './db-maintenance.mjs';
+import { collectGrantStageReceipts, isOutsideCheckout } from './grant-stage-receipts.mjs';
 import { run, redact } from './exec.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 
@@ -18,8 +20,11 @@ const JOB_TEMPLATE = path.join('deploy', 'k8s', 'migrations', 'projects-config',
 const RUN_LABEL = 'agentweaver.io/db-maintenance-run';
 const SHA = /^[a-f0-9]{40}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const PLAN_HASH = /^[a-f0-9]{64}$/;
 const JOB_TIMEOUT_SECONDS = 900;
 const RECEIPT_DIRECTORY = path.join(homedir(), '.agentweaver', 'db-maintenance');
+
+export { collectGrantStageReceipts };
 const TERMINAL_CONDITIONS = new Set(['Complete', 'Failed']);
 const FAILED_PULL_REASONS = new Set([
   'ErrImagePull', 'ImagePullBackOff', 'InvalidImageName', 'CreateContainerConfigError',
@@ -28,10 +33,12 @@ const FAILED_PULL_REASONS = new Set([
 export const PROJECTS_CONFIG_MIGRATION_USAGE = `Usage: npm run db:maintenance:projects-config -- --publication <receipt.json> [options]
 
 Without --execute the runner checks the publication, target access, and migration lock, then writes a plan receipt.
+Run it from a clean checkout of the fetched origin/v1 tip.
 
   --publication <file>       Published release receipt containing the Projects & Config image. Required.
-  --execute                  Create a short-lived credential Secret and one migration Job.
-  --receipt-dir <directory>  Receipt directory. Default: ~/.agentweaver/db-maintenance.
+  --execute                  Create a short-lived credential Secret and one migration Job, then apply and
+                             read back the planned Projects & Config runtime grants under the same lock.
+  --receipt-dir <directory>  Receipt directory outside the checkout. Default: ~/.agentweaver/db-maintenance.
   --help                     Show this help.
 
 Execute reads these process environment variables and never prints their values:
@@ -190,6 +197,10 @@ function defaultDependencies() {
     sleep: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
     newRunId: () => randomUUID().replaceAll('-', '').slice(0, 12),
     verifyImage: image => verifyServiceRegistryImage(image),
+    applyRuntimeGrants: root => bootstrapP1Postgres({
+      repoRoot: root, execute: true, mode: 'projects-config-grants',
+    }),
+    collectGrantStageReceipts,
     log: message => console.log(message),
   };
 }
@@ -199,9 +210,15 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
   const root = path.resolve(deps.root ?? process.cwd());
   const runId = deps.newRunId();
   const receiptDirectory = path.resolve(root, options.receiptDir ?? RECEIPT_DIRECTORY);
+  // Receipts inside the checkout would make it dirty, and the next maintenance or rollout step
+  // refuses a dirty checkout. Reject that before any receipt is written.
+  if (!isOutsideCheckout(root, receiptDirectory)) {
+    fail('--receipt-dir must be outside the source checkout.');
+  }
   const receiptPath = path.join(receiptDirectory, `projects-config-migration-${runId}.json`);
   const receipt = {
-    schemaVersion: 1,
+    // Version 2 receipts prove the runtime grants as well as the migration; the rollout requires them.
+    schemaVersion: 2,
     runId,
     mode: options.execute ? 'execute' : 'dry-run',
     result: 'running',
@@ -224,9 +241,11 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
   let lockHeld = false;
   let secretCreated = false;
   let jobCreated = false;
+  let grantStageStarted = false;
 
   const record = (name, detail = {}) => {
-    receipt.steps.push({ name, at: deps.now().toISOString(), ...detail });
+    // The step name goes last so a detail field can never replace it; the rollout reads step names.
+    receipt.steps.push({ at: deps.now().toISOString(), ...detail, name });
     deps.log(`- ${name}`);
   };
   const must = (result, action) => {
@@ -249,6 +268,11 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
       'Could not refresh origin/v1');
     // A later maintenance script can operate on an earlier publication only when both are on approved v1.
     requireAncestor(deps.exec, root, head, 'deployment-tool source');
+    // The runtime grant step runs only from the admitted v1 tip. Check that here, before any lock,
+    // Secret, or Job exists, so a run never migrates and then stops short of applying the grants.
+    const admitted = must(deps.exec('git', ['rev-parse', 'origin/v1'], { cwd: root }),
+      'Could not read origin/v1').stdout.trim();
+    if (head !== admitted) fail(`the source checkout must be the fetched origin/v1 tip ${admitted}, not ${head}.`);
     const publication = parseJson(deps.readFile(path.resolve(root, options.publicationPath), 'utf8'),
       'publication receipt');
     const image = await resolveProjectsConfigPublicationImage(publication, {
@@ -273,10 +297,10 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
       const credentials = readCredentials();
       secrets.push(credentials.connection, credentials.accessToken);
       receipt.plannedSteps = ['lock', 'create-credential-secret', 'create-migration-job',
-        'verify-job-completion', 'delete-job-and-secret', 'release-lock', 'receipt'];
+        'verify-job-completion', 'apply-runtime-grants', 'delete-job-and-secret', 'release-lock', 'receipt'];
     } else {
       receipt.plannedSteps = ['verify-migration-lock', 'create-credential-secret', 'create-migration-job',
-        'verify-job-completion', 'delete-job-and-secret', 'release-lock', 'receipt'];
+        'verify-job-completion', 'apply-runtime-grants', 'delete-job-and-secret', 'release-lock', 'receipt'];
     }
 
     await deps.withKubeconfig({
@@ -336,16 +360,32 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
         };
         kubectl(['create', '--filename', '-'], { input: JSON.stringify(secret) });
         secretCreated = true;
-        record('credential-secret-created', { name: secretName });
+        record('credential-secret-created', { secret: secretName });
 
         const name = `projects-config-migration-${runId}`;
         const job = prepareJob(jobTemplate, { name, image: image.image, runId, secretName });
         validateJob(job, { name });
         kubectl(['create', '--filename', '-'], { input: JSON.stringify(job) });
         jobCreated = true;
-        record('migration-job-created', { name, image: image.image });
+        record('migration-job-created', { job: name, image: image.image });
         await waitForJob(kubectl, deps, name);
-        record('migration-job-completed', { name, image: image.image });
+        record('migration-job-completed', { job: name, image: image.image });
+
+        // The migration creates Projects & Config tables, but the runtime role cannot use them until
+        // the planned grants exist. Apply and read them back now, still under the maintenance lock,
+        // so no run can finish with migrated tables and missing grants. Both steps are idempotent:
+        // if this fails, rerunning the whole command repeats a no-op migration and retries the grants.
+        grantStageStarted = true;
+        const grants = await deps.applyRuntimeGrants(root);
+        const evidence = grants?.receipt?.p1Initializer;
+        // Accept only the exact grant mode, run from this same source, with a readback marker and plan hash.
+        if (grants?.executed !== true || grants.mode !== 'projects-config-grants' || grants.sourceSha !== head ||
+            evidence?.verification !== 'projects-config-grants-applied' ||
+            !PLAN_HASH.test(evidence.planSha256 ?? '') || evidence.planSha256 !== grants.planSha256) {
+          fail('the runtime grant step did not prove exact Projects & Config grants for this source.');
+        }
+        receipt.grants = { status: 'exact', sourceSha: head, planSha256: evidence.planSha256 };
+        record('runtime-grants-applied', { planSha256: evidence.planSha256 });
         receipt.result = 'succeeded';
       } catch (error) {
         actionError = error;
@@ -379,6 +419,21 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
             ], { cwd: root, check: false }).status === 0;
           receipt.cleanup.lock = released;
           if (!released) cleanupErrors.push('database maintenance lock');
+        }
+        if (grantStageStarted) {
+          // The grant stage writes its receipt under the checkout's Temp directory, even when it fails.
+          // Move it next to this receipt, then prove the checkout is clean again. Otherwise a rerun or
+          // the whole-release rollout from this same checkout would refuse to start.
+          try {
+            receipt.grantStageReceipts = deps.collectGrantStageReceipts(root, receiptDirectory, runId);
+            receipt.cleanup.grantStageReceipts = true;
+          } catch (error) {
+            receipt.cleanup.grantStageReceipts = false;
+            cleanupErrors.push(`grant stage receipt (${safeDiagnostic(error, secrets)})`);
+          }
+          const status = deps.exec('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: root });
+          receipt.cleanup.sourceCheckout = status.status === 0 && !status.stdout.trim();
+          if (!receipt.cleanup.sourceCheckout) cleanupErrors.push('source checkout left dirty');
         }
         if (cleanupErrors.length) {
           receipt.cleanupErrors = cleanupErrors;

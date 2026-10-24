@@ -41,23 +41,30 @@ var pendingMode = (args.Length == 12 || args.Length == 13) && args[0] == "--appl
     args[1] == "--source-sha" && args[3] == "--core-merge-sha" && args[5] == "--plan-sha256" &&
     args[7] == "--max-core-version" && args[9] == "--max-events-version" &&
     (args.Length == 12 ? args[11] == "--dry-run" : args[11] == "--receipt");
+// Projects & Config runtime grants after that service's separate migration Job: --dry-run writes nothing;
+// --receipt applies. It never migrates and changes no other service, so it takes no Core merge or maxima.
+var projectsGrantsMode = (args.Length == 6 || args.Length == 7) && args[0] == "--apply-projects-config-grants" &&
+    args[1] == "--source-sha" && args[3] == "--plan-sha256" &&
+    (args.Length == 6 ? args[5] == "--dry-run" : args[5] == "--receipt");
 // Each mode accepts one exact argument shape. Positional checks keep a typo from silently selecting
-// a different mode. The 12-argument pending form ends with --dry-run, so it is read-only too.
-var readOnlyMode = inspectMode || (pendingMode && args.Length == 12);
-if (!freshMode && !continuationMode && !inspectMode && !pendingMode)
+// a different mode. The 12-argument pending form and the 6-argument grant form end with --dry-run,
+// so they are read-only too.
+var readOnlyMode = inspectMode || (pendingMode && args.Length == 12) || (projectsGrantsMode && args.Length == 6);
+if (!freshMode && !continuationMode && !inspectMode && !pendingMode && !projectsGrantsMode)
     throw new ArgumentException(
-        "Use --plan; --inspect --source-sha SHA --plan-sha256 SHA256; --apply-pending-migrations --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --max-core-version N --max-events-version N (--dry-run | --receipt PATH); --initialize --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --receipt PATH; or the reviewed --continue-after-projects-config mode with its prior source, plan, and receipt hashes.");
+        "Use --plan; --inspect --source-sha SHA --plan-sha256 SHA256; --apply-pending-migrations --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --max-core-version N --max-events-version N (--dry-run | --receipt PATH); --apply-projects-config-grants --source-sha SHA --plan-sha256 SHA256 (--dry-run | --receipt PATH); --initialize --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --receipt PATH; or the reviewed --continue-after-projects-config mode with its prior source, plan, and receipt hashes.");
 
-// Argument positions differ by mode. Inspection has no Core merge, so its plan hash sits at index 4.
-// Only writing modes get a receipt path; read-only runs leave receiptArgument null.
+// Argument positions differ by mode. Inspection and the grant step have no Core merge, so their plan
+// hash sits at index 4. Only writing modes get a receipt path; read-only runs leave receiptArgument null.
 var sourceSha = args[2];
-var coreMergeSha = inspectMode ? null : args[4];
-var expectedPlanHash = inspectMode ? args[4] : args[6];
+var coreMergeSha = inspectMode || projectsGrantsMode ? null : args[4];
+var expectedPlanHash = inspectMode || projectsGrantsMode ? args[4] : args[6];
 var priorSourceSha = continuationMode ? args[8] : null;
 var priorPlanHash = continuationMode ? args[10] : null;
 var priorReceiptArgument = continuationMode ? args[12] : null;
 var priorReceiptHash = continuationMode ? args[14] : null;
-var receiptArgument = continuationMode ? args[16] : freshMode ? args[8] : pendingMode && !readOnlyMode ? args[12] : null;
+var receiptArgument = continuationMode ? args[16] : freshMode ? args[8] : pendingMode && !readOnlyMode ? args[12]
+    : projectsGrantsMode && !readOnlyMode ? args[6] : null;
 int? maxCoreVersion = pendingMode ? ParseVersion(args[8]) : null;
 int? maxEventsVersion = pendingMode ? ParseVersion(args[10]) : null;
 if (!Regex.IsMatch(sourceSha, "^[0-9a-f]{40}$") ||
@@ -72,7 +79,7 @@ var worktreeStatus = await RunLocalAsync("git", ["status", "--porcelain", "--unt
 var statusEntries = worktreeStatus.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 // Fresh initialization needs a fully clean checkout. Later modes may also see receipts that earlier
 // runs left under Temp/, so untracked files there are allowed. Any other change is rejected.
-var invalidStatus = continuationMode || inspectMode || pendingMode
+var invalidStatus = continuationMode || inspectMode || pendingMode || projectsGrantsMode
     ? statusEntries.Any(line => !line.StartsWith("?? Temp/", StringComparison.Ordinal) &&
         !line.StartsWith("?? Temp\\", StringComparison.Ordinal))
     : statusEntries.Length != 0;
@@ -376,6 +383,84 @@ try
         return 0;
     }
 
+    if (projectsGrantsMode)
+    {
+        // The Projects & Config migration Job creates operator-owned tables with no runtime grants. This mode
+        // applies only that service's planned runtime grants. It never migrates, never creates or alters
+        // roles, and never writes another service's objects.
+        var projects = plan.Services.Single(item => item.Service == "projects-config");
+        // Step 1: the five runtime roles must still map exactly to their Entra principals and already hold
+        // CONNECT. This mode repairs neither, so any difference stops the run before a write.
+        principals = await P1PostgresContinuation.ReadPrincipalsAsync(principalConnection, null, plan, cancellationToken);
+        var grantors = InitializerChecks.CaptureMembershipGrantors(
+            plan.Services, principals, operatorOid, plan.Target.TenantId);
+        InitializerChecks.AssertPrincipals(plan.Services, principals, operatorOid, plan.Target.TenantId, grantors);
+        InitializerChecks.AssertRuntimeDatabaseConnect(existingBoundary, principals.Select(item => item.Oid).ToArray());
+        await AssertPreflightAsync(connection, plan, existingBoundary, operatorOid, cancellationToken);
+        var runtimeOid = principals.Single(item => item.Role == projects.Role).Oid;
+        // Step 2: the operator must own the schema, which may grant the runtime role only USAGE. Every live
+        // relation must be planned and operator-owned, and no live runtime privilege may exceed the plan.
+        // Holding fewer privileges is expected: that is the gap this mode closes.
+        InitializerChecks.AssertServiceSchemaAcl(projects,
+            await ReadJsonAsync<SchemaAclState>(connection, null, InitializerChecks.SchemaAclQuery, cancellationToken,
+                new NpgsqlParameter("schema", projects.Schema)),
+            operatorOid, runtimeOid, allowMissingRuntimeUsage: true);
+        InitializerChecks.AssertRelationsWithinPlan(projects,
+            await ReadRelationsAsync(connection, null, projects, true, cancellationToken), plan.Target.OperatorName);
+        // Step 3: the live EF history must equal this source's compiled migrations, and the schema must hold
+        // exactly the planned operator-owned objects. Every grant then targets an object this reviewed
+        // source created, and a missing or extra migration stops the run.
+        await P1PostgresContinuation.VerifyServiceMigrationsAsync(source, projects, cancellationToken);
+        await P1PostgresContinuation.AssertOwnedObjectsAsync(
+            connection, projects, plan.Target.OperatorName, cancellationToken);
+        // Step 4: report whether the live grants already match the plan. The readback runs in a transaction
+        // that is always rolled back. A mismatch is reported, not thrown, because it is the expected input.
+        string grantsBefore;
+        await using (var readback = await connection.BeginTransactionAsync(cancellationToken))
+        {
+            try
+            {
+                await AssertFunctionGrantsAsync(connection, readback, projects, operatorOid, runtimeOid, cancellationToken);
+                await transactionCheckAsync(connection, readback, projects, operatorOid, runtimeOid, cancellationToken);
+                grantsBefore = "exact";
+            }
+            catch (InvalidOperationException error)
+            {
+                grantsBefore = $"incomplete: {error.Message}";
+            }
+            await readback.RollbackAsync(cancellationToken);
+        }
+        var grantSummary = JsonSerializer.Serialize(new
+        {
+            service = projects.Service, schema = projects.Schema, role = projects.Role, grantsBefore,
+        });
+        if (readOnlyMode)
+        {
+            Console.WriteLine(grantSummary);
+            Console.WriteLine("P1_POSTGRES_PROJECTS_CONFIG_GRANTS_DRY_RUN writes=false");
+            return 0;
+        }
+
+        // Step 5: apply the planned grants and read every grant back in one transaction. Any difference throws
+        // before commit, so the database keeps either its previous grants or exactly the planned set.
+        await RecordAsync($"projects_config_state_checked:{grantSummary}");
+        await AssertPreflightAsync(connection, plan, existingBoundary, operatorOid, cancellationToken);
+        await using (var grants = await connection.BeginTransactionAsync(cancellationToken))
+        {
+            await ApplyPlannedServiceGrantsAsync(connection, grants, projects, cancellationToken);
+            // CONNECT already exists, so the database ACL and protected state must be unchanged.
+            InitializerChecks.AssertBoundary(existingBoundary,
+                await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken), []);
+            await AssertFunctionGrantsAsync(connection, grants, projects, operatorOid, runtimeOid, cancellationToken);
+            await transactionCheckAsync(connection, grants, projects, operatorOid, runtimeOid, cancellationToken);
+            await grants.CommitAsync(cancellationToken);
+        }
+        await RecordAsync("projects_config_exact_grants_committed");
+        Console.WriteLine(grantSummary);
+        Console.WriteLine("P1_POSTGRES_PROJECTS_CONFIG_GRANTS_APPLIED runtimeIdentityProof=false deploymentProof=false");
+        return 0;
+    }
+
     if (pendingMode)
     {
         // Incremental continuation proves the whole initialized state before its first write and never creates,
@@ -461,36 +546,9 @@ try
         // Re-apply the exact planned grants for the two incrementally migrated services in one checked transaction.
         await using (var grants = await connection.BeginTransactionAsync(cancellationToken))
         {
+            // New tables from the pending migrations get their planned privileges here.
             foreach (var service in plan.Services.Where(item => PlannedVersions(item) is not null))
-            {
-                // Grants are additive and idempotent, so re-granting already present privileges is safe.
-                // New tables from the pending migrations get their planned privileges here.
-                await ExecuteAsync(connection, grants,
-                    $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}", cancellationToken);
-                foreach (var table in service.Tables)
-                {
-                    var relation = $"{Quote(service.Schema)}.{Quote(table.Table)}";
-                    await ExecuteAsync(connection, grants,
-                        $"GRANT {string.Join(", ", table.Privileges)} ON TABLE {relation} TO {Quote(service.Role)}",
-                        cancellationToken);
-                    // Some tables also let the runtime role update only a lock column.
-                    if (table.LockColumn is not null)
-                        await ExecuteAsync(connection, grants,
-                            $"GRANT UPDATE ({Quote(table.LockColumn)}) ON TABLE {relation} TO {Quote(service.Role)}",
-                            cancellationToken);
-                }
-                foreach (var function in service.Functions)
-                {
-                    var signature = $"{Quote(service.Schema)}.{function.Signature}";
-                    // PostgreSQL grants EXECUTE to PUBLIC by default. Remove it, then grant EXECUTE only
-                    // to the runtime role when the plan allows it.
-                    await ExecuteAsync(connection, grants,
-                        $"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC", cancellationToken);
-                    if (function.Execute)
-                        await ExecuteAsync(connection, grants,
-                            $"GRANT EXECUTE ON FUNCTION {signature} TO {Quote(service.Role)}", cancellationToken);
-                }
-            }
+                await ApplyPlannedServiceGrantsAsync(connection, grants, service, cancellationToken);
             // CONNECT already exists, so the database ACL and protected state must be byte-for-byte unchanged.
             InitializerChecks.AssertBoundary(existingBoundary,
                 await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken), []);
@@ -736,6 +794,38 @@ catch (Exception error)
 // Quotes identifiers using the same source-checked rules as the invariant helpers.
 static string Quote(string value) => InitializerChecks.Quote(value);
 
+// Issues one service's planned runtime grants inside the caller's transaction. The caller must read every
+// grant back before commit; this helper only issues the statements.
+static async Task ApplyPlannedServiceGrantsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+    ServicePlan service, CancellationToken cancellationToken)
+{
+    // Grants are additive and idempotent, so re-granting privileges that already exist changes nothing.
+    await ExecuteAsync(connection, transaction,
+        $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}", cancellationToken);
+    foreach (var table in service.Tables)
+    {
+        var relation = $"{Quote(service.Schema)}.{Quote(table.Table)}";
+        await ExecuteAsync(connection, transaction,
+            $"GRANT {string.Join(", ", table.Privileges)} ON TABLE {relation} TO {Quote(service.Role)}",
+            cancellationToken);
+        // Some tables also let the runtime role update only one lock column.
+        if (table.LockColumn is not null)
+            await ExecuteAsync(connection, transaction,
+                $"GRANT UPDATE ({Quote(table.LockColumn)}) ON TABLE {relation} TO {Quote(service.Role)}",
+                cancellationToken);
+    }
+    foreach (var function in service.Functions)
+    {
+        var signature = $"{Quote(service.Schema)}.{function.Signature}";
+        // PostgreSQL grants EXECUTE to PUBLIC by default. Remove it, then grant EXECUTE only to the runtime
+        // role when the plan allows it.
+        await ExecuteAsync(connection, transaction, $"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC", cancellationToken);
+        if (function.Execute)
+            await ExecuteAsync(connection, transaction,
+                $"GRANT EXECUTE ON FUNCTION {signature} TO {Quote(service.Role)}", cancellationToken);
+    }
+}
+
 // Parses an explicit approved maximum migration version.
 static int ParseVersion(string value) => Regex.IsMatch(value, "^[1-9][0-9]{0,3}$")
     ? int.Parse(value, System.Globalization.CultureInfo.InvariantCulture)
@@ -940,6 +1030,18 @@ static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTrans
                     $"The {service.Service} role does not have exactly its planned UPDATE column on {service.Schema}.{table.Table}.");
         }
     }
+    // Table-level checks can't see column grants, such as UPDATE on one column of a read-only table.
+    // The service's startup authority check rejects those, so they must fail here too.
+    var columnGrants = new List<ColumnGrant>();
+    await using (var columnQuery = new NpgsqlCommand(InitializerChecks.RuntimeColumnGrantsQuery, connection, transaction))
+    {
+        columnQuery.Parameters.AddWithValue("schema", service.Schema);
+        columnQuery.Parameters.AddWithValue("runtime", NpgsqlTypes.NpgsqlDbType.Oid, runtimeOid);
+        await using var reader = await columnQuery.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            columnGrants.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3)));
+    }
+    InitializerChecks.AssertRuntimeColumnGrants(service, columnGrants);
     foreach (var table in service.OwnerOnlyTables)
     {
         foreach (var privilege in new[] { "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER" })

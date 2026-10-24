@@ -55,8 +55,10 @@ the steps an execute run would take and changes nothing.
 Projects & Config migrations use a separate runner because the P1 database
 maintenance command covers Environment, Orchestrator, and Events & Sessions.
 The Projects & Config runner selects and verifies its image from a published
-release receipt. Its clean `v1` checkout may be newer than the publication
-source, as long as both commits are on `origin/v1`.
+release receipt. Run it from a clean checkout of the fetched `origin/v1` tip.
+That checkout may be newer than the publication source, as long as the
+publication source is also on `origin/v1`. Keep `--receipt-dir` outside the
+checkout so the checkout stays clean for the rollout.
 
 Start with a dry run:
 
@@ -85,17 +87,43 @@ npm run db:maintenance:projects-config -- `
 ```
 
 The runner shares the database-maintenance Lease, creates a short-lived
-credential Secret and a single migration Job, waits for completion, removes
-the Job and Secret, releases the Lease, and writes a receipt. The receipt
-records the publication, image, target, and cleanup results without credentials.
-If the Job or cleanup fails, the runner writes a failed receipt and exits
-non-zero.
+credential Secret and a single migration Job, and waits for completion. The
+migration Job grants the Projects & Config runtime role nothing on new tables
+or functions, so the runner then applies the planned runtime grants while it
+still holds the Lease. It commits the grants only when every grant reads back
+exactly as planned. The runner then removes the Job and Secret, releases the
+Lease, moves the grant step's receipt next to its own receipt, confirms the
+checkout is clean, and writes its receipt. The receipt records the publication,
+image, target, grant plan hash, and cleanup results without credentials.
+
+If the Job, the grant step, or cleanup fails, the runner writes a failed
+receipt and exits non-zero. Fix the cause and rerun the same command. Both
+steps are idempotent: the migration applies nothing new, and the grant step
+retries the grants.
+
+To inspect or repair the grants without a migration, run the grant step on its
+own from the same clean checkout. Its dry run reads the current grants and
+writes nothing:
+
+```powershell
+node scripts\azure\bootstrap-p1-postgres.mjs --apply-projects-config-grants --dry-run --execute
+node scripts\azure\bootstrap-p1-postgres.mjs --apply-projects-config-grants --execute
+```
+
+The step changes only the Projects & Config schema grants. It refuses
+unplanned column-level grants, and it saves its receipt in
+`~/.agentweaver/db-maintenance` (or the `--receipt-dir` you pass, which must be
+outside the checkout) and prints the receipt path. Without these
+grants, the restarted service can't read its tables and fails to start.
 
 Run the whole-release dry run after reviewing the migration result. Before an
 execute rollout, pass the successful migration receipt with
-`--projects-config-migration-receipt`; the rollout refuses a missing or
-mismatched receipt. This makes the Projects & Config migration complete before
-the dependent Deployment is restarted.
+`--projects-config-migration-receipt`. The rollout refuses a missing or
+mismatched receipt, and a receipt that doesn't prove exact runtime grants for
+the plan in the rollout's source. Receipts from runners that didn't apply
+grants are refused; rerun the migration runner to get a new receipt. This makes
+the Projects & Config migration and its grants complete before the dependent
+Deployment is restarted.
 
 ## Before you begin
 
@@ -379,7 +407,8 @@ These changes need their own review.
 After the ownership handover, the operator no longer owns the P1 schemas. The
 `--inspect` and `--apply-pending-migrations` modes of
 `bootstrap-p1-postgres.mjs` expect operator ownership, so use this runner for
-later migrations instead.
+later migrations instead. The `--apply-projects-config-grants` mode checks and
+changes only the Projects & Config schema, which the operator still owns.
 
 ## Related information
 

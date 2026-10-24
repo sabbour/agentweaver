@@ -179,6 +179,15 @@ test('Initializer validates planned and installed mutation guards before it comm
   assert.ok(source.includes('InitializerChecks.AssertMigrationCatalog(plan.CoreVersions, CoordinationOwnerMigrator.SupportedVersions,'));
 });
 
+test('Initializer protected-table count matches the plan', () => {
+  // The initializer rejects any plan whose one-column row-lock table count differs from its reviewed number.
+  // A new protected table must update that number in the same change, or every initializer mode stops.
+  const plan = buildP1PostgresPlan();
+  const protectedTables = plan.services.flatMap(service => service.tables.filter(table => table.lockColumn));
+  const checks = readFileSync(new URL('../../../tools/P1PostgresInitializer/InitializerChecks.cs', import.meta.url), 'utf8');
+  assert.ok(checks.includes(`protectedTables.Length != ${protectedTables.length})`));
+});
+
 // Both owner catalogs must agree with the separately reviewed initializer plan.
 test('Current source catalog preserves exact Core and Events versions and embedded resources', () => {
   const plan = buildP1PostgresPlan();

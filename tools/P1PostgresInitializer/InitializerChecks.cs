@@ -153,8 +153,10 @@ internal static class InitializerChecks
             service.Tables.Where(table => table.LockColumn is not null ||
                 table.MutationDenialRequired || table.MutationDenialGuard is not null)
                 .Select(table => (Service: service, Table: table))).ToArray();
-        if (services.Length != 5 || protectedTables.Length != 8)
-            throw new InvalidOperationException("The exact eight protected row-lock columns are required.");
+        // The reviewed plan protects nine tables: five Events tables and four Core tables. A different count
+        // means the plan changed without this check being reviewed with it.
+        if (services.Length != 5 || protectedTables.Length != 9)
+            throw new InvalidOperationException("The exact nine protected row-lock columns are required.");
 
         foreach (var (service, table) in protectedTables)
         {
@@ -227,16 +229,45 @@ internal static class InitializerChecks
                 $"The {service} source catalog ends at {planned[^1]}, not the approved maximum {value}. Refusing to apply unapproved versions.");
     }
 
-    /// <summary>Reads one schema's owner and explicit ACL; returns no row when the schema is absent.</summary>
+    /// <summary>Reads one schema's owner and effective ACL; returns no row when the schema is absent.</summary>
+    // A schema nobody has granted on has a NULL ACL, which means the owner's default CREATE and USAGE.
+    // Expanding the default keeps that state equal to the explicit owner-only ACL.
     internal const string SchemaAclQuery = """
         SELECT pg_catalog.json_build_object(
             'ownerOid', n.nspowner::bigint,
             'grants', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
                 'grantor', a.grantor::bigint, 'grantee', a.grantee::bigint,
                 'privilege', a.privilege_type, 'grantable', a.is_grantable))
-                FROM pg_catalog.aclexplode(n.nspacl) a), '[]'::json))::text
+                FROM pg_catalog.aclexplode(COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))) a), '[]'::json))::text
         FROM pg_catalog.pg_namespace n WHERE n.nspname = @schema
         """;
+
+    /// <summary>Lists column-level grants in one schema that reach the runtime role directly or through PUBLIC.</summary>
+    internal const string RuntimeColumnGrantsQuery = """
+        SELECT c.relname, a.attname, x.privilege_type, x.grantee = 0
+        FROM pg_catalog.pg_attribute a
+        JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN LATERAL pg_catalog.aclexplode(a.attacl) x
+        WHERE n.nspname = @schema AND a.attnum > 0 AND NOT a.attisdropped
+          AND x.grantee IN (@runtime, 0)
+        ORDER BY c.relname, a.attname, x.privilege_type
+        """;
+
+    /// <summary>Allows a runtime column grant only as UPDATE on a planned lock column.</summary>
+    internal static void AssertRuntimeColumnGrants(ServicePlan service, IEnumerable<ColumnGrant> grants)
+    {
+        foreach (var grant in grants)
+        {
+            // PUBLIC column grants reach every role, so none is ever planned. A direct grant is planned
+            // only when it is UPDATE on the lock column the plan names for that table.
+            var planned = !grant.Public && grant.Privilege == "UPDATE" &&
+                service.Tables.Any(table => table.Table == grant.Relation && table.LockColumn == grant.Column);
+            if (!planned)
+                throw new InvalidOperationException(
+                    $"The {service.Service} runtime role has unexpected column {grant.Privilege} authority on {service.Schema}.{grant.Relation}.{grant.Column}.");
+        }
+    }
 
     /// <summary>Reads one schema's relations, owners, and the runtime role's effective privileges when the role exists.</summary>
     internal const string RelationStateQuery = """
@@ -290,7 +321,8 @@ internal static class InitializerChecks
         """;
 
     /// <summary>Requires a service schema to be operator-owned with only owner CREATE/USAGE and runtime USAGE.</summary>
-    internal static void AssertServiceSchemaAcl(ServicePlan service, SchemaAclState? state, uint operatorOid, uint runtimeOid)
+    internal static void AssertServiceSchemaAcl(ServicePlan service, SchemaAclState? state, uint operatorOid, uint runtimeOid,
+        bool allowMissingRuntimeUsage = false)
     {
         // The only allowed schema grants: the operator's own owner privileges, and USAGE for the runtime role.
         // Grant options are never allowed, so the runtime role cannot pass privileges on.
@@ -300,9 +332,13 @@ internal static class InitializerChecks
             new(operatorOid, operatorOid, "USAGE", false),
             new(operatorOid, runtimeOid, "USAGE", false),
         ];
+        // The grant step may run before the runtime role ever received USAGE. It then accepts the owner grants
+        // alone, because it adds USAGE itself. Any other grant still fails.
+        var withoutRuntimeUsage = expected[..2];
         // A missing schema, an unresolved role id, a different owner, or any extra grant fails closed.
         if (state is null || operatorOid == 0 || runtimeOid == 0 || state.OwnerOid != operatorOid ||
-            !SameGrants(expected, state.Grants))
+            !(SameGrants(expected, state.Grants) ||
+                (allowMissingRuntimeUsage && SameGrants(withoutRuntimeUsage, state.Grants))))
             throw new InvalidOperationException(
                 $"The {service.Schema} schema is missing or has unexpected ownership or privileges. Refusing incremental continuation.");
     }
@@ -660,6 +696,8 @@ internal sealed record ServicePlan(string Service, string Schema, string Role, s
     public string[] OwnerOnlyTables { get; init; } = [];
     public string[] OwnerOnlySequences { get; init; } = [];
 }
+/// <summary>One column-level grant that reaches the runtime role directly or, when Public is true, through PUBLIC.</summary>
+internal sealed record ColumnGrant(string Relation, string Column, string Privilege, bool Public);
 /// <summary>Runtime table privileges and any one-column lock update allowed for the service.</summary>
 internal sealed record TablePlan(string Table, string[] Privileges, string? LockColumn, bool MutationDenialRequired,
     MutationDenialGuardPlan? MutationDenialGuard);
@@ -675,7 +713,7 @@ internal sealed record MutationGuardState(string Table, string? TriggerName, str
     string? FunctionSource);
 /// <summary>One live relation in a service schema with its owner and effective runtime privileges.</summary>
 internal sealed record RelationState(string Name, string Kind, string Owner, string[]? RuntimePrivileges);
-/// <summary>Observed owner and explicit ACL for one service schema.</summary>
+/// <summary>Observed owner and effective ACL for one service schema.</summary>
 internal sealed record SchemaAclState(
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint OwnerOid, AclGrant[] Grants);
 /// <summary>Function signature and whether its execute privilege is granted to the runtime principal.</summary>

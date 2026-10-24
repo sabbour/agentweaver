@@ -166,6 +166,86 @@ public sealed class P1PostgresInitializerPreflightPostgresTests(ProbePostgresFix
     }
 
     [Fact]
+    public async Task ProjectsConfigGrantChecksSeeNullSchemaAclsAndColumnGrants()
+    {
+        await using (var maintenance = new NpgsqlConnection(fixture.ConnectionString))
+        {
+            await maintenance.OpenAsync();
+            await ExecuteAsync(maintenance, "CREATE DATABASE p1_projects_grants");
+        }
+        await using var connection = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+        {
+            Database = "p1_projects_grants",
+        }.ConnectionString);
+        await connection.OpenAsync();
+        await ExecuteAsync(connection, "CREATE SCHEMA projects_config");
+        await ExecuteAsync(connection, "CREATE ROLE p1_projects_runtime NOLOGIN");
+        var ownerOid = await ScalarOidAsync(connection,
+            "SELECT nspowner FROM pg_catalog.pg_namespace WHERE nspname = 'projects_config'");
+        var runtimeOid = await ScalarOidAsync(connection,
+            "SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'p1_projects_runtime'");
+        var service = new ServicePlan("projects-config", "projects_config", "p1_projects_runtime", "object-id",
+        [
+            new TablePlan("requests", ["SELECT"], null, false, null),
+            new TablePlan("locks", ["SELECT"], "lock_owner", false, null),
+        ], []);
+
+        // A fresh schema has a NULL ACL. The query must expand it to the owner's defaults, so the grant
+        // step accepts the state it exists to repair.
+        Assert.Null(await ScalarAsync(connection,
+            "SELECT nspacl::text FROM pg_catalog.pg_namespace WHERE nspname = 'projects_config'"));
+        InitializerChecks.AssertServiceSchemaAcl(service, await ReadSchemaAclAsync(connection), ownerOid, runtimeOid,
+            allowMissingRuntimeUsage: true);
+
+        await ExecuteAsync(connection, "CREATE TABLE projects_config.requests (id int, status text)");
+        await ExecuteAsync(connection, "CREATE TABLE projects_config.locks (id int, lock_owner text)");
+        await ExecuteAsync(connection,
+            "GRANT SELECT ON projects_config.requests, projects_config.locks TO p1_projects_runtime");
+        await ExecuteAsync(connection, "GRANT UPDATE (lock_owner) ON projects_config.locks TO p1_projects_runtime");
+        InitializerChecks.AssertRuntimeColumnGrants(service, await ReadColumnGrantsAsync(connection, runtimeOid));
+
+        // A single-column UPDATE on a read-only table is invisible to table-level privilege checks.
+        await ExecuteAsync(connection, "GRANT UPDATE (status) ON projects_config.requests TO p1_projects_runtime");
+        var hidden = await ReadColumnGrantsAsync(connection, runtimeOid);
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertRuntimeColumnGrants(service, hidden));
+        await ExecuteAsync(connection, "REVOKE UPDATE (status) ON projects_config.requests FROM p1_projects_runtime");
+
+        // A PUBLIC column grant reaches the runtime role too.
+        await ExecuteAsync(connection, "GRANT UPDATE (lock_owner) ON projects_config.locks TO PUBLIC");
+        var publicGrant = await ReadColumnGrantsAsync(connection, runtimeOid);
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertRuntimeColumnGrants(service, publicGrant));
+    }
+
+    private static async Task<uint> ScalarOidAsync(NpgsqlConnection connection, string sql) =>
+        Convert.ToUInt32(await ScalarAsync(connection, sql));
+
+    private static async Task<object?> ScalarAsync(NpgsqlConnection connection, string sql)
+    {
+        await using var command = new NpgsqlCommand(sql, connection);
+        var value = await command.ExecuteScalarAsync();
+        return value is DBNull ? null : value;
+    }
+
+    private static async Task<SchemaAclState?> ReadSchemaAclAsync(NpgsqlConnection connection)
+    {
+        await using var command = new NpgsqlCommand(InitializerChecks.SchemaAclQuery, connection);
+        command.Parameters.AddWithValue("schema", "projects_config");
+        return JsonSerializer.Deserialize<SchemaAclState>((string)(await command.ExecuteScalarAsync())!, JsonOptions);
+    }
+
+    private static async Task<List<ColumnGrant>> ReadColumnGrantsAsync(NpgsqlConnection connection, uint runtimeOid)
+    {
+        await using var command = new NpgsqlCommand(InitializerChecks.RuntimeColumnGrantsQuery, connection);
+        command.Parameters.AddWithValue("schema", "projects_config");
+        command.Parameters.AddWithValue("runtime", NpgsqlTypes.NpgsqlDbType.Oid, runtimeOid);
+        var grants = new List<ColumnGrant>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            grants.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3)));
+        return grants;
+    }
+
+    [Fact]
     public async Task ProductionRoleSetupSqlWorksForNonSuperuserCreateRoleOperatorAndCommitsExactState()
     {
         await using var admin = new NpgsqlConnection(fixture.ConnectionString);

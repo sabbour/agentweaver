@@ -230,7 +230,9 @@ schema range accepted by the Orchestrator and Events and Sessions images.
 This command does not run database migrations or reset data. Run the
 Projects & Config migration runner before this command when the publication
 contains its migrations. Whole-release execute requires the successful
-migration receipt for the same publication, image, and target. It stops if the
+migration receipt for the same publication, image, and target. That receipt
+must also prove the runner applied and read back the exact Projects & Config
+runtime grants for the plan in this command's source. It stops if the
 database-maintenance lock is held.
 
 Run the same command with `--execute` only after reviewing the plan. Execute
