@@ -14,11 +14,12 @@ Prepare one manifest for the exact target. It must include:
 - The current platform selection revision.
 - Independently produced native and recovery evidence for checks that need it.
 
-The harness accepts only releases pinned in the release deployment script,
-such as v1.0.9. It checks the release's annotated tag, exact source commit, and
-immutable publication result before it records evidence. A release deployed by
-the whole-release script stays pinned for this check but can't be deployed with
-the pre-acceptance bootstrap.
+For a draft-stage release manifest, the harness accepts only releases pinned in
+the release deployment script. It checks each release's tag, exact source
+commit, and immutable publication result before it records evidence. v1.0.9 is
+pinned with an annotated tag. It was deployed by the whole-release script, so it
+stays pinned for this check but can't be deployed with the pre-acceptance
+bootstrap.
 
 The one-account launcher cannot produce a distinct denied identity. If the
 manifest requests one, the launcher stops before sign-in. Do not use the
