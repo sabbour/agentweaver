@@ -11,6 +11,7 @@ import {
 } from '../changesets.mjs';
 import { createPlan, planChecksum } from '../plan.mjs';
 import { createReboundReceipt } from '../rebind-receipt.mjs';
+import { verifyPreparation } from '../preparation.mjs';
 import {
   readPublicationPackageComponents, resolveVersionApplicationSourceSha, selectPublicationPackageComponents,
 } from '../publication-selection.mjs';
@@ -547,71 +548,111 @@ test('a committed pre-planning change may precede the receipt source within the 
   assert.doesNotThrow(() => validateChangesets(readManifest(dir), { root: dir, changes, ancestorSha }));
 });
 
-test('a squash-merged release rebind verifies preplanning commits and generated artifacts by content', (t) => {
-  const dir = initRepo(t, { changeset: false });
-  const baseSha = git(dir, 'rev-parse', 'HEAD');
+test('a squash-merged release rebind passes the exact v1 push diff after checking both squash boundaries', (t) => {
+  const { dir, baseSha, planSourceSha, squashSha } = squashReleaseFixture(t);
+  const originalReceiptPath = `releases/receipts/${planSourceSha}.json`;
+  const originalPush = {
+    eventName: 'push', testedSourceSha: squashSha, baseSha, sourceHeadSha: '',
+  };
+  const originalBase = resolveCiComparisonBase(dir, originalPush);
+  assert.equal(originalBase, baseSha);
+  assert.throws(() => validateChangesets(readManifest(dir), {
+    root: dir, changes: diffChanges(dir, originalBase), ancestorSha: originalBase,
+  }), /stale or unrelated receipt/);
 
-  const manifest = readManifest(dir);
-  manifest.compatibility[0].versions.push('0.1.1');
-  writeFileSync(manifestPath(dir), JSON.stringify(manifest, null, 2) + '\n');
-  writeFileSync(path.join(dir, 'release-preparation.txt'), 'Compatibility was reviewed before planning.\n');
-  commit(dir, 'predeclare dependency compatibility');
-
-  writeFileSync(path.join(dir, '.changeset', 'dependency-fix.md'),
-    '---\n"Pkg.B": patch\n---\n\nFix the dependency contract.\n');
-  writeFileSync(path.join(dir, 'packages', 'Pkg.B', 'Feature.cs'), 'class Feature {}\n');
-  commit(dir, 'record release changeset and source');
-  const planSourceSha = git(dir, 'rev-parse', 'HEAD');
-
-  const plan = createPlan(readManifest(dir), { root: dir });
-  assert.equal(plan.components[0].toVersion, '0.1.1');
-  applyPlan(plan, manifestPath(dir), { root: dir });
-  commit(dir, 'apply release plan');
-
-  const preparedTree = git(dir, 'rev-parse', 'HEAD^{tree}');
-  const squashSha = execFileSync('git', [
-    '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
-    'commit-tree', preparedTree, '-p', baseSha,
-  ], { cwd: dir, encoding: 'utf8', input: 'squash release branch\n' }).trim();
-  git(dir, 'switch', '--detach', '-q', squashSha);
-
-  const rebound = createReboundReceipt(dir, `releases/receipts/${planSourceSha}.json`, squashSha);
+  const rebound = createReboundReceipt(dir, originalReceiptPath, squashSha);
   assert.equal(rebound.sourceSha, squashSha);
   assert.equal(rebound.planSourceSha, planSourceSha);
   assert.equal(rebound.preparationBaseSha, baseSha);
-  const reboundPath = path.join(dir, 'releases', 'receipts', `${squashSha}.json`);
-  writeFileSync(reboundPath, JSON.stringify(rebound, null, 2) + '\n');
-  commit(dir, 'rebind the verified release receipt');
+  assert.doesNotThrow(() => verifyPreparation(dir, rebound));
+  writeFileSync(path.join(dir, 'releases', 'receipts', `${squashSha}.json`),
+    JSON.stringify(rebound, null, 2) + '\n');
 
-  const changes = diffChanges(dir, squashSha);
-  const ancestorSha = resolveMergeBase(dir, squashSha);
-  assert.equal(ancestorSha, squashSha);
-  assert.doesNotThrow(() => validateChangesets(readManifest(dir), { root: dir, changes, ancestorSha }));
+  git(dir, 'add', '-A');
+  const rebindSquashSha = commitTree(dir, git(dir, 'write-tree'), [squashSha], 'squash receipt rebind');
+  git(dir, 'switch', '--detach', '-q', rebindSquashSha);
+  const push = {
+    eventName: 'push', testedSourceSha: rebindSquashSha, baseSha: squashSha, sourceHeadSha: '',
+  };
+  const pushBase = resolveCiComparisonBase(dir, push);
+  assert.equal(pushBase, squashSha);
+  const changes = diffChanges(dir, pushBase);
+  assert.doesNotThrow(() => validateChangesets(readManifest(dir), { root: dir, changes, ancestorSha: pushBase }));
   assert.equal(requireFreshVersionApplicationReceipt(changes), `releases/receipts/${squashSha}.json`);
+  assert.equal(git(dir, 'rev-parse', 'HEAD'), rebindSquashSha);
 });
 
-test('a squash-rebound receipt rejects a missing preplanning source edit', (t) => {
-  const dir = initRepo(t, { changeset: false });
-  const baseSha = git(dir, 'rev-parse', 'HEAD');
-  writeFileSync(path.join(dir, 'release-preparation.txt'), 'Reviewed before planning.\n');
-  commit(dir, 'preplan release');
-  writeFileSync(path.join(dir, '.changeset', 'preplanned-feature.md'),
-    '---\n"Pkg.A": patch\n---\n\nRecord the prepared feature.\n');
-  commit(dir, 'record preplanned release changeset');
-  const planSourceSha = git(dir, 'rev-parse', 'HEAD');
+test('CI fetches the verified plan source by exact SHA after its source branch is deleted', (t) => {
+  const { dir, planSourceSha, squashSha } = squashReleaseFixture(t);
+  const rebound = createReboundReceipt(dir, `releases/receipts/${planSourceSha}.json`, squashSha);
+  writeFileSync(path.join(dir, 'releases', 'receipts', `${squashSha}.json`),
+    JSON.stringify(rebound, null, 2) + '\n');
+  git(dir, 'add', '-A');
+  const pushSha = commitTree(dir, git(dir, 'write-tree'), [squashSha], 'squash receipt rebind');
+  const checkout = createPushCheckout(t, dir, { planSourceSha, squashSha, pushSha });
+  const pushBase = resolveCiComparisonBase(checkout, {
+    eventName: 'push', testedSourceSha: pushSha, baseSha: squashSha, sourceHeadSha: '',
+  });
+  assert.equal(pushBase, squashSha);
+  const changes = diffChanges(checkout, pushBase);
+  assert.doesNotThrow(() => validateChangesets(readManifest(checkout), {
+    root: checkout, changes, ancestorSha: pushBase,
+  }));
+  assert.equal(git(checkout, 'cat-file', '-t', `${planSourceSha}^{commit}`), 'commit');
+});
 
-  const plan = createPlan(readManifest(dir), { root: dir });
-  applyPlan(plan, manifestPath(dir), { root: dir });
-  commit(dir, 'apply release plan');
-  writeFileSync(path.join(dir, 'release-preparation.txt'), 'Different content in squash result.\n');
-  git(dir, 'add', 'release-preparation.txt');
-  const squashTree = git(dir, 'write-tree');
-  const squashSha = execFileSync('git', [
-    '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
-    'commit-tree', squashTree, '-p', baseSha,
-  ], { cwd: dir, encoding: 'utf8', input: 'squash release branch\n' }).trim();
-  git(dir, 'switch', '--detach', '-q', squashSha);
+test('version-2 receipts reject tampered checksums, original hashes, and reintroduced notes', (t) => {
+  const { dir, planSourceSha, squashSha } = squashReleaseFixture(t);
+  const rebound = createReboundReceipt(dir, `releases/receipts/${planSourceSha}.json`, squashSha);
 
+  assert.throws(() => verifyPreparation(dir, { ...rebound, planChecksum: 'f'.repeat(64) }),
+    /receipt decisions do not match genuine source changesets/);
+  assert.throws(() => verifyPreparation(dir, { ...rebound, originalReceiptSha256: '0'.repeat(64) }),
+    /original preparation receipt does not match the squash-rebind hash/);
+
+  const notePath = path.join(dir, '.changeset', 'dependency-fix.md');
+  writeFileSync(notePath, git(dir, 'show', `${planSourceSha}:.changeset/dependency-fix.md`));
+  assert.throws(() => verifyPreparation(dir, rebound),
+    /consumed source changeset is still present after squash integration/);
+});
+
+test('version-2 receipts require archived changesets to match the source bytes', (t) => {
+  const { dir, planSourceSha, squashSha } = squashReleaseFixture(t);
+  const rebound = createReboundReceipt(dir, `releases/receipts/${planSourceSha}.json`, squashSha);
+  writeFileSync(path.join(dir, '.changeset', 'archive', 'dependency-fix.md'), 'tampered archive\n');
+  assert.throws(() => verifyPreparation(dir, rebound),
+    /archive \.changeset\/archive\/dependency-fix\.md differs from source Git note bytes/);
+});
+
+test('version-2 receipts reject a wrong plan source and an integrated source missing from history', (t) => {
+  const { dir, baseSha, planSourceSha, squashSha } = squashReleaseFixture(t);
+  const rebound = createReboundReceipt(dir, `releases/receipts/${planSourceSha}.json`, squashSha);
+
+  assert.throws(() => verifyPreparation(dir, { ...rebound, planSourceSha: baseSha }),
+    /receipt decisions do not match genuine source changesets/);
+  assert.throws(() => verifyPreparation(dir, { ...rebound, sourceSha: 'f'.repeat(40) }),
+    /squash-rebind source is not in the integrated history/);
+});
+
+test('a squash-rebound receipt does not bypass changeset coverage for additional product edits', (t) => {
+  const { dir, planSourceSha, squashSha } = squashReleaseFixture(t);
+  const rebound = createReboundReceipt(dir, `releases/receipts/${planSourceSha}.json`, squashSha);
+  writeFileSync(path.join(dir, 'releases', 'receipts', `${squashSha}.json`),
+    JSON.stringify(rebound, null, 2) + '\n');
+  writeFileSync(path.join(dir, 'packages', 'Pkg.A', 'Unplanned.cs'), 'class Unplanned {}\n');
+  git(dir, 'add', '-A');
+  const pushSha = commitTree(dir, git(dir, 'write-tree'), [squashSha], 'squash receipt with extra product edit');
+  git(dir, 'switch', '--detach', '-q', pushSha);
+  const pushBase = resolveCiComparisonBase(dir, {
+    eventName: 'push', testedSourceSha: pushSha, baseSha: squashSha, sourceHeadSha: '',
+  });
+  assert.throws(() => validateChangesets(readManifest(dir), {
+    root: dir, changes: diffChanges(dir, pushBase), ancestorSha: pushBase,
+  }), /missing new or modified changeset entries for Pkg\.A/);
+});
+
+test('a squash-rebound receipt rejects changed preparation content', (t) => {
+  const { dir, planSourceSha, squashSha } = squashReleaseFixture(t, { mismatchPreparation: true });
   assert.throws(() => createReboundReceipt(
     dir, `releases/receipts/${planSourceSha}.json`, squashSha,
   ), /preparation source change is missing or differs/);
@@ -679,6 +720,61 @@ test('a deleted-only top-level changeset with no receipt at all still fails the 
 function commit(dir, message = 'fixture') {
   git(dir, 'add', '-A');
   git(dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', message);
+}
+
+function commitTree(dir, tree, parents, message) {
+  return execFileSync('git', [
+    '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    'commit-tree', tree, ...parents.flatMap((parent) => ['-p', parent]),
+  ], { cwd: dir, encoding: 'utf8', input: `${message}\n` }).trim();
+}
+
+function squashReleaseFixture(t, { mismatchPreparation = false } = {}) {
+  const dir = initRepo(t, { changeset: false });
+  const baseSha = git(dir, 'rev-parse', 'HEAD');
+
+  const manifest = readManifest(dir);
+  manifest.compatibility[0].versions.push('0.1.1');
+  writeFileSync(manifestPath(dir), JSON.stringify(manifest, null, 2) + '\n');
+  writeFileSync(path.join(dir, 'release-preparation.txt'), 'Compatibility was reviewed before planning.\n');
+  commit(dir, 'predeclare dependency compatibility');
+
+  writeFileSync(path.join(dir, '.changeset', 'dependency-fix.md'),
+    '---\n"Pkg.B": patch\n---\n\nFix the dependency contract.\n');
+  writeFileSync(path.join(dir, 'packages', 'Pkg.B', 'Feature.cs'), 'class Feature {}\n');
+  commit(dir, 'record release changeset and source');
+  const planSourceSha = git(dir, 'rev-parse', 'HEAD');
+
+  const plan = createPlan(readManifest(dir), { root: dir });
+  assert.equal(plan.components[0].toVersion, '0.1.1');
+  applyPlan(plan, manifestPath(dir), { root: dir });
+  commit(dir, 'apply release plan');
+
+  if (mismatchPreparation) {
+    writeFileSync(path.join(dir, 'release-preparation.txt'), 'Different content in squash result.\n');
+    git(dir, 'add', 'release-preparation.txt');
+  }
+  const squashSha = commitTree(dir, git(dir, 'write-tree'), [baseSha], 'squash release branch');
+  git(dir, 'switch', '--detach', '-q', squashSha);
+  return { dir, baseSha, planSourceSha, squashSha };
+}
+
+function createPushCheckout(t, dir, { planSourceSha, pushSha }) {
+  const fixtureRoot = path.resolve('artifacts', 'release-tests');
+  const remote = mkdtempSync(path.join(fixtureRoot, 'v1-release-remote-'));
+  const checkout = mkdtempSync(path.join(fixtureRoot, 'v1-release-push-'));
+  t.after(() => rmSync(remote, { recursive: true, force: true }));
+  t.after(() => rmSync(checkout, { recursive: true, force: true }));
+  git(remote, 'init', '--bare', '-q');
+  git(dir, 'remote', 'add', 'origin', remote);
+  git(dir, 'push', '--quiet', 'origin', `${pushSha}:refs/heads/v1`);
+  git(dir, 'push', '--quiet', 'origin', `${planSourceSha}:refs/pull/source/head`);
+  execFileSync('git', ['clone', '--no-local', '--quiet', '--branch', 'v1', remote, checkout]);
+  assert.equal(git(checkout, 'rev-parse', 'HEAD'), pushSha);
+  assert.throws(() => execFileSync('git', ['cat-file', '-e', `${planSourceSha}^{commit}`], {
+    cwd: checkout, stdio: ['ignore', 'pipe', 'ignore'],
+  }));
+  return checkout;
 }
 
 function integratedPreparationFixture(t, { corruption, integratedExtra = false, freshNote = false } = {}) {

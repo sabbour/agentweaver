@@ -71,14 +71,15 @@ semantic-version intent. Documentation-only changes do not require a changeset.
    The base-aware command also checks changeset coverage against the selected
    base commit. CI runs validation against its verified source history.
    A version receipt may use a source commit after the diff merge base when
-   compatibility declarations were committed before planning, but that source
-   must be reachable from the tested head. If the release PR is squash-merged,
-   rebind its receipt to the integrated v1 commit before publication. The
-   rebound receipt retains the original plan source and checksum; CI verifies
-   its original receipt, changeset bytes, preplanning edits, compatibility
-   declarations, and generated version artifacts against the integrated tree.
-   The original plan-source commit must remain available in Git. The complete
-   diff remains subject to normal changeset coverage.
+   compatibility declarations were committed before planning. If the release
+   PR is squash-merged, rebind its receipt to the integrated v1 commit before
+   publication. The rebound receipt retains the original plan source and
+   checksum; CI verifies the original receipt, changeset bytes, preplanning
+   edits, compatibility declarations, and generated version artifacts against
+   the integrated tree. If the plan-source commit is absent from the checkout,
+   validation fetches that exact commit SHA from `origin`. GitHub keeps the
+   closed pull-request head ref available after its source branch is deleted.
+   The complete diff remains subject to normal changeset coverage.
 
 2. Generate the source-bound version plan:
 
@@ -110,8 +111,10 @@ semantic-version intent. Documentation-only changes do not require a changeset.
    ```
 
    The command adds a receipt for the integrated source; it does not edit or
-   replace the original plan receipt. Wait for the new receipt's CI and docs
-   checks to pass before publication.
+   replace the original plan receipt. The follow-up receipt PR can also be
+   squash-merged. Its v1 push is checked against the preceding v1 tip, while
+   CI verifies the integrated source and the original plan source independently.
+   Wait for the new receipt's CI and docs checks to pass before publication.
 
 After applying versions, restore the separate PostgreSQL initializer from the
 repository root and commit its generated lock file with the release changes:
@@ -173,10 +176,13 @@ manifest version or a successful local build.
 
 ```mermaid
 flowchart LR
-  Event["Verified event and ordered commit parents"] --> SourceBase["Authored source common ancestor"]
-  SourceBase --> Diff["Compare with the integrated tested tree"]
-  Diff --> Guards["Unchanged receipt, archive, and product coverage checks"]
-  Tested["Integrated checkout and exact coverage identity"] --> Diff
+  Event["Verified v1 push and first-parent base"] --> Diff["Compare the exact push diff"]
+  Plan["Original plan-source SHA"] --> Fetch["Fetch exact SHA from origin when absent"]
+  Fetch --> Verify["Recompute plan and verify original receipt"]
+  Squash["Squash-integrated source commit"] --> Verify
+  Verify --> Artifacts["Check archives, consumed notes, and prepared files"]
+  Diff --> Guards["Keep receipt and product changeset coverage checks"]
+  Artifacts --> Guards
 ```
 
 ```mermaid
