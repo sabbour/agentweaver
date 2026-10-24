@@ -3,6 +3,41 @@ import { AgentweaverGatewayClient } from './api';
 import type { KnowledgeRecordTransferBundle, ProjectConfiguration } from './contracts';
 
 describe('Gateway API client', () => {
+  it('uses one-shot repository selection codes for explicit team-sync preview and commit', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        configurationRevision: 7,
+        changeSetHash: 'a'.repeat(64),
+        nothingToSync: false,
+        changes: [{ path: '.squad/team.md', kind: 'modified' }],
+      })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        commitId: 'commit-1',
+        branch: 'main',
+        htmlUrl: 'https://github.com/octo/team/commit/commit-1',
+      })));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const preview = await client.previewProjectTeamSync('token', 'p1', 'selection-code', 'tenant');
+    await client.commitProjectTeamSync('token', 'p1', 'selection-code', {
+      expectedChangeSetHash: preview.changeSetHash,
+      expectedConfigurationRevision: preview.configurationRevision,
+    }, 'tenant');
+
+    expect(String(fetcher.mock.calls[0][0])).toBe('https://gateway.example.test/api/v1/projects/p1/team/sync');
+    expect(String(fetcher.mock.calls[1][0])).toBe('https://gateway.example.test/api/v1/projects/p1/team/sync');
+    for (const [, init] of fetcher.mock.calls) {
+      expect(new Headers(init?.headers).get('X-Agentweaver-Team-Sync-Selection')).toBe('selection-code');
+      expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant');
+      expect(init?.cache).toBe('no-store');
+    }
+    expect(fetcher.mock.calls[0][1]?.method).toBeUndefined();
+    expect(fetcher.mock.calls[1][1]?.method).toBe('POST');
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toEqual({
+      expectedChangeSetHash: 'a'.repeat(64),
+      expectedConfigurationRevision: 7,
+    });
+  });
+
   it('reads exact captured file bytes and the digest with the explicit tenant', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(new Uint8Array([0, 255, 65]), {
       headers: { 'X-Source-Control-Output-Sha256': 'digest' },

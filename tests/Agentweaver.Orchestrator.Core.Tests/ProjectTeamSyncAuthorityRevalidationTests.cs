@@ -83,7 +83,43 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
         Assert.Equal(0, adapter.RefUpdates);
     }
 
-    private static async Task<WebApplication> CreateAppAsync(ProjectState state, PausingTeamSyncAdapter adapter)
+    [Fact]
+    public async Task PublicCommitRejectsStaleConfigurationBeforeReadingOrWritingRepository()
+    {
+        var state = new ProjectState("writeProjects") { ConfigurationRevision = 2 };
+        var adapter = new CountingTeamSyncAdapter();
+        await using var app = await CreateAppAsync(state, adapter);
+
+        var response = await InvokePublicTeamSyncCommitAsync(
+            app,
+            new ProjectTeamSyncCommitCommand(new string('a', 64), 1, null));
+
+        Assert.Equal(StatusCodes.Status409Conflict, response.StatusCode);
+        Assert.Contains("team_sync_configuration_changed", response.Body, StringComparison.Ordinal);
+        Assert.Equal(0, adapter.Reads);
+        Assert.Equal(0, adapter.CommitAttempts);
+    }
+
+    [Fact]
+    public async Task PublicCommitRejectsChangedPreviewWithoutRepositoryWrite()
+    {
+        var state = new ProjectState("writeProjects");
+        var adapter = new CountingTeamSyncAdapter();
+        await using var app = await CreateAppAsync(state, adapter);
+
+        var response = await InvokePublicTeamSyncCommitAsync(
+            app,
+            new ProjectTeamSyncCommitCommand(new string('a', 64), 1, null));
+
+        Assert.Equal(StatusCodes.Status409Conflict, response.StatusCode);
+        Assert.Contains("team_sync_change_set_changed", response.Body, StringComparison.Ordinal);
+        Assert.Equal(1, adapter.Reads);
+        Assert.Equal(0, adapter.CommitAttempts);
+    }
+
+    private static async Task<WebApplication> CreateAppAsync(
+        ProjectState state,
+        ISourceControlTeamSyncAdapter adapter)
     {
         // Keep owner state and provider barriers mutable so each test can change authority mid-request.
         var builder = WebApplication.CreateBuilder();
@@ -101,8 +137,6 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
         builder.Services.AddSingleton<IProjectTeamSyncTokenClient, TestTeamSyncTokenClient>();
         builder.Services.AddSingleton(state);
         builder.Services.AddSingleton(adapter);
-        builder.Services.AddSingleton<ISourceControlTeamSyncAdapter>(services =>
-            services.GetRequiredService<PausingTeamSyncAdapter>());
         builder.Services.AddSingleton(TimeProvider.System);
 
         var app = builder.Build();
@@ -125,6 +159,22 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
             Content = JsonContent.Create(request, options: JsonOptions)
         };
         message.Headers.Authorization = new("Bearer", "test-token");
+        using var response = await client.SendAsync(message);
+        return ((int)response.StatusCode, await response.Content.ReadAsStringAsync());
+    }
+
+    private static async Task<(int StatusCode, string Body)> InvokePublicTeamSyncCommitAsync(
+        WebApplication app,
+        ProjectTeamSyncCommitCommand request)
+    {
+        // The public route accepts the short-lived repository selection only in its dedicated header.
+        using var client = app.GetTestClient();
+        using var message = new HttpRequestMessage(HttpMethod.Post, "/api/projects/project/team/sync")
+        {
+            Content = JsonContent.Create(request, options: JsonOptions)
+        };
+        message.Headers.Authorization = new("Bearer", "test-token");
+        message.Headers.Add(ProjectTeamSyncContract.SelectionCodeHeader, TeamSyncSelectionCode);
         using var response = await client.SendAsync(message);
         return ((int)response.StatusCode, await response.Content.ReadAsStringAsync());
     }
@@ -155,6 +205,7 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
     private sealed class ProjectState(string permission)
     {
         public string Permission { get; set; } = permission;
+        public long ConfigurationRevision { get; set; } = 1;
         public SourceControlRepositoryIdentity Repository { get; set; } =
             new("octo", "widget");
     }
@@ -166,7 +217,31 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
             CancellationToken cancellationToken)
         {
             // Return no-store owner contracts from the mutable state observed at each validation boundary.
-            object payload = request.RequestUri!.AbsolutePath switch
+            if (request.RequestUri!.AbsolutePath == "/api/projects/project/team-sync-projection")
+            {
+                var expectedRevision = long.Parse(
+                    request.RequestUri.Query.Split('=', 2)[1],
+                    System.Globalization.CultureInfo.InvariantCulture);
+                if (expectedRevision != state.ConfigurationRevision)
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict));
+                var proof = new IssueSyncProjectProof(
+                    "project", "tenant", Actor, "connection", state.Repository);
+                var projection = new ProjectTeamSyncProjection(
+                    "project",
+                    "Project",
+                    null,
+                    state.ConfigurationRevision,
+                    proof,
+                    [new ProjectTeamSyncMember("lead", "Lead", "Engineer", "Builds the project.", 0)]);
+                var projectionResponse = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(projection, options: JsonOptions)
+                };
+                projectionResponse.Headers.CacheControl = new() { NoStore = true };
+                return Task.FromResult(projectionResponse);
+            }
+
+            object payload = request.RequestUri.AbsolutePath switch
             {
                 "/api/authorization/context" => new ProjectsAuthorizationContext(
                     1,
@@ -187,6 +262,34 @@ public sealed class ProjectTeamSyncAuthorityRevalidationTests
             };
             response.Headers.CacheControl = new() { NoStore = true };
             return Task.FromResult(response);
+        }
+    }
+
+    private sealed class CountingTeamSyncAdapter : ISourceControlTeamSyncAdapter
+    {
+        public int Reads { get; private set; }
+        public int CommitAttempts { get; private set; }
+
+        public Task<SourceControlTeamSyncSnapshot> ReadTeamSyncTreeAsync(
+            SourceControlRepositoryIdentity repository,
+            string reference,
+            SecretCredential credential,
+            CancellationToken cancellationToken)
+        {
+            Reads++;
+            return Task.FromResult(new SourceControlTeamSyncSnapshot(
+                repository.FullName, reference, CommitSha, []));
+        }
+
+        public Task<SourceControlTeamSyncCommit> CommitTeamSyncChangesAsync(
+            SourceControlRepositoryIdentity repository,
+            SecretCredential credential,
+            SourceControlTeamSyncCommitRequest request,
+            Func<CancellationToken, Task> revalidateBeforeRefUpdate,
+            CancellationToken cancellationToken)
+        {
+            CommitAttempts++;
+            throw new InvalidOperationException("Rejected previews must not reach the repository writer.");
         }
     }
 

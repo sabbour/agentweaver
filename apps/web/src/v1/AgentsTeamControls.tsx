@@ -14,7 +14,15 @@ import { useAuth } from './AuthContext';
 import { GatewayError, gatewayClient } from './api';
 import { inspectAgentSuiteArchive, type InspectedAgentSuiteArchive } from './agentSuiteArchive';
 import { castableRoles, castingError, draftWithMember, draftWithRole, draftWithoutMember, isConflict, reviewPath } from './castingData';
-import type { AgentSuiteExport, AgentSuiteImportRequest, ProjectCastingProposal, ProjectCastingRoleDefinition, ProjectConfiguration, RemoteMcpConnectionDirectoryEntry } from './contracts';
+import type {
+  AgentSuiteExport,
+  AgentSuiteImportRequest,
+  ProjectCastingProposal,
+  ProjectCastingRoleDefinition,
+  ProjectConfiguration,
+  ProjectTeamSyncStatus,
+  RemoteMcpConnectionDirectoryEntry,
+} from './contracts';
 import { ErrorNotice } from './pageParts';
 
 const CONNECTION_DIRECTORY_PAGE_SIZE = 50;
@@ -233,25 +241,103 @@ function agentSuiteError(reason: unknown): string {
   return castingError(reason, true);
 }
 
+/** Maps repository team-sync failures to actionable, non-sensitive page copy. */
+function projectTeamSyncError(reason: unknown): string {
+  if (reason instanceof GatewayError && reason.status === 403)
+    return 'Repository team sync requires Owner access and a configured GitHub App repository.';
+  if (reason instanceof GatewayError && reason.status === 409)
+    return 'The project team or repository changed after this preview. Preview again before committing.';
+  return castingError(reason, true);
+}
+
 /**
- * 0.x "Sync" panel on v1: exports this project's team as an AgentSuite package
- * and stages an imported package as a proposal for review.
+ * 0.x "Sync" panel on v1: explicitly previews and commits repository team files,
+ * and keeps digest-checked AgentSuite export/import available as a separate transfer.
  */
-export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: {
+export function TeamSyncPanel({ projectId, configurationRevision, repositoryFullName = null, disabled = false, onConflict }: {
   projectId: string;
   configurationRevision: number;
+  repositoryFullName?: string | null;
+  disabled?: boolean;
   onConflict?: () => void;
 }) {
   const styles = useStyles();
   const { apiCall } = useAuth();
   const navigate = useNavigate();
   const fileInput = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState<'export' | 'inspect' | 'import' | null>(null);
+  const [busy, setBusy] = useState<'export' | 'inspect' | 'import' | 'repository-preview' | 'repository-commit' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [repositoryPreview, setRepositoryPreview] = useState<ProjectTeamSyncStatus | null>(null);
   const [selectedArchive, setSelectedArchive] = useState<(InspectedAgentSuiteArchive & { file: File }) | null>(null);
   const [connections, setConnections] = useState<RemoteMcpConnectionDirectoryEntry[]>([]);
   const [providerBindings, setProviderBindings] = useState<Record<string, string>>({});
+
+  /** Issues a short-lived code for the configured repository without exposing credentials. */
+  const issueRepositorySelection = async (): Promise<string> => {
+    if (!repositoryFullName) throw new Error('Configure a GitHub App repository before syncing team files.');
+    const selection = await apiCall(
+      (token) => gatewayClient.issueRepoAppRepositorySelection(token, repositoryFullName),
+      null,
+    );
+    return selection.selectionCode;
+  };
+
+  /** Reads the current repository tree and stores the reviewable change set. */
+  const previewRepository = async () => {
+    setBusy('repository-preview');
+    setError(null);
+    setNotice(null);
+    setRepositoryPreview(null);
+    try {
+      const selectionCode = await issueRepositorySelection();
+      const result = await apiCall((token, tenant) => gatewayClient.previewProjectTeamSync(
+        token, projectId, selectionCode, tenant,
+      ), null);
+      if (result.configurationRevision !== configurationRevision) {
+        setError('The project team changed while the preview was loading. Reload the team and preview again.');
+        onConflict?.();
+        return;
+      }
+      setRepositoryPreview(result);
+    } catch (reason) {
+      setError(projectTeamSyncError(reason));
+      if (isConflict(reason)) onConflict?.();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Reissues the repository selection code and commits only the exact displayed preview. */
+  const commitRepositoryPreview = async () => {
+    if (!repositoryPreview) return;
+    setBusy('repository-commit');
+    setError(null);
+    setNotice(null);
+    try {
+      const selectionCode = await issueRepositorySelection();
+      const result = await apiCall((token, tenant) => gatewayClient.commitProjectTeamSync(
+        token,
+        projectId,
+        selectionCode,
+        {
+          expectedChangeSetHash: repositoryPreview.changeSetHash,
+          expectedConfigurationRevision: repositoryPreview.configurationRevision,
+        },
+        tenant,
+      ), null);
+      setRepositoryPreview(null);
+      setNotice(`Committed the team sync to ${result.branch} (${result.commitId}).`);
+    } catch (reason) {
+      setError(projectTeamSyncError(reason));
+      if (isConflict(reason)) {
+        setRepositoryPreview(null);
+        onConflict?.();
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
 
   /** Downloads the team at the configuration revision shown on the page. */
   const exportTeam = async () => {
@@ -357,13 +443,53 @@ export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: 
     selectedArchive.toolProviders.every((provider) => Boolean(providerBindings[provider]));
 
   return (
-    <PageSection title="Sync" description="Export this team as an AgentSuite package, or import a package as a proposal you review before it applies.">
+    <PageSection title="Sync" description="Preview and explicitly commit this project team to its configured repository, or transfer team content with an AgentSuite package.">
       <div className={styles.stack}>
+        <div className={styles.stack}>
+          {repositoryFullName
+            ? <Text>Repository sync writes the current cast and charters under .squad/ in {repositoryFullName}. It does not mirror changes automatically.</Text>
+            : <Text size={200} className={styles.muted}>Configure a GitHub App repository in project settings to enable repository sync.</Text>}
+          {repositoryFullName && (
+            <div className={styles.row}>
+              <Button
+                appearance="secondary"
+                disabled={disabled || busy !== null}
+                onClick={() => void previewRepository()}
+              >
+                {busy === 'repository-preview' ? 'Previewing…' : 'Preview repository sync'}
+              </Button>
+              {repositoryPreview && repositoryPreview.changes.length > 0 && (
+                <Button
+                  appearance="primary"
+                  disabled={disabled || busy !== null}
+                  onClick={() => void commitRepositoryPreview()}
+                >
+                  {busy === 'repository-commit' ? 'Committing…' : 'Commit reviewed changes'}
+                </Button>
+              )}
+            </div>
+          )}
+          {repositoryPreview && (
+            <div className={styles.stack} aria-live="polite">
+              {repositoryPreview.changes.length === 0
+                ? <Text>No repository changes are needed for configuration revision {repositoryPreview.configurationRevision}.</Text>
+                : <>
+                  <Text>Review these changes for configuration revision {repositoryPreview.configurationRevision} before committing:</Text>
+                  <ul className={styles.list} aria-label="Repository team sync preview">
+                    {repositoryPreview.changes.map((change) => (
+                      <li key={`${change.kind}:${change.path}`}>{change.kind}: {change.path}</li>
+                    ))}
+                  </ul>
+                </>}
+            </div>
+          )}
+        </div>
+        <Text size={200} className={styles.muted}>AgentSuite export and import use a digest-checked portable archive. They transfer team content; they do not read or write repository files.</Text>
         <div className={styles.row} role="toolbar" aria-label="Sync actions">
-          <Button icon={<ArrowDownloadRegular />} disabled={busy !== null} onClick={() => void exportTeam()}>
+          <Button icon={<ArrowDownloadRegular />} disabled={disabled || busy !== null} onClick={() => void exportTeam()}>
             {busy === 'export' ? 'Exporting…' : 'Export team'}
           </Button>
-          <Button icon={<ArrowUploadRegular />} disabled={busy !== null || selectedArchive !== null} onClick={() => fileInput.current?.click()}>
+          <Button icon={<ArrowUploadRegular />} disabled={disabled || busy !== null || selectedArchive !== null} onClick={() => fileInput.current?.click()}>
             {busy === 'inspect' ? 'Checking archive…' : 'Import team'}
           </Button>
           <input
@@ -382,7 +508,7 @@ export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: 
               <Field key={provider} label={provider} required>
                 <Select
                   value={providerBindings[provider] ?? ''}
-                  disabled={busy !== null}
+                  disabled={disabled || busy !== null}
                   onChange={(_, data) => setProviderBindings((current) => ({ ...current, [provider]: data.value }))}
                 >
                   <option value="">Select a connection</option>
@@ -397,7 +523,7 @@ export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: 
             )}
             <div className={styles.row}>
               <Button
-                disabled={!bindingsComplete || busy !== null}
+                disabled={!bindingsComplete || disabled || busy !== null}
                 onClick={() => void stageImport(
                   selectedArchive.file,
                   selectedArchive,
@@ -409,7 +535,7 @@ export function TeamSyncPanel({ projectId, configurationRevision, onConflict }: 
               >
                 {busy === 'import' ? 'Importing…' : 'Review import'}
               </Button>
-              <Button appearance="secondary" disabled={busy !== null} onClick={() => setSelectedArchive(null)}>Cancel</Button>
+              <Button appearance="secondary" disabled={disabled || busy !== null} onClick={() => setSelectedArchive(null)}>Cancel</Button>
             </div>
           </div>
         )}

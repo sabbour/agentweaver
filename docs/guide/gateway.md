@@ -339,6 +339,33 @@ Transfer version or
 team incompatibility returns `422`. These source routes do not establish
 deployment. The web client uses them on **Agents** and the **Cast a team** page.
 
+## Sync project team files with a repository
+
+Repository team sync is an explicit preview-and-commit action on **Agents**.
+It requires an active project, current project Owner authority, a configured
+GitHub App repository, and a fresh repository selection code. The Gateway
+forwards that code only in `X-Agentweaver-Team-Sync-Selection`; it is never
+placed in the URL or request body.
+
+| Method | Gateway path | Operation |
+| --- | --- | --- |
+| GET | `/api/v1/projects/{projectId}/team/sync` | Preview repository changes |
+| POST | `/api/v1/projects/{projectId}/team/sync` | Commit the reviewed preview |
+
+Read the preview before committing. It contains the current configuration
+revision, a change-set hash, and the `.squad/` paths that will be added,
+modified, or removed. The commit sends `expectedConfigurationRevision` and
+`expectedChangeSetHash` from that preview. A stale configuration, repository
+head, or file set returns `409`; get a new preview and review it again. The
+owner writes only the generated `.squad/team.md` and current cast-member
+charters. It does not read repository files as the project roster, mirror files
+automatically, or replace unrelated `.squad/` content.
+
+This operation is distinct from AgentSuite export and import. Repository sync
+updates files in the selected GitHub repository. AgentSuite transfers a
+digest-checked portable archive; import stages a proposal for review and
+confirmation. Neither transfer reads or writes repository files.
+
 ## List Remote MCP connections
 
 `GET /api/v1/projects/{projectId}/remote-mcp/connections` lists the project's

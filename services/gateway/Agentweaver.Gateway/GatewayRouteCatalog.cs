@@ -33,7 +33,8 @@ public sealed record GatewayRoute(
     long? MaximumRequestBodyBytes = null,
     bool ForwardTenantSelector = false,
     ImmutableArray<string> ExposedResponseHeaders = default,
-    long? MaximumResponseBytes = null);
+    long? MaximumResponseBytes = null,
+    ImmutableArray<string> ForwardRequestHeaders = default);
 
 /// <summary>Defines the public v1 API surface and its owner paths, request bounds, and forwarding flags.</summary>
 public static class GatewayRouteCatalog
@@ -72,7 +73,8 @@ public static class GatewayRouteCatalog
             long? maximumRequestBodyBytes = null,
             bool forwardTenantSelector = false,
             string[]? exposedResponseHeaders = null,
-            long? maximumResponseBytes = null) =>
+            long? maximumResponseBytes = null,
+            string[]? forwardRequestHeaders = null) =>
             routes.Add(new GatewayRoute(
                 method,
                 VersionPrefix + publicSuffix,
@@ -89,7 +91,8 @@ public static class GatewayRouteCatalog
                 MaximumRequestBodyBytes: maximumRequestBodyBytes,
                 ForwardTenantSelector: forwardTenantSelector || requiresTenantSelector,
                 ExposedResponseHeaders: (exposedResponseHeaders ?? []).ToImmutableArray(),
-                MaximumResponseBytes: maximumResponseBytes));
+                MaximumResponseBytes: maximumResponseBytes,
+                ForwardRequestHeaders: (forwardRequestHeaders ?? []).ToImmutableArray()));
 
         Add("GET", GatewayOwner.Projects, "/projects", "/api/projects/",
             "listProjects", "List projects", forwardTenantSelector: true);
@@ -267,6 +270,16 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/agentsuite-agents/{effectiveAgentId}/policy",
             "getProjectAgentSuiteAgentPolicy", "Read the policy bound to an imported AgentSuite agent",
             forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/team/sync",
+            "/api/projects/{projectId}/team/sync", "readProjectTeamSync",
+            "Preview configured project team files against the selected repository",
+            forwardTenantSelector: true,
+            forwardRequestHeaders: [ProjectTeamSyncContract.SelectionCodeHeader]);
+        Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/team/sync",
+            "/api/projects/{projectId}/team/sync", "commitProjectTeamSync",
+            "Commit the reviewed project team files to the selected repository",
+            body: true, maximumRequestBodyBytes: 4096, forwardTenantSelector: true,
+            forwardRequestHeaders: [ProjectTeamSyncContract.SelectionCodeHeader]);
         // Project-scoped run reads accept an unbound token; a run-bound token is narrowed to its run.
         Add("GET", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
             "/api/projects/{projectId}/runs", "listProjectRuns", "List project runs",

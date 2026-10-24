@@ -904,6 +904,11 @@ public sealed class GatewayOwnerClient(
             tenantSelector = CopyTenantSelector(context, request);
         CopySingleRequestHeader(context, request, "Idempotency-Key");
         CopySingleRequestHeader(context, request, "If-Match");
+        if (!route.ForwardRequestHeaders.IsDefaultOrEmpty)
+        {
+            foreach (var header in route.ForwardRequestHeaders)
+                CopySingleRequestHeader(context, request, header);
+        }
         var hasRequestBody = context.Request.ContentLength is > 0 ||
             context.Request.ContentType is not null ||
             context.Request.Headers.ContainsKey("Transfer-Encoding");

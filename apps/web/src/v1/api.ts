@@ -83,6 +83,9 @@ import type {
   ProjectRoleAssignmentView,
   ProjectPullRequestPage,
   ProjectPullRequestStateFilter,
+  ProjectTeamSyncCommitCommand,
+  ProjectTeamSyncCommitResult,
+  ProjectTeamSyncStatus,
   SkillAssignmentRequest,
   SkillContentCandidateRequest,
   SkillContentInventoryPage,
@@ -779,6 +782,43 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'agentsuite-agents', effectiveAgentId, 'policy')}`,
       {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Previews repository-backed team files using a short-lived repository selection code. */
+  previewProjectTeamSync(
+    token: string,
+    projectId: string,
+    selectionCode: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectTeamSyncStatus> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'team', 'sync')}`,
+      { headers: { 'X-Agentweaver-Team-Sync-Selection': selectionCode } },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  /** Commits only the exact repository team-sync preview reviewed by the caller. */
+  commitProjectTeamSync(
+    token: string,
+    projectId: string,
+    selectionCode: string,
+    command: ProjectTeamSyncCommitCommand,
+    tenantSelector?: string | null,
+  ): Promise<ProjectTeamSyncCommitResult> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'team', 'sync')}`,
+      {
+        method: 'POST',
+        headers: { 'X-Agentweaver-Team-Sync-Selection': selectionCode },
+        body: JSON.stringify(command),
+      },
       this.baseUrl,
       tenantSelector,
     );

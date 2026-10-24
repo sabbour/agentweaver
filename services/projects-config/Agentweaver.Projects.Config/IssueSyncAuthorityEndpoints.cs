@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Claims;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -61,6 +63,70 @@ public static class IssueSyncAuthorityEndpoints
                 actor.RequireUnboundRequest();
                 actor.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
                 return Results.Ok(await ReadProofAsync(actor, projectId, projects, ct));
+            }
+            catch (ProjectConfigException)
+            {
+                return Results.Json(new { error = "issue_sync_creator_not_owner" }, statusCode: 403);
+            }
+            catch (RuntimeAuthorizationException error)
+            {
+                return Results.Json(new { error = error.Code }, statusCode: 409);
+            }
+        }).RequireAuthorization();
+        app.MapGet("/api/projects/{projectId}/team-sync-projection", async (
+            string projectId, HttpContext context, ProjectAuthorizationOwner owner,
+            ProjectsConfigService projects, CancellationToken ct) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var revisionValues = context.Request.Query["expectedConfigurationRevision"];
+            if (context.Request.Query.Keys.Any(key => key != "expectedConfigurationRevision") ||
+                revisionValues.Count > 1 ||
+                revisionValues.Count == 1 &&
+                    (!long.TryParse(revisionValues[0], NumberStyles.None, CultureInfo.InvariantCulture,
+                        out var expectedRevision) || expectedRevision < 1))
+                return Results.Json(new { error = "team_sync_revision_invalid" }, statusCode: 400);
+
+            try
+            {
+                var actor = await owner.ResolveAsync(context.User,
+                    context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader].ToArray(), ct);
+                actor.RequireUnboundRequest();
+                actor.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+                if (!actor.HasRole(
+                        ProjectAuthorityResourceType.Project,
+                        projectId,
+                        ProjectAuthorityRole.Owner))
+                    throw ProjectConfigException.Forbidden();
+                // Only an active project Owner with the configured GitHub App repository can review these files.
+                var proof = await ReadProofAsync(actor, projectId, projects, ct);
+                var configuration = await projects.GetProjectConfigurationAsync(
+                    actor, projectId, revision: null, ct);
+                var currentRevision = configuration.Revision;
+                if (revisionValues.Count == 1 &&
+                    long.Parse(revisionValues[0]!, NumberStyles.None, CultureInfo.InvariantCulture) != currentRevision)
+                    return Results.Json(new { error = "team_sync_configuration_changed" }, statusCode: 409);
+
+                var project = await projects.GetProjectAsync(actor, projectId, ct);
+                var charters = configuration.Configuration.AgentCharters
+                    .ToDictionary(charter => charter.AgentId, StringComparer.Ordinal);
+                // Casting is the authoritative roster; uncast project agents are not copied to the repository.
+                var members = configuration.Configuration.Casting
+                    .OrderBy(member => member.Order)
+                    .ThenBy(member => member.AgentId, StringComparer.Ordinal)
+                    .Select(member =>
+                    {
+                        var charter = charters[member.AgentId];
+                        return new ProjectTeamSyncMember(
+                            charter.AgentId,
+                            charter.Name,
+                            charter.CustomRoleTitle ?? charter.Role,
+                            charter.Charter,
+                            member.Order);
+                    })
+                    .ToImmutableArray();
+                return Results.Ok(new ProjectTeamSyncProjection(
+                    projectId, project.Name, configuration.Configuration.CastingUniverse,
+                    currentRevision, proof, members));
             }
             catch (ProjectConfigException)
             {

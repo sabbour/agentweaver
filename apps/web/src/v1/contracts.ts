@@ -1561,6 +1561,34 @@ export interface SourceControlRepositoryPinView {
   pinnedAt: string;
 }
 
+/** One reviewable path change between the project roster and its repository files. */
+export interface ProjectTeamSyncChangeSummary {
+  path: string;
+  kind: 'added' | 'modified' | 'removed';
+}
+
+/** No-store preview of the configured project team against its repository files. */
+export interface ProjectTeamSyncStatus {
+  configurationRevision: number;
+  changeSetHash: string;
+  nothingToSync: boolean;
+  changes: ProjectTeamSyncChangeSummary[];
+}
+
+/** Revision-fenced request to commit the exact preview the user reviewed. */
+export interface ProjectTeamSyncCommitCommand {
+  expectedChangeSetHash: string;
+  expectedConfigurationRevision: number;
+  message?: string;
+}
+
+/** Repository commit created by the explicit team-sync action. */
+export interface ProjectTeamSyncCommitResult {
+  commitId: string;
+  branch: string;
+  htmlUrl: string;
+}
+
 /**
  * One admitted capture of the files a run session produced. Digests and byte
  * lengths describe the stored manifest, patch, and package.

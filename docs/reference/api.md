@@ -199,6 +199,40 @@ MCP discovers these operations from the Gateway catalog. The retained Board
 supports queue order, batch-ready, state, archive, and prerequisite actions; it
 does not start a run.
 
+### Repository team sync
+
+The Gateway exposes an explicit preview-and-commit operation for the current
+project team:
+
+| Method | Gateway path | Native owner path | Operation ID |
+| --- | --- | --- | --- |
+| GET | `/api/v1/projects/{projectId}/team/sync` | Orchestrator `GET /api/projects/{projectId}/team/sync` | `readProjectTeamSync` |
+| POST | `/api/v1/projects/{projectId}/team/sync` | Orchestrator `POST /api/projects/{projectId}/team/sync` | `commitProjectTeamSync` |
+
+Both operations require an unbound bearer with `api.read` and `projects.admin`,
+current project Owner authority, an active project with a GitHub App repository
+selection, and a fresh repository selection code in
+`X-Agentweaver-Team-Sync-Selection`. The Gateway forwards the selection code
+only as a request header. Responses are `Cache-Control: no-store`.
+
+GET previews changes derived from the current Projects & Config cast and
+charters. The preview includes `configurationRevision`, `changeSetHash`,
+`nothingToSync`, and changed `.squad/` paths with an `added`, `modified`, or
+`removed` kind. POST requires `expectedConfigurationRevision` and
+`expectedChangeSetHash` from that preview. The owner recomputes the exact plan
+and rejects stale project configuration, repository head, or file content
+with `409` before creating a commit. It writes only `.squad/team.md` and
+canonical charter paths for current cast members; it does not load repository
+files as a team roster or mirror them automatically.
+The optional commit message is limited to 200 characters and cannot contain
+control characters.
+
+Repository sync is not AgentSuite export/import. Repository sync reads and
+commits selected `.squad/` files in the configured repository. AgentSuite
+export/import transfers a digest-checked portable archive, and import stages a
+casting proposal for review and confirmation. Neither AgentSuite operation
+reads or writes repository files.
+
 Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 `GatewayRouteCatalog.cs`.
 

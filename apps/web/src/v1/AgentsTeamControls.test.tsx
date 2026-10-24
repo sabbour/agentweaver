@@ -15,6 +15,9 @@ const api = vi.hoisted(() => ({
   exportProjectAgentSuite: vi.fn(),
   importProjectAgentSuite: vi.fn(),
   listRemoteMcpConnections: vi.fn(),
+  issueRepoAppRepositorySelection: vi.fn(),
+  previewProjectTeamSync: vi.fn(),
+  commitProjectTeamSync: vi.fn(),
 }));
 // One stable apiCall, like the real provider, so effects that depend on it run once.
 const auth = vi.hoisted(() => ({ apiCall: (operation: (token: string, tenant: string) => unknown) => operation('token', 'tenant-1') }));
@@ -108,6 +111,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   stubDecompressionStream();
   api.listRemoteMcpConnections.mockResolvedValue({ connections: [], nextConnectionId: null });
+  api.issueRepoAppRepositorySelection.mockResolvedValue({ selectionCode: 'short-lived-code' });
   api.listCatalogRoles.mockResolvedValue([
     { id: 'tester', title: 'Tester', summary: 'Tests changes.', responsibilities: [], boundaries: [] },
     { id: 'scribe', title: 'Scribe', summary: 'Reserved.', responsibilities: [], boundaries: [] },
@@ -152,6 +156,96 @@ describe('AddMemberDialog', () => {
 });
 
 describe('TeamSyncPanel', () => {
+  it('keeps repository sync unavailable until a GitHub App repository is configured', () => {
+    renderAt(<TeamSyncPanel projectId="p1" configurationRevision={7} />);
+
+    expect(screen.getByText(/Configure a GitHub App repository/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Preview repository sync' })).toBeNull();
+    expect(api.previewProjectTeamSync).not.toHaveBeenCalled();
+  });
+
+  it('previews repository changes and commits only the reviewed revision and hash', async () => {
+    api.previewProjectTeamSync.mockResolvedValue({
+      configurationRevision: 7,
+      changeSetHash: 'a'.repeat(64),
+      nothingToSync: false,
+      changes: [
+        { path: '.squad/team.md', kind: 'modified' },
+        { path: '.squad/agents/lead/charter.md', kind: 'added' },
+      ],
+    });
+    api.commitProjectTeamSync.mockResolvedValue({
+      commitId: 'commit-1',
+      branch: 'main',
+      htmlUrl: 'https://github.com/octo/team/commit/commit-1',
+    });
+    renderAt(<TeamSyncPanel
+      projectId="p1"
+      configurationRevision={7}
+      repositoryFullName="octo/team"
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview repository sync' }));
+    expect(await screen.findByText('modified: .squad/team.md')).toBeTruthy();
+    expect(screen.getByText('added: .squad/agents/lead/charter.md')).toBeTruthy();
+    expect(api.issueRepoAppRepositorySelection).toHaveBeenCalledWith('token', 'octo/team');
+    expect(api.previewProjectTeamSync).toHaveBeenCalledWith('token', 'p1', 'short-lived-code', 'tenant-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Commit reviewed changes' }));
+    expect(await screen.findByText('Committed the team sync to main (commit-1).')).toBeTruthy();
+    expect(api.commitProjectTeamSync).toHaveBeenCalledWith('token', 'p1', 'short-lived-code', {
+      expectedChangeSetHash: 'a'.repeat(64),
+      expectedConfigurationRevision: 7,
+    }, 'tenant-1');
+    expect(screen.queryByRole('list', { name: 'Repository team sync preview' })).toBeNull();
+  });
+
+  it('drops a repository preview after a conflict and reloads the project configuration', async () => {
+    const onConflict = vi.fn();
+    api.previewProjectTeamSync.mockResolvedValue({
+      configurationRevision: 7,
+      changeSetHash: 'b'.repeat(64),
+      nothingToSync: false,
+      changes: [{ path: '.squad/team.md', kind: 'modified' }],
+    });
+    api.commitProjectTeamSync.mockRejectedValue(new GatewayError(409, {}, 'Conflict'));
+    renderAt(<TeamSyncPanel
+      projectId="p1"
+      configurationRevision={7}
+      repositoryFullName="octo/team"
+      onConflict={onConflict}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview repository sync' }));
+    expect(await screen.findByText('modified: .squad/team.md')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Commit reviewed changes' }));
+    expect(await screen.findByText(/changed after this preview/)).toBeTruthy();
+    expect(onConflict).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('list', { name: 'Repository team sync preview' })).toBeNull();
+  });
+
+  it('rejects a preview for a configuration revision different from the page', async () => {
+    const onConflict = vi.fn();
+    api.previewProjectTeamSync.mockResolvedValue({
+      configurationRevision: 6,
+      changeSetHash: 'c'.repeat(64),
+      nothingToSync: false,
+      changes: [{ path: '.squad/team.md', kind: 'modified' }],
+    });
+    renderAt(<TeamSyncPanel
+      projectId="p1"
+      configurationRevision={7}
+      repositoryFullName="octo/team"
+      onConflict={onConflict}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview repository sync' }));
+
+    expect(await screen.findByText(/team changed while the preview was loading/)).toBeTruthy();
+    expect(onConflict).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('button', { name: 'Commit reviewed changes' })).toBeNull();
+  });
+
   it('exports the team at the shown revision', async () => {
     const createObjectURL = vi.fn(() => 'blob:team');
     const revokeObjectURL = vi.fn();

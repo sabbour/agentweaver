@@ -132,6 +132,67 @@ internal sealed class ProjectsRunSelectionClient(
         }
     }
 
+    internal async Task<ProjectTeamSyncProjection> ReadTeamSyncProjectProjectionAsync(
+        HttpContext context,
+        string projectId,
+        ProjectsAuthorizationContext authorization,
+        IssueSyncProjectProof expectedProof,
+        long? expectedConfigurationRevision,
+        CancellationToken cancellationToken)
+    {
+        // Projects owns the only team roster; an optional revision fence rejects stale previews before repository writes.
+        var revisionQuery = expectedConfigurationRevision is { } revision
+            ? "?expectedConfigurationRevision=" + revision.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : string.Empty;
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(RequireOwnerUri(options.ProjectsOwnerBaseAddress),
+                $"/api/projects/{Uri.EscapeDataString(projectId)}/team-sync-projection{revisionQuery}"));
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+            throw new CoordinationException("team_sync_project_permission_denied", StatusCodes.Status403Forbidden);
+        if (response.StatusCode == HttpStatusCode.Conflict && expectedConfigurationRevision is not null)
+            throw new CoordinationException("team_sync_configuration_changed", StatusCodes.Status409Conflict);
+        if (response.StatusCode != HttpStatusCode.OK || response.Headers.CacheControl?.NoStore != true)
+            throw new CoordinationException("team_sync_project_unavailable", StatusCodes.Status502BadGateway);
+
+        try
+        {
+            await response.Content.LoadIntoBufferAsync(4 * 1024 * 1024, cancellationToken).ConfigureAwait(false);
+            var projection = await response.Content.ReadFromJsonAsync<ProjectTeamSyncProjection>(
+                JsonOptions, cancellationToken).ConfigureAwait(false);
+            if (projection is null ||
+                projection.ProjectId != projectId ||
+                string.IsNullOrWhiteSpace(projection.ProjectName) ||
+                projection.ProjectName.Length > 160 ||
+                projection.Members.IsDefault ||
+                projection.Members.Any(member => member is null || string.IsNullOrWhiteSpace(member.AgentId) ||
+                    string.IsNullOrWhiteSpace(member.Name) || string.IsNullOrWhiteSpace(member.Role) ||
+                    member.Charter is null || member.Order < 0) ||
+                projection.Members.Select(member => member.AgentId).Distinct(StringComparer.Ordinal).Count() !=
+                    projection.Members.Length)
+                throw new CoordinationException(
+                    "team_sync_project_contract_invalid", StatusCodes.Status502BadGateway);
+            if (projection.ConfigurationRevision < 1 ||
+                expectedConfigurationRevision is { } expected && projection.ConfigurationRevision != expected)
+                throw new CoordinationException(
+                    "team_sync_configuration_changed", StatusCodes.Status409Conflict);
+            if (projection.Authority != expectedProof)
+                throw new CoordinationException(
+                    "team_sync_project_authority_changed", StatusCodes.Status409Conflict);
+            return projection;
+        }
+        catch (JsonException exception)
+        {
+            throw new CoordinationException(
+                "team_sync_project_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+    }
+
     /// <summary>Resolves fresh project authority before creating a run without a run-bound token.</summary>
     internal async Task<ProjectsAuthorizationContext> ReadProjectRunAuthorityAsync(
         HttpContext context, string projectId, CancellationToken cancellationToken,
