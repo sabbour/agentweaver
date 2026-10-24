@@ -8,9 +8,9 @@ it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal and serves ordered run-event replay. Project history reads require fresh Projects read authority and preserve exact run-bound narrowing. Configured private remote tool result routes require direct mutual TLS before reading bodies. Events checks current Orchestrator proof, stores bytes before journal references, and verifies reads before returning bytes. Generic and public routes do not expose private results. Native remote-tool dispatch remains disabled." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal and serves ordered run-event replay. Project history reads require fresh Projects read authority and preserve exact run-bound narrowing. Configured private remote tool result routes require direct mutual TLS before reading bodies. Events checks current Orchestrator proof, inventories keys before writes, commits references with retention deadlines, and deletes expired bytes or aged orphans while preserving journal history. It verifies reads before returning bytes. Generic and public routes do not expose private results. Native remote-tool dispatch remains disabled." />
   </a>
-  <figcaption>Run-bound events, project facts, and addressed messages use separate storage. Project history reads recheck current project access; run-bound callers stay within their run. Private result routes require configured mutual TLS and current owner proof. Bytes precede journal references and acknowledgments. The figure describes source behavior, not an approved deployment.</figcaption>
+  <figcaption>Run-bound events, project facts, and addressed messages use separate storage. Project history reads recheck current project access; run-bound callers stay within their run. Private result routes require configured mutual TLS and current owner proof. Inventory precedes byte writes; cleanup removes expired bytes and aged orphans without deleting journal history. The figure describes source behavior, not an approved deployment.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 
@@ -54,11 +54,24 @@ An observe credential alone does not authorize a material write.
 Events generates the scoped object key and records the kind, SHA-256 digest,
 byte length, SDK version, runtime version, and model binding.
 Each object contains at most 1 MiB.
-Events stores the bytes before it commits the journal event and reference.
+Before writing bytes, Events commits an inventory row for the generated key.
+It stores the bytes before the journal transaction commits the event and
+reference, and records the reference's retention deadline in that same
+transaction. Every committed object reference extends the inventory deadline,
+including references committed by ordinary journal appends. A journal failure
+leaves the object unreferenced and its inventory row available for cleanup; it
+does not acknowledge the material. An append cannot create a reference to an
+object that cleanup has already deleted.
 It rechecks current authority after storage and database waits, including exact retries.
 The same event and material return the original acknowledgment.
 Changed material for the same event conflicts.
 An object without a committed journal reference is not acknowledged material.
+The Events owner checks inventory hourly. It deletes unreferenced objects after
+a 24-hour grace period and deletes referenced object bytes after their recorded
+retention deadline. Deletion preserves journal history and reference metadata;
+reads of expired or missing bytes fail instead of rebuilding them. Migration
+010 backfills inventory from committed references, but earlier unreferenced
+objects cannot be discovered because `IObjectStore` has no listing contract.
 
 `GET /internal/sessions/{sessionId}/material/{eventId}/{kind}` reads only material
 from a committed event in the authorized session.

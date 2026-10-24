@@ -211,10 +211,11 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.ok(source.includes('(applied.Contains(33) && !applied.Contains(24))'));
       assert.ok(plan.coreVersions.includes(32));
     } else {
-      assert.deepEqual(plan.eventsVersions, Array.from({ length: 9 }, (_, index) => index + 1));
-      assert.ok(source.includes('private const int CurrentSchemaVersion = 9;'));
+      assert.deepEqual(plan.eventsVersions, Array.from({ length: 10 }, (_, index) => index + 1));
+      assert.ok(source.includes('private const int CurrentSchemaVersion = 10;'));
       assert.ok(source.includes('(applied.Contains(8) && !applied.Contains(7))'));
-      assert.ok(source.includes('(applied.Contains(9) && !applied.Contains(8))'));
+      assert.ok(source.includes('(applied.Contains(10) && !applied.Contains(9))'));
+      assert.ok(source.includes('10 => "Agentweaver.EventsAndSessions.Migrations.010_session_object_inventory.sql"'));
       assert.ok(source.includes('3 when legacyProjectFactsV2 => "Agentweaver.EventsAndSessions.Migrations.002_addressed_messages.sql"'));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 3);
     }
@@ -254,7 +255,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 113);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 114);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);
