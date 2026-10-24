@@ -122,7 +122,13 @@ export function projectIdentityRoutingInventory(value) {
 }
 
 function projectPublicApplication(value) {
-  return { id: value?.id, appId: value?.appId, publicClient: { redirectUris: value?.publicClient?.redirectUris } };
+  return {
+    id: value?.id,
+    appId: value?.appId,
+    signInAudience: value?.signInAudience,
+    isFallbackPublicClient: value?.isFallbackPublicClient,
+    publicClient: { redirectUris: value?.publicClient?.redirectUris },
+  };
 }
 
 /** Requires the gateway and its security policy to be placed in the approved namespace. */
@@ -155,18 +161,27 @@ function requireConditions(object, conditions, types) {
   }
 }
 
+/** Derives the broker hostname from the managed AKS Application Routing domain. */
+export function managedBrokerHostnameFromDomain(domain) {
+  const bareDomain = typeof domain === 'string' && domain.startsWith('*.') ? domain.slice(2) : domain;
+  const labels = typeof bareDomain === 'string' ? bareDomain.split('.') : [];
+  if (typeof bareDomain !== 'string' || !bareDomain.endsWith('.aksapp.io') || bareDomain.length > 240 ||
+      labels.length < 4 || labels.some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) {
+    throw new Error('The managed AKS wildcard host must use the exact default *.aksapp.io domain.');
+  }
+  return `agentweaver.${bareDomain}`;
+}
+
 /** Derives the broker hostname from the managed certificate and namespace inputs. */
 export function managedBrokerHostname(certificate, namespace) {
   assertObject(certificate, 'DefaultDomainCertificate', namespace);
   requireConditions(certificate, certificate.status?.conditions, ['Available']);
   const domain = certificate.status?.domain;
-  const labels = typeof domain === 'string' ? domain.slice(2).split('.') : [];
   if (certificate.spec?.target?.secret !== 'identity-broker-tls' ||
-      !domain?.startsWith('*.') || !domain.endsWith('.aksapp.io') || domain.length > 242 ||
-      labels.length < 4 || labels.some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) {
+      typeof domain !== 'string' || !domain.startsWith('*.')) {
     throw new Error('Managed certificate must report an available AKS wildcard domain and the exact TLS Secret.');
   }
-  return `agentweaver.${domain.slice(2)}`;
+  return managedBrokerHostnameFromDomain(domain);
 }
 
 function managedPortalHostname(certificate, namespace) {
@@ -513,24 +528,44 @@ export function deriveIdentityRouting({
 
 /** Produces a tenant- and application-bound callback registration plan without applying it. */
 export function planPublicBrokerCallback(application, clientId, callbackUri, tenantId) {
-  const callback = new URL(callbackUri);
+  let callback;
+  try {
+    callback = new URL(callbackUri);
+  } catch {
+    throw new Error('Public callback plan requires the exact upstream application and managed Broker callback URI.');
+  }
+  const redirects = application?.publicClient?.redirectUris;
   if (!GUID_PATTERN.test(application?.id ?? '') || !GUID_PATTERN.test(clientId ?? '') ||
-      !GUID_PATTERN.test(tenantId ?? '') || application?.appId?.toLowerCase() !== clientId?.toLowerCase() ||
+      !GUID_PATTERN.test(tenantId ?? '') || typeof application?.appId !== 'string' ||
+      application.appId.toLowerCase() !== clientId.toLowerCase() ||
       callback.protocol !== 'https:' || callback.pathname !== '/signin-oidc' ||
       callback.search || callback.hash || callback.username || callback.password ||
       !callback.hostname.startsWith('agentweaver.') || !callback.hostname.endsWith('.aksapp.io') ||
-      !Array.isArray(application.publicClient?.redirectUris) ||
-      application.publicClient.redirectUris.some(uri => typeof uri !== 'string')) {
+      (redirects != null && (!Array.isArray(redirects) ||
+        redirects.some(uri => typeof uri !== 'string')))) {
     throw new Error('Public callback plan requires the exact upstream application and managed Broker callback URI.');
   }
-  const existing = application.publicClient.redirectUris;
+  const existing = redirects ?? [];
   const unchanged = existing.includes(callbackUri);
+  const missingPrerequisites = [];
+  if (application.signInAudience !== 'AzureADMyOrg')
+    missingPrerequisites.push('single-tenant sign-in audience (AzureADMyOrg)');
+  if (application.isFallbackPublicClient !== true)
+    missingPrerequisites.push('public-client flow (isFallbackPublicClient=true)');
+  if (!unchanged)
+    missingPrerequisites.push('the exact route-derived callback in publicClient.redirectUris');
+  const patch = {};
+  if (application.signInAudience !== 'AzureADMyOrg') patch.signInAudience = 'AzureADMyOrg';
+  if (application.isFallbackPublicClient !== true) patch.isFallbackPublicClient = true;
+  if (!unchanged) patch.publicClient = { redirectUris: [...existing, callbackUri] };
+  // The installed provider requests standard OpenID Connect scopes only, so this plan never adds API permissions or consent.
   return {
     tenantId, clientId, applicationObjectId: application.id,
     patchUri: `https://graph.microsoft.com/v1.0/applications/${application.id}`,
-    platform: 'publicClient', action: unchanged ? 'noop' : 'append',
+    platform: 'publicClient', action: unchanged ? (Object.keys(patch).length ? 'reconcile' : 'noop') : 'append',
     redirectUris: unchanged ? [...existing] : [...existing, callbackUri],
-    callbackUri, mutationExecuted: false,
+    callbackUri, missingPrerequisites, registrationReady: missingPrerequisites.length === 0,
+    patch, mutationExecuted: false,
   };
 }
 
@@ -554,7 +589,7 @@ export function registerPublicBrokerCallback(plan, config, { execAz = runAz } = 
   }
   function readApplication() {
     const result = execAz(['ad', 'app', 'show', '--id', plan.clientId,
-      '--query', '{id:id,appId:appId,publicClient:publicClient}', '-o', 'json'], {
+      '--query', '{id:id,appId:appId,signInAudience:signInAudience,isFallbackPublicClient:isFallbackPublicClient,publicClient:publicClient}', '-o', 'json'], {
       ...COMMAND_OPTIONS, projectJson: projectPublicApplication, preserveProjectedJson: true,
     });
     if (result.status !== 0) throw new Error(`Public callback read failed: ${redact(result.stderr)}`);
@@ -565,18 +600,117 @@ export function registerPublicBrokerCallback(plan, config, { execAz = runAz } = 
     return fresh;
   }
   const fresh = readApplication();
-  if (fresh.action === 'noop') return fresh;
+  if (Object.keys(fresh.patch).length === 0) return fresh;
+  // Patch only the protocol settings this Broker needs; Graph receives no role, scope,
+  // permission, consent, Web redirect, or SPA redirect fields.
   const patch = execAz(['rest', '--method', 'PATCH', '--uri', fresh.patchUri,
     '--subscription', config.subscriptionId, '--headers', 'Content-Type=application/json',
-    '--body', JSON.stringify({ publicClient: { redirectUris: fresh.redirectUris } }), '-o', 'none'], COMMAND_OPTIONS);
+    '--body', JSON.stringify(fresh.patch), '-o', 'none'], COMMAND_OPTIONS);
   if (patch.status !== 0) {
-    throw new Error(`Public callback append failed; no permissions were granted: ${redact(patch.stderr)}`);
+    throw new Error(`Public client reconciliation failed; no API permission or consent grant was attempted: ${redact(patch.stderr)}`);
   }
   const verified = readApplication();
-  if (verified.action !== 'noop' || fresh.redirectUris.some(uri => !verified.redirectUris.includes(uri))) {
-    throw new Error('Public callback append returned success but the exact URI or previous public redirects are missing.');
+  if (!verified.registrationReady || fresh.redirectUris.some(uri => !verified.redirectUris.includes(uri))) {
+    throw new Error('Public client reconciliation returned success but the required settings or previous public redirects are missing.');
   }
-  return { ...verified, action: 'append', mutationExecuted: true };
+  return { ...verified, action: fresh.action, mutationExecuted: true };
+}
+
+function registrationReconciliationCommand(callbackUri) {
+  return 'node scripts/azure/deploy.mjs --resource-group <approved-resource-group> ' +
+    '--subscription <approved-subscription> --allowed-subscription <approved-subscription> ' +
+    '--tenant <approved-tenant> --allowed-tenant <approved-tenant> ' +
+    '--template <reviewed-template> --parameters <reviewed-parameters-file> ' +
+    '--identity-upstream-client-id <client-id> --identity-gateway-namespace agentweaver-gateway ' +
+    '--identity-gateway-security-policy <restricted|baseline> --bootstrap-identity-routing ' +
+    '--identity-routing-certificates-only ' +
+    '--register-identity-broker-callback ' +
+    `--confirm-identity-broker-callback "${callbackUri}" --execute`;
+}
+
+export function assertPublicBrokerRegistration(plan) {
+  if (!plan.registrationReady) {
+    throw new Error(
+      `The exact Entra application is not ready for Broker sign-in. Missing: ${plan.missingPrerequisites.join(', ')}. ` +
+        `Reconcile it explicitly with: ${registrationReconciliationCommand(plan.callbackUri)}. ` +
+        'No API permission or consent grant is required or changed.',
+    );
+  }
+  return plan;
+}
+
+/**
+ * Checks the selected tenant, existing Entra application, and managed route callback
+ * before a deployment or routing write. The callback uses the AKS domain that generates the route certificate.
+ */
+export function preflightPublicBrokerRegistration(config, {
+  execAz = runAz,
+} = {}) {
+  if (!GUID_PATTERN.test(config.subscriptionId ?? '') || !GUID_PATTERN.test(config.tenantId ?? '') ||
+      !GUID_PATTERN.test(config.upstreamClientId ?? '')) {
+    throw new Error('Identity Broker registration preflight requires the exact subscription, tenant, and client IDs.');
+  }
+  const account = execAz(['account', 'show', '-o', 'json'], {
+    ...COMMAND_OPTIONS,
+    projectJson: value => ({ id: value.id, tenantId: value.tenantId, state: value.state }),
+    preserveProjectedJson: true,
+  });
+  if (account.status !== 0) {
+    throw new Error(`Entra preflight could not read the selected account: ${redact(account.stderr)}. ` +
+      'Confirm the account with `az account show -o json`, then rerun the guarded installer.');
+  }
+  const selected = JSON.parse(account.stdout);
+  if (selected.id?.toLowerCase() !== config.subscriptionId.toLowerCase() ||
+      selected.tenantId?.toLowerCase() !== config.tenantId.toLowerCase() || selected.state !== 'Enabled') {
+    throw new Error('Entra preflight selected account differs from the exact approved subscription and tenant.');
+  }
+  const clusterName = config.clusterName ?? `${config.resourceGroup}-aks`;
+  const cluster = execAz(['aks', 'show', '--resource-group', config.resourceGroup, '--name', clusterName,
+    '--subscription', config.subscriptionId, '-o', 'json'], {
+    ...COMMAND_OPTIONS,
+    projectJson: value => ({
+      id: value.id,
+      defaultDomainEnabled: value.ingressProfile?.webAppRouting?.defaultDomain?.enabled,
+      domainName: value.ingressProfile?.webAppRouting?.defaultDomain?.domainName,
+    }),
+    preserveProjectedJson: true,
+  });
+  if (cluster.status !== 0) {
+    throw new Error(`Could not read the exact AKS managed Application Routing domain: ${redact(cluster.stderr)}. ` +
+      'Provision the platform and its managed default domain first, then rerun the guarded Broker installer.');
+  }
+  const observedCluster = JSON.parse(cluster.stdout);
+  const expectedClusterId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}` +
+    `/providers/Microsoft.ContainerService/managedClusters/${clusterName}`;
+  if (observedCluster.id?.toLowerCase() !== expectedClusterId.toLowerCase() ||
+      observedCluster.defaultDomainEnabled !== true) {
+    throw new Error('The exact AKS target does not expose an enabled managed Application Routing default domain. ' +
+      'Complete the platform setup first; no callback can be inferred from a custom or missing domain.');
+  }
+  const hostname = managedBrokerHostnameFromDomain(observedCluster.domainName);
+  const result = execAz(['ad', 'app', 'show', '--id', config.upstreamClientId,
+    '--query', '{id:id,appId:appId,signInAudience:signInAudience,isFallbackPublicClient:isFallbackPublicClient,publicClient:publicClient}',
+    '-o', 'json'], {
+    ...COMMAND_OPTIONS, projectJson: projectPublicApplication, preserveProjectedJson: true,
+  });
+  if (result.status !== 0) {
+    throw new Error(`Could not read the exact Entra client ${config.upstreamClientId} in tenant ${config.tenantId}: ` +
+      `${redact(result.stderr)}. Verify it with \`az ad app show --id ${config.upstreamClientId} -o json\`; ` +
+      'the signed-in account must be in the application tenant.');
+  }
+  const application = JSON.parse(result.stdout);
+  if (!GUID_PATTERN.test(application.id ?? '') ||
+      typeof application.appId !== 'string' ||
+      application.appId.toLowerCase() !== config.upstreamClientId.toLowerCase()) {
+    throw new Error(`Entra returned a different application for client ${config.upstreamClientId}. ` +
+      `Verify the intended registration with \`az ad app show --id ${config.upstreamClientId} -o json\`; ` +
+      'the installer will not create or select another registration.');
+  }
+  // Application Routing's managed domain is the source for the certificate and HTTPRoute host, including on first install.
+  const callbackUri = `https://${hostname}/signin-oidc`;
+  const plan = planPublicBrokerCallback(application, config.upstreamClientId, callbackUri, config.tenantId);
+  const reconciled = registerPublicBrokerCallback(plan, config, { execAz });
+  return assertPublicBrokerRegistration(reconciled);
 }
 
 /** Checks the routing receipt and live prerequisites required before broker runtime bootstrap. */
@@ -653,6 +787,7 @@ export function bootstrapIdentityRouting(config, {
       selected.tenantId?.toLowerCase() !== config.tenantId.toLowerCase() || selected.state !== 'Enabled') {
     throw new Error('Identity routing selected account/tenant changed; refusing native routing changes.');
   }
+  const publicCallbackPlan = preflightPublicBrokerRegistration(config, { execAz });
   return withP0UserKubeconfig(config, baseArgs => {
     function command(args, options = {}) {
       const result = execKubectl([...baseArgs, '--request-timeout=30s', ...args], {
@@ -691,19 +826,6 @@ export function bootstrapIdentityRouting(config, {
       throw new Error('Native managed AKS GatewayClass is not available.');
     }
     requireConditions(gatewayClass, gatewayClass.status?.conditions, ['Accepted']);
-    const application = execAz(['ad', 'app', 'show', '--id', config.upstreamClientId,
-      '--query', '{id:id,appId:appId,publicClient:publicClient}', '-o', 'json'], {
-      ...COMMAND_OPTIONS, projectJson: projectPublicApplication, preserveProjectedJson: true,
-    });
-    if (application.status !== 0) {
-      throw new Error(`Public callback read failed: ${redact(application.stderr)}`);
-    }
-    const publicApplication = JSON.parse(application.stdout);
-    if (!GUID_PATTERN.test(publicApplication.id ?? '') ||
-        publicApplication.appId?.toLowerCase() !== config.upstreamClientId.toLowerCase() ||
-        !Array.isArray(publicApplication.publicClient?.redirectUris)) {
-      throw new Error('Exact upstream public application metadata is unavailable.');
-    }
     const existingObjects = new Map();
     for (const [kind, namespace, name, service] of [
       ['defaultdomaincertificate', GATEWAY_NAMESPACE, 'identity-broker', 'identity-broker'],
@@ -797,13 +919,18 @@ export function bootstrapIdentityRouting(config, {
     if (managedBrokerHostname(brokerCertificate, P0_NAMESPACE) !== hostname) {
       throw new Error('Managed Gateway and Broker certificate domains differ.');
     }
+    const callbackUri = `https://${hostname}/signin-oidc`;
+    // Keep the certificate-derived callback bound to preflight before applying any route.
+    if (callbackUri !== publicCallbackPlan.callbackUri) {
+      throw new Error('The certificate-derived callback differs from the preflighted AKS domain; route writes were not attempted.');
+    }
     const portalHostname = managedPortalHostname(gatewayCertificate, GATEWAY_NAMESPACE);
     const wildcardHostname = managedWildcardHostname(hostname);
     // Return after both managed certificates converge; only the full phase may apply routes.
     if (certificatesOnly) {
       return {
         certificatesConfigured: true, hostname, portalHostname,
-        routingConfigured: false, runtimeVerified: false,
+        callbackUri, publicCallbackPlan, routingConfigured: false, runtimeVerified: false,
       };
     }
     for (const [filename, replacements] of [
@@ -861,8 +988,10 @@ export function bootstrapIdentityRouting(config, {
       mcpRoute: read('httproute', P0_NAMESPACE, 'mcp'),
       mcpBackendPolicy: read('backendtlspolicy', P0_NAMESPACE, 'mcp'),
     });
-    receipt.publicCallbackPlan = registerPublicBrokerCallback(planPublicBrokerCallback(
-      publicApplication, config.upstreamClientId, receipt.callbackUri, config.tenantId), config, { execAz });
+    if (receipt.callbackUri !== publicCallbackPlan.callbackUri) {
+      throw new Error('The route callback changed after preflight; routing was not accepted as a verified result.');
+    }
+    receipt.publicCallbackPlan = publicCallbackPlan;
     receipt.runtimeConfigInputs = {
       IdentityBroker__Issuer: receipt.issuer,
       IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,

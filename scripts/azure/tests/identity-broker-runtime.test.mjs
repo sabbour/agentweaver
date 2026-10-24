@@ -7,6 +7,7 @@ import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime, brokerAccept
 const namespace = 'agentweaver';
 const clientId = '11111111-1111-1111-1111-111111111111';
 const principalId = '22222222-2222-2222-2222-222222222222';
+const applicationObjectId = '33333333-3333-3333-3333-333333333333';
 const config = {
   resourceGroup: 'agentweaver', clusterName: 'agentweaver-aks', subscriptionId: clientId, tenantId: clientId,
   keyVaultName: 'agentweaver-kv',
@@ -346,7 +347,11 @@ test('runtime setup creates absent native objects once and never overwrites conf
       if (args[0] === 'identity' && args[1] === 'federated-credential') value = {
         issuer, subject: `system:serviceaccount:${namespace}:identity-broker`, audiences: ['api://AzureADTokenExchange'],
       };
-      if (args[0] === 'ad') value = { appId: clientId, publicClient: { redirectUris: [`https://${hostname}/signin-oidc`] } };
+      if (args[0] === 'ad') value = {
+        id: applicationObjectId, appId: clientId, signInAudience: 'AzureADMyOrg',
+        isFallbackPublicClient: true,
+        publicClient: { redirectUris: [`https://${hostname}/signin-oidc`] },
+      };
       return ok(JSON.stringify(options.projectJson(value)));
     },
     execKubectl(args, options) {
@@ -397,6 +402,21 @@ test('runtime setup creates absent native objects once and never overwrites conf
   assert.equal(bootstrapIdentityBrokerRuntime(runtimeConfig, deps).configMapCreated, false);
   assert.equal(calls.filter(args =>
     args.includes('--filename') && !args.includes('--dry-run=client')).length, writes);
+  const writesBeforeInvalidRegistration = calls.filter(args =>
+    args.includes('--filename') && !args.includes('--dry-run=client')).length;
+  const validExecAz = deps.execAz;
+  deps.execAz = (args, options) => args[0] === 'ad'
+    ? ok(JSON.stringify(options.projectJson({
+      id: applicationObjectId, appId: clientId, signInAudience: 'AzureADMultipleOrgs',
+      isFallbackPublicClient: false,
+      publicClient: { redirectUris: [`https://${hostname}/signin-oidc`] },
+    })))
+    : validExecAz(args, options);
+  assert.throws(() => bootstrapIdentityBrokerRuntime(runtimeConfig, deps),
+    /single-tenant sign-in audience.*public-client flow/);
+  assert.equal(calls.filter(args =>
+    args.includes('--filename') && !args.includes('--dry-run=client')).length, writesBeforeInvalidRegistration);
+  deps.execAz = validExecAz;
   created.get('Service/identity-broker').spec.ports[0].port = 80;
   assert.throws(() => bootstrapIdentityBrokerRuntime(runtimeConfig, deps), /refusing replacement/);
 });

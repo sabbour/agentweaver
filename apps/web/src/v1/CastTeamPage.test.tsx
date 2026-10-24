@@ -15,6 +15,7 @@ const api = vi.hoisted(() => ({
   createCastingProposal: vi.fn(),
   createCastingDraftProposal: vi.fn(),
   updateCastingProposal: vi.fn(),
+  updateCastingProposalMemberRole: vi.fn(),
   transitionCastingProposal: vi.fn(),
 }));
 // One stable apiCall, like the real provider, so effects that depend on it run once.
@@ -187,6 +188,39 @@ describe('CastTeamPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/projects/p1/team'));
     expect(api.transitionCastingProposal).toHaveBeenCalledWith('token', 'p1', 'pr-1', 'reject', 2, 'tenant-1');
+  });
+
+  it('updates a member role in the proposal and confirms the new draft revision', async () => {
+    const changedDraft = config([['lead', 'Lead'], ['tester', 'Tester']]);
+    changedDraft.agentCharters[0] = {
+      ...changedDraft.agentCharters[0],
+      role: 'docs',
+      customRoleTitle: 'Staff Writer',
+      charter: 'Docs charter.',
+    };
+    changedDraft.casting[0] = { ...changedDraft.casting[0], role: 'docs' };
+    api.getCastingProposal.mockResolvedValue(proposal());
+    api.updateCastingProposalMemberRole.mockResolvedValue(proposal({ draftRevision: 2, draft: changedDraft }));
+    renderPage('/projects/p1/team/cast?proposal=pr-1');
+
+    const memberList = await screen.findByLabelText('Proposed members');
+    fireEvent.click(within(memberList).getAllByRole('button', { name: 'Re-role' })[0]);
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.change(within(dialog).getByRole('combobox', { name: 'New role' }), { target: { value: 'docs' } });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Custom role title (optional)' }), { target: { value: 'Staff Writer' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Re-role' }));
+
+    await waitFor(() => expect(api.updateCastingProposalMemberRole).toHaveBeenCalledWith(
+      'token', 'p1', 'pr-1', 'lead',
+      { expectedDraftRevision: 1, roleId: 'docs', customRoleTitle: 'Staff Writer' },
+      'tenant-1',
+    ));
+    await waitFor(() => expect(memberList.textContent).toContain('Staff Writer'));
+    // Confirmation uses the revised proposal token returned by the role edit.
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cast team' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/projects/p1/team'));
+    expect(api.transitionCastingProposal).toHaveBeenCalledWith('token', 'p1', 'pr-1', 'confirm', 2, 'tenant-1');
   });
 
   it('allows an empty removal proposal to be confirmed', async () => {

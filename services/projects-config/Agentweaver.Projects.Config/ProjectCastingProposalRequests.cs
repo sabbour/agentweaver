@@ -37,6 +37,15 @@ public sealed record UpdateProjectCastingProposalRequest
     public required ProjectConfiguration Draft { get; init; }
 }
 
+/// <summary>Request to change one proposal member's catalog role and optional display title.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record UpdateProjectCastingProposalMemberRoleRequest
+{
+    public required long ExpectedDraftRevision { get; init; }
+    public required string RoleId { get; init; }
+    public string? CustomRoleTitle { get; init; }
+}
+
 /// <summary>Request to confirm or reject a pending proposal at the expected draft revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record TransitionProjectCastingProposalRequest

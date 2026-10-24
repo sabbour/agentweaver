@@ -269,8 +269,10 @@ proposal first. Nothing changes until someone confirms the proposal.
 
 - **Cast team** opens the **Cast a team** page. Pick a built-in template or
   choose roles, then review the proposed agents. You can remove members before
-  you confirm. **Cast team** confirms the proposal and saves a new
-  configuration revision. **Reject** discards it.
+  you confirm. Use **Re-role** to change a proposed member's catalog role and
+  optional display title. The title does not change the role ID. Each edit is
+  saved against the proposal draft revision. **Cast team** confirms the
+  proposal and saves a new configuration revision. **Reject** discards it.
 - **Add member** stages a proposal that adds one catalog role to the current
   team, then opens it for review.
 - **Sync** has **Export team** and **Import team**. Export downloads the current

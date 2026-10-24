@@ -123,6 +123,7 @@ for the owner transaction boundary.
 | `CreateScenarioProjectCastingProposalRequest` | `expectedConfigurationRevision`, catalog `templateId`, optional supported `universe`. |
 | `CreateManualProjectCastingProposalRequest` | `expectedConfigurationRevision`, non-empty catalog `roleIds`, optional supported `universe`. |
 | `UpdateProjectCastingProposalRequest` | `expectedDraftRevision`, replacement `draft`. |
+| `UpdateProjectCastingProposalMemberRoleRequest` | `expectedDraftRevision`, catalog `roleId`, optional `customRoleTitle`; edits only the proposal draft. |
 | `TransitionProjectCastingProposalRequest` | `expectedDraftRevision` for confirm or reject. |
 | `ProjectCastingProposal` | `proposalId`, `projectId`, `baseConfigurationRevision`, `draftRevision`, `state` (`pending`, `confirmed`, or `rejected`), `draft`, nullable `confirmedConfigurationRevision`, nullable `result`, nullable `transferProvenance`, and creation/update actor IDs and timestamps. |
 | `ProjectCastingTransfer` | `formatVersion` (1), `sourceProjectId`, `sourceConfigurationRevision`, `agentCharters`, `casting`, `contentDigest`. Contains no unrelated project settings. |
@@ -857,6 +858,12 @@ codes. A missing or revoked
 authorization returns `consent_required`. These errors go only to the
 registered redirect URI and include the original `state`; silent authorization
 does not create or extend a permanent authorization.
+
+Other upstream sign-in failures also return through the one-use authorization
+continuation. The Broker sends the client a safe OAuth error and fixed
+actionable `error_description`; when present, it includes only the numeric
+Microsoft Entra error code. Provider descriptions and account details are not
+returned.
 
 `IdentityBroker:WebOrigin` is an optional, origin-only HTTPS value, required when
 `IdentityBroker:GitHubRepoApp` is configured. It has no path, credentials, query, or

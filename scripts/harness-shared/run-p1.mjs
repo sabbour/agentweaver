@@ -203,6 +203,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
   createFixture = createP1Fixture,
   acquireRunIdentity = acquireP1RunIdentity,
   createSurfaceAdapters = createP1SurfaceAdapters,
+  pageProvider,
   runSurfaceJourney = runP1SurfaceJourney,
   identityProvider,
 } = {}) {
@@ -279,8 +280,9 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       outputPath = undefined;
       throw new Error('The evidence output path must not replace a P1 input or deployment artifact.');
     }
-    if (surface === 'ui') {
-      throw new Error('The P1 UI page provider is blocked on #1859 until the 0.x UI is restored onto v1.');
+    // Refuse to create a live fixture if the UI has no authorized page source.
+    if (surface === 'ui' && !options.pageModule && typeof pageProvider !== 'function') {
+      throw new Error('The UI surface requires the built-in sign-in launcher or an authorized page provider.');
     }
     sourceEvidence = await prepareDeploymentEvidence({
       repoRoot: repositoryRoot,
@@ -347,6 +349,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
           identity: fixture.identity,
           deniedActor: validated.fixturePlan.deniedActor,
           pageModulePath: options.pageModule ? resolve(options.pageModule) : undefined,
+          pageProvider,
         });
         result = await runSurfaceJourney(surface, fixture.input, {
           ...adapters,
