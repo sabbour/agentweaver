@@ -108,6 +108,17 @@ internal sealed class AgentSuiteObjectStore(IObjectStore objectStore)
         }
     }
 
+    /// <summary>Reads one retained blob and verifies that its bytes still match the native digest.</summary>
+    public async Task<byte[]> ReadBlobAsync(string digest, CancellationToken cancellationToken)
+    {
+        // Read through the same bounded path used for records so a damaged object cannot be returned unchecked.
+        var bytes = await ReadAsync(BlobKey(digest), MaximumBlobBytes, cancellationToken).ConfigureAwait(false)
+            ?? throw IntegrityError("A retained AgentSuite blob is missing.");
+        if (!string.Equals(Digest(bytes), digest, StringComparison.Ordinal))
+            throw IntegrityError("A retained AgentSuite blob does not match its digest.");
+        return bytes;
+    }
+
     /// <summary>
     /// Writes the record if absent. An existing record is returned only when it is byte-identical; the same
     /// source with different bindings or blueprint data is a conflict and the stored record is kept.

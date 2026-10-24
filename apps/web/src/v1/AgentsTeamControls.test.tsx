@@ -1,15 +1,20 @@
+/// <reference types="node" />
+
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { gunzipSync } from 'node:zlib';
 import { AddMemberDialog, TeamSyncPanel } from './AgentsTeamControls';
 import { GatewayError } from './api';
-import type { ProjectConfiguration } from './contracts';
+import { contentArchive } from './__tests__/agentSuiteArchiveFixtures';
+import type { ProjectConfiguration, RemoteMcpConnectionDirectoryEntry } from './contracts';
 
 const api = vi.hoisted(() => ({
   listCatalogRoles: vi.fn(),
   createCastingDraftProposal: vi.fn(),
-  exportCastingTransfer: vi.fn(),
-  importCastingTransfer: vi.fn(),
+  exportProjectAgentSuite: vi.fn(),
+  importProjectAgentSuite: vi.fn(),
+  listRemoteMcpConnections: vi.fn(),
 }));
 // One stable apiCall, like the real provider, so effects that depend on it run once.
 const auth = vi.hoisted(() => ({ apiCall: (operation: (token: string, tenant: string) => unknown) => operation('token', 'tenant-1') }));
@@ -40,8 +45,69 @@ function renderAt(element: React.ReactElement) {
   );
 }
 
+function stubDecompressionStream(): void {
+  // Happy DOM does not consistently expose the browser gzip stream API.
+  class TestDecompressionStream extends TransformStream<Uint8Array, Uint8Array> {
+    constructor(format: string) {
+      if (format !== 'gzip') throw new Error('Unsupported compression format.');
+      const chunks: Uint8Array[] = [];
+      super({
+        transform(chunk) {
+          chunks.push(new Uint8Array(chunk));
+        },
+        flush(controller) {
+          const total = chunks.reduce((size, chunk) => size + chunk.byteLength, 0);
+          const encoded = new Uint8Array(total);
+          let offset = 0;
+          for (const chunk of chunks) {
+            encoded.set(chunk, offset);
+            offset += chunk.byteLength;
+          }
+          controller.enqueue(new Uint8Array(gunzipSync(encoded)));
+        },
+      });
+    }
+  }
+  vi.stubGlobal('DecompressionStream', TestDecompressionStream);
+}
+
+function connection(overrides: Partial<RemoteMcpConnectionDirectoryEntry> = {}): RemoteMcpConnectionDirectoryEntry {
+  // The display name is safe to show while the endpoint remains private connection data.
+  return {
+    connectionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    displayName: 'Docs',
+    endpointUri: 'https://private.example.test/mcp',
+    resourceUri: null,
+    authenticationMode: 'delegatedOAuth',
+    transportProfile: 'streamableHttp20250618',
+    state: 'enabled',
+    rowRevision: 1,
+    configurationRevision: 1,
+    configurationSha256: 'a'.repeat(64),
+    identityBound: true,
+    registryServerName: null,
+    registryExactVersion: null,
+    discoveryRevision: 1,
+    catalogSha256: 'b'.repeat(64),
+    toolCount: 1,
+    ...overrides,
+  };
+}
+
+async function archiveBase64(file: File): Promise<string> {
+  // Match the UI encoder so assertions compare the exact request archive bytes.
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  stubDecompressionStream();
+  api.listRemoteMcpConnections.mockResolvedValue({ connections: [], nextConnectionId: null });
   api.listCatalogRoles.mockResolvedValue([
     { id: 'tester', title: 'Tester', summary: 'Tests changes.', responsibilities: [], boundaries: [] },
     { id: 'scribe', title: 'Scribe', summary: 'Reserved.', responsibilities: [], boundaries: [] },
@@ -92,39 +158,86 @@ describe('TeamSyncPanel', () => {
     // jsdom has no object URLs, so provide them for the download.
     Object.assign(URL, { createObjectURL, revokeObjectURL });
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    api.exportCastingTransfer.mockResolvedValue({ formatVersion: 1, sourceConfigurationRevision: 7, agentCharters: [], casting: [] });
+    api.exportProjectAgentSuite.mockResolvedValue({
+      format: 'content-tar-gzip',
+      suiteName: 'Team One',
+      sourceConfigurationRevision: 7,
+      archive: btoa('archive'),
+    });
     renderAt(<TeamSyncPanel projectId="p1" configurationRevision={7} />);
     fireEvent.click(screen.getByRole('button', { name: 'Export team' }));
-    expect(await screen.findByText('Exported the team from configuration revision 7.')).toBeTruthy();
-    expect(api.exportCastingTransfer).toHaveBeenCalledWith('token', 'p1', 7, 'tenant-1');
+    expect(await screen.findByText('Exported Team One from configuration revision 7.')).toBeTruthy();
+    expect(api.exportProjectAgentSuite).toHaveBeenCalledWith('token', 'p1', 7, 'tenant-1');
     expect(click).toHaveBeenCalledOnce();
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:team');
   });
 
-  it('refuses a file over 1 MiB before uploading', async () => {
+  it('refuses an archive over 16 MiB before uploading', async () => {
     renderAt(<TeamSyncPanel projectId="p1" configurationRevision={7} />);
-    const file = new File(['x'], 'team.json', { type: 'application/json' });
-    Object.defineProperty(file, 'size', { value: 1024 * 1024 + 1 });
-    fireEvent.change(screen.getByLabelText('Team file'), { target: { files: [file] } });
-    expect(await screen.findByText('The file is larger than 1 MiB.')).toBeTruthy();
-    expect(api.importCastingTransfer).not.toHaveBeenCalled();
+    const file = contentArchive(false);
+    Object.defineProperty(file, 'size', { value: 16 * 1024 * 1024 + 1 });
+    fireEvent.change(screen.getByLabelText('AgentSuite archive'), { target: { files: [file] } });
+    expect(await screen.findByText('Choose an AgentSuite archive that is between 1 byte and 16 MiB.')).toBeTruthy();
+    expect(api.importProjectAgentSuite).not.toHaveBeenCalled();
   });
 
-  it('imports a team file as a proposal and opens it', async () => {
-    api.importCastingTransfer.mockResolvedValue({ proposalId: 'pr-3' });
+  it('imports a package without remote dependencies as a proposal', async () => {
+    api.importProjectAgentSuite.mockResolvedValue({ proposal: { proposalId: 'pr-3' }, unresolvedSkillBindings: [] });
     renderAt(<TeamSyncPanel projectId="p1" configurationRevision={7} />);
-    const transfer = { formatVersion: 1, sourceProjectId: 'p0', sourceConfigurationRevision: 2, contentDigest: 'd', agentCharters: [], casting: [] };
-    const file = new File([JSON.stringify(transfer)], 'team.json', { type: 'application/json' });
-    fireEvent.change(screen.getByLabelText('Team file'), { target: { files: [file] } });
+    const file = contentArchive(false);
+    fireEvent.change(screen.getByLabelText('AgentSuite archive'), { target: { files: [file] } });
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/projects/p1/team/cast?proposal=pr-3'));
-    expect(api.importCastingTransfer).toHaveBeenCalledWith('token', 'p1', { expectedConfigurationRevision: 7, transfer }, 'tenant-1');
+    const [, projectId, request, tenant] = api.importProjectAgentSuite.mock.calls[0];
+    expect(projectId).toBe('p1');
+    expect(request).toEqual({
+      expectedConfigurationRevision: 7,
+      format: 'content-tar-gzip',
+      archive: await archiveBase64(file),
+      toolConnections: [],
+    });
+    expect(tenant).toBe('tenant-1');
   });
 
-  it('explains a rejected team file', async () => {
-    api.importCastingTransfer.mockRejectedValue(new GatewayError(422, {}, 'Invalid'));
+  it('binds remote tool providers to usable target connections without showing endpoints', async () => {
+    api.listRemoteMcpConnections.mockResolvedValue({
+      connections: [
+        connection(),
+        connection({
+          connectionId: 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff',
+          displayName: 'Not connected',
+          identityBound: false,
+        }),
+        connection({
+          connectionId: 'cccccccc-dddd-eeee-ffff-000000000000',
+          displayName: 'Disabled',
+          state: 'disabled',
+        }),
+      ],
+      nextConnectionId: null,
+    });
+    api.importProjectAgentSuite.mockResolvedValue({ proposal: { proposalId: 'pr-4' }, unresolvedSkillBindings: [] });
     renderAt(<TeamSyncPanel projectId="p1" configurationRevision={7} />);
-    const file = new File(['{}'], 'team.json', { type: 'application/json' });
-    fireEvent.change(screen.getByLabelText('Team file'), { target: { files: [file] } });
-    expect(await screen.findByText(/not a valid team export/)).toBeTruthy();
+    const file = contentArchive();
+    fireEvent.change(screen.getByLabelText('AgentSuite archive'), { target: { files: [file] } });
+    const select = await screen.findByRole('combobox', { name: 'search@1.0.0' });
+    expect(screen.getByRole('option', { name: 'Docs' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Not connected' })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Disabled' })).toBeNull();
+    expect(screen.queryByText(/private\.example\.test/)).toBeNull();
+    fireEvent.change(select, { target: { value: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review import' }));
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/projects/p1/team/cast?proposal=pr-4'));
+    const [, , request] = api.importProjectAgentSuite.mock.calls[0];
+    expect(request.toolConnections).toEqual([{
+      toolProvider: 'search@1.0.0',
+      connectionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    }]);
+  });
+
+  it('explains a rejected AgentSuite package', async () => {
+    api.importProjectAgentSuite.mockRejectedValue(new GatewayError(422, {}, 'Invalid'));
+    renderAt(<TeamSyncPanel projectId="p1" configurationRevision={7} />);
+    fireEvent.change(screen.getByLabelText('AgentSuite archive'), { target: { files: [contentArchive(false)] } });
+    expect(await screen.findByText('The AgentSuite package is invalid or incompatible with this project.')).toBeTruthy();
   });
 });

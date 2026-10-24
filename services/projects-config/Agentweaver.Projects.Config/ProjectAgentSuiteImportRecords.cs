@@ -197,6 +197,13 @@ public sealed record ProjectAgentSuiteImportResult(ProjectAgentSuiteImport Impor
     public ImmutableArray<BlueprintUnresolvedSkillBinding> UnresolvedSkillBindings { get; init; } = [];
 }
 
+/// <summary>A portable AgentSuite content archive exported from one project configuration revision.</summary>
+public sealed record ProjectAgentSuiteExport(
+    string Format,
+    string SuiteName,
+    long SourceConfigurationRevision,
+    string Archive);
+
 /// <summary>Thrown when the archive fails native or Agentweaver validation. Carries every error line.</summary>
 public sealed class AgentSuiteImportRejectedException(
     string code,
