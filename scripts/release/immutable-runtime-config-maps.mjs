@@ -142,10 +142,18 @@ export function replaceImmutableRuntimeConfigMaps(replacements, namespace, { roo
       reject('immutable ConfigMap replacement is missing its exact source object or live identity', fail);
     }
     // Bind deletion to the live object observed during planning so a concurrent change cannot be removed.
-    run('kubectl', [
-      'delete', 'configmap', name, '--namespace', namespace,
-      `--preconditions=uid=${identity.uid},resourceVersion=${identity.resourceVersion}`,
-    ], { cwd: root });
+    // `kubectl delete` has no preconditions flag, so send a raw DELETE whose DeleteOptions body
+    // carries the uid and resourceVersion; the API server rejects the delete if either changed.
+    const deletePath = `/api/v1/namespaces/${encodeURIComponent(namespace)}` +
+      `/configmaps/${encodeURIComponent(name)}`;
+    run('kubectl', ['delete', '--raw', deletePath, '--filename', '-'], {
+      cwd: root,
+      input: JSON.stringify({
+        kind: 'DeleteOptions',
+        apiVersion: 'v1',
+        preconditions: { uid: identity.uid, resourceVersion: identity.resourceVersion },
+      }),
+    });
     run('kubectl', ['create', '--filename', '-', '--namespace', namespace], {
       cwd: root, input: JSON.stringify(resource),
     });

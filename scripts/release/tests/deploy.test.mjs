@@ -806,8 +806,16 @@ function liveRuntimeConfigMap(resource) {
 
 function runConfigMapMutation(file, args, options, currentByName) {
   if (file !== 'kubectl') return undefined;
-  if (args[0] === 'delete' && args[1] === 'configmap') {
-    currentByName.delete(args[2]);
+  if (args[0] === 'delete' && args[1] === '--raw') {
+    const name = decodeURIComponent(args[2].split('/').at(-1));
+    const { preconditions } = JSON.parse(options.input);
+    const current = currentByName.get(name);
+    // Mirror the API server: the guarded delete succeeds only for the exact observed object.
+    if (current?.metadata?.uid !== preconditions.uid ||
+        current?.metadata?.resourceVersion !== preconditions.resourceVersion) {
+      throw new Error(`Precondition failed for ConfigMap/${name}`);
+    }
+    currentByName.delete(name);
     return { operation: 'delete', result: '' };
   }
   if (args[0] === 'create' && args[1] === '--filename') {
@@ -1334,9 +1342,11 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
   ]);
   const replacement = calls.filter(({ operation }) => ['delete', 'create'].includes(operation));
   assert.deepEqual(replacement.map(({ operation }) => operation), ['delete', 'create']);
-  assert.deepEqual(replacement[0].args.slice(0, 3), ['delete', 'configmap', 'agenthost-runtime-v1']);
-  assert.match(replacement[0].args.find(arg => arg.startsWith('--preconditions=')),
-    /^--preconditions=uid=uid-agenthost-runtime-v1,resourceVersion=1$/);
+  assert.deepEqual(replacement[0].args, [
+    'delete', '--raw', '/api/v1/namespaces/agentweaver/configmaps/agenthost-runtime-v1', '--filename', '-',
+  ]);
+  assert.deepEqual(JSON.parse(replacement[0].input).preconditions,
+    { uid: 'uid-agenthost-runtime-v1', resourceVersion: '1' });
   assert.deepEqual(JSON.parse(replacement[1].input), desired);
 });
 
@@ -1433,7 +1443,7 @@ test('pre-acceptance execute replaces only changed Projects.Config runtime data 
   const replacements = calls.filter(({ operation }) => ['delete', 'create'].includes(operation));
   assert.deepEqual(replacements.map(({ operation }) => operation), ['delete', 'create']);
   assert.deepEqual(replacements[0].args.slice(0, 3), [
-    'delete', 'configmap', 'projects-config-runtime-config',
+    'delete', '--raw', `/api/v1/namespaces/${target.namespace}/configmaps/projects-config-runtime-config`,
   ]);
   assert.deepEqual(JSON.parse(replacements[1].input), desired);
   assert.ok(calls.findIndex(({ operation }) => operation === 'create') <
@@ -1521,7 +1531,9 @@ test('pre-acceptance execute replaces the changed Gateway ConfigMap and restarts
     resource.kind === 'ConfigMap' && resource.metadata.name === 'gateway-runtime-config'), false);
   const replacement = calls.filter(({ operation }) => ['delete', 'create'].includes(operation));
   assert.deepEqual(replacement.map(({ operation }) => operation), ['delete', 'create']);
-  assert.deepEqual(replacement[0].args.slice(0, 3), ['delete', 'configmap', 'gateway-runtime-config']);
+  assert.deepEqual(replacement[0].args.slice(0, 3), [
+    'delete', '--raw', `/api/v1/namespaces/${target.namespace}/configmaps/gateway-runtime-config`,
+  ]);
   assert.deepEqual(JSON.parse(replacement[1].input), desired);
   const applyIndex = calls.findIndex(({ operation }) => operation === 'apply');
   const restartIndex = calls.findIndex(({ operation }) => operation === 'restart');

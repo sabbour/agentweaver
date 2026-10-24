@@ -208,8 +208,15 @@ function makeFixture({
       return { status: 0, stdout: 'patched', stderr: '' };
     }
     if (action === 'rollout') return { status: 0, stdout: 'ready', stderr: '' };
-    if (args.includes('delete') && args.includes('configmap')) {
-      const name = args[args.indexOf('configmap') + 1];
+    if (args.includes('delete') && args.includes('--raw')) {
+      const name = decodeURIComponent(args[args.indexOf('--raw') + 1].split('/').at(-1));
+      const { preconditions } = JSON.parse(settings.input);
+      const current = liveMaps.get(name);
+      // Mirror the API server: refuse a guarded delete whose observed identity is stale.
+      if (current?.metadata?.uid !== preconditions.uid ||
+          current?.metadata?.resourceVersion !== preconditions.resourceVersion) {
+        return { status: 1, stdout: '', stderr: `Precondition failed for ConfigMap/${name}` };
+      }
       liveMaps.delete(name);
       return { status: 0, stdout: `configmap/${name} deleted`, stderr: '' };
     }
@@ -400,7 +407,7 @@ test('whole-release replaces only approved immutable ConfigMaps after cache expi
     call.command === 'kubectl' && call.args.includes('patch') &&
     call.args[call.args.indexOf('deployment') + 1] === 'projects-config');
   const deletion = world.calls.findIndex(call =>
-    call.command === 'kubectl' && call.args.includes('delete') && call.args.includes('configmap'));
+    call.command === 'kubectl' && call.args.includes('delete') && call.args.includes('--raw'));
   const replacementCreate = world.calls.findIndex(call =>
     call.command === 'kubectl' && call.args.includes('create') && call.args.includes('--filename'));
   const restore = world.calls.findIndex((call, index) =>
@@ -438,6 +445,26 @@ test('whole-release restores drained ConfigMap consumers when an earlier rollout
   assert.equal(projectsConfig.spec.template.spec.containers[0].image,
     world.publication.published.find(item => item.id === 'Agentweaver.Projects.Config').image);
   assert.equal(world.written[0].receipt.result, 'failed');
+});
+
+test('a failed restore after a failed ConfigMap replacement keeps both causes in the receipt', async () => {
+  const world = makeFixture({ changedRuntimeConfigMap: 'projects-config-runtime-config' });
+  const originalExec = world.overrides.exec;
+  world.overrides.exec = (command, args, settings) => {
+    if (command === 'kubectl' && args.includes('delete') && args.includes('--raw')) {
+      return { status: 1, stdout: '', stderr: 'Precondition failed: UID in precondition does not match' };
+    }
+    if (command === 'kubectl' && args.includes('rollout') && args.includes('deployment/projects-config')) {
+      return { status: 1, stdout: '', stderr: 'progress deadline exceeded' };
+    }
+    return originalExec(command, args, settings);
+  };
+  await assert.rejects(runWholeRelease({ ...world.options, execute: true }, world.overrides),
+    /Precondition failed[\s\S]*projects-config did not become ready/);
+  const receipt = world.written[0].receipt;
+  assert.equal(receipt.result, 'failed');
+  assert.match(receipt.error, /Precondition failed: UID in precondition does not match/);
+  assert.match(receipt.error, /projects-config did not become ready.*progress deadline exceeded/);
 });
 
 test('a complete rollout writes deployed only after readiness, Pod, and Gateway checks pass', async () => {

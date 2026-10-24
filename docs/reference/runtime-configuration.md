@@ -166,7 +166,10 @@ immutable-field error. With `--execute`, the command validates the rest of the
 rendered bundle, checks namespace-scoped ConfigMap create and name-scoped
 delete permissions for each eligible changed map, and replaces only those maps
 from the source-rendered objects with a UID- and resource-version-guarded
-delete followed by a create. Unchanged data follows the normal apply path.
+delete followed by a create. The delete is a raw API request whose
+`DeleteOptions` preconditions carry the UID and resource version observed
+during planning, so the API server refuses it if the live map changed in the
+meantime. Unchanged data follows the normal apply path.
 
 This exception is limited to `agenthost-runtime-v1`,
 `projects-config-runtime-config`, and `gateway-runtime-config`. It never

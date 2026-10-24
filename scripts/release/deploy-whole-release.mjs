@@ -575,8 +575,12 @@ export async function runWholeRelease(options, overrides = {}) {
           }
         }
         if (restoreErrors.length > 0) {
+          // Receipts record only the top-level message, so name the original failure and every
+          // restore failure here; otherwise the operator cannot see why execution stopped.
+          const restoreMessages = restoreErrors.map(item => item?.message ?? String(item)).join('; ');
           throw new AggregateError([error, ...restoreErrors],
-            'Whole-release execution failed and one or more drained Deployments could not be restored and verified.');
+            `Whole-release execution failed (${error?.message ?? String(error)}) and one or more ` +
+            `drained Deployments could not be restored and verified: ${restoreMessages}`);
         }
         throw error;
       }
