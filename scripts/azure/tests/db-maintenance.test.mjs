@@ -14,6 +14,10 @@ import { redact } from '../lib/exec.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
 
 const digest = character => `sha256:${character.repeat(64)}`;
+const range = (minSchema, maxSchema, supportedVersions = Array.from(
+  { length: maxSchema - minSchema + 1 }, (_, index) => minSchema + index)) =>
+  ({ minSchema, maxSchema, supportedVersions });
+const coreRange = () => range(31, 35, [31, 32, 33, 35]);
 const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
 const fail = (stderr = 'failed', status = 1) => ({ status, stdout: '', stderr });
 const CLIENT_ID = '12345678-1234-4123-8123-123456789abc';
@@ -29,10 +33,10 @@ const goodLogs = {
   'events-and-sessions': marker('events-and-sessions', 'events_sessions', plan.eventsVersions),
 };
 const defaultSchemaRanges = {
-  [digest('a')]: { minSchema: 31, maxSchema: 35 },
-  [digest('b')]: { minSchema: 10, maxSchema: 10 },
-  [digest('d')]: { minSchema: 11, maxSchema: 11 },
-  [digest('f')]: { minSchema: 10, maxSchema: 10 },
+  [digest('a')]: coreRange(),
+  [digest('b')]: range(10, 10),
+  [digest('d')]: range(11, 11),
+  [digest('f')]: range(10, 10),
 };
 
 function kustomize(directory) {
@@ -714,12 +718,10 @@ const apps = (running, expected = 'b') => [
     expected: eventsImage(expected), running: eventsImage(running) },
 ];
 const schemas = { environment: 11, orchestrator: 35, 'events-and-sessions': 10 };
-const range = (minSchema, maxSchema) => ({ minSchema, maxSchema });
-
 test('the service order follows the schema ranges of the running and target images', () => {
   // Ranges are keyed by image reference, as the runner reads them from each image.
   const order = (running, target, current) => planServiceOrder({ appImages: apps('e'),
-    ranges: { [environmentImage('d')]: range(11, 11), [apps('e')[1].expected]: range(31, 35),
+    ranges: { [environmentImage('d')]: range(11, 11), [apps('e')[1].expected]: coreRange(),
       [eventsImage('e')]: running, [eventsImage('b')]: target },
     targetSchema: schemas, currentSchema: { environment: 11, orchestrator: 31, 'events-and-sessions': current } });
   // The running image accepts the target schema: migrate first; deploying is optional.
@@ -743,12 +745,30 @@ test('the service order follows the schema ranges of the running and target imag
   assert.throws(() => order(undefined, undefined, 8), /accepts schema unknown, not 10/);
 });
 
+test('service ordering does not treat skipped Core 034 as compatible', () => {
+  const orchestrator = {
+    ...apps('e')[1],
+    status: 'mismatch',
+    running: imageReference('Agentweaver.Orchestrator', digest('e')),
+  };
+  const result = planServiceOrder({
+    appImages: [orchestrator],
+    ranges: {
+      [orchestrator.expected]: coreRange(),
+      [orchestrator.running]: range(31, 33),
+    },
+    targetSchema: { orchestrator: 35 },
+    currentSchema: { orchestrator: 34 },
+  });
+  assert.equal(result.services[0].action, 'gap');
+});
+
 test('the schema range comes from the readiness check in the migrator source', () => {
   // Orchestrator requires 31 at startup and accepts optional 032, 033, and 035.
   // Git output passes through redaction, which must not change the parsed text.
   const read = (path, component) => schemaRangeFromSource(redact(readFileSync(path, 'utf8')), component);
   assert.deepEqual(read('services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs',
-    'Agentweaver.Orchestrator'), range(31, 35));
+    'Agentweaver.Orchestrator'), coreRange());
   assert.deepEqual(read('services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs',
     'Agentweaver.EventsAndSessions'), range(Math.max(...plan.eventsVersions), Math.max(...plan.eventsVersions)));
   const environmentSource = readFileSync(
@@ -814,7 +834,7 @@ test('pinned owner readiness shapes preserve migration gaps through Core 035', a
   const repositoryIdentityRange = await derive(imageReference('Agentweaver.Orchestrator', digest('b')));
   assert.deepEqual(oldRange, { ...range(31, 32), sourceSha: oldCommit });
   assert.deepEqual(repositoryIdentityRange, { ...range(31, 33), sourceSha: newCommit });
-  assert.deepEqual(newRange, { ...range(31, 35), sourceSha: queuePositionCommit });
+  assert.deepEqual(newRange, { ...coreRange(), sourceSha: queuePositionCommit });
   assert.doesNotMatch(queuePositionSource, /\b34\b/);
   // The source-owned compatibility contract agrees with the parsed readiness range, without
   // requiring the parser to depend on metadata that older images do not have.
@@ -840,7 +860,7 @@ test('old-to-new owner upgrade deploys before Core 035 when schema 031 is record
         'events-and-sessions': eventsImage('b') },
       state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
         data: { handoverPrincipalObjectId: PRINCIPAL_ID, ...(current ? { 'orchestrator.schema': String(current) } : {}) } },
-      schemaRanges: { [digest('a')]: range(31, 35), [digest('e')]: range(31, 32), [digest('b')]: range(10, 10) },
+      schemaRanges: { [digest('a')]: coreRange(), [digest('e')]: range(31, 32), [digest('b')]: range(10, 10) },
     });
     try {
       const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
@@ -881,7 +901,7 @@ test('an image schema range is read from its source label and the source at that
   };
   const read = (overrides = {}) => readImageSchemaRange({ image: eventsImage('b'), component: 'Agentweaver.EventsAndSessions',
     readImage: async () => ({ sourceSha: sha }), exec: fakeGit(), repoRoot: '.', ...overrides });
-  assert.deepEqual(await read(), { minSchema: 10, maxSchema: 10, sourceSha: sha });
+  assert.deepEqual(await read(), { ...range(10, 10), sourceSha: sha });
   // A missing commit is fetched by name once, then read.
   assert.deepEqual(gitCalls.map(args => args[0]), ['cat-file', 'fetch', 'show']);
   assert.deepEqual(gitCalls[2], ['show', `${sha}:services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs`]);
@@ -894,7 +914,7 @@ test('an image schema range is read from its source label and the source at that
 });
 
 test('a target image whose schema range cannot be read stops the run before any change', async () => {
-  const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 35) } });
+  const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange() } });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([
       ...baseArgs, '--events-digest', digest('c'), '--deploy-apps']),
@@ -904,7 +924,7 @@ test('a target image whose schema range cannot be read stops the run before any 
 });
 
 test('a target digest built for another schema stops the run before any change', async () => {
-  const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 35), [digest('b')]: range(8, 8) } });
+  const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(8, 8) } });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--deploy-apps']),
       receiptDir: fake.receiptDir }, fake.deps), /accepts schema 8-8, not 10 from the reviewed plan/);
@@ -915,7 +935,7 @@ test('a target digest built for another schema stops the run before any change',
 test('deploy-first moves a service to an image that accepts the current schema before any migration Job', async () => {
   const fake = appWorld({ state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
       data: { handoverPrincipalObjectId: PRINCIPAL_ID, 'events-and-sessions.schema': '8' } },
-    schemaRanges: { [digest('a')]: range(31, 35), [digest('b')]: range(8, 10) } });
+    schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(8, 10) } });
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
       receiptDir: fake.receiptDir }, fake.deps);
@@ -930,7 +950,7 @@ test('deploy-first moves a service to an image that accepts the current schema b
 });
 
 test('migrate-first keeps a running image that accepts the target schema when no deploy is asked for', async () => {
-  const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 35), [digest('b')]: range(10, 10), [digest('e')]: range(8, 10) } });
+  const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(10, 10), [digest('e')]: range(8, 10) } });
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
       receiptDir: fake.receiptDir }, fake.deps);

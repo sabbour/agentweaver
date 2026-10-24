@@ -26,6 +26,7 @@ The offline plan hash for this source catalog is
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
 placeholder. The Core list is 1-16, 18-33, and 35; 034 is not in the catalog.
+Readiness ordering checks the exact supported versions, not only the range endpoints.
 Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
 027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
