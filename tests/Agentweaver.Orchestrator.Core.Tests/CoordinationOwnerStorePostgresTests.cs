@@ -160,7 +160,10 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
                 ? Task.FromException(new CoordinationException("run_selection_permission_denied", 403))
                 : Task.CompletedTask));
         if (fault.StartsWith("unpriced", StringComparison.Ordinal))
+        {
             Assert.Equal("runtime_cost_budget_pricing_missing", failure.Code);
+            Assert.Equal(409, failure.StatusCode);
+        }
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             SELECT (SELECT count(*) FROM "{_schema}".accepted_runs WHERE run_id = @run),
