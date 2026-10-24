@@ -247,6 +247,9 @@ if (materialContainer is not null)
         throw new InvalidOperationException("Session material requires an explicitly configured HTTPS Blob container.");
     builder.Services.AddSingleton<IObjectStore>(services => new AzureBlobObjectStore(
         new BlobContainerClient(containerUri, services.GetRequiredService<TokenCredential>())));
+    // Cleanup shares the Events owner credentials and is unavailable when material storage is not configured.
+    builder.Services.AddSingleton<SessionObjectRetentionService>();
+    builder.Services.AddHostedService<SessionObjectRetentionWorker>();
     builder.Services.AddSessionMaterialOwner();
     builder.Services.AddProducedRunCaptureOwner();
 }

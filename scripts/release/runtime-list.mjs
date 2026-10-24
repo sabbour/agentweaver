@@ -60,6 +60,7 @@ const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
 /** Static service deployments that make HTTPS calls to internal owner APIs. */
 export const BACKEND_CA_WORKLOADS = Object.freeze([
   'environment', 'events-and-sessions', 'gateway', 'identity-broker', 'knowledge', 'mcp', 'orchestrator',
+  'projects-config',
 ]);
 const ENVIRONMENT_CILIUM_CONFIGMAP = 'environment-cilium-config';
 const ENVIRONMENT_CILIUM_CONFIG_KEY = 'appsettings.Production.json';

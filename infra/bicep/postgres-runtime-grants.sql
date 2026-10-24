@@ -27,3 +27,8 @@ WHERE to_regclass(format('%I.chief_of_staff_priorities', :'service_schema')) IS 
 SELECT format('GRANT SELECT, INSERT, DELETE ON TABLE %I.chief_of_staff_priority_links TO %I',
   :'service_schema', :'runtime_role')
 WHERE to_regclass(format('%I.chief_of_staff_priority_links', :'service_schema')) IS NOT NULL \gexec
+
+-- Events & Sessions keeps its service-owned inventory writable only by its runtime role.
+SELECT format('GRANT SELECT, INSERT, UPDATE ON TABLE %I.session_object_inventory TO %I',
+  :'service_schema', :'runtime_role')
+WHERE to_regclass(format('%I.session_object_inventory', :'service_schema')) IS NOT NULL \gexec

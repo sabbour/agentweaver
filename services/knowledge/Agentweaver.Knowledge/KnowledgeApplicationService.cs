@@ -98,7 +98,60 @@ public sealed class KnowledgeApplicationService(
             .ConfigureAwait(false);
         ProjectsConfigClient.RequireProjectPermission(
             authority, projectId, ProjectAuthorizationPermission.AccessPrivateKnowledge);
+        // Broad discovery still requires run-selection permission; agent history uses its narrower private read.
         ProjectsConfigClient.RequireRunSelectionPermission(authority, projectId);
+        return await SearchAuthorizedProjectRunsAsync(
+            projectId, null, kind, query, includeInactive, page, pageSize, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Reads recent private Memory records for one agent without exposing run identifiers.</summary>
+    public async Task<ProjectAgentHistoryResponse> ReadProjectAgentHistoryAsync(
+        string projectId,
+        string agentId,
+        CancellationToken cancellationToken)
+    {
+        ValidateResourceIdentifier(projectId, nameof(projectId));
+        ValidateAgent(agentId);
+        var authority = await projects.GetCurrentProjectAuthorityAsync(projectId, cancellationToken)
+            .ConfigureAwait(false);
+        ProjectsConfigClient.RequireProjectPermission(
+            authority, projectId, ProjectAuthorizationPermission.AccessPrivateKnowledge);
+
+        // The selected agent narrows the private read; no run IDs or other agents leave this owner.
+        var page = await SearchAuthorizedProjectRunsAsync(
+            projectId,
+            agentId,
+            KnowledgeRecordKind.Memory,
+            query: null,
+            includeInactive: true,
+            page: 1,
+            pageSize: ProjectAgentHistoryContract.MaximumItems,
+            cancellationToken: cancellationToken,
+            requirePrivateKnowledgePermission: true).ConfigureAwait(false);
+        return new ProjectAgentHistoryResponse(
+            projectId,
+            agentId,
+            page.Items.Select(item => new ProjectAgentHistoryEntry(
+                    item.Record.RecordId,
+                    item.Record.Type,
+                    item.Record.Title,
+                    item.Record.Content,
+                    item.Record.UpdatedAt))
+                .ToImmutableArray());
+    }
+
+    private async Task<ProjectKnowledgeRecordPage> SearchAuthorizedProjectRunsAsync(
+        string projectId,
+        string? agentId,
+        KnowledgeRecordKind? kind,
+        string? query,
+        bool includeInactive,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken,
+        bool requirePrivateKnowledgePermission = false)
+    {
         var runIds = await bindings.ListBoundRunIdsAsync(projectId, cancellationToken).ConfigureAwait(false);
         var resolvedRuns = new List<(string RunId, AuthorizedProvider Context)>(runIds.Length);
         foreach (var runId in runIds)
@@ -109,7 +162,8 @@ public sealed class KnowledgeApplicationService(
                 runId,
                 ProjectAuthorizationPermission.AccessPrivateKnowledge,
                 cancellationToken,
-                requireExistingBinding: true).ConfigureAwait(false);
+                requireExistingBinding: true,
+                requirePrivateKnowledgePermission: requirePrivateKnowledgePermission).ConfigureAwait(false);
             resolvedRuns.Add((runId, context));
         }
 
@@ -130,7 +184,7 @@ public sealed class KnowledgeApplicationService(
             {
                 var sourceResult = await source.Context.Provider.SearchAsync(
                     new KnowledgeRecordQuery(
-                        projectId, null, kind, query, includeInactive, sourcePage, pageSize),
+                        projectId, agentId, kind, query, includeInactive, sourcePage, pageSize),
                     cancellationToken).ConfigureAwait(false);
                 if (sourcePage == 1)
                     sourceTotalCount = sourceResult.TotalCount;
@@ -152,7 +206,8 @@ public sealed class KnowledgeApplicationService(
                 runId,
                 context,
                 ProjectAuthorizationPermission.AccessPrivateKnowledge,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                requirePrivateKnowledgePermission).ConfigureAwait(false);
 
         if (totalCount > int.MaxValue)
             throw new KnowledgeProviderUnavailableException(
@@ -615,18 +670,22 @@ public sealed class KnowledgeApplicationService(
         string runId,
         ProjectAuthorizationPermission permission,
         CancellationToken cancellationToken,
-        bool requireExistingBinding = false)
+        bool requireExistingBinding = false,
+        bool requirePrivateKnowledgePermission = false)
     {
         ValidateResourceIdentifier(projectId, nameof(projectId));
         ValidateResourceIdentifier(runId, nameof(runId));
         var authority = await projects.GetCurrentAuthorityAsync(projectId, runId, cancellationToken)
             .ConfigureAwait(false);
         ProjectsConfigClient.RequireProjectPermission(authority, projectId, permission);
-        var provider = requireExistingBinding
-            ? await bindings.ResolveExistingAndVerifyAsync(
+        var provider = requirePrivateKnowledgePermission
+            ? await bindings.ResolveExistingForPrivateKnowledgeAsync(
                 authority, projectId, runId, cancellationToken).ConfigureAwait(false)
-            : await bindings.ResolveAndVerifyAsync(
-                authority, projectId, runId, cancellationToken).ConfigureAwait(false);
+            : requireExistingBinding
+                ? await bindings.ResolveExistingAndVerifyAsync(
+                    authority, projectId, runId, cancellationToken).ConfigureAwait(false)
+                : await bindings.ResolveAndVerifyAsync(
+                    authority, projectId, runId, cancellationToken).ConfigureAwait(false);
         return new AuthorizedProvider(authority, provider.Provider, provider.Selection, provider.Binding);
     }
 
@@ -636,7 +695,8 @@ public sealed class KnowledgeApplicationService(
         string runId,
         AuthorizedProvider expected,
         ProjectAuthorizationPermission permission,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requirePrivateKnowledgePermission = false)
     {
         var authority = await projects.GetCurrentAuthorityAsync(projectId, runId, cancellationToken)
             .ConfigureAwait(false);
@@ -652,8 +712,11 @@ public sealed class KnowledgeApplicationService(
                 "The current Knowledge caller authority changed while the request was in progress.",
                 StatusCodes.Status403Forbidden);
 
-        var current = await bindings.ResolveExistingAndVerifyAsync(
-            authority, projectId, runId, cancellationToken).ConfigureAwait(false);
+        var current = requirePrivateKnowledgePermission
+            ? await bindings.ResolveExistingForPrivateKnowledgeAsync(
+                authority, projectId, runId, cancellationToken).ConfigureAwait(false)
+            : await bindings.ResolveExistingAndVerifyAsync(
+                authority, projectId, runId, cancellationToken).ConfigureAwait(false);
         if (!SameProviderBinding(expected.Binding, current.Binding) ||
             !ReferenceEquals(expected.Provider, current.Provider) ||
             expected.Selection.ProjectRevision != current.Selection.ProjectRevision ||

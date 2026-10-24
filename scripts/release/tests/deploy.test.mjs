@@ -3207,6 +3207,7 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
   // Generated runtime manifests mount the CA for every static owner caller before deployment validation.
   for (const name of [
     'environment', 'events-and-sessions', 'gateway', 'identity-broker', 'knowledge', 'mcp', 'orchestrator',
+    'projects-config',
   ]) {
     const pod = item('Deployment', name).spec.template.spec;
     const volumeName = name === 'identity-broker' ? 'projects-ca' : 'backend-ca';

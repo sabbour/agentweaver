@@ -49,7 +49,7 @@ const GROUPS = {
   },
   events_sessions: {
     SELECT: 'sessions_schema_migrations outbox_schema_migrations',
-    'SELECT,INSERT,UPDATE': 'session_run_streams project_fact_streams addressed_messages outbox_streams outbox_events',
+    'SELECT,INSERT,UPDATE': 'session_run_streams project_fact_streams addressed_messages outbox_streams outbox_events session_object_inventory',
     'SELECT,INSERT,UPDATE,DELETE': 'addressed_message_threads',
     'SELECT,INSERT': 'messaging_provider_bindings session_events session_object_references project_facts usage_run_cost_bindings usage_source_receipts consumer_inbox_receipts sessions session_provider_bindings session_fork_lineage usage_rate_cards usage_ledger',
   },
@@ -220,7 +220,7 @@ export function buildP1PostgresPlan() {
     coreVersions: [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 36],
     // Bind each owner migration catalog into the reviewed plan hash.
     environmentVersions: Array.from({ length: 11 }, (_, index) => index + 1),
-    eventsVersions: Array.from({ length: 9 }, (_, index) => index + 1),
+    eventsVersions: Array.from({ length: 10 }, (_, index) => index + 1),
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',
       'A separate approval permits the five SQL login mappings, schema initialization, and exact grants.',

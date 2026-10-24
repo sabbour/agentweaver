@@ -9,9 +9,9 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "160e76be2a82f33e60aeda9445e88e4d64e9ed3dd1355f89bafef9fa5b919886";
+    private const string ReviewedPlanSha256 = "ea1303e02ca0381735704de35b2ddf61e2e484d5ce64633d2fbc45170fd01f9b";
     private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 36];
-    private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 9)];
+    private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 10)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 11)];
 
     [Fact]
@@ -41,6 +41,8 @@ public sealed class PlannedRuntimeGrantsTests
             "events-and-sessions", "events_sessions", "agentweaver-id-events-and-sessions", ReviewedPlanSha256, EventsVersions);
         Assert.Equal(EventsVersions, events.Versions);
         Assert.NotEmpty(events.Tables);
+        var inventory = Assert.Single(events.Tables, table => table.Table == "session_object_inventory");
+        Assert.Equal(["SELECT", "INSERT", "UPDATE"], inventory.Privileges);
 
         var environment = PlannedRuntimeGrants.Load(
             "environment", "environment", "agentweaver-id-environment", ReviewedPlanSha256, EnvironmentVersions);
@@ -96,7 +98,7 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Contains("catalog", error.Message);
 
         Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(
-            "events-and-sessions", "events_sessions", "agentweaver-id-events-and-sessions", ReviewedPlanSha256, [.. Enumerable.Range(1, 8)]));
+            "events-and-sessions", "events_sessions", "agentweaver-id-events-and-sessions", ReviewedPlanSha256, [.. Enumerable.Range(1, 9)]));
         Assert.Throws<InvalidOperationException>(() => PlannedRuntimeGrants.Load(
             "environment", "environment", "agentweaver-id-environment", ReviewedPlanSha256, [.. Enumerable.Range(1, 10)]));
     }

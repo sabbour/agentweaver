@@ -26,7 +26,7 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   registry: 'ghcr.io/sabbour',
 });
 /** The reviewed plan binds Environment, Events, Core, and Projects & Config runtime grants. */
-export const REVIEWED_PLAN_SHA256 = '160e76be2a82f33e60aeda9445e88e4d64e9ed3dd1355f89bafef9fa5b919886';
+export const REVIEWED_PLAN_SHA256 = 'ea1303e02ca0381735704de35b2ddf61e2e484d5ce64633d2fbc45170fd01f9b';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';

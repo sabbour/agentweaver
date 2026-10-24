@@ -57,6 +57,20 @@ public sealed class KnowledgeProviderBindingService(
         => await ResolveAsync(authority, projectId, runId, allowCreate: false, cancellationToken)
             .ConfigureAwait(false);
 
+    /// <summary>Resolves a persisted provider binding using private-Knowledge access instead of run-selection access.</summary>
+    public async Task<KnowledgeProviderContext> ResolveExistingForPrivateKnowledgeAsync(
+        ProjectAuthorizationContextResponse authority,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+        => await ResolveAsync(
+            authority,
+            projectId,
+            runId,
+            allowCreate: false,
+            cancellationToken,
+            requirePrivateKnowledgePermission: true).ConfigureAwait(false);
+
     /// <summary>Lists only run IDs that already have an immutable Knowledge provider binding.</summary>
     public async Task<ImmutableArray<string>> ListBoundRunIdsAsync(
         string projectId,
@@ -92,11 +106,23 @@ public sealed class KnowledgeProviderBindingService(
         string projectId,
         string runId,
         bool allowCreate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requirePrivateKnowledgePermission = false)
     {
-        ProjectsConfigClient.RequireRunSelectionPermission(authority, projectId);
-        var selection = await projects.GetRunSelectionAsync(projectId, runId, cancellationToken)
-            .ConfigureAwait(false);
+        ProjectRunSelectionResponse selection;
+        if (requirePrivateKnowledgePermission)
+        {
+            ProjectsConfigClient.RequireProjectPermission(
+                authority, projectId, ProjectAuthorizationPermission.AccessPrivateKnowledge);
+            selection = await projects.GetPrivateKnowledgeRunSelectionAsync(
+                projectId, runId, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            ProjectsConfigClient.RequireRunSelectionPermission(authority, projectId);
+            selection = await projects.GetRunSelectionAsync(projectId, runId, cancellationToken)
+                .ConfigureAwait(false);
+        }
         var memorySelections = selection.Providers
             .Where(item => item.Seam == ProviderSeam.Memory)
             .ToArray();

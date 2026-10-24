@@ -185,6 +185,22 @@ test('only the managed Broker HTTPS root and recognized runtime keys are accepte
   assert.throws(() => renderProjectsProfile(extraRootInput), /unsupported field/);
 });
 
+test('Knowledge owner uses the fixed in-cluster HTTPS root', () => {
+  // The service DNS name and port are part of the admitted backend TLS owner identity.
+  for (const address of [
+    'http://knowledge.agentweaver.svc.cluster.local:8443/',
+    'https://knowledge.example:8443/',
+    'https://knowledge.agentweaver.svc.cluster.local/',
+    'https://knowledge.agentweaver.svc.cluster.local:8443/history',
+    'https://user@knowledge.agentweaver.svc.cluster.local:8443/',
+    'https://knowledge.agentweaver.svc.cluster.local:8443/?query=x',
+  ]) {
+    const input = requiredFixture();
+    input.configuration.ProjectsConfig__Knowledge__BaseAddress = address;
+    assert.throws(() => renderProjectsProfile(input), /Projects Knowledge address/);
+  }
+});
+
 /** Add a read-only model-binding eligibility copy with one hosted, one BYOK and one disabled binding. */
 function bindingFixture() {
   const input = requiredFixture();

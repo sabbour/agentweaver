@@ -22,7 +22,7 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`160e76be2a82f33e60aeda9445e88e4d64e9ed3dd1355f89bafef9fa5b919886`.
+`ea1303e02ca0381735704de35b2ddf61e2e484d5ce64633d2fbc45170fd01f9b`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
 placeholder. The Core list is 1-16, 18-33, and 036; reserved versions 034 and
@@ -248,10 +248,10 @@ to `backlog_plan_promotions`, so it requires migrations 025 and 030.
 The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
 `backlog_plan_promotions` until commit. Its runtime role needs only
 `SELECT,INSERT` on the new table.
-Events requires versions 1 through 9 and preserves the earlier version-2 layout.
+Events requires versions 1 through 10 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 114 tables and nine exact row-lock columns.
+The plan lists 115 tables and nine exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

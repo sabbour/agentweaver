@@ -402,6 +402,10 @@ public static class SessionsEndpoints
         {
             return Results.Json(new { error = "event_identity_conflict" }, statusCode: StatusCodes.Status409Conflict);
         }
+        catch (SessionMaterialIntegrityException exception)
+        {
+            return Results.Json(new { error = exception.Code }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
         catch (SessionForkUnsupportedException)
         {
             return Results.Json(new { error = "session_fork_unavailable" },
