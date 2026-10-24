@@ -264,6 +264,20 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Assert.Equal("runtime_tool_call_limit_exhausted",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 IssueAsync(0, Action(0, toolInvocation: true)))).Code);
+
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var drop = new NpgsqlCommand(
+            $"DROP TABLE \"{_schema}\".maf_root_model_turn_admissions", connection))
+            await drop.ExecuteNonQueryAsync();
+        var missingAdmissionEventId = Guid.NewGuid();
+        var missingAdmissionStoreFailure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            IssueAsync(0, modelRequest with
+            {
+                EventId = missingAdmissionEventId,
+                DispatchId = missingAdmissionEventId
+            }));
+        Assert.Equal("database_update_pending", missingAdmissionStoreFailure.Code);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, missingAdmissionStoreFailure.StatusCode);
     }
 
     [Theory]

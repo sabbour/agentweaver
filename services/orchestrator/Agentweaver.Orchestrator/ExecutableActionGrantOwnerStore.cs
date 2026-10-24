@@ -534,7 +534,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             available.Parameters.AddWithValue(
                 "table", NpgsqlDbType.Text, $"{options.Schema}.{RootModelTurnAdmissionTable}");
             if (!(bool)(await available.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
-                return false;
+                throw new CoordinationException("database_update_pending", StatusCodes.Status503ServiceUnavailable);
         }
         await using var admission = new NpgsqlCommand($"""
             SELECT 1 FROM {_schema}.{RootModelTurnAdmissionTable}
