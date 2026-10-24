@@ -183,11 +183,13 @@ Workflow-bound native sends now prepare through the current source owner.
 Configured hosted credit limits also require a valid Events admission receipt before root acceptance or backlog claim.
 Events resolves the concrete model through the same versioned server-owned map as AgentHost.
 The acceptance transaction retains the model, connection, selection hash, and Cost receipt in the existing outbox.
-An explicit `Unpriced` quote does not block acceptance; only the known priced subtotal counts toward the limit.
+For a hard credit limit, an unpriced quote or unpriced existing usage rejects root acceptance rather than treating unknown cost as zero.
+A soft-only limit may retain an explicit `Unpriced` quote; that amount remains visible and is not counted in the priced subtotal.
+Fully priced root usage at the exact hard limit can be accepted, but the runtime owner denies the next model dispatch at its boundary.
 It rechecks current Projects authority after remote waits and before root or claim commit.
 The Host registration carries that immutable model pin and rejects a different local binding before SDK startup.
 Configured hosted credit limits require an Events cost snapshot before dispatch start and again at native begin.
-An explicit `Unpriced` quote remains admissible and visible, but does not count toward the priced subtotal.
+When a hard credit limit is active, an unpriced quote or whole-run total holds new dispatch at both boundaries.
 The Host completes an observed source-to-ledger receipt join before returning output.
 MAF rereads that completed dispatch and verifies the output hash before retaining the result.
 Explicit unpriced accounting does not establish a zero cost; it remains visible and outside the priced subtotal.
