@@ -179,11 +179,13 @@ checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
 Its source catalog includes 33 Core migration versions (1 through 16, 18
-through 33, and 35), with version 17 excluded, nine Events versions, and 11 Environment
-versions. The initializer compares that catalog with each migrator's compiled
-version list. The reviewed offline plan hash is
-`8adecd6c19d060282f69ea96fd15eb430c2b213d69db7b0bb7706807a9486e1c`.
-It retains 112 tables, eight row-lock columns, and 33 exact function signatures.
+through 33, and 35), with version 17 excluded and no version 34, ten Events
+versions, and 11 Environment versions. The initializer compares that catalog
+with each migrator's compiled version list. The reviewed offline plan hash is
+`d707f9e1af3c55e5da496e4185b5a64f9d2d0a594f00a5f7c6d2a505a86e1383`.
+It retains 114 tables, eight row-lock columns, and 33 exact function signatures.
+Events migration 010 adds `session_object_inventory` with exactly
+`SELECT, INSERT, UPDATE` runtime access.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,

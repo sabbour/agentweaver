@@ -22,10 +22,11 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`8adecd6c19d060282f69ea96fd15eb430c2b213d69db7b0bb7706807a9486e1c`.
+`d707f9e1af3c55e5da496e4185b5a64f9d2d0a594f00a5f7c6d2a505a86e1383`.
 It is not an approval receipt. The runner uses its explicit registered version
 list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-33, and 35. Version 027 requires 026 only.
+placeholder. The Core list is 1-16, 18-33, and 35; 034 is not in the catalog.
+Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
 027 and needs exactly `SELECT, INSERT` on `orchestrator.guardrails_evaluations`
 plus the `reject_guardrails_evaluation_mutation()` trigger function. It is an
@@ -248,10 +249,10 @@ to `backlog_plan_promotions`, so it requires migrations 025 and 030.
 The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
 `backlog_plan_promotions` until commit. Its runtime role needs only
 `SELECT,INSERT` on the new table.
-Events requires versions 1 through 9 and preserves the earlier version-2 layout.
+Events requires versions 1 through 10 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 112 tables and eight exact row-lock columns.
+The plan lists 114 tables and eight exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

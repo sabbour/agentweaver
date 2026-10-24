@@ -8,8 +8,8 @@ namespace Agentweaver.EventsAndSessions;
 /// <summary>Applies explicit Events &amp; Sessions schema migrations and verifies current owner tables and guards.</summary>
 public static class EventsAndSessionsMigrator
 {
-    // Project reporting requires migration 009 before this runtime serves traffic.
-    private const int CurrentSchemaVersion = 9;
+    // Object inventory requires migration 010 before this runtime serves traffic.
+    private const int CurrentSchemaVersion = 10;
 
     /// <summary>Every version <see cref="MigrateAsync"/> can apply, in order.</summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
@@ -66,7 +66,8 @@ public static class EventsAndSessionsMigrator
             (applied.Contains(6) && !applied.Contains(5)) ||
             (applied.Contains(7) && !applied.Contains(6)) ||
             (applied.Contains(8) && !applied.Contains(7)) ||
-            (applied.Contains(9) && !applied.Contains(8)))
+            (applied.Contains(9) && !applied.Contains(8)) ||
+            (applied.Contains(10) && !applied.Contains(9)))
             throw new InvalidOperationException("Unsupported Events & Sessions schema version.");
 
         // Version 2 was used by two historical source layouts, so table presence must disambiguate version 3.
@@ -126,6 +127,7 @@ public static class EventsAndSessionsMigrator
                 7 => "Agentweaver.EventsAndSessions.Migrations.007_native_usage_receipts.sql",
                 8 => "Agentweaver.EventsAndSessions.Migrations.008_row_lock_record_updates.sql",
                 9 => "Agentweaver.EventsAndSessions.Migrations.009_project_usage_index.sql",
+                10 => "Agentweaver.EventsAndSessions.Migrations.010_session_object_inventory.sql",
                 _ => throw new InvalidOperationException("Unsupported Events & Sessions schema version.")
             };
             await using var resource = typeof(EventsAndSessionsMigrator).Assembly.GetManifestResourceStream(resourceName)
@@ -164,7 +166,7 @@ public static class EventsAndSessionsMigrator
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 3),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 4),
-                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9)),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -210,7 +212,10 @@ public static class EventsAndSessionsMigrator
                       AND tgenabled = 'O' AND NOT tgisinternal
                       AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 9) = 1,
-                to_regclass(@projectUsageIndex) IS NOT NULL
+                to_regclass(@projectUsageIndex) IS NOT NULL,
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 10) = 1,
+                to_regclass(@objectInventory) IS NOT NULL,
+                to_regclass(@objectReferenceKeyIndex) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.sessions");
         command.Parameters.AddWithValue("bindings", NpgsqlDbType.Text, $"{schema}.session_provider_bindings");
@@ -232,6 +237,8 @@ public static class EventsAndSessionsMigrator
         command.Parameters.AddWithValue("forkLineage", NpgsqlDbType.Text, $"{schema}.session_fork_lineage");
         command.Parameters.AddWithValue("updateGuard", NpgsqlDbType.Text, $"{schema}.reject_row_lock_record_update()");
         command.Parameters.AddWithValue("projectUsageIndex", NpgsqlDbType.Text, $"{schema}.ix_usage_ledger_project_occurred");
+        command.Parameters.AddWithValue("objectInventory", NpgsqlDbType.Text, $"{schema}.session_object_inventory");
+        command.Parameters.AddWithValue("objectReferenceKeyIndex", NpgsqlDbType.Text, $"{schema}.ix_session_object_references_object_key");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) ||
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
@@ -241,7 +248,8 @@ public static class EventsAndSessionsMigrator
             reader.GetInt64(24) != 1 || reader.GetInt64(25) != 1 ||
             !reader.GetBoolean(26) || !reader.GetBoolean(27) ||
             reader.GetInt64(28) != 1 || !reader.GetBoolean(29) || !reader.GetBoolean(30) ||
-            Enumerable.Range(31, 6).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(31, 6).Any(column => !reader.GetBoolean(column)) ||
+            Enumerable.Range(37, 3).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Events & Sessions schema is not current; run the explicit --migrate command.");
     }

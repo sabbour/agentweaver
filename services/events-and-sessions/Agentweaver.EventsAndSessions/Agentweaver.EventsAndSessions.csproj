@@ -31,5 +31,6 @@
     <EmbeddedResource Include="Migrations\008_row_lock_record_updates.sql" />
     <!-- Project reporting index, applied only by the explicit migration path. -->
     <EmbeddedResource Include="Migrations\009_project_usage_index.sql" />
+    <EmbeddedResource Include="Migrations\010_session_object_inventory.sql" />
   </ItemGroup>
 </Project>

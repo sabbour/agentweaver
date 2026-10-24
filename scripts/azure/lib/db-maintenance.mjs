@@ -26,7 +26,7 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   registry: 'ghcr.io/sabbour',
 });
 /** The reviewed plan binds Environment, Events, Core, and Projects & Config runtime grants. */
-export const REVIEWED_PLAN_SHA256 = '8adecd6c19d060282f69ea96fd15eb430c2b213d69db7b0bb7706807a9486e1c';
+export const REVIEWED_PLAN_SHA256 = 'd707f9e1af3c55e5da496e4185b5a64f9d2d0a594f00a5f7c6d2a505a86e1383';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';
@@ -264,10 +264,10 @@ function checkAppImages(kubectl, options) {
  * highest applied migration of that service. The readiness check rejects any version outside its
  * `NOT IN (...)` list, so the highest listed version is the most the image accepts. It also
  * requires each version it checks with `WHERE version = N)`, except versions it also accepts as
- * absent (`= 0`), such as Orchestrator 032 and the rollout-compatible 033. An image can accept
- * 033 as optional at startup while its default migration catalog still applies 033. The highest
- * required version is the least the image accepts. Returns undefined when the source does not
- * have that shape, so an unexpected file never produces a guessed range.
+ * absent (`= 0`), such as Orchestrator 032, 033, and 035. Migration catalogs are explicit and may
+ * contain gaps; an absent version is never inferred from the numeric range. The highest required
+ * version is the least the image accepts. Returns undefined when the source does not have that
+ * shape, so an unexpected file never produces a guessed range.
  */
 export function schemaRangeFromSource(source, component) {
   const owner = OWNER_SOURCES[component];
