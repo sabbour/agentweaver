@@ -551,7 +551,8 @@ This command uses the guarded AKS-only deployment path and requires the same
 source, target, and permission checks as other Azure writes. The certificate
 stage is a separate, default-off option. It requires
 `--bootstrap-identity-routing` and cannot be combined with Broker readiness
-verification or callback registration.
+verification. Explicit callback registration can be combined with this stage
+when the exact route-derived URI is confirmed.
 
 After the release bootstrap creates the product Services, run the same
 guarded command again without `--identity-routing-certificates-only`. The full
@@ -575,26 +576,34 @@ The installer reads the public issuer from the admitted route hostname.
 Current-generation conditions and exact certificate, listener, parent,
 controller, backend, and namespace references must match.
 
-The callback plan reads only the selected application's `publicClient.redirectUris`.
-It reports `noop` for an existing exact `/signin-oidc` URI.
-Otherwise, it reports an append that preserves all existing public redirect URIs.
-Ordinary routing setup never changes the application.
-The plan names the selected tenant, client ID, application object ID, exact
-Graph URI, public platform, and callback URI.
+Before an identity routing or Broker runtime deployment, the installer checks
+the enabled Azure account, exact AKS cluster, managed Application Routing
+domain, and existing Entra application. It derives
+`https://agentweaver.<managed-domain>/signin-oidc` from the AKS domain before
+the what-if or any infrastructure write. This also works before the first
+certificate or route exists. Create the platform and its managed domain first;
+the installer does not infer a callback for a missing cluster or custom domain.
 
-After separate approval, `--register-identity-broker-callback` requests an append.
-It also requires `--confirm-identity-broker-callback <exact-route-callback-uri>`.
-Both options require `--bootstrap-identity-routing` and `--execute`.
-The confirmation must match the URI derived from the admitted route.
-The installer rechecks the selected tenant and subscription.
-It reads the existing application again at the write boundary.
-Client and object identity must match the plan.
-An existing callback returns `noop` without a PATCH.
-Otherwise, the PATCH changes only `publicClient.redirectUris`.
-It preserves all current public redirects, Web and SPA redirects, client mode,
-roles, and unrelated application properties.
-The installer reads the application again to verify the append.
-Native permission errors remain explicit and redacted.
+The existing application must have the exact client ID in the selected tenant,
+`AzureADMyOrg` single-tenant mode, public-client flow enabled, and the exact
+route-derived callback in `publicClient.redirectUris`. The Broker requests only
+the OpenID Connect scopes `openid`, `profile`, and `email`. It does not need an
+Agentweaver API permission or consent grant. The tooling never creates an app
+registration. A read-only plan makes no Azure or application changes. On
+execution, preflight reports missing settings and stops before infrastructure
+changes.
+
+After separate approval, use `--register-identity-broker-callback` with
+`--confirm-identity-broker-callback <exact-route-callback-uri>` and
+`--execute`. The confirmation must match the URI derived from AKS. This explicit
+option can be used with the certificate-only first-install stage or full routing.
+The installer rechecks the selected tenant, subscription, client ID, and
+application object ID at the write boundary. Its PATCH changes only
+`signInAudience`, `isFallbackPublicClient`, and `publicClient.redirectUris`.
+It appends the callback without removing existing public redirects and leaves
+Web and SPA redirects, roles, scopes, API permissions, and consent grants
+unchanged. It reads the application again to verify the settings. Native
+permission errors remain explicit and redacted.
 It never grants permissions, creates an application, or creates a client secret.
 
 A routing receipt sets `routingConfigured: true` and `runtimeVerified: false`.
