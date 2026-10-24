@@ -1213,19 +1213,24 @@ delivery only; it does not start a workflow. The public GitHub POST path is deni
 because the base has no trusted relay identity; deployment and direct GitHub delivery remain unavailable
 until such a relay is separately approved and deployed.
 
-The pin, webhook, merge, and produced-output capture owner flow is summarized below. It describes the
-unpublished source candidate, not a deployed service or public webhook endpoint.
+The run pin, explicit project team-sync, webhook, merge, and produced-output
+capture owner flow is summarized below. Team sync reads only `.squad/` files and
+commits reviewed changes after checking the previewed branch, blob IDs, and
+complete resulting-tree limits. Orchestrator rechecks authority before
+returning a snapshot and immediately before the commit updates the branch. Its
+contents-only token stays on the internal service path. The drawing describes
+the source boundary, not a deployed service or public webhook endpoint.
 
 <p align="center">
   <a href="../../diagrams/flagship/v1-source-control-owner-flow.png">
-    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration selects exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived selection code is sent only in the initial run-scoped pin request; the durable pin keeps its hash and actual permission digest. Identity owns OAuth/install callbacks and run-bound exact-repository token mint; token and private-key values are not stored. IssueWrite is retained only when the returned permission map confirms issues:write. Typed operations and checkout use the pinned provider binding. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay. Source Control persists exact pending output bytes for retry across restart; Events journal IDs and Object Store bytes provide provenance for admitted output. Admission and historical reads recheck current authority and run state; completed history is retained while failed, indeterminate, and pending captures are withheld." />
+    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Agentweaver's Source Control owner flow. Accepted project configuration selects either exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. Run-scoped operations use a short-lived repository-selection code only for initial pinning, then Identity checks the run binding and returns a temporary repository token. Explicit project team sync uses current project authority and a project-scoped token limited to contents:read or contents:write. Reads and commits are restricted to regular .squad/ files; Orchestrator rechecks authority before returning a snapshot and immediately before updating the branch. Commits require the previewed branch and blob IDs and enforce the file and content limits on the resulting tree. Tokens and App private-key values are not stored or returned to callers. IssueWrite is retained only when the GitHub token response confirms issues:write. Typed issue, pull-request, review, and checkout operations use the pinned provider binding. Workspaces isolate each run and return a bounded diff. GitHub webhooks are accepted only through an authenticated project/run relay, with raw-byte HMAC verification, pinned repository checks, and durable delivery deduplication; direct GitHub posts are rejected. Merge requires a server-read pull request, immutable intent, typed approval, current authority and grant, exact-head required checks, and a repository-scoped PostgreSQL lock. Pre-effect revocation is a persisted conflict without a merge write; post-effect revocation retains the true merge SHA for replay. Expected base is a preflight only, and uncertain remote outcomes remain explicit. Source Control persists exact pending output bytes for retry across restart; Events journal IDs and Object Store bytes provide provenance for admitted output. Admission and historical reads recheck current authority and run state; completed history is retained while failed, indeterminate, and pending captures are withheld." />
   </a>
 </p>
 <p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>
 
-The drawing above focuses on the legacy `SecretRef` owner path. GitHub App mode
-uses the following separate source contract; it does not establish that the
-Identity or Source Control owner routes are admitted or deployed:
+GitHub App mode uses the following separate source contract; it does not
+establish that the Identity or Source Control owner routes are admitted or
+deployed:
 
 ```mermaid
 flowchart LR
@@ -1236,6 +1241,7 @@ flowchart LR
     Source["Source Control owner"]
     Core["Projects & Core"]
     Store["Source Control owner store"]
+    ProjectUser["Project-scoped caller"]
     Browser -->|"Current user bearer; safe repository selection"| Gateway
     Gateway -->|"Same bearer; no tenant selector"| Identity
     Identity -->|"Metadata + single-use selectionCode"| Browser
@@ -1244,6 +1250,11 @@ flowchart LR
     Gateway -->|"Same run bearer and tenant"| Source
     Source -->|"Current authority and accepted repository"| Core
     Source -->|"Pin exact provider IDs server-side"| Store
+    ProjectUser -->|"Explicit team-sync request"| Source
+    Source -->|"Current project write authority"| Core
+    Source -->|"Contents-only token over private mTLS"| Identity
+    Identity -->|"contents:read or contents:write"| GitHub
+    Source -->|"Read .squad or commit expected base and blobs"| GitHub
 ```
 
 ## Telemetry

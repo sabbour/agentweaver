@@ -14,7 +14,10 @@ namespace Agentweaver.SourceControl;
 public sealed record GitHubAppInstallationCredential(
     SecretCredential Credential,
     string PermissionDigest,
-    bool IssueWriteGranted);
+    bool IssueWriteGranted)
+{
+    public string? ContentsPermission { get; init; }
+}
 
 /// <summary>
 /// Mints repository-scoped GitHub App installation tokens from a redeemed private key.
@@ -62,13 +65,16 @@ public sealed class GitHubAppInstallationTokenIssuer
         string appJwt,
         bool issueWriteRequested,
         bool issuesOnly,
+        string? contentsPermission,
         CancellationToken cancellationToken)
     {
+        // Team sync chooses one contents level and never inherits issue or pull-request permissions.
         var permissions = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!issuesOnly)
         {
-            permissions["contents"] = "write";
-            permissions["pull_requests"] = "write";
+            permissions["contents"] = contentsPermission ?? "write";
+            if (contentsPermission is null)
+                permissions["pull_requests"] = "write";
         }
         if (issueWriteRequested)
             permissions["issues"] = "write";
@@ -94,10 +100,11 @@ public sealed class GitHubAppInstallationTokenIssuer
         HttpResponseMessage response,
         bool issueWriteRequested,
         bool issuesOnly,
+        string? contentsPermission,
         CancellationToken cancellationToken)
     {
         if (!response.IsSuccessStatusCode)
-            throw CreateResponseException(response.StatusCode, issueWriteRequested);
+            throw CreateResponseException(response.StatusCode, issueWriteRequested || contentsPermission is not null);
 
         try
         {
@@ -113,7 +120,8 @@ public sealed class GitHubAppInstallationTokenIssuer
                 !expiryElement.TryGetDateTimeOffset(out var expiresAt) ||
                 !root.TryGetProperty("permissions", out var permissionsElement))
                 throw new JsonException("The GitHub installation-token response was incomplete or invalid.");
-            var permissions = ReadPermissions(permissionsElement, issueWriteRequested, issuesOnly);
+            var permissions = ReadPermissions(
+                permissionsElement, issueWriteRequested, issuesOnly, contentsPermission);
             if (expiresAt <= _timeProvider.GetUtcNow() ||
                 issuesOnly && expiresAt > _timeProvider.GetUtcNow().AddHours(1).AddMinutes(5))
                 throw new JsonException("The GitHub installation-token response was expired.");
@@ -130,8 +138,12 @@ public sealed class GitHubAppInstallationTokenIssuer
                     response.StatusCode);
             }
 
+            // Keep the exact requested contents level with the credential for the internal caller's contract check.
             return new GitHubAppInstallationCredential(
-                credential, ComputePermissionDigest(permissions), issueWriteGranted);
+                credential, ComputePermissionDigest(permissions), issueWriteGranted)
+            {
+                ContentsPermission = contentsPermission
+            };
         }
         catch (JsonException exception)
         {
@@ -159,31 +171,53 @@ public sealed class GitHubAppInstallationTokenIssuer
         SecretCredential appPrivateKey,
         bool issueWriteRequested,
         CancellationToken cancellationToken) =>
-        MintCoreAsync(installationId, repositoryId, appPrivateKey, issueWriteRequested, false, cancellationToken);
+        MintCoreAsync(
+            installationId, repositoryId, appPrivateKey, issueWriteRequested, false, null, cancellationToken);
 
     /// <summary>Mints only issues:write for one repository; never contents or pull-request authority.</summary>
     public Task<GitHubAppInstallationCredential> MintIssueSyncAsync(
         long installationId, long repositoryId, SecretCredential appPrivateKey, CancellationToken cancellationToken) =>
-        MintCoreAsync(installationId, repositoryId, appPrivateKey, true, true, cancellationToken);
+        MintCoreAsync(installationId, repositoryId, appPrivateKey, true, true, null, cancellationToken);
+
+    /// <summary>Mints a repository-scoped token with only contents:read or contents:write.</summary>
+    public Task<GitHubAppInstallationCredential> MintTeamSyncAsync(
+        long installationId,
+        long repositoryId,
+        SecretCredential appPrivateKey,
+        bool writeRequested,
+        CancellationToken cancellationToken) =>
+        MintCoreAsync(
+            installationId,
+            repositoryId,
+            appPrivateKey,
+            issueWriteRequested: false,
+            issuesOnly: false,
+            contentsPermission: writeRequested ? "write" : "read",
+            cancellationToken: cancellationToken);
 
     private async Task<GitHubAppInstallationCredential> MintCoreAsync(
         long installationId, long repositoryId, SecretCredential appPrivateKey, bool issueWriteRequested,
-        bool issuesOnly, CancellationToken cancellationToken)
+        bool issuesOnly, string? contentsPermission, CancellationToken cancellationToken)
     {
+        // Reject unsupported permission combinations before signing or contacting GitHub.
         ArgumentNullException.ThrowIfNull(appPrivateKey);
         if (installationId <= 0)
             throw new ArgumentOutOfRangeException(nameof(installationId));
         if (repositoryId <= 0)
             throw new ArgumentOutOfRangeException(nameof(repositoryId));
+        if (contentsPermission is not null &&
+            (contentsPermission is not ("read" or "write") || issueWriteRequested || issuesOnly))
+            throw new ArgumentException("Team-sync tokens require one contents permission only.", nameof(contentsPermission));
 
         try
         {
             var appJwt = CreateAppJwt(appPrivateKey);
             using var response = await SendTokenRequestAsync(
-                installationId, repositoryId, appJwt, issueWriteRequested, issuesOnly, cancellationToken)
+                installationId, repositoryId, appJwt, issueWriteRequested, issuesOnly,
+                contentsPermission, cancellationToken)
                 .ConfigureAwait(false);
             return await ReadCredentialAsync(
-                response, issueWriteRequested, issuesOnly, cancellationToken).ConfigureAwait(false);
+                response, issueWriteRequested, issuesOnly, contentsPermission, cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
         {
@@ -276,8 +310,9 @@ public sealed class GitHubAppInstallationTokenIssuer
     /// <summary>Validates GitHub's granted permissions against the requested permission ceiling.</summary>
     private static ImmutableSortedDictionary<string, string> ReadPermissions(
         JsonElement permissionsElement,
-        bool issueWriteRequested, bool issuesOnly)
+        bool issueWriteRequested, bool issuesOnly, string? contentsPermission)
     {
+        // Validate every granted key against the exact permission mode requested by the caller.
         if (permissionsElement.ValueKind != JsonValueKind.Object)
             throw new JsonException("The GitHub response permissions were invalid.");
 
@@ -289,8 +324,11 @@ public sealed class GitHubAppInstallationTokenIssuer
             var level = permission.Value.GetString();
             var permittedLevel = permission.Name switch
             {
-                "contents" or "pull_requests" => !issuesOnly && (level is "read" or "write"),
-                "issues" => issueWriteRequested && (level is "read" or "write"),
+                "contents" => !issuesOnly && (contentsPermission is null
+                    ? level is "read" or "write"
+                    : level == contentsPermission),
+                "pull_requests" => !issuesOnly && contentsPermission is null && (level is "read" or "write"),
+                "issues" => issueWriteRequested && contentsPermission is null && (level is "read" or "write"),
                 "metadata" => level == "read",
                 _ => false
             };
@@ -299,8 +337,12 @@ public sealed class GitHubAppInstallationTokenIssuer
             permissions.Add(permission.Name, level!);
         }
 
-        if (!issuesOnly && (!permissions.ContainsKey("contents") || !permissions.ContainsKey("pull_requests")))
+        if (!issuesOnly && (!permissions.ContainsKey("contents") ||
+            contentsPermission is null && !permissions.ContainsKey("pull_requests")))
             throw new JsonException("The GitHub response omitted a requested permission.");
+        if (contentsPermission is not null &&
+            permissions.Any(permission => permission.Key is not ("contents" or "metadata")))
+            throw new JsonException("The GitHub response exceeded the contents-only permission ceiling.");
 
         return permissions.ToImmutable();
     }

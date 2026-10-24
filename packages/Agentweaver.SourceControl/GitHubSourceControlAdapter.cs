@@ -43,7 +43,8 @@ public sealed class SourceControlOperationException(
 /// Implements the Source Control provider contract against GitHub's REST API.
 /// Every operation checks the pinned provider/resource/capability binding and treats uncertain writes distinctly.
 /// </summary>
-public sealed partial class GitHubSourceControlAdapter : ISourceControlAdapter, ISourceControlIssueAdapter
+public sealed partial class GitHubSourceControlAdapter :
+    ISourceControlAdapter, ISourceControlIssueAdapter, ISourceControlTeamSyncAdapter
 {
     /// <summary>The provider-options schema version supported by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 1;
