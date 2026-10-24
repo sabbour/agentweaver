@@ -105,7 +105,10 @@ The Cast a team page lists universe names from the Projects & Config owner.
 Choose a name or keep **Random (any universe)**. The page sends the choice with
 the template or role selection when it creates a proposal at the displayed
 configuration revision. Projects & Config stores the choice in the pending
-draft; it becomes project configuration only after confirmation.
+draft; it becomes project configuration only after confirmation. During
+review, use **Re-role** to change one member's catalog role and optional
+display title. The title remains separate from the role ID and is saved only
+in the proposal until confirmation.
 
 The production host serves `index.html` for client routes. Missing `/assets`
 files return `404`, not the SPA fallback.
