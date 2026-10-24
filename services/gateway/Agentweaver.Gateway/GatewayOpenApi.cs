@@ -166,9 +166,12 @@ internal static partial class GatewayOpenApi
             ["listRemoteMcpConnections"] = C(null, "RemoteMcpConnectionDirectoryPage", "200"),
             ["readProjectBacklog"] = C(null, "BacklogGraph", "200"),
             ["captureBacklogTask"] = C("CaptureBacklogTaskRequest", "BacklogGraph", "200"),
+            ["setAllProjectBacklogTasksReady"] = C("BacklogGraphRevisionRequest", "BacklogGraph", "200"),
             ["editBacklogTaskContent"] = C("EditBacklogTaskContentRequest", "BacklogGraph", "200"),
+            ["setProjectBacklogTaskPosition"] = C("SetBacklogTaskPositionRequest", "BacklogGraph", "200"),
             ["setProjectBacklogTaskState"] = C("SetBacklogTaskStateRequest", "BacklogGraph", "200"),
             ["archiveProjectBacklogTask"] = C("BacklogTaskRevisionRequest", "BacklogGraph", "200"),
+            ["deleteProjectBacklogTask"] = C("BacklogTaskRevisionRequest", "BacklogGraph", "200"),
             ["addProjectBacklogDependency"] = C("BacklogGraphRevisionRequest", "BacklogGraph", "200"),
             ["removeProjectBacklogDependency"] = C("BacklogGraphRevisionRequest", "BacklogGraph", "200"),
             ["claimBacklogTask"] = C("ClaimBacklogTaskRequest", "BacklogTaskClaimReceipt", "200"),
@@ -343,7 +346,8 @@ internal static partial class GatewayOpenApi
                             : null);
         }
         if (route.OperationId is "captureBacklogTask" or "editBacklogTaskContent" or
-            "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or
+            "setAllProjectBacklogTasksReady" or "setProjectBacklogTaskPosition" or
+            "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or "deleteProjectBacklogTask" or
             "addProjectBacklogDependency" or "removeProjectBacklogDependency" or "claimBacklogTask")
         {
             responses["400"] = JsonResponse(
@@ -352,8 +356,9 @@ internal static partial class GatewayOpenApi
             responses["409"] = JsonResponse(
                 new { oneOf = new[] { Ref("BacklogIssues"), Ref("Problem") } },
                 "Stale revision, blocked prerequisite, duplicate claim, or current owner conflict.");
-            if (route.OperationId is "editBacklogTaskContent" or "setProjectBacklogTaskState" or
-                "archiveProjectBacklogTask" or "addProjectBacklogDependency" or
+            if (route.OperationId is "editBacklogTaskContent" or "setProjectBacklogTaskPosition" or
+                "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or "deleteProjectBacklogTask" or
+                "addProjectBacklogDependency" or
                 "removeProjectBacklogDependency" or "claimBacklogTask")
                 responses["404"] = JsonResponse(
                     new { oneOf = new[] { Ref("BacklogIssues"), Ref("Problem") } },
@@ -361,6 +366,9 @@ internal static partial class GatewayOpenApi
             if (route.OperationId == "claimBacklogTask")
                 responses["503"] = ProblemResponse(
                     "A prerequisite or run owner is unavailable. Events session registration may fail after the durable claim commits; retry with the same idempotency key.");
+            if (route.OperationId is "setProjectBacklogTaskPosition" or "setAllProjectBacklogTasksReady")
+                responses["503"] = ProblemResponse(
+                    "Queue ordering is unavailable until its reviewed schema migration is applied.");
         }
         else if (route.IsRunEventStream)
         {
@@ -917,11 +925,12 @@ else if (route.OperationId is
         ["BacklogTaskContent"] = StrictObj(["title"], ("title", Str()), ("description", NullableStr()),
             ("lifecycle", Enum("open", "closed")), ("repositoryIssue", Nullable(Ref("BacklogRepositoryIssueLink")))),
         ["BacklogTaskSnapshot"] = StrictObj(
-            ["reference", "revision", "state", "isArchived", "isAutomationInvocationPending", "title", "lifecycle"],
+            ["reference", "revision", "state", "isArchived", "isAutomationInvocationPending", "title", "lifecycle", "position"],
             ("reference", Ref("BacklogTaskReference")), ("revision", Int()),
             ("state", Enum("backlog", "ready", "claimed")), ("isArchived", Bool()),
             ("isAutomationInvocationPending", Bool()), ("title", Str()), ("description", NullableStr()),
-            ("lifecycle", Enum("open", "closed")), ("repositoryIssue", Nullable(Ref("BacklogRepositoryIssueLink")))),
+            ("lifecycle", Enum("open", "closed")), ("repositoryIssue", Nullable(Ref("BacklogRepositoryIssueLink"))),
+            ("position", Int())),
         ["BacklogDependencyEdge"] = StrictObj(["task", "prerequisite"],
             ("task", Ref("BacklogTaskReference")), ("prerequisite", Ref("BacklogTaskReference"))),
         ["BacklogGraph"] = StrictObj(["projectId", "revision", "tasks", "dependencies", "snapshot"],
@@ -940,6 +949,10 @@ else if (route.OperationId is
             ("state", Enum("backlog", "ready")),
             ("expectedGraphRevision", Int()),
             ("expectedTaskRevision", Int())),
+        ["SetBacklogTaskPositionRequest"] = StrictObj(
+            ["state", "position", "expectedGraphRevision", "expectedTaskRevision"],
+            ("state", Enum("backlog", "ready")), ("position", Int()),
+            ("expectedGraphRevision", Int()), ("expectedTaskRevision", Int())),
         ["BacklogTaskRevisionRequest"] = StrictObj(
             ["expectedGraphRevision", "expectedTaskRevision"],
             ("expectedGraphRevision", Int()),

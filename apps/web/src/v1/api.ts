@@ -27,6 +27,7 @@ import type {
   CaptureBacklogTaskRequest,
   EditBacklogTaskContentRequest,
   SetBacklogTaskStateRequest,
+  SetBacklogTaskPositionRequest,
   BacklogTaskRevisionRequest,
   BacklogGraphRevisionRequest,
   ClaimBacklogTaskRequest,
@@ -1880,8 +1881,9 @@ export class AgentweaverGatewayClient {
     if (graph?.projectId !== projectId
       || typeof graph.revision !== 'number'
       || !Array.isArray(graph.tasks)
-      || !Array.isArray(graph.dependencies))
-      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned a backlog for a different project.');
+      || !Array.isArray(graph.dependencies)
+      || graph.tasks.some((task) => !Number.isSafeInteger(task.position) || task.position < 0))
+      throw new GatewayError(502, { code: 'owner_contract_invalid' }, 'The service returned an invalid backlog graph.');
     return graph;
   }
 
@@ -1910,6 +1912,23 @@ export class AgentweaverGatewayClient {
     const graph = await this.request<BacklogGraph>(
       token,
       `/projects/${encodeSegments(projectId, 'backlog', 'tasks')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Moves eligible tasks from Backlog to Ready in one graph revision. */
+  async setAllProjectBacklogTasksReady(
+    token: string,
+    projectId: string,
+    request: BacklogGraphRevisionRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'ready-all')}`,
       { method: 'POST', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
@@ -1957,6 +1976,24 @@ export class AgentweaverGatewayClient {
     return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
   }
 
+  /** Places an unclaimed task at a queue slot using both revisions read from the board. */
+  async setProjectBacklogTaskPosition(
+    token: string,
+    projectId: string,
+    taskId: string,
+    request: SetBacklogTaskPositionRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'position')}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
   /** Archives one unclaimed task at the graph and task revisions read from the board. */
   async archiveProjectBacklogTask(
     token: string,
@@ -1969,6 +2006,24 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId, 'archive')}`,
       { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+    return AgentweaverGatewayClient.checkedBacklogGraph(graph, projectId);
+  }
+
+  /** Deletes an unclaimed task at the graph and task revisions read from the board. */
+  async deleteProjectBacklogTask(
+    token: string,
+    projectId: string,
+    taskId: string,
+    request: BacklogTaskRevisionRequest,
+    tenantSelector?: string | null,
+  ): Promise<BacklogGraph> {
+    const graph = await this.request<BacklogGraph>(
+      token,
+      `/projects/${encodeSegments(projectId, 'backlog', 'tasks', taskId)}`,
+      { method: 'DELETE', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
     );

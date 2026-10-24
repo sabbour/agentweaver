@@ -1162,6 +1162,8 @@ export interface BacklogTaskSnapshot {
   description?: string | null;
   lifecycle: BacklogTaskLifecycle;
   repositoryIssue?: BacklogRepositoryIssueLink | null;
+  /** Zero-based position within the task's queue. */
+  position: number;
 }
 
 /** `task` can start only after `prerequisite` is done. */
@@ -1198,6 +1200,14 @@ export interface EditBacklogTaskContentRequest {
 /** Changes an unclaimed task's queue state with optimistic graph and task revisions. */
 export interface SetBacklogTaskStateRequest {
   state: 'backlog' | 'ready';
+  expectedGraphRevision: number;
+  expectedTaskRevision: number;
+}
+
+/** Places one unclaimed task in a queue using the revisions read from the board. */
+export interface SetBacklogTaskPositionRequest {
+  state: 'backlog' | 'ready';
+  position: number;
   expectedGraphRevision: number;
   expectedTaskRevision: number;
 }

@@ -3,7 +3,7 @@
   "formatVersion": 1,
   "currentImage": {
     "requiredCoreVersions": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
-    "optionalCoreVersions": [32, 33],
+    "optionalCoreVersions": [32, 33, 35],
     "repositoryIdentityWriteVersion": 33,
     "beforeRepositoryIdentityUpdateError": "database_update_pending"
   },
@@ -11,7 +11,7 @@
     "maximumKnownCoreVersion": 32,
     "acceptsCore033": false
   },
-  "rolloutOrder": ["deployCurrentImages", "applyCore032And033"],
-  "applyByDefault": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33],
+  "rolloutOrder": ["deployCurrentImages", "applyCore032And033And035"],
+  "applyByDefault": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35],
   "separateApprovalRequired": []
 }

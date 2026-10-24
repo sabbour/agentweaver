@@ -124,9 +124,12 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
         {
             "readProjectBacklog",
             "captureBacklogTask",
+            "setAllProjectBacklogTasksReady",
             "editBacklogTaskContent",
+            "setProjectBacklogTaskPosition",
             "setProjectBacklogTaskState",
             "archiveProjectBacklogTask",
+            "deleteProjectBacklogTask",
             "addProjectBacklogDependency",
             "removeProjectBacklogDependency",
             "claimBacklogTask",
@@ -136,7 +139,8 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
                 candidate => candidate.GetProperty("name").GetString() == "agentweaver_" + operation);
             var backlogInputSchema = tool.GetProperty("inputSchema");
             Assert.False(backlogInputSchema.GetProperty("additionalProperties").GetBoolean());
-            if (operation is "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or
+            if (operation is "setAllProjectBacklogTasksReady" or "setProjectBacklogTaskPosition" or
+                "setProjectBacklogTaskState" or "archiveProjectBacklogTask" or "deleteProjectBacklogTask" or
                 "addProjectBacklogDependency" or "removeProjectBacklogDependency" or "claimBacklogTask")
                 Assert.False(backlogInputSchema.GetProperty("properties").GetProperty("body")
                     .GetProperty("additionalProperties").GetBoolean());

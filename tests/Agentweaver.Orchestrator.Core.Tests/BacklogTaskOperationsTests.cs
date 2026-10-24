@@ -52,6 +52,145 @@ public sealed class BacklogTaskOperationsTests
     }
 
     [Fact]
+    public void ReordersTasksWithinAndAcrossQueuesWithRevisionChecks()
+    {
+        var graph = CreateGraph(
+            graphRevision: 2,
+            new BacklogTaskSnapshot(Ref("first"), 0, BacklogTaskState.Backlog, Position: 0),
+            new BacklogTaskSnapshot(Ref("second"), 3, BacklogTaskState.Backlog, Position: 1),
+            new BacklogTaskSnapshot(Ref("ready"), 4, BacklogTaskState.Ready, Position: 0));
+
+        var reordered = graph.SetTaskPosition(
+            Ref("second"), BacklogTaskState.Backlog, 0, expectedGraphRevision: 2, expectedTaskRevision: 3);
+        var moved = reordered.Value!.Graph.SetTaskPosition(
+            Ref("first"), BacklogTaskState.Ready, 0, expectedGraphRevision: 3, expectedTaskRevision: 1);
+        var noOp = moved.Value!.Graph.SetTaskPosition(
+            Ref("first"), BacklogTaskState.Ready, 0, expectedGraphRevision: 4, expectedTaskRevision: 2);
+
+        Assert.True(reordered.Value.Changed);
+        Assert.Equal(3, reordered.Value.Graph.Revision);
+        Assert.Equal(new BacklogTaskSnapshot(Ref("second"), 4, BacklogTaskState.Backlog, Position: 0),
+            reordered.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "second"));
+        Assert.Equal(new BacklogTaskSnapshot(Ref("first"), 1, BacklogTaskState.Backlog, Position: 1),
+            reordered.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "first"));
+        Assert.True(moved.Value.Changed);
+        Assert.Equal(4, moved.Value.Graph.Revision);
+        Assert.Equal(new BacklogTaskSnapshot(Ref("first"), 2, BacklogTaskState.Ready, Position: 0),
+            moved.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "first"));
+        Assert.False(noOp.Value!.Changed);
+        Assert.Same(moved.Value.Graph, noOp.Value.Graph);
+    }
+
+    [Fact]
+    public void BatchReadyMovesOnlyEligibleBacklogTasks()
+    {
+        var graph = CreateGraph(
+            graphRevision: 6,
+            new BacklogTaskSnapshot(Ref("open"), 1, BacklogTaskState.Backlog, Position: 0),
+            new BacklogTaskSnapshot(Ref("closed"), 2, BacklogTaskState.Backlog,
+                Lifecycle: BacklogTaskLifecycle.Closed, Position: 1),
+            new BacklogTaskSnapshot(Ref("archived"), 3, BacklogTaskState.Backlog,
+                IsArchived: true, Position: 2),
+            new BacklogTaskSnapshot(Ref("pending"), 4, BacklogTaskState.Backlog,
+                IsAutomationInvocationPending: true, Position: 3),
+            new BacklogTaskSnapshot(Ref("ready"), 5, BacklogTaskState.Ready, Position: 0));
+
+        var moved = graph.SetAllEligibleTasksReady(expectedGraphRevision: 6);
+        var stale = graph.SetAllEligibleTasksReady(expectedGraphRevision: 5);
+
+        Assert.True(moved.IsSuccess);
+        Assert.Equal(7, moved.Value!.Graph.Revision);
+        Assert.Equal(new BacklogTaskSnapshot(Ref("open"), 2, BacklogTaskState.Ready, Position: 1),
+            moved.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "open"));
+        Assert.Equal(BacklogTaskState.Backlog,
+            moved.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "closed").State);
+        Assert.Equal(BacklogTaskState.Backlog,
+            moved.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "archived").State);
+        Assert.Equal(BacklogTaskState.Backlog,
+            moved.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "pending").State);
+        Assert.Contains(stale.Issues, issue => issue.Code == BacklogIssueCode.StaleGraphRevision);
+    }
+
+    [Fact]
+    public void DeletionRejectsTasksWithDependentsAndRemovesItsOwnPrerequisites()
+    {
+        var graph = BacklogDependencyGraph.Create(new BacklogDependencyGraphSnapshot(
+            "project-a",
+            3,
+            [
+                new BacklogTaskSnapshot(Ref("root"), 0, BacklogTaskState.Backlog),
+                new BacklogTaskSnapshot(Ref("child"), 1, BacklogTaskState.Ready),
+                new BacklogTaskSnapshot(Ref("dependent"), 2, BacklogTaskState.Ready)
+            ],
+            [
+                new BacklogDependencyEdge(Ref("child"), Ref("root")),
+                new BacklogDependencyEdge(Ref("dependent"), Ref("child"))
+            ])).Value!;
+
+        var protectedTask = graph.DeleteTask(Ref("child"), expectedGraphRevision: 3, expectedTaskRevision: 1);
+        var deleted = graph.DeleteTask(Ref("dependent"), expectedGraphRevision: 3, expectedTaskRevision: 2);
+
+        Assert.Contains(protectedTask.Issues, issue => issue.Code == BacklogIssueCode.TaskHasDependents);
+        Assert.True(deleted.IsSuccess);
+        Assert.Equal(4, deleted.Value!.Graph.Revision);
+        Assert.DoesNotContain(deleted.Value.Graph.Tasks, task => task.Reference.TaskId == "dependent");
+        Assert.DoesNotContain(deleted.Value.Graph.Dependencies,
+            edge => edge.Task.TaskId == "dependent" || edge.Prerequisite.TaskId == "dependent");
+    }
+
+    [Fact]
+    public void DeletionCompactsOnlyItsQueueAndAdvancesChangedTaskRevisions()
+    {
+        var graph = CreateGraph(
+            graphRevision: 3,
+            new BacklogTaskSnapshot(Ref("first"), 1, BacklogTaskState.Backlog, Position: 0),
+            new BacklogTaskSnapshot(Ref("deleted"), 2, BacklogTaskState.Backlog, Position: 1),
+            new BacklogTaskSnapshot(Ref("third"), 3, BacklogTaskState.Backlog, Position: 2),
+            new BacklogTaskSnapshot(Ref("ready"), 4, BacklogTaskState.Ready, Position: 0));
+
+        var deleted = graph.DeleteTask(Ref("deleted"), expectedGraphRevision: 3, expectedTaskRevision: 2);
+
+        Assert.True(deleted.IsSuccess);
+        Assert.Equal(4, deleted.Value!.Graph.Revision);
+        Assert.Equal((0L, 1L), (
+            deleted.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "first").Position,
+            deleted.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "first").Revision));
+        Assert.Equal((1L, 4L), (
+            deleted.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "third").Position,
+            deleted.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "third").Revision));
+        Assert.Equal((0L, 4L), (
+            deleted.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "ready").Position,
+            deleted.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "ready").Revision));
+    }
+
+    [Fact]
+    public void DeletionPreservesSyntheticPositionsBeforeQueueMigration()
+    {
+        var graph = CreateGraph(
+            graphRevision: 3,
+            new BacklogTaskSnapshot(Ref("first"), 1, BacklogTaskState.Backlog),
+            new BacklogTaskSnapshot(Ref("deleted"), 2, BacklogTaskState.Backlog),
+            new BacklogTaskSnapshot(Ref("third"), 3, BacklogTaskState.Backlog));
+
+        var deleted = graph.DeleteTask(
+            Ref("deleted"), expectedGraphRevision: 3, expectedTaskRevision: 2, compactQueue: false);
+
+        Assert.True(deleted.IsSuccess);
+        Assert.All(deleted.Value!.Graph.Tasks, task => Assert.Equal(0, task.Position));
+        Assert.Equal(1, deleted.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "first").Revision);
+        Assert.Equal(3, deleted.Value.Graph.Tasks.Single(task => task.Reference.TaskId == "third").Revision);
+    }
+
+    [Fact]
+    public void RejectsNegativeTaskPositions()
+    {
+        var graph = BacklogDependencyGraph.Create(new BacklogDependencyGraphSnapshot(
+            "project-a", 0, [new BacklogTaskSnapshot(Ref("task"), 0, BacklogTaskState.Backlog, Position: -1)], []));
+
+        Assert.Contains(graph.Issues, issue => issue.Code == BacklogIssueCode.InvalidTaskPosition);
+    }
+
+    [Fact]
     public void RejectsStaleClaimedProvisionalAndArchivedTaskMutations()
     {
         var backlog = CreateGraph(

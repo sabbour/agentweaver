@@ -33,11 +33,13 @@ internal sealed class BacklogOwnerStore
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
 
     private readonly NpgsqlDataSource _dataSource;
+    private readonly string _schema;
     private readonly string _projects;
     private readonly string _tasks;
     private readonly string _dependencies;
     private readonly string _promotions;
     private readonly string _origins;
+    private readonly string _issueSyncReceipts;
 
     /// <summary>
     /// Creates a backlog store for a validated, non-reserved PostgreSQL schema.
@@ -53,12 +55,14 @@ internal sealed class BacklogOwnerStore
             throw new ArgumentException("A non-reserved lowercase schema identifier is required.", nameof(schema));
 
         _dataSource = dataSource;
+        _schema = schema;
         var quotedSchema = $"\"{schema}\"";
         _projects = $"{quotedSchema}.backlog_projects";
         _tasks = $"{quotedSchema}.backlog_tasks";
         _dependencies = $"{quotedSchema}.backlog_dependencies";
         _promotions = $"{quotedSchema}.backlog_plan_promotions";
         _origins = $"{quotedSchema}.backlog_task_origins";
+        _issueSyncReceipts = $"{quotedSchema}.issue_sync_receipts";
     }
 
     /// <summary>
@@ -138,11 +142,17 @@ internal sealed class BacklogOwnerStore
                 edit.Value.Graph.Tasks.Single(item => item.Reference.TaskId == task.TaskId), cancellationToken)
                 .ConfigureAwait(false);
         }
+        // Read the committed storage shape so legacy schemas return synthetic zero positions consistently.
+        var responseGraph = await ReadGraphInTransactionAsync(
+            connection, transaction, task.ProjectId, lockRows: false, cancellationToken).ConfigureAwait(false);
+        if (!responseGraph.IsSuccess)
+            return await RollbackFailureAsync<BacklogDependencyGraph>(
+                transaction, responseGraph.Issues).ConfigureAwait(false);
         // Check again just before commit because authority may change during the write.
         if (revalidateCurrentAuthority is not null)
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
+        return responseGraph;
     }
 
     /// <summary>Replaces content and lifecycle under the same project lock used by execution claims.</summary>
@@ -176,11 +186,16 @@ internal sealed class BacklogOwnerStore
             await UpdateTaskAsync(connection, transaction, edit.Value.Graph, task.TaskId, cancellationToken)
                 .ConfigureAwait(false);
         }
+        var responseGraph = await ReadGraphInTransactionAsync(
+            connection, transaction, task.ProjectId, lockRows: false, cancellationToken).ConfigureAwait(false);
+        if (!responseGraph.IsSuccess)
+            return await RollbackFailureAsync<BacklogDependencyGraph>(
+                transaction, responseGraph.Issues).ConfigureAwait(false);
         // Check again just before commit because authority may change during the write.
         if (revalidateCurrentAuthority is not null)
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
+        return responseGraph;
     }
 
     /// <summary>
@@ -244,11 +259,17 @@ internal sealed class BacklogOwnerStore
             await UpdateTaskAsync(connection, transaction, edit.Value.Graph, task.TaskId, cancellationToken)
                 .ConfigureAwait(false);
         }
+        // Match the storage projection when optional queue-position migration 035 is not installed.
+        var responseGraph = await ReadGraphInTransactionAsync(
+            connection, transaction, task.ProjectId, lockRows: false, cancellationToken).ConfigureAwait(false);
+        if (!responseGraph.IsSuccess)
+            return await RollbackFailureAsync<BacklogDependencyGraph>(
+                transaction, responseGraph.Issues).ConfigureAwait(false);
         // Check again just before commit because authority may change during the write.
         if (revalidateCurrentAuthority is not null)
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
+        return responseGraph;
     }
 
     /// <summary>
@@ -288,6 +309,204 @@ internal sealed class BacklogOwnerStore
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
+    }
+
+    /// <summary>Moves a task to a queue slot while persisting the graph and positions atomically.</summary>
+    public async Task<BacklogCoreResult<BacklogDependencyGraph>> SetTaskPositionAsync(
+        BacklogTaskReference task,
+        BacklogTaskState targetState,
+        long targetPosition,
+        long expectedGraphRevision,
+        long expectedTaskRevision,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
+    {
+        var taskValidation = ValidateTaskReference(task);
+        if (!taskValidation.IsSuccess)
+            return taskValidation;
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var graph = await ReadGraphInTransactionAsync(
+            connection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
+        if (!graph.IsSuccess)
+            return await RollbackFailureAsync<BacklogDependencyGraph>(
+                transaction, graph.Issues).ConfigureAwait(false);
+        if (!await HasQueuePositionMigrationAsync(connection, transaction, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException("backlog_position_unavailable", StatusCodes.Status503ServiceUnavailable);
+
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        var edit = graph.Value!.SetTaskPosition(
+            task, targetState, targetPosition, expectedGraphRevision, expectedTaskRevision);
+        if (!edit.IsSuccess)
+            return await RollbackFailureAsync<BacklogDependencyGraph>(
+                transaction, edit.Issues).ConfigureAwait(false);
+        if (edit.Value!.Changed)
+        {
+            await UpdateGraphRevisionAsync(connection, transaction, edit.Value.Graph, cancellationToken)
+                .ConfigureAwait(false);
+            // Persist both queues together so a cross-state move cannot expose an intermediate order.
+            await UpdateChangedTasksAsync(connection, transaction, graph.Value, edit.Value.Graph, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
+    }
+
+    /// <summary>Moves eligible backlog tasks to Ready in one graph revision.</summary>
+    public async Task<BacklogCoreResult<BacklogDependencyGraph>> SetAllEligibleTasksReadyAsync(
+        string projectId,
+        long expectedGraphRevision,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var graph = await ReadGraphInTransactionAsync(
+            connection, transaction, projectId, lockRows: true, cancellationToken).ConfigureAwait(false);
+        if (!graph.IsSuccess)
+            return await RollbackFailureAsync<BacklogDependencyGraph>(
+                transaction, graph.Issues).ConfigureAwait(false);
+        if (!await HasQueuePositionMigrationAsync(connection, transaction, cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException("backlog_position_unavailable", StatusCodes.Status503ServiceUnavailable);
+
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        var edit = graph.Value!.SetAllEligibleTasksReady(expectedGraphRevision);
+        if (!edit.IsSuccess)
+            return await RollbackFailureAsync<BacklogDependencyGraph>(
+                transaction, edit.Issues).ConfigureAwait(false);
+        if (edit.Value!.Changed)
+        {
+            await UpdateGraphRevisionAsync(connection, transaction, edit.Value.Graph, cancellationToken)
+                .ConfigureAwait(false);
+            // A batch transition commits every eligible task and the new Ready positions atomically.
+            await UpdateChangedTasksAsync(connection, transaction, graph.Value, edit.Value.Graph, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
+    }
+
+    /// <summary>Deletes an unclaimed task without removing prerequisites owned by dependent tasks.</summary>
+    public async Task<BacklogCoreResult<BacklogDependencyGraph>> DeleteTaskAsync(
+        BacklogTaskReference task,
+        long expectedGraphRevision,
+        long expectedTaskRevision,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
+    {
+        var taskValidation = ValidateTaskReference(task);
+        if (!taskValidation.IsSuccess)
+            return taskValidation;
+        // Hold the issue-sync session lock so a cycle cannot write a receipt for the task after deletion.
+        var syncConnection = await new IssueSyncStore(_dataSource, _schema)
+            .TryLockAsync(task.ProjectId, cancellationToken).ConfigureAwait(false);
+        if (syncConnection is null)
+            return BacklogCoreResult<BacklogDependencyGraph>.Failure(
+            [
+                new BacklogIssue(
+                    BacklogIssueCode.TaskDeletionUnavailable, "task",
+                    "A task cannot be deleted while issue sync is in progress.")
+            ]);
+        try
+        {
+            await using var transaction = await syncConnection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            var graph = await ReadGraphInTransactionAsync(
+                syncConnection, transaction, task.ProjectId, lockRows: true, cancellationToken).ConfigureAwait(false);
+            if (!graph.IsSuccess)
+                return await RollbackFailureAsync<BacklogDependencyGraph>(
+                    transaction, graph.Issues).ConfigureAwait(false);
+
+            if (revalidateCurrentAuthority is not null)
+                await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+            await using (var origin = new NpgsqlCommand($"""
+                SELECT EXISTS (
+                    SELECT 1 FROM {_origins}
+                    WHERE project_id = @project AND task_id = @task
+                )
+                """, syncConnection, transaction))
+            {
+                origin.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, task.ProjectId);
+                origin.Parameters.AddWithValue("task", NpgsqlDbType.Varchar, task.TaskId);
+                if ((bool)(await origin.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? false))
+                    return await RollbackFailureAsync<BacklogDependencyGraph>(transaction,
+                    [
+                        new BacklogIssue(
+                            BacklogIssueCode.TaskDeletionUnavailable, "task",
+                            "A task promoted from an accepted work plan cannot be deleted.")
+                    ]).ConfigureAwait(false);
+            }
+
+            // Keep the durable remote-issue mapping; deleting it would let a later import recreate the task.
+            await using (var receipt = new NpgsqlCommand($"""
+                SELECT EXISTS (
+                    SELECT 1 FROM {_issueSyncReceipts}
+                    WHERE project_id = @project AND task_id = @task
+                )
+                """, syncConnection, transaction))
+            {
+                receipt.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, task.ProjectId);
+                receipt.Parameters.AddWithValue("task", NpgsqlDbType.Varchar, task.TaskId);
+                if ((bool)(await receipt.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? false))
+                    return await RollbackFailureAsync<BacklogDependencyGraph>(transaction,
+                    [
+                        new BacklogIssue(
+                            BacklogIssueCode.TaskDeletionUnavailable, "task",
+                            "A task linked to a repository issue cannot be deleted.")
+                    ]).ConfigureAwait(false);
+            }
+
+            // Before migration 035, reads synthesize position zero; do not return unpersistable queue indexes.
+            var compactQueue = await HasQueuePositionMigrationAsync(
+                syncConnection, transaction, cancellationToken).ConfigureAwait(false);
+            var edit = graph.Value!.DeleteTask(
+                task, expectedGraphRevision, expectedTaskRevision, compactQueue);
+            if (!edit.IsSuccess)
+                return await RollbackFailureAsync<BacklogDependencyGraph>(
+                    transaction, edit.Issues).ConfigureAwait(false);
+            if (edit.Value!.Changed)
+            {
+                await UpdateGraphRevisionAsync(syncConnection, transaction, edit.Value.Graph, cancellationToken)
+                    .ConfigureAwait(false);
+                // Compact the remaining state queue before removing the task, in the same transaction.
+                await UpdateChangedTasksAsync(
+                    syncConnection, transaction, graph.Value, edit.Value.Graph, cancellationToken)
+                    .ConfigureAwait(false);
+                await using (var removeDependencies = new NpgsqlCommand($"""
+                    DELETE FROM {_dependencies}
+                    WHERE project_id = @project AND task_id = @task
+                    """, syncConnection, transaction))
+                {
+                    removeDependencies.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, task.ProjectId);
+                    removeDependencies.Parameters.AddWithValue("task", NpgsqlDbType.Varchar, task.TaskId);
+                    var expectedEdges = graph.Value.Dependencies.Count(edge => edge.Task.TaskId == task.TaskId);
+                    if (await removeDependencies.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != expectedEdges)
+                        throw new CoordinationException("backlog_graph_conflict", StatusCodes.Status409Conflict);
+                }
+                await using var removeTask = new NpgsqlCommand($"""
+                    DELETE FROM {_tasks}
+                    WHERE project_id = @project AND task_id = @task AND task_revision = @revision
+                    """, syncConnection, transaction);
+                removeTask.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, task.ProjectId);
+                removeTask.Parameters.AddWithValue("task", NpgsqlDbType.Varchar, task.TaskId);
+                removeTask.Parameters.AddWithValue("revision", NpgsqlDbType.Bigint, expectedTaskRevision);
+                if (await removeTask.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                    throw new CoordinationException("backlog_task_unavailable", StatusCodes.Status409Conflict);
+            }
+            if (revalidateCurrentAuthority is not null)
+                await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
+        }
+        finally
+        {
+            await IssueSyncStore.UnlockAsync(syncConnection, task.ProjectId).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -1066,6 +1285,21 @@ internal sealed class BacklogOwnerStore
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
     }
 
+    /// <summary>Checks whether the reviewed queue-position migration is available to this owner.</summary>
+    private async Task<bool> HasQueuePositionMigrationAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM "{_schema}".coordination_schema_migrations
+                WHERE version = 35
+            )
+            """, connection, transaction);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? false);
+    }
+
     /// <summary>
     /// Loads the graph and optionally locks its project, task, and dependency rows for a mutation.
     /// </summary>
@@ -1078,6 +1312,8 @@ internal sealed class BacklogOwnerStore
         CancellationToken cancellationToken)
     {
         long revision;
+        var hasQueuePosition = await HasQueuePositionMigrationAsync(
+            connection, transaction, cancellationToken).ConfigureAwait(false);
         await using (var readProject = new NpgsqlCommand($"""
             SELECT graph_revision
             FROM {_projects}
@@ -1097,10 +1333,10 @@ internal sealed class BacklogOwnerStore
         await using (var readTasks = new NpgsqlCommand($"""
             SELECT task_id, task_revision, task_state, is_archived, automation_invocation_pending,
                    title, description, lifecycle, issue_provider_id, issue_repository_owner,
-                   issue_repository_name, issue_number
+                   issue_repository_name, issue_number, {(hasQueuePosition ? "queue_position" : "0::bigint")}
             FROM {_tasks}
             WHERE project_id = @project
-            ORDER BY task_id
+            ORDER BY {(hasQueuePosition ? "task_state, queue_position, task_id" : "task_id")}
             {(lockRows ? "FOR UPDATE" : string.Empty)}
             """, connection, transaction))
         {
@@ -1124,7 +1360,8 @@ internal sealed class BacklogOwnerStore
                     reader.IsDBNull(8) ? null : new BacklogRepositoryIssueLink(
                         reader.GetString(8),
                         new SourceControlRepositoryIdentity(reader.GetString(9), reader.GetString(10)),
-                        reader.GetInt64(11))));
+                        reader.GetInt64(11)),
+                    reader.GetInt64(12)));
             }
         }
 
@@ -1201,10 +1438,13 @@ internal sealed class BacklogOwnerStore
         long expectedTaskRevision,
         CancellationToken cancellationToken)
     {
+        var hasQueuePosition = await HasQueuePositionMigrationAsync(
+            connection, transaction, cancellationToken).ConfigureAwait(false);
         await using var update = new NpgsqlCommand($"""
             UPDATE {_tasks}
             SET task_revision = @revision,
                 task_state = 'claimed',
+                {(hasQueuePosition ? "queue_position = @position," : string.Empty)}
                 claim_id = @claim,
                 claim_phase = 'preparing',
                 claim_task_revision = @revision,
@@ -1224,6 +1464,8 @@ internal sealed class BacklogOwnerStore
               AND task_state IN ('backlog', 'ready')
             """, connection, transaction);
         update.Parameters.AddWithValue("revision", NpgsqlDbType.Bigint, claimedTask.Revision);
+        if (hasQueuePosition)
+            update.Parameters.AddWithValue("position", NpgsqlDbType.Bigint, claimedTask.Position);
         update.Parameters.AddWithValue("claim", NpgsqlDbType.Uuid, claimId);
         update.Parameters.AddWithValue("idempotency", NpgsqlDbType.Varchar, idempotencyKey);
         update.Parameters.AddWithValue("request_hash", NpgsqlDbType.Char, requestHash);
@@ -1288,15 +1530,18 @@ internal sealed class BacklogOwnerStore
         BacklogTaskSnapshot task,
         CancellationToken cancellationToken)
     {
+        var hasQueuePosition = await HasQueuePositionMigrationAsync(
+            connection, transaction, cancellationToken).ConfigureAwait(false);
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {_tasks}
                 (project_id, task_id, task_revision, task_state, is_archived, automation_invocation_pending,
                  title, description, lifecycle, issue_provider_id, issue_repository_owner,
-                 issue_repository_name, issue_number)
+                 issue_repository_name, issue_number{(hasQueuePosition ? ", queue_position" : string.Empty)})
             VALUES (@project, @task, @revision, @state, @archived, @pending,
-                    @title, @description, @lifecycle, @issue_provider, @issue_owner, @issue_repository, @issue_number)
+                    @title, @description, @lifecycle, @issue_provider, @issue_owner, @issue_repository, @issue_number
+                    {(hasQueuePosition ? ", @position" : string.Empty)})
             """, connection, transaction);
-        AddTaskParameters(insert, task);
+        AddTaskParameters(insert, task, hasQueuePosition);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1312,18 +1557,40 @@ internal sealed class BacklogOwnerStore
         CancellationToken cancellationToken)
     {
         var task = graph.Tasks.Single(item => item.Reference.TaskId == taskId);
+        var hasQueuePosition = await HasQueuePositionMigrationAsync(
+            connection, transaction, cancellationToken).ConfigureAwait(false);
         await using var update = new NpgsqlCommand($"""
             UPDATE {_tasks}
             SET task_revision = @revision, task_state = @state, is_archived = @archived,
                 automation_invocation_pending = @pending, title = @title, description = @description,
                 lifecycle = @lifecycle, issue_provider_id = @issue_provider,
                 issue_repository_owner = @issue_owner, issue_repository_name = @issue_repository,
-                issue_number = @issue_number, updated_at = clock_timestamp()
+                issue_number = @issue_number{(hasQueuePosition ? ", queue_position = @position" : string.Empty)},
+                updated_at = clock_timestamp()
             WHERE project_id = @project AND task_id = @task
             """, connection, transaction);
-        AddTaskParameters(update, task);
+        AddTaskParameters(update, task, hasQueuePosition);
         if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
             throw new CoordinationException("backlog_task_unavailable", StatusCodes.Status409Conflict);
+    }
+
+    /// <summary>Writes only task snapshots whose state or queue position changed in a graph edit.</summary>
+    private async Task UpdateChangedTasksAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        BacklogDependencyGraph before,
+        BacklogDependencyGraph after,
+        CancellationToken cancellationToken)
+    {
+        var previous = before.Tasks.ToDictionary(task => task.Reference.TaskId, StringComparer.Ordinal);
+        foreach (var task in after.Tasks)
+        {
+            if (!previous.TryGetValue(task.Reference.TaskId, out var prior) ||
+                (task.State == prior.State && task.Position == prior.Position))
+                continue;
+            await UpdateTaskAsync(
+                connection, transaction, after, task.Reference.TaskId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -1357,7 +1624,10 @@ internal sealed class BacklogOwnerStore
     /// <summary>
     /// Adds the task snapshot fields using the database types expected by the backlog schema.
     /// </summary>
-    private static void AddTaskParameters(NpgsqlCommand command, BacklogTaskSnapshot task)
+    private static void AddTaskParameters(
+        NpgsqlCommand command,
+        BacklogTaskSnapshot task,
+        bool includeQueuePosition)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, task.Reference.ProjectId);
         command.Parameters.AddWithValue("task", NpgsqlDbType.Varchar, task.Reference.TaskId);
@@ -1377,6 +1647,8 @@ internal sealed class BacklogOwnerStore
             (object?)task.RepositoryIssue?.Repository.Name ?? DBNull.Value);
         command.Parameters.AddWithValue("issue_number", NpgsqlDbType.Bigint,
             (object?)task.RepositoryIssue?.IssueNumber ?? DBNull.Value);
+        if (includeQueuePosition)
+            command.Parameters.AddWithValue("position", NpgsqlDbType.Bigint, task.Position);
     }
 
     /// <summary>
