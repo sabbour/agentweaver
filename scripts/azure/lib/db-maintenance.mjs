@@ -26,7 +26,7 @@ export const DB_MAINTENANCE_TARGET = Object.freeze({
   registry: 'ghcr.io/sabbour',
 });
 /** The reviewed plan binds Environment, Events, Core, and Projects & Config runtime grants. */
-export const REVIEWED_PLAN_SHA256 = 'ea1303e02ca0381735704de35b2ddf61e2e484d5ce64633d2fbc45170fd01f9b';
+export const REVIEWED_PLAN_SHA256 = '2782a5c49d8de6c33914376332cb80eb24ea9f8cba10b2a3a6d7c9dc5acfb0d7';
 export const LOCK_NAME = 'p1-db-maintenance-lock';
 export const STATE_NAME = 'p1-db-maintenance-state';
 export const MIGRATION_IDENTITY = 'agentweaver-id-p1-postgres-migration';
@@ -264,10 +264,12 @@ function checkAppImages(kubectl, options) {
  * highest applied migration of that service. The readiness check rejects any version outside its
  * `NOT IN (...)` list, so the highest listed version is the most the image accepts. It also
  * requires each version it checks with `WHERE version = N)`, except versions it also accepts as
- * absent (`= 0`), such as Orchestrator 032 and the rollout-compatible 033. An image can accept
- * 033 as optional at startup while its default migration catalog still applies 033. The highest
- * required version is the least the image accepts. Returns undefined when the source does not
- * have that shape, so an unexpected file never produces a guessed range.
+ * absent (`= 0`), such as Orchestrator 032, 033, and 035. Migration catalogs are explicit and may
+ * contain gaps; an absent version is never inferred from the numeric range. The highest required
+ * version is the least the image accepts. The supported version set is retained alongside its
+ * bounds so deployment ordering cannot mistake a skipped migration for a compatible schema.
+ * Returns undefined when the source does not have that shape, so an unexpected file never produces
+ * a guessed range.
  */
 export function schemaRangeFromSource(source, component) {
   const owner = OWNER_SOURCES[component];
@@ -278,22 +280,30 @@ export function schemaRangeFromSource(source, component) {
     if (!current || !source.includes('pending.Length > 0')) return undefined;
     const version = Number(current[1]);
     return Number.isSafeInteger(version) && version > 0
-      ? { minSchema: version, maxSchema: version }
+      ? { minSchema: version, maxSchema: version, supportedVersions: [version] }
       : undefined;
   }
   // Exactly one allow-list is expected; zero or several means the shape changed.
   const allowLists = [...source.matchAll(new RegExp(`${owner.table} WHERE version NOT IN \\(([\\d, ]+)\\)`, 'g'))];
   if (allowLists.length !== 1) return undefined;
-  const allowed = allowLists[0][1].split(',').map(Number);
+  const allowed = allowLists[0][1].split(',').map(Number).sort((left, right) => left - right);
   const checked = new Set([...source.matchAll(new RegExp(`${owner.table} WHERE version = (\\d+)\\)`, 'g'))]
     .map(match => Number(match[1])));
   const optional = new Set([...source.matchAll(new RegExp(`${owner.table} WHERE version = (\\d+)\\) = 0`, 'g'))]
     .map(match => Number(match[1])));
   const required = [...checked].filter(version => !optional.has(version));
   if (!required.length) return undefined;
-  const range = { minSchema: Math.max(...required), maxSchema: Math.max(...allowed) };
+  const minSchema = Math.max(...required);
+  const maxSchema = Math.max(...allowed);
+  const range = {
+    minSchema,
+    maxSchema,
+    supportedVersions: allowed.filter(version => version >= minSchema && version <= maxSchema),
+  };
   // The least accepted version must itself be allowed, or the two rules contradict each other.
-  return allowed.includes(range.minSchema) && range.minSchema <= range.maxSchema ? range : undefined;
+  return range.supportedVersions.includes(range.minSchema) && range.minSchema <= range.maxSchema
+    ? range
+    : undefined;
 }
 
 /**
@@ -301,8 +311,8 @@ export function schemaRangeFromSource(source, component) {
  * service image carries its source commit in the `org.opencontainers.image.revision` label. The
  * runner reads that label from the registry, reads the owner's migrator source at that commit
  * with git, and parses the range (see schemaRangeFromSource). Nothing is maintained by hand.
- * Returns `{ minSchema, maxSchema, sourceSha }`, or `{ unknown: reason }` when any step fails;
- * the caller decides whether unknown is acceptable.
+ * Returns `{ minSchema, maxSchema, supportedVersions, sourceSha }`, or `{ unknown: reason }`
+ * when any step fails; the caller decides whether unknown is acceptable.
  */
 export async function readImageSchemaRange({ image, component, readImage, exec, repoRoot }) {
   const owner = OWNER_SOURCES[component];
@@ -342,7 +352,15 @@ export async function readImageSchemaRange({ image, component, readImage, exec, 
  */
 export function planServiceOrder({ appImages, ranges, targetSchema, currentSchema }) {
   const within = (range, version) => range !== undefined && version !== undefined &&
-    version >= range.minSchema && version <= range.maxSchema;
+    version >= range.minSchema && version <= range.maxSchema &&
+    range.supportedVersions?.includes(version) === true;
+  const describeRange = range => {
+    const bounds = `${range.minSchema}-${range.maxSchema}`;
+    const versions = range.supportedVersions ?? [];
+    return versions.length === range.maxSchema - range.minSchema + 1
+      ? bounds
+      : `${bounds} (supported versions: ${versions.join(', ')})`;
+  };
   const services = appImages.map(app => {
     const target = targetSchema[app.deployment];
     const current = currentSchema[app.deployment];
@@ -350,7 +368,7 @@ export function planServiceOrder({ appImages, ranges, targetSchema, currentSchem
     // A target image that rejects the plan's own schema was built from other source: wrong digest.
     if (!within(targetSupports, target))
       throw new Error(`${app.deployment} image ${app.expected} accepts schema ` +
-        `${targetSupports ? `${targetSupports.minSchema}-${targetSupports.maxSchema}` : 'unknown'}, ` +
+        `${targetSupports ? describeRange(targetSupports) : 'unknown'}, ` +
         `not ${target} from the reviewed plan. Pass the digest built from the reviewed source.`);
     const runningSupports = app.running ? ranges[app.running] : undefined;
     const action = app.status !== 'mismatch' ? 'none'
@@ -677,11 +695,19 @@ export async function runDbMaintenance(options, overrides = {}) {
         const targetRange = await deps.imageSchemaRange(app.expected, app.component);
         if (targetRange.unknown)
           throw new Error(`Could not read the schema range of ${app.deployment} image ${app.expected}: ${targetRange.unknown}.`);
-        ranges[app.expected] = { minSchema: targetRange.minSchema, maxSchema: targetRange.maxSchema };
+        ranges[app.expected] = {
+          minSchema: targetRange.minSchema,
+          maxSchema: targetRange.maxSchema,
+          supportedVersions: targetRange.supportedVersions,
+        };
         if (!app.running || app.running === app.expected) continue;
         const runningRange = await deps.imageSchemaRange(app.running, app.component);
         if (runningRange.unknown) log(`Schema range of running ${app.deployment} image is unknown: ${runningRange.unknown}.`);
-        else ranges[app.running] = { minSchema: runningRange.minSchema, maxSchema: runningRange.maxSchema };
+        else ranges[app.running] = {
+          minSchema: runningRange.minSchema,
+          maxSchema: runningRange.maxSchema,
+          supportedVersions: runningRange.supportedVersions,
+        };
       }
       const targetSchema = Object.fromEntries(P1_JOBS.map(job => [job.key, Math.max(...plan[job.planVersions])]));
       // Unrecorded or malformed versions count as unknown, which only removes the deploy-first choice.

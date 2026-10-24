@@ -51,6 +51,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(32)]
     [InlineData(33)]
     [InlineData(34)]
+    [InlineData(35)]
+    [InlineData(36)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -131,11 +133,11 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var insert = new NpgsqlCommand($"""
-            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (35)
+            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (34)
             """, connection))
             await insert.ExecuteNonQueryAsync();
 
-        // Version 35 is intentionally outside the set accepted by the readiness verifier.
+        // Version 34 is reserved and outside the set accepted by the readiness verifier.
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
         var sink = new ReadinessCapturingLogger();
@@ -192,7 +194,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                     WHERE link_id = 'legacy' AND item_number = 42 AND provider_id IS NULL
                       AND repository_owner IS NULL AND repository_name IS NULL
                       AND created_at = '2026-10-20T00:00:00Z'),
-                -- A pre-033 owner rejects both the repository-identity and root-admission versions.
+                -- A pre-033 owner rejects repository identity and later Core migrations.
                 (SELECT count(*) FROM "{_schema}".coordination_schema_migrations
                     WHERE version NOT IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32)),
                 to_regclass(@obsolete) IS NULL
@@ -203,8 +205,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(0));
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
-        // Old owner images cannot accept 033 or 036; migrating and deploying must be coordinated.
-        Assert.Equal(2L, reader.GetInt64(3));
+        // Old owner images cannot accept 033 or later migrations; deploy before applying them.
+        Assert.Equal(3L, reader.GetInt64(3));
         Assert.True(reader.GetBoolean(4));
     }
 
@@ -402,6 +404,52 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
     }
 
+    [Fact]
+    public async Task VerificationRequiresTheRootAdmissionActorColumns()
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            $"ALTER TABLE \"{_schema}\".maf_root_model_turn_admissions DROP COLUMN actor_issuer", connection))
+            await command.ExecuteNonQueryAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    [Fact]
+    public async Task VerificationRequiresTheRootAdmissionRequestPrimaryKey()
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            $"ALTER TABLE \"{_schema}\".maf_root_model_turn_admissions DROP CONSTRAINT maf_root_model_turn_admissions_pkey",
+            connection))
+            await command.ExecuteNonQueryAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    [Fact]
+    public async Task VerificationRejectsAConditionalRootAdmissionImmutabilityTrigger()
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            DROP TRIGGER maf_root_model_turn_admissions_no_update
+                ON "{_schema}".maf_root_model_turn_admissions;
+            CREATE TRIGGER maf_root_model_turn_admissions_no_update
+                BEFORE UPDATE OR DELETE ON "{_schema}".maf_root_model_turn_admissions
+                FOR EACH ROW WHEN (OLD.request_id <> '00000000-0000-0000-0000-000000000001'::uuid)
+                EXECUTE FUNCTION "{_schema}".reject_row_lock_record_update()
+            """, connection))
+            await command.ExecuteNonQueryAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
     private async Task ApplyMigrationsThroughAsync(int version, bool includePreviouslyUnregistered = true)
     {
         // Reconstruct real intermediate schemas from embedded SQL, including the intentional version gaps.
@@ -440,6 +488,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (31, "031_user_notification_promotion_dismissals.sql"),
             (32, "032_source_control_pull_request_records.sql"),
             (33, "033_priority_link_repository_identity.sql"),
+            (35, "035_backlog_task_queue_position.sql"),
             (36, "036_maf_root_model_turn_admissions.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
@@ -575,8 +624,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        // The default history includes the latest supported migration, allowing reserved gaps.
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 36]), reader.GetFieldValue<int[]>(9));
+        // The default history skips reserved versions 017 and 034.
+        Assert.Equal(
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36]),
+            reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));

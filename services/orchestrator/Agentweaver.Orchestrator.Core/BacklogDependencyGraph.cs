@@ -30,7 +30,9 @@ public sealed class BacklogDependencyGraph
     public long Revision { get; }
 
     public ImmutableArray<BacklogTaskSnapshot> Tasks =>
-        [.. _tasks.Values.OrderBy(task => task.Reference.TaskId, StringComparer.Ordinal)];
+        [.. _tasks.Values.OrderBy(task => task.State)
+            .ThenBy(task => task.Position)
+            .ThenBy(task => task.Reference.TaskId, StringComparer.Ordinal)];
 
     public ImmutableArray<BacklogDependencyEdge> Dependencies =>
         [.. _dependencies.OrderBy(edge => edge.Task.TaskId, StringComparer.Ordinal)
@@ -72,6 +74,13 @@ public sealed class BacklogDependencyGraph
         if (!validation.IsEmpty)
             return BacklogCoreResult<BacklogTaskEdit>.Failure(validation);
         var updated = ApplyContent(task!, content);
+        if (updated.State != task!.State)
+        {
+            if (!TryGetNextPosition(updated.State, out var position))
+                return TaskFailure(BacklogIssueCode.TaskPositionExhausted, "task.position",
+                    "The task position cannot be incremented.");
+            updated = updated with { Position = position };
+        }
         if (updated == task)
             return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(this, false));
         if (task!.IsArchived || task.IsAutomationInvocationPending)
@@ -166,7 +175,10 @@ public sealed class BacklogDependencyGraph
             return TaskFailure(BacklogIssueCode.GraphRevisionExhausted, "graph.revision",
                 "The dependency graph revision cannot be incremented.");
 
-        var task = new BacklogTaskSnapshot(taskReference!, 0, BacklogTaskState.Backlog);
+        if (!TryGetNextPosition(BacklogTaskState.Backlog, out var position))
+            return TaskFailure(BacklogIssueCode.TaskPositionExhausted, "task.position",
+                "The task position cannot be incremented.");
+        var task = new BacklogTaskSnapshot(taskReference!, 0, BacklogTaskState.Backlog, Position: position);
         var tasks = _tasks.Add(taskReference!.TaskId, task);
         var graph = new BacklogDependencyGraph(
             ProjectId, Revision + 1, tasks, _dependencies, _prerequisitesByTask);
@@ -206,8 +218,11 @@ public sealed class BacklogDependencyGraph
         if (Revision == long.MaxValue)
             return TaskFailure(BacklogIssueCode.GraphRevisionExhausted, "graph.revision",
                 "The dependency graph revision cannot be incremented.");
+        if (!TryGetNextPosition(state, out var position))
+            return TaskFailure(BacklogIssueCode.TaskPositionExhausted, "task.position",
+                "The task position cannot be incremented.");
 
-        var updatedTask = task with { Revision = task.Revision + 1, State = state };
+        var updatedTask = task with { Revision = task.Revision + 1, State = state, Position = position };
         var graph = new BacklogDependencyGraph(
             ProjectId,
             Revision + 1,
@@ -216,6 +231,185 @@ public sealed class BacklogDependencyGraph
             _prerequisitesByTask);
         return BacklogCoreResult<BacklogTaskEdit>.Success(
             new BacklogTaskEdit(graph, Changed: true));
+    }
+
+    /// <summary>Moves a task within or between the project queue columns at one graph revision.</summary>
+    public BacklogCoreResult<BacklogTaskEdit> SetTaskPosition(
+        BacklogTaskReference? taskReference,
+        BacklogTaskState targetState,
+        long targetPosition,
+        long expectedGraphRevision,
+        long expectedTaskRevision)
+    {
+        if (!TryValidateTaskMutation(taskReference, expectedGraphRevision, expectedTaskRevision,
+                out var task, out var issues))
+            return BacklogCoreResult<BacklogTaskEdit>.Failure(issues);
+        var currentTask = task!;
+        if (!Enum.IsDefined(targetState) || targetState == BacklogTaskState.Claimed)
+            return TaskFailure(BacklogIssueCode.InvalidTaskState, "targetState",
+                "Tasks can be positioned only in Backlog or Ready.");
+        if (targetPosition < 0)
+            return TaskFailure(BacklogIssueCode.InvalidTaskPosition, "targetPosition",
+                "Task position must be zero or greater.");
+        if (targetState == BacklogTaskState.Ready && currentTask.Lifecycle == BacklogTaskLifecycle.Closed)
+            return TaskFailure(BacklogIssueCode.TaskNotEligible, "targetState",
+                "A closed task cannot become ready.");
+        if (!CanEditDependencies(currentTask))
+            return TaskFailure(BacklogIssueCode.TaskNotEditable, "task",
+                "A task can be positioned only while it is unclaimed, unarchived, and not held by an automation invocation.");
+        var sourceQueue = _tasks.Values
+            .Where(candidate => candidate.State == currentTask.State &&
+                candidate.Reference.TaskId != currentTask.Reference.TaskId)
+            .OrderBy(candidate => candidate.Position)
+            .ThenBy(candidate => candidate.Reference.TaskId, StringComparer.Ordinal)
+            .ToList();
+        var targetQueue = currentTask.State == targetState
+            ? sourceQueue
+            : _tasks.Values
+                .Where(candidate => candidate.State == targetState)
+                .OrderBy(candidate => candidate.Position)
+                .ThenBy(candidate => candidate.Reference.TaskId, StringComparer.Ordinal)
+                .ToList();
+        if (targetPosition > targetQueue.Count)
+            return TaskFailure(BacklogIssueCode.InvalidTaskPosition, "targetPosition",
+                "Task position must refer to a slot in the target queue.");
+
+        // Reindex the affected queues under the same graph revision so order and state cannot diverge.
+        targetQueue.Insert((int)targetPosition, currentTask with { State = targetState });
+        var updatedTasks = _tasks;
+        var changed = false;
+        foreach (var queue in currentTask.State == targetState
+                     ? new[] { targetQueue }
+                     : new[] { sourceQueue, targetQueue })
+        {
+            for (var index = 0; index < queue.Count; index++)
+            {
+                var current = _tasks[queue[index].Reference.TaskId];
+                var positioned = queue[index] with { Position = index };
+                if (positioned.State == current.State && positioned.Position == current.Position)
+                    continue;
+                if (current.Revision == long.MaxValue)
+                    return TaskFailure(BacklogIssueCode.TaskRevisionExhausted, "task.revision",
+                        "A task revision cannot be incremented.");
+                updatedTasks = updatedTasks.SetItem(
+                    current.Reference.TaskId, positioned with { Revision = current.Revision + 1 });
+                changed = true;
+            }
+        }
+        if (!changed)
+            return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(this, false));
+        if (Revision == long.MaxValue)
+            return TaskFailure(BacklogIssueCode.GraphRevisionExhausted, "graph.revision",
+                "The dependency graph revision cannot be incremented.");
+
+        return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(
+            new BacklogDependencyGraph(ProjectId, Revision + 1, updatedTasks,
+                _dependencies, _prerequisitesByTask), true));
+    }
+
+    /// <summary>Moves all eligible Backlog tasks to Ready in one graph revision.</summary>
+    public BacklogCoreResult<BacklogTaskEdit> SetAllEligibleTasksReady(long expectedGraphRevision)
+    {
+        if (expectedGraphRevision < 0)
+            return TaskFailure(BacklogIssueCode.InvalidGraphRevision, "expectedGraphRevision",
+                "Expected graph revision must be zero or greater.");
+        if (expectedGraphRevision != Revision)
+            return TaskFailure(BacklogIssueCode.StaleGraphRevision, "expectedGraphRevision",
+                $"Expected graph revision {expectedGraphRevision} does not match current revision {Revision}.");
+
+        // Prerequisites remain a claim-time check; this write only commits open, available tasks to Ready.
+        var backlogTasks = _tasks.Values
+            .Where(task => task.State == BacklogTaskState.Backlog &&
+                task.Lifecycle == BacklogTaskLifecycle.Open &&
+                !task.IsArchived && !task.IsAutomationInvocationPending)
+            .OrderBy(task => task.Position)
+            .ThenBy(task => task.Reference.TaskId, StringComparer.Ordinal)
+            .ToArray();
+        if (backlogTasks.Length == 0)
+            return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(this, false));
+        if (Revision == long.MaxValue)
+            return TaskFailure(BacklogIssueCode.GraphRevisionExhausted, "graph.revision",
+                "The dependency graph revision cannot be incremented.");
+
+        var nextPosition = _tasks.Values
+            .Where(task => task.State == BacklogTaskState.Ready)
+            .Select(task => task.Position)
+            .DefaultIfEmpty(-1)
+            .Max();
+        if (nextPosition > long.MaxValue - backlogTasks.Length)
+            return TaskFailure(BacklogIssueCode.TaskPositionExhausted, "task.position",
+                "The task position cannot be incremented.");
+
+        var updatedTasks = _tasks;
+        foreach (var candidate in backlogTasks)
+        {
+            if (candidate.Revision == long.MaxValue)
+                return TaskFailure(BacklogIssueCode.TaskRevisionExhausted, "task.revision",
+                    "A task revision cannot be incremented.");
+            nextPosition++;
+            updatedTasks = updatedTasks.SetItem(candidate.Reference.TaskId, candidate with
+            {
+                Revision = candidate.Revision + 1,
+                State = BacklogTaskState.Ready,
+                Position = nextPosition
+            });
+        }
+        return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(
+            new BacklogDependencyGraph(ProjectId, Revision + 1, updatedTasks,
+                _dependencies, _prerequisitesByTask), true));
+    }
+
+    /// <summary>Deletes an unclaimed task when no other task depends on it.</summary>
+    public BacklogCoreResult<BacklogTaskEdit> DeleteTask(
+        BacklogTaskReference? taskReference,
+        long expectedGraphRevision,
+        long expectedTaskRevision,
+        bool compactQueue = true)
+    {
+        if (!TryValidateTaskMutation(taskReference, expectedGraphRevision, expectedTaskRevision,
+                out var task, out var issues))
+            return BacklogCoreResult<BacklogTaskEdit>.Failure(issues);
+        if (!CanEditDependencies(task!))
+            return TaskFailure(BacklogIssueCode.TaskNotEditable, "task",
+                "A task can be deleted only while it is unclaimed, unarchived, and not held by an automation invocation.");
+        if (_dependencies.Any(edge => edge.Prerequisite.TaskId == task!.Reference.TaskId))
+            return TaskFailure(BacklogIssueCode.TaskHasDependents, "task",
+                "Another task depends on this task. Remove that prerequisite before deleting it.");
+        if (Revision == long.MaxValue)
+            return TaskFailure(BacklogIssueCode.GraphRevisionExhausted, "graph.revision",
+                "The dependency graph revision cannot be incremented.");
+
+        var deletingTask = task!;
+        // The dependent check above makes it safe to remove only prerequisites owned by the deleted task.
+        var dependencies = _dependencies
+            .Where(edge => edge.Task.TaskId != deletingTask.Reference.TaskId)
+            .ToImmutableHashSet();
+        var updatedTasks = _tasks.Remove(deletingTask.Reference.TaskId);
+        if (compactQueue)
+        {
+            foreach (var (remaining, position) in _tasks.Values
+                         .Where(candidate => candidate.State == deletingTask.State &&
+                             candidate.Reference.TaskId != deletingTask.Reference.TaskId)
+                         .OrderBy(candidate => candidate.Position)
+                         .ThenBy(candidate => candidate.Reference.TaskId, StringComparer.Ordinal)
+                         .Select((candidate, index) => (candidate, index)))
+            {
+                if (remaining.Position == position)
+                    continue;
+                if (remaining.Revision == long.MaxValue)
+                    return TaskFailure(BacklogIssueCode.TaskRevisionExhausted, "task.revision",
+                        "A task revision cannot be incremented.");
+                updatedTasks = updatedTasks.SetItem(remaining.Reference.TaskId, remaining with
+                {
+                    Revision = remaining.Revision + 1,
+                    Position = position
+                });
+            }
+        }
+        var graph = new BacklogDependencyGraph(
+            ProjectId, Revision + 1, updatedTasks,
+            dependencies, CreatePrerequisiteMap(dependencies));
+        return BacklogCoreResult<BacklogTaskEdit>.Success(new BacklogTaskEdit(graph, true));
     }
 
     /// <summary>Claims a ready task after checking current graph, task, and prerequisite revisions.</summary>
@@ -240,6 +434,14 @@ public sealed class BacklogDependencyGraph
                     "task.revision",
                     "The task revision cannot be incremented.")
             ]);
+        if (!TryGetNextPosition(BacklogTaskState.Claimed, out var position))
+            return BacklogCoreResult<BacklogTaskClaimEdit>.Failure(
+            [
+                new BacklogIssue(
+                    BacklogIssueCode.TaskPositionExhausted,
+                    "task.position",
+                    "The task position cannot be incremented.")
+            ]);
         if (Revision == long.MaxValue)
             return BacklogCoreResult<BacklogTaskClaimEdit>.Failure(
             [
@@ -253,7 +455,8 @@ public sealed class BacklogDependencyGraph
         var claimedTask = _tasks[taskId] with
         {
             Revision = expectedTaskRevision + 1,
-            State = BacklogTaskState.Claimed
+            State = BacklogTaskState.Claimed,
+            Position = position
         };
         var graph = new BacklogDependencyGraph(
             ProjectId,
@@ -344,6 +547,9 @@ public sealed class BacklogDependencyGraph
                 if (task.Revision < 0)
                     Add(issues, BacklogIssueCode.InvalidTaskRevision, path + ".revision",
                         "Task revision must be zero or greater.");
+                if (task.Position < 0)
+                    Add(issues, BacklogIssueCode.InvalidTaskPosition, path + ".position",
+                        "Task position must be zero or greater.");
                 if (!Enum.IsDefined(task.State))
                     Add(issues, BacklogIssueCode.InvalidTaskState, path + ".state",
                         "Task state is not supported.");
@@ -635,6 +841,22 @@ public sealed class BacklogDependencyGraph
         !task.IsArchived &&
         !task.IsAutomationInvocationPending &&
         task.State is BacklogTaskState.Backlog or BacklogTaskState.Ready;
+
+    private bool TryGetNextPosition(BacklogTaskState state, out long position)
+    {
+        var current = _tasks.Values
+            .Where(task => task.State == state)
+            .Select(task => task.Position)
+            .DefaultIfEmpty(-1)
+            .Max();
+        if (current == long.MaxValue)
+        {
+            position = 0;
+            return false;
+        }
+        position = current + 1;
+        return true;
+    }
 
     private static BacklogCoreResult<BacklogDependencyGraphEdit> Failure(
         BacklogIssueCode code,

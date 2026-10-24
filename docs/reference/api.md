@@ -117,11 +117,19 @@ forwards the tenant selector and exposes these versioned operations:
 | --- | --- | --- |
 | GET | `/api/v1/projects/{projectId}/backlog` | Current `ReadProjects` |
 | POST | `/api/v1/projects/{projectId}/backlog/tasks` | Current `WriteProjects` |
+| POST | `/api/v1/projects/{projectId}/backlog/ready-all` | Current `WriteProjects` |
 | PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/content` | Current `WriteProjects` |
+| PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/position` | Current `WriteProjects` |
 | PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/state` | Current `WriteProjects` |
 | POST | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/archive` | Current `WriteProjects` |
+| DELETE | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}` | Current `WriteProjects` |
 | PUT | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Current `WriteProjects` |
 | DELETE | `/api/v1/projects/{projectId}/backlog/tasks/{taskId}/dependencies/{prerequisiteTaskId}` | Current `WriteProjects` |
+
+Task deletion is rejected when another task depends on it, when it came from an
+accepted work plan, when it has a repository issue sync receipt, or while that
+project's issue sync cycle is active. Once queue positions are installed, a
+successful deletion compacts the task's state queue in the same transaction.
 
 The native paths replace `/api/v1` with `/api`. Reads require `api.read`.
 Writes also require `projects.admin` and project Owner or tenant administrator
@@ -163,11 +171,33 @@ checks current prerequisite execution and output evidence again and returns
 typed blockers when work is not eligible. Archive and dependency changes use
 the same graph lock and revision checks as task edits.
 
-These source mappings require migration `026_backlog_task_content.sql`.
-Migration application, existing grant reconciliation, and the changed
-PostgreSQL plan hash require separate operator approval and remain unapplied.
+Position writes use a zero-based insertion index in the complete state queue
+after removing the moved task. Hidden archived or closed tasks still occupy
+queue slots, and each successful move reindexes affected queues. Insertion is
+unavailable until migration 035 installs persisted positions.
+
+Each task snapshot includes a zero-based `position` within its queue. A position
+write sends `state`, `position`, `expectedGraphRevision`, and
+`expectedTaskRevision`. The owner reorders the queue under the graph lock and
+advances revisions for every task whose state or position changes. Batch-ready
+sends `expectedGraphRevision` and moves open, unarchived tasks without a
+pending automation invocation from Backlog to Ready in one graph change.
+Prerequisites are still checked when a run claims a task.
+
+Delete sends `expectedGraphRevision` and `expectedTaskRevision`. The owner
+rejects claimed, archived, or provisional tasks, tasks that have dependents,
+and tasks promoted from an accepted work plan. It removes the deleted task's
+own prerequisite links in the same transaction.
+
+Migration `026_backlog_task_content.sql` stores editable content.
+Migration `035_backlog_task_queue_position.sql` stores queue order and adds the
+index used to read it. The new owner image accepts the complete schema before
+035 is applied, but position and batch-ready writes return `503` until then.
+Both migration versions, the backlog delete grant, and the PostgreSQL plan
+hash are recorded in the reviewed plan; none is applied to a live database.
 MCP discovers these operations from the Gateway catalog. The retained Board
-uses the state, archive, and dependency operations; it does not start a run.
+supports queue order, batch-ready, state, archive, and prerequisite actions; it
+does not start a run.
 
 Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 `GatewayRouteCatalog.cs`.

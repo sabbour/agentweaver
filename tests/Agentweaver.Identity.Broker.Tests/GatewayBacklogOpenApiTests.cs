@@ -57,6 +57,9 @@ public sealed class GatewayBacklogOpenApiTests
             .GetProperty("get").GetProperty("operationId").GetString());
         Assert.Equal("captureBacklogTask", paths.GetProperty("/api/v1/projects/{projectId}/backlog/tasks")
             .GetProperty("post").GetProperty("operationId").GetString());
+        Assert.Equal("setAllProjectBacklogTasksReady",
+            paths.GetProperty("/api/v1/projects/{projectId}/backlog/ready-all")
+                .GetProperty("post").GetProperty("operationId").GetString());
         Assert.Equal("editBacklogTaskContent",
             paths.GetProperty("/api/v1/projects/{projectId}/backlog/tasks/{taskId}/content")
                 .GetProperty("put").GetProperty("operationId").GetString());
@@ -72,6 +75,20 @@ public sealed class GatewayBacklogOpenApiTests
                 .GetProperty("$ref").GetString());
         Assert.True(schemas.GetProperty("BacklogTaskSnapshot").GetProperty("properties")
             .TryGetProperty("repositoryIssue", out _));
+        Assert.Contains(schemas.GetProperty("BacklogTaskSnapshot").GetProperty("required")
+            .EnumerateArray(), item => item.GetString() == "position");
+
+        var position = paths.GetProperty("/api/v1/projects/{projectId}/backlog/tasks/{taskId}/position")
+            .GetProperty("put");
+        Assert.Equal("setProjectBacklogTaskPosition", position.GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/SetBacklogTaskPositionRequest",
+            position.GetProperty("requestBody").GetProperty("content").GetProperty("application/json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
+        var delete = paths.GetProperty("/api/v1/projects/{projectId}/backlog/tasks/{taskId}").GetProperty("delete");
+        Assert.Equal("deleteProjectBacklogTask", delete.GetProperty("operationId").GetString());
+        Assert.Equal("#/components/schemas/BacklogTaskRevisionRequest",
+            delete.GetProperty("requestBody").GetProperty("content").GetProperty("application/json")
+                .GetProperty("schema").GetProperty("$ref").GetString());
 
         var state = paths.GetProperty("/api/v1/projects/{projectId}/backlog/tasks/{taskId}/state")
             .GetProperty("put");
@@ -112,6 +129,7 @@ public sealed class GatewayBacklogOpenApiTests
             "CaptureBacklogTaskRequest",
             "EditBacklogTaskContentRequest",
             "SetBacklogTaskStateRequest",
+            "SetBacklogTaskPositionRequest",
             "BacklogTaskRevisionRequest",
             "BacklogGraphRevisionRequest",
             "ClaimBacklogTaskRequest",

@@ -703,7 +703,7 @@ describe('v1 web project scoping', () => {
   it('counts backlog tasks by Board column on the Flow page', async () => {
     const task = (taskId: string, state: string, extra: Record<string, unknown> = {}) => ({
       reference: { projectId: 'p1', taskId }, revision: 1, state, isArchived: false,
-      isAutomationInvocationPending: false, title: taskId, description: null, lifecycle: 'open', repositoryIssue: null, ...extra,
+      isAutomationInvocationPending: false, title: taskId, description: null, lifecycle: 'open', repositoryIssue: null, position: 0, ...extra,
     });
     mocks.readProjectBacklog.mockResolvedValue({
       projectId: 'p1',
@@ -721,7 +721,7 @@ describe('v1 web project scoping', () => {
   it('opens the project Board from its address and adds a task through Start task', async () => {
     const task = (taskId: string, title: string, revision: number) => ({
       reference: { projectId: 'p1', taskId }, revision, state: 'backlog', isArchived: false,
-      isAutomationInvocationPending: false, title, description: null, lifecycle: 'open', repositoryIssue: null,
+      isAutomationInvocationPending: false, title, description: null, lifecycle: 'open', repositoryIssue: null, position: 0,
     });
     mocks.readProjectBacklog.mockResolvedValue({ projectId: 'p1', revision: 3, tasks: [task('t1', 'Existing task', 1)], dependencies: [] });
     mocks.captureBacklogTask.mockImplementation(async (_token: string, projectId: string, request: { taskId: string; content: { title: string } }) => {

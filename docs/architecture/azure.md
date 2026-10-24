@@ -178,12 +178,12 @@ type, function source/owner, and runtime EXECUTE restriction. Its role stage
 checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
-Its source catalog includes 33 Core migration versions (1 through 16, 18
-through 33, and 36), with version 17 excluded and reserved gaps 34 and 35
+Its source catalog includes 34 Core migration versions (1 through 16, 18
+through 33, and 35-36), with version 17 excluded and reserved version 34
 skipped, ten Events versions, and 11 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`ea1303e02ca0381735704de35b2ddf61e2e484d5ce64633d2fbc45170fd01f9b`.
+`2782a5c49d8de6c33914376332cb80eb24ea9f8cba10b2a3a6d7c9dc5acfb0d7`.
 It retains 115 tables, nine row-lock columns, and 33 exact function signatures.
 Events migration 010 adds `session_object_inventory` with exactly
 `SELECT, INSERT, UPDATE` runtime access.

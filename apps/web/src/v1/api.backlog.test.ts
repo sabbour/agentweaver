@@ -29,12 +29,35 @@ describe('Gateway backlog and issue client', () => {
     await expect(client(fetcher).readProjectBacklog('token', 'p 1')).rejects.toMatchObject({ status: 502, code: 'owner_contract_invalid' });
   });
 
+  it('rejects a backlog with an invalid queue position', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json({
+      ...graph,
+      tasks: [{
+        reference: { projectId: 'p 1', taskId: 't1' }, revision: 1, state: 'backlog',
+        isArchived: false, isAutomationInvocationPending: false, title: 'Task',
+        lifecycle: 'open', position: -1,
+      }],
+    }));
+    await expect(client(fetcher).readProjectBacklog('token', 'p 1'))
+      .rejects.toMatchObject({ status: 502, code: 'owner_contract_invalid' });
+  });
+
   it('captures a task with POST and the expected graph revision', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(graph));
     const request = { taskId: 'task-1', content: { title: 'Write docs' }, expectedGraphRevision: 6 };
     await client(fetcher).captureBacklogTask('token', 'p 1', request);
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe('https://gateway.example.test/api/v1/projects/p%201/backlog/tasks');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual(request);
+  });
+
+  it('moves eligible backlog tasks to Ready with POST', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(graph));
+    const request = { expectedGraphRevision: 7 };
+    await client(fetcher).setAllProjectBacklogTasksReady('token', 'p 1', request);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe('https://gateway.example.test/api/v1/projects/p%201/backlog/ready-all');
     expect(init?.method).toBe('POST');
     expect(JSON.parse(String(init?.body))).toEqual(request);
   });
@@ -46,6 +69,26 @@ describe('Gateway backlog and issue client', () => {
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe('https://gateway.example.test/api/v1/projects/p%201/backlog/tasks/task%2F1/content');
     expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual(request);
+  });
+
+  it('moves a task within its queue with PUT and both revisions', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(graph));
+    const request = { state: 'ready' as const, position: 2, expectedGraphRevision: 7, expectedTaskRevision: 3 };
+    await client(fetcher).setProjectBacklogTaskPosition('token', 'p 1', 'task/1', request);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe('https://gateway.example.test/api/v1/projects/p%201/backlog/tasks/task%2F1/position');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual(request);
+  });
+
+  it('deletes a task with both revisions', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(graph));
+    const request = { expectedGraphRevision: 7, expectedTaskRevision: 3 };
+    await client(fetcher).deleteProjectBacklogTask('token', 'p 1', 'task/1', request);
+    const [url, init] = fetcher.mock.calls[0];
+    expect(url).toBe('https://gateway.example.test/api/v1/projects/p%201/backlog/tasks/task%2F1');
+    expect(init?.method).toBe('DELETE');
     expect(JSON.parse(String(init?.body))).toEqual(request);
   });
 

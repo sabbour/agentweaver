@@ -14,6 +14,10 @@ import { redact } from '../lib/exec.mjs';
 import { parseKustomizeResources } from '../../release/kustomize-runtime.mjs';
 
 const digest = character => `sha256:${character.repeat(64)}`;
+const range = (minSchema, maxSchema, supportedVersions = Array.from(
+  { length: maxSchema - minSchema + 1 }, (_, index) => minSchema + index)) =>
+  ({ minSchema, maxSchema, supportedVersions });
+const coreRange = () => range(31, 36, [31, 32, 33, 35, 36]);
 const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
 const fail = (stderr = 'failed', status = 1) => ({ status, stdout: '', stderr });
 const CLIENT_ID = '12345678-1234-4123-8123-123456789abc';
@@ -29,10 +33,10 @@ const goodLogs = {
   'events-and-sessions': marker('events-and-sessions', 'events_sessions', plan.eventsVersions),
 };
 const defaultSchemaRanges = {
-  [digest('a')]: { minSchema: 31, maxSchema: 33 },
-  [digest('b')]: { minSchema: 10, maxSchema: 10 },
-  [digest('d')]: { minSchema: 11, maxSchema: 11 },
-  [digest('f')]: { minSchema: 10, maxSchema: 10 },
+  [digest('a')]: coreRange(),
+  [digest('b')]: range(10, 10),
+  [digest('d')]: range(11, 11),
+  [digest('f')]: range(10, 10),
 };
 
 function kustomize(directory) {
@@ -206,7 +210,7 @@ test('grant markers must match the reviewed plan exactly', () => {
   }), /versions=1,2/);
   assert.throws(() => verifyGrantsMarker('migrated\n', expected), /0 grant markers/);
   assert.throws(() => verifyGrantsMarker(`${goodLogs.orchestrator}\n${goodLogs.orchestrator}`, expected), /2 grant markers/);
-  assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', [...plan.coreVersions, 35]), expected),
+  assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', [...plan.coreVersions, 34]), expected),
     /differs from the reviewed plan/);
   assert.throws(() => verifyGrantsMarker(marker('orchestrator', 'orchestrator', plan.coreVersions.slice(0, -1)), expected),
     /differs from the reviewed plan/);
@@ -215,12 +219,12 @@ test('grant markers must match the reviewed plan exactly', () => {
   assert.throws(() => verifyGrantsMarker(goodLogs['events-and-sessions'], expected), /does not match/);
 });
 
-test('the reviewed plan includes 032 and 036 and matches the pinned hash', () => {
+test('the reviewed plan includes 035 and 036, skips reserved Core 034, and matches the hash', () => {
   assert.equal(p1PostgresPlanHash(), REVIEWED_PLAN_SHA256);
   assert.ok(!plan.coreVersions.includes(17));
   assert.ok(plan.coreVersions.includes(32));
   assert.ok(!plan.coreVersions.includes(34));
-  assert.ok(!plan.coreVersions.includes(35));
+  assert.ok(plan.coreVersions.includes(35));
   assert.ok(plan.coreVersions.includes(36));
   assert.equal(Math.max(...plan.coreVersions), 36);
   assert.deepEqual(plan.eventsVersions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
@@ -405,7 +409,7 @@ test('a failed Job still removes Jobs, releases the lock, and writes a failed re
 });
 
 test('a ledger past the reviewed plan fails the run', async () => {
-  const fake = world({ logs: { ...goodLogs, orchestrator: marker('orchestrator', 'orchestrator', [...plan.coreVersions, 35]) },
+  const fake = world({ logs: { ...goodLogs, orchestrator: marker('orchestrator', 'orchestrator', [...plan.coreVersions, 34]) },
     state: { kind: 'ConfigMap', metadata: { name: STATE_NAME }, data: { handoverPrincipalObjectId: PRINCIPAL_ID } } });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
@@ -714,13 +718,11 @@ const apps = (running, expected = 'b') => [
   { deployment: 'events-and-sessions', component: 'Agentweaver.EventsAndSessions', status: 'mismatch',
     expected: eventsImage(expected), running: eventsImage(running) },
 ];
-const schemas = { environment: 11, orchestrator: 33, 'events-and-sessions': 10 };
-const range = (minSchema, maxSchema) => ({ minSchema, maxSchema });
-
+const schemas = { environment: 11, orchestrator: 36, 'events-and-sessions': 10 };
 test('the service order follows the schema ranges of the running and target images', () => {
   // Ranges are keyed by image reference, as the runner reads them from each image.
   const order = (running, target, current) => planServiceOrder({ appImages: apps('e'),
-    ranges: { [environmentImage('d')]: range(11, 11), [apps('e')[1].expected]: range(31, 33),
+    ranges: { [environmentImage('d')]: range(11, 11), [apps('e')[1].expected]: coreRange(),
       [eventsImage('e')]: running, [eventsImage('b')]: target },
     targetSchema: schemas, currentSchema: { environment: 11, orchestrator: 31, 'events-and-sessions': current } });
   // The running image accepts the target schema: migrate first; deploying is optional.
@@ -744,12 +746,36 @@ test('the service order follows the schema ranges of the running and target imag
   assert.throws(() => order(undefined, undefined, 8), /accepts schema unknown, not 10/);
 });
 
+test('service ordering does not treat skipped Core 034 as compatible', () => {
+  const orchestrator = {
+    ...apps('e')[1],
+    status: 'mismatch',
+    running: imageReference('Agentweaver.Orchestrator', digest('e')),
+  };
+  const result = planServiceOrder({
+    appImages: [orchestrator],
+    ranges: {
+      [orchestrator.expected]: coreRange(),
+      [orchestrator.running]: range(31, 33),
+    },
+    targetSchema: { orchestrator: 35 },
+    currentSchema: { orchestrator: 34 },
+  });
+  assert.equal(result.services[0].action, 'gap');
+  assert.throws(() => planServiceOrder({
+    appImages: [{ ...orchestrator, status: 'match' }],
+    ranges: { [orchestrator.expected]: coreRange() },
+    targetSchema: { orchestrator: 34 },
+    currentSchema: { orchestrator: 33 },
+  }), /supported versions: 31, 32, 33, 35, 36\), not 34/);
+});
+
 test('the schema range comes from the readiness check in the migrator source', () => {
-  // Orchestrator requires 31 at startup and accepts optional 032-036 during rollout, with reserved gaps.
+  // Orchestrator requires 31 and optionally accepts 032, 033, 035, and 036 during rollout.
   // Git output passes through redaction, which must not change the parsed text.
   const read = (path, component) => schemaRangeFromSource(redact(readFileSync(path, 'utf8')), component);
   assert.deepEqual(read('services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs',
-    'Agentweaver.Orchestrator'), range(31, 36));
+    'Agentweaver.Orchestrator'), coreRange());
   assert.deepEqual(read('services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs',
     'Agentweaver.EventsAndSessions'), range(Math.max(...plan.eventsVersions), Math.max(...plan.eventsVersions)));
   const environmentSource = readFileSync(
@@ -770,11 +796,11 @@ test('the schema range comes from the readiness check in the migrator source', (
   assert.equal(schemaRangeFromSource(older, 'Agentweaver.Other'), undefined);
 });
 
-test('pinned owner readiness shapes derive 31-32 before repository identity and 31-33 after it', async () => {
-  // Ledger projections from the two published-source commits. Keep the nested optional-033
-  // parentheses: this regression must not depend on the current source or a full git checkout.
+test('pinned owner readiness shapes preserve the Core 034 gap through Core 036', async () => {
+  // These pinned source projections cover the pre-032, pre-035, and post-035 readiness shapes.
   const oldCommit = 'aab23a5daeca847966e92944a653423f2541d665';
   const newCommit = '077884663e7f7b727199fa56d405c005ccebe650';
+  const queuePositionCommit = '4d21e9a75a718121f14039a3de224fd70ab8b904';
   const oldSource = `
     (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32)),
     (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 31) = 1,
@@ -787,11 +813,21 @@ test('pinned owner readiness shapes derive 31-32 before repository identity and 
      OR ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 33) = 1
     ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32) = 0
     ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32) = 1`;
+  const queuePositionSource = `
+    (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35)),
+    (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 31) = 1,
+    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32) = 0
+     OR (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 32) = 1),
+    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 33) = 0
+     OR (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 33) = 1),
+    ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 35) = 0
+     OR (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 35) = 1)`;
   const imageCommits = {
     [imageReference('Agentweaver.Orchestrator', digest('e'))]: oldCommit,
-    [imageReference('Agentweaver.Orchestrator', digest('a'))]: newCommit,
+    [imageReference('Agentweaver.Orchestrator', digest('b'))]: newCommit,
+    [imageReference('Agentweaver.Orchestrator', digest('a'))]: queuePositionCommit,
   };
-  const sources = { [oldCommit]: oldSource, [newCommit]: newSource };
+  const sources = { [oldCommit]: oldSource, [newCommit]: newSource, [queuePositionCommit]: queuePositionSource };
   const derive = async image => readImageSchemaRange({ image, component: 'Agentweaver.Orchestrator', repoRoot: '.',
     readImage: async reference => ({ sourceSha: imageCommits[reference] }),
     exec: (command, args) => {
@@ -802,8 +838,14 @@ test('pinned owner readiness shapes derive 31-32 before repository identity and 
     } });
   const oldRange = await derive(imageReference('Agentweaver.Orchestrator', digest('e')));
   const newRange = await derive(imageReference('Agentweaver.Orchestrator', digest('a')));
+  const repositoryIdentityRange = await derive(imageReference('Agentweaver.Orchestrator', digest('b')));
   assert.deepEqual(oldRange, { ...range(31, 32), sourceSha: oldCommit });
-  assert.deepEqual(newRange, { ...range(31, 33), sourceSha: newCommit });
+  assert.deepEqual(repositoryIdentityRange, { ...range(31, 33), sourceSha: newCommit });
+  assert.deepEqual(newRange, {
+    ...range(31, 35, [31, 32, 33, 35]),
+    sourceSha: queuePositionCommit,
+  });
+  assert.doesNotMatch(queuePositionSource, /\b34\b/);
   // The source-owned compatibility contract agrees with the parsed readiness range, without
   // requiring the parser to depend on metadata that older images do not have.
   const compatibility = JSON.parse(readFileSync(
@@ -811,26 +853,31 @@ test('pinned owner readiness shapes derive 31-32 before repository identity and 
   const currentSource = readFileSync(
     'services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs', 'utf8');
   const currentRange = schemaRangeFromSource(currentSource, 'Agentweaver.Orchestrator');
-  assert.equal(newRange.maxSchema, 33);
+  assert.equal(newRange.maxSchema, 35);
   assert.equal(currentRange.minSchema, Math.max(...compatibility.currentImage.requiredCoreVersions));
   assert.equal(currentRange.maxSchema, Math.max(...compatibility.currentImage.optionalCoreVersions));
+  assert.deepEqual(currentRange.supportedVersions, [31, 32, 33, 35, 36]);
+  assert.ok(!currentRange.supportedVersions.includes(34));
   assert.equal(oldRange.maxSchema, compatibility.preRepositoryIdentityImage.maximumKnownCoreVersion);
   assert.ok(oldRange.maxSchema < 33);
   assert.deepEqual(plan.coreVersions, compatibility.applyByDefault);
   assert.ok(!plan.coreVersions.includes(17));
+  assert.ok(!plan.coreVersions.includes(34));
   assert.ok(plan.coreVersions.includes(32));
+  assert.ok(plan.coreVersions.includes(35));
+  assert.ok(plan.coreVersions.includes(36));
 });
 
-test('old-to-new owner upgrade deploys before Core 033 when schema 031 is recorded, otherwise plans a gap', async () => {
+test('old-to-new owner upgrade deploys before Core 036 when schema 031 is recorded, otherwise plans a gap', async () => {
   for (const current of [31, undefined]) {
-    // The new owner accepts the complete old schema at startup, so it can roll out before 033.
+    // The new owner accepts the complete old schema at startup, so it can roll out before 036.
     // An unrecorded schema cannot prove that and takes the bounded planned-gap path instead.
     const fake = world({
       appImages: { orchestrator: imageReference('Agentweaver.Orchestrator', digest('e')),
         'events-and-sessions': eventsImage('b') },
       state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
         data: { handoverPrincipalObjectId: PRINCIPAL_ID, ...(current ? { 'orchestrator.schema': String(current) } : {}) } },
-      schemaRanges: { [digest('a')]: range(31, 33), [digest('e')]: range(31, 32), [digest('b')]: range(10, 10) },
+      schemaRanges: { [digest('a')]: coreRange(), [digest('e')]: range(31, 32), [digest('b')]: range(10, 10) },
     });
     try {
       const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
@@ -839,19 +886,19 @@ test('old-to-new owner upgrade deploys before Core 033 when schema 031 is record
       assert.equal(receipt.serviceOrder.order, current ? 'deploy-first' : 'planned-readiness-gap');
       const names = receipt.steps.map(step => step.name);
       assert.equal(names.indexOf('app-ready') < names.indexOf('orchestrator-migrated'), Boolean(current));
-      assert.equal(fake.cluster.get(`configmap/${STATE_NAME}`).data['orchestrator.schema'], '33');
+      assert.equal(fake.cluster.get(`configmap/${STATE_NAME}`).data['orchestrator.schema'], '36');
       assert.equal(receipt.readinessGap?.planned, current ? undefined : true);
     } finally { fake.done(); }
   }
 });
 
-test('a matching or absent old target image cannot bypass the Core 033 compatibility gate', async () => {
+test('a matching or absent old target image cannot bypass the Core 036 compatibility gate', async () => {
   for (const running of [undefined, imageReference('Agentweaver.Orchestrator', digest('a'))]) {
     const fake = world({ appImages: { orchestrator: running },
       schemaRanges: { [digest('a')]: range(31, 32), [digest('b')]: range(10, 10) } });
     try {
       await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
-        receiptDir: fake.receiptDir }, fake.deps), /accepts schema 31-32, not 33 from the reviewed plan/);
+        receiptDir: fake.receiptDir }, fake.deps), /accepts schema 31-32, not 36 from the reviewed plan/);
       assert.ok(!fake.calls.some(call => call.args[4] === 'create'));
     } finally { fake.done(); }
   }
@@ -871,7 +918,7 @@ test('an image schema range is read from its source label and the source at that
   };
   const read = (overrides = {}) => readImageSchemaRange({ image: eventsImage('b'), component: 'Agentweaver.EventsAndSessions',
     readImage: async () => ({ sourceSha: sha }), exec: fakeGit(), repoRoot: '.', ...overrides });
-  assert.deepEqual(await read(), { minSchema: 10, maxSchema: 10, sourceSha: sha });
+  assert.deepEqual(await read(), { ...range(10, 10), sourceSha: sha });
   // A missing commit is fetched by name once, then read.
   assert.deepEqual(gitCalls.map(args => args[0]), ['cat-file', 'fetch', 'show']);
   assert.deepEqual(gitCalls[2], ['show', `${sha}:services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs`]);
@@ -884,7 +931,7 @@ test('an image schema range is read from its source label and the source at that
 });
 
 test('a target image whose schema range cannot be read stops the run before any change', async () => {
-  const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 33) } });
+  const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange() } });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([
       ...baseArgs, '--events-digest', digest('c'), '--deploy-apps']),
@@ -894,7 +941,7 @@ test('a target image whose schema range cannot be read stops the run before any 
 });
 
 test('a target digest built for another schema stops the run before any change', async () => {
-  const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 33), [digest('b')]: range(8, 8) } });
+  const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(8, 8) } });
   try {
     await assert.rejects(runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--deploy-apps']),
       receiptDir: fake.receiptDir }, fake.deps), /accepts schema 8-8, not 10 from the reviewed plan/);
@@ -905,7 +952,7 @@ test('a target digest built for another schema stops the run before any change',
 test('deploy-first moves a service to an image that accepts the current schema before any migration Job', async () => {
   const fake = appWorld({ state: { kind: 'ConfigMap', metadata: { name: STATE_NAME },
       data: { handoverPrincipalObjectId: PRINCIPAL_ID, 'events-and-sessions.schema': '8' } },
-    schemaRanges: { [digest('a')]: range(31, 33), [digest('b')]: range(8, 10) } });
+    schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(8, 10) } });
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute', '--deploy-apps']),
       receiptDir: fake.receiptDir }, fake.deps);
@@ -920,7 +967,7 @@ test('deploy-first moves a service to an image that accepts the current schema b
 });
 
 test('migrate-first keeps a running image that accepts the target schema when no deploy is asked for', async () => {
-  const fake = appWorld({ schemaRanges: { [digest('a')]: range(31, 33), [digest('b')]: range(10, 10), [digest('e')]: range(8, 10) } });
+  const fake = appWorld({ schemaRanges: { [digest('a')]: coreRange(), [digest('b')]: range(10, 10), [digest('e')]: range(8, 10) } });
   try {
     const receipt = await runDbMaintenance({ ...parseDbMaintenanceArgs([...baseArgs, '--execute']),
       receiptDir: fake.receiptDir }, fake.deps);
