@@ -225,7 +225,8 @@ with `409` before creating a commit. It writes only `.squad/team.md` and
 canonical charter paths for current cast members; it does not load repository
 files as a team roster or mirror them automatically.
 The optional commit message is limited to 200 characters and cannot contain
-control characters.
+control characters. These routes are excluded from the MCP tool catalog so
+repository sync remains an explicit web action.
 
 Repository sync is not AgentSuite export/import. Repository sync reads and
 commits selected `.squad/` files in the configured repository. AgentSuite

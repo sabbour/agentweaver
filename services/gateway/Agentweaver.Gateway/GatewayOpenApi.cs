@@ -742,6 +742,7 @@ else if (route.OperationId is
             ["x-agentweaver-stream"] = route.IsRunEventStream ? "server-sent-events" : null,
             ["x-agentweaver-max-request-body-bytes"] = route.MaximumRequestBodyBytes,
             ["x-agentweaver-max-response-bytes"] = route.MaximumResponseBytes,
+            ["x-agentweaver-mcp-excluded"] = route.ExcludeFromMcp,
         };
     }
 

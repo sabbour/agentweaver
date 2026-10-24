@@ -3,6 +3,7 @@
 "Agentweaver.Projects.Config": minor
 "Agentweaver.Orchestrator": minor
 "Agentweaver.Gateway": minor
+"Agentweaver.Mcp": patch
 "Agentweaver.Web": minor
 ---
 

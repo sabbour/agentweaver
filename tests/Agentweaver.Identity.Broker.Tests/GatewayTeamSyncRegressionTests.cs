@@ -57,6 +57,7 @@ public sealed class GatewayTeamSyncRegressionTests
             Assert.Equal(operationId, operation.GetProperty("operationId").GetString());
             Assert.Equal("Orchestrator", operation.GetProperty("x-agentweaver-owner").GetString());
             Assert.Equal(route.OwnerPath, operation.GetProperty("x-agentweaver-owner-path").GetString());
+            Assert.True(operation.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
             var parameters = operation.GetProperty("parameters").EnumerateArray().ToArray();
             var selectionHeader = Assert.Single(parameters,
                 item => item.GetProperty("name").GetString() == ProjectTeamSyncContract.SelectionCodeHeader);
