@@ -201,6 +201,9 @@ builder.Services.AddTransient<ISourceControlAdapter>(services =>
     services.GetRequiredService<GitHubSourceControlAdapter>());
 builder.Services.AddTransient<ISourceControlIssueAdapter>(services =>
     services.GetRequiredService<GitHubSourceControlAdapter>());
+builder.Services.AddTransient<ISourceControlTeamSyncAdapter>(services =>
+    services.GetRequiredService<GitHubSourceControlAdapter>());
+builder.Services.AddScoped<ProjectTeamSyncTokenClient>();
 if (sourceControlWorkspaceRoot is not null)
     builder.Services.AddSingleton(new GitWorkspaceManager(sourceControlWorkspaceRoot));
 builder.Services.AddTransient<IExecutableActionPolicyEvaluationJournal>(services =>

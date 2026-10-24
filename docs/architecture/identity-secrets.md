@@ -312,7 +312,7 @@ credential. A GitHub App installation token cannot authenticate the Copilot SDK.
 | --- | --- | --- |
 | Core sign-in | Broker OIDC, OAuth, consent, refresh, and purpose-bound secret redemption exist. | These contracts do not supply either GitHub connection lifecycle. |
 | GitHub Copilot | Identity implements owner-bound account linking, PKCE/cookie callbacks, exact-version writes, refresh rotation, and current binding checks in source. The SDK consumes only the current user access token. | Deployed OAuth, writer permissions, and live entitlement are not proven by source tests. |
-| GitHub App | Identity owns the Repo App user connection, installation/repository selection, refresh, and run-bound exact-repository token mint used by Source Control. | A reachable settings UI and deployment are not part of this source. The Web and MCP connection surfaces are still missing. |
+| GitHub App | Identity owns the Repo App user connection, installation/repository selection, refresh, and exact-repository token mint for run operations and explicit project team sync. | A reachable settings UI and deployment are not part of this source. The Web and MCP connection surfaces are still missing. |
 | Web and MCP | Existing core routes and tools are implemented. | Reachable retained settings and real GitHub connection and repository routes in Web and MCP. |
 
 The compatible 0.x Copilot flow binds browser state, PKCE, cookies, and a single-use
@@ -323,12 +323,14 @@ a transient failure must not fabricate that result.
 Identity implements the GitHub App producer in source. User
 authorization uses OAuth S256 PKCE, an owner-bound state and protected verifier, and a
 short-lived HttpOnly callback cookie. Installation setup uses its own owner-bound
-single-use callback. Identity discovers only installations and repositories visible to
-the connected user. A returned selection code is short-lived and is submitted only in
-the initial run-scoped Orchestrator `/pin` request, never in accepted Project/Run
-configuration or the durable pin. Identity stores only its hash and binds its
-first run-bound use to one owner and project. Later minting is limited to that
-project and uses the stored hash.
+single-use callback. Identity discovers only installations and repositories visible to the connected
+user. A returned selection code is short-lived and is submitted either in the initial
+run-scoped Orchestrator `/pin` request or to the internal project team-sync token
+request. It is never stored in accepted Project/Run configuration or a durable
+Source Control pin. Identity stores only its hash and binds its first accepted use
+to one owner and project. Later run-bound minting is limited to that project and
+uses the stored hash; project team-sync minting rechecks the same project and
+repository binding.
 
 The Copilot source flow is not deployed login, writer permission, or paid-execution authority.
 The separate GitHub App and browser integrations retain their own delivery and acceptance boundaries.
@@ -352,6 +354,14 @@ expiry and returned permission set are authoritative.
 The private key and installation token are never stored in PostgreSQL. The Orchestrator
 receives the token only for the current operation and invalidates it afterward; later
 operations repeat Identity's binding and permission checks.
+
+Explicit team sync uses a separate project-scoped mint path over the existing
+certificate-pinned service channel. Identity rechecks the current project-owner
+proof, Repo App connection, installation, repository, and selection before minting.
+The token has only `contents:read` for a repository read or `contents:write` for
+a reviewed commit; it does not include issue or pull-request permissions. The
+token is returned only to Orchestrator over the internal channel, is never
+returned to a caller, and is invalidated after the bounded GitHub operation.
 
 The browser integration uses one configured HTTPS Web origin. When GitHub Repo App
 support is enabled, `IdentityBroker:WebOrigin` is required and is the only origin

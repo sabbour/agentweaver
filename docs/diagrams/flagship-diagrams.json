@@ -14,7 +14,7 @@
     },
     {
       "name": "v1-source-control-owner-flow",
-      "concept": "GitHub App connection and per-request token mint, Source Control pinning, webhook relay admission, and approved merge",
+      "concept": "Run-bound Source Control and explicit project-scoped .squad sync with least-privilege GitHub tokens",
       "docs": ["docs/architecture/design/provider-seams.md"]
     },
     {

@@ -443,3 +443,63 @@ public interface ISourceControlAdapter
         SourceControlMergeRequest request,
         CancellationToken cancellationToken);
 }
+
+/// <summary>One regular file from a repository's explicit team-sync tree.</summary>
+public sealed record SourceControlTeamSyncFile(string Path, string BlobSha, byte[] Content, bool Executable);
+
+/// <summary>Current `.squad/` files and the repository revision from which they were read.</summary>
+public sealed record SourceControlTeamSyncSnapshot(
+    string Repository,
+    string Reference,
+    string CommitSha,
+    ImmutableArray<SourceControlTeamSyncFile> Files);
+
+/// <summary>A path update or deletion guarded by the blob SHA observed during preview.</summary>
+public sealed record SourceControlTeamSyncChange(string Path, string? ExpectedBlobSha, byte[]? Content);
+
+/// <summary>Expected repository head and a non-empty set of `.squad/` changes.</summary>
+public sealed record SourceControlTeamSyncCommitRequest(
+    string Branch,
+    string ExpectedBaseSha,
+    string Message,
+    ImmutableArray<SourceControlTeamSyncChange> Changes)
+{
+    public override string ToString() => nameof(SourceControlTeamSyncCommitRequest) + " [REDACTED]";
+}
+
+/// <summary>Commit created on the configured repository branch.</summary>
+public sealed record SourceControlTeamSyncCommit(string CommitSha, string Branch, Uri HtmlUrl);
+
+/// <summary>Authenticated request to read the configured repository at a ref.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ProjectTeamSyncReadRequest(string SelectionCode, string? Reference)
+{
+    public override string ToString() => nameof(ProjectTeamSyncReadRequest) + " [REDACTED]";
+}
+
+/// <summary>Authenticated request to apply previewed `.squad/` changes to the configured repository.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ProjectTeamSyncCommitRequest(
+    string SelectionCode,
+    string ExpectedBaseSha,
+    string Message,
+    ImmutableArray<SourceControlTeamSyncChange> Changes)
+{
+    public override string ToString() => nameof(ProjectTeamSyncCommitRequest) + " [REDACTED]";
+}
+
+/// <summary>Explicit repository-backed team-sync operations, separate from run-bound provider operations.</summary>
+public interface ISourceControlTeamSyncAdapter
+{
+    Task<SourceControlTeamSyncSnapshot> ReadTeamSyncTreeAsync(
+        SourceControlRepositoryIdentity repository,
+        string reference,
+        SecretCredential credential,
+        CancellationToken cancellationToken);
+
+    Task<SourceControlTeamSyncCommit> CommitTeamSyncChangesAsync(
+        SourceControlRepositoryIdentity repository,
+        SecretCredential credential,
+        SourceControlTeamSyncCommitRequest request,
+        CancellationToken cancellationToken);
+}

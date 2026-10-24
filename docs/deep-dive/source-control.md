@@ -45,6 +45,34 @@ environment rather than the clone URL.
 validates the returned permission ceiling and expiry, then invalidates the
 supplied private-key credential after the attempt.
 
+## Read and commit team files explicitly
+
+Project team synchronization is an explicit user action. It reads the
+configured repository's `.squad/` files at a selected ref and commits only
+those paths after the user reviews the preview. It does not mirror local Squad
+files automatically and does not create a second team roster or loader.
+
+The read operation requests a repository-scoped `contents:read` token. A
+commit requests `contents:write` only. Identity verifies the current project
+owner and repository selection before minting the token, and Orchestrator
+checks current project authority before calling Source Control. The token is
+returned only over the internal service channel and is invalidated after the
+provider operation. The internal path uses the existing certificate-pinned
+Issue Sync channels; it does not expose a public token-minting route.
+
+Reads reject incomplete trees, symlinks, submodules, invalid paths, and files
+or trees over the configured limits. Commits accept only regular paths beneath
+`.squad/`. Before creating Git objects, the adapter checks both the expected
+branch head and every expected blob ID from the preview. A mismatch returns a
+conflict without sending a write request. The final branch update is
+non-forced, so a concurrent change cannot be overwritten.
+
+Repository synchronization is different from the digest-checked JSON export
+and import. Repository sync reads and writes the selected `.squad/` files in a
+configured GitHub repository. JSON export and import transfer a reviewed
+portable snapshot and verify its digest; they do not read or write a
+repository.
+
 ## Prepare and recover a workspace
 
 Before preparing a workspace, you need an accepted repository binding, the

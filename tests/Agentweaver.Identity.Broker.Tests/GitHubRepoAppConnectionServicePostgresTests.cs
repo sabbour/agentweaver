@@ -23,6 +23,7 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
     [Fact]
     public async Task ConnectsBrowsesAndMintsRepositoryScopedTokensBoundToOneProject()
     {
+        // Verify real database selection binding while checking team-sync tokens stay contents-only.
         var connectionString = await postgres.CreateMigratedDatabaseAsync();
         await using var dataSource = NpgsqlDataSource.Create(connectionString);
         var dbOptions = new DbContextOptionsBuilder<IdentityBrokerDbContext>()
@@ -82,6 +83,8 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
         });
         var appMintRequests = 0;
         var returnedContentsPermission = "write";
+        var teamSyncMint = false;
+        var requestedTeamSyncPermission = "read";
         var appTokenHandler = new StubHandler(async (request, _) =>
         {
             appMintRequests++;
@@ -92,6 +95,14 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
             Assert.Equal(new long[] { 789 }, body.GetProperty("repository_ids")
                 .EnumerateArray().Select(value => value.GetInt64()).ToArray());
             var permissions = body.GetProperty("permissions");
+            if (teamSyncMint)
+            {
+                Assert.Single(permissions.EnumerateObject());
+                Assert.Equal(requestedTeamSyncPermission, permissions.GetProperty("contents").GetString());
+                return JsonResponse(
+                    "{\"token\":\"installation-token\",\"expires_at\":\"2026-10-08T10:47:00Z\"," +
+                    $"\"permissions\":{{\"contents\":\"{requestedTeamSyncPermission}\",\"metadata\":\"read\"}}}}");
+            }
             Assert.Equal(2, permissions.EnumerateObject().Count());
             Assert.Equal("write", permissions.GetProperty("contents").GetString());
             Assert.Equal("write", permissions.GetProperty("pull_requests").GetString());
@@ -362,8 +373,55 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
             expiredSelectionAttempt.Failure);
         Assert.Equal(3, appMintRequests);
 
+        teamSyncMint = true;
+        requestedTeamSyncPermission = "read";
+        var projectProof = new IssueSyncProjectProof(
+            "project-one", "tenant-one", ownerId.ToString("D"), connection.ConnectionId,
+            new SourceControlRepositoryIdentity("octo", "widget"));
+        var readTeamSyncToken = await service.MintTeamSyncTokenAsync(
+            projectProof, selection.Code, tokenIssuer, writeRequested: false,
+            cancellationToken: CancellationToken.None);
+        Assert.Equal("read", readTeamSyncToken.Credential.ContentsPermission);
+        Assert.False(readTeamSyncToken.Credential.IssueWriteGranted);
+        Assert.Equal("installation-token", readTeamSyncToken.Credential.Credential.GetValue());
+        readTeamSyncToken.Credential.Credential.Invalidate();
+
+        requestedTeamSyncPermission = "write";
+        var writeTeamSyncToken = await service.MintTeamSyncTokenAsync(
+            projectProof, selection.Code, tokenIssuer, writeRequested: true,
+            cancellationToken: CancellationToken.None);
+        Assert.Equal("write", writeTeamSyncToken.Credential.ContentsPermission);
+        Assert.False(writeTeamSyncToken.Credential.IssueWriteGranted);
+        Assert.Equal("installation-token", writeTeamSyncToken.Credential.Credential.GetValue());
+        writeTeamSyncToken.Credential.Credential.Invalidate();
+        Assert.Equal(5, appMintRequests);
+
+        var crossProjectTeamSync = await Assert.ThrowsAsync<GitHubRepoAppConnectionException>(() =>
+            service.MintTeamSyncTokenAsync(
+                projectProof with { ProjectId = "project-two" },
+                selection.Code,
+                tokenIssuer,
+                writeRequested: true,
+                cancellationToken: CancellationToken.None));
+        Assert.Equal(GitHubRepoAppConnectionFailure.RepositoryUnavailable, crossProjectTeamSync.Failure);
+        Assert.Equal(5, appMintRequests);
+
+        var invalidTeamSyncSelection = await Assert.ThrowsAsync<GitHubRepoAppConnectionException>(() =>
+            service.MintTeamSyncTokenAsync(
+                projectProof,
+                "short",
+                tokenIssuer,
+                writeRequested: true,
+                cancellationToken: CancellationToken.None));
+        Assert.Equal(GitHubRepoAppConnectionFailure.AuthorizationInvalid, invalidTeamSyncSelection.Failure);
+        Assert.Equal(5, appMintRequests);
+
         Assert.Equal(
             ["/user",
+             "/user/installations?per_page=100&page=1",
+             "/user/installations/456/repositories?per_page=100&page=1",
+             "/user/installations?per_page=100&page=1",
+             "/user/installations/456/repositories?per_page=100&page=1",
              "/user/installations?per_page=100&page=1",
              "/user/installations/456/repositories?per_page=100&page=1",
              "/user/installations?per_page=100&page=1",
