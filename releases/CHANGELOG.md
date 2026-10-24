@@ -2,6 +2,11 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-24T21:13:54.500Z — source `a178ee66e96ababdfbebc833ee4bc4e57e49f936`
+
+- `Agentweaver.Persistence.Postgres`: 1.2.1 -> 1.2.2 (patch) — .changeset/projects-config-role-assignment-grants.md
+- `Agentweaver.Projects.Config`: 1.6.0 -> 1.7.0 (minor) — .changeset/platform-admin-bootstrap.md
+
 ## 2026-10-24T07:43:02.561Z — source `058de67cc33e2e71c0e6a41dd9046ff62b192563`
 
 - `Agentweaver.Abstractions`: 1.4.0 -> 1.5.0 (minor) — .changeset/agent-history-abstractions.md, .changeset/hosted-model-reasoning-catalog.md, .changeset/knowledge-project-discovery-abstractions.md, .changeset/project-team-sync-repository-content.md, .changeset/remote-mcp-adapter-pin.md, .changeset/team-sync-preview-and-gateway.md

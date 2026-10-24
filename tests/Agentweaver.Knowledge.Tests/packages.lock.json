@@ -815,7 +815,7 @@
           "Agentweaver.Abstractions": "[1.5.0, )",
           "Agentweaver.Identity": "[1.5.0, )",
           "Agentweaver.ObjectStore.AzureBlob": "[1.0.2, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.1, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.2, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",
@@ -835,7 +835,7 @@
         "dependencies": {
           "Agentweaver.Abstractions": "[1.5.0, )",
           "Agentweaver.Identity": "[1.5.0, )",
-          "Agentweaver.Persistence.Postgres": "[1.2.1, )",
+          "Agentweaver.Persistence.Postgres": "[1.2.2, )",
           "Agentweaver.Providers": "[1.1.0, )",
           "Agentweaver.Telemetry": "[1.0.2, )",
           "Azure.Identity": "[1.17.1, )",

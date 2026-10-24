@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "a178ee66e96ababdfbebc833ee4bc4e57e49f936",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "3c1a3d418706362e0a21ee3a387eda1de90c76b3bd140f2adec7c8e0f4380c08",
+  "appliedAt": "2026-10-24T21:13:54.500Z",
+  "components": [
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "fromVersion": "1.2.1",
+      "toVersion": "1.2.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.6.0",
+      "toVersion": "1.7.0",
+      "bump": "minor"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/platform-admin-bootstrap.md",
+      "archivedPath": ".changeset/archive/platform-admin-bootstrap.md",
+      "sha256": "eaa34d0d6fbe8c4c74c46daa0d3ce1e428787d89e2d1fdb856e67e570037f4ca"
+    },
+    {
+      "sourcePath": ".changeset/projects-config-role-assignment-grants.md",
+      "archivedPath": ".changeset/archive/projects-config-role-assignment-grants.md",
+      "sha256": "e485b8538bffd40858590a247ce9ad85ca1f704eeb7cda6d0fed88d33fb86fb8"
+    }
+  ]
+}
