@@ -922,6 +922,13 @@ else if (route.OperationId is
                 description = "Filter to runs started by the authenticated caller's exact issuer and subject.",
                 @enum = new[] { "me" },
             };
+        if (operationId == "searchProjectKnowledge" && name == "state")
+            return new
+            {
+                type = "string",
+                description = "Only pending proposals; requires kind=proposal.",
+                @enum = new[] { "pending" },
+            };
 
         if ((operationId is "removeMarketplaceSource" or "revokeProjectRoleAssignment" && name == "expectedRevision") ||
             (operationId == "removeChiefOfStaffPriorityLink" && name == "expectedRevision") ||

@@ -1139,7 +1139,7 @@ provenance.
 
 | Method | Suffix | Auth | Purpose |
 | --- | --- | --- | --- |
-| GET | `/records` | Private Knowledge and direct project `ReadRunSelection` | Search all agents across existing run-provider bindings by `kind`, `q`, `includeInactive`, `page`, and `pageSize`. Each result includes the access run for history reads; record provenance is separate. |
+| GET | `/records` | Private Knowledge and direct project `ReadRunSelection` | Search all agents across existing run-provider bindings by `kind`, `q`, `includeInactive`, `page`, and `pageSize`. The optional `state=pending` requires `kind=proposal` and counts pending proposals even when `includeInactive=false`; other state filters are not supported. Each result includes the access run for history reads; record provenance is separate. |
 
 Native prefix: `/api/projects/{projectId}/runs/{runId}/agents/{agentId}`.
 Gateway prefix: `/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}`.

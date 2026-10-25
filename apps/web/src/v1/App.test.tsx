@@ -228,8 +228,9 @@ import { clearRecentRuns } from './recentRuns';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((complete) => { resolve = complete; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((complete, fail) => { resolve = complete; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 function projectConfiguration(projectId: string, revision: number) {
@@ -2310,15 +2311,15 @@ describe('v1 web project scoping', () => {
     );
   });
 
-  it('shows project-wide decision and memory counts and names unsupported legacy totals', async () => {
+  it('shows filtered pending proposal, decision, and memory counts while sessions stay unavailable', async () => {
     mocks.ensureSession.mockResolvedValue(true);
     mocks.searchProjectKnowledge.mockImplementation(async (
       _token: string,
       _projectId: string,
-      options: { kind?: string },
+      options: { kind?: string; state?: string },
     ) => ({
       ...knowledgePage([]),
-      totalCount: options.kind === 'decision' ? 3 : options.kind === 'memory' ? 2 : 0,
+      totalCount: options.state === 'pending' ? 4 : options.kind === 'decision' ? 3 : options.kind === 'memory' ? 2 : 0,
     }));
     window.history.replaceState({}, '', '/projects/p1/knowledge');
 
@@ -2328,11 +2329,19 @@ describe('v1 web project scoping', () => {
     await waitFor(() => {
       expect(within(summary).getByText('3')).toBeTruthy();
       expect(within(summary).getByText('2')).toBeTruthy();
+      expect(within(summary).getByText('4')).toBeTruthy();
     });
-    expect(within(summary).getAllByText('Unavailable')).toHaveLength(2);
+    expect(within(summary).getAllByText('Unavailable')).toHaveLength(1);
     expect(
-      within(summary).getByText("Pending proposals and project-wide session counts aren't available yet."),
+      within(summary).getByText("Project-wide session counts aren't available yet."),
     ).toBeTruthy();
+    expect(within(summary).getByText('Pending proposals')).toBeTruthy();
+    expect(mocks.searchProjectKnowledge).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      expect.objectContaining({ kind: 'proposal', state: 'pending', includeInactive: true, page: 1, pageSize: 1 }),
+      'tenant-1',
+    );
     expect(mocks.searchProjectKnowledge).toHaveBeenCalledWith(
       'broker-token',
       'p1',
@@ -2345,6 +2354,33 @@ describe('v1 web project scoping', () => {
       expect.objectContaining({ kind: 'memory', includeInactive: false, page: 1, pageSize: 1 }),
       'tenant-1',
     );
+  });
+
+  it('does not show zero for pending proposals while loading or after a denied or failed read', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    const pending = deferred<ReturnType<typeof knowledgePage>>();
+    mocks.searchProjectKnowledge.mockImplementation(async (
+      _token: string,
+      _projectId: string,
+      options: { state?: string },
+    ) => options.state ? pending.promise : knowledgePage([]));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+    render(<App />);
+
+    const summary = screen.getByRole('region', { name: 'Team memory summary' });
+    expect(within(summary).getAllByText('Loading')).toHaveLength(3);
+    await act(async () => {
+      pending.reject(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+      try { await pending.promise; } catch { /* Expected denied response. */ }
+    });
+    await waitFor(() => expect(within(summary).getAllByText('Unavailable')).toHaveLength(4));
+    expect(within(summary).getByText(/Forbidden|403/)).toBeTruthy();
+    expect(within(summary).queryByText('0')).toBeNull();
+
+    mocks.searchProjectKnowledge.mockRejectedValue(new Error('Counts unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(within(summary).getByText(/Counts unavailable/)).toBeTruthy());
+    expect(within(summary).getAllByText('Unavailable')).toHaveLength(4);
   });
 
   it('refreshes project counts when a successful mutation finishes after the record scope changes', async () => {
@@ -2363,10 +2399,10 @@ describe('v1 web project scoping', () => {
     mocks.searchProjectKnowledge.mockImplementation(async (
       _token: string,
       _projectId: string,
-      options: { kind?: string },
+      options: { kind?: string; state?: string },
     ) => ({
       ...knowledgePage([]),
-      totalCount: options.kind === 'decision' ? 3 : activeMemoryCount,
+      totalCount: options.state ? 0 : options.kind === 'decision' ? 3 : activeMemoryCount,
     }));
     mocks.updateKnowledgeRecord.mockReturnValue(pendingArchive.promise);
     window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');

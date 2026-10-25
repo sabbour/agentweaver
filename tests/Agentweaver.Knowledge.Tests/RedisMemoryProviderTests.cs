@@ -42,6 +42,58 @@ public sealed class RedisMemoryProviderTests
     }
 
     [Fact]
+    public async Task ProjectSearchCountsOnlyPendingProposalsBeforePaging()
+    {
+        var (provider, _, options) = CreateProvider();
+        await provider.NegotiateAsync(Candidate(provider, options));
+
+        async Task<Guid> CreateProposalAsync(string key)
+        {
+            var created = await provider.CreateAsync(
+                CreateInput("project-a", KnowledgeRecordKind.Proposal, key), $"create-{key}");
+            return created.Record!.RecordId;
+        }
+
+        var first = await CreateProposalAsync("pending-first");
+        var second = await CreateProposalAsync("pending-second");
+        var rejected = await CreateProposalAsync("rejected-proposal");
+        var promoted = await CreateProposalAsync("promoted-proposal");
+        await provider.RejectProposalAsync(
+            "project-a", "run-a", rejected, 1, ActorFingerprint, "reject-third");
+        var promotion = await provider.PromoteProposalAsync(
+            "project-a",
+            "run-a",
+            promoted,
+            1,
+            ActorFingerprint,
+            Authorization(),
+            "promote-fourth");
+        Assert.Equal(KnowledgeWriteStatus.Updated, promotion.Status);
+        var promotedProposal = await provider.ReadAsync("project-a", promoted);
+        Assert.Equal(KnowledgeRecordState.Promoted, promotedProposal!.State);
+        Assert.Equal(KnowledgeTrustState.Pending, promotedProposal.TrustState);
+        await provider.CreateAsync(
+            CreateInput("project-a", KnowledgeRecordKind.Memory, "other kind"), "create-memory");
+
+        var query = new KnowledgeRecordQuery(
+            "project-a", null, KnowledgeRecordKind.Proposal, IncludeInactive: true,
+            PageSize: 1, State: KnowledgeRecordState.Pending);
+        var page1 = await provider.SearchAsync(query);
+        var page2 = await provider.SearchAsync(query with { Page = 2 });
+
+        Assert.Equal(2, page1.TotalCount);
+        Assert.Equal(2, page2.TotalCount);
+        Assert.Equal(
+            new[] { first, second }.Order(),
+            page1.Items.Concat(page2.Items).Select(item => item.RecordId).Order());
+        Assert.All(page1.Items.Concat(page2.Items), item =>
+        {
+            Assert.Equal(KnowledgeRecordKind.Proposal, item.Kind);
+            Assert.Equal(KnowledgeRecordState.Pending, item.State);
+        });
+    }
+
+    [Fact]
     public async Task NegotiationFailsClosedForUnverifiedDurabilityEvictionAndTopology()
     {
         var (provider, client, options) = CreateProvider();

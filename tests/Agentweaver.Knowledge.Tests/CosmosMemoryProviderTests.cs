@@ -87,6 +87,37 @@ public sealed class CosmosMemoryProviderTests
     }
 
     [Fact]
+    public async Task ProjectSearchCountsOnlyPendingProposalsBeforePaging()
+    {
+        var (provider, _, _) = CreateProvider();
+        var first = await CreateProposalAsync(provider, "first");
+        var second = await CreateProposalAsync(provider, "second");
+        var rejected = await CreateProposalAsync(provider, "rejected");
+        var promoted = await CreateProposalAsync(provider, "promoted");
+        await provider.CreateAsync(CreateInput("memory", "other kind"), "search-active-memory");
+        await provider.RejectProposalAsync(
+            "project-a", "run-a", rejected, 1, ActorFingerprint, "search-reject");
+        var promotion = await PromoteAsync(provider, promoted);
+        Assert.Equal(KnowledgeWriteStatus.Updated, promotion.Status);
+        var promotedProposal = await provider.ReadAsync("project-a", promoted);
+        Assert.Equal(KnowledgeRecordState.Promoted, promotedProposal!.State);
+        Assert.Equal(KnowledgeTrustState.Pending, promotedProposal.TrustState);
+
+        var query = new KnowledgeRecordQuery("project-a", null, KnowledgeRecordKind.Proposal,
+            IncludeInactive: true, PageSize: 1, State: KnowledgeRecordState.Pending);
+        var page1 = await provider.SearchAsync(query);
+        var page2 = await provider.SearchAsync(query with { Page = 2 });
+
+        Assert.Equal(2, page1.TotalCount);
+        Assert.Equal(2, page2.TotalCount);
+        Assert.Equal(
+            new[] { first, second }.Order(),
+            page1.Items.Concat(page2.Items).Select(item => item.RecordId).Order());
+        Assert.All(page1.Items.Concat(page2.Items), item =>
+            Assert.Equal(KnowledgeRecordState.Pending, item.State));
+    }
+
+    [Fact]
     public async Task ReusingIdempotencyKeyForDifferentContentConflicts()
     {
         var (provider, _, _) = CreateProvider();
@@ -1014,6 +1045,7 @@ public sealed class CosmosMemoryProviderTests
                     .Where(record => record.ProjectId == query.ProjectId &&
                         (query.AgentId is null || record.AgentId == query.AgentId))
                     .Where(record => query.Kind is null || record.Kind == query.Kind)
+                    .Where(record => query.State is null || record.State == query.State)
                     .Where(record => query.IncludeInactive || record.State == KnowledgeRecordState.Active)
                     .Where(record => string.IsNullOrWhiteSpace(query.Query) ||
                         SearchableText(record).Contains(query.Query, StringComparison.OrdinalIgnoreCase))
