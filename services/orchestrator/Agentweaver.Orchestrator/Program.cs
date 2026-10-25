@@ -168,6 +168,11 @@ builder.Services.AddSingleton<IExecutableActionSourceReceiptWriter>(services =>
     services.GetRequiredService<ExecutableActionGrantOwnerStore>());
 builder.Services.AddSingleton<IExecutableActionPolicyEvaluationReceiptWriter>(services =>
     services.GetRequiredService<ExecutableActionGrantOwnerStore>());
+builder.Services.AddSingleton(services => new MafChildSpawnAuthorizationOwnerStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options,
+    services.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<MafChildSpawnAuthorizationOwner>();
 builder.Services.AddSingleton(services => new PostgresMafCheckpointStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,

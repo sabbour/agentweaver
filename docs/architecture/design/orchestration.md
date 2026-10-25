@@ -108,6 +108,31 @@ owner persists accepted definitions and decisions, exact-request gate state, wor
 position, and MAF checkpoints in its own PostgreSQL schema. The full dispatch engine
 remains a separate slice.
 
+## Authorize child work before registration
+
+The Orchestrator can authorize a child-spawn intent before a child runtime exists.
+It binds the authenticated actor and active parent and root sessions to the current
+execution fence, accepted selection and context revision, and the confirmed WorkPlan
+revision, step, and exact work item. The intent hash includes the full work item and
+its stable intent identifier.
+
+Authorization uses the existing executable-action guard for `maf.child.spawn`.
+A selected or pinned policy provider is not an allow decision. The owner accepts
+only a policy allow recorded by the guard and stores immutable evidence that names
+the matching provider, adapter, options revision, and policy receipt. Denials,
+evaluation errors, stale authority, or a changed intent fail closed.
+
+The layer that records child associations must check and consume this evidence inside
+the same owner-local database transaction as its association, outbox, and checkpoint
+writes. The check revalidates current authority and the grant, then records consumption
+without committing the caller's transaction. Repeating the same intent hash reports
+that it was already consumed; reusing the identifier with different content is a conflict.
+This prerequisite does not register a child or perform external child effects.
+Authorization for already-registered runtime actions is unchanged.
+Migration 037 stores the immutable authorization and consumption evidence.
+Readiness accepts the pre-migration schema during rollout, but authorization
+and consumption fail closed until both tables and their immutability guards exist.
+
 Migration `021_row_lock_record_updates.sql` rejects every row update to
 `coordinator_decisions` and `maf_workflow_checkpoints`.
 New decisions and checkpoints use new rows; inserts and row locks remain available.

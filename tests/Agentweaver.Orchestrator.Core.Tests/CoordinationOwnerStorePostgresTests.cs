@@ -19,11 +19,13 @@ public sealed class CoordinationPostgresFixture : IAsyncLifetime
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine").Build();
 
     public NpgsqlDataSource DataSource { get; private set; } = null!;
+    public string ConnectionString { get; private set; } = null!;
 
     public async Task InitializeAsync()
     {
         await _container.StartAsync();
-        DataSource = NpgsqlDataSource.Create(_container.GetConnectionString());
+        ConnectionString = _container.GetConnectionString();
+        DataSource = NpgsqlDataSource.Create(ConnectionString);
     }
 
     public async Task DisposeAsync()

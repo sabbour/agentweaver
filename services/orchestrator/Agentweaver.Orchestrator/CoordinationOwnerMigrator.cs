@@ -18,8 +18,8 @@ public static class CoordinationOwnerMigrator
     /// </summary>
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
-        // Version 035 adds queue ordering; 036 uses the row-lock trigger introduced in 021.
-        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36])];
+        // Version 035 adds queue ordering; 036 and 037 use the row-lock trigger introduced in 021.
+        [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37])];
 
     /// <summary>
     /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
@@ -67,7 +67,7 @@ public static class CoordinationOwnerMigrator
         // Fail on any version this build doesn't know, or on a version whose prerequisite is missing.
         // Optional owner features remain compatible with their complete pre-migration shapes
         // until the reviewed maintenance plan applies them.
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21 or 22 or 23 or 24 or 25 or 26 or 27 or 28 or 29 or 30 or 31 or 32 or 33 or 35 or 36 or 37)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -109,7 +109,8 @@ public static class CoordinationOwnerMigrator
             // Queue positions extend project backlog tasks from 016.
             (applied.Contains(35) && !applied.Contains(16)) ||
             // Root model-turn admission uses the immutable row-lock guard from 021.
-            (applied.Contains(36) && !applied.Contains(21)))
+            (applied.Contains(36) && !applied.Contains(21)) ||
+            (applied.Contains(37) && !applied.Contains(21)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         // Apply every catalog version that is not yet recorded, in catalog order. Operator tooling relies on
         // this: it can only cap what runs by checking that the catalog itself ends at the approved version.
@@ -154,6 +155,7 @@ public static class CoordinationOwnerMigrator
                 33 => "priority_link_repository_identity",
                 35 => "backlog_task_queue_position",
                 36 => "maf_root_model_turn_admissions",
+                37 => "maf_child_spawn_authorization",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -192,7 +194,7 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // Additive migrations 032 and 036 remain optional to readiness so the owner can start before
+        // Additive migrations 032, 036, and 037 remain optional to readiness so the owner can start before
         // maintenance applies the reviewed plan; accept only their complete table-and-ledger shapes.
         await using var command = new NpgsqlCommand($"""
             SELECT
@@ -212,7 +214,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -387,7 +389,53 @@ public static class CoordinationOwnerMigrator
                         WHERE attrelid = to_regclass(@backlogTasks) AND attname = 'queue_position'
                           AND atttypid = 'bigint'::regtype AND attnotnull
                           AND attnum > 0 AND NOT attisdropped)
-                    AND to_regclass(@backlogPositionIndex) IS NOT NULL))
+                    AND to_regclass(@backlogPositionIndex) IS NOT NULL)),
+                -- 037 is additive; accept an absent ledger/table pair or the complete pair of immutable evidence tables.
+                (((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 37) = 0
+                    AND to_regclass(@childSpawnAuthorizations) IS NULL
+                    AND to_regclass(@childSpawnConsumptions) IS NULL)
+                 OR ((SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 37) = 1
+                    AND to_regclass(@childSpawnAuthorizations) IS NOT NULL
+                    AND to_regclass(@childSpawnConsumptions) IS NOT NULL
+                    AND (SELECT count(*) FROM pg_attribute
+                        WHERE attrelid = to_regclass(@childSpawnAuthorizations) AND NOT attisdropped
+                          AND attname IN ('project_id', 'run_id', 'spawn_intent_id', 'intent_hash',
+                              'parent_session_id', 'root_session_id', 'actor_issuer', 'actor_id', 'tenant_id',
+                              'accepted_selection_hash', 'context_revision', 'project_revision',
+                              'project_configuration_revision', 'platform_runtime_revision', 'membership_revision',
+                              'role_revision', 'execution_fence', 'plan_id', 'plan_revision', 'workflow_step_id',
+                              'work_item_id', 'grant_id', 'grant_revision', 'policy_receipt_id',
+                              'policy_provider_id', 'policy_adapter_version', 'policy_options_schema_version',
+                              'policy_options_revision', 'policy_outcome', 'policy_reason_code', 'created_at')) = 31
+                    AND (SELECT count(*) FROM pg_attribute
+                        WHERE attrelid = to_regclass(@childSpawnConsumptions) AND NOT attisdropped
+                          AND attname IN ('project_id', 'run_id', 'spawn_intent_id', 'intent_hash', 'consumed_at')) = 5
+                    AND EXISTS (SELECT 1 FROM pg_constraint
+                        WHERE conrelid = to_regclass(@childSpawnAuthorizations) AND contype = 'p'
+                          AND pg_get_constraintdef(oid) = 'PRIMARY KEY (project_id, run_id, spawn_intent_id)')
+                    AND EXISTS (SELECT 1 FROM pg_constraint
+                        WHERE conrelid = to_regclass(@childSpawnConsumptions) AND contype = 'p'
+                          AND pg_get_constraintdef(oid) = 'PRIMARY KEY (project_id, run_id, spawn_intent_id)')
+                    AND EXISTS (SELECT 1 FROM pg_constraint
+                        WHERE conrelid = to_regclass(@childSpawnAuthorizations)
+                          AND conname = 'uq_maf_child_spawn_authorization_receipt_hash'
+                          AND contype = 'u' AND convalidated)
+                    AND EXISTS (SELECT 1 FROM pg_constraint
+                        WHERE conrelid = to_regclass(@childSpawnAuthorizations)
+                          AND conname = 'fk_maf_child_spawn_authorization_policy_receipt'
+                          AND contype = 'f' AND convalidated)
+                    AND EXISTS (SELECT 1 FROM pg_constraint
+                        WHERE conrelid = to_regclass(@childSpawnConsumptions)
+                          AND conname = 'fk_maf_child_spawn_consumption_receipt'
+                          AND contype = 'f' AND convalidated)
+                    AND (SELECT count(*) FROM pg_trigger
+                        WHERE tgrelid IN (to_regclass(@childSpawnAuthorizations),
+                            to_regclass(@childSpawnConsumptions))
+                          AND tgname IN ('maf_child_spawn_authorizations_no_update',
+                              'maf_child_spawn_consumptions_no_update')
+                          AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 27
+                          AND tgenabled = 'O' AND NOT tgisinternal
+                          AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0) = 2))
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");
@@ -469,6 +517,10 @@ public static class CoordinationOwnerMigrator
             $"{schema}.ix_source_control_pull_requests_project_recorded");
         command.Parameters.AddWithValue("rootModelTurnAdmissions", NpgsqlDbType.Text,
             $"{schema}.maf_root_model_turn_admissions");
+        command.Parameters.AddWithValue("childSpawnAuthorizations", NpgsqlDbType.Text,
+            $"{schema}.maf_child_spawn_authorization_receipts");
+        command.Parameters.AddWithValue("childSpawnConsumptions", NpgsqlDbType.Text,
+            $"{schema}.maf_child_spawn_authorization_consumptions");
         command.Parameters.AddWithValue("backlogIssueUnique", NpgsqlDbType.Text,
             $"{schema}.backlog_tasks_repository_issue_unique");
         command.Parameters.AddWithValue("backlogDependencies", NpgsqlDbType.Text, $"{schema}.backlog_dependencies");
@@ -518,8 +570,8 @@ public static class CoordinationOwnerMigrator
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
             // Columns 57 onward are boolean checks. The three version 028 checks, the three version 029
             // checks, the six version 030 checks, and the two version 031 checks precede the
-            // optional-033, optional-032, optional-036, and optional-035 shape checks. A partial apply never counts as ready.
-            Enumerable.Range(57, 47).Any(column => !reader.GetBoolean(column)))
+            // optional-033, optional-032, optional-036, optional-035, and optional-037 shape checks. A partial apply never counts as ready.
+            Enumerable.Range(57, 48).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }
