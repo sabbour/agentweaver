@@ -812,6 +812,10 @@ same short-lived credential Secret and Job path. The database transaction is
 `REPEATABLE READ` and explicitly `READ ONLY`. The command does not grant,
 revoke, repair, or migrate data. The runner removes the Job and Secret and
 writes a sanitized receipt outside the checkout.
+For inspection, the runner disables optional GSS encryption negotiation in the
+Job connection string; the required `SSL Mode=VerifyFull` still validates the
+PostgreSQL server certificate and hostname. This avoids relying on an optional
+native Kerberos library in the minimal service image.
 
 Read the `platformAdminInspection` object in that receipt. `membership.state`
 is `active` or `absent`; `activeAssignments` lists each active platform

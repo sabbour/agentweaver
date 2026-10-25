@@ -152,7 +152,7 @@ export async function resolveProjectsConfigPublicationImage(publication, {
   };
 }
 
-function readCredentials() {
+function readCredentials({ inspectFirstPlatformAdmin = false } = {}) {
   const connection = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_CONNECTION?.trim();
   const accessToken = process.env.AGENTWEAVER_PROJECTS_CONFIG_MIGRATION_ACCESS_TOKEN?.trim();
   if (!connection || !accessToken) {
@@ -178,7 +178,11 @@ function readCredentials() {
       fields.get('ssl mode')?.toLowerCase() !== 'verifyfull') {
     fail('migration connection must be password-free and target the approved database with SSL Mode=VerifyFull.');
   }
-  return { connection, accessToken };
+  // Inspection already requires verified TLS, so skip optional GSS encryption probing in its minimal image.
+  const inspectionConnection = inspectFirstPlatformAdmin
+    ? `${connection.replace(/;+$/, '')};GSS Encryption Mode=Disable`
+    : connection;
+  return { connection: inspectionConnection, accessToken };
 }
 
 const PLATFORM_ADMIN_BOOTSTRAP_CONFIG = [
@@ -567,7 +571,7 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
       fail('Projects & Config migration Job template has an unexpected identity.');
     }
     if (executeJob) {
-      const credentials = readCredentials();
+      const credentials = readCredentials({ inspectFirstPlatformAdmin });
       secrets.push(credentials.connection, credentials.accessToken);
       receipt.plannedSteps = inspectFirstPlatformAdmin
         ? ['lock', 'verify-approved-identity-config', 'create-credential-secret',

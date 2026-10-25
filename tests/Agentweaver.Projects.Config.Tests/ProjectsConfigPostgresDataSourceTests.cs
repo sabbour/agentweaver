@@ -17,7 +17,8 @@ public sealed class ProjectsConfigPostgresDataSourceTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ConnectionStrings:ProjectsConfigMigration"] =
-                    "Host=postgres.example.test;Port=5432;Database=agentweaver;Username=projects_config_owner",
+                    "Host=postgres.example.test;Port=5432;Database=agentweaver;Username=projects_config_owner;" +
+                    "GSS Encryption Mode=Disable",
                 ["ProjectsConfig:Migration:AccessToken"] = token,
             })
             .Build();
@@ -29,6 +30,7 @@ public sealed class ProjectsConfigPostgresDataSourceTests
         Assert.Equal("projects_config_owner", connection.Username);
         Assert.Null(connection.Password);
         Assert.Equal(SslMode.VerifyFull, connection.SslMode);
+        Assert.Equal("Disable", connection["GSS Encryption Mode"].ToString());
     }
 
     [Fact]
