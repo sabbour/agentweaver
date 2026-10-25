@@ -5,7 +5,10 @@ using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
 using Agentweaver.Identity;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Xunit;
 
@@ -110,6 +113,136 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         await Assert.ThrowsAsync<SessionEventConflictException>(() => Store.WriteAsync(Principal, "session",
             input with { Bytes = "different actual bytes"u8.ToArray() }, _registration, Source, Current, default));
         Assert.Equal(1, _objects.Writes);
+    }
+
+    [Fact]
+    public async Task MaterialReadsUseDatabaseTimeAtTheInclusiveDeadlineBeforeCleanup()
+    {
+        var input = Request();
+        var acknowledgment = await Store.WriteAsync(
+            Principal, "session", input, _registration, Source, Current, default);
+        var databaseTime = await ReadDatabaseTimeAsync();
+
+        // The same comparison used by the journal treats an equal deadline as expired.
+        Assert.False(PostgresSessionsJournal.IsMaterialReferenceExpired(databaseTime.AddTicks(1), databaseTime));
+        Assert.True(PostgresSessionsJournal.IsMaterialReferenceExpired(databaseTime, databaseTime));
+        Assert.True(PostgresSessionsJournal.IsMaterialReferenceExpired(databaseTime.AddTicks(-1), databaseTime));
+
+        await SetReferenceAndInventoryDeadlineAsync(
+            input.EventId, acknowledgment.Reference.Key, databaseTime.AddHours(1));
+        Assert.Equal(input.Bytes, (await Store.ReadAsync(
+            Principal, "session", input.EventId, input.Kind, Historical, default)).Bytes);
+
+        // Setting the persisted deadline to a database-time sample makes it expired at the next check.
+        await SetReferenceAndInventoryDeadlineAsync(input.EventId, acknowledgment.Reference.Key, databaseTime);
+        var readsBeforeDeadline = _objects.Reads;
+        var atDeadline = await Assert.ThrowsAsync<SessionMaterialIntegrityException>(() => Store.ReadAsync(
+            Principal, "session", input.EventId, input.Kind, Historical, default));
+        Assert.Equal("session_material_retention_expired", atDeadline.Code);
+        Assert.Equal(readsBeforeDeadline, _objects.Reads);
+
+        await SetReferenceAndInventoryDeadlineAsync(
+            input.EventId, acknowledgment.Reference.Key, databaseTime.AddSeconds(-1));
+        var afterDeadline = await Assert.ThrowsAsync<SessionMaterialIntegrityException>(() => Store.ReadAsync(
+            Principal, "session", input.EventId, input.Kind, Historical, default));
+        Assert.Equal("session_material_retention_expired", afterDeadline.Code);
+        Assert.Equal(readsBeforeDeadline, _objects.Reads);
+        Assert.Contains(acknowledgment.Reference.Key, _objects.Values.Keys);
+    }
+
+    [Fact]
+    public async Task ExpiredReferenceStaysUnreadableWhileAnotherLiveReferenceRetainsItsObject()
+    {
+        var input = Request();
+        var acknowledgment = await Store.WriteAsync(
+            Principal, "session", input, _registration, Source, Current, default);
+        var expiredAt = await ReadDatabaseTimeAsync();
+        await SetReferenceAndInventoryDeadlineAsync(
+            input.EventId, acknowledgment.Reference.Key, expiredAt.AddSeconds(-1));
+
+        // A different journal event extends object retention without changing the original reference deadline.
+        var second = await _journal.AppendAsync(Principal, "session", new(
+            Guid.NewGuid(), 1, 2,
+            new TurnSessionPayload("assistant", new SessionObjectReference(
+                acknowledgment.Reference.Key, acknowledgment.Reference.Purpose, acknowledgment.Reference.ByteLength))));
+        Assert.Equal(acknowledgment.Reference.Key, Assert.Single(second.Event.ObjectReferences).Reference.Key);
+
+        var retention = new SessionObjectRetentionService(fixture.DataSource, _options, _objects);
+        Assert.Equal(0, await retention.CleanupAsync(default));
+        Assert.Contains(acknowledgment.Reference.Key, _objects.Values.Keys);
+
+        var readsBeforeExpiredReference = _objects.Reads;
+        var expired = await Assert.ThrowsAsync<SessionMaterialIntegrityException>(() => Store.ReadAsync(
+            Principal, "session", input.EventId, input.Kind, Historical, default));
+        Assert.Equal("session_material_retention_expired", expired.Code);
+        Assert.Equal(readsBeforeExpiredReference, _objects.Reads);
+    }
+
+    [Fact]
+    public async Task ExpiredRequiredTurnsFailAndOnlyExpiredOptionalCacheMapsToNotFound()
+    {
+        var turn = Request(SessionMaterialKind.TurnContent);
+        var cache = Request(SessionMaterialKind.SdkCache);
+        var turnAck = await Store.WriteAsync(
+            Principal, "session", turn, _registration, Source, Current, default);
+        var cacheAck = await Store.WriteAsync(
+            Principal, "session", cache, _registration, Source, Current, default);
+        var deadline = (await ReadDatabaseTimeAsync()).AddSeconds(-1);
+        await SetReferenceAndInventoryDeadlineAsync(turn.EventId, turnAck.Reference.Key, deadline);
+        await SetReferenceAndInventoryDeadlineAsync(cache.EventId, cacheAck.Reference.Key, deadline);
+
+        var projects = new ProjectReaderAuthorizationClient(_registration.Binding);
+        var providerBinding = await _journal.GetProviderBindingAsync(Principal, "session", default);
+        var binder = new ReadOnlySessionsProviderBinder(providerBinding);
+        var service = new SessionMaterialApplicationService(
+            null!, projects, Store, _journal, binder, TimeProvider.System);
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<IProjectsAuthorizationContextClient>(projects);
+        builder.Services.AddSingleton<ISessionsProviderBinder>(binder);
+        builder.Services.AddSingleton(service);
+        await using var app = builder.Build();
+        app.Use(async (context, next) =>
+        {
+            context.User = Principal;
+            await next();
+        });
+        app.UseAuthorization();
+        app.MapSessionMaterialEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+
+        using var turnResponse = await client.GetAsync(
+            $"/internal/sessions/session/turns/{turn.EventId:D}");
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, turnResponse.StatusCode);
+        Assert.True(turnResponse.Headers.CacheControl?.NoStore);
+        Assert.Contains("session_material_retention_expired", await turnResponse.Content.ReadAsStringAsync());
+
+        using var cacheResponse = await client.GetAsync(
+            $"/internal/sessions/session/material/{cache.EventId:D}/sdkCache");
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, cacheResponse.StatusCode);
+        Assert.True(cacheResponse.Headers.CacheControl?.NoStore);
+        Assert.Contains("session_material_retention_expired", await cacheResponse.Content.ReadAsStringAsync());
+
+        var liveCache = Request(SessionMaterialKind.SdkCache);
+        var liveCacheAck = await Store.WriteAsync(
+            Principal, "session", liveCache, _registration, Source, Current, default);
+        _objects.Values[liveCacheAck.Reference.Key] =
+            Enumerable.Repeat((byte)'x', liveCache.Bytes.Length).ToArray();
+        using var corruptCacheResponse = await client.GetAsync(
+            $"/internal/sessions/session/material/{liveCache.EventId:D}/sdkCache");
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, corruptCacheResponse.StatusCode);
+        Assert.Contains("session_material_digest_invalid",
+            await corruptCacheResponse.Content.ReadAsStringAsync());
+
+        projects.CanRead = false;
+        var readsBeforeDeniedCache = _objects.Reads;
+        using var deniedCacheResponse = await client.GetAsync(
+            $"/internal/sessions/session/material/{liveCache.EventId:D}/sdkCache");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, deniedCacheResponse.StatusCode);
+        Assert.True(deniedCacheResponse.Headers.CacheControl?.NoStore);
+        Assert.Equal(readsBeforeDeniedCache, _objects.Reads);
     }
 
     [Fact]
@@ -396,6 +529,42 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         await command.ExecuteNonQueryAsync();
     }
 
+    private async Task<DateTimeOffset> ReadDatabaseTimeAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand("SELECT clock_timestamp()", connection);
+        return new DateTimeOffset((DateTime)(await command.ExecuteScalarAsync())!);
+    }
+
+    private async Task SetReferenceAndInventoryDeadlineAsync(
+        Guid eventId, ObjectKey key, DateTimeOffset deadline)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var reference = new NpgsqlCommand($"""
+            UPDATE "{_schema}".session_object_references
+            SET retain_until = @deadline
+            WHERE project_id = 'project' AND run_id = 'run' AND event_id = @event AND object_key = @key
+            """, connection, transaction))
+        {
+            reference.Parameters.AddWithValue("deadline", NpgsqlTypes.NpgsqlDbType.TimestampTz, deadline);
+            reference.Parameters.AddWithValue("event", NpgsqlTypes.NpgsqlDbType.Uuid, eventId);
+            reference.Parameters.AddWithValue("key", NpgsqlTypes.NpgsqlDbType.Varchar, key.Value);
+            Assert.Equal(1, await reference.ExecuteNonQueryAsync());
+        }
+        await using (var inventory = new NpgsqlCommand($"""
+            UPDATE "{_schema}".session_object_inventory
+            SET retain_until = @deadline
+            WHERE object_key = @key
+            """, connection, transaction))
+        {
+            inventory.Parameters.AddWithValue("deadline", NpgsqlTypes.NpgsqlDbType.TimestampTz, deadline);
+            inventory.Parameters.AddWithValue("key", NpgsqlTypes.NpgsqlDbType.Varchar, key.Value);
+            Assert.Equal(1, await inventory.ExecuteNonQueryAsync());
+        }
+        await transaction.CommitAsync();
+    }
+
     [Theory]
     [InlineData("missing")]
     [InlineData("digest")]
@@ -611,6 +780,7 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         : IProjectsAuthorizationContextClient
     {
         public int CallCount { get; private set; }
+        public bool CanRead { get; set; } = true;
 
         public Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
             HttpContext context, CancellationToken cancellationToken = default)
@@ -619,8 +789,10 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
             CallCount++;
             return Task.FromResult(new ProjectsAuthorizationContextResponse(
                 1, binding.ActorIssuer, binding.ActorId, binding.TenantId, 1, binding.ProjectId, binding.RunId,
-                [new("project", binding.ProjectId,
-                    [new ProjectsAuthorizationPermissionGrant("readRunSelection", 1)])]));
+                CanRead
+                    ? [new("project", binding.ProjectId,
+                        [new ProjectsAuthorizationPermissionGrant("readRunSelection", 1)])]
+                    : []));
         }
 
         public Task<ProjectsAuthorizationContextResponse> GetProjectReadAsync(
@@ -630,5 +802,20 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
             CancellationToken cancellationToken) =>
             Task.FromException<ProjectsAuthorizationContextResponse>(
                 new NotSupportedException("Project reads are not configured in this test fake."));
+    }
+
+    private sealed class ReadOnlySessionsProviderBinder(SessionProviderBinding binding) : ISessionsProviderBinder
+    {
+        public Task<SessionProviderBinding> ResolveAndPinAsync(
+            ClaimsPrincipal principal, CancellationToken cancellationToken = default) =>
+            Task.FromResult(binding);
+
+        public Task VerifyPinnedAsync(
+            ClaimsPrincipal principal, SessionProviderBinding requested, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(binding, requested);
+            return Task.CompletedTask;
+        }
     }
 }

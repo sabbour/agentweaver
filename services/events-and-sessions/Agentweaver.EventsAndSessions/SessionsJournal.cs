@@ -265,14 +265,65 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
     internal async Task<SessionEventEnvelope> ReadMaterialEventAsync(
         ClaimsPrincipal principal, string sessionId, Guid eventId, CancellationToken cancellationToken)
     {
+        var envelope = await ReadEventForSessionAsync(
+            principal, sessionId, eventId, cancellationToken).ConfigureAwait(false);
+
+        // Check each durable reference before returning the event to the material reader.
+        if (!envelope.ObjectReferences.IsDefaultOrEmpty)
+        {
+            foreach (var stored in envelope.ObjectReferences)
+                await RequireMaterialReferenceRetainedAsync(
+                    envelope.Identity, envelope.EventId, stored.Reference.Key, cancellationToken).ConfigureAwait(false);
+        }
+
+        return envelope;
+    }
+
+    /// <summary>Reads an event by exact session and event identity without applying material-retention policy.</summary>
+    private async Task<SessionEventEnvelope> ReadEventForSessionAsync(
+        ClaimsPrincipal principal, string sessionId, Guid eventId, CancellationToken cancellationToken)
+    {
         var identity = RequireScope(principal).ForSession(sessionId);
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        var envelope = await ReadEventByIdAsync(connection, null, identity.ProjectId, identity.RunId,
-            eventId, cancellationToken).ConfigureAwait(false);
+        SessionEventEnvelope? envelope;
+        await using (var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
+            envelope = await ReadEventByIdAsync(connection, null, identity.ProjectId, identity.RunId,
+                eventId, cancellationToken).ConfigureAwait(false);
         if (envelope is null || envelope.Identity != identity)
+            // Do not disclose whether the event exists outside the caller's exact session.
             throw new SessionNotFoundException("The recorded session material event does not exist.");
         return envelope;
     }
+
+    /// <summary>Rejects a reference once its own Events deadline expires, even if another reference keeps the key.</summary>
+    internal async Task RequireMaterialReferenceRetainedAsync(
+        SessionIdentity identity, Guid eventId, ObjectKey key, CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT retain_until, clock_timestamp()
+            FROM {_objectReferences}
+            WHERE project_id = @project AND run_id = @run AND event_id = @event AND object_key = @key
+            """, connection);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
+        command.Parameters.AddWithValue("event", NpgsqlDbType.Uuid, eventId);
+        command.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, key.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) || reader.IsDBNull(0))
+            throw new SessionMaterialIntegrityException("session_material_record_invalid");
+
+        var retainUntil = new DateTimeOffset(reader.GetDateTime(0));
+        var databaseTime = new DateTimeOffset(reader.GetDateTime(1));
+        // A missing or malformed owner deadline is never interpreted as an unbounded retention grant.
+        if (IsMaterialReferenceExpired(retainUntil, databaseTime))
+            throw new SessionMaterialIntegrityException("session_material_retention_expired");
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new SessionMaterialIntegrityException("session_material_record_invalid");
+    }
+
+    /// <summary>Uses the database sample returned beside a reference deadline and expires at equality.</summary>
+    internal static bool IsMaterialReferenceExpired(DateTimeOffset retainUntil, DateTimeOffset databaseTime) =>
+        retainUntil <= databaseTime;
 
     /// <summary>Persists a verified produced-run capture and returns its journal position and replay status.</summary>
     internal async Task<ProducedRunCaptureAcknowledgment> AppendProducedRunCaptureAsync(
@@ -318,7 +369,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         Guid eventId,
         CancellationToken cancellationToken)
     {
-        var envelope = await ReadMaterialEventAsync(
+        var envelope = await ReadEventForSessionAsync(
             principal, sessionId, eventId, cancellationToken).ConfigureAwait(false);
         if (envelope.Payload is not ProducedRunCaptureSessionPayload payload)
             throw new SessionNotFoundException("The event does not record a produced-run capture.");
