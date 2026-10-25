@@ -28,7 +28,7 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
     private readonly string _schema = $"\"{options.Schema}\"";
 
     internal async Task<ExecutableActionGrantReference> IssueGrantAsync(
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority,
         CancellationToken cancellationToken)
     {
@@ -113,7 +113,7 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
     }
 
     internal async Task<MafChildSpawnAuthorizationEvidence?> ReadCurrentAsync(
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority,
         CancellationToken cancellationToken)
     {
@@ -144,7 +144,7 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
     }
 
     internal async Task<MafChildSpawnAuthorizationEvidence> StoreAllowAsync(
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority,
         Guid policyReceiptId,
         CancellationToken cancellationToken)
@@ -164,6 +164,9 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
             connection, transaction, authority, intent, cancellationToken).ConfigureAwait(false);
         _ = await RequireCurrentOwnerStateAsync(
             connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false);
+        // Check the receipt before the authorization-row FK so missing policy evidence fails as a closed denial.
+        await RequireCurrentPolicyReceiptAndGrantAsync(
+            connection, transaction, evidence, cancellationToken).ConfigureAwait(false);
 
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.{ReceiptTable}
@@ -211,7 +214,7 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
     internal async Task<MafChildSpawnAuthorizationConsumeResult> CheckAndConsumeWithinTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority,
         CancellationToken cancellationToken)
     {
@@ -270,7 +273,7 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         MafChildSpawnAuthorizationAuthority authority,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         CancellationToken cancellationToken)
     {
         // Callers lock the run and parent/root sessions first, matching coordinator grant transitions.
@@ -374,7 +377,7 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
     private async Task<CurrentDecision> RequireCurrentOwnerStateAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority,
         CancellationToken cancellationToken)
     {
@@ -462,13 +465,13 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
             decisionReader.GetGuid(0),
             decisionReader.GetInt64(1),
             decisionReader.GetString(3));
-        ValidateConfirmedPlan(current, intent, authority);
+        ValidateConfirmedIntent(current, intent, authority);
         return current;
     }
 
-    private static void ValidateConfirmedPlan(
+    private static void ValidateConfirmedIntent(
         CurrentDecision current,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority)
     {
         try
@@ -480,8 +483,6 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
                 envelopeElement.GetRawText(), DecisionJsonOptions)
                 ?? throw new JsonException("The accepted decision state is missing.");
             var plan = envelope.ConfirmedWorkPlan;
-            var item = plan?.Items.SingleOrDefault(candidate => candidate.Id == intent.WorkItemId);
-            // Matching the canonical hash proves every work-item field, not only its identifier and step.
             if (envelope.Version != CoordinatorDecisionStateEnvelope.CurrentVersion ||
                 envelope.Issuer != authority.ActorIssuer ||
                 envelope.Subject != authority.ActorId ||
@@ -502,27 +503,105 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
                 plan.Id != intent.PlanId ||
                 current.StateVersion != intent.PlanRevision ||
                 envelope.CandidateWorkPlan is not null ||
-                envelope.PendingGate is not null ||
-                item is null ||
-                item.WorkflowStepId != intent.WorkflowStepId ||
-                MafChildSpawnAuthorizationContract.ComputeIntentHash(intent) !=
-                    MafChildSpawnAuthorizationContract.ComputeIntentHash(intent with { WorkItem = item }))
+                envelope.PendingGate is not null)
                 throw new RuntimeAuthorizationException("maf_child_spawn_plan_stale");
+
+            switch (intent)
+            {
+                case MafChildSpawnIntent open:
+                    var item = plan.Items.SingleOrDefault(candidate => candidate.Id == open.WorkItemId);
+                    // Matching the canonical hash proves every work-item field, not only its identifier and step.
+                    if (item is null ||
+                        item.WorkflowStepId != open.WorkflowStepId ||
+                        MafChildSpawnAuthorizationContract.ComputeIntentHash(open) !=
+                            MafChildSpawnAuthorizationContract.ComputeIntentHash(open with { WorkItem = item }))
+                        throw new RuntimeAuthorizationException("maf_child_spawn_plan_stale");
+                    break;
+                case MafChildSpawnFixedWorkIntent fixedWork:
+                    ValidateConfirmedFixedWork(envelope, plan, fixedWork);
+                    break;
+                default:
+                    throw new RuntimeAuthorizationException("maf_child_spawn_plan_stale");
+            }
         }
         catch (RuntimeAuthorizationException)
         {
             throw;
         }
-        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        catch (Exception exception) when (
+            exception is JsonException or InvalidOperationException or ArgumentException)
         {
             throw new RuntimeAuthorizationException("maf_child_spawn_decision_unavailable", null, exception);
         }
     }
 
+    private static void ValidateConfirmedFixedWork(
+        CoordinatorDecisionStateEnvelope envelope,
+        WorkPlan plan,
+        MafChildSpawnFixedWorkIntent intent)
+    {
+        var workflow = envelope.SelectedWorkflow;
+        var selection = envelope.ConfirmedSelectionContext;
+        if (workflow is null ||
+            workflow.Id != intent.WorkflowDefinitionId ||
+            workflow.Revision != intent.WorkflowDefinitionRevision ||
+            plan.WorkflowId != workflow.Id ||
+            plan.DefinitionRevision != workflow.Revision ||
+            workflow.Steps.IsDefault ||
+            selection is null ||
+            selection.Roles.IsDefault ||
+            selection.ModelTaskSelections.IsDefault)
+            throw new RuntimeAuthorizationException("maf_child_spawn_plan_stale");
+
+        var step = workflow.Steps.SingleOrDefault(candidate => candidate.Id == intent.WorkflowStepId);
+        if (step is null ||
+            step.Mode != WorkflowStepMode.Fixed ||
+            step.FixedWork is not { } fixedWork ||
+            !string.Equals(
+                intent.FixedWorkSpecificationHash,
+                MafChildSpawnAuthorizationContract.ComputeFixedWorkSpecificationHash(fixedWork),
+                StringComparison.Ordinal))
+            throw new RuntimeAuthorizationException("maf_child_spawn_plan_stale");
+
+        var roles = selection.Roles
+            .Where(candidate => string.Equals(candidate.RoleId, fixedWork.RoleId, StringComparison.Ordinal))
+            .ToArray();
+        var role = roles.Length == 1 ? roles[0] : null;
+        if (role is null ||
+            role.EligibleAgentIds.IsDefaultOrEmpty ||
+            role.ModelSelectionReferences.IsDefault ||
+            role.EligibleIsolationChoices.IsDefault ||
+            !role.EligibleIsolationChoices.Contains(fixedWork.IsolationChoice, StringComparer.Ordinal))
+            throw new RuntimeAuthorizationException("maf_child_spawn_plan_stale");
+
+        // The planner chooses the first eligible agent ordinally; re-derive that binding from the confirmed context.
+        var agentId = role.EligibleAgentIds.Order(StringComparer.Ordinal).First();
+        var modelReference = ModelTaskSelectionResolver.ResolveReference(
+            step.ModelTaskKind ?? ModelTaskKind.Straightforward,
+            fixedWork.RoleId,
+            agentId,
+            selection.ModelTaskSelections);
+        var isolation = selection.IsolationProviderBinding;
+        if (isolation is null ||
+            isolation.RunId != envelope.RunId ||
+            isolation.Seam != ProviderSeam.Sandbox ||
+            isolation.NegotiatedCapabilities is null ||
+            step.RequiredProviderCapabilities.IsDefault ||
+            !string.Equals(isolation.ProviderId, intent.RoleBinding.IsolationProviderId, StringComparison.Ordinal) ||
+            !step.RequiredProviderCapabilities.IsDefaultOrEmpty &&
+                !step.RequiredProviderCapabilities.All(isolation.NegotiatedCapabilities.Contains) ||
+            !string.Equals(intent.RoleBinding.RoleId, fixedWork.RoleId, StringComparison.Ordinal) ||
+            !string.Equals(intent.RoleBinding.AgentId, agentId, StringComparison.Ordinal) ||
+            !string.Equals(intent.RoleBinding.ModelSelectionReference, modelReference, StringComparison.Ordinal) ||
+            !role.ModelSelectionReferences.Contains(intent.RoleBinding.ModelSelectionReference, StringComparer.Ordinal) ||
+            !string.Equals(intent.RoleBinding.IsolationChoice, fixedWork.IsolationChoice, StringComparison.Ordinal))
+            throw new RuntimeAuthorizationException("maf_child_spawn_plan_stale");
+    }
+
     private async Task<MafChildSpawnAuthorizationEvidence?> ReadEvidenceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority,
         CancellationToken cancellationToken)
     {
@@ -569,7 +648,7 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
 
     private static void RequireCurrentEvidence(
         MafChildSpawnAuthorizationEvidence evidence,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority)
     {
         if (evidence.IntentId != intent.IntentId ||

@@ -113,14 +113,21 @@ remains a separate slice.
 The Orchestrator can authorize a child-spawn intent before a child runtime exists.
 It binds the authenticated actor and active parent and root sessions to the current
 execution fence, accepted selection and context revision, and the confirmed WorkPlan
-revision, step, and exact work item. The intent hash includes the full work item and
-its stable intent identifier.
+revision. Open-step intents bind the exact work item and its stable intent identifier.
+Fixed-step intents instead bind the confirmed workflow definition and revision, the
+step, a canonical hash of its fixed-work specification, and the selected role binding
+(role, agent, model, and pinned isolation provider/choice). The owner checks that
+binding against the confirmed workflow step and run-selection context; fixed work is
+not converted into a WorkPlan item.
 
 Authorization uses the existing executable-action guard for `maf.child.spawn`.
 A selected or pinned policy provider is not an allow decision. The owner accepts
 only a policy allow recorded by the guard and stores immutable evidence that names
 the matching provider, adapter, options revision, and policy receipt. Denials,
-evaluation errors, stale authority, or a changed intent fail closed.
+evaluation errors, stale authority, missing or mismatched receipts, or a changed
+intent fail closed. Both intent variants use the same durable receipt keyed by intent
+identifier: an identical hash retry returns the original receipt, while reusing the
+identifier with different content is a conflict.
 
 The layer that records child associations must check and consume this evidence inside
 the same owner-local database transaction as its association, outbox, and checkpoint
