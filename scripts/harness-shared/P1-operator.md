@@ -19,7 +19,8 @@ the release deployment script. It checks each release's tag, exact source
 commit, and immutable publication result before it records evidence. v1.0.9 is
 pinned with an annotated tag. It was deployed by the whole-release script, so it
 stays pinned for this check but can't be deployed with the pre-acceptance
-bootstrap.
+bootstrap. v1.0.11 is pinned the same way, except its release tag is a
+lightweight tag on the published source commit.
 
 The one-account launcher cannot produce a distinct denied identity. If the
 manifest requests one, the launcher stops before sign-in. Do not use the

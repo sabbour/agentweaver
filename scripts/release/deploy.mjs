@@ -274,6 +274,15 @@ const BOOTSTRAP_RELEASES = Object.freeze({
     wholeReleaseDeployed: true,
     additionalProductComponents: Object.freeze(['Agentweaver.Providers.Sessions.AgentSessions']),
   }),
+  // Pin v1.0.11 for P1 acceptance evidence only, like v1.0.9. Its publication is bound to the
+  // receipt-rebind merge commit, and the release tag is a lightweight tag on that commit.
+  'v1.0.11': Object.freeze({
+    sourceSha: 'e2929bca622b5397804cdb05abed49befc86aa3d',
+    continuation: false,
+    wholeReleaseDeployed: true,
+    allowLightweightTag: true,
+    additionalProductComponents: Object.freeze(['Agentweaver.Providers.Sessions.AgentSessions']),
+  }),
 });
 
 /**
