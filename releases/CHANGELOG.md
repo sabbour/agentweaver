@@ -2,6 +2,10 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-25T11:34:38.557Z — source `5b943d4fb22850ef2116df54147692ae802d9975`
+
+- `Agentweaver.Web`: 1.5.0 -> 1.6.0 (minor) — .changeset/web-app-version.md
+
 ## 2026-10-25T04:19:26.055Z — source `bac7ecc850ba930d02f634de15c9954fd2b66cb8`
 
 - `Agentweaver.Projects.Config`: 1.7.0 -> 1.7.1 (patch) — .changeset/platform-admin-bootstrap-diagnostics.md, .changeset/platform-admin-read-only-inspection.md
