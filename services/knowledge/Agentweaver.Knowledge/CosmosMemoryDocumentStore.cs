@@ -240,6 +240,7 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
             AND c.documentType = @recordType
             AND (@agent IS NULL OR c.record.agentId = @agent)
             AND (@kind IS NULL OR c.record.kind = @kind)
+            AND (@state IS NULL OR c.record.state = @state)
             AND (@includeInactive = true OR c.record.state = @active)
             """;
         if (text is not null)
@@ -496,6 +497,7 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
             .WithParameter("@recordType", RecordDocumentType)
             .WithParameter("@agent", query.AgentId)
             .WithParameter("@kind", query.Kind is null ? null : (int)query.Kind.Value)
+            .WithParameter("@state", query.State is null ? null : (int)query.State.Value)
             .WithParameter("@includeInactive", query.IncludeInactive)
             .WithParameter("@active", (int)KnowledgeRecordState.Active)
             .WithParameter("@query", text);

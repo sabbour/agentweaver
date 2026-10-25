@@ -166,6 +166,143 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
     }
 
     [Fact]
+    public async Task ProjectSearchCountsOnlyCallerVisiblePendingProposalsBeforePaging()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true, bindCaller: false);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+
+        async Task<Guid> CreateAsync(string runId, string agentId, string key, string kind)
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/projects/project-a/runs/{runId}/agents/{agentId}/records")
+            {
+                Content = JsonContent.Create(new
+                {
+                    kind,
+                    type = "note",
+                    title = "proposal",
+                    content = key,
+                    importance = "medium",
+                    tags = Array.Empty<string>()
+                }, options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            return body.RootElement.GetProperty("record").GetProperty("recordId").GetGuid();
+        }
+
+        var first = await CreateAsync("run-a", "agent-a", "pending-first", "proposal");
+        var second = await CreateAsync("run-b", "agent-b", "pending-second", "proposal");
+        var rejected = await CreateAsync("run-a", "agent-a", "rejected-proposal", "proposal");
+        var promoted = await CreateAsync("run-a", "agent-a", "promoted-proposal", "proposal");
+        await CreateAsync("run-a", "agent-a", "active-memory", "memory");
+        using (var reject = new HttpRequestMessage(
+                   HttpMethod.Post,
+                   $"/api/projects/project-a/runs/run-a/agents/agent-a/proposals/{rejected:D}/reject")
+               { Content = JsonContent.Create(new { expectedRevision = 1 }, options: JsonOptions) })
+        {
+            reject.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            reject.Headers.TryAddWithoutValidation("Idempotency-Key", "reject-third");
+            using var response = await client.SendAsync(reject);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+        var promotion = await database.Provider.PromoteProposalAsync(
+            "project-a",
+            "run-a",
+            promoted,
+            1,
+            new string('a', 64),
+            new AcceptedEffectAuthorizationBounds(
+                "https://identity.test/",
+                "actor-a",
+                "tenant-a",
+                "project-a",
+                "run-a",
+                ProjectAuthorityResourceType.Project,
+                "project-a",
+                1,
+                1,
+                1,
+                1,
+                "context-a"),
+            "promote-excluded-proposal");
+        Assert.Equal(KnowledgeWriteStatus.Updated, promotion.Status);
+        var promotedProposal = await database.Provider.ReadAsync("project-a", promoted);
+        Assert.Equal(KnowledgeRecordState.Promoted, promotedProposal!.State);
+        Assert.Equal(KnowledgeTrustState.Pending, promotedProposal.TrustState);
+
+        async Task<JsonDocument> SearchAsync(int page)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"/api/projects/project-a/knowledge/records?kind=proposal&state=pending&page={page}&pageSize=1");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+            return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        }
+
+        using var page1 = await SearchAsync(1);
+        using var page2 = await SearchAsync(2);
+        Assert.Equal(2, page1.RootElement.GetProperty("totalCount").GetInt32());
+        Assert.Equal(2, page2.RootElement.GetProperty("totalCount").GetInt32());
+        Assert.Equal(
+            new[] { first, second }.Order(),
+            new[] { page1, page2 }.Select(body => body.RootElement.GetProperty("items")[0]
+                    .GetProperty("record").GetProperty("recordId").GetGuid())
+                .Order());
+        Assert.All(new[] { page1, page2 }, body =>
+            Assert.Equal("pending", body.RootElement.GetProperty("items")[0]
+                .GetProperty("record").GetProperty("state").GetString()));
+
+        // The new filter must not bypass the unbound-token and current private-knowledge checks.
+        owner.ClearPaths();
+        using var runBound = new HttpRequestMessage(HttpMethod.Get,
+            "/api/projects/project-a/knowledge/records?kind=proposal&state=pending");
+        runBound.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+        using var denied = await client.SendAsync(runBound);
+        using var deniedBody = JsonDocument.Parse(await denied.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal(
+            "project_wide_authority_required",
+            deniedBody.RootElement.GetProperty("code").GetString());
+        Assert.Equal(["/api/authorization/context"], owner.Paths);
+
+        owner.DenyRunSelectionPermission();
+        owner.ClearPaths();
+        using var unbound = new HttpRequestMessage(HttpMethod.Get,
+            "/api/projects/project-a/knowledge/records?kind=proposal&state=pending");
+        unbound.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+        using var revoked = await client.SendAsync(unbound);
+        Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
+        Assert.Equal(["/api/authorization/context"], owner.Paths);
+    }
+
+    [Theory]
+    [InlineData("kind=memory&state=pending")]
+    [InlineData("state=pending")]
+    [InlineData("kind=proposal&state=active")]
+    [InlineData("kind=1")]
+    public async Task ProjectSearchRejectsUnsupportedFilters(string filters)
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true, bindCaller: false);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/projects/project-a/knowledge/records?{filters}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task AgentHistoryReturnsOnlyMemoryForTheRequestedAgent()
     {
         await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
@@ -1471,6 +1608,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 .Where(record => record.ProjectId == query.ProjectId)
                 .Where(record => query.AgentId is null || record.AgentId == query.AgentId)
                 .Where(record => query.Kind is null || record.Kind == query.Kind)
+                .Where(record => query.State is null || record.State == query.State)
                 .Where(record => query.IncludeInactive || record.State == KnowledgeRecordState.Active)
                 .Where(record => query.Query is null ||
                     record.Content.Contains(query.Query, StringComparison.OrdinalIgnoreCase))
@@ -1589,7 +1727,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             _cacheControlHeaders.Enqueue(request.Headers.CacheControl?.ToString());
             object payload;
             if (path == "/api/authorization/context")
-                payload = Authority();
+                payload = Authority(request.Headers.Authorization?.Parameter);
             else if (path.StartsWith("/internal/projects/project-a/runs/", StringComparison.Ordinal) &&
                      path.EndsWith("/knowledge-selection", StringComparison.Ordinal))
             {
@@ -1616,8 +1754,10 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             });
         }
 
-        private ProjectAuthorizationContextResponse Authority()
+        private ProjectAuthorizationContextResponse Authority(string? token)
         {
+            // The owner context must mirror each request's token; a test can use bound and unbound callers in sequence.
+            var callerIsBound = bindCaller || !string.Equals(token, "unbound-token", StringComparison.Ordinal);
             var permissions = ImmutableArray.CreateBuilder<ProjectAuthorizationPermissionGrant>();
             permissions.Add(new ProjectAuthorizationPermissionGrant(
                 ProjectAuthorizationPermission.ReadProjects, 1));
@@ -1637,8 +1777,8 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 "actor-a",
                 "tenant-a",
                 1,
-                bindCaller ? "project-a" : null,
-                bindCaller ? "run-a" : null,
+                callerIsBound ? "project-a" : null,
+                callerIsBound ? "run-a" : null,
                 [new EffectiveProjectAuthorization(
                     ProjectAuthorityResourceType.Project,
                     "project-a",

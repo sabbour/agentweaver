@@ -281,6 +281,7 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
                 (query.AgentId is null ||
                  string.Equals(record.AgentId, query.AgentId, StringComparison.Ordinal)) &&
                 (query.Kind is null || record.Kind == query.Kind) &&
+                (query.State is null || record.State == query.State) &&
                 (query.IncludeInactive || record.State == KnowledgeRecordState.Active) &&
                 (text is null || Matches(record, text)))
             .OrderByDescending(record => record.UpdatedAt)

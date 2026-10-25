@@ -15,6 +15,31 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class GatewayKnowledgeOpenApiRegressionTests
 {
     [Fact]
+    public async Task ProjectKnowledgeSearchPublishesOnlyPendingProposalStateFilter()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call owners."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var operation = document.RootElement.GetProperty("paths")
+            .GetProperty("/api/v1/projects/{projectId}/knowledge/records").GetProperty("get");
+        Assert.Equal("searchProjectKnowledge", operation.GetProperty("operationId").GetString());
+        var state = Assert.Single(operation.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("name").GetString() == "state");
+        Assert.Equal("query", state.GetProperty("in").GetString());
+        Assert.Equal(["pending"], state.GetProperty("schema").GetProperty("enum")
+            .EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains("kind=proposal", state.GetProperty("schema").GetProperty("description").GetString());
+        var route = Assert.Single(GatewayHost::Agentweaver.Gateway.GatewayRouteCatalog.Routes,
+            item => item.OperationId == "searchProjectKnowledge");
+        Assert.Contains("state", route.QueryParameters);
+        Assert.Equal("/api/projects/{projectId}/knowledge/records", route.OwnerPath);
+    }
+
+    [Fact]
     public async Task PriorityLinkRequestsAndReceiptsExposeRepositoryIdentity()
     {
         using var rsa = RSA.Create(2048);

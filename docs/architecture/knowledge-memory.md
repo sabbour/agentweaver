@@ -72,6 +72,9 @@ inaccessible or unavailable binding fails the request. Each result identifies an
 access run: the existing run binding that authorizes revision-history reads.
 The record's `sourceRunId`, when present, remains separate provenance. Results
 from all resources are globally ordered before the requested page is selected.
+The optional `kind=proposal&state=pending` search filters the stored proposal
+lifecycle before counting and paging; pending proposals are included even when
+`includeInactive` is false. Other record states are not a project-wide filter.
 
 The data paths preserve project and agent/run scope. Scoped search filters by
 project and agent before counting or returning records; project-wide search filters

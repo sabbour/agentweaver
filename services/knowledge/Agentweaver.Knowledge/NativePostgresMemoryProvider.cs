@@ -146,6 +146,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             var filter = """
                 project_id = @project AND (@agent IS NULL OR agent_id = @agent)
                 AND (@kind IS NULL OR kind = @kind)
+                AND (@state IS NULL OR state = @state)
                 AND (@include_inactive OR state = 'Active')
                 AND (@query IS NULL OR strpos(
                     lower(concat_ws(' ', record_type, title, content, array_to_string(tags, ' '))),
@@ -1742,6 +1743,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, query.ProjectId);
         AddNullable(command, "agent", NpgsqlDbType.Varchar, query.AgentId);
         AddNullable(command, "kind", NpgsqlDbType.Varchar, kind);
+        AddNullable(command, "state", NpgsqlDbType.Varchar, query.State?.ToString());
         command.Parameters.AddWithValue("include_inactive", NpgsqlDbType.Boolean, query.IncludeInactive);
         AddNullable(command, "query", NpgsqlDbType.Text, text);
     }

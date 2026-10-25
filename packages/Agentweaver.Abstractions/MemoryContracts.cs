@@ -101,7 +101,7 @@ public sealed record KnowledgeRecordRevision(
     string? ActorFingerprint = null,
     string? ChangeKind = null);
 
-/// <summary>Project filter with an optional agent, kind, text query, and paging inputs.</summary>
+/// <summary>Project filter with an optional agent, kind, state, text query, and paging inputs.</summary>
 public sealed record KnowledgeRecordQuery(
     string ProjectId,
     string? AgentId,
@@ -109,7 +109,8 @@ public sealed record KnowledgeRecordQuery(
     string? Query = null,
     bool IncludeInactive = false,
     int Page = 1,
-    int PageSize = 50);
+    int PageSize = 50,
+    KnowledgeRecordState? State = null);
 
 /// <summary>Page of current knowledge records and the total count for the query.</summary>
 public sealed record KnowledgeRecordPage(
