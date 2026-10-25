@@ -22,10 +22,10 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`2d23dae8dd58c37671fd196a13550907c244694c5a54b0ec51c1ffcde47ff1a1`.
+`19f861b4d240818f1021109fb9ad1e1b7efe711a94dc6c7eca9c1c4c897101d4`.
 It is not an approval receipt. The runner uses its explicit registered
 version list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-33, and 35-36; 034 is not in the
+placeholder. The Core list is 1-16, 18-33, and 35-37; 034 is not in the
 catalog. Readiness ordering checks exact supported versions, not only range
 endpoints. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
@@ -72,7 +72,17 @@ and coordinator decisions from version 002; its immutability trigger reuses the
 function introduced in version 021, which is its prerequisite. The migration
 runner applies the registered catalog in ascending order and permits the
 reserved gap at 034.
-The Core catalog and plan include 032, 033, 035, and 036; the maintenance Job
+Migration `037_maf_child_spawn_authorization.sql` adds append-only authorization
+receipts and consumption records for child-spawn intents. Each receipt binds
+the exact intent hash to the authenticated actor, current root fence, confirmed
+plan step, accepted selection context revision, and provider decision and
+options revision. The owner-local consumer rechecks current authority and
+records one consumption for that same hash inside the caller's transaction.
+Only an allow decision can be recorded; deny and provider errors fail closed.
+Both tables have exactly `SELECT, INSERT` in the runtime plan and are optional
+to readiness during rollout. The migration reuses the immutability trigger
+introduced in version 021.
+The Core catalog and plan include 032, 033, and 035-037; the maintenance Job
 applies the included versions in order.
 Existing grants on the Priority link table cover the added columns.
 
@@ -262,7 +272,7 @@ The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
 Events requires versions 1 through 10 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 115 tables and nine exact row-lock columns.
+The plan lists 117 tables and eleven exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

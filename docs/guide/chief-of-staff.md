@@ -270,7 +270,7 @@ schema version. Rolling back to this compatible owner works on either shape.
 The machine-readable contract is
 `services/orchestrator/Agentweaver.Orchestrator/schema-compatibility.json`.
 Its required, optional and default-apply version lists describe this image's
-behavior. The P1 plan includes 032, 033, and 036, skips 017 and reserved gaps 034-035; regenerating the plan
+behavior. The P1 plan includes 032, 033, and 035-037, skips 017 and reserved gap 034; regenerating the plan
 changes its hash. Schema compatibility is not permission to apply the plan.
 
 ## Related content
