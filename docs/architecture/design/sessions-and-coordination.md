@@ -66,17 +66,23 @@ child owner row and root decision and checking authority and selection again; a 
 mapping or decision returns a conflict. The current status endpoint reports durable
 owner run state and its fence/version/cause, not live AgentHost health. The explicit
 typed dispatch route stages only ready open/fixed child work within the configured
-child and concurrency limits. Each child, spawn outbox request, dispatch intent, and
-checkpoint update commit together before the ready batch is sent concurrently to an
-authenticated, currently ready AgentHost. The owner validates the SDK-context-bound
-reply and records the result; a later explicit dispatch reconciles child outcomes
-and exposes newly ready dependencies. Pending intents retain their identity for
-replay. A root-run mutex serializes dispatch, and the sticky Copilot/AIC hard-cap
-floor is not a monetary estimate or a second accounting ledger. The output-witness
-helper and store are not yet consumed by owner dispatch, so Host-source completeness
-remains `Partial` or `Unknown`; cap retirement is not claimed without complete
-native send-membership and priced usage evidence. The route does not schedule
-itself. Native platform-gate execution and broader recovery remain incomplete.
+child and concurrency limits. A fixed child intent binds the confirmed workflow
+definition and revision, the canonical hash of the step's fixed-work specification,
+and the role, agent, model, and isolation provider/choice re-derived from the
+accepted run selection. It is not converted into an open-work plan item. Open and
+fixed child receipts use the same Policy authorization contract, and the current
+allow is consumed in the transaction that commits the child, spawn outbox request,
+dispatch intent, and checkpoint update. The ready batch is then sent concurrently
+to authenticated, currently ready AgentHosts. The owner validates the
+SDK-context-bound reply and records the result; a later explicit dispatch
+reconciles child outcomes and exposes newly ready dependencies. Pending intents
+retain their identity for replay. A root-run mutex serializes dispatch, and the
+sticky Copilot/AIC hard-cap floor is not a monetary estimate or a second
+accounting ledger. The output-witness helper and store are not yet consumed by
+owner dispatch, so Host-source completeness remains `Partial` or `Unknown`; cap
+retirement is not claimed without complete native send-membership and priced usage
+evidence. The route does not schedule itself. Native platform-gate execution and
+broader recovery remain incomplete.
 
 The owner persists accepted definitions, decisions, pending gate request IDs, step
 position, and child references in its PostgreSQL schema. Its MAF checkpoint refers to

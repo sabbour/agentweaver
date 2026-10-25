@@ -129,13 +129,14 @@ intent fail closed. Both intent variants use the same durable receipt keyed by i
 identifier: an identical hash retry returns the original receipt, while reusing the
 identifier with different content is a conflict.
 
-The layer that records child associations must check and consume this evidence inside
-the same owner-local database transaction as its association, outbox, and checkpoint
-writes. The check revalidates current authority and the grant, then records consumption
-without committing the caller's transaction. Repeating the same intent hash reports
-that it was already consumed; reusing the identifier with different content is a conflict.
-This prerequisite does not register a child or perform external child effects.
-Authorization for already-registered runtime actions is unchanged.
+MAF dispatch checks and consumes this evidence inside the same owner-local database
+transaction as the child association, spawn outbox, pending intent, and Running
+checkpoint writes. The check revalidates current authority and the grant, then records
+consumption without committing the caller's transaction. Repeating the same intent
+hash reports that it was already consumed; reusing the identifier with different
+content is a conflict. Authorization alone does not register a child or perform
+external child effects. Authorization for already-registered runtime actions is
+unchanged.
 Migration 037 stores the immutable authorization and consumption evidence.
 Readiness accepts the pre-migration schema during rollout, but authorization
 and consumption fail closed until both tables and their immutability guards exist.
@@ -400,14 +401,14 @@ owner-side execution frontier. The catalog binder resolves every accepted step
 snapshot to a registered executor by step mode; platform steps also resolve by
 gate. Unknown modes and missing registrations fail binding before dispatch. Fixed
 work remains prescribed and platform gates remain platform-owned; a model task
-cannot replace either. The Policy owner supports fixed-work authorization receipts,
-but dispatch does not yet construct or consume them, so fixed-work child dispatch
-is refused. Open child work is authorized as `maf.child.spawn` by the pinned Policy
-provider. The resulting durable receipt is bound to the exact plan item, dispatch
-intent, accepted selection and execution fence; a provider binding by itself is not
-an allow decision. The dispatch owner
-re-reads and consumes that receipt in the Orchestrator transaction that commits
-the child association, spawn outbox, pending intent and Running checkpoint.
+cannot replace either. Open child work is authorized as `maf.child.spawn` by the
+pinned Policy provider using the exact plan item. Fixed child work uses the same
+authorization contract, with an intent bound to the confirmed workflow definition
+and revision, canonical fixed-work specification hash, and role binding re-derived
+from the accepted run selection. Fixed work is not represented as a WorkPlan item.
+A provider binding by itself is not an allow decision. The dispatch owner re-reads
+and consumes either intent's durable receipt in the Orchestrator transaction that
+commits the child association, spawn outbox, pending intent, and Running checkpoint.
 Ready child work is checkpointed with its spawn outbox request. The dispatch owner
 reads the current root registration and Environment
 readiness, checks its lifecycle, lease, provider fence, accepted selection and
@@ -430,12 +431,12 @@ terminal child status is joined in the owner transaction.
 The binder recognizes fixed/open child routes and the executable BuildTest gate.
 A workflow requiring another platform executor fails binding before child
 dispatch; this slice does not substitute a model task or fabricate a gate result.
-The Policy owner now supports a durable fixed-work receipt bound to the confirmed
-fixed-work specification and selected role, but this dispatch path does not yet
-construct that intent or consume its receipt in the spawn transaction. Fixed-work
-child actions therefore fail closed before session creation; wiring this receipt
-through dispatch is the next layer. Native runtime action admission still evaluates
-the selected Policy provider and Guardrails before Host effects.
+For fixed child work, dispatch constructs the fixed-work intent from the confirmed
+definition, step specification, and selected role binding. The owner re-derives and
+checks those values against the current decision before authorization and consumption.
+Fixed work remains separate from open WorkPlan items while using the same durable
+allow receipt and transactional spawn boundary. Native runtime action admission
+still evaluates the selected Policy provider and Guardrails before Host effects.
 
 The configured wall-time limit is measured from the persisted root-session
 creation time. After a wall-time or hard-cap limit is reached, the dispatcher holds
@@ -464,9 +465,8 @@ flowchart TD
     S --> BindExecutors{"Registered executor for every step?"}
     BindExecutors -->|"No"| BindError["Reject binding with a step-scoped error"]
     BindExecutors -->|"Yes"| DispatchWorkflow["Explicit typed dispatch"]
-    DispatchWorkflow --> FixedWork{"Open child-work action?"}
-    FixedWork -->|"No: fixed-work receipt not wired into dispatch"| BlockFixed["Refuse fixed-work child before side effects"]
-    FixedWork -->|"Yes"| AuthorizeSpawn{"Pinned Policy allows exact child-spawn intent?"}
+    DispatchWorkflow --> ChildWork{"Ready open or fixed child-work action?"}
+    ChildWork -->|"Yes"| AuthorizeSpawn{"Pinned Policy allows exact open-item or fixed-spec-and-role intent?"}
     AuthorizeSpawn -->|"No"| BlockPolicy
     AuthorizeSpawn -->|"Yes"| VerifyEgress{"Environment owner verifies exact fence, policy generation and selection revision?"}
     VerifyEgress -->|"No"| BlockEgress["Reject stale or unavailable egress; no spawn"]

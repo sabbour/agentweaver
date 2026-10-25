@@ -378,7 +378,7 @@ public static partial class CoordinationEndpoints
             }
 
             async Task RequireChildSpawnAllowedAsync(
-                MafChildSpawnIntent intent, CancellationToken token)
+                MafChildSpawnAuthorizationIntent intent, CancellationToken token)
             {
                 try
                 {
@@ -406,7 +406,7 @@ public static partial class CoordinationEndpoints
             async Task RequireChildSpawnConsumedAsync(
                 NpgsqlConnection connection,
                 NpgsqlTransaction transaction,
-                MafChildSpawnIntent intent,
+                MafChildSpawnAuthorizationIntent intent,
                 CancellationToken token)
             {
                 try
@@ -414,7 +414,7 @@ public static partial class CoordinationEndpoints
                     // Consumption shares the child/outbox/checkpoint transaction; a failure rolls back all four writes.
                     var consumed = await childSpawnAuthorization.CheckAndConsumeWithinTransactionAsync(
                         context, connection, transaction, intent, token).ConfigureAwait(false);
-                    // Match the allow receipt to the same immutable intent and require its durable consumption row.
+                    // Match either supported intent variant to the same immutable allow and consumption row.
                     if (consumed.Evidence.IntentId != intent.IntentId ||
                         !string.Equals(
                             consumed.Evidence.IntentHash,
@@ -1240,11 +1240,6 @@ public static partial class CoordinationEndpoints
                         wallTimeLimitReached = true;
                         break;
                     }
-                    // Fixed-work authorization is not part of the shared receipt contract yet; refuse before any I/O.
-                    if (action.Step.Mode == WorkflowStepMode.Fixed)
-                        throw new CoordinationException(
-                            "maf_child_spawn_fixed_authorization_unavailable",
-                            StatusCodes.Status503ServiceUnavailable);
                     if (MafBuildTestCommandContract.IsExecutable(action.Step))
                     {
                         var commandIntent = await PrepareBuildTestAsync(action.Step, cancellationToken)
@@ -1253,19 +1248,68 @@ public static partial class CoordinationEndpoints
                             .ConfigureAwait(false);
                         continue;
                     }
-                    if (action.WorkItem is not { } workItem)
-                        throw new CoordinationException(
-                            "maf_execution_executor_unavailable", StatusCodes.Status409Conflict);
-                    var associationId = workItem.Id;
-                    var task = workItem.Task;
-                    var workPlanAssociation = new ConfirmedWorkPlanItemAssociation(
-                        workItem.Id, decision.StateVersion, decision.SelectionHash);
-                    var childSessionId = MafExecutionPlanner.CreateChildSessionId(
-                        identity, plan.Plan.Id, associationId);
-                    var spawnAuthorizationIntent = MafExecutionWorkflowBindings.CreateOpenChildSpawnIntent(
-                        plan, identity, action, selection.Selection.ContextRevision,
-                        decision.StateVersion, decision.State.Fence);
-                    var prompt = BuildPrompt(action, checkpoint.State, associationId, null);
+
+                    string associationId;
+                    string task;
+                    string childSessionId;
+                    ConfirmedWorkPlanItemAssociation? workPlanAssociation = null;
+                    MafExecutionFixedWorkAssociation? fixedAssociation = null;
+                    MafChildSpawnAuthorizationIntent spawnAuthorizationIntent;
+                    if (action.Step.Mode == WorkflowStepMode.Fixed)
+                    {
+                        // Fixed steps have no WorkPlanItem; bind the deterministic association to the selected role.
+                        var activationRevision = checked(checkpoint.State.FixedWorkAssociations.Values
+                            .Where(existing =>
+                                existing.WorkPlanId == plan.Plan.Id &&
+                                string.Equals(existing.StepId, action.Step.Id, StringComparison.Ordinal))
+                            .Select(existing => existing.ActivationRevision)
+                            .DefaultIfEmpty(0)
+                            .Max() + 1);
+                        childSessionId = MafExecutionPlanner.CreateChildSessionId(
+                            identity,
+                            plan.Plan.Id,
+                            MafExecutionPlanner.CreateFixedWorkAssociationId(
+                                identity, plan.Plan.Id, action.Step.Id, activationRevision));
+                        fixedAssociation = MafExecutionPlanner.CreateFixedWorkAssociation(
+                            plan,
+                            selectionContext,
+                            identity,
+                            action.Step,
+                            decision.SelectionHash,
+                            decision.State.Fence,
+                            decision.StateVersion,
+                            activationRevision,
+                            childSessionId);
+                        associationId = fixedAssociation.AssociationId;
+                        task = fixedAssociation.Specification.Task;
+                        spawnAuthorizationIntent = MafExecutionWorkflowBindings.CreateFixedChildSpawnIntent(
+                            plan,
+                            selectionContext,
+                            identity,
+                            action,
+                            fixedAssociation,
+                            decision.SelectionHash,
+                            selection.Selection.ContextRevision,
+                            decision.StateVersion,
+                            decision.State.Fence);
+                    }
+                    else
+                    {
+                        if (action.Step.Mode != WorkflowStepMode.Open || action.WorkItem is not { } workItem)
+                            throw new CoordinationException(
+                                "maf_execution_executor_unavailable", StatusCodes.Status409Conflict);
+                        associationId = workItem.Id;
+                        task = workItem.Task;
+                        workPlanAssociation = new ConfirmedWorkPlanItemAssociation(
+                            workItem.Id, decision.StateVersion, decision.SelectionHash);
+                        childSessionId = MafExecutionPlanner.CreateChildSessionId(
+                            identity, plan.Plan.Id, associationId);
+                        spawnAuthorizationIntent = MafExecutionWorkflowBindings.CreateOpenChildSpawnIntent(
+                            plan, identity, action, selection.Selection.ContextRevision,
+                            decision.StateVersion, decision.State.Fence);
+                    }
+
+                    var prompt = BuildPrompt(action, checkpoint.State, associationId, fixedAssociation);
                     await RequireChildSpawnAllowedAsync(
                         spawnAuthorizationIntent, cancellationToken).ConfigureAwait(false);
                     var egressReceipt = await VerifyEgressAsync(cancellationToken).ConfigureAwait(false);
@@ -1329,7 +1373,7 @@ public static partial class CoordinationEndpoints
                             await RequireChildSpawnConsumedAsync(
                                 connection, transaction, spawnAuthorizationIntent, token).ConfigureAwait(false);
                             var next = PrepareRunningCheckpoint(
-                                latest, plan.Plan.Id, decision.StateVersion, associationId, null, intent);
+                                latest, plan.Plan.Id, decision.StateVersion, associationId, fixedAssociation, intent);
                             if (next is null)
                                 return;
                             _ = await execution.AppendInTransactionAsync(

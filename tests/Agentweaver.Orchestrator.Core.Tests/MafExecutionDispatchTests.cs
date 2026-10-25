@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
+using Agentweaver.Orchestrator.Core;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Xunit;
@@ -46,18 +47,74 @@ public sealed class MafExecutionDispatchTests
             () => MafExecutionWorkflowBindings.RequireBound(unsupported, false));
         Assert.Equal("maf_execution_executor_unavailable", failure.Code);
 
-        // Fixed work has no WorkPlanItem receipt variant yet, so dispatch refuses it before persistence.
+        // Fixed work uses its own receipt intent, bound to the confirmed step and role selection.
+        var fixedStep = new WorkflowStepDefinition(
+            "setup",
+            "Prescribed setup work",
+            WorkflowStepMode.Fixed,
+            0,
+            new WorkflowCardinality(1, 1),
+            [],
+            ["engineer"],
+            ["planning"],
+            ["sandboxed"],
+            [],
+            new FixedWorkSpecification(
+                "Prepare plan", "Create the prescribed plan.", "engineer", "planning",
+                "sandboxed", ["docs/plan.md"]),
+            null);
+        var fixedSelection = WorkflowTestData.SelectionContext(
+            modelTaskSelections:
+            [
+                new ModelTaskSelectionReference(
+                    ModelTaskKind.Straightforward, "engineer", "agent-1", "model:provider/alpha")
+            ]);
         var fixedPlan = WorkPlanValidator.ValidateAndSnapshot(
             WorkflowTestData.Snapshot(WorkflowTestData.Definition(
-                WorkflowDefinitionOrigin.BuiltIn, WorkflowTestData.Fixed("setup", 0, [], ["docs/plan.md"]))),
+                WorkflowDefinitionOrigin.BuiltIn, fixedStep)),
             WorkflowTestData.Plan(),
-            WorkflowTestData.SelectionContext()).Value!;
+            fixedSelection).Value!;
         var fixedBound = MafExecutionWorkflowBindings.RequireBound(fixedPlan, false);
         var fixedAction = new MafExecutionAction(fixedBound.Steps[0].Definition, null);
-        var fixedFailure = Assert.Throws<CoordinationException>(() =>
-            MafExecutionWorkflowBindings.CreateOpenChildSpawnIntent(
-                fixedPlan, root, fixedAction, "context-1", 3, 4));
-        Assert.Equal("maf_child_spawn_fixed_authorization_unavailable", fixedFailure.Code);
+        const long activationRevision = 1;
+        var associationId = MafExecutionPlanner.CreateFixedWorkAssociationId(
+            root, fixedPlan.Plan.Id, fixedAction.Step.Id, activationRevision);
+        var childSessionId = MafExecutionPlanner.CreateChildSessionId(
+            root, fixedPlan.Plan.Id, associationId);
+        var association = MafExecutionPlanner.CreateFixedWorkAssociation(
+            fixedPlan,
+            fixedSelection,
+            root,
+            fixedAction.Step,
+            new string('A', 64),
+            4,
+            3,
+            activationRevision,
+            childSessionId);
+
+        // The fixed intent names the confirmed specification and exactly re-derived role binding.
+        var fixedIntent = MafExecutionWorkflowBindings.CreateFixedChildSpawnIntent(
+            fixedPlan, fixedSelection, root, fixedAction, association,
+            new string('A', 64), "context-1", 3, 4);
+        Assert.Equal(fixedPlan.Workflow.Definition.Id, fixedIntent.WorkflowDefinitionId);
+        Assert.Equal(fixedPlan.Workflow.Definition.Revision, fixedIntent.WorkflowDefinitionRevision);
+        Assert.Equal(
+            MafChildSpawnAuthorizationContract.ComputeFixedWorkSpecificationHash(fixedStep.FixedWork!),
+            fixedIntent.FixedWorkSpecificationHash);
+        Assert.Equal(
+            new MafChildSpawnRoleBinding(
+                "engineer", "agent-1", "model:provider/alpha", "sandbox.test", "sandboxed"),
+            fixedIntent.RoleBinding);
+        Assert.Equal(
+            MafExecutionPlanner.CreateDispatchMessageId(root, fixedPlan.Plan.Id, associationId),
+            fixedIntent.IntentId);
+
+        var staleBinding = Assert.Throws<CoordinationException>(() =>
+            MafExecutionWorkflowBindings.CreateFixedChildSpawnIntent(
+                fixedPlan, fixedSelection, root, fixedAction,
+                association with { AgentId = "agent-2" },
+                new string('A', 64), "context-1", 3, 4));
+        Assert.Equal("maf_child_spawn_plan_stale", staleBinding.Code);
     }
 
     [Fact]

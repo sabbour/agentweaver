@@ -120,6 +120,9 @@ public sealed class MafChildSpawnFixedWorkAuthorizationOwnerStoreTests(
             store.StoreAllowAsync(_intent, _authority, receiptId, CancellationToken.None));
 
         Assert.Equal("maf_child_spawn_policy_receipt_unavailable", denied.Code);
+        Assert.Equal((0L, 0L, 0L), await CountDispatchStateAsync());
+        await AssertSpawnRejectedWithoutDispatchAsync(
+            store, "maf_child_spawn_authorization_missing");
     }
 
     [Theory]
@@ -137,6 +140,9 @@ public sealed class MafChildSpawnFixedWorkAuthorizationOwnerStoreTests(
             store.StoreAllowAsync(_intent, _authority, receiptId, CancellationToken.None));
 
         Assert.Equal("maf_child_spawn_policy_receipt_unavailable", unavailable.Code);
+        Assert.Equal((0L, 0L, 0L), await CountDispatchStateAsync());
+        await AssertSpawnRejectedWithoutDispatchAsync(
+            store, "maf_child_spawn_authorization_missing");
     }
 
     [Fact]
@@ -169,6 +175,248 @@ public sealed class MafChildSpawnFixedWorkAuthorizationOwnerStoreTests(
         Assert.Equal("maf_child_spawn_plan_stale", stale.Code);
     }
 
+    [Fact]
+    public async Task StalePlanRevisionCannotIssueFixedWorkAuthorization()
+    {
+        var store = CreateStore();
+        var changed = _intent with { PlanRevision = _intent.PlanRevision + 1 };
+
+        var stale = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            store.IssueGrantAsync(changed, _authority, CancellationToken.None));
+
+        Assert.Equal("maf_child_spawn_plan_stale", stale.Code);
+        Assert.Equal((0L, 0L, 0L), await CountDispatchStateAsync());
+    }
+
+    [Fact]
+    public async Task ChangedAcceptedSelectionCannotIssueFixedWorkAuthorization()
+    {
+        var store = CreateStore();
+        var changedAuthority = _authority with { AcceptedSelectionHash = new string('B', 64) };
+
+        var stale = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            store.IssueGrantAsync(_intent, changedAuthority, CancellationToken.None));
+
+        Assert.Equal("maf_child_spawn_authority_stale", stale.Code);
+        Assert.Equal((0L, 0L, 0L), await CountDispatchStateAsync());
+    }
+
+    [Fact]
+    public async Task AcceptedSelectionChangedAfterAllowCannotCommitDispatchOrConsumeReceipt()
+    {
+        var store = CreateStore();
+        var grant = await store.IssueGrantAsync(_intent, _authority, CancellationToken.None);
+        var receiptId = Guid.NewGuid();
+        await InsertPolicyReceiptAsync(grant, receiptId, "allow", "allowed");
+        _ = await store.StoreAllowAsync(_intent, _authority, receiptId, CancellationToken.None);
+
+        await ChangeAcceptedSelectionHashAsync(new string('B', 64));
+        await AssertSpawnRejectedWithoutDispatchAsync(
+            store, "maf_child_spawn_authority_stale");
+    }
+
+    [Fact]
+    public async Task FixedDispatchConsumesAllowWithCheckpointAndOutboxAndReusesTheSameIntent()
+    {
+        var authorizationStore = CreateStore();
+        var grant = await authorizationStore.IssueGrantAsync(
+            _intent, _authority, CancellationToken.None);
+        var receiptId = Guid.NewGuid();
+        await InsertPolicyReceiptAsync(grant, receiptId, "allow", "allowed");
+        var allow = await authorizationStore.StoreAllowAsync(
+            _intent, _authority, receiptId, CancellationToken.None);
+
+        var actor = new CoordinationActor(_authority.ActorIssuer, _authority.ActorId);
+        var root = new SessionIdentity(_authority.ProjectId, _authority.RunId, _intent.RootSessionId);
+        var owner = new CoordinationOwnerStore(fixture.DataSource, _schema);
+        var association = CreateExecutionAssociation(root);
+        var execution = CreateExecutionStore(root, actor);
+        var dispatchIntent = new MafExecutionDispatchIntent(
+            association.AssociationId,
+            association.ChildSessionId,
+            _intent.IntentId,
+            new string('a', 64));
+        var request = new SpawnSessionRequest(
+            association.ChildSessionId,
+            CoordinationSessionKind.ChildWork,
+            _intent.IntentId.ToString("N"),
+            _specification.Task);
+
+        // A failure after receipt consumption must roll back all owner writes and leave the same allow reusable.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SpawnAsync(failAfterConsumption: true));
+        Assert.Equal((0L, 0L, 0L), await CountDispatchStateAsync());
+        Assert.Null(await execution.ReadLatestAsync(CancellationToken.None));
+        var unconsumed = await authorizationStore.ReadCurrentAsync(
+            _intent, _authority, CancellationToken.None);
+        Assert.NotNull(unconsumed);
+        Assert.Null(unconsumed.ConsumedAt);
+
+        var spawned = await SpawnAsync(failAfterConsumption: false);
+        var checkpoint = await execution.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(checkpoint);
+        Assert.Equal(MafExecutionTaskStatus.Running,
+            checkpoint.State.Progress.FixedWorkItems[association.AssociationId]);
+        AssertFixedWorkAssociationEqual(
+            association, checkpoint.State.FixedWorkAssociations[association.AssociationId]);
+        Assert.Equal(dispatchIntent,
+            checkpoint.State.PendingDispatches[association.AssociationId]);
+        Assert.Equal((1L, 1L, 1L), await CountDispatchStateAsync());
+        var consumed = await authorizationStore.ReadCurrentAsync(
+            _intent, _authority, CancellationToken.None);
+        Assert.NotNull(consumed);
+        Assert.NotNull(consumed.ConsumedAt);
+        Assert.Equal(allow.PolicyReceiptId, consumed.PolicyReceiptId);
+        Assert.Equal(MafChildSpawnAuthorizationContract.ComputeIntentHash(_intent), consumed.IntentHash);
+
+        // Retrying the same fixed intent returns its original spawn and cannot duplicate durable rows.
+        var replay = await SpawnAsync(failAfterConsumption: false);
+        Assert.Equal(spawned.CommandId, replay.CommandId);
+        Assert.Equal((1L, 1L, 1L), await CountDispatchStateAsync());
+        var replayCheckpoint = await execution.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(replayCheckpoint);
+        Assert.Equal(checkpoint.Info, replayCheckpoint.Info);
+        Assert.Equal(checkpoint.State.Revision, replayCheckpoint.State.Revision);
+        Assert.Equal(dispatchIntent,
+            replayCheckpoint.State.PendingDispatches[association.AssociationId]);
+
+        async Task<SpawnedSession> SpawnAsync(bool failAfterConsumption)
+        {
+            return await owner.SpawnSessionAsync(
+                actor, root, request, 100, 32, CancellationToken.None,
+                persistSpawnedInTransaction: async (connection, transaction, spawnedSession, token) =>
+                {
+                    Assert.Equal(association.ChildSessionId, spawnedSession.Node.Identity.SessionId);
+                    var consumed = await authorizationStore.CheckAndConsumeWithinTransactionAsync(
+                        connection, transaction, _intent, _authority, token);
+                    Assert.Equal(_intent.IntentId, consumed.Evidence.IntentId);
+                    Assert.Equal(
+                        MafChildSpawnAuthorizationContract.ComputeIntentHash(_intent),
+                        consumed.Evidence.IntentHash);
+                    if (failAfterConsumption)
+                    {
+                        Assert.False(consumed.AlreadyConsumed);
+                        throw new InvalidOperationException("checkpoint append failed after receipt consumption");
+                    }
+
+                    var latest = await execution.ReadLatestInTransactionAsync(connection, transaction, token);
+                    var next = CoordinationEndpoints.PrepareRunningCheckpoint(
+                        latest,
+                        _intent.PlanId,
+                        _intent.PlanRevision,
+                        association.AssociationId,
+                        association,
+                        dispatchIntent);
+                    Assert.Equal(next is null, consumed.AlreadyConsumed);
+                    if (next is not null)
+                        _ = await execution.AppendInTransactionAsync(
+                            connection, transaction, Guid.NewGuid().ToString("N"), latest?.Info, next, token);
+                });
+        }
+    }
+
+    [Fact]
+    public async Task RevokedFixedWorkGrantCannotCommitDispatchOrConsumeItsReceipt()
+    {
+        var authorizationStore = CreateStore();
+        var grant = await authorizationStore.IssueGrantAsync(
+            _intent, _authority, CancellationToken.None);
+        var receiptId = Guid.NewGuid();
+        await InsertPolicyReceiptAsync(grant, receiptId, "allow", "allowed");
+        _ = await authorizationStore.StoreAllowAsync(
+            _intent, _authority, receiptId, CancellationToken.None);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var revoke = new NpgsqlCommand($"""
+            UPDATE "{_schema}".executable_action_grants
+            SET grant_state = 'revoked'
+            WHERE project_id = @project AND run_id = @run AND grant_id = @grant
+            """, connection))
+        {
+            revoke.Parameters.AddWithValue("project", _authority.ProjectId);
+            revoke.Parameters.AddWithValue("run", _authority.RunId);
+            revoke.Parameters.AddWithValue("grant", grant.GrantId);
+            Assert.Equal(1, await revoke.ExecuteNonQueryAsync());
+        }
+
+        await AssertSpawnRejectedWithoutDispatchAsync(
+            authorizationStore, "maf_child_spawn_policy_receipt_unavailable");
+    }
+
+    private async Task AssertSpawnRejectedWithoutDispatchAsync(
+        MafChildSpawnAuthorizationOwnerStore authorizationStore,
+        string expectedCode)
+    {
+        var actor = new CoordinationActor(_authority.ActorIssuer, _authority.ActorId);
+        var root = new SessionIdentity(_authority.ProjectId, _authority.RunId, _intent.RootSessionId);
+        var owner = new CoordinationOwnerStore(fixture.DataSource, _schema);
+        var execution = CreateExecutionStore(root, actor);
+        var association = CreateExecutionAssociation(root);
+        var dispatchIntent = new MafExecutionDispatchIntent(
+            association.AssociationId,
+            association.ChildSessionId,
+            _intent.IntentId,
+            new string('a', 64));
+        var request = new SpawnSessionRequest(
+            association.ChildSessionId,
+            CoordinationSessionKind.ChildWork,
+            _intent.IntentId.ToString("N"),
+            _specification.Task);
+
+        // Exercise receipt consumption after the owner has staged its child and outbox, then prove rollback on rejection.
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            owner.SpawnSessionAsync(
+                actor, root, request, 100, 32, CancellationToken.None,
+                persistSpawnedInTransaction: async (connection, transaction, spawnedSession, token) =>
+                {
+                    Assert.Equal(association.ChildSessionId, spawnedSession.Node.Identity.SessionId);
+                    _ = await authorizationStore.CheckAndConsumeWithinTransactionAsync(
+                        connection, transaction, _intent, _authority, token);
+                    var latest = await execution.ReadLatestInTransactionAsync(connection, transaction, token);
+                    var next = CoordinationEndpoints.PrepareRunningCheckpoint(
+                        latest,
+                        _intent.PlanId,
+                        _intent.PlanRevision,
+                        association.AssociationId,
+                        association,
+                        dispatchIntent);
+                    if (next is not null)
+                        _ = await execution.AppendInTransactionAsync(
+                            connection, transaction, Guid.NewGuid().ToString("N"), latest?.Info, next, token);
+                }));
+
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Equal((0L, 0L, 0L), await CountDispatchStateAsync());
+        Assert.Null(await execution.ReadLatestAsync(CancellationToken.None));
+    }
+
+    private async Task ChangeAcceptedSelectionHashAsync(string acceptedSelectionHash)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs
+            SET accepted_selection_hash = @selectionHash
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, acceptedSelectionHash);
+        command.Parameters.AddWithValue("project", _authority.ProjectId);
+        command.Parameters.AddWithValue("run", _authority.RunId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private static void AssertFixedWorkAssociationEqual(
+        MafExecutionFixedWorkAssociation expected,
+        MafExecutionFixedWorkAssociation actual)
+    {
+        Assert.True(expected.Specification.DeclaredOutputs.SequenceEqual(
+            actual.Specification.DeclaredOutputs, StringComparer.Ordinal));
+        Assert.Equal(expected with
+        {
+            Specification = expected.Specification with
+            {
+                DeclaredOutputs = actual.Specification.DeclaredOutputs
+            }
+        }, actual);
+    }
+
     private MafChildSpawnAuthorizationOwnerStore CreateStore() =>
         new(
             fixture.DataSource,
@@ -181,6 +429,60 @@ public sealed class MafChildSpawnFixedWorkAuthorizationOwnerStoreTests(
                 "events",
                 _schema),
             TimeProvider.System);
+
+    private MafExecutionFixedWorkAssociation CreateExecutionAssociation(SessionIdentity root)
+    {
+        const long activationRevision = 1;
+        var associationId = MafExecutionPlanner.CreateFixedWorkAssociationId(
+            root, _intent.PlanId, _intent.WorkflowStepId, activationRevision);
+        var childSessionId = MafExecutionPlanner.CreateChildSessionId(root, _intent.PlanId, associationId);
+        return new MafExecutionFixedWorkAssociation(
+            associationId,
+            activationRevision,
+            _intent.PlanId,
+            _intent.WorkflowDefinitionId,
+            _intent.WorkflowDefinitionRevision,
+            "catalog-1",
+            _intent.WorkflowStepId,
+            _specification,
+            _intent.RoleBinding.AgentId,
+            _intent.RoleBinding.ModelSelectionReference,
+            _intent.RoleBinding.IsolationProviderId,
+            _authority.AcceptedSelectionHash,
+            _intent.ExecutionFence,
+            _intent.PlanRevision,
+            childSessionId);
+    }
+
+    private MafExecutionCheckpointStore CreateExecutionStore(SessionIdentity root, CoordinationActor actor) =>
+        new(
+            new PostgresMafCheckpointStore(fixture.DataSource, _schema, null),
+            new MafCheckpointBinding(
+                root, actor, _intent.ExecutionFence,
+                MafExecutionCheckpointStore.CurrentSdkVersion, "model:provider/alpha", null));
+
+    private async Task<(long Children, long Spawns, long Consumptions)> CountDispatchStateAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_sessions
+                 WHERE project_id = @project AND run_id = @run AND parent_session_id = @root),
+                (SELECT count(*) FROM "{_schema}".outbox_events
+                 WHERE stream_id = @stream AND event_type = 'orchestrator.session.spawn_requested'),
+                (SELECT count(*) FROM "{_schema}".maf_child_spawn_authorization_consumptions
+                 WHERE project_id = @project AND run_id = @run AND spawn_intent_id = @intent)
+            """, connection);
+        command.Parameters.AddWithValue("project", _authority.ProjectId);
+        command.Parameters.AddWithValue("run", _authority.RunId);
+        command.Parameters.AddWithValue("root", _intent.RootSessionId);
+        command.Parameters.AddWithValue(
+            "stream", $"coordination/{_authority.ProjectId}/{_authority.RunId}/{_intent.RootSessionId}");
+        command.Parameters.AddWithValue("intent", _intent.IntentId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
+    }
 
     private MafChildSpawnFixedWorkIntent CreateIntent() => new(
         Guid.NewGuid(),
@@ -282,7 +584,10 @@ public sealed class MafChildSpawnFixedWorkAuthorizationOwnerStoreTests(
         {
             run.Parameters.AddWithValue("project", _authority.ProjectId);
             run.Parameters.AddWithValue("run", _authority.RunId);
-            run.Parameters.AddWithValue("selection", NpgsqlDbType.Jsonb, "{}");
+            run.Parameters.AddWithValue(
+                "selection",
+                NpgsqlDbType.Jsonb,
+                """{"modelSelection":{"reference":"model:provider/alpha"}}""");
             run.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, _authority.AcceptedSelectionHash);
             run.Parameters.AddWithValue("issuer", _authority.ActorIssuer);
             run.Parameters.AddWithValue("actor", _authority.ActorId);
