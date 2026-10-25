@@ -403,21 +403,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
     {
         // Allow two model turns so the run can send two dispatches.
         await RegisterSourceAsync(0, _registrations[0].Binding with { MaxModelTurns = 2 });
-        // The second dispatch reuses the first registration, grant, and source, but gets its own message ID.
-        _registrations[1] = _registrations[0];
-        _grants[1] = _grants[0];
-        _sources[1] = _sources[0];
-        _intents[1] = new("item-1", _registrations[0].Binding.SessionId, Guid.NewGuid(), _intents[0].PromptHash);
-        _messages[1] = _messages[0] with
-        {
-            Message = _messages[0].Message with { MessageId = _intents[1].MessageId }
-        };
-        // Save a checkpoint that lists both dispatches as pending, so both can be prepared.
-        await AdvanceNativeCheckpointAsync($"budgeted-pair-{Guid.NewGuid():N}", _checkpoint.State with
-        {
-            Revision = _checkpoint.State.Revision + 1,
-            PendingDispatches = _intents.ToImmutableDictionary(intent => intent.AssociationId)
-        });
+        await PrepareSharedSourcePairAsync($"budgeted-pair-{Guid.NewGuid():N}");
     }
 
     // A run-scoped Copilot budget in AIC at revision 1.

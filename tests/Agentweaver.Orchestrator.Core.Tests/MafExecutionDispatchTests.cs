@@ -16,6 +16,108 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 public sealed class MafExecutionDispatchTests
 {
     [Fact]
+    public void DispatchBindsOnlyRegisteredCatalogExecutors()
+    {
+        var supported = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+                WorkflowDefinitionOrigin.BuiltIn, WorkflowTestData.Open("implement", 0, []))),
+            WorkflowTestData.Plan(WorkflowTestData.Item("first")),
+            WorkflowTestData.SelectionContext()).Value!;
+        var bound = MafExecutionWorkflowBindings.RequireBound(supported, false);
+        var openAction = new MafExecutionAction(bound.Steps[0].Definition, supported.Plan.Items[0]);
+        MafExecutionWorkflowBindings.RequireBoundAction(bound, openAction);
+        var root = new SessionIdentity("project-1", "run-1", "root");
+        // The authorized item produces the stable grant identity and preserves the exact accepted plan object.
+        var authorizationIntent = MafExecutionWorkflowBindings.CreateOpenChildSpawnIntent(
+            supported, root, openAction, "context-1", 3, 4);
+        Assert.Equal(openAction.WorkItem, authorizationIntent.WorkItem);
+        Assert.Equal(root.SessionId, authorizationIntent.RootSessionId);
+        Assert.Equal(3, authorizationIntent.PlanRevision);
+
+        // An unimplemented platform gate cannot be claimed by an open child.
+        var unsupported = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+                WorkflowDefinitionOrigin.BuiltIn,
+                WorkflowTestData.Open("implement", 0, []),
+                WorkflowTestData.Platform("review", 1, ["implement"]))),
+            WorkflowTestData.Plan(WorkflowTestData.Item("first")),
+            WorkflowTestData.SelectionContext()).Value!;
+        var failure = Assert.Throws<CoordinationException>(
+            () => MafExecutionWorkflowBindings.RequireBound(unsupported, false));
+        Assert.Equal("maf_execution_executor_unavailable", failure.Code);
+
+        // Fixed work has no WorkPlanItem receipt variant yet, so dispatch refuses it before persistence.
+        var fixedPlan = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+                WorkflowDefinitionOrigin.BuiltIn, WorkflowTestData.Fixed("setup", 0, [], ["docs/plan.md"]))),
+            WorkflowTestData.Plan(),
+            WorkflowTestData.SelectionContext()).Value!;
+        var fixedBound = MafExecutionWorkflowBindings.RequireBound(fixedPlan, false);
+        var fixedAction = new MafExecutionAction(fixedBound.Steps[0].Definition, null);
+        var fixedFailure = Assert.Throws<CoordinationException>(() =>
+            MafExecutionWorkflowBindings.CreateOpenChildSpawnIntent(
+                fixedPlan, root, fixedAction, "context-1", 3, 4));
+        Assert.Equal("maf_child_spawn_fixed_authorization_unavailable", fixedFailure.Code);
+    }
+
+    [Fact]
+    public void PendingDispatchCannotReplayUnderAnotherEnvironmentOrPolicyGeneration()
+    {
+        var fence = new EnvironmentGenerationFence(
+            new EnvironmentOwnerIdentity("tenant-1", "project-1", "run-1", "environment-1"), 3);
+        var pinned = new RuntimeEgressVerificationReceipt(1, fence, 7, "context-v1", new string('a', 64));
+        MafExecutionEgressGuard.RequireSameReceipt(pinned, pinned);
+
+        foreach (var changed in new[]
+                 {
+                     pinned with { Fence = new EnvironmentGenerationFence(fence.Owner, 4) },
+                     pinned with { PolicyGeneration = 8 },
+                     pinned with { ContextRevision = "context-v2" },
+                     pinned with { IntentHash = new string('b', 64) }
+                 })
+        {
+            var failure = Assert.Throws<CoordinationException>(
+                () => MafExecutionEgressGuard.RequireSameReceipt(pinned, changed));
+            Assert.Equal("maf_execution_egress_stale", failure.Code);
+        }
+        Assert.Throws<CoordinationException>(() => MafExecutionEgressGuard.RequireSameReceipt(null, pinned));
+    }
+
+    [Fact]
+    public void CheckpointIdentityComparisonUsesPersistedIdsInsteadOfObjectIdentity()
+    {
+        var firstRead = new CheckpointInfo("session-1", "checkpoint-1");
+        var secondRead = new CheckpointInfo("session-1", "checkpoint-1");
+        var changedRead = new CheckpointInfo("session-1", "checkpoint-2");
+
+        // PostgreSQL reads create distinct instances for one row; changed identifiers must still be rejected.
+        Assert.NotSame(firstRead, secondRead);
+        Assert.True(CoordinationEndpoints.SameCheckpointInfo(firstRead, secondRead));
+        Assert.False(CoordinationEndpoints.SameCheckpointInfo(firstRead, changedRead));
+        Assert.True(CoordinationEndpoints.SameCheckpointInfo(null, null));
+        Assert.False(CoordinationEndpoints.SameCheckpointInfo(firstRead, null));
+    }
+
+    [Theory]
+    [InlineData(RuntimeEgressVerificationFailureCodes.AuthorizationChanged, 403)]
+    [InlineData(RuntimeEgressVerificationFailureCodes.StaleFence, 409)]
+    [InlineData(RuntimeEgressVerificationFailureCodes.GenerationUnverified, 409)]
+    [InlineData(RuntimeEgressVerificationFailureCodes.SelectionChanged, 409)]
+    [InlineData(RuntimeEgressVerificationFailureCodes.Unavailable, 503)]
+    [InlineData("runtime_actor_expired", 401)]
+    [InlineData("unexpected_environment_error", 503)]
+    public void EgressVerificationFailuresRetainTheirCodeAndControlledStatus(
+        string code, int expectedStatusCode)
+    {
+        var failure = new RuntimeAuthorizationException(code);
+
+        var mapped = MafExecutionEgressGuard.MapVerificationFailure(failure);
+
+        Assert.Equal(code, mapped.Code);
+        Assert.Equal(expectedStatusCode, mapped.StatusCode);
+    }
+
+    [Fact]
     public void LegacyCreditGuardIdentityKeepsItsOriginalRateCardProjection()
     {
         var multipliers = ImmutableDictionary<string, decimal>.Empty

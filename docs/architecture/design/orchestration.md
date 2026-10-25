@@ -255,8 +255,9 @@ output contract.
 Migration 016 remains unregistered, and whole-producer runtime acceptance remains
 pending. The bounded C3/MAF source composition is admitted, but these routes are not
 yet deployable. The 015 schema source is packaged and registered. This source change
-does not apply it to a shared or live database. No child dispatch or successful
-output verification is implied.
+does not apply it to a shared or live database. This backlog evidence slice does
+not itself confirm a WorkPlan, dispatch a child, or imply successful output
+verification.
 
 Non-empty or fixed-work plans also require a trusted Sandbox binding. The owner
 validates the accepted candidate against the server catalog, asks its registered
@@ -398,17 +399,52 @@ This flowchart shows typed proposals passing deterministic validation into the
 owner-side execution frontier. The catalog binder resolves every accepted step
 snapshot to a registered executor by step mode; platform steps also resolve by
 gate. Unknown modes and missing registrations fail binding before dispatch. Fixed
-work remains prescribed, and platform gates remain platform-owned; a model task
-cannot replace either. Ready child work is checkpointed with its spawn outbox
-request. The configured wall-time limit is measured from the persisted root-session
+work remains prescribed and platform gates remain platform-owned; a model task
+cannot replace either. The Policy owner supports fixed-work authorization receipts,
+but dispatch does not yet construct or consume them, so fixed-work child dispatch
+is refused. Open child work is authorized as `maf.child.spawn` by the pinned Policy
+provider. The resulting durable receipt is bound to the exact plan item, dispatch
+intent, accepted selection and execution fence; a provider binding by itself is not
+an allow decision. The dispatch owner
+re-reads and consumes that receipt in the Orchestrator transaction that commits
+the child association, spawn outbox, pending intent and Running checkpoint.
+Ready child work is checkpointed with its spawn outbox request. The dispatch owner
+reads the current root registration and Environment
+readiness, checks its lifecycle, lease, provider fence, accepted selection and
+observed network generation, then asks Environment to verify the exact
+`EnvironmentGenerationFence`, policy generation and `ContextRevision`. A typed
+root receipt is pinned to each pending child intent; a changed root lifecycle,
+policy, selection or egress intent cannot be adopted by a retry. A child may
+have a different Environment: once registered, its own current placement,
+generation and verified egress are checked before native preparation and again
+before Host send and terminal join. Native admission persists the child's
+exact registration binding. The owner rechecks the root receipt around remote
+waits and native sends; a failed verification leaves the
+pending intent visible, not dispatched under a guessed generation. The owner
+recomputes ready dependencies, including normalized output-conflict edges, under
+its root lock before committing child association, spawn outbox and the append-only
+Running checkpoint in one Orchestrator transaction. A duplicate returns the same
+intent; a failed callback rolls all three writes back. Results are immutable and
+terminal child status is joined in the owner transaction.
+
+The binder recognizes fixed/open child routes and the executable BuildTest gate.
+A workflow requiring another platform executor fails binding before child
+dispatch; this slice does not substitute a model task or fabricate a gate result.
+The Policy owner now supports a durable fixed-work receipt bound to the confirmed
+fixed-work specification and selected role, but this dispatch path does not yet
+construct that intent or consume its receipt in the spawn transaction. Fixed-work
+child actions therefore fail closed before session creation; wiring this receipt
+through dispatch is the next layer. Native runtime action admission still evaluates
+the selected Policy provider and Guardrails before Host effects.
+
+The configured wall-time limit is measured from the persisted root-session
 creation time. After a wall-time or hard-cap limit is reached, the dispatcher holds
 pending intents and reports the limit; already-running child turns can settle, but
 no new or replayed Host message is sent. Every protected Host send, capped or
 uncapped, also requires real Phase B admission bound to the actual current child
 registration, SDK source/native-turn identity, execution fence, pending intent and
 checkpoint, and applicable counters. Phase A and registration/readiness checks are
-not admission. No Phase B producer is wired, so all pending Host sends remain
-pending and their steps are reported unavailable.
+not native turn admission.
 
 ```mermaid
 flowchart TD
@@ -428,11 +464,19 @@ flowchart TD
     S --> BindExecutors{"Registered executor for every step?"}
     BindExecutors -->|"No"| BindError["Reject binding with a step-scoped error"]
     BindExecutors -->|"Yes"| DispatchWorkflow["Explicit typed dispatch"]
-    DispatchWorkflow --> RecheckRun["Recheck plan, selection, fence and limits under root-run mutex"]
-    RecheckRun --> O["Stage ready dependency frontier within remaining limits"]
-    O --> X["Phase A: commit child association, spawn outbox, pending intent, Running checkpoint"]
-    X --> ChildRegistration["Read and validate actual current child registration"]
-    ChildRegistration --> W{"Real Phase B admission bound to registration, native source/turn, fence, pending checkpoint, and applicable counters?"}
+    DispatchWorkflow --> FixedWork{"Open child-work action?"}
+    FixedWork -->|"No: fixed-work receipt not wired into dispatch"| BlockFixed["Refuse fixed-work child before side effects"]
+    FixedWork -->|"Yes"| AuthorizeSpawn{"Pinned Policy allows exact child-spawn intent?"}
+    AuthorizeSpawn -->|"No"| BlockPolicy
+    AuthorizeSpawn -->|"Yes"| VerifyEgress{"Environment owner verifies exact fence, policy generation and selection revision?"}
+    VerifyEgress -->|"No"| BlockEgress["Reject stale or unavailable egress; no spawn"]
+    VerifyEgress -->|"Yes"| RecheckRun["Recheck plan and selection; lock owner root"]
+    RecheckRun --> O["Recompute ready frontier and serialized output conflicts from latest checkpoint"]
+    O --> X["Phase A: consume spawn receipt and atomically commit child association, outbox, intent and Running checkpoint"]
+    X --> VerifyAgain{"Current Environment receipt still matches pending intent?"}
+    VerifyAgain -->|"No"| BlockRetry["Keep original intent; reject obsolete-generation retry"]
+    VerifyAgain -->|"Yes"| ChildRegistration["Read actual current child registration and verify its own Environment egress"]
+    ChildRegistration --> W{"Real Phase B admission bound to child registration, native source/turn, fence, pending checkpoint, and applicable counters?"}
     W -->|"Yes"| M["Deliver admitted intents to authenticated ready Hosts"]
     W -->|"No"| L["Keep pending intent; report unavailable step or reached limit"]
     M --> J{"Join state matches checkpoint?"}

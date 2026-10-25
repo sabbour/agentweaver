@@ -218,7 +218,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             MaxModelTurns = rootContext.MaxModelTurns,
             MaxToolCalls = rootContext.MaxToolCalls
         };
-        await RegisterSourceAsync(0, rootBinding);
+        await RegisterSourceAsync(0, rootBinding, bindDispatchIntent: false);
 
         var generationEventId = Guid.NewGuid();
         const string generationPrompt = "Generate an unconfirmed casting proposal.";
@@ -377,7 +377,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             MaxModelTurns = rootContext.MaxModelTurns,
             MaxToolCalls = rootContext.MaxToolCalls
         };
-        await RegisterSourceAsync(0, rootBinding);
+        await RegisterSourceAsync(0, rootBinding, bindDispatchIntent: false);
 
         var eventId = Guid.NewGuid();
         const string generationPrompt = "Generate an unconfirmed casting proposal.";
@@ -995,7 +995,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         }
     }
 
-    private async Task RegisterSourceAsync(int index, RuntimeBinding binding)
+    private async Task RegisterSourceAsync(
+        int index, RuntimeBinding binding, bool bindDispatchIntent = true)
     {
         var registration = await new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System)
             .RegisterAsync(binding, DateTimeOffset.UtcNow.AddHours(1), default);
@@ -1007,9 +1008,28 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             "gpt-6.1-sol", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
             binding.AcceptedSelectionHash, registration.Revision);
         await RegisterCurrentSourceAsync(index, registration, grant, source);
+        if (!bindDispatchIntent)
+        {
+            // Root-admission tests reuse a registration slot without changing its checkpointed child intent.
+            return;
+        }
+
         var prompt = $"Execute work item {index}.";
-        var intent = new MafExecutionDispatchIntent($"item-{index}", binding.SessionId,
-            Guid.NewGuid(), RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)));
+        var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt));
+        var intent = _intents[index];
+        if (intent is null)
+        {
+            // The initial registration creates the immutable dispatch identity stored in the first checkpoint.
+            intent = new MafExecutionDispatchIntent(
+                $"item-{index}", binding.SessionId, Guid.NewGuid(), promptHash);
+        }
+        else if (!string.Equals(intent.ChildSessionId, binding.SessionId, StringComparison.Ordinal) ||
+            !string.Equals(intent.PromptHash, promptHash, StringComparison.Ordinal))
+        {
+            // A registration refresh cannot retarget or rewrite a dispatch that may already have been sent.
+            throw new InvalidOperationException(
+                "A numeric-limit fixture cannot change a persisted dispatch intent.");
+        }
         _intents[index] = intent;
         _messages[index] = new(new("message", intent.MessageId, source.SdkSessionId, "user",
             [new("text", prompt)], new(new(1, registration, grant.GrantId, grant.Revision,
@@ -1135,24 +1155,51 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
     {
         await RegisterSourceAsync(0, _registrations[0].Binding with { MaxModelTurns = 2 });
-        _registrations[1] = _registrations[0];
-        _grants[1] = _grants[0];
-        _sources[1] = _sources[0];
-        _intents[1] = new("item-1", _registrations[0].Binding.SessionId, Guid.NewGuid(), _intents[0].PromptHash);
-        _messages[1] = _messages[0] with
-        {
-            Message = _messages[0].Message with { MessageId = _intents[1].MessageId }
-        };
-        await AdvanceNativeCheckpointAsync("native-accounting-pair", _checkpoint.State with
-        {
-            Revision = _checkpoint.State.Revision + 1,
-            PendingDispatches = _intents.ToImmutableDictionary(intent => intent.AssociationId)
-        });
+        await PrepareSharedSourcePairAsync("native-accounting-pair");
         // Both preparations must succeed: no credit denial and no spend budget denial.
         Assert.Equal(new(null, null), await PrepareOutcomeAsync(0, null, spendBudgets, readSpendEvidence));
         Assert.Equal(new(null, null), await PrepareOutcomeAsync(1, null, spendBudgets, readSpendEvidence));
         return [Assert.IsType<RuntimeNativeTurnAdmissionReceipt>((await BeginAsync(0)).Admission),
             Assert.IsType<RuntimeNativeTurnAdmissionReceipt>((await BeginAsync(1)).Admission)];
+    }
+
+    private async Task PrepareSharedSourcePairAsync(string checkpointId)
+    {
+        var registration = _registrations[0];
+        var grant = _grants[0];
+        var source = _sources[0];
+        var firstIntent = _intents[0];
+        var firstMessage = _messages[0];
+
+        // The numeric tests share one source, but keep the already-persisted item-1 intent unchanged.
+        _registrations[1] = registration;
+        _grants[1] = grant;
+        _sources[1] = source;
+        const string associationId = "item-1-same-source";
+        var intent = _checkpoint.State.PendingDispatches.GetValueOrDefault(associationId)
+            ?? new MafExecutionDispatchIntent(
+                associationId, registration.Binding.SessionId, Guid.NewGuid(), firstIntent.PromptHash);
+        if (!string.Equals(intent.ChildSessionId, registration.Binding.SessionId, StringComparison.Ordinal) ||
+            !string.Equals(intent.PromptHash, firstIntent.PromptHash, StringComparison.Ordinal))
+            throw new InvalidOperationException("The shared-source dispatch intent binding changed.");
+        _intents[1] = intent;
+        _messages[1] = firstMessage with
+        {
+            Message = firstMessage.Message with { MessageId = intent.MessageId }
+        };
+
+        // Add a distinct running association so the checkpoint transition remains immutable and retry-safe.
+        var latest = _checkpoint.State;
+        await AdvanceNativeCheckpointAsync(checkpointId, latest with
+        {
+            Revision = checked(latest.Revision + 1),
+            Progress = latest.Progress with
+            {
+                WorkItems = latest.Progress.WorkItems.SetItem(
+                    associationId, MafExecutionTaskStatus.Running)
+            },
+            PendingDispatches = latest.PendingDispatches.SetItem(associationId, intent)
+        });
     }
 
     private async Task AdvanceNativeCheckpointAsync(string id, MafExecutionCheckpoint state)

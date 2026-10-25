@@ -55,6 +55,17 @@ internal sealed class RuntimeEnvironmentContextClient(
             $"/environments/{Uri.EscapeDataString(environmentId)}/coordination/sessions/{Uri.EscapeDataString(sessionId)}" +
             $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(profileId)}",
             actor, null, cancellationToken);
+
+    /// <summary>Reads the current owner-locked placement and its observed network generation.</summary>
+    public Task<EnvironmentRuntimeReadinessContext> ReadReadinessAsync(
+        RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
+        string environmentId, string profileId, CancellationToken cancellationToken) =>
+        RuntimeOwnerHttpTransport.SendAsync<EnvironmentRuntimeReadinessContext>(
+            client, options.EnvironmentOwnerAddress,
+            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
+            $"/environments/{Uri.EscapeDataString(environmentId)}/coordination/sessions/{Uri.EscapeDataString(sessionId)}" +
+            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(profileId)}/readiness",
+            actor, null, cancellationToken);
 }
 
 /// <summary>

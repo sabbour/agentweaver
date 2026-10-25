@@ -59,10 +59,12 @@ internal static class MafExecutionPlanner
         string workPlanId,
         string associationId)
     {
+        // Bind the root identity, plan, association and purpose so unrelated dispatches cannot share a replay key.
         var scope = JsonSerializer.SerializeToUtf8Bytes(new[]
         {
             parent.ProjectId, parent.RunId, parent.SessionId, workPlanId, associationId, "maf-a2a"
         });
+        // A fixed SHA-256 prefix yields the same compact identifier on every exact retry.
         return new Guid(SHA256.HashData(scope).AsSpan(0, 16));
     }
 
@@ -426,6 +428,26 @@ internal static class MafExecutionPlanner
             unavailable.ToImmutable(),
             failedDependencies.ToImmutable(),
             stepStatuses.Values.All(status => status == MafExecutionTaskStatus.Succeeded));
+    }
+
+    /// <summary>Rechecks an individual child action against the locked, current checkpoint frontier.</summary>
+    internal static void RequireReadyDispatchAction(
+        WorkPlanSnapshot snapshot,
+        MafExecutionProgress progress,
+        ImmutableDictionary<string, MafExecutionFixedWorkAssociation>? fixedAssociations,
+        MafExecutionAction action)
+    {
+        // Child slots are enforced by the owner spawn transaction. This check is only for
+        // dependency outcomes, fixed-work activation and normalized output-conflict edges.
+        var frontier = BuildFrontier(
+            snapshot, progress, 0, 0, int.MaxValue, int.MaxValue,
+            _ => false, fixedAssociations);
+        // Missing actions include stale dependencies and serialized output conflicts; never commit them from an old frontier.
+        if (!frontier.ReadyActions.Any(candidate =>
+                candidate.Step.Id == action.Step.Id &&
+                candidate.WorkItem?.Id == action.WorkItem?.Id))
+            throw new CoordinationException(
+                "maf_execution_frontier_stale", StatusCodes.Status409Conflict);
     }
 
     /// <summary>
