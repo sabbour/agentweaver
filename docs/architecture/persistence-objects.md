@@ -88,6 +88,10 @@ A normal small event does not require a Blob object.
 
 ## Production session-material composition
 
+The [session-material composition decision](session-material-composition.md)
+records the production boundary, source evidence, remaining read-time retention
+gap, and independently owned implementation slices.
+
 The existing foundations are the PostgreSQL journal and reference records, the
 `IObjectStore` contract, and the create-only Azure Blob adapter. The Events &
 Sessions host composes them through its typed owner when the explicit container
@@ -128,7 +132,9 @@ sequenceDiagram
     Runtime->>Events: Typed bytes with event, session, and fence
     Events->>Projects: Check current actor and project/run authority
     Events->>Core: Check current registration, source, and writer fence
-    Events->>Objects: Create immutable object with owner-generated key
+    Events->>PG: Commit inventory for the owner-generated key
+    Events->>PG: Lock inventory in the journal transaction
+    Events->>Objects: Create immutable object or verify identical bytes
     Objects->>Blob: Write opaque bytes to configured container
     alt Blob write fails
         Blob-->>Objects: Storage error
@@ -167,20 +173,27 @@ length and digest, and checks authority again before returning bytes. Historical
 turn reads and execution-bound cache reads use their respective current authority
 rules. Cache restore also requires compatible runtime and model bindings.
 
-PostgreSQL owns each reference's retention owner and expiry. The current source
-records that metadata but does not run Blob retention deletion. Any later cleanup
-must re-read the current Events-owned reference and retention state, confirm the
-object is no longer retained or referenced, and delete only that exact key under
-the owner boundary. Blob does not choose which run data to delete.
+PostgreSQL owns each reference's retention owner and expiry. Migration 010 adds
+durable object inventory and backfills committed references. Events inventories
+new typed uploads before storage, then records reference deadlines in the journal
+transaction. The owner cleanup worker runs at startup and hourly. It deletes
+expired bytes and unreferenced uploads older than the 24-hour grace period, using
+inventory locks and current reference checks. Any unexpired reference preserves
+the bytes. Journal history and reference metadata remain after byte deletion.
+Blob does not choose which run data to delete.
 
-The current source also has no durable inventory or enumeration path for unreferenced
-uploads. `IObjectStore` can create, read, and delete a known key, but it cannot list
-candidate objects; Events has no persistent orphan-reconciliation record. Therefore
-the service cannot discover every orphan after restart. Do not sweep the container
-or delete a key based on caller input. Reconciliation must remain Events-owned and
-must prove, from current PostgreSQL state, that an exact candidate has no committed
-reference before deletion. This limitation is unresolved in the current contract;
-it does not authorize a new public API or broader Blob access.
+Read-time retention is still incomplete: the material read path verifies authority,
+scope, length, and digest but does not check the recorded deadline before returning
+bytes. Content may remain readable until cleanup runs. The composition decision
+requires expiry checks before retrieval and before disclosure; it does not claim
+that this follow-up is implemented.
+
+`IObjectStore` can create, read, and delete a known key, but it cannot list
+candidate objects. Inventory makes new typed uploads discoverable after restart;
+it cannot discover earlier unreferenced objects. Do not sweep the container or
+delete a key based on caller input. Historical reconciliation needs a separately
+approved owner-scoped listing/scan contract. This decision does not add one or
+authorize broader Blob access.
 
 A cache must come from actual SDK-supported serialization through the runtime's
 custom filesystem. Do not rewrite an opaque SDK payload to fabricate safety or
