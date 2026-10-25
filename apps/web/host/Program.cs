@@ -134,8 +134,10 @@ public sealed record WebBuildVersion(
     [property: System.Text.Json.Serialization.JsonPropertyName("gitSha")] string? GitSha,
     [property: System.Text.Json.Serialization.JsonPropertyName("isRelease")] bool IsRelease)
 {
+    // Strict SemVer core plus an optional prerelease: no leading zeros in numeric
+    // parts and no empty prerelease identifiers, so malformed tags show as unknown.
     private static readonly System.Text.RegularExpressions.Regex SemanticVersion =
-        new(@"^v?(\d+\.\d+\.\d+)(-[0-9A-Za-z.-]+)?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        new(@"^v?((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     private static readonly System.Text.RegularExpressions.Regex CommitSha =
         new("^[0-9a-fA-F]{7,64}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 

@@ -145,6 +145,9 @@ public sealed class WebHostCallbackTests
     [InlineData("dev", "unknown", null, null, false)]
     [InlineData(null, null, null, null, false)]
     [InlineData("1.5.0", "not-a-sha", "1.5.0", null, true)]
+    [InlineData("01.5.0", "abc1234", null, "abc1234", false)]
+    [InlineData("1.5.0-..", "abc1234", null, "abc1234", false)]
+    [InlineData("1.5.0-01", "abc1234", null, "abc1234", false)]
     public void BuildVersionKeepsOnlyRealVersionsAndCommits(
         string? version, string? gitSha, string? expectedVersion, string? expectedSha, bool expectedRelease)
     {
