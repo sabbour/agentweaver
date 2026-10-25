@@ -636,6 +636,25 @@ The production host provides unauthenticated `/health/live` and
 `wwwroot/index.html` is missing. These checks report host and page availability;
 they do not verify Broker access or live API behavior.
 
+## Check the app version
+
+The persona menu at the bottom of the left rail shows the running web app
+version, like the 0.x client. Hover over the badge to see the full version and
+the commit the web image was built from. A build that is not a published
+version shows the commit in the badge, for example `v1.5.0-dev+a1c11f1`.
+
+The version comes from the web host's `/api/version` route, which reports the
+version and commit baked into the web image when it was built. If the release
+reuses an earlier web image, the badge shows that image's version, because that
+is the code that is running. The route isn't cached, so the badge updates after
+an upgrade when the page reloads. When the route isn't available, as with the
+local Vite dev server, the badge shows the version from the web package.
+
+This is the web app version, not the platform release tag. Each platform
+service has its own version. **Platform settings** and **Cluster** show the web
+app version and build commit above the platform component table. For
+administrators, the table lists every area with its selected (active)
+implementations and the other available implementations, each with its version.
 ## Understand client limitations
 
 The optional managed portal routes `/` to Web on port 8080, `/api/v1` and the

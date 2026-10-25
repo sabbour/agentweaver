@@ -116,6 +116,45 @@ public sealed class WebHostCallbackTests
             configuration.RootElement.GetProperty("IDENTITY_BROKER_ISSUER").GetString());
     }
 
+    [Fact]
+    public async Task VersionRouteReturnsUncachedJsonInsteadOfTheAppShell()
+    {
+        using var factory = new WebApplicationFactory<WebHost::Program>()
+            .WithWebHostBuilder(builder =>
+                builder.UseWebRoot(Path.Combine(FindRepositoryRoot(), "apps", "web")));
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://web.test")
+        });
+
+        using var response = await client.GetAsync("/api/version");
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        Assert.True(body.RootElement.TryGetProperty("version", out _));
+        Assert.True(body.RootElement.TryGetProperty("gitSha", out _));
+        Assert.True(body.RootElement.TryGetProperty("isRelease", out _));
+    }
+
+    [Theory]
+    [InlineData("1.5.0", "ABCDEF0123456789abcdef0123456789abcdef01", "1.5.0", "abcdef0123456789abcdef0123456789abcdef01", true)]
+    [InlineData("v1.5.0", "abc1234", "1.5.0", "abc1234", true)]
+    [InlineData("1.6.0-rc.1", "abc1234", "1.6.0-rc.1", "abc1234", false)]
+    [InlineData("dev", "unknown", null, null, false)]
+    [InlineData(null, null, null, null, false)]
+    [InlineData("1.5.0", "not-a-sha", "1.5.0", null, true)]
+    public void BuildVersionKeepsOnlyRealVersionsAndCommits(
+        string? version, string? gitSha, string? expectedVersion, string? expectedSha, bool expectedRelease)
+    {
+        var result = WebHost::WebBuildVersion.FromEnvironment(version, gitSha);
+
+        Assert.Equal(expectedVersion, result.Version);
+        Assert.Equal(expectedSha, result.GitSha);
+        Assert.Equal(expectedRelease, result.IsRelease);
+    }
+
     private static string FindRepositoryRoot()
     {
         foreach (var startingPath in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })

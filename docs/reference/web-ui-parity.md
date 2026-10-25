@@ -125,7 +125,7 @@ Each row says what works and what is still missing. The missing parts link to
 | --- | --- | --- |
 | Sign-in | Broker sign-in in the 0.x card. | Nothing. |
 | Consent | Permission explanations in the sign-in card. | Nothing. |
-| Shell and breadcrumbs | 0.x rail with **Overview**, the v1-only **Chief of Staff** section link, **Projects**, and **Sessions**, the **New session** button, project switcher, persona menu, and `Projects / project / page` breadcrumbs. Project pages list Flow, Workflows, Workspace, Observability, Diagnostics, Heartbeat, and Cluster. | Nothing. |
+| Shell and breadcrumbs | 0.x rail with **Overview**, the v1-only **Chief of Staff** section link, **Projects**, and **Sessions**, the **New session** button, project switcher, persona menu with the running web app version, and `Projects / project / page` breadcrumbs. Project pages list Flow, Workflows, Workspace, Observability, Diagnostics, Heartbeat, and Cluster. | Nothing. |
 | Notification bell | Your notifications across projects, with the pending count, links to the run Approvals tab or the Board, and **Dismiss**. | Nothing. |
 | Overview | **Chief of Staff** group with Priorities, New chat, and My conversations; the 0.x **Operations** tiles; four recent project rows; metrics and usage for one chosen project; recent run summaries; and **Needs attention**. Missing global totals and full activity are named in the page. | Cross-project totals, aggregate metrics and usage, service health, and the full activity feed from `GET /api/v1/overview`. |
 | Sessions | Runs across your projects, newest first, with **Load more**, **Refresh**, and **New session**. | Nothing. |
@@ -150,7 +150,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Settings > Repository, Platform components, Run limits, Connections, History, Advanced | Saved configuration fields and revisions. | Nothing. |
 | Settings > Models | Default model, reasoning effort, credential, and per-task models. | Model catalog (behavior limit). |
 | Settings > Danger zone | Archive and restore. | Project delete: `DELETE /api/v1/projects/{projectId}`. |
-| Platform settings | All 16 platform component areas with owner, readiness, and implementations. | BYOK providers, platform-default Copilot status, account AI access. |
+| Platform settings | The web app version and build commit, and all 16 platform component areas with owner, readiness, and the active and available implementations with their versions. | BYOK providers, platform-default Copilot status, account AI access. |
 | Board | **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, title and description edits, queue state, queue order, send all to Ready, archive, and prerequisite controls. | A task delete control, backlog settings, decompose, and the Human Review and Problems columns. |
 | Flow | Project task notifications, **Needs input** including dismissed gates, **Task stages**, and **Open**, **Working**, and **Done** run groups. | The live agent graph for the project and current provider-side PR state per run. |
 | Workflows | **Saved workflow references**: the default workflow and the workflow for each blueprint, from project configuration. | Workflow catalog, YAML, edit, run, generate, sync, default, and per-task override. |
@@ -158,7 +158,7 @@ Each row says what works and what is still missing. The missing parts link to
 | Observability | Metric tiles, **Activity** chart, run totals, model and agent usage, and **Recent runs**. | Per-run traces and response-duration percentiles. |
 | Diagnostics | **Areas that are not ready** from the platform component report, and **Failed runs**. | Service self-checks and project diagnostic reports. |
 | Heartbeat | Seven-day metric tiles and **Active and blocked runs**. | Heartbeat records for each service process. |
-| Cluster | **Platform components** with owner, readiness, and implementations. | Node and replica topology. |
+| Cluster | The web app version and build commit, and **Platform components** with owner, readiness, and implementations with their versions. | Node and replica topology. |
 | Apps and Canvas | Not shown. | Not planned for v1. |
 
 ### Re-role comparison
@@ -220,7 +220,7 @@ work around missing routes.
 | Project diagnostics | `GET /api/projects/{p}/diagnostics` | `GET /api/v1/projects/{projectId}/diagnostics` | Return configuration and connection checks for one project. |
 | Heartbeat | `GET /api/diagnostics/heartbeat` | `GET /api/v1/platform/heartbeat` | Return the last heartbeat of each service process; add a table on Heartbeat. |
 | Cluster topology | `GET /api/diagnostics/cluster`, `GET /api/diagnostics/cluster/topology` | `GET /api/v1/platform/cluster` | Return nodes and replicas; add a table on Cluster. |
-| System runtime | `GET /api/system/runtime` | `GET /api/v1/platform/runtime` | Return version and host details; show them on Cluster. |
+| System runtime | `GET /api/system/runtime` | `GET /api/v1/platform/runtime` | Return host details, such as the .NET runtime and operating system, and show them on Cluster. The web app version and each component version are already shown. |
 | Workflow catalog | `GET /api/projects/{p}/workflows`, `GET …/workflows/{id}`, `GET …/workflows/{id}/yaml` | `GET /api/v1/projects/{projectId}/workflows`, `GET /api/v1/projects/{projectId}/workflows/{workflowId}` | Return available workflows and their definitions; list them on Workflows. |
 | Workflow edit | `PUT /api/projects/{p}/workflows/{id}`, `POST …/workflows/generate` | `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`, `POST /api/v1/projects/{projectId}/workflows/generate` | Save workflow definitions with a revision. |
 | Workflow sync | `POST /api/projects/{p}/workflows/sync` | `POST /api/v1/projects/{projectId}/workflows/sync` | Read workflow files from the repository. |
