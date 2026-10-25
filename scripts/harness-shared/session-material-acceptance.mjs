@@ -88,6 +88,7 @@ export function createSessionMaterialAcceptance({ sourceEvidence, environment, f
       },
       requiredTurnMaterial: {
         missing: { status: 'not-probed', expectedDisposition: 'turn-failure' },
+        expired: { status: 'not-probed', expectedDisposition: 'turn-failure' },
       },
       modelTurnDuringRebuild: { status: 'not-observed', count: null },
       repeatedExternalEffects: { status: 'not-observed' },

@@ -86,6 +86,7 @@ test('separates unattempted turn evidence, optional cache fallback, and required
   assert.equal(result.recovery.optionalSdkCache.absent.expectedDisposition, 'rebuild-from-retained-turns');
   assert.equal(result.recovery.optionalSdkCache.expired.expectedDisposition, 'rebuild-from-retained-turns');
   assert.equal(result.recovery.requiredTurnMaterial.missing.expectedDisposition, 'turn-failure');
+  assert.equal(result.recovery.requiredTurnMaterial.expired.expectedDisposition, 'turn-failure');
   assert.equal(result.recovery.modelTurnDuringRebuild.count, null);
   assert.equal(result.recovery.repeatedExternalEffects.status, 'not-observed');
   assert.ok(result.ownerBoundaryChecks.every(check => check.status === 'blocked'));
