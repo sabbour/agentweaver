@@ -199,6 +199,7 @@ public sealed class MafChildSpawnAuthorizationOwnerStoreTests(
             lockOwner.Parameters.AddWithValue("root", _intent.RootSessionId);
             Assert.Equal(_authority.RunId, await lockOwner.ExecuteScalarAsync());
         }
+        await using var observerConnection = await fixture.DataSource.OpenConnectionAsync();
 
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var retry = retryStore.IssueGrantAsync(_intent, _authority, cancellation.Token);
@@ -210,6 +211,7 @@ public sealed class MafChildSpawnAuthorizationOwnerStoreTests(
             var waitingOnOwner = false;
             while (DateTime.UtcNow < deadline)
             {
+                // Keep pg_stat_activity polling outside the lock-holding transaction so each poll gets a fresh snapshot.
                 await using var activity = new NpgsqlCommand("""
                     SELECT EXISTS (
                         SELECT 1
@@ -217,7 +219,7 @@ public sealed class MafChildSpawnAuthorizationOwnerStoreTests(
                         WHERE datname = current_database()
                           AND application_name = @application
                           AND wait_event_type = 'Lock')
-                    """, transitionConnection, transition);
+                    """, observerConnection);
                 activity.Parameters.AddWithValue("application", applicationName);
                 waitingOnOwner = (bool)(await activity.ExecuteScalarAsync())!;
                 if (waitingOnOwner)
