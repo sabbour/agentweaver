@@ -34,6 +34,7 @@ database credentials while collecting evidence.
 | A workload does not restart after a ConfigMap edit | Kubernetes does not restart a process when referenced ConfigMap data changes. | Restart only the affected reviewed Deployment and check its rollout status. |
 | A pod starts but a feature is unavailable | The source may contain an unpublished service candidate, an unregistered provider, or a route that is not deployed. | Check the release manifest and provider catalog. Source code, route declarations, and health probes do not prove deployed feature availability. |
 | Run selection returns `409 platform_runtime_unconfigured` | No platform runtime defaults revision has been written yet. | Bootstrap the first PlatformAdmin, then apply the reviewed `deploy/k8s/runtime-configs/platform-runtime-defaults.json` with the [deployment guide](./deploy-to-azure.md). Retry selection after the script confirms the exact revision. |
+| PlatformAdmin bootstrap Job fails | The receipt reports the exception type, an allowlisted configuration category when applicable, and validated PostgreSQL SQL state, constraint, and table metadata; it omits free-form exception messages. A failed receipt does not establish that the grant transaction rolled back. | Read `bootstrap.diagnostic`, then have a database operator verify the exact active PlatformAdmin assignment and matching `role_assigned` audit row for the approved identity before any retry. This repository has no dedicated read-only API or script for that exact readback. |
 
 ## Collect a safe diagnostic
 

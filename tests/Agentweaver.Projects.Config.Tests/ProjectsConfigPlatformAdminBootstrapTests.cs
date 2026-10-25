@@ -10,6 +10,8 @@ public sealed class ProjectsConfigPlatformAdminBootstrapTests(
     ProjectsConfigPostgresFixture fixture) : IClassFixture<ProjectsConfigPostgresFixture>
 {
     private const string TestIssuer = "https://projects-config.test/";
+    private const string SyntheticIssuer = "https://agentweaver.synthetic.example/";
+    private const string SyntheticTenantId = "11111111-2222-4333-8444-555555555555";
 
     [Fact]
     public async Task CreatesMembershipPlatformAdminAndAuditAtomicallyAndIsIdempotent()
@@ -166,6 +168,79 @@ public sealed class ProjectsConfigPlatformAdminBootstrapTests(
         Assert.Equal(ProjectAuthorityResourceType.Platform, roleAudit.ResourceType);
         Assert.Equal(ProjectAuthorizationOwner.PlatformResourceId, roleAudit.ResourceId);
         await CleanupPlatformAdminAsync(subject, tenantId);
+    }
+
+    [Fact]
+    public async Task PlatformAdminBootstrapSucceedsAfterTenantAdminBootstrapForSyntheticIdentity()
+    {
+        var options = CreateDbContextOptions();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var subject = Guid.NewGuid().ToString();
+
+        Assert.True(await store.BootstrapFirstTenantAdminAsync(
+            SyntheticIssuer, subject, SyntheticTenantId));
+
+        try
+        {
+            Assert.True(await store.BootstrapFirstPlatformAdminAsync(
+                SyntheticIssuer, subject, SyntheticTenantId));
+            Assert.False(await store.BootstrapFirstPlatformAdminAsync(
+                SyntheticIssuer, subject, SyntheticTenantId));
+
+            await using var db = new ProjectsConfigDbContext(options);
+            var membership = await db.TenantMemberships.AsNoTracking().SingleAsync(item =>
+                item.Issuer == SyntheticIssuer &&
+                item.Subject == subject &&
+                item.TenantId == SyntheticTenantId);
+            var assignments = await db.RoleAssignments.AsNoTracking()
+                .Where(item => item.MembershipId == membership.MembershipId)
+                .ToArrayAsync();
+            var audit = await db.AuthorityAudit.AsNoTracking()
+                .Where(item => item.MembershipId == membership.MembershipId)
+                .ToArrayAsync();
+
+            Assert.Equal(2, assignments.Length);
+            Assert.Contains(assignments, item =>
+                item.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                item.ResourceId == SyntheticTenantId &&
+                item.Role == ProjectAuthorityRole.TenantAdmin);
+            Assert.Contains(assignments, item =>
+                item.ResourceType == ProjectAuthorityResourceType.Platform &&
+                item.ResourceId == ProjectAuthorizationOwner.PlatformResourceId &&
+                item.Role == ProjectAuthorityRole.PlatformAdmin);
+            Assert.Single(audit, item => item.EventType == "membership_granted");
+            Assert.Single(audit, item =>
+                item.EventType == "role_assigned" &&
+                item.ResourceType == ProjectAuthorityResourceType.Tenant);
+            Assert.Single(audit, item =>
+                item.EventType == "role_assigned" &&
+                item.ResourceType == ProjectAuthorityResourceType.Platform);
+        }
+        finally
+        {
+            await using var db = new ProjectsConfigDbContext(options);
+            var membershipId = await db.TenantMemberships.AsNoTracking()
+                .Where(item =>
+                    item.Issuer == SyntheticIssuer &&
+                    item.Subject == subject &&
+                    item.TenantId == SyntheticTenantId)
+                .Select(item => (Guid?)item.MembershipId)
+                .SingleOrDefaultAsync();
+            if (membershipId is not null)
+            {
+                var activeAssignments = await db.RoleAssignments.AsNoTracking()
+                    .Where(item =>
+                        item.MembershipId == membershipId &&
+                        item.State == ProjectAuthorityRecordState.Active)
+                    .Select(item => new { item.AssignmentId, item.Revision })
+                    .ToArrayAsync();
+                foreach (var assignment in activeAssignments)
+                {
+                    await store.RevokeRoleAssignmentAsync(
+                        assignment.AssignmentId, assignment.Revision, "platform-bootstrap-test-cleanup");
+                }
+            }
+        }
     }
 
     [Fact]

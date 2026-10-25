@@ -180,7 +180,11 @@ const PLATFORM_ADMIN_BOOTSTRAP_MESSAGES = new Map([
   ['The first PlatformAdmin was created.', 'created'],
   ['The approved PlatformAdmin already exists; no changes were made.', 'already-present'],
   ['First PlatformAdmin bootstrap refused because another active PlatformAdmin exists.', 'conflict'],
+  ['First PlatformAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.', 'failed'],
 ]);
+const PLATFORM_ADMIN_BOOTSTRAP_DIAGNOSTIC_PREFIX = 'PlatformAdmin bootstrap diagnostic: ';
+const PLATFORM_ADMIN_BOOTSTRAP_DIAGNOSTIC_PATTERN =
+  /^ExceptionType=[A-Za-z][A-Za-z0-9]{0,127}(?:; InnerExceptionType=[A-Za-z][A-Za-z0-9]{0,127})?(?:; (?:Category=invalid-bootstrap-configuration|SqlState=(?:unknown|[0-9A-Z]{5}); ConstraintName=(?:unknown|[A-Za-z_][A-Za-z0-9_.$-]{0,127}); TableName=(?:unknown|[A-Za-z_][A-Za-z0-9_.$-]{0,127})))?$/;
 
 function prepareJob(template, { name, image, runId, secretName, bootstrapFirstPlatformAdmin = false }) {
   const job = structuredClone(template);
@@ -264,13 +268,20 @@ function verifyPlatformAdminBootstrapConfig(configMap) {
 }
 
 function parsePlatformAdminBootstrapMessage(log) {
-  // Ignore host noise and retain only one exact message emitted by the one-shot command.
+  // Keep arbitrary process output out of receipts by accepting only the formatter's metadata fields.
   const lines = log.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const outcomes = lines.map(line => PLATFORM_ADMIN_BOOTSTRAP_MESSAGES.get(line)).filter(Boolean);
   if (outcomes.length !== 1) {
     fail('PlatformAdmin bootstrap Job did not return exactly one stable outcome message.');
   }
-  return outcomes[0];
+  const diagnostics = lines
+    .filter(line => line.startsWith(PLATFORM_ADMIN_BOOTSTRAP_DIAGNOSTIC_PREFIX))
+    .map(line => line.slice(PLATFORM_ADMIN_BOOTSTRAP_DIAGNOSTIC_PREFIX.length));
+  if (diagnostics.length > 1 || (diagnostics.length === 1 &&
+      (outcomes[0] !== 'failed' || !PLATFORM_ADMIN_BOOTSTRAP_DIAGNOSTIC_PATTERN.test(diagnostics[0])))) {
+    fail('PlatformAdmin bootstrap Job returned unexpected diagnostic output.');
+  }
+  return { outcome: outcomes[0], diagnostic: diagnostics[0] };
 }
 
 function defaultDependencies() {
@@ -487,10 +498,14 @@ export async function runProjectsConfigMigration(options, overrides = {}) {
             image: image.image,
           });
           // Bootstrap command output is limited to stable result messages; raw pod logs are never persisted.
-          const outcome = parsePlatformAdminBootstrapMessage(
+          const { outcome, diagnostic } = parsePlatformAdminBootstrapMessage(
             kubectl(['logs', `job/${name}`, '--tail=20']).stdout);
           receipt.bootstrap = { outcome };
+          if (diagnostic) receipt.bootstrap.diagnostic = safeDiagnostic(diagnostic, secrets);
           record('platform-admin-bootstrap-result', { outcome });
+          if (outcome === 'failed') {
+            fail('First PlatformAdmin bootstrap command failed; review the sanitized diagnostic in the receipt.');
+          }
           if (outcome === 'conflict') {
             fail('First PlatformAdmin bootstrap was refused because another active PlatformAdmin exists.');
           }

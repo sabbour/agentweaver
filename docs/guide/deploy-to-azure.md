@@ -790,6 +790,20 @@ approved grant, or refused because another active PlatformAdmin exists. Stop
 if it reports a conflict. The command verifies the migration history and does
 not rerun migrations or apply runtime grants.
 
+If the bootstrap Job fails unexpectedly, its receipt records the stable failure
+outcome, exception type, an allowlisted configuration category when applicable,
+and validated PostgreSQL metadata. It omits free-form exception messages. A
+failed receipt does not prove that no grant committed. Before retrying, require
+an exact read-only database readback of the active PlatformAdmin assignment
+and its matching `role_assigned` audit row for the approved issuer, subject,
+and tenant. Confirm the membership is active and
+that the assignment has `resource_type=Platform`, `resource_id=default`,
+`role=PlatformAdmin`, and active state; the audit row must match its assignment
+and membership IDs and identity, resource, and role fields. This repository
+does not yet provide a supported read-only readback for this check. Do not
+replace it with ad hoc database queries, and do not retry the bootstrap until a
+supported readback has confirmed the state.
+
 After the bootstrap succeeds, write the reviewed defaults in
 `deploy/k8s/runtime-configs/platform-runtime-defaults.json` through the public
 Gateway API. The script opens the existing P1 browser sign-in flow and requests

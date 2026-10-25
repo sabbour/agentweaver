@@ -69,10 +69,12 @@ if (runFirstTenantAdminBootstrap)
             "First TenantAdmin bootstrap refused because another active TenantAdmin exists for this tenant.");
         Environment.ExitCode = 1;
     }
-    catch (Exception)
+    catch (Exception exception)
     {
         await Console.Error.WriteLineAsync(
             "First TenantAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.");
+        await Console.Error.WriteLineAsync(
+            $"TenantAdmin bootstrap diagnostic: {BootstrapFailureDiagnostics.Format(exception)}");
         Environment.ExitCode = 1;
     }
     return;
@@ -93,10 +95,12 @@ if (runFirstPlatformAdminBootstrap)
             "First PlatformAdmin bootstrap refused because another active PlatformAdmin exists.");
         Environment.ExitCode = 1;
     }
-    catch (Exception)
+    catch (Exception exception)
     {
         await Console.Error.WriteLineAsync(
             "First PlatformAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.");
+        await Console.Error.WriteLineAsync(
+            $"PlatformAdmin bootstrap diagnostic: {BootstrapFailureDiagnostics.Format(exception)}");
         Environment.ExitCode = 1;
     }
     return;
