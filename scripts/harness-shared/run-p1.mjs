@@ -17,6 +17,10 @@ import {
 } from './p1-fixture-setup.mjs';
 import { createP1SetupApi, acquireP1RunIdentity, createP1SurfaceAdapters } from './p1-runtime-adapters.mjs';
 import { runP1SurfaceJourney } from './p1-surface-runner.mjs';
+import {
+  attachSessionMaterialAcceptance,
+  createSessionMaterialAcceptance,
+} from './session-material-acceptance.mjs';
 import { sanitizeP1Failure } from './p1-surface-common.mjs';
 import { redact } from './redaction.mjs';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from './safe-jsonl.mjs';
@@ -206,6 +210,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
   pageProvider,
   runSurfaceJourney = runP1SurfaceJourney,
   identityProvider,
+  attachSessionMaterialAcceptance: attachSessionMaterial = attachSessionMaterialAcceptance,
 } = {}) {
   let options;
   let surface = 'api';
@@ -373,6 +378,24 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
         cleanupError = error;
       }
       result = addFixtureCleanup(result, fixture.state, cleanup, nativeFence, cleanupError);
+      // A failed evidence attachment must not bypass fixture cleanup or erase its receipt.
+      try {
+        result = attachSessionMaterial(
+          result,
+          createSessionMaterialAcceptance({
+            sourceEvidence,
+            environment: validated.environment,
+            fixtureInput: fixture.input,
+          }),
+        );
+      } catch (error) {
+        const failure = sanitizeP1Failure(error);
+        result.failure = result.failure
+          ? { message: `${result.failure.message}; session-material acceptance failed: ${failure.message}` }
+          : { message: `Session-material acceptance failed: ${failure.message}` };
+        result.fullP1Status = 'failed';
+        result.exitCode = 1;
+      }
     } finally {
       if (!result) {
         result = createFailureResult(surface,
