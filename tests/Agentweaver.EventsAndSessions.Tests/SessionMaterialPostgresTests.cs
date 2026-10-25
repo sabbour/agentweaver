@@ -814,7 +814,8 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
             ClaimsPrincipal principal, SessionProviderBinding requested, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Assert.Equal(binding, requested);
+            // PostgreSQL reconstructs the binding and capability set; compare every pin by value, not object identity.
+            Assert.True(binding.Matches(requested));
             return Task.CompletedTask;
         }
     }
