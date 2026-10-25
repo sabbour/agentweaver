@@ -4,7 +4,18 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>Exact plan item and parent authority that a child-spawn intent asks the Orchestrator to admit.</summary>
+/// <summary>Shared run, session, plan, and fence binding for child-spawn intent variants.</summary>
+public abstract record MafChildSpawnAuthorizationIntent(
+    Guid IntentId,
+    string ParentSessionId,
+    string RootSessionId,
+    string PlanId,
+    long PlanRevision,
+    string WorkflowStepId,
+    string ContextRevision,
+    long ExecutionFence);
+
+/// <summary>Exact open-step work item that a child-spawn intent asks the Orchestrator to admit.</summary>
 public sealed record MafChildSpawnIntent(
     Guid IntentId,
     string ParentSessionId,
@@ -15,7 +26,38 @@ public sealed record MafChildSpawnIntent(
     string WorkItemId,
     string ContextRevision,
     long ExecutionFence,
-    WorkPlanItem WorkItem);
+    WorkPlanItem WorkItem)
+    : MafChildSpawnAuthorizationIntent(
+        IntentId, ParentSessionId, RootSessionId, PlanId, PlanRevision,
+        WorkflowStepId, ContextRevision, ExecutionFence);
+
+/// <summary>The selected agent, model, and pinned isolation binding for one fixed workflow step.</summary>
+public sealed record MafChildSpawnRoleBinding(
+    string RoleId,
+    string AgentId,
+    string ModelSelectionReference,
+    string IsolationProviderId,
+    string IsolationChoice);
+
+/// <summary>
+/// Fixed-work child-spawn intent bound to a confirmed workflow step and its accepted role selection.
+/// </summary>
+public sealed record MafChildSpawnFixedWorkIntent(
+    Guid IntentId,
+    string ParentSessionId,
+    string RootSessionId,
+    string PlanId,
+    long PlanRevision,
+    string WorkflowStepId,
+    string ContextRevision,
+    long ExecutionFence,
+    string WorkflowDefinitionId,
+    string WorkflowDefinitionRevision,
+    string FixedWorkSpecificationHash,
+    MafChildSpawnRoleBinding RoleBinding)
+    : MafChildSpawnAuthorizationIntent(
+        IntentId, ParentSessionId, RootSessionId, PlanId, PlanRevision,
+        WorkflowStepId, ContextRevision, ExecutionFence);
 
 /// <summary>Current authenticated and selected authority used to evaluate a child-spawn intent.</summary>
 public sealed record MafChildSpawnAuthorizationAuthority(
@@ -82,6 +124,10 @@ public static class MafChildSpawnAuthorizationContract
 
     /// <summary>Validates the immutable spawn intent before it is hashed or authorized.</summary>
     public static void ValidateIntent(MafChildSpawnIntent intent)
+        => ValidateIntent((MafChildSpawnAuthorizationIntent)intent);
+
+    /// <summary>Validates the immutable intent before it is hashed or authorized.</summary>
+    public static void ValidateIntent(MafChildSpawnAuthorizationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
         if (intent.IntentId == Guid.Empty ||
@@ -90,37 +136,124 @@ public static class MafChildSpawnAuthorizationContract
             !AgtPolicyProvider.IsIdentifier(intent.PlanId) ||
             intent.PlanRevision < 1 ||
             !AgtPolicyProvider.IsIdentifier(intent.WorkflowStepId) ||
-            !AgtPolicyProvider.IsIdentifier(intent.WorkItemId) ||
             !AgtPolicyProvider.IsIdentifier(intent.ContextRevision) ||
-            intent.ExecutionFence < 1 ||
-            intent.WorkItem is null ||
-            intent.WorkItem.Id != intent.WorkItemId ||
-            intent.WorkItem.WorkflowStepId != intent.WorkflowStepId ||
-            intent.WorkItem.DependsOn.IsDefault ||
-            intent.WorkItem.DeclaredOutputs.IsDefault)
+            intent.ExecutionFence < 1)
             throw new ArgumentException("The child-spawn intent is invalid.", nameof(intent));
+
+        switch (intent)
+        {
+            case MafChildSpawnIntent open:
+                if (!AgtPolicyProvider.IsIdentifier(open.WorkItemId) ||
+                    open.WorkItem is null ||
+                    open.WorkItem.Id != open.WorkItemId ||
+                    open.WorkItem.WorkflowStepId != open.WorkflowStepId ||
+                    open.WorkItem.DependsOn.IsDefault ||
+                    open.WorkItem.DeclaredOutputs.IsDefault)
+                    throw new ArgumentException("The child-spawn intent is invalid.", nameof(intent));
+                break;
+            case MafChildSpawnFixedWorkIntent fixedWork:
+                if (!AgtPolicyProvider.IsIdentifier(fixedWork.WorkflowDefinitionId) ||
+                    !WorkflowValidationSupport.IsOpaqueReference(fixedWork.WorkflowDefinitionRevision) ||
+                    !IsCanonicalHash(fixedWork.FixedWorkSpecificationHash) ||
+                    fixedWork.RoleBinding is null ||
+                    !AgtPolicyProvider.IsIdentifier(fixedWork.RoleBinding.RoleId) ||
+                    !WorkflowValidationSupport.IsOpaqueReference(fixedWork.RoleBinding.AgentId) ||
+                    !WorkflowValidationSupport.IsOpaqueReference(fixedWork.RoleBinding.ModelSelectionReference) ||
+                    !WorkflowValidationSupport.IsOpaqueReference(fixedWork.RoleBinding.IsolationProviderId) ||
+                    !AgtPolicyProvider.IsIdentifier(fixedWork.RoleBinding.IsolationChoice))
+                    throw new ArgumentException("The fixed-work child-spawn intent is invalid.", nameof(intent));
+                break;
+            default:
+                throw new ArgumentException("The child-spawn intent variant is unsupported.", nameof(intent));
+        }
     }
 
     /// <summary>Hashes the intent with an explicit field order so retries use the same identity across callers.</summary>
     public static string ComputeIntentHash(MafChildSpawnIntent intent)
+        => ComputeIntentHash((MafChildSpawnAuthorizationIntent)intent);
+
+    /// <summary>Hashes either supported intent variant with a stable, explicit field order.</summary>
+    public static string ComputeIntentHash(MafChildSpawnAuthorizationIntent intent)
     {
         ValidateIntent(intent);
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
-            // Field order is part of this contract; keep it explicit rather than relying on serializer defaults.
+            switch (intent)
+            {
+                case MafChildSpawnIntent open:
+                    // Preserve version 1 bytes for existing open-work authorization receipts.
+                    writer.WriteStartObject();
+                    writer.WriteNumber("version", 1);
+                    writer.WriteString("intentId", open.IntentId.ToString("N"));
+                    writer.WriteString("parentSessionId", open.ParentSessionId);
+                    writer.WriteString("rootSessionId", open.RootSessionId);
+                    writer.WriteString("planId", open.PlanId);
+                    writer.WriteNumber("planRevision", open.PlanRevision);
+                    writer.WriteString("workflowStepId", open.WorkflowStepId);
+                    writer.WriteString("workItemId", open.WorkItemId);
+                    writer.WriteString("contextRevision", open.ContextRevision);
+                    writer.WriteNumber("executionFence", open.ExecutionFence);
+                    WriteWorkItem(writer, open.WorkItem);
+                    writer.WriteEndObject();
+                    break;
+                case MafChildSpawnFixedWorkIntent fixedWork:
+                    // Field order and the distinct variant version are part of the durable receipt identity.
+                    writer.WriteStartObject();
+                    writer.WriteNumber("version", 2);
+                    writer.WriteString("intentKind", "fixedWork");
+                    writer.WriteString("intentId", fixedWork.IntentId.ToString("N"));
+                    writer.WriteString("parentSessionId", fixedWork.ParentSessionId);
+                    writer.WriteString("rootSessionId", fixedWork.RootSessionId);
+                    writer.WriteString("planId", fixedWork.PlanId);
+                    writer.WriteNumber("planRevision", fixedWork.PlanRevision);
+                    writer.WriteString("workflowDefinitionId", fixedWork.WorkflowDefinitionId);
+                    writer.WriteString("workflowDefinitionRevision", fixedWork.WorkflowDefinitionRevision);
+                    writer.WriteString("workflowStepId", fixedWork.WorkflowStepId);
+                    writer.WriteString("fixedWorkSpecificationHash", fixedWork.FixedWorkSpecificationHash);
+                    writer.WriteString("contextRevision", fixedWork.ContextRevision);
+                    writer.WriteNumber("executionFence", fixedWork.ExecutionFence);
+                    writer.WriteStartObject("roleBinding");
+                    writer.WriteString("roleId", fixedWork.RoleBinding.RoleId);
+                    writer.WriteString("agentId", fixedWork.RoleBinding.AgentId);
+                    writer.WriteString("modelSelectionReference", fixedWork.RoleBinding.ModelSelectionReference);
+                    writer.WriteString("isolationProviderId", fixedWork.RoleBinding.IsolationProviderId);
+                    writer.WriteString("isolationChoice", fixedWork.RoleBinding.IsolationChoice);
+                    writer.WriteEndObject();
+                    writer.WriteEndObject();
+                    break;
+                default:
+                    throw new ArgumentException("The child-spawn intent variant is unsupported.", nameof(intent));
+            }
+        }
+
+        return Convert.ToHexString(SHA256.HashData(stream.ToArray())).ToLowerInvariant();
+    }
+
+    /// <summary>Hashes the canonical fixed-work fields in their declared order.</summary>
+    public static string ComputeFixedWorkSpecificationHash(FixedWorkSpecification specification)
+    {
+        ArgumentNullException.ThrowIfNull(specification);
+        if (string.IsNullOrWhiteSpace(specification.Title) ||
+            string.IsNullOrWhiteSpace(specification.Task) ||
+            !AgtPolicyProvider.IsIdentifier(specification.RoleId) ||
+            !AgtPolicyProvider.IsIdentifier(specification.Phase) ||
+            !AgtPolicyProvider.IsIdentifier(specification.IsolationChoice) ||
+            specification.DeclaredOutputs.IsDefault)
+            throw new ArgumentException("The fixed-work specification is invalid.", nameof(specification));
+
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            // Explicit ordering prevents serializer settings from changing a confirmed specification's identity.
             writer.WriteStartObject();
             writer.WriteNumber("version", 1);
-            writer.WriteString("intentId", intent.IntentId.ToString("N"));
-            writer.WriteString("parentSessionId", intent.ParentSessionId);
-            writer.WriteString("rootSessionId", intent.RootSessionId);
-            writer.WriteString("planId", intent.PlanId);
-            writer.WriteNumber("planRevision", intent.PlanRevision);
-            writer.WriteString("workflowStepId", intent.WorkflowStepId);
-            writer.WriteString("workItemId", intent.WorkItemId);
-            writer.WriteString("contextRevision", intent.ContextRevision);
-            writer.WriteNumber("executionFence", intent.ExecutionFence);
-            WriteWorkItem(writer, intent.WorkItem);
+            writer.WriteString("title", specification.Title);
+            writer.WriteString("task", specification.Task);
+            writer.WriteString("roleId", specification.RoleId);
+            writer.WriteString("phase", specification.Phase);
+            writer.WriteString("isolationChoice", specification.IsolationChoice);
+            WriteStrings(writer, "declaredOutputs", specification.DeclaredOutputs);
             writer.WriteEndObject();
         }
 
@@ -129,7 +262,7 @@ public static class MafChildSpawnAuthorizationContract
 
     /// <summary>Creates immutable evidence only for a complete policy allow decision.</summary>
     public static MafChildSpawnAuthorizationEvidence CreateEvidence(
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority,
         Guid policyReceiptId,
         PolicyEvaluationOutcome outcome,
@@ -165,7 +298,7 @@ public static class MafChildSpawnAuthorizationContract
             intent.PlanId,
             intent.PlanRevision,
             intent.WorkflowStepId,
-            intent.WorkItemId,
+            ReceiptWorkItemId(intent),
             policyReceiptId,
             authority.PolicyProviderId,
             authority.PolicyAdapterVersion,
@@ -179,7 +312,7 @@ public static class MafChildSpawnAuthorizationContract
     /// <summary>Returns true only when the durable allow still matches the exact intent and all current authority.</summary>
     public static bool MatchesCurrent(
         MafChildSpawnAuthorizationEvidence evidence,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         MafChildSpawnAuthorizationAuthority authority)
     {
         ArgumentNullException.ThrowIfNull(evidence);
@@ -208,7 +341,7 @@ public static class MafChildSpawnAuthorizationContract
             evidence.PlanId == intent.PlanId &&
             evidence.PlanRevision == intent.PlanRevision &&
             evidence.WorkflowStepId == intent.WorkflowStepId &&
-            evidence.WorkItemId == intent.WorkItemId &&
+            evidence.WorkItemId == ReceiptWorkItemId(intent) &&
             evidence.PolicyProviderId == authority.PolicyProviderId &&
             evidence.PolicyAdapterVersion == authority.PolicyAdapterVersion &&
             evidence.PolicyOptionsSchemaVersion == authority.PolicyOptionsSchemaVersion &&
@@ -217,6 +350,20 @@ public static class MafChildSpawnAuthorizationContract
             evidence.Outcome == PolicyEvaluationOutcome.Allow &&
             evidence.ReasonCode == PolicyEvaluationReasonCode.Allowed;
     }
+
+    /// <summary>Returns the existing receipt column's stable item key without creating fixed work as a plan item.</summary>
+    public static string ReceiptWorkItemId(MafChildSpawnAuthorizationIntent intent) =>
+        intent switch
+        {
+            MafChildSpawnIntent open => open.WorkItemId,
+            MafChildSpawnFixedWorkIntent fixedWork => fixedWork.WorkflowStepId,
+            _ => throw new ArgumentException("The child-spawn intent variant is unsupported.", nameof(intent))
+        };
+
+    private static bool IsCanonicalHash(string? value) =>
+        value is { Length: 64 } &&
+        value.All(Uri.IsHexDigit) &&
+        string.Equals(value, value.ToLowerInvariant(), StringComparison.Ordinal);
 
     private static void ValidateAuthority(MafChildSpawnAuthorizationAuthority authority)
     {

@@ -103,6 +103,73 @@ public sealed class MafChildSpawnAuthorizationTests
             evidence, intent, authority with { PolicyAdapterVersion = "different-version" }));
     }
 
+    [Fact]
+    public void FixedWorkIntentHashBindsWorkflowSpecificationAndSelectedRole()
+    {
+        var intent = FixedWorkIntent();
+        var hash = MafChildSpawnAuthorizationContract.ComputeIntentHash(intent);
+
+        Assert.Equal(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(intent));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(
+            intent with { WorkflowDefinitionId = "different-workflow" }));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(
+            intent with { WorkflowDefinitionRevision = "revision-2" }));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(
+            intent with { FixedWorkSpecificationHash = new string('b', 64) }));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(
+            intent with { RoleBinding = intent.RoleBinding with { AgentId = "agent-2" } }));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(
+            intent with { RoleBinding = intent.RoleBinding with { ModelSelectionReference = "model-2" } }));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(
+            intent with { RoleBinding = intent.RoleBinding with { IsolationProviderId = "other-sandbox" } }));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(
+            intent with { RoleBinding = intent.RoleBinding with { IsolationChoice = "shared" } }));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(
+            intent with { ContextRevision = "context-2" }));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeIntentHash(
+            intent with { ExecutionFence = 8 }));
+    }
+
+    [Fact]
+    public void FixedWorkSpecificationHashUsesAllCanonicalSpecificationFields()
+    {
+        var specification = FixedWorkSpecification();
+        var hash = MafChildSpawnAuthorizationContract.ComputeFixedWorkSpecificationHash(specification);
+
+        Assert.Equal(hash, MafChildSpawnAuthorizationContract.ComputeFixedWorkSpecificationHash(specification));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeFixedWorkSpecificationHash(
+            specification with { Task = "different task" }));
+        Assert.NotEqual(hash, MafChildSpawnAuthorizationContract.ComputeFixedWorkSpecificationHash(
+            specification with { DeclaredOutputs = ["src/other.cs"] }));
+    }
+
+    [Fact]
+    public void FixedWorkEvidenceRequiresTheExactIntentAndCurrentAuthority()
+    {
+        var intent = FixedWorkIntent();
+        var authority = Authority();
+        var evidence = MafChildSpawnAuthorizationContract.CreateEvidence(
+            intent,
+            authority,
+            Guid.NewGuid(),
+            PolicyEvaluationOutcome.Allow,
+            PolicyEvaluationReasonCode.Allowed,
+            DateTimeOffset.UtcNow);
+
+        Assert.True(MafChildSpawnAuthorizationContract.MatchesCurrent(evidence, intent, authority));
+        Assert.Equal(intent.WorkflowStepId, evidence.WorkItemId);
+        Assert.False(MafChildSpawnAuthorizationContract.MatchesCurrent(
+            evidence,
+            intent with { FixedWorkSpecificationHash = new string('b', 64) },
+            authority));
+        Assert.False(MafChildSpawnAuthorizationContract.MatchesCurrent(
+            evidence,
+            intent with { RoleBinding = intent.RoleBinding with { AgentId = "agent-2" } },
+            authority));
+        Assert.False(MafChildSpawnAuthorizationContract.MatchesCurrent(
+            evidence, intent, authority with { ActorId = "different-actor" }));
+    }
+
     private static MafChildSpawnIntent Intent()
     {
         var item = new WorkPlanItem(
@@ -130,6 +197,29 @@ public sealed class MafChildSpawnAuthorizationTests
             7,
             item);
     }
+
+    private static MafChildSpawnFixedWorkIntent FixedWorkIntent() => new(
+        Guid.Parse("00000000-0000-0000-0000-000000000002"),
+        "parent-session",
+        "root-session",
+        "plan-1",
+        4,
+        "implementation",
+        "context-1",
+        7,
+        "workflow-1",
+        "refs/tags/v1",
+        MafChildSpawnAuthorizationContract.ComputeFixedWorkSpecificationHash(FixedWorkSpecification()),
+        new MafChildSpawnRoleBinding(
+            "developer", "agent-1", "model:provider/alpha", "sandbox/provider", "isolated"));
+
+    private static FixedWorkSpecification FixedWorkSpecification() => new(
+        "Implement feature",
+        "Complete the implementation",
+        "developer",
+        "execute",
+        "isolated",
+        ["src/feature.cs"]);
 
     private static MafChildSpawnAuthorizationAuthority Authority() => new(
         "project-1",
