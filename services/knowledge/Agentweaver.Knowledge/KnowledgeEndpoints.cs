@@ -46,7 +46,7 @@ public static class KnowledgeEndpoints
     /// <summary>Searches private Knowledge across currently authorized project-run provider bindings.</summary>
     private static Task<IResult> SearchProjectAsync(
         string projectId,
-        KnowledgeRecordKind? kind,
+        string? kind,
         string? state,
         string? q,
         bool? includeInactive,
@@ -59,13 +59,32 @@ public static class KnowledgeEndpoints
         httpContext.Response.Headers.CacheControl = "no-store";
         return ExecuteAsync(async () => Results.Ok(await service.SearchProjectAsync(
             projectId,
-            kind,
+            ParseProjectSearchKind(kind),
             state,
             q,
             includeInactive ?? false,
             page ?? 1,
             pageSize ?? 50,
             cancellationToken).ConfigureAwait(false)));
+    }
+
+    private static KnowledgeRecordKind? ParseProjectSearchKind(string? kind)
+    {
+        if (kind is null)
+            return null;
+
+        // The public query uses camel-case enum values; parse explicitly instead of relying on enum binding.
+        return kind.ToLowerInvariant() switch
+        {
+            "memory" => KnowledgeRecordKind.Memory,
+            "proposal" => KnowledgeRecordKind.Proposal,
+            "decision" => KnowledgeRecordKind.Decision,
+            "sessioncontext" => KnowledgeRecordKind.SessionContext,
+            _ => throw new KnowledgeApiException(
+                "invalid_knowledge_search",
+                "Knowledge search filters or paging values are invalid.",
+                StatusCodes.Status400BadRequest)
+        };
     }
 
     /// <summary>Reads a caller-authorized agent history without returning provider or run details.</summary>

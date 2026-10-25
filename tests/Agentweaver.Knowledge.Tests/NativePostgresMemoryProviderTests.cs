@@ -30,6 +30,68 @@ public sealed class NativePostgresMemoryProviderTests(KnowledgePostgresFixture p
     }
 
     [Fact]
+    public async Task SearchFiltersPendingProposalLifecycleBeforeCountingAndPaging()
+    {
+        await using var database = await KnowledgeDatabase.CreateAsync(postgres);
+        var first = await database.Provider.CreateAsync(
+            Record("project-a", "agent-a", KnowledgeRecordKind.Proposal, "proposal", "pending first",
+                sourceRunId: "run-a"),
+            "pending-search-first");
+        var second = await database.Provider.CreateAsync(
+            Record("project-a", "agent-b", KnowledgeRecordKind.Proposal, "proposal", "pending second",
+                sourceRunId: "run-b"),
+            "pending-search-second");
+        var rejected = await database.Provider.CreateAsync(
+            Record("project-a", "agent-a", KnowledgeRecordKind.Proposal, "proposal", "rejected",
+                sourceRunId: "run-a"),
+            "pending-search-rejected");
+        var promoted = await database.Provider.CreateAsync(
+            Record("project-a", "agent-a", KnowledgeRecordKind.Proposal, "proposal", "promoted",
+                sourceRunId: "run-a"),
+            "pending-search-promoted");
+        var memory = await database.Provider.CreateAsync(
+            Record("project-a", "agent-a", KnowledgeRecordKind.Memory, "note", "active memory"),
+            "pending-search-memory");
+        await database.Provider.RejectProposalAsync(
+            "project-a", "run-a", rejected.Record!.RecordId, 1, Actor, "pending-search-reject");
+        var promotion = await database.Provider.PromoteProposalAsync(
+            "project-a", "run-a", promoted.Record!.RecordId, 1, Actor,
+            Authorization("project-a", "run-a"), "pending-search-promote");
+        var decision = await database.Provider.UpdateAsync(
+            Update(promotion.Decision!, 1, "active decision with pending trust"),
+            "pending-search-decision");
+
+        Assert.Equal(KnowledgeRecordState.Active, memory.Record!.State);
+        Assert.Equal(KnowledgeTrustState.Pending, memory.Record.TrustState);
+        Assert.Equal(KnowledgeWriteStatus.Updated, decision.Status);
+        Assert.Equal(KnowledgeRecordState.Active, decision.Record!.State);
+        Assert.Equal(KnowledgeTrustState.Pending, decision.Record.TrustState);
+        Assert.Equal(KnowledgeRecordState.Promoted, promotion.Proposal!.State);
+        Assert.Equal(KnowledgeTrustState.Pending, promotion.Proposal.TrustState);
+
+        var query = new KnowledgeRecordQuery(
+            "project-a",
+            null,
+            Kind: KnowledgeRecordKind.Proposal,
+            IncludeInactive: true,
+            PageSize: 1,
+            State: KnowledgeRecordState.Pending);
+        var page1 = await database.Provider.SearchAsync(query);
+        var page2 = await database.Provider.SearchAsync(query with { Page = 2 });
+
+        Assert.Equal(2, page1.TotalCount);
+        Assert.Equal(2, page2.TotalCount);
+        Assert.Equal(
+            new[] { first.Record!.RecordId, second.Record!.RecordId }.Order(),
+            new[] { Assert.Single(page1.Items).RecordId, Assert.Single(page2.Items).RecordId }.Order());
+        Assert.All(page1.Items.Concat(page2.Items), record =>
+        {
+            Assert.Equal(KnowledgeRecordKind.Proposal, record.Kind);
+            Assert.Equal(KnowledgeRecordState.Pending, record.State);
+        });
+    }
+
+    [Fact]
     public async Task SearchesAndReadsRemainIsolatedByProjectAndAgent()
     {
         await using var database = await KnowledgeDatabase.CreateAsync(postgres);

@@ -279,7 +279,8 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
     [InlineData("kind=memory&state=pending")]
     [InlineData("state=pending")]
     [InlineData("kind=proposal&state=active")]
-    public async Task ProjectSearchRejectsUnsupportedStateFilter(string filters)
+    [InlineData("kind=1")]
+    public async Task ProjectSearchRejectsUnsupportedFilters(string filters)
     {
         await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
         var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true, bindCaller: false);
