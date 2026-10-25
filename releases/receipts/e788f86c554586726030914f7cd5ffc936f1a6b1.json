@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 2,
+  "sourceSha": "e788f86c554586726030914f7cd5ffc936f1a6b1",
+  "planSourceSha": "5b943d4fb22850ef2116df54147692ae802d9975",
+  "preparationBaseSha": "5b943d4fb22850ef2116df54147692ae802d9975",
+  "originalReceiptSha256": "42af807bb1959de016dba52fc4f7bc45a315bf6d8dab4f22a465d7c7fd6e9097",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "1f58b726557357ee0aa60fee83202c4191ef948194f0755be012537015c732a0",
+  "appliedAt": "2026-10-25T11:34:38.557Z",
+  "components": [
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.5.0",
+      "toVersion": "1.6.0",
+      "bump": "minor"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/web-app-version.md",
+      "archivedPath": ".changeset/archive/web-app-version.md",
+      "sha256": "3b673d786318fa86a9c6f09112dba5883081ed8ab4974678e4ef47b65261e596"
+    }
+  ]
+}
