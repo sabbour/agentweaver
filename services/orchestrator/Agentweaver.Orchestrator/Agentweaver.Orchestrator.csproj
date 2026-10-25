@@ -57,5 +57,6 @@
     <EmbeddedResource Include="Migrations\035_backlog_task_queue_position.sql" />
     <EmbeddedResource Include="Migrations\036_maf_root_model_turn_admissions.sql" />
     <EmbeddedResource Include="Migrations\037_maf_child_spawn_authorization.sql" />
+    <EmbeddedResource Include="Migrations\038_source_control_pull_request_operations.sql" />
   </ItemGroup>
 </Project>

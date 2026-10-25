@@ -19,6 +19,7 @@ public static class CoordinationOwnerMigrator
     /// <remarks>Operator tooling compares this catalog with its reviewed plan before applying anything.</remarks>
     public static IReadOnlyList<int> SupportedVersions { get; } =
         // Version 035 adds queue ordering; 036 and 037 use the row-lock trigger introduced in 021.
+        // Version 038 adds the Source Control pull-request operation ledger.
         [.. Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38])];
 
     /// <summary>
@@ -196,7 +197,7 @@ public static class CoordinationOwnerMigrator
         // record, the spend_budget_reservations table, and the spend_budget_accounting_cursors table.
         // Six columns cover version 030: its migration record, its two tables, and its three unique indexes.
         // Two columns cover version 031: its migration record and the promotion dismissal table.
-        // Additive migrations 032, 036, and 037 remain optional to readiness so the owner can start before
+        // Additive migrations 032, 036, 037, and 038 remain optional to readiness so the owner can start before
         // maintenance applies the reviewed plan; accept only their complete table-and-ledger shapes.
         await using var command = new NpgsqlCommand($"""
             SELECT
@@ -216,7 +217,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -588,7 +589,8 @@ public static class CoordinationOwnerMigrator
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
             // Columns 57 onward are boolean checks. The three version 028 checks, the three version 029
             // checks, the six version 030 checks, and the two version 031 checks precede the
-            // optional-033, optional-032, optional-036, optional-035, and optional-037 shape checks. A partial apply never counts as ready.
+            // optional-033, optional-032, optional-036, optional-035, optional-037, and optional-038 shape checks.
+            // A partial apply never counts as ready.
             Enumerable.Range(57, 48).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
