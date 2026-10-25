@@ -400,11 +400,12 @@ owner-side execution frontier. The catalog binder resolves every accepted step
 snapshot to a registered executor by step mode; platform steps also resolve by
 gate. Unknown modes and missing registrations fail binding before dispatch. Fixed
 work remains prescribed and platform gates remain platform-owned; a model task
-cannot replace either. Fixed-work child dispatch is currently refused because its
-authorization receipt variant is not available yet. Open child work is authorized
-as `maf.child.spawn` by the pinned Policy provider. The resulting durable receipt
-is bound to the exact plan item, dispatch intent, accepted selection and execution
-fence; a provider binding by itself is not an allow decision. The dispatch owner
+cannot replace either. The Policy owner supports fixed-work authorization receipts,
+but dispatch does not yet construct or consume them, so fixed-work child dispatch
+is refused. Open child work is authorized as `maf.child.spawn` by the pinned Policy
+provider. The resulting durable receipt is bound to the exact plan item, dispatch
+intent, accepted selection and execution fence; a provider binding by itself is not
+an allow decision. The dispatch owner
 re-reads and consumes that receipt in the Orchestrator transaction that commits
 the child association, spawn outbox, pending intent and Running checkpoint.
 Ready child work is checkpointed with its spawn outbox request. The dispatch owner
@@ -429,10 +430,12 @@ terminal child status is joined in the owner transaction.
 The binder recognizes fixed/open child routes and the executable BuildTest gate.
 A workflow requiring another platform executor fails binding before child
 dispatch; this slice does not substitute a model task or fabricate a gate result.
-Fixed-work child actions fail closed before session creation until the Policy
-receipt contract can bind their fixed specification and selected role. Native
-runtime action admission still evaluates the selected Policy provider and
-Guardrails before Host effects.
+The Policy owner now supports a durable fixed-work receipt bound to the confirmed
+fixed-work specification and selected role, but this dispatch path does not yet
+construct that intent or consume its receipt in the spawn transaction. Fixed-work
+child actions therefore fail closed before session creation; wiring this receipt
+through dispatch is the next layer. Native runtime action admission still evaluates
+the selected Policy provider and Guardrails before Host effects.
 
 The configured wall-time limit is measured from the persisted root-session
 creation time. After a wall-time or hard-cap limit is reached, the dispatcher holds
@@ -461,8 +464,8 @@ flowchart TD
     S --> BindExecutors{"Registered executor for every step?"}
     BindExecutors -->|"No"| BindError["Reject binding with a step-scoped error"]
     BindExecutors -->|"Yes"| DispatchWorkflow["Explicit typed dispatch"]
-    DispatchWorkflow --> FixedWork{"Open plan item?"}
-    FixedWork -->|"No: fixed-work authorization unavailable"| BlockPolicy["Refuse fixed-work child before side effects"]
+    DispatchWorkflow --> FixedWork{"Open child-work action?"}
+    FixedWork -->|"No: fixed-work receipt not wired into dispatch"| BlockFixed["Refuse fixed-work child before side effects"]
     FixedWork -->|"Yes"| AuthorizeSpawn{"Pinned Policy allows exact child-spawn intent?"}
     AuthorizeSpawn -->|"No"| BlockPolicy
     AuthorizeSpawn -->|"Yes"| VerifyEgress{"Environment owner verifies exact fence, policy generation and selection revision?"}

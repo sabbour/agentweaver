@@ -218,7 +218,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             MaxModelTurns = rootContext.MaxModelTurns,
             MaxToolCalls = rootContext.MaxToolCalls
         };
-        await RegisterSourceAsync(0, rootBinding);
+        await RegisterSourceAsync(0, rootBinding, bindDispatchIntent: false);
 
         var generationEventId = Guid.NewGuid();
         const string generationPrompt = "Generate an unconfirmed casting proposal.";
@@ -377,7 +377,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             MaxModelTurns = rootContext.MaxModelTurns,
             MaxToolCalls = rootContext.MaxToolCalls
         };
-        await RegisterSourceAsync(0, rootBinding);
+        await RegisterSourceAsync(0, rootBinding, bindDispatchIntent: false);
 
         var eventId = Guid.NewGuid();
         const string generationPrompt = "Generate an unconfirmed casting proposal.";
@@ -995,7 +995,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         }
     }
 
-    private async Task RegisterSourceAsync(int index, RuntimeBinding binding)
+    private async Task RegisterSourceAsync(
+        int index, RuntimeBinding binding, bool bindDispatchIntent = true)
     {
         var registration = await new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System)
             .RegisterAsync(binding, DateTimeOffset.UtcNow.AddHours(1), default);
@@ -1007,6 +1008,12 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
             "gpt-6.1-sol", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
             binding.AcceptedSelectionHash, registration.Revision);
         await RegisterCurrentSourceAsync(index, registration, grant, source);
+        if (!bindDispatchIntent)
+        {
+            // Root-admission tests reuse a registration slot without changing its checkpointed child intent.
+            return;
+        }
+
         var prompt = $"Execute work item {index}.";
         var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt));
         var intent = _intents[index];

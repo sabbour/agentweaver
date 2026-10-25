@@ -443,7 +443,10 @@ public sealed class MafChildSpawnAuthorizationOwnerStoreTests(
         {
             run.Parameters.AddWithValue("project", _authority.ProjectId);
             run.Parameters.AddWithValue("run", _authority.RunId);
-            run.Parameters.AddWithValue("selection", NpgsqlDbType.Jsonb, "{}");
+            run.Parameters.AddWithValue(
+                "selection",
+                NpgsqlDbType.Jsonb,
+                """{"modelSelection":{"reference":"model:provider/alpha"}}""");
             run.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, _authority.AcceptedSelectionHash);
             run.Parameters.AddWithValue("issuer", _authority.ActorIssuer);
             run.Parameters.AddWithValue("actor", _authority.ActorId);
