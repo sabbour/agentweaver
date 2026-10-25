@@ -127,6 +127,11 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
         using var download = await objects.ReadAsync(reference.Key, cancellationToken).ConfigureAwait(false)
             ?? throw new SessionMaterialIntegrityException("session_material_object_missing");
         var bytes = await ReadVerifiedBytesAsync(download, reference, cancellationToken).ConfigureAwait(false);
+
+        // Recheck after the object read so delayed cleanup cannot widen this reference's retention window.
+        await journal.RequireMaterialReferenceRetainedAsync(
+            envelope.Identity, envelope.EventId, reference.Key, cancellationToken).ConfigureAwait(false);
+        // Keep the current owner check last so a revocation during either read wait prevents disclosure.
         await validateReadAuthority(reference.Material, cancellationToken).ConfigureAwait(false);
         return new(Acknowledgment(envelope, reference), bytes);
     }
