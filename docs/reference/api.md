@@ -1260,7 +1260,7 @@ These are native owner routes, not Gateway or first-party MCP operations.
 | POST | `/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/release` | Environment write and `ReadRunSelection` | Release fenced owner state. |
 | GET | `/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/lifecycle` | Environment read | Inspect lifecycle. |
 | POST | `/api/network-egress/apply` | Environment write and `ReadRunSelection` | Apply accepted egress intent. |
-| POST | `/api/network-egress/verify` | Environment write and `ReadRunSelection` | Verify owner-pinned policy. |
+| POST | `/api/network-egress/verify` | `WriteProjects` and `ReadRunSelection` | Read-only verification of the exact Environment fence, policy generation, and authorized selection revision. |
 | POST | `/api/network-egress/revoke` | Environment write | Revoke owned policy. |
 | POST | `/api/network-egress/reconcile` | Environment write and `ReadRunSelection` | Reconcile recorded uncertain effect. |
 | POST | `/internal/provider-lifecycle/reports` | Bearer | Returns `503 environment_provider_lifecycle_unavailable`; report ingestion is not implemented. |
