@@ -79,6 +79,7 @@ public sealed class KnowledgeApplicationService(
     public async Task<ProjectKnowledgeRecordPage> SearchProjectAsync(
         string projectId,
         KnowledgeRecordKind? kind,
+        string? state,
         string? query,
         bool includeInactive,
         int page,
@@ -86,7 +87,9 @@ public sealed class KnowledgeApplicationService(
         CancellationToken cancellationToken)
     {
         ValidateResourceIdentifier(projectId, nameof(projectId));
+        // Only the persisted pending Proposal lifecycle is exposed here; do not broaden other searches.
         if ((kind is not null && !Enum.IsDefined(kind.Value)) ||
+            (state is not null && (state != "pending" || kind != KnowledgeRecordKind.Proposal)) ||
             query?.Length > 256 || query?.Any(char.IsControl) == true ||
             page is < 1 or > 100 || pageSize is < 1 or > 100)
             throw new KnowledgeApiException(
@@ -101,7 +104,8 @@ public sealed class KnowledgeApplicationService(
         // Broad discovery still requires run-selection permission; agent history uses its narrower private read.
         ProjectsConfigClient.RequireRunSelectionPermission(authority, projectId);
         return await SearchAuthorizedProjectRunsAsync(
-            projectId, null, kind, query, includeInactive, page, pageSize, cancellationToken)
+            projectId, null, kind, query, includeInactive, page, pageSize, cancellationToken,
+            pendingProposalsOnly: state is not null)
             .ConfigureAwait(false);
     }
 
@@ -150,7 +154,8 @@ public sealed class KnowledgeApplicationService(
         int page,
         int pageSize,
         CancellationToken cancellationToken,
-        bool requirePrivateKnowledgePermission = false)
+        bool requirePrivateKnowledgePermission = false,
+        bool pendingProposalsOnly = false)
     {
         var runIds = await bindings.ListBoundRunIdsAsync(projectId, cancellationToken).ConfigureAwait(false);
         var resolvedRuns = new List<(string RunId, AuthorizedProvider Context)>(runIds.Length);
@@ -182,9 +187,11 @@ public sealed class KnowledgeApplicationService(
             var sourceTotalCount = 0;
             for (var sourcePage = 1; sourceRecords.Count < lastIndex; sourcePage++)
             {
+                // Pending proposals are inactive by default; filter at the provider before count and paging.
                 var sourceResult = await source.Context.Provider.SearchAsync(
                     new KnowledgeRecordQuery(
-                        projectId, agentId, kind, query, includeInactive, sourcePage, pageSize),
+                        projectId, agentId, kind, query, includeInactive || pendingProposalsOnly,
+                        sourcePage, pageSize, pendingProposalsOnly ? KnowledgeRecordState.Pending : null),
                     cancellationToken).ConfigureAwait(false);
                 if (sourcePage == 1)
                     sourceTotalCount = sourceResult.TotalCount;

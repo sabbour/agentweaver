@@ -47,6 +47,7 @@ public static class KnowledgeEndpoints
     private static Task<IResult> SearchProjectAsync(
         string projectId,
         KnowledgeRecordKind? kind,
+        string? state,
         string? q,
         bool? includeInactive,
         int? page,
@@ -59,6 +60,7 @@ public static class KnowledgeEndpoints
         return ExecuteAsync(async () => Results.Ok(await service.SearchProjectAsync(
             projectId,
             kind,
+            state,
             q,
             includeInactive ?? false,
             page ?? 1,
