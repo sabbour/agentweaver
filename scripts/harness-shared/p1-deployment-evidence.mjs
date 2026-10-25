@@ -18,6 +18,15 @@ import { validateManifest } from '../release/validate.mjs';
 const SHA = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const preparedHostSources = new WeakMap();
+
+/** Only preparation may authorize an older build source; supplied evidence cannot opt into reuse. */
+export function p1AgentHostBuildSource(sourceEvidence, releaseSource) {
+  const binding = preparedHostSources.get(sourceEvidence);
+  return binding?.release.sourceSha === releaseSource.sourceSha
+    && binding.release.sourceTree === releaseSource.sourceTree
+    ? { ...binding.build } : releaseSource;
+}
 const IMAGE_REFERENCE = /^ghcr\.io\/([a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)@(sha256:[a-f0-9]{64})$/;
 const IMAGE_ACCEPT = [
   'application/vnd.oci.image.index.v1+json',
@@ -833,7 +842,11 @@ export function createP1ReleaseDeploymentEvidence({
     throw new Error('The release deployment readbacks are not bound to the exact source and target.');
   }
   // Revalidate image identities here so callers cannot create a receipt from unchecked image rows.
-  validateP1PublicationReceipt(publication, manifest, sourceSha, sourceTree, deploymentManifest);
+  const validatedImages = validateP1PublicationReceipt(
+    publication, manifest, sourceSha, sourceTree, deploymentManifest);
+  if (hashJson(images) !== hashJson(validatedImages)) {
+    throw new Error('The release deployment images differ from the validated publication.');
+  }
   const expected = new Map(images.filter(image => image.id !== 'Agentweaver.AgentHost')
     .map(image => [image.id, image]));
   const agentHostImages = images.filter(image => image.id === 'Agentweaver.AgentHost');
@@ -853,6 +866,10 @@ export function createP1ReleaseDeploymentEvidence({
   for (const [id, image] of expected) {
     const readback = observed.get(id);
     const expectedDigest = imageParts(image.image).digest;
+    // A reused image carries the source labels of the commit that built it. The publication
+    // validator already bound that build commit to this release, so expect its labels here.
+    const expectedSourceSha = image.reusedFrom?.sourceSha ?? sourceSha;
+    const expectedSourceTree = image.reusedFrom?.sourceTree ?? sourceTree;
     if (!readback || readback.service?.name !== image.name || !readback.service.uid
       || !readback.service.resourceVersion || !SHA256.test(readback.service.sha256 ?? '')
       || !readback.deployment?.uid || readback.deployment.name !== image.name
@@ -868,7 +885,7 @@ export function createP1ReleaseDeploymentEvidence({
         || !registry || registry.manifestDigest !== expectedDigest
         || !DIGEST.test(registry.platformDigest ?? '')
         || podDigest !== registry.manifestDigest && podDigest !== registry.platformDigest
-        || registry.sourceSha !== sourceSha || registry.sourceTree !== sourceTree
+        || registry.sourceSha !== expectedSourceSha || registry.sourceTree !== expectedSourceTree
         || !DIGEST.test(registry.configDigest ?? '')) {
         throw new Error(`The release deployment image readback for ${id} differs from its source publication.`);
       }
@@ -993,6 +1010,7 @@ export async function prepareP1DeploymentEvidence({
   fetchImpl = globalThis.fetch,
   readObjects = runKubectl,
   spawnSyncImpl = spawnSync,
+  measureAgentHostArchive = measureAgentHostArchiveSync,
 }) {
   let publication;
   let manifest;
@@ -1138,13 +1156,16 @@ export async function prepareP1DeploymentEvidence({
     images,
     serviceEvidence,
   });
+  const hostImage = images.find(image => image.id === 'Agentweaver.AgentHost');
+  // A reused AgentHost archive was built from an earlier commit, and its labels name that commit.
+  // Measure it against that build commit; the publication validator has already bound it to this release.
+  const hostBuildSource = hostImage?.reusedFrom ?? source;
   let agentHostMeasurement;
   try {
-    agentHostMeasurement = measureAgentHostArchiveSync(agentHostArchivePath, repoRoot, source.sourceSha);
+    agentHostMeasurement = measureAgentHostArchive(agentHostArchivePath, repoRoot, hostBuildSource.sourceSha);
   } catch (error) {
     throw new Error(`The existing AgentHost image measurement failed: ${redact(error).message}`);
   }
-  const hostImage = images.find(image => image.id === 'Agentweaver.AgentHost');
   let archiveSha256;
   try {
     archiveSha256 = await sha256File(agentHostArchivePath);
@@ -1153,8 +1174,8 @@ export async function prepareP1DeploymentEvidence({
   }
   const publishedMeasurement = hostImage?.preparedOciMeasurement;
   if (agentHostMeasurement.kind !== 'agenthost-image'
-    || agentHostMeasurement.sourceSha !== source.sourceSha
-    || agentHostMeasurement.sourceTree !== source.sourceTree
+    || agentHostMeasurement.sourceSha !== hostBuildSource.sourceSha
+    || agentHostMeasurement.sourceTree !== hostBuildSource.sourceTree
     || agentHostMeasurement.image?.platform !== 'linux/amd64'
     || archiveSha256 !== hostImage.ociArchiveSha256
     || agentHostMeasurement.image?.digest !== publishedMeasurement?.image?.digest
@@ -1162,7 +1183,7 @@ export async function prepareP1DeploymentEvidence({
     || agentHostMeasurement.image?.compressedPullBytes !== hostImage.compressedPullBytes) {
     throw new Error('The measured AgentHost OCI archive does not match the exact source-bound publication receipt.');
   }
-  return {
+  const evidence = {
     source,
     ...(integrationDeployment ? { integrationDeployment } : { releaseDeployment }),
     providerCatalog: serviceEvidence.providerCatalog,
@@ -1178,4 +1199,11 @@ export async function prepareP1DeploymentEvidence({
     },
     agentHostRuntime: serviceEvidence.agentHostRuntime,
   };
+  // Keep this binding in memory, not in caller-editable JSON. The measurements still record
+  // the build source, while the source and deployment receipts keep the reviewed release source.
+  preparedHostSources.set(evidence, {
+    release: { sourceSha: source.sourceSha, sourceTree: source.sourceTree },
+    build: { sourceSha: hostBuildSource.sourceSha, sourceTree: hostBuildSource.sourceTree },
+  });
+  return evidence;
 }

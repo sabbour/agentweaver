@@ -199,8 +199,12 @@ receipt must come from `release:deploy-integration` and match the source,
 manifest, publication, target namespace, image identities, and service
 readbacks. For a published release, `agentHostArchivePath` is the exact
 AgentHost OCI archive from that release's images artifact. The runner measures
-it against the published source commit, so you can run acceptance from a newer
-reviewed checkout that still contains that commit. `fixturePlan` requires a
+it against the original build commit recorded in the validated publication
+when the image is reused; otherwise it uses the published source commit.
+Deployment and service evidence remain bound to the release source. The
+in-process preparation step carries the checked image build source into each
+journey; an older source supplied in JSON is not enough. You can run acceptance
+from a newer reviewed checkout that still contains those commits. `fixturePlan` requires a
 positive `expectedPlatformRuntimeRevision` alongside the selection context and
 only the gate or message content needed by the selected journey. A distinct
 `fixturePlan.deniedActor` is optional. When supplied, it must remain a distinct

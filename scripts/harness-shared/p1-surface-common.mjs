@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { redact } from './redaction.mjs';
+import { p1AgentHostBuildSource } from './p1-deployment-evidence.mjs';
 
 /** Hash a JSON-compatible receipt using the same serialization as the deployment evidence writer. */
 function hashJson(value) {
@@ -41,6 +42,7 @@ export function summarizeP1SourceEvidence(sourceEvidence, pins) {
     throw new P1BlockedError('The exact source-bound service and AgentHost image observations are required.');
   }
   const { sourceReceipt, providerReceipt, imageReceipt } = pins;
+  const hostBuildSource = p1AgentHostBuildSource(sourceEvidence, sourceReceipt);
   const integrationDeployment = sourceEvidence.integrationDeployment;
   const releaseDeployment = sourceEvidence.releaseDeployment;
   const deployment = releaseDeployment ?? integrationDeployment;
@@ -74,8 +76,8 @@ export function summarizeP1SourceEvidence(sourceEvidence, pins) {
         services: sourceEvidence.services.services,
       }) !== releaseDeployment.readbackSha256
     )
-    || measurement.sourceSha !== sourceReceipt.sourceSha
-    || measurement.sourceTree !== sourceReceipt.sourceTree
+    || measurement.sourceSha !== hostBuildSource.sourceSha
+    || measurement.sourceTree !== hostBuildSource.sourceTree
     || provider?.name !== providerReceipt.configMapName
     || provider.sourceCommit !== providerReceipt.sourceCommit
     || provider.uid !== providerReceipt.uid

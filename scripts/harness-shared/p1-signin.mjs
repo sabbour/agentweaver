@@ -606,6 +606,10 @@ async function authorizeP1InContext({
       return await exchangeCode({ ...request, issuer: environment.issuer, audience: environment.audience, actorId }, code, fetchImpl);
   } finally {
     if (onResponse) context.off('response', onResponse);
+    // Chrome exits a persistent-profile browser when its last page closes. The launcher reuses
+    // this context for the run-bound token after the setup token, so open a blank page first
+    // whenever this is the last one. A failure here must not hide the original sign-in result.
+    if (context.pages().length <= 1) await context.newPage().catch(() => {});
     // Detaching can resume paused requests. Keep interception until close succeeds;
     // if close fails, leave the session attached for the owner's context cleanup.
     await page.close();

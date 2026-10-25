@@ -1,16 +1,20 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
   createP1ReleaseDeploymentEvidence,
   loadValidatedPublicationImages,
   observeP1ServiceDeployments,
+  prepareP1DeploymentEvidence,
   resolveReviewedSource,
   validateP1IntegrationDeploymentReceipt,
   validateP1PublicationReceipt,
 } from '../p1-deployment-evidence.mjs';
 import { componentImageRepository, componentImageTag } from '../../release/pack.mjs';
+import { summarizeP1SourceEvidence } from '../p1-surface-common.mjs';
 
 const sourceSha = 'a'.repeat(40);
 const sourceTree = 'b'.repeat(40);
@@ -250,7 +254,7 @@ function createRegistryFetch(registryBodies, calls = [], {
     calls.push({ url: requestUrl.href, options });
     if (requestUrl.origin === 'https://ghcr.io' && requestUrl.pathname === '/token') {
       assert.equal(requestUrl.searchParams.get('service'), 'ghcr.io');
-      const scopeMatch = /^repository:(sabbour\/agentweaver\/[a-z-]+):pull$/
+      const scopeMatch = /^repository:(sabbour\/agentweaver[/.-][a-z.-]+):pull$/
         .exec(requestUrl.searchParams.get('scope') ?? '');
       assert.ok(scopeMatch, 'token request must be scoped to one service repository');
       assert.equal(new Headers(options.headers).has('authorization'), false);
@@ -918,6 +922,191 @@ test('accepts a release publication that reuses an image tagged by its original 
   assert.throws(() => validateP1PublicationReceipt(sourceTag, fixtureData.manifest, sourceSha, sourceTree),
     /release manifest disagree/);
 });
+
+function reuseReleaseImage(data, id) {
+  const reused = {
+    sourceSha: 'e'.repeat(40),
+    sourceTree: 'f'.repeat(40),
+    inputFingerprint: `sha256:${'1'.repeat(64)}`,
+    receiptSourceSha: 'e'.repeat(40),
+  };
+  const plan = data.publication.planned.find(row => row.id === id);
+  const published = data.publication.published.find(row => row.id === id);
+  plan.destination = `ghcr.io/sabbour/${componentImageRepository(id)}:${componentImageTag(plan.version, reused.sourceSha)}`;
+  plan.reused = reused;
+  published.reused = structuredClone(reused);
+  if (published.preparedOciMeasurement) {
+    published.preparedOciMeasurement.sourceSha = reused.sourceSha;
+    published.preparedOciMeasurement.sourceTree = reused.sourceTree;
+  }
+  return reused;
+}
+
+test('release deployment accepts reused service build labels, not release labels or unchecked image rows', () => {
+  const data = releasePublicationFixture();
+  const id = 'Agentweaver.Gateway';
+  const build = reuseReleaseImage(data, id);
+  const images = validateP1PublicationReceipt(data.publication, data.manifest, sourceSha, sourceTree);
+  const serviceEvidence = releaseServiceReadbackFixture(images);
+  const registry = serviceEvidence.services.find(service => service.componentId === id).pods[0].registry;
+  Object.assign(registry, { sourceSha: build.sourceSha, sourceTree: build.sourceTree });
+  const create = (overrides = {}) => createP1ReleaseDeploymentEvidence({
+    sourceSha, sourceTree, ...data, context, namespace, providerCatalog, images, serviceEvidence, ...overrides,
+  });
+  assert.equal(create().sourceSha, sourceSha);
+  assert.equal(create().sourceTree, sourceTree);
+  for (const field of ['sourceSha', 'sourceTree']) {
+    const correct = registry[field];
+    registry[field] = field === 'sourceSha' ? sourceSha : sourceTree;
+    assert.throws(() => create(), /image readback.*differs/);
+    registry[field] = correct;
+  }
+  const unchecked = structuredClone(images);
+  unchecked.find(image => image.id === id).reusedFrom.sourceSha = sourceSha;
+  assert.throws(() => create({ images: unchecked }), /images differ from the validated publication/);
+  const editedPublication = structuredClone(data.publication);
+  editedPublication.published.find(row => row.id === id).reused.sourceTree = sourceTree;
+  assert.throws(() => create({ publication: editedPublication }), /invalid reused-image provenance/);
+});
+
+/** Exercise real publication and readback validation with controlled Git, registry, and archive seams. */
+function preparationFixture(t, reused) {
+  const parent = path.resolve('artifacts', 'release-tests');
+  mkdirSync(parent, { recursive: true });
+  const root = mkdtempSync(path.join(parent, 'p1-preparation-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const data = releasePublicationFixture();
+  data.manifest.components.find(component => component.id === 'Agentweaver.Web').project = 'apps/web/package.json';
+  data.manifest.evidence = {
+    sourceSha,
+    deploymentSha: sourceSha,
+    personaRuns: ['api', 'ui', 'mcp'].map(surface => ({
+      surface, sourceSha, runUrl: `https://example.test/${surface}`,
+    })),
+  };
+  const live = fixture();
+  for (const [id, name] of p1ServiceComponents) {
+    const image = live.images.find(image => image.name === name);
+    const oldRepository = `sabbour/agentweaver/${name}`;
+    const repository = `sabbour/${componentImageRepository(id)}`;
+    live.items = JSON.parse(JSON.stringify(live.items).replaceAll(oldRepository, repository));
+    live.registryBodies = new Map([...live.registryBodies].map(([url, bytes]) => [
+      url.replace(oldRepository, repository), bytes,
+    ]));
+    image.image = image.image.replace(oldRepository, repository);
+    data.manifest.components.find(component => component.id === id).imageDigest = image.image.split('@')[1];
+    data.publication.published.find(row => row.id === id).image = image.image;
+  }
+  const host = data.publication.published.find(row => row.id === 'Agentweaver.AgentHost');
+  host.preparedOciMeasurement.image.digest = host.image.split('@')[1];
+  const build = reused ? reuseReleaseImage(data, host.id) : { sourceSha, sourceTree };
+  const archive = Buffer.from('controlled archive bytes');
+  host.ociArchiveSha256 = createHash('sha256').update(archive).digest('hex');
+  const publicationPath = path.join(root, 'publication.json');
+  const agentHostArchivePath = path.join(root, 'agenthost.tar');
+  writeFileSync(publicationPath, JSON.stringify(data.publication));
+  writeFileSync(agentHostArchivePath, archive);
+  const tagSha = '1'.repeat(40);
+  const resultSha = '2'.repeat(40);
+  const releaseTag = 'v1.0.11';
+  const resultTag = `agentweaver-publication/${sourceSha}/result`;
+  const gitOutputs = new Map([
+    ['rev-parse --verify HEAD', 'd'.repeat(40)],
+    [`rev-parse --verify ${sourceSha}^{commit}`, sourceSha],
+    [`rev-parse --verify ${sourceSha}^{tree}`, sourceTree],
+    ['status --porcelain --untracked-files=normal', ''],
+    [`show ${sourceSha}:manifest.json`, JSON.stringify(data.manifest)],
+    [`show ${sourceSha}:apps/web/package.json`, JSON.stringify({ version: '1.0.0' })],
+    [`show ${sourceSha}:apps/web/package-lock.json`,
+      JSON.stringify({ version: '1.0.0', packages: { '': { version: '1.0.0' } } })],
+    ...data.manifest.components.filter(component => component.id !== 'Agentweaver.Web')
+      .map(component => [`show ${sourceSha}:${component.project}`, '<Project><Version>1.0.0</Version></Project>']),
+  ]);
+  const options = {
+    repoRoot: root, expectedSourceSha: sourceSha, publicationPath,
+    manifestPath: 'manifest.json', releaseTag, agentHostArchivePath, providerCatalog, context, namespace,
+    readObjects: async () => live.items,
+    fetchImpl: createRegistryFetch(live.registryBodies, []),
+    spawnSyncImpl(executable, args) {
+      let output;
+      if (executable === 'git') {
+        assert.ok(gitOutputs.has(args.join(' ')), `Unexpected Git query: ${args.join(' ')}`);
+        output = gitOutputs.get(args.join(' '));
+      } else {
+        assert.equal(executable, 'gh');
+        const endpoint = args[1];
+        if (endpoint.endsWith(`/releases/tags/${releaseTag}`)) {
+          output = { tag_name: releaseTag, draft: false, prerelease: false };
+        } else if (endpoint.endsWith(`/git/ref/tags/${releaseTag}`)) {
+          output = { object: { type: 'tag', sha: tagSha } };
+        } else if (endpoint.endsWith(`/git/tags/${tagSha}`)) {
+          output = { tag: releaseTag, object: { type: 'commit', sha: sourceSha } };
+        } else if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(resultTag)}`)) {
+          output = { object: { type: 'tag', sha: resultSha } };
+        } else {
+          assert.ok(endpoint.endsWith(`/git/tags/${resultSha}`), 'Unexpected GitHub query');
+          output = {
+            tag: resultTag, object: { type: 'commit', sha: sourceSha },
+            message: JSON.stringify(data.publication),
+          };
+        }
+        output = JSON.stringify(output);
+      }
+      return { status: 0, stdout: output };
+    },
+    measureAgentHostArchive(_archive, _root, expectedSha) {
+      assert.equal(expectedSha, build.sourceSha);
+      return structuredClone(host.preparedOciMeasurement);
+    },
+  };
+  const pins = {
+    context, namespace, sourceReceipt: { sourceSha, sourceTree },
+    providerReceipt: { ...providerCatalog, uid: 'catalog-uid', resourceVersion: '12' },
+    imageReceipt: {
+      registryImage: host.image, registryDigest: host.preparedOciMeasurement.image.digest,
+      archiveSha256: host.ociArchiveSha256,
+      manifestDigest: host.preparedOciMeasurement.image.digest,
+      configDigest: host.preparedOciMeasurement.image.configDigest, compressedPullBytes: 2048,
+    },
+  };
+  return { options, pins, build, host };
+}
+
+for (const reused of [false, true]) {
+  test(`preparation and downstream evidence preserve ${reused ? 'reused' : 'new'} AgentHost build source without weakening release pins`, async t => {
+    const { options, pins, build } = preparationFixture(t, reused);
+    const evidence = await prepareP1DeploymentEvidence(options);
+    const summary = summarizeP1SourceEvidence(evidence, pins);
+    assert.equal(summary.agentHostImageMeasurement.sourceSha, build.sourceSha);
+    assert.equal(summary.agentHostImageMeasurement.sourceTree, build.sourceTree);
+    assert.deepEqual(evidence.source, pins.sourceReceipt);
+    assert.equal(summary.releaseDeployment.sourceSha, sourceSha);
+    assert.equal(summary.releaseDeployment.sourceTree, sourceTree);
+    if (reused) {
+      // Copying JSON cannot turn a supplied older source into a preparation-validated binding.
+      assert.throws(() => summarizeP1SourceEvidence(structuredClone(evidence), pins), /exact input pin/);
+      assert.throws(() => summarizeP1SourceEvidence({
+        ...evidence, agentHostBuildSource: build, reusedFrom: build,
+      }, pins), /exact input pin/);
+    }
+    for (const field of ['sourceSha', 'sourceTree']) {
+      const original = evidence.agentHostImageMeasurement[field];
+      evidence.agentHostImageMeasurement[field] = '9'.repeat(40);
+      assert.throws(() => summarizeP1SourceEvidence(evidence, pins), /exact input pin/);
+      evidence.agentHostImageMeasurement[field] = original;
+      const measure = options.measureAgentHostArchive;
+      await assert.rejects(prepareP1DeploymentEvidence({
+        ...options,
+        measureAgentHostArchive(...args) { return { ...measure(...args), [field]: '9'.repeat(40) }; },
+      }), /archive does not match/);
+    }
+    for (const receipt of [evidence.source, evidence.releaseDeployment, evidence.services]) {
+      receipt.sourceSha = build.sourceSha === sourceSha ? '9'.repeat(40) : build.sourceSha;
+      assert.throws(() => summarizeP1SourceEvidence(evidence, pins), /exact input pin/);
+      receipt.sourceSha = sourceSha;
+    }
+  });
+}
 
 test('fails explicitly when anonymous GHCR token exchange fails or omits its token', async () => {
   const data = fixture();

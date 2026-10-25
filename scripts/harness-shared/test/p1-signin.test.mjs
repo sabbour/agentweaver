@@ -482,7 +482,13 @@ test('invalid callbacks are aborted before rejection and page close precedes CDP
         async close() { events.push('close'); },
       };
       const signing = authorizeP1InBrowser({
-        context: { pages: () => [page], on() {}, off() {}, async newCDPSession() { return session; } },
+        context: {
+          pages: () => [page],
+          on() {},
+          off() {},
+          async newPage() { events.push('keep-alive page'); return {}; },
+          async newCDPSession() { return session; },
+        },
         environment: ENVIRONMENT,
         scopes: P1_SETUP_SCOPES,
         makeRequest: options => ({ ...createP1AuthorizationRequest(options), state: 'expected' }),
@@ -504,7 +510,8 @@ test('invalid callbacks are aborted before rejection and page close precedes CDP
         releaseAbort();
         await assert.rejects(signing, /P1 sign-in could not be completed/);
       }
-      assert.deepEqual(events, ['abort sent', 'abort acknowledged', 'close', 'detach']);
+      // The keep-alive page opens before the last page closes so the shared browser survives.
+      assert.deepEqual(events, ['abort sent', 'abort acknowledged', 'keep-alive page', 'close', 'detach']);
     });
   }
 });
@@ -1118,6 +1125,7 @@ test('redirect-hop callbacks are paused without page routing and rejected before
       let exchanged = false;
       let detached = false;
       let closed = false;
+      let keptAlive = false;
       let routeCount = 0;
       let releaseNavigation;
       const valid = ['valid', 'pending-navigation'].includes(scenario);
@@ -1156,6 +1164,7 @@ test('redirect-hop callbacks are paused without page routing and rejected before
           pages: () => [page],
           on() {},
           off() {},
+          async newPage() { keptAlive = true; return {}; },
           async newCDPSession(target) { assert.equal(target, page); return session; },
         },
         environment: ENVIRONMENT,
@@ -1175,9 +1184,63 @@ test('redirect-hop callbacks are paused without page routing and rejected before
       assert.equal(failed, scenario !== 'abort-failure', 'invalid callbacks are also aborted');
       assert.equal(routeCount, 1, 'page routing is used only for the initial authorization/consent request');
       assert.equal(closed, true);
+      assert.equal(keptAlive, true, 'a blank page keeps the shared browser open after the last page closes');
       assert.equal(detached, scenario !== 'close-failure', 'never detach from a page that failed to close');
     });
   }
+});
+
+test('the shared browser context stays usable for a second sign-in after the first closes its page', async () => {
+  // Model Chrome's persistent-profile behavior: closing the last page closes the context.
+  const pages = [];
+  let contextClosed = false;
+  const makePage = () => {
+    const session = callbackSession(() => {});
+    const page = {
+      session,
+      route() {},
+      async goto(url) {
+        const authorize = new URL(url);
+        const callback = new URL(authorize.searchParams.get('redirect_uri'));
+        callback.searchParams.set('state', authorize.searchParams.get('state'));
+        callback.searchParams.set('code', 'redirect-code');
+        await session.pause(callback.toString());
+        throw new Error('navigation aborted');
+      },
+      async close() {
+        pages.splice(pages.indexOf(page), 1);
+        if (pages.length === 0) contextClosed = true;
+      },
+    };
+    session.detach = async () => {};
+    return page;
+  };
+  const context = {
+    pages: () => [...pages],
+    on() {},
+    off() {},
+    async newPage() {
+      if (contextClosed) throw new Error('Target page, context or browser has been closed');
+      const page = makePage();
+      pages.push(page);
+      return page;
+    },
+    async newCDPSession(target) { return target.session; },
+  };
+  const signIn = scopes => authorizeP1InBrowser({
+    context,
+    environment: ENVIRONMENT,
+    scopes,
+    io: { log() {} },
+    timeoutMs: 1000,
+    fetchImpl: async () => ({ ok: true, async json() { return { token_type: 'Bearer', access_token: jwt() }; } }),
+  });
+
+  assert.equal(await signIn(P1_SETUP_SCOPES), jwt());
+  assert.equal(contextClosed, false);
+  assert.equal(await signIn(P1_RUN_SCOPES), jwt());
+  assert.equal(contextClosed, false);
+  assert.equal(pages.length, 1);
 });
 
 test('multi-surface launcher shares one setup sign-in and runs both surfaces despite a blocked result', async () => {
