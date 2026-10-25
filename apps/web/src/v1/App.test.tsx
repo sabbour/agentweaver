@@ -2346,6 +2346,60 @@ describe('v1 web project scoping', () => {
     );
   });
 
+  it('refreshes project counts when a successful mutation finishes after the record scope changes', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    mocks.ensureSession.mockResolvedValue(true);
+    const current = knowledgeRecord('record-1');
+    const archived = { ...current, state: 'archived' as const, revision: 2, revisionId: 'record-1-revision-2' };
+    const pendingArchive = deferred<{
+      status: 'updated';
+      record: typeof archived;
+      currentRevision: number;
+      isDuplicate: boolean;
+    }>();
+    let activeMemoryCount = 7;
+    mocks.searchKnowledge.mockResolvedValue(knowledgePage([current]));
+    mocks.searchProjectKnowledge.mockImplementation(async (
+      _token: string,
+      _projectId: string,
+      options: { kind?: string },
+    ) => ({
+      ...knowledgePage([]),
+      totalCount: options.kind === 'decision' ? 3 : activeMemoryCount,
+    }));
+    mocks.updateKnowledgeRecord.mockReturnValue(pendingArchive.promise);
+    window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'record-1' });
+    const summary = screen.getByRole('region', { name: 'Team memory summary' });
+    await waitFor(() => expect(within(summary).getByText('7')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Archive record' }));
+    await waitFor(() => expect(mocks.updateKnowledgeRecord).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Decisions' }));
+    await waitFor(() => expect(mocks.searchKnowledge).toHaveBeenLastCalledWith(
+      'broker-token',
+      'p1',
+      'r1',
+      'a1',
+      expect.objectContaining({ kind: 'decision' }),
+      'tenant-1',
+    ));
+    activeMemoryCount = 6;
+    await act(async () => {
+      pendingArchive.resolve({
+        status: 'updated',
+        record: archived,
+        currentRevision: 2,
+        isDuplicate: false,
+      });
+    });
+
+    await waitFor(() => expect(within(summary).getByText('6')).toBeTruthy());
+  });
+
   it('opens project run history with project-read routes instead of run-owner snapshots', async () => {
     mocks.ensureSession.mockResolvedValue(true);
     mocks.getProjectRunHistorySessions.mockResolvedValue({

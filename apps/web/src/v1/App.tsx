@@ -1594,6 +1594,7 @@ function KnowledgePage() {
     page,
   ]);
   const activeScope = useRef(requestScope);
+  const activeProjectId = useRef(projectId);
   const closeRevisionHistory = () => {
     activeRevisionScope.current = null;
     setRevisionRecordId(null);
@@ -1651,10 +1652,17 @@ function KnowledgePage() {
 
   useEffect(() => {
     activeScope.current = requestScope;
+    activeProjectId.current = projectId;
     if (!binding || !agentId.trim() || !correctlyScoped) return undefined;
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
-  }, [binding, agentId, correctlyScoped, load, requestScope]);
+  }, [binding, agentId, correctlyScoped, load, projectId, requestScope]);
+
+  const refreshSummaryCounts = (mutationProjectId: string) => {
+    // List filters can change while a project-wide mutation is in flight.
+    if (activeProjectId.current === mutationProjectId)
+      setSummaryRefreshKey((current) => current + 1);
+  };
 
   const setScope = (event: FormEvent) => {
     event.preventDefault();
@@ -1694,11 +1702,11 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Record created (${result.status}). The list shows its saved state.`);
       setNoticeScope(scope);
-      setSummaryRefreshKey((current) => current + 1);
       closeRevisionHistory();
       await load(true);
     } catch (reason) {
@@ -1720,11 +1728,11 @@ function KnowledgePage() {
         : await apiCall((token, tenantSelector) => gatewayClient.rejectKnowledgeProposal(
           token, projectId, binding.runId, agentId.trim(), record.recordId, record.revision, idempotencyKey, tenantSelector,
         ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Proposal updated (${result.status}). The list shows its current state.`);
       setNoticeScope(scope);
-      setSummaryRefreshKey((current) => current + 1);
       closeRevisionHistory();
       await load(true);
     } catch (reason) {
@@ -1758,11 +1766,11 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Record archived (${result.status}). The list shows its current state.`);
       setNoticeScope(scope);
-      setSummaryRefreshKey((current) => current + 1);
       closeCorrection();
       closeRevisionHistory();
       await load(true);
@@ -1813,11 +1821,11 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Correction saved (${result.status}). The list shows the corrected record.`);
       setNoticeScope(scope);
-      setSummaryRefreshKey((current) => current + 1);
       closeCorrection();
       closeRevisionHistory();
       await load(true);
@@ -1844,11 +1852,11 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Decision approved (${result.status}). The list shows its trust state.`);
       setNoticeScope(scope);
-      setSummaryRefreshKey((current) => current + 1);
       closeRevisionHistory();
       await load(true);
     } catch (reason) {
@@ -1891,11 +1899,11 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Decision replaced (${result.status}). The list shows the new link.`);
       setNoticeScope(scope);
-      setSummaryRefreshKey((current) => current + 1);
       closeRevisionHistory();
       await load(true);
     } catch (reason) {
@@ -1965,11 +1973,11 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Revision restored (${result.status}). The list shows the restored record.`);
       setNoticeScope(scope);
-      setSummaryRefreshKey((current) => current + 1);
       closeRevisionHistory();
       closeCorrection();
       await load(true);
@@ -2036,11 +2044,11 @@ function KnowledgePage() {
         crypto.randomUUID(),
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeRecordsInScope(result.records, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Imported ${result.records.length} record(s). The list shows their saved state.`);
       setNoticeScope(scope);
-      setSummaryRefreshKey((current) => current + 1);
       setImportConfirmed(false);
       setTransferText('');
       closeRevisionHistory();
