@@ -502,6 +502,12 @@ the project configuration. Kind tabs filter by **All**, **Memories**,
 **Decisions**, **Proposals**, or **Session context**. It displays immutable revision history and supports the
 owner-authorized operations implemented for the record type:
 
+The summary row shows project-wide Decision and active Memory totals from
+Knowledge search. Pending proposal counts need a state filter on
+`GET /api/v1/projects/{projectId}/knowledge/records`, which is not available.
+The project-wide Sessions count is also unavailable; v1 exposes session history
+per run at `GET /api/v1/projects/{projectId}/runs/{runId}/history/sessions`.
+
 - Correct or archive supported Memory and SessionContext records.
 - Restore a historical revision as a new Active+Pending revision.
 - Approve an eligible Active Pending or Legacy Decision.
