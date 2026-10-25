@@ -146,6 +146,17 @@ appropriate accepted isolation context. The owner resolves an existing
 resource through a registered Sandbox adapter; it does not invent or provision
 a resource at this boundary.
 
+OpenPullRequest is available when the private authenticated Source Control owner
+is configured. Dispatch accepts an exact workspace locator for each such step.
+It saves the request and source binding before calling the owner. Retries reuse
+the saved request and operation identity, and dependent work waits until a
+validated pull request receipt is stored. The owner records the operation before
+contacting the provider. Recovery reuses the exact pull request across open and
+closed states; a missing or ambiguous result never triggers another create.
+Managed workspace changes wait while the owner holds the revision lease for
+the write. A changed source, workspace, or decision leaves the gate incomplete.
+Other platform gates still require their own registered executors.
+
 Candidate and confirmed plans are separate states. Pending gates prevent
 decomposition or dispatch according to transition rules. Gate answers bind a
 request ID, actor, and fence; exact replay returns the saved result.

@@ -22,10 +22,10 @@ runtime role receives exactly `SELECT, INSERT, UPDATE` on
 `casting_generation_requests`; this grant is included in the same reviewed plan.
 Source validation does not perform a migration, grant or deployment action.
 The offline plan hash for this source catalog is
-`19f861b4d240818f1021109fb9ad1e1b7efe711a94dc6c7eca9c1c4c897101d4`.
+`a6cb4eab724248f09c749ba97e660a0a818d574ffda18073585f5fe6844e5c04`.
 It is not an approval receipt. The runner uses its explicit registered
 version list, not contiguous numbering; the absent 017 does not require a
-placeholder. The Core list is 1-16, 18-33, and 35-37; 034 is not in the
+placeholder. The Core list is 1-16, 18-33, and 35-38; 034 is not in the
 catalog. Readiness ordering checks exact supported versions, not only range
 endpoints. Version 027 requires 026 only.
 Version 028 adds the append-only `guardrails_evaluations` table. It requires
@@ -82,7 +82,15 @@ Only an allow decision can be recorded; deny and provider errors fail closed.
 Both tables have exactly `SELECT, INSERT` in the runtime plan and are optional
 to readiness during rollout. The migration reuses the immutability trigger
 introduced in version 021.
-The Core catalog and plan include 032, 033, and 035-037; the maintenance Job
+Migration `038_source_control_pull_request_operations.sql` adds an operation
+ledger for idempotent pull-request creation. It requires migration 012 and
+grants the Orchestrator runtime role exactly `SELECT, INSERT, UPDATE` on
+`orchestrator.source_control_pull_request_operations`. The owner can reserve an
+operation before contacting Source Control, then record the pull-request
+number. Migration 038 is optional during readiness until its table and ledger
+entry are applied.
+
+The Core catalog and plan include 032, 033, and 035-038; the maintenance Job
 applies the included versions in order.
 Existing grants on the Priority link table cover the added columns.
 
@@ -272,7 +280,7 @@ The foreign key takes a `SHARE ROW EXCLUSIVE` lock on
 Events requires versions 1 through 10 and preserves the earlier version-2 layout.
 The initializer compares each plan catalog with the migrator's compiled
 `SupportedVersions` list instead of matching migrator source text.
-The plan lists 117 tables and eleven exact row-lock columns.
+The plan lists 118 tables and eleven exact row-lock columns.
 Applying migrations or grants, or running initialization with the new plan hash,
 requires separate approval.
 The plan contains five principal object IDs from the approved target snapshot.

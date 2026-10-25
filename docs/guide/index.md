@@ -12,6 +12,8 @@ rendering the source does not deploy a platform.
    choosing a workflow or service.
 3. Review [Foundation architecture](../architecture/overview.md) to find the
    service that owns each operation.
+4. Read [Workflow execution](../deep-dive/orchestration.md) to see how
+   confirmed plans, platform gates, and retries work.
 
 ## Tutorial
 

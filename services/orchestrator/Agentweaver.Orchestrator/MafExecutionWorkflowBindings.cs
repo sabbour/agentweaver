@@ -13,10 +13,14 @@ internal static class MafExecutionWorkflowBindings
     {
         public WorkflowPlatformGate Gate => WorkflowPlatformGate.BuildTest;
     }
+    private sealed class OpenPullRequestExecutor : IPlatformWorkflowStepExecutor
+    {
+        public WorkflowPlatformGate Gate => WorkflowPlatformGate.OpenPullRequest;
+    }
 
     /// <summary>Binds the accepted catalog before any child is spawned or platform intent is prepared.</summary>
     internal static BoundWorkflowDefinition RequireBound(
-        WorkPlanSnapshot plan, bool hasBuildTestOwner)
+        WorkPlanSnapshot plan, bool hasBuildTestOwner, bool hasOpenPullRequestOwner = false)
     {
         // Do not impersonate an unsupported platform gate with a model child or a no-op executor.
         var registrations = new List<KeyValuePair<WorkflowStepExecutorType, IWorkflowStepExecutor>>
@@ -24,6 +28,10 @@ internal static class MafExecutionWorkflowBindings
             new(WorkflowStepExecutorType.Fixed, new FixedChildExecutor()),
             new(WorkflowStepExecutorType.Open, new OpenChildExecutor())
         };
+        if (hasOpenPullRequestOwner)
+            registrations.Add(new(
+                WorkflowStepExecutorType.ForPlatformGate(WorkflowPlatformGate.OpenPullRequest),
+                new OpenPullRequestExecutor()));
         if (hasBuildTestOwner &&
             plan.Workflow.Definition.Steps.Any(step =>
                 step.PlatformGate == WorkflowPlatformGate.BuildTest &&
@@ -45,7 +53,7 @@ internal static class MafExecutionWorkflowBindings
         }
     }
 
-    /// <summary>Rejects a ready action that no longer belongs to its bound fixed/open/BuildTest step.</summary>
+    /// <summary>Rejects a ready action that no longer belongs to its bound fixed, open, or registered platform step.</summary>
     internal static void RequireBoundAction(BoundWorkflowDefinition bound, MafExecutionAction action)
     {
         // Match both the step identifier and full definition so an edited same-ID step cannot reuse the old binding.

@@ -76,6 +76,8 @@ public sealed class GitWorkspaceManager
             _rootPath, Hash(request.Context.Binding.RunId + "\0" + request.WorkspaceId));
         Directory.CreateDirectory(workspaceRoot);
         EnsureNotReparsePoint(workspaceRoot);
+        await using var revisionLease = await AcquireWorkspaceRevisionLeaseAsync(
+            request.Context.Binding.RunId, request.WorkspaceId, cancellationToken).ConfigureAwait(false);
 
         var manifestPath = Path.Combine(workspaceRoot, "workspace.json");
         var repositoryPath = Path.Combine(workspaceRoot, "repository");
@@ -231,6 +233,8 @@ public sealed class GitWorkspaceManager
                 GitWorkspaceFailureCode.PathConflict,
                 "The workspace reference does not match the requested run and pinned repository.");
 
+        await using var revisionLease = await AcquireWorkspaceRevisionLeaseAsync(
+            request.Context.Binding.RunId, request.WorkspaceId, cancellationToken).ConfigureAwait(false);
         EnsureNotReparsePoint(expected.WorkspaceRoot);
         EnsureNotReparsePoint(expected.ManifestPath);
         var manifest = await ReadManifestAsync(expected.ManifestPath, cancellationToken).ConfigureAwait(false);
@@ -287,6 +291,129 @@ public sealed class GitWorkspaceManager
             DecodeGitOutput(headBytes).Trim(),
             DecodeGitOutput(statusBytes),
             DecodeGitOutput(patchBytes));
+    }
+
+    /// <summary>Reads only the exact workspace HEAD without constructing a diff response.</summary>
+    public async Task<GitWorkspaceDiff> ReadRevisionAsync(
+        GitWorkspaceRequest request,
+        GitWorkspace workspace,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(workspace);
+        ValidateRequest(request);
+        var expected = GetWorkspacePaths(request);
+        if (!string.Equals(
+                Path.GetFullPath(workspace.Path), expected.RepositoryPath, PathComparison) ||
+            !string.Equals(workspace.RunId, request.Context.Binding.RunId, StringComparison.Ordinal) ||
+            !string.Equals(workspace.WorkspaceId, request.WorkspaceId, StringComparison.Ordinal) ||
+            !string.Equals(workspace.RepositoryId, request.Context.Binding.Resource.ResourceId, StringComparison.Ordinal) ||
+            workspace.ResourceGeneration != request.Context.Binding.Resource.Generation ||
+            !string.Equals(workspace.BaseSha, request.BaseSha, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(workspace.BranchName, request.BranchName, StringComparison.Ordinal))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.PathConflict,
+                "The workspace reference does not match the requested run and pinned repository.");
+
+        EnsureNotReparsePoint(expected.WorkspaceRoot);
+        EnsureNotReparsePoint(expected.ManifestPath);
+        var manifest = await ReadManifestAsync(expected.ManifestPath, cancellationToken).ConfigureAwait(false);
+        ValidateManifestBinding(manifest, request);
+        if (manifest.State != "ready" ||
+            !Guid.TryParseExact(manifest.WorkspaceIncarnationId, "N", out var incarnationId) ||
+            workspace.WorkspaceIncarnationId != incarnationId)
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace,
+                "The source-control workspace is not ready.");
+        await ValidateOwnedRepositoryAsync(
+            expected.RepositoryPath,
+            _remote.GetCloneUri(request.Context.Repository),
+            cancellationToken).ConfigureAwait(false);
+
+        var emptyGitConfig = Path.Combine(expected.WorkspaceRoot, "git-empty-config");
+        EnsureEmptyGitConfig(emptyGitConfig);
+        var headBytes = await RunGitAsync(
+            expected.RepositoryPath,
+            ["rev-parse", "--verify", "HEAD^{commit}"],
+            128,
+            emptyGitConfig,
+            remoteUri: null,
+            credential: null,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        return new GitWorkspaceDiff(
+            workspace.WorkspaceId,
+            request.BaseSha,
+            DecodeGitOutput(headBytes).Trim(),
+            string.Empty,
+            string.Empty);
+    }
+
+    /// <summary>Holds the managed workspace revision stable across an owner-authorized write.</summary>
+    /// <exception cref="GitWorkspaceException">The workspace is absent, invalid, or outside its configured root.</exception>
+    public async Task<IAsyncDisposable> AcquireWorkspaceRevisionLeaseAsync(
+        string runId,
+        string workspaceId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(runId) ||
+            runId.Length > 256 ||
+            string.IsNullOrWhiteSpace(workspaceId) ||
+            workspaceId.Length > 128 ||
+            workspaceId.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) && character is not ('-' or '_')))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.InvalidRequest,
+                "The source-control workspace identity is invalid.");
+        if (!Directory.Exists(_rootPath))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.WorkspaceUnavailable,
+                "The source-control workspace is no longer available.");
+
+        EnsureNotReparsePoint(_rootPath);
+        var paths = GetWorkspacePaths(runId, workspaceId);
+        if (!Directory.Exists(paths.WorkspaceRoot))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.WorkspaceUnavailable,
+                "The source-control workspace is no longer available.");
+        EnsureNotReparsePoint(paths.WorkspaceRoot);
+        var lockPath = Path.Combine(paths.WorkspaceRoot, "workspace-revision.lock");
+
+        // Managed preparation and diff assembly share this lease; wait until the exact revision is idle.
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                if (File.Exists(lockPath))
+                {
+                    EnsureNotReparsePoint(lockPath);
+                    return new FileStream(
+                        lockPath,
+                        FileMode.Open,
+                        FileAccess.ReadWrite,
+                        FileShare.None,
+                        bufferSize: 1,
+                        FileOptions.Asynchronous);
+                }
+
+                return new FileStream(
+                    lockPath,
+                    FileMode.CreateNew,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.Asynchronous);
+            }
+            catch (IOException) when (!cancellationToken.IsCancellationRequested)
+            {
+                if (!File.Exists(lockPath))
+                    throw new GitWorkspaceException(
+                        GitWorkspaceFailureCode.PathConflict,
+                        "The source-control workspace revision lock is invalid.");
+                EnsureNotReparsePoint(lockPath);
+                await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>Captures a workspace using the Source Control binding carried by a checkout request.</summary>
@@ -936,7 +1063,10 @@ public sealed class GitWorkspaceManager
             return existing;
         }
 
-        if (Directory.EnumerateFileSystemEntries(workspaceRoot).Any())
+        // The empty lease file is created before manifest initialization while preparation holds the workspace lock.
+        if (Directory.EnumerateFileSystemEntries(workspaceRoot)
+            .Any(path => !string.Equals(
+                Path.GetFileName(path), "workspace-revision.lock", StringComparison.Ordinal)))
             throw new GitWorkspaceException(
                 GitWorkspaceFailureCode.PathConflict,
                 "The target source-control workspace contains data without an ownership manifest.");

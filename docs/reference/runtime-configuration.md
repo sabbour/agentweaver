@@ -5,6 +5,14 @@ This reference describes the non-secret ConfigMap keys in
 them. It covers the v1 source contract; it does not turn a source candidate
 into a deployed or selectable provider.
 
+## OpenPullRequest workflow executor
+
+The Orchestrator uses `Orchestrator:SourceControlOwner:OwnerBaseAddress` to
+call its private authenticated Source Control routes when a workflow includes
+an OpenPullRequest gate. The address must be an HTTPS owner origin trusted by
+the Orchestrator's existing owner transport. Without it, workflows that need
+this executor fail binding instead of treating the gate as successful.
+
 ## Optional periodic issue-sync service channels
 
 Issue sync is disabled as a host capability unless its explicit TLS profiles

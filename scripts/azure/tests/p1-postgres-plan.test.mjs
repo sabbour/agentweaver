@@ -11,15 +11,17 @@ test('Image compatibility preserves reserved gaps while accepting reviewed migra
   // The runner can read this source-owned contract before choosing deployment and migration order.
   assert.deepEqual(compatibility.applyByDefault, core);
   assert.deepEqual(compatibility.currentImage.requiredCoreVersions,
-    core.filter(version => ![32, 33, 35, 36, 37].includes(version)));
-  assert.deepEqual(compatibility.currentImage.optionalCoreVersions, [32, 33, 35, 36, 37]);
+    core.filter(version => ![32, 33, 35, 36, 37, 38].includes(version)));
+  assert.deepEqual(compatibility.currentImage.optionalCoreVersions, [32, 33, 35, 36, 37, 38]);
   assert.equal(compatibility.currentImage.repositoryIdentityWriteVersion, 33);
   assert.equal(compatibility.currentImage.beforeRepositoryIdentityUpdateError, 'database_update_pending');
   assert.equal(compatibility.rootModelTurnAdmissionsVersion, 36);
   assert.equal(compatibility.rootModelTurnAdmissionsPrerequisiteVersion, 21);
   assert.equal(compatibility.childSpawnAuthorizationVersion, 37);
   assert.equal(compatibility.childSpawnAuthorizationPrerequisiteVersion, 21);
-  assert.deepEqual(compatibility.rolloutOrder, ['deployCurrentImages', 'applyCore032And033And035And036And037']);
+  assert.equal(compatibility.sourceControlPullRequestOperationsVersion, 38);
+  assert.equal(compatibility.sourceControlPullRequestOperationsPrerequisiteVersion, 12);
+  assert.deepEqual(compatibility.rolloutOrder, ['deployCurrentImages', 'applyCore032And033And035And036And037And038']);
   assert.deepEqual(compatibility.separateApprovalRequired, []);
   assert.equal(compatibility.preRepositoryIdentityImage.acceptsCore033, false);
   assert.equal(core.includes(32), true);
@@ -27,6 +29,7 @@ test('Image compatibility preserves reserved gaps while accepting reviewed migra
   assert.equal(core.includes(35), true);
   assert.equal(core.includes(36), true);
   assert.equal(core.includes(37), true);
+  assert.equal(core.includes(38), true);
 });
 
 test('P1 plan binds five service roles to the provisioned principal IDs', () => {
@@ -143,15 +146,17 @@ test('Only the existing casting authority function receives direct runtime EXECU
 });
 
 // The Core catalog includes both feature migrations and preserves the reserved 034 gap.
-test('Core plan includes migrations through 037 and grants append-only owner evidence', () => {
-  // The plan must include every shipped resource without granting mutation of caller receipts.
+test('Core plan includes migration 038 and its exact owner-operation grants', () => {
+  // The plan must include every shipped resource and only the table operations its owner requires.
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
-    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37]);
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38]);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'backlog_tasks').privileges, ['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'source_control_pull_requests').privileges, ['SELECT', 'INSERT', 'UPDATE']);
+  assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
+    .find(table => table.table === 'source_control_pull_request_operations').privileges, ['SELECT', 'INSERT', 'UPDATE']);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
     .find(table => table.table === 'user_notification_dismissals').privileges, ['SELECT', 'INSERT']);
   assert.deepEqual(plan.services.find(service => service.schema === 'orchestrator').tables
@@ -243,7 +248,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
     for (const [, filename] of mappings)
       assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
     if (owner.startsWith('orchestrator/')) {
-      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37])'));
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38])'));
       assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
       assert.ok(source.includes('(applied.Contains(22) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(23) && !applied.Contains(22))'));
@@ -256,7 +261,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
       assert.ok(source.includes('(applied.Contains(30) && !applied.Contains(26))'));
       assert.ok(source.includes('(applied.Contains(31) && (!applied.Contains(30) || !applied.Contains(25)))'));
-      assert.ok(source.includes('Enumerable.Range(57, 48)'));
+      assert.ok(source.includes('Enumerable.Range(57, 49)'));
       assert.ok(source.includes('(applied.Contains(33) && !applied.Contains(24))'));
       assert.ok(source.includes('(applied.Contains(36) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(37) && !applied.Contains(21))'));
@@ -306,7 +311,7 @@ test('Initializer binds exact plan versions to compiled migrator catalogs and ap
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   // Check exact grants as well as counts; a new table must not gain broader default privileges.
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 117);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 118);
   const projectsConfig = plan.services.find(service => service.schema === 'projects_config');
   assert.deepEqual(projectsConfig.tables.find(table => table.table === 'casting_generation_requests').privileges,
     ['SELECT', 'INSERT', 'UPDATE']);

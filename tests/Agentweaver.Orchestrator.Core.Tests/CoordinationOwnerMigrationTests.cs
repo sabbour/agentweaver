@@ -54,6 +54,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(35)]
     [InlineData(36)]
     [InlineData(37)]
+    [InlineData(38)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -129,6 +130,25 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Fact]
+    public async Task PullRequestOperationMigrationIsOptionalBeforeItIsApplied()
+    {
+        await ApplyMigrationsThroughAsync(37);
+
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 38),
+                to_regclass(@table) IS NOT NULL
+            """, connection);
+        command.Parameters.AddWithValue("table", $"{_schema}.source_control_pull_request_operations");
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0L, reader.GetInt64(0));
+        Assert.False(reader.GetBoolean(1));
+    }
+
+    [Fact]
     public async Task RootAdmissionMigrationUsesItsActualPrerequisiteWithoutReservedSiblingVersions()
     {
         await ApplyMigrationsThroughAsync(21);
@@ -164,6 +184,28 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             await apply.ExecuteNonQueryAsync();
         await using (var record = new NpgsqlCommand($"""
             INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (37)
+            """, connection))
+            await record.ExecuteNonQueryAsync();
+
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await AssertCurrentSchemaAsync();
+    }
+
+    [Fact]
+    public async Task PullRequestOperationMigrationUsesItsActualPrerequisiteWithoutReservedSiblingVersions()
+    {
+        await ApplyMigrationsThroughAsync(12);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        var resourceName = "Agentweaver.Orchestrator.Migrations.038_source_control_pull_request_operations.sql";
+        await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Missing migration resource '{resourceName}'.");
+        using var reader = new StreamReader(resource);
+        var sql = (await reader.ReadToEndAsync()).Replace("{schema}", $"\"{_schema}\"", StringComparison.Ordinal);
+        await using (var apply = new NpgsqlCommand(sql, connection))
+            await apply.ExecuteNonQueryAsync();
+        await using (var record = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (38)
             """, connection))
             await record.ExecuteNonQueryAsync();
 
@@ -251,7 +293,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
         // Old owner images cannot accept 033 or later migrations; deploy before applying them.
-        Assert.Equal(4L, reader.GetInt64(3));
+        Assert.Equal(5L, reader.GetInt64(3));
         Assert.True(reader.GetBoolean(4));
     }
 
@@ -392,6 +434,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData("maf_root_model_turn_admissions")]
     [InlineData("maf_child_spawn_authorization_receipts")]
     [InlineData("maf_child_spawn_authorization_consumptions")]
+    [InlineData("source_control_pull_request_operations")]
     public async Task VerificationRequiresRegisteredTables(string table)
     {
         // A version receipt alone is insufficient when its required table is missing.
@@ -559,7 +602,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (33, "033_priority_link_repository_identity.sql"),
             (35, "035_backlog_task_queue_position.sql"),
             (36, "036_maf_root_model_turn_admissions.sql"),
-            (37, "037_maf_child_spawn_authorization.sql")
+            (37, "037_maf_child_spawn_authorization.sql"),
+            (38, "038_source_control_pull_request_operations.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -706,7 +750,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));

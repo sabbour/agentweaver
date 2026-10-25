@@ -945,6 +945,23 @@ accepting owner state does not start an automatic scheduler.
 | POST | `/sessions/{sessionId}/suspend` | Request fenced suspend. | No |
 | POST | `/sessions/{sessionId}/resume` | Request retained-Workspace resume. | No |
 
+The dispatch body may include `openPullRequestWorkspaces`, an object keyed by
+OpenPullRequest step ID. Each value contains `workspaceId`,
+`workspaceIncarnationId`, `baseSha`, `branchName`, `headSha`, and `baseBranch`.
+The Source Control owner checks the current repository pin and exact workspace
+revision before it creates or reuses a pull request. The Orchestrator stores the
+request and operation identity before the owner call and reuses both after a
+retry or recovery. The owner records that operation before contacting the
+provider. Recovery reuses only the matching pull request, including when it has
+closed; it never creates another pull request for the same operation. A missing
+or ambiguous provider result fails closed. A gate succeeds only after the owner
+returns a valid pull request number, URL, and matching head SHA and the
+Orchestrator saves its receipt. The owner holds a workspace revision lease while
+checking the workspace and writing to the provider. An owner error or a changed
+decision, source binding, or workspace leaves the gate incomplete, so dependent
+steps do not run. This executor requires the private
+`Orchestrator:SourceControlOwner:OwnerBaseAddress` configuration.
+
 ### Backlog claims
 
 Native owner prefix: `/api/projects/{projectId}/runs/{runId}/backlog`.

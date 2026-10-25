@@ -12,6 +12,36 @@ namespace Agentweaver.SourceControl.Tests;
 
 public sealed partial class GitWorkspaceManagerTests
 {
+    [Fact]
+    public async Task WorkspaceRevisionLeaseWaitsForManagedRevisionMutationLease()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            const string runId = "run-lease";
+            const string workspaceId = "workspace-lease";
+            var key = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(runId + "\0" + workspaceId)))[..32].ToLowerInvariant();
+            Directory.CreateDirectory(Path.Combine(temporaryRoot, key));
+            var manager = new GitWorkspaceManager(
+                temporaryRoot, new UnavailableGitRepositoryRemote());
+            await using var held = await manager.AcquireWorkspaceRevisionLeaseAsync(
+                runId, workspaceId, CancellationToken.None);
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var waiting = manager.AcquireWorkspaceRevisionLeaseAsync(
+                runId, workspaceId, cancellation.Token);
+
+            await Task.Delay(75);
+            Assert.False(waiting.IsCompleted);
+            await held.DisposeAsync();
+            await using var released = await waiting.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

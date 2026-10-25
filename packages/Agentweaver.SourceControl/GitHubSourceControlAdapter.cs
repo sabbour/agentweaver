@@ -225,6 +225,40 @@ public sealed partial class GitHubSourceControlAdapter :
     {
         ValidatePullRequestRequest(request);
         ValidateContext(context, SourceControlCapabilities.PullRequestWrite);
+        var executionBinding = request.ExecutionBinding;
+        var providerRequest = request;
+        if (executionBinding is not null)
+        {
+            if (executionBinding.OperationId == Guid.Empty ||
+                executionBinding.WorkspaceIncarnationId == Guid.Empty ||
+                !string.Equals(executionBinding.WorkspaceHeadSha, request.ExpectedHeadSha,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(executionBinding.WorkspaceBaseSha, request.ExpectedBaseSha,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new SourceControlOperationException(
+                    SourceControlFailureCode.Conflict,
+                    "The persisted pull request operation binding does not match its request.");
+
+            var marker = OpenPullRequestOperationMarker(executionBinding.OperationId);
+            var markedBody = string.IsNullOrEmpty(request.Body)
+                ? marker
+                : request.Body + "\n\n" + marker;
+            if (markedBody.Length > 60_000)
+                throw new SourceControlOperationException(
+                    SourceControlFailureCode.InvalidRequest,
+                    "The pull request body is too large for its durable operation marker.");
+            providerRequest = request with { Body = markedBody };
+
+            var recovered = await FindPullRequestByOperationAsync(
+                context, providerRequest, marker, cancellationToken).ConfigureAwait(false);
+            if (recovered is not null)
+                return recovered with { Disposition = SourceControlPullRequestDisposition.Reused };
+            if (!executionBinding.OwnerMayCreate)
+                throw new SourceControlOperationException(
+                    SourceControlFailureCode.Conflict,
+                    "The pull request operation has no recoverable provider result; creation is not retried.");
+        }
+
         var uri = RepositoryUri(context.Repository, "pulls");
         using var response = await SendAsync(
             HttpMethod.Post,
@@ -232,19 +266,24 @@ public sealed partial class GitHubSourceControlAdapter :
             context.Credential,
             JsonContent.Create(new
             {
-                title = request.Title,
-                body = request.Body,
-                head = context.Repository.Owner + ":" + request.HeadBranch,
-                @base = request.BaseBranch,
-                draft = request.Draft
+                title = providerRequest.Title,
+                body = providerRequest.Body,
+                head = context.Repository.Owner + ":" + providerRequest.HeadBranch,
+                @base = providerRequest.BaseBranch,
+                draft = providerRequest.Draft
             }),
             cancellationToken,
             operationMayHaveChangedRemoteState: true).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.UnprocessableEntity)
         {
-            var matching = await FindOpenPullRequestAsync(
-                context, request, cancellationToken).ConfigureAwait(false);
+            var matching = executionBinding is null
+                ? await FindOpenPullRequestAsync(context, request, cancellationToken).ConfigureAwait(false)
+                : await FindPullRequestByOperationAsync(
+                    context,
+                    providerRequest,
+                    OpenPullRequestOperationMarker(executionBinding.OperationId),
+                    cancellationToken).ConfigureAwait(false);
             if (matching is not null)
                 return matching with { Disposition = SourceControlPullRequestDisposition.Reused };
             throw new SourceControlOperationException(
@@ -261,7 +300,7 @@ public sealed partial class GitHubSourceControlAdapter :
                 document.RootElement,
                 context.Repository,
                 SourceControlPullRequestDisposition.Created);
-            EnsureExactPullRequest(created, request);
+            EnsureExactPullRequest(created, providerRequest);
             return created;
         }
         catch (SourceControlOperationException exception) when (
@@ -270,6 +309,69 @@ public sealed partial class GitHubSourceControlAdapter :
             throw UncertainWriteResponse(exception);
         }
     }
+
+    /// <summary>
+    /// Finds a PR carrying this persisted operation marker across open and closed states.
+    /// A pending owner operation may only be recovered; it never posts a second create.
+    /// </summary>
+    private async Task<SourceControlPullRequest?> FindPullRequestByOperationAsync(
+        SourceControlOperationContext context,
+        SourceControlPullRequestRequest request,
+        string marker,
+        CancellationToken cancellationToken)
+    {
+        const int pageSize = 100;
+        const int maximumPages = 10;
+        var exactMarkerResults = new List<SourceControlPullRequest>();
+        for (var page = 1; page <= maximumPages; page++)
+        {
+            var query = "?state=all&per_page=" + pageSize.ToString(CultureInfo.InvariantCulture) +
+                        "&page=" + page.ToString(CultureInfo.InvariantCulture) +
+                        "&head=" + Uri.EscapeDataString(
+                            context.Repository.Owner + ":" + request.HeadBranch) +
+                        "&base=" + Uri.EscapeDataString(request.BaseBranch);
+            using var response = await SendAsync(
+                HttpMethod.Get,
+                RepositoryUri(context.Repository, "pulls" + query),
+                context.Credential,
+                content: null,
+                cancellationToken).ConfigureAwait(false);
+            EnsureSuccess(response, "GitHub pull request operation lookup");
+            using var document = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                throw InvalidResponse("GitHub returned an invalid pull request operation lookup response.");
+
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (ReadOptionalString(item, "body")?.Contains(marker, StringComparison.Ordinal) != true)
+                    continue;
+                exactMarkerResults.Add(ParseAnyStatePullRequestListItem(item, context.Repository));
+            }
+
+            var hasNext = response.Headers.TryGetValues("Link", out var links) &&
+                links.Any(link => link.Contains("rel=\"next\"", StringComparison.OrdinalIgnoreCase));
+            if (!hasNext)
+                break;
+            if (page == maximumPages)
+                throw new SourceControlOperationException(
+                    SourceControlFailureCode.Conflict,
+                    "The pull request operation history exceeds the bounded recovery window.");
+        }
+
+        if (exactMarkerResults.Count > 1)
+            throw new SourceControlOperationException(
+                SourceControlFailureCode.Conflict,
+                "GitHub returned multiple pull requests for one persisted operation.");
+        if (exactMarkerResults.Count == 0)
+            return null;
+
+        var matching = exactMarkerResults[0];
+        EnsureExactPullRequest(matching, request);
+        return matching;
+    }
+
+    internal static string OpenPullRequestOperationMarker(Guid operationId) =>
+        "<!-- agentweaver-open-pr-operation:" + operationId.ToString("N") + " -->";
 
     /// <summary>Reads and validates one pull request from the bound repository.</summary>
     /// <exception cref="SourceControlOperationException">The number, binding, response, or repository identity is invalid.</exception>
@@ -971,6 +1073,21 @@ public sealed partial class GitHubSourceControlAdapter :
         return pullRequest;
     }
 
+    private static SourceControlPullRequest ParseAnyStatePullRequestListItem(
+        JsonElement root,
+        SourceControlRepositoryIdentity expectedRepository)
+    {
+        var pullRequest = ParsePullRequest(
+            root,
+            expectedRepository,
+            SourceControlPullRequestDisposition.Observed,
+            allowOpenListItem: true,
+            allowClosedListItem: true);
+        if (pullRequest.State is not ("open" or "closed"))
+            throw InvalidResponse("GitHub returned an unsupported pull request state.");
+        return pullRequest;
+    }
+
     /// <summary>Reads repository identity, timestamps, and credential permissions from GitHub.</summary>
     private async Task<RepositoryInfo> ReadRepositoryAsync(
         SourceControlRepositoryIdentity repository,
@@ -1155,7 +1272,8 @@ public sealed partial class GitHubSourceControlAdapter :
         JsonElement root,
         SourceControlRepositoryIdentity expectedRepository,
         SourceControlPullRequestDisposition disposition,
-        bool allowOpenListItem = false)
+        bool allowOpenListItem = false,
+        bool allowClosedListItem = false)
     {
         var head = ReadObject(root, "head");
         var @base = ReadObject(root, "base");
@@ -1172,6 +1290,12 @@ public sealed partial class GitHubSourceControlAdapter :
         else if (allowOpenListItem && state == "open")
         {
             merged = false;
+        }
+        else if (allowClosedListItem && state == "closed" &&
+                 root.TryGetProperty("merged_at", out var mergedAt) &&
+                 mergedAt.ValueKind is JsonValueKind.Null or JsonValueKind.String)
+        {
+            merged = mergedAt.ValueKind == JsonValueKind.String;
         }
         else
         {

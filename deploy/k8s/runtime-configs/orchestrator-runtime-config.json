@@ -13,6 +13,7 @@
     "Orchestrator__Database__WorkloadIdentity__ClientId": "039d7849-9fa0-4488-83ed-c52ec55007ea",
     "Orchestrator__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
     "Orchestrator__Schema": "orchestrator",
+    "Orchestrator__SourceControlOwner__OwnerBaseAddress": "https://orchestrator.agentweaver.svc.cluster.local:8443/",
     "Identity__Issuer": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "Identity__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "ProjectsConfig__AuthorizationContext__OwnerBaseAddress": "https://projects-config.agentweaver.svc.cluster.local:8443/",

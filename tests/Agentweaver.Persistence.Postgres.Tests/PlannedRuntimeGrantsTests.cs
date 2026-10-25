@@ -9,8 +9,8 @@ namespace Agentweaver.Persistence.Postgres.Tests;
 // Pure tests for the plan gates. They need no database: every gate throws before a connection opens.
 public sealed class PlannedRuntimeGrantsTests
 {
-    private const string ReviewedPlanSha256 = "19f861b4d240818f1021109fb9ad1e1b7efe711a94dc6c7eca9c1c4c897101d4";
-    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37];
+    private const string ReviewedPlanSha256 = "a6cb4eab724248f09c749ba97e660a0a818d574ffda18073585f5fe6844e5c04";
+    private static readonly int[] CoreVersions = [.. Enumerable.Range(1, 16), .. Enumerable.Range(18, 16), 35, 36, 37, 38];
     private static readonly int[] EventsVersions = [.. Enumerable.Range(1, 10)];
     private static readonly int[] EnvironmentVersions = [.. Enumerable.Range(1, 11)];
 
@@ -32,11 +32,14 @@ public sealed class PlannedRuntimeGrantsTests
         Assert.Contains(33, core.Versions);
         Assert.Contains(36, core.Versions);
         Assert.Contains(37, core.Versions);
+        Assert.Contains(38, core.Versions);
         Assert.DoesNotContain(34, core.Versions);
         Assert.Contains(35, core.Versions);
         Assert.NotEmpty(core.Tables);
         var pullRequestRecords = Assert.Single(core.Tables, table => table.Table == "source_control_pull_requests");
         Assert.Equal(["SELECT", "INSERT", "UPDATE"], pullRequestRecords.Privileges);
+        var pullRequestOperations = Assert.Single(core.Tables, table => table.Table == "source_control_pull_request_operations");
+        Assert.Equal(["SELECT", "INSERT", "UPDATE"], pullRequestOperations.Privileges);
         foreach (var tableName in new[]
         {
             "maf_child_spawn_authorization_receipts",

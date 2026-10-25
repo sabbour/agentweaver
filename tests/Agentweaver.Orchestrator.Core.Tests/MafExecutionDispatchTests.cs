@@ -118,6 +118,47 @@ public sealed class MafExecutionDispatchTests
     }
 
     [Fact]
+    public void DispatchRegistersOnlyTheImplementedOpenPullRequestPlatformGate()
+    {
+        var supported = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+                WorkflowDefinitionOrigin.BuiltIn,
+                WorkflowTestData.Open("implement", 0, []),
+                WorkflowTestData.Platform(
+                    "publish", 1, ["implement"], WorkflowPlatformGate.OpenPullRequest))),
+            WorkflowTestData.Plan(WorkflowTestData.Item("first")),
+            WorkflowTestData.SelectionContext()).Value!;
+
+        var bound = MafExecutionWorkflowBindings.RequireBound(supported, false, true);
+        var action = new MafExecutionAction(bound.Steps[1].Definition, null);
+        MafExecutionWorkflowBindings.RequireBoundAction(bound, action);
+        Assert.Equal(WorkflowPlatformGate.OpenPullRequest, Assert.IsType<BoundWorkflowStep.Platform>(
+            bound.Steps[1]).Gate);
+
+        foreach (var gate in new[]
+                 {
+                     WorkflowPlatformGate.Merge,
+                     WorkflowPlatformGate.Scribe,
+                     WorkflowPlatformGate.Preview,
+                     WorkflowPlatformGate.ResponsibleAi,
+                     WorkflowPlatformGate.RubberDuck,
+                     WorkflowPlatformGate.IndependentReview,
+                     WorkflowPlatformGate.Publish
+                 })
+        {
+            var unsupported = WorkPlanValidator.ValidateAndSnapshot(
+                WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+                    WorkflowDefinitionOrigin.BuiltIn, WorkflowTestData.Platform("gate", 0, [], gate))),
+                WorkflowTestData.Plan(),
+                WorkflowTestData.SelectionContext()).Value!;
+
+            var failure = Assert.Throws<CoordinationException>(
+                () => MafExecutionWorkflowBindings.RequireBound(unsupported, false, true));
+            Assert.Equal("maf_execution_executor_unavailable", failure.Code);
+        }
+    }
+
+    [Fact]
     public void PendingDispatchCannotReplayUnderAnotherEnvironmentOrPolicyGeneration()
     {
         var fence = new EnvironmentGenerationFence(
