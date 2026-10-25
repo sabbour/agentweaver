@@ -2330,8 +2330,9 @@ describe('v1 web project scoping', () => {
       expect(within(summary).getByText('2')).toBeTruthy();
     });
     expect(within(summary).getAllByText('Unavailable')).toHaveLength(2);
-    expect(within(summary).getByText(/kind=proposal.*state=pending/)).toBeTruthy();
-    expect(within(summary).getByText(/projects\/\{projectId\}\/sessions/)).toBeTruthy();
+    expect(
+      within(summary).getByText("Pending proposals and project-wide session counts aren't available yet."),
+    ).toBeTruthy();
     expect(mocks.searchProjectKnowledge).toHaveBeenCalledWith(
       'broker-token',
       'p1',

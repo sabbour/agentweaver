@@ -1499,8 +1499,7 @@ function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string;
         <p className="v1-muted">Sign in without a run binding to load project-wide counts.</p>
       )}
       <p className="v1-muted">
-        Pending needs <code>GET /api/v1/projects/{'{projectId}'}/knowledge/records?kind=proposal&amp;state=pending</code>.
-        Project sessions need <code>GET /api/v1/projects/{'{projectId}'}/sessions</code>; v1 only exposes session history per run.
+        Pending proposals and project-wide session counts aren't available yet.
       </p>
     </section>
   );
