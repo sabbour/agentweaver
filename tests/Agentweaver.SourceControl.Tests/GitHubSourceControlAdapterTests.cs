@@ -194,6 +194,61 @@ public sealed partial class GitHubSourceControlAdapterTests
     }
 
     [Fact]
+    public async Task CreatePullRequestRecoversClosedMarkedPullRequestWithoutCreatingAnother()
+    {
+        var operationId = Guid.Parse("9489ab8e-d2a8-4b91-a44b-6966f8873eac");
+        var marker = "<!-- agentweaver-open-pr-operation:" + operationId.ToString("N") + " -->";
+        var calls = 0;
+        var handler = new StubHandler((request, _) =>
+        {
+            calls++;
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Contains("state=all", request.RequestUri!.Query, StringComparison.Ordinal);
+            Assert.Contains("head=octo%3Afeature", request.RequestUri.Query, StringComparison.Ordinal);
+            var closed = OpenPullRequestListItemJson(7, HeadSha, BaseSha)
+                .Replace(
+                    "\"state\":\"open\"",
+                    "\"body\":\"" + marker + "\",\"state\":\"closed\",\"merged\":false",
+                    StringComparison.Ordinal);
+            return Task.FromResult(JsonResponse("[" + closed + "]"));
+        });
+        var adapter = CreateAdapter(handler);
+
+        var result = await adapter.CreateOrReusePullRequestAsync(
+            CreateContext("run-1", SourceControlCapabilities.PullRequestWrite),
+            OpenPullRequestRequest(operationId),
+            CancellationToken.None);
+
+        Assert.Equal(1, calls);
+        Assert.Equal(7, result.Number);
+        Assert.Equal("closed", result.State);
+        Assert.Equal(SourceControlPullRequestDisposition.Reused, result.Disposition);
+    }
+
+    [Fact]
+    public async Task PendingPullRequestOperationWithoutMarkedResultNeverCreates()
+    {
+        var calls = 0;
+        var handler = new StubHandler((request, _) =>
+        {
+            calls++;
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Contains("state=all", request.RequestUri!.Query, StringComparison.Ordinal);
+            return Task.FromResult(JsonResponse("[]"));
+        });
+        var adapter = CreateAdapter(handler);
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(() =>
+            adapter.CreateOrReusePullRequestAsync(
+                CreateContext("run-1", SourceControlCapabilities.PullRequestWrite),
+                OpenPullRequestRequest(Guid.Parse("56d50f45-8adb-4a19-b96a-ad6b603dcd60")),
+                CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.Conflict, exception.Code);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task CreatePullRequestReturnsProviderTitleForCreatedAndReusedPullRequests()
     {
         var calls = 0;
@@ -711,6 +766,25 @@ public sealed partial class GitHubSourceControlAdapterTests
         "\",\"repo\":{\"full_name\":\"octo/widget\"}}," +
         "\"base\":{\"ref\":\"main\",\"sha\":\"" + baseSha +
         "\",\"repo\":{\"full_name\":\"octo/widget\"}}}";
+
+    private static SourceControlPullRequestRequest OpenPullRequestRequest(Guid operationId) =>
+        new("Feature", "Body", "feature", HeadSha, "main", BaseSha, Draft: false)
+        {
+            ExecutionBinding = new SourceControlPullRequestExecutionBinding(
+                operationId,
+                1,
+                1,
+                new string('a', 64),
+                "plan-1",
+                "publish",
+                "source-pin",
+                "workspace-1",
+                Guid.Parse("162c8348-5c5c-40f4-8879-367eb6bb9b8f"),
+                "feature",
+                "main",
+                BaseSha,
+                HeadSha)
+        };
 
     private static string OpenPullRequestListItemJson(long number, string headSha, string baseSha) =>
         "{\"number\":" + number +

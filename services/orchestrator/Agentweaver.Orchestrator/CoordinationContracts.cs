@@ -130,6 +130,13 @@ public sealed record MafExecutionDispatchRequest(long ExpectedStateVersion, stri
     [System.Text.Json.Serialization.JsonIgnore(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ImmutableDictionary<string, SourceControlBuildTestWorkspaceLocator>? BuildTestWorkspaces { get; init; }
+
+    /// <summary>
+    /// Gets the exact Source Control workspace revisions used by OpenPullRequest gates, keyed by workflow step ID.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableDictionary<string, SourceControlPullRequestWorkspaceLocator>? OpenPullRequestWorkspaces { get; init; }
 }
 
 /// <summary>
@@ -140,6 +147,17 @@ public sealed record SourceControlBuildTestWorkspaceLocator(
     Guid WorkspaceIncarnationId,
     string BaseSha,
     string BranchName);
+
+/// <summary>
+/// Identifies the exact checked-out workspace revision that an OpenPullRequest gate may publish.
+/// </summary>
+public sealed record SourceControlPullRequestWorkspaceLocator(
+    string WorkspaceId,
+    Guid WorkspaceIncarnationId,
+    string BaseSha,
+    string BranchName,
+    string HeadSha,
+    string BaseBranch);
 
 /// <summary>
 /// Reports which plan steps were dispatched, unavailable, failed, or completed.

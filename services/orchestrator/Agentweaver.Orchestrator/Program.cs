@@ -81,6 +81,16 @@ var secretRedemptionOptions = new SourceControlSecretRedemptionOptions(
     audience,
     secretRedemption["Audience"],
     secretRedemption["OwnerBaseAddress"]);
+var sourceControlOwnerAddressValue =
+    builder.Configuration["Orchestrator:SourceControlOwner:OwnerBaseAddress"];
+MafSourceControlOwnerOptions? sourceControlOwnerOptions = null;
+if (sourceControlOwnerAddressValue is not null)
+{
+    if (!Uri.TryCreate(sourceControlOwnerAddressValue, UriKind.Absolute, out var sourceControlOwnerAddress))
+        throw new InvalidOperationException("The Source Control owner address must be an absolute HTTPS URI.");
+    sourceControlOwnerOptions = new MafSourceControlOwnerOptions(
+        RuntimeOwnerHttpTransport.RequireOwnerAddress(sourceControlOwnerAddress));
+}
 const string providerCatalogSection = "ProjectsConfig:ProviderCatalog";
 var providerCatalog = builder.Configuration.GetSection(providerCatalogSection).Exists()
     ? ProviderCatalogConfiguration.Load(builder.Configuration, providerCatalogSection)
@@ -110,6 +120,13 @@ var issueSyncEnabled = IssueSyncServiceTransport.AddChannel(builder, IssueSyncAu
     "Orchestrator:IssueSync:IdentityTls", "Orchestrator", "IdentityBroker", false);
 builder.Services.AddHttpClient(string.Empty)
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+if (sourceControlOwnerOptions is not null)
+{
+    builder.Services.AddSingleton(sourceControlOwnerOptions);
+    builder.Services.AddHttpClient<MafSourceControlOwnerClient>(client =>
+            client.Timeout = TimeSpan.FromSeconds(30))
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
+}
 if (issueSyncEnabled)
 {
     builder.Services.AddScoped<IIssueSyncAuthority, IssueSyncAuthorityClient>();

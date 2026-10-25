@@ -10,6 +10,7 @@ using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Npgsql;
 
 namespace Agentweaver.Orchestrator;
 
@@ -652,6 +653,9 @@ internal static partial class SourceControlEndpoints
         SourceControlOwnerStore sourceControlOwner,
         ISourceControlAdapter adapter,
         SourceControlSecretRedemptionClient redemption,
+        CoordinatorRunSelectionContextStore runSelectionContexts,
+        NpgsqlDataSource dataSource,
+        IServiceProvider services,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
@@ -669,6 +673,14 @@ internal static partial class SourceControlEndpoints
                 cancellationToken).ConfigureAwait(false);
             EnsureAdapterMatchesPin(adapter, run.Pin);
             EnsureApiCredential(run.Pin);
+            if (request.ExecutionBinding is not null)
+            {
+                var gatePullRequest = await CreateOrRecoverOpenPullRequestAsync(
+                    run, request, context, projects, decisions, sourceControlOwner,
+                    adapter, redemption, runSelectionContexts, dataSource, services, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(gatePullRequest);
+            }
 
             var pullRequest = await redemption.WithCredentialAsync(
                 context,
@@ -697,6 +709,187 @@ internal static partial class SourceControlEndpoints
                 .ConfigureAwait(false);
             return Results.Ok(pullRequest);
         }, cancellationToken);
+
+    private static async Task<SourceControlPullRequest> CreateOrRecoverOpenPullRequestAsync(
+        SourceControlRunContext run,
+        SourceControlPullRequestRequest request,
+        HttpContext context,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        SourceControlOwnerStore sourceControlOwner,
+        ISourceControlAdapter adapter,
+        SourceControlSecretRedemptionClient redemption,
+        CoordinatorRunSelectionContextStore runSelectionContexts,
+        NpgsqlDataSource dataSource,
+        IServiceProvider services,
+        CancellationToken cancellationToken)
+    {
+        var binding = request.ExecutionBinding
+            ?? throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+        MafOpenPullRequestContract.RequireOwnerBinding(run, request);
+        ValidateWorkspaceRequest(binding.WorkspaceId, binding.WorkspaceBaseSha, request.HeadBranch);
+        var workspaceManager = services.GetService<GitWorkspaceManager>()
+            ?? throw new CoordinationException(
+                "source_control_workspace_unconfigured", StatusCodes.Status503ServiceUnavailable);
+        var fingerprint = MafOpenPullRequestContract.OwnerRequestFingerprint(run.Identity, request);
+        var operation = await sourceControlOwner.BeginOpenPullRequestOperationAsync(
+            run.Pin, run.Identity, binding.OperationId, fingerprint, cancellationToken).ConfigureAwait(false);
+
+        var selectionContext = await runSelectionContexts.ReadAsync(
+            run.Selection.Selection, binding.ExecutionFence, cancellationToken).ConfigureAwait(false)
+            ?? CoordinatorWorkflowCatalog.CreateRunSelectionContext(run.Selection.Selection.Snapshot);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        try
+        {
+            await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                connection, transaction, run.Actor, run.Identity, run.Selection, selectionContext,
+                binding.DecisionStateVersion, binding.ExecutionFence, binding.WorkPlanId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (CoordinationException failure) when (failure.Code == "maf_execution_dispatch_stale")
+        {
+            throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict, failure);
+        }
+
+        await using var workspaceRevisionLease = await workspaceManager
+            .AcquireWorkspaceRevisionLeaseAsync(
+                run.Identity.RunId, binding.WorkspaceId, cancellationToken)
+            .ConfigureAwait(false);
+        await RequireCurrentSourceControlRunAsync(
+            context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
+        var workspaceBefore = await ReadOpenPullRequestWorkspaceRevisionAsync(
+            run, binding, request, context, projects, decisions, adapter,
+            redemption, workspaceManager, cancellationToken).ConfigureAwait(false);
+        MafOpenPullRequestContract.RequireOwnerWorkspaceRevision(binding, workspaceBefore);
+
+        SourceControlPullRequest pullRequest;
+        if (operation.PullRequestNumber is { } retainedNumber)
+        {
+            pullRequest = await redemption.WithCredentialAsync(
+                context,
+                run.Pin,
+                run.Pin.ApiCredential,
+                async (credential, token) =>
+                {
+                    await RequireCurrentSourceControlRunAsync(
+                        context, run, projects, decisions, token).ConfigureAwait(false);
+                    var operationContext = new SourceControlOperationContext(
+                        run.Pin.ProviderBinding, run.Pin.Repository, credential);
+                    await adapter.VerifyCurrentBindingAsync(
+                        operationContext, SourceControlCapabilities.PullRequestRead, token)
+                        .ConfigureAwait(false);
+                    var result = await adapter.ReadPullRequestAsync(
+                        operationContext, retainedNumber, token).ConfigureAwait(false);
+                    await RequireCurrentSourceControlRunAsync(
+                        context, run, projects, decisions, token).ConfigureAwait(false);
+                    return result with { Disposition = SourceControlPullRequestDisposition.Reused };
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            var ownerRequest = request with
+            {
+                ExecutionBinding = binding with { OwnerMayCreate = operation.IsNew }
+            };
+            pullRequest = await redemption.WithCredentialAsync(
+                context,
+                run.Pin,
+                run.Pin.ApiCredential,
+                async (credential, token) =>
+                {
+                    await RequireCurrentSourceControlRunAsync(
+                        context, run, projects, decisions, token).ConfigureAwait(false);
+                    var operationContext = new SourceControlOperationContext(
+                        run.Pin.ProviderBinding, run.Pin.Repository, credential);
+                    await adapter.VerifyCurrentBindingAsync(
+                        operationContext, SourceControlCapabilities.PullRequestWrite, token)
+                        .ConfigureAwait(false);
+                    await RequireCurrentSourceControlRunAsync(
+                        context, run, projects, decisions, token).ConfigureAwait(false);
+                    var result = await adapter.CreateOrReusePullRequestAsync(
+                        operationContext, ownerRequest, token).ConfigureAwait(false);
+                    await RequireCurrentSourceControlRunAsync(
+                        context, run, projects, decisions, token).ConfigureAwait(false);
+                    return result;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        await RequireCurrentSourceControlRunAsync(
+            context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
+        var workspaceAfter = await ReadOpenPullRequestWorkspaceRevisionAsync(
+            run, binding, request, context, projects, decisions, adapter,
+            redemption, workspaceManager, cancellationToken).ConfigureAwait(false);
+        MafOpenPullRequestContract.RequireOwnerWorkspaceRevision(binding, workspaceAfter);
+        MafOpenPullRequestContract.RequireOwnerPullRequestTarget(binding, run.Pin.Repository, pullRequest);
+
+        if (operation.PullRequestNumber is null)
+            await sourceControlOwner.CompleteOpenPullRequestOperationInTransactionAsync(
+                connection, transaction, run.Identity, binding.OperationId, run.Pin.PinId,
+                fingerprint, pullRequest.Number, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        await sourceControlOwner.RecordPullRequestAsync(run.Pin, pullRequest, cancellationToken)
+            .ConfigureAwait(false);
+        return pullRequest;
+    }
+
+    private static async Task<SourceControlWorkspaceDiffView> ReadOpenPullRequestWorkspaceRevisionAsync(
+        SourceControlRunContext run,
+        SourceControlPullRequestExecutionBinding binding,
+        SourceControlPullRequestRequest request,
+        HttpContext context,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        ISourceControlAdapter adapter,
+        SourceControlSecretRedemptionClient redemption,
+        GitWorkspaceManager workspaceManager,
+        CancellationToken cancellationToken)
+    {
+        var checkoutCredential = run.Pin.CheckoutCredential;
+        if (run.Pin.GitHubAppBinding is null)
+        {
+            if (checkoutCredential is null)
+                throw new CoordinationException(
+                    "source_control_checkout_not_configured", StatusCodes.Status409Conflict);
+            EnsureCredentialPurpose(checkoutCredential, SourceControlSecretPurposes.Checkout);
+        }
+        EnsureCheckoutCapability(run.Pin);
+        return await redemption.WithCredentialAsync(
+            context,
+            run.Pin,
+            checkoutCredential,
+            async (credential, token) =>
+            {
+                await RequireCurrentSourceControlRunAsync(
+                    context, run, projects, decisions, token).ConfigureAwait(false);
+                var operation = new SourceControlOperationContext(
+                    run.Pin.ProviderBinding, run.Pin.Repository, credential);
+                await adapter.VerifyCurrentBindingAsync(
+                    operation, SourceControlCapabilities.RepositoryCheckout, token).ConfigureAwait(false);
+                var workspaceRequest = new GitWorkspaceRequest(
+                    operation, binding.WorkspaceId, binding.WorkspaceBaseSha, request.HeadBranch);
+                var workspace = await workspaceManager.OpenExistingAsync(
+                    workspaceRequest, token).ConfigureAwait(false);
+                if (workspace.WorkspaceIncarnationId != binding.WorkspaceIncarnationId)
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+                var revision = await workspaceManager.ReadRevisionAsync(
+                    workspaceRequest, workspace, token).ConfigureAwait(false);
+                await RequireCurrentSourceControlRunAsync(
+                    context, run, projects, decisions, token).ConfigureAwait(false);
+                return new SourceControlWorkspaceDiffView(
+                    revision.WorkspaceId, revision.BaseSha, revision.HeadSha, string.Empty, string.Empty)
+                {
+                    WorkspaceIncarnationId = workspace.WorkspaceIncarnationId
+                };
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Reads reviews for a positive pull request number after verifying the pinned provider and current run.
@@ -833,7 +1026,7 @@ internal static partial class SourceControlEndpoints
         }, cancellationToken);
 
     /// <summary>
-    /// Prepares the requested pinned workspace and returns its diff only while the accepted run remains current.
+    /// Returns a pinned workspace diff; an incarnation-bound request must open the existing workspace.
     /// </summary>
     private static Task<IResult> ReadWorkspaceDiffAsync(
         string projectId,
@@ -894,19 +1087,35 @@ internal static partial class SourceControlEndpoints
                         context, run, projects, decisions, token).ConfigureAwait(false);
                     var workspaceRequest = new GitWorkspaceRequest(
                         operation, workspaceId, request.BaseSha, request.BranchName);
-                    var workspace = await workspaceManager.PrepareAsync(
-                        workspaceRequest, token).ConfigureAwait(false);
+                    // A caller that supplies an incarnation asks to inspect that existing workspace, not create a replacement.
+                    var workspace = request.WorkspaceIncarnationId is null
+                        ? await workspaceManager.PrepareAsync(workspaceRequest, token).ConfigureAwait(false)
+                        : await workspaceManager.OpenExistingAsync(workspaceRequest, token).ConfigureAwait(false);
+                    if (request.WorkspaceIncarnationId is { } expectedIncarnation &&
+                        workspace.WorkspaceIncarnationId != expectedIncarnation)
+                        throw new CoordinationException(
+                            "source_control_run_binding_changed", StatusCodes.Status409Conflict);
                     await RequireCurrentSourceControlRunAsync(
                         context, run, projects, decisions, token).ConfigureAwait(false);
-                    var result = await workspaceManager.AssembleDiffAsync(
-                        workspaceRequest, workspace, token).ConfigureAwait(false);
+                    var result = request.IncludePatch
+                        ? await workspaceManager.AssembleDiffAsync(
+                            workspaceRequest, workspace, token).ConfigureAwait(false)
+                        : await workspaceManager.ReadRevisionAsync(
+                            workspaceRequest, workspace, token).ConfigureAwait(false);
                     await RequireCurrentSourceControlRunAsync(
                         context, run, projects, decisions, token).ConfigureAwait(false);
-                    return result;
+                    return (Revision: result, IncarnationId: workspace.WorkspaceIncarnationId);
                 },
                 cancellationToken).ConfigureAwait(false);
             return Results.Ok(new SourceControlWorkspaceDiffView(
-                diff.WorkspaceId, diff.BaseSha, diff.HeadSha, diff.Status, diff.Patch));
+                diff.Revision.WorkspaceId,
+                diff.Revision.BaseSha,
+                diff.Revision.HeadSha,
+                diff.Revision.Status,
+                diff.Revision.Patch)
+            {
+                WorkspaceIncarnationId = diff.IncarnationId
+            });
         }, cancellationToken);
 
     /// <summary>
@@ -2976,11 +3185,15 @@ internal sealed record PrepareSourceControlWorkspaceRequest(
     string BranchName);
 
 /// <summary>
-/// The base commit and branch used to identify an existing workspace revision.
+/// The base commit and branch used to identify a workspace revision, with an optional incarnation fence.
 /// </summary>
 internal sealed record PrepareSourceControlWorkspaceRevisionRequest(
     string BaseSha,
-    string BranchName);
+    string BranchName)
+{
+    public Guid? WorkspaceIncarnationId { get; init; }
+    public bool IncludePatch { get; init; } = true;
+}
 
 /// <summary>
 /// The safe workspace metadata returned after a checkout is prepared.
@@ -2999,7 +3212,10 @@ internal sealed record SourceControlWorkspaceDiffView(
     string BaseSha,
     string HeadSha,
     string Status,
-    string Patch);
+    string Patch)
+{
+    public Guid WorkspaceIncarnationId { get; init; }
+}
 
 /// <summary>
 /// The metadata and digests exposed for one admitted repository output capture.

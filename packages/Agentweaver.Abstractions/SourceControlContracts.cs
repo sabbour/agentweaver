@@ -252,7 +252,35 @@ public sealed record SourceControlPullRequestRequest(
     string ExpectedHeadSha,
     string BaseBranch,
     string ExpectedBaseSha,
-    bool Draft);
+    bool Draft)
+{
+    /// <summary>Optional immutable workflow binding required by the authenticated OpenPullRequest owner path.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SourceControlPullRequestExecutionBinding? ExecutionBinding { get; init; }
+}
+
+/// <summary>
+/// Carries a persisted OpenPullRequest operation and its authority and workspace fences to the Source Control owner.
+/// </summary>
+public sealed record SourceControlPullRequestExecutionBinding(
+    Guid OperationId,
+    long DecisionStateVersion,
+    long ExecutionFence,
+    string AcceptedSelectionHash,
+    string WorkPlanId,
+    string WorkflowStepId,
+    string SourceControlPinId,
+    string WorkspaceId,
+    Guid WorkspaceIncarnationId,
+    string WorkspaceBranchName,
+    string WorkspaceBaseBranch,
+    string WorkspaceBaseSha,
+    string WorkspaceHeadSha)
+{
+    /// <summary>Set only by the owner after durable operation lookup; callers cannot grant create authority.</summary>
+    [JsonIgnore]
+    public bool OwnerMayCreate { get; init; }
+}
 
 /// <summary>Reports whether a matching pull request was newly created, reused, or only observed.</summary>
 public enum SourceControlPullRequestDisposition

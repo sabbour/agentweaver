@@ -199,8 +199,35 @@ internal sealed record MafExecutionBuildTestIntent(
         new SandboxBuildTestApiRequest(CheckpointReference(), ExpectedBinding).Validate();
 }
 
+/// <summary>The persisted Source Control request and exact workspace revision for one OpenPullRequest gate.</summary>
+internal sealed record MafExecutionOpenPullRequestIntent(
+    Guid OperationId,
+    SessionIdentity Identity,
+    string CheckpointId,
+    long CheckpointRevision,
+    string WorkPlanId,
+    string StepId,
+    long DecisionStateVersion,
+    long ExecutionFence,
+    string AcceptedSelectionHash,
+    string SourceControlPinId,
+    SourceControlRepositoryIdentity Repository,
+    SourceControlPullRequestWorkspaceLocator Workspace,
+    string TitleSource,
+    string BodySource,
+    string OutcomeSummary,
+    SourceControlPullRequestRequest Request);
+
+/// <summary>Small terminal proof that the pinned Source Control owner opened or reused the requested pull request.</summary>
+internal sealed record MafOpenPullRequestTerminalReceipt(
+    Guid OperationId,
+    long PullRequestNumber,
+    string HtmlUrl,
+    string HeadSha,
+    string RequestFingerprint);
+
 /// <summary>
-/// A versioned checkpoint state for one work plan, including progress, pending dispatches, results, and BuildTest evidence.
+/// A versioned checkpoint state for one work plan, including progress, pending dispatches, results, and platform evidence.
 /// State validation and transition checks prevent accepted intents and terminal receipts from being rewritten.
 /// </summary>
 internal sealed record MafExecutionCheckpoint(
@@ -219,6 +246,10 @@ internal sealed record MafExecutionCheckpoint(
         ImmutableDictionary<string, MafExecutionBuildTestIntent>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, MafBuildTestTerminalReceipt> BuildTestReceipts { get; init; } =
         ImmutableDictionary<string, MafBuildTestTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafExecutionOpenPullRequestIntent> OpenPullRequestIntents { get; init; } =
+        ImmutableDictionary<string, MafExecutionOpenPullRequestIntent>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafOpenPullRequestTerminalReceipt> OpenPullRequestReceipts { get; init; } =
+        ImmutableDictionary<string, MafOpenPullRequestTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -345,7 +376,7 @@ internal static class MafExecutionCheckpointContract
         string.Equals(binding.StoreName, StoreName, StringComparison.Ordinal);
 
     /// <summary>
-    /// Validates that the next checkpoint preserves prior BuildTest intents and terminal receipts.
+    /// Validates that the next checkpoint preserves prior platform intents and terminal receipts.
     /// </summary>
     /// <param name="previous">The currently persisted state.</param>
     /// <param name="next">The proposed state.</param>
@@ -395,6 +426,26 @@ internal static class MafExecutionCheckpointContract
                 throw new ArgumentException(
                     "A persisted BuildTest terminal receipt cannot be removed or changed.", nameof(next));
         }
+        foreach (var (stepId, intent) in previous.OpenPullRequestIntents)
+        {
+            if (!next.OpenPullRequestIntents.TryGetValue(stepId, out var retained) ||
+                !OpenPullRequestIntentsMatch(intent, retained))
+                throw new ArgumentException(
+                    "A persisted OpenPullRequest intent cannot be removed or changed.", nameof(next));
+        }
+        if (next.OpenPullRequestIntents.Any(item =>
+                !previous.OpenPullRequestIntents.ContainsKey(item.Key) &&
+                (item.Value.CheckpointRevision != next.Revision ||
+                 item.Value.DecisionStateVersion != next.DecisionStateVersion)))
+            throw new ArgumentException(
+                "A new OpenPullRequest intent must bind to the checkpoint that first stores it.", nameof(next));
+        foreach (var (stepId, receipt) in previous.OpenPullRequestReceipts)
+        {
+            if (!next.OpenPullRequestReceipts.TryGetValue(stepId, out var retained) ||
+                retained != receipt)
+                throw new ArgumentException(
+                    "A persisted OpenPullRequest terminal receipt cannot be removed or changed.", nameof(next));
+        }
     }
 
     /// <summary>
@@ -415,12 +466,36 @@ internal static class MafExecutionCheckpointContract
         }
     }
 
+    /// <summary>Ensures OpenPullRequest intents belong to the checkpoint's root identity and fence.</summary>
+    internal static void ValidateOpenPullRequestBinding(
+        MafExecutionCheckpoint state,
+        SessionIdentity identity,
+        long executionFence,
+        string checkpointId)
+    {
+        foreach (var intent in state.OpenPullRequestIntents.Values)
+        {
+            if (intent.Identity != identity || intent.ExecutionFence != executionFence ||
+                intent.CheckpointRevision == state.Revision && intent.CheckpointId != checkpointId)
+                throw new ArgumentException(
+                    "The OpenPullRequest intent does not match its checkpoint binding.", nameof(state));
+        }
+    }
+
     /// <summary>
     /// Compares two BuildTest intents using their serialized contract, excluding transient seed bytes.
     /// </summary>
     internal static bool BuildTestIntentsMatch(
         MafExecutionBuildTestIntent left,
         MafExecutionBuildTestIntent right) =>
+        JsonElement.DeepEquals(
+            JsonSerializer.SerializeToElement(left, JsonOptions),
+            JsonSerializer.SerializeToElement(right, JsonOptions));
+
+    /// <summary>Compares immutable OpenPullRequest intent data after checkpoint serialization.</summary>
+    internal static bool OpenPullRequestIntentsMatch(
+        MafExecutionOpenPullRequestIntent left,
+        MafExecutionOpenPullRequestIntent right) =>
         JsonElement.DeepEquals(
             JsonSerializer.SerializeToElement(left, JsonOptions),
             JsonSerializer.SerializeToElement(right, JsonOptions));
@@ -440,7 +515,8 @@ internal static class MafExecutionCheckpointContract
         if (state.FixedWorkAssociations is null)
             throw new ArgumentException("MAF execution fixed-work associations are required.", nameof(state));
         if (state.PendingDispatches is null || state.Results is null ||
-            state.BuildTestIntents is null || state.BuildTestReceipts is null)
+            state.BuildTestIntents is null || state.BuildTestReceipts is null ||
+            state.OpenPullRequestIntents is null || state.OpenPullRequestReceipts is null)
             throw new ArgumentException("MAF execution dispatch state is required.", nameof(state));
         if (state.Progress.WorkItems.Any(item =>
                 string.IsNullOrWhiteSpace(item.Key) || item.Key.Length > 128 ||
@@ -506,6 +582,39 @@ internal static class MafExecutionCheckpointContract
             if (receipt is null || !state.BuildTestIntents.TryGetValue(stepId, out var intent) ||
                 receipt.ValidateFor(intent) != state.Progress.NonModelSteps.GetValueOrDefault(stepId))
                 throw new ArgumentException("The BuildTest receipt does not match checkpoint progress.", nameof(state));
+        }
+        foreach (var (stepId, intent) in state.OpenPullRequestIntents)
+        {
+            if (intent is null || stepId != intent.StepId ||
+                !IsIdentifier(intent.StepId) ||
+                intent.OperationId == Guid.Empty || !operationIds.Add(intent.OperationId) ||
+                !IsMetadataValue(intent.Identity.ProjectId) ||
+                !IsMetadataValue(intent.Identity.RunId) ||
+                !IsMetadataValue(intent.Identity.SessionId) ||
+                !IsIdentifier(intent.CheckpointId) ||
+                intent.CheckpointRevision < 1 || intent.CheckpointRevision > state.Revision ||
+                intent.WorkPlanId != state.WorkPlanId ||
+                intent.DecisionStateVersion < 1 ||
+                intent.DecisionStateVersion > state.DecisionStateVersion ||
+                intent.ExecutionFence < 1 || !IsHash(intent.AcceptedSelectionHash) ||
+                !IsIdentifier(intent.SourceControlPinId) ||
+                intent.Repository is null || intent.Workspace is null ||
+                !MafOpenPullRequestContract.IsValidIntent(intent) ||
+                !state.Progress.NonModelSteps.TryGetValue(stepId, out var status) ||
+                status == MafExecutionTaskStatus.Pending)
+                throw new ArgumentException("MAF OpenPullRequest checkpoint intents are invalid.", nameof(state));
+            if (status != MafExecutionTaskStatus.Running &&
+                !state.OpenPullRequestReceipts.ContainsKey(stepId))
+                throw new ArgumentException(
+                    "A terminal OpenPullRequest step requires an owner-verified receipt.", nameof(state));
+        }
+        foreach (var (stepId, receipt) in state.OpenPullRequestReceipts)
+        {
+            if (receipt is null || !state.OpenPullRequestIntents.TryGetValue(stepId, out var intent) ||
+                MafOpenPullRequestContract.ValidateReceipt(intent, receipt) !=
+                    state.Progress.NonModelSteps.GetValueOrDefault(stepId))
+                throw new ArgumentException(
+                    "The OpenPullRequest receipt does not match checkpoint progress.", nameof(state));
         }
 
         var childSessionIds = new HashSet<string>(StringComparer.Ordinal);

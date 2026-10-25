@@ -54,6 +54,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(35)]
     [InlineData(36)]
     [InlineData(37)]
+    [InlineData(38)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -392,6 +393,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData("maf_root_model_turn_admissions")]
     [InlineData("maf_child_spawn_authorization_receipts")]
     [InlineData("maf_child_spawn_authorization_consumptions")]
+    [InlineData("source_control_pull_request_operations")]
     public async Task VerificationRequiresRegisteredTables(string table)
     {
         // A version receipt alone is insufficient when its required table is missing.
@@ -559,7 +561,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (33, "033_priority_link_repository_identity.sql"),
             (35, "035_backlog_task_queue_position.sql"),
             (36, "036_maf_root_model_turn_admissions.sql"),
-            (37, "037_maf_child_spawn_authorization.sql")
+            (37, "037_maf_child_spawn_authorization.sql"),
+            (38, "038_source_control_pull_request_operations.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""

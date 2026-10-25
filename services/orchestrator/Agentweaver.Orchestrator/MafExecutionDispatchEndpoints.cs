@@ -19,7 +19,7 @@ using OpenIddict.Abstractions;
 namespace Agentweaver.Orchestrator;
 
 /// <summary>
-/// Coordinates MAF work-plan dispatch, BuildTest execution, and runtime-host message delivery.
+/// Coordinates MAF work-plan dispatch, platform gate execution, and runtime-host message delivery.
 /// The endpoints revalidate accepted selection and decision state around each durable or remote side effect.
 /// </summary>
 public static partial class CoordinationEndpoints
@@ -77,6 +77,8 @@ public static partial class CoordinationEndpoints
                 RuntimeContractValidation.ValidateIdentifier(requestedEnvironment);
 
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var buildTestClient = context.RequestServices.GetService<MafBuildTestEnvironmentClient>();
+            var sourceControlClient = context.RequestServices.GetService<MafSourceControlOwnerClient>();
             var identity = new SessionIdentity(projectId, runId, sessionId);
             var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
@@ -108,7 +110,9 @@ public static partial class CoordinationEndpoints
             var plan = validated.Value;
             // Bind the accepted snapshot, not a model-supplied executor name or an edited project catalog.
             var bound = MafExecutionWorkflowBindings.RequireBound(
-                plan, context.RequestServices.GetService<MafBuildTestEnvironmentClient>() is not null);
+                plan,
+                buildTestClient is not null,
+                sourceControlClient is not null);
             if (request.BuildTestWorkspaces is { } workspaces)
             {
                 if (workspaces.Count > plan.Workflow.Definition.Steps.Length ||
@@ -118,6 +122,18 @@ public static partial class CoordinationEndpoints
                         "maf_execution_dispatch_invalid", StatusCodes.Status400BadRequest);
                 foreach (var locator in workspaces.Values)
                     SourceControlEndpoints.ValidateBuildTestWorkspaceLocator(locator);
+            }
+            if (request.OpenPullRequestWorkspaces is { } pullRequestWorkspaces)
+            {
+                if (pullRequestWorkspaces.Count > plan.Workflow.Definition.Steps.Length ||
+                    pullRequestWorkspaces.Any(item =>
+                        !plan.Workflow.Definition.Steps.Any(step =>
+                            step.Id == item.Key &&
+                            step.Mode == WorkflowStepMode.Platform &&
+                            step.PlatformGate == WorkflowPlatformGate.OpenPullRequest) ||
+                        !MafOpenPullRequestContract.IsValidWorkspace(item.Value)))
+                    throw new CoordinationException(
+                        "source_control_pull_request_request_invalid", StatusCodes.Status400BadRequest);
             }
             var checkpointBinding = CreateExecutionCheckpointBinding(
                 identity,
@@ -140,6 +156,20 @@ public static partial class CoordinationEndpoints
                     association.DecisionStateVersion != decision.StateVersion))
                 throw new CoordinationException(
                     "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+            if (checkpoint is not null)
+                foreach (var intent in checkpoint.State.OpenPullRequestIntents.Values)
+                {
+                    if (request.OpenPullRequestWorkspaces?.TryGetValue(intent.StepId, out var locator) == true &&
+                        locator != intent.Workspace)
+                        throw new CoordinationException(
+                            "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+                    var currentPin = await context.RequestServices.GetRequiredService<SourceControlOwnerStore>()
+                        .ReadRepositoryPinAsync(actor, identity, selection, cancellationToken)
+                        .ConfigureAwait(false);
+                    MafOpenPullRequestContract.RequireCurrentSource(
+                        intent, actor, identity, selection.Authorization.TenantId,
+                        decision.StateVersion, decision.State.Fence, decision.SelectionHash, currentPin);
+                }
             if (checkpoint is not null)
                 foreach (var intent in checkpoint.State.BuildTestIntents.Values)
                 {
@@ -237,11 +267,14 @@ public static partial class CoordinationEndpoints
                 .GetRequiredService<MafChildSpawnAuthorizationOwner>();
             var runtimeSourceOwner = context.RequestServices.GetService<RuntimeUsageSourceOwner>();
             var dataSource = context.RequestServices.GetRequiredService<NpgsqlDataSource>();
-            var buildTestClient = context.RequestServices.GetService<MafBuildTestEnvironmentClient>();
             bool HasBuildTestExecutor(WorkflowStepDefinition step) =>
                 buildTestClient is not null && MafBuildTestCommandContract.IsExecutable(step) &&
                 (request.BuildTestEnvironmentId is not null ||
                  checkpoint.State.BuildTestIntents.ContainsKey(step.Id));
+            bool HasPlatformExecutor(WorkflowStepDefinition step) =>
+                (sourceControlClient is not null &&
+                    step.PlatformGate == WorkflowPlatformGate.OpenPullRequest) ||
+                HasBuildTestExecutor(step);
             var hostClient = context.RequestServices.GetRequiredService<IHttpClientFactory>()
                 .CreateClient("maf-execution-host");
             var dispatched = ImmutableArray.CreateBuilder<string>();
@@ -677,8 +710,19 @@ public static partial class CoordinationEndpoints
                         : throw new CoordinationException(
                             "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
                     .ToArray();
+                var pullRequestResults = plan.Workflow.Definition.Steps
+                    .Where(step =>
+                        dependencySteps.Contains(step.Id) &&
+                        step.PlatformGate == WorkflowPlatformGate.OpenPullRequest)
+                    .Select(step => state.OpenPullRequestReceipts.TryGetValue(step.Id, out var receipt)
+                        ? (step.Id, Receipt: receipt)
+                        : throw new CoordinationException(
+                            "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
+                    .ToArray();
 
-                if (requiredResults.Count == 0 && platformResults.Length == 0)
+                if (requiredResults.Count == 0 &&
+                    platformResults.Length == 0 &&
+                    pullRequestResults.Length == 0)
                 {
                     if (workItem is not null)
                         return workItem.Task;
@@ -706,6 +750,9 @@ public static partial class CoordinationEndpoints
                 foreach (var (stepId, receipt) in platformResults)
                     prompt.Append("\n\n[").Append(stepId).Append("]\n")
                         .Append(BuildTestResultSummary(receipt));
+                foreach (var (stepId, receipt) in pullRequestResults)
+                    prompt.Append("\n\n[").Append(stepId).Append("]\n")
+                        .Append(MafOpenPullRequestContract.ResultSummary(receipt));
                 var value = prompt.ToString();
                 if (value.Length > AddressedMessageValidation.MaximumTextLength ||
                     value.Any(character => char.IsControl(character) &&
@@ -1174,11 +1221,153 @@ public static partial class CoordinationEndpoints
                 return intent;
             }
 
+            async Task RequireCurrentOpenPullRequestAsync(
+                MafExecutionOpenPullRequestIntent intent, CancellationToken token)
+            {
+                await RevalidateOpenPullRequestDispatchAsync(token).ConfigureAwait(false);
+                var sourceOwner = context.RequestServices.GetRequiredService<SourceControlOwnerStore>();
+                var pin = await sourceOwner.ReadRepositoryPinAsync(
+                    actor, identity, selection, token).ConfigureAwait(false);
+                MafOpenPullRequestContract.RequireCurrentSource(
+                    intent, actor, identity, selection.Authorization.TenantId,
+                    decision.StateVersion, decision.State.Fence, decision.SelectionHash, pin);
+                var latest = await execution.ReadLatestAsync(token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (latest.State.WorkPlanId != intent.WorkPlanId ||
+                    latest.State.DecisionStateVersion != intent.DecisionStateVersion ||
+                    !latest.State.OpenPullRequestIntents.TryGetValue(intent.StepId, out var retained) ||
+                    !MafExecutionCheckpointContract.OpenPullRequestIntentsMatch(intent, retained) ||
+                    latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) !=
+                        MafExecutionTaskStatus.Running)
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+            }
+
+            async Task RevalidateOpenPullRequestDispatchAsync(CancellationToken token)
+            {
+                try
+                {
+                    await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                }
+                catch (CoordinationException failure) when (failure.Code == "maf_execution_dispatch_stale")
+                {
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict, failure);
+                }
+            }
+
+            async Task RequireOpenPullRequestDecisionInTransactionAsync(
+                NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)
+            {
+                try
+                {
+                    await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                        connection, transaction, actor, identity, selection, selectionContext,
+                        decision.StateVersion, decision.State.Fence, plan.Plan.Id, token).ConfigureAwait(false);
+                }
+                catch (CoordinationException failure) when (failure.Code == "maf_execution_dispatch_stale")
+                {
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict, failure);
+                }
+            }
+
+            var openPullRequestExecutor = sourceControlClient is null
+                ? null
+                : new MafOpenPullRequestExecutor(
+                    execution,
+                    sourceControlClient,
+                    context.RequestServices.GetRequiredService<NpgsqlDataSource>(),
+                    CreateRuntimeActorAsync,
+                    RequireCurrentOpenPullRequestAsync,
+                    RequireOpenPullRequestDecisionInTransactionAsync,
+                    IsWallTimeLimitReached,
+                    () => wallTimeLimitReached = true,
+                    snapshot => checkpoint = snapshot);
+
+            async Task<MafExecutionOpenPullRequestIntent> PrepareOpenPullRequestAsync(
+                WorkflowStepDefinition step, CancellationToken token)
+            {
+                var locator = request.OpenPullRequestWorkspaces?.GetValueOrDefault(step.Id)
+                    ?? throw new CoordinationException(
+                        "source_control_workspace_request_invalid", StatusCodes.Status400BadRequest);
+                if (sourceControlClient is null)
+                    throw new CoordinationException(
+                        "source_control_owner_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (step.Mode != WorkflowStepMode.Platform ||
+                    step.PlatformGate != WorkflowPlatformGate.OpenPullRequest ||
+                    !MafOpenPullRequestContract.IsValidWorkspace(locator))
+                    throw new CoordinationException(
+                        "source_control_pull_request_request_invalid", StatusCodes.Status400BadRequest);
+
+                await RevalidateOpenPullRequestDispatchAsync(token).ConfigureAwait(false);
+                var sourceOwner = context.RequestServices.GetRequiredService<SourceControlOwnerStore>();
+                var pin = await sourceOwner.ReadRepositoryPinAsync(
+                    actor, identity, selection, token).ConfigureAwait(false);
+                if (!string.Equals(locator.BaseBranch, pin.DefaultBranch, StringComparison.Ordinal))
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+
+                var dataSource = context.RequestServices.GetRequiredService<NpgsqlDataSource>();
+                await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+                await RequireOpenPullRequestDecisionInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false);
+                await execution.AcquireExecutionLockInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false);
+                var latest = await execution.ReadLatestInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (latest.State.OpenPullRequestIntents.TryGetValue(step.Id, out var retained))
+                {
+                    MafOpenPullRequestContract.RequireCurrentSource(
+                        retained, actor, identity, selection.Authorization.TenantId,
+                        decision.StateVersion, decision.State.Fence, decision.SelectionHash, pin);
+                    if (retained.Workspace != locator)
+                        throw new CoordinationException(
+                            "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+                    checkpoint = latest;
+                    await transaction.CommitAsync(token).ConfigureAwait(false);
+                    return retained;
+                }
+
+                var checkpointId = Guid.NewGuid().ToString("N");
+                var completedWorkItems = latest.State.Progress.WorkItems.Values.Count(
+                    status => status == MafExecutionTaskStatus.Succeeded);
+                var intent = MafOpenPullRequestContract.CreateIntent(
+                    Guid.NewGuid(), identity, checkpointId, checked(latest.State.Revision + 1),
+                    plan.Plan.Id, step.Id, decision.StateVersion, decision.State.Fence,
+                    decision.SelectionHash, pin, locator, completedWorkItems);
+                var next = PrepareOpenPullRequestCheckpoint(latest, intent)
+                    ?? throw new CoordinationException(
+                        "maf_execution_open_pull_request_intent_conflict", StatusCodes.Status409Conflict);
+                checkpoint = await execution.AppendInTransactionAsync(
+                    connection, transaction, checkpointId, latest.Info, next, token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return intent;
+            }
+
+            async Task<bool> ExecuteOpenPullRequestAsync(
+                MafExecutionOpenPullRequestIntent intent, CancellationToken token)
+            {
+                if (openPullRequestExecutor is null)
+                    throw new CoordinationException(
+                        "source_control_owner_unavailable", StatusCodes.Status503ServiceUnavailable);
+                return await openPullRequestExecutor.ExecuteAsync(intent, token).ConfigureAwait(false);
+            }
+
             foreach (var intent in checkpoint.State.BuildTestIntents.Values
                          .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
                              MafExecutionTaskStatus.Running)
                          .OrderBy(intent => intent.StepId, StringComparer.Ordinal).ToArray())
                 _ = await ExecuteBuildTestAsync(intent, cancellationToken).ConfigureAwait(false);
+            foreach (var intent in checkpoint.State.OpenPullRequestIntents.Values
+                         .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
+                             MafExecutionTaskStatus.Running)
+                         .OrderBy(intent => intent.StepId, StringComparer.Ordinal).ToArray())
+                _ = await ExecuteOpenPullRequestAsync(intent, cancellationToken).ConfigureAwait(false);
 
             var pendingDeliveries = checkpoint.State.PendingDispatches.Values
                 .OrderBy(intent => intent.AssociationId, StringComparer.Ordinal)
@@ -1224,7 +1413,7 @@ public static partial class CoordinationEndpoints
                     capacity.ActiveChildren,
                     maxChildren,
                     maxConcurrentChildren,
-                    hasNonModelExecutor: HasBuildTestExecutor,
+                    hasNonModelExecutor: HasPlatformExecutor,
                     checkpoint.State.FixedWorkAssociations);
                 if (frontier.ReadyActions.IsDefaultOrEmpty)
                     break;
@@ -1239,6 +1428,14 @@ public static partial class CoordinationEndpoints
                     {
                         wallTimeLimitReached = true;
                         break;
+                    }
+                    if (action.Step.PlatformGate == WorkflowPlatformGate.OpenPullRequest)
+                    {
+                        var pullRequestIntent = await PrepareOpenPullRequestAsync(
+                            action.Step, cancellationToken).ConfigureAwait(false);
+                        platformAdvanced |= await ExecuteOpenPullRequestAsync(
+                            pullRequestIntent, cancellationToken).ConfigureAwait(false);
+                        continue;
                     }
                     if (MafBuildTestCommandContract.IsExecutable(action.Step))
                     {
@@ -1431,7 +1628,7 @@ public static partial class CoordinationEndpoints
                 finalCapacity.ActiveChildren,
                 maxChildren,
                 maxConcurrentChildren,
-                hasNonModelExecutor: HasBuildTestExecutor,
+                hasNonModelExecutor: HasPlatformExecutor,
                 checkpoint.State.FixedWorkAssociations);
             unavailable.UnionWith(finalFrontier.UnavailableExecutorStepIds);
             if (finalFrontier.IsComplete)
@@ -1636,6 +1833,89 @@ public static partial class CoordinationEndpoints
             }
         };
         MafExecutionCheckpointContract.ValidateTransition(state, next);
+        return next;
+    }
+
+    /// <summary>Adds one immutable OpenPullRequest request before its Source Control owner call.</summary>
+    internal static MafExecutionCheckpoint? PrepareOpenPullRequestCheckpoint(
+        MafExecutionCheckpointSnapshot latest,
+        MafExecutionOpenPullRequestIntent intent)
+    {
+        ArgumentNullException.ThrowIfNull(latest);
+        ArgumentNullException.ThrowIfNull(intent);
+        var state = latest.State;
+        if (!MafOpenPullRequestContract.IsValidIntent(intent))
+            throw new CoordinationException(
+                "source_control_pull_request_request_invalid", StatusCodes.Status400BadRequest);
+        if (state.OpenPullRequestIntents.TryGetValue(intent.StepId, out var existing))
+        {
+            if (!MafExecutionCheckpointContract.OpenPullRequestIntentsMatch(existing, intent))
+                throw new CoordinationException(
+                    "maf_execution_open_pull_request_intent_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        if (intent.CheckpointRevision != checked(state.Revision + 1) ||
+            intent.WorkPlanId != state.WorkPlanId ||
+            intent.Identity.SessionId != latest.Info.SessionId ||
+            intent.DecisionStateVersion != state.DecisionStateVersion ||
+            state.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != MafExecutionTaskStatus.Pending ||
+            state.Progress.NonModelSteps.Values.Any(status => status == MafExecutionTaskStatus.Running))
+            throw new CoordinationException(
+                "maf_execution_open_pull_request_checkpoint_stale", StatusCodes.Status409Conflict);
+
+        var next = state with
+        {
+            Revision = intent.CheckpointRevision,
+            OpenPullRequestIntents = state.OpenPullRequestIntents.Add(intent.StepId, intent),
+            Progress = state.Progress with
+            {
+                NonModelSteps = state.Progress.NonModelSteps.SetItem(
+                    intent.StepId, MafExecutionTaskStatus.Running)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(state, next);
+        return next;
+    }
+
+    /// <summary>Stores a compact owner-verified PR receipt and releases only that gate's dependents.</summary>
+    internal static MafExecutionCheckpoint? PrepareOpenPullRequestCompletionCheckpoint(
+        MafExecutionCheckpointSnapshot latest,
+        MafExecutionOpenPullRequestIntent intent,
+        MafOpenPullRequestTerminalReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(latest);
+        ArgumentNullException.ThrowIfNull(intent);
+        ArgumentNullException.ThrowIfNull(receipt);
+        _ = MafOpenPullRequestContract.ValidateReceipt(intent, receipt);
+        if (!latest.State.OpenPullRequestIntents.TryGetValue(intent.StepId, out var retained) ||
+            !MafExecutionCheckpointContract.OpenPullRequestIntentsMatch(intent, retained))
+            throw new CoordinationException(
+                "maf_execution_open_pull_request_intent_conflict", StatusCodes.Status409Conflict);
+        if (latest.State.OpenPullRequestReceipts.TryGetValue(intent.StepId, out var previous))
+        {
+            if (previous != receipt ||
+                latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) !=
+                    MafExecutionTaskStatus.Succeeded)
+                throw new CoordinationException(
+                    "maf_execution_open_pull_request_terminal_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        if (latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) !=
+            MafExecutionTaskStatus.Running)
+            throw new CoordinationException(
+                "maf_execution_open_pull_request_checkpoint_stale", StatusCodes.Status409Conflict);
+
+        var next = latest.State with
+        {
+            Revision = checked(latest.State.Revision + 1),
+            OpenPullRequestReceipts = latest.State.OpenPullRequestReceipts.Add(intent.StepId, receipt),
+            Progress = latest.State.Progress with
+            {
+                NonModelSteps = latest.State.Progress.NonModelSteps.SetItem(
+                    intent.StepId, MafExecutionTaskStatus.Succeeded)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(latest.State, next);
         return next;
     }
 

@@ -428,7 +428,8 @@ Running checkpoint in one Orchestrator transaction. A duplicate returns the same
 intent; a failed callback rolls all three writes back. Results are immutable and
 terminal child status is joined in the owner transaction.
 
-The binder recognizes fixed/open child routes and the executable BuildTest gate.
+The binder recognizes fixed/open child routes, the executable BuildTest gate,
+and OpenPullRequest when the authenticated Source Control owner is configured.
 A workflow requiring another platform executor fails binding before child
 dispatch; this slice does not substitute a model task or fabricate a gate result.
 For fixed child work, dispatch constructs the fixed-work intent from the confirmed
@@ -465,6 +466,14 @@ flowchart TD
     S --> BindExecutors{"Registered executor for every step?"}
     BindExecutors -->|"No"| BindError["Reject binding with a step-scoped error"]
     BindExecutors -->|"Yes"| DispatchWorkflow["Explicit typed dispatch"]
+    DispatchWorkflow --> PullRequestGate{"Ready OpenPullRequest gate?"}
+    PullRequestGate -->|"Yes"| SavePullRequestIntent["Persist exact operation and request"]
+    SavePullRequestIntent --> CheckWorkspaceRevision["Check workspace incarnation and pinned head/base"]
+    CheckWorkspaceRevision --> SourceControlPR["Authenticated Source Control owner creates or reuses PR"]
+    SourceControlPR --> VerifyPullRequest{"Owner result matches repository, request, and head?"}
+    VerifyPullRequest -->|"Yes"| SavePullRequestReceipt["Commit compact PR receipt and Succeeded status"]
+    SavePullRequestReceipt --> DispatchWorkflow
+    VerifyPullRequest -->|"No or owner error"| HoldPullRequest["Retain incomplete gate; report Source Control error"]
     DispatchWorkflow --> ChildWork{"Ready open or fixed child-work action?"}
     ChildWork -->|"Yes"| AuthorizeSpawn{"Pinned Policy allows exact open-item or fixed-spec-and-role intent?"}
     AuthorizeSpawn -->|"No"| BlockPolicy
@@ -566,6 +575,42 @@ Checkpoints retain compact terminal receipts and output digests, not raw command
 Dependent model work receives a bounded typed result summary.
 Final output witnesses must match the collector's file digests and byte counts.
 Required command outputs cannot use a no-output seal.
+
+### OpenPullRequest gate
+
+The optional dispatch field `openPullRequestWorkspaces` maps an OpenPullRequest
+step ID to one exact workspace revision: workspace ID, incarnation ID, base SHA,
+branch name, head SHA, and base branch. The base branch must match the pinned
+repository's default branch. A locator does not grant repository or provider
+access.
+
+Before contacting Source Control, the Orchestrator checkpoint stores an operation
+ID, the accepted run and decision versions, the repository pin, the workspace
+locator, and the complete title/body/branch request. Recovery reuses that exact
+intent. The authenticated Source Control owner rechecks the current run and
+provider, verifies the workspace incarnation and head/base SHAs, then creates
+or reuses the pull request through the existing `CreateOrReusePullRequestAsync`
+operation. The Orchestrator validates the owner response against the repository,
+request, and head, then stores only the pull request number, URL, head SHA, and
+request fingerprint as a terminal receipt.
+
+The gate becomes successful only after that receipt is committed. Owner errors,
+changed decision or source bindings, changed workspace revisions, and malformed
+owner results leave the gate incomplete; dependent work cannot run. The owner
+records the operation identity and request fingerprint before the provider call,
+then records the pull request number with the owner transaction. If the owner
+created the pull request but the checkpoint write did not commit, recovery sends
+the same request and operation identity. The provider searches for that identity
+in open and closed pull requests. If it cannot find one exact result, recovery
+fails closed instead of creating another pull request. If the original pull
+request has closed, the gate stays incomplete.
+
+The owner holds a workspace revision lease while it checks the pinned
+incarnation and SHAs and performs the provider write. Managed workspace
+preparation and diff assembly use the same lease, so they cannot change the
+workspace during that operation.
+Configure the private owner address with
+`Orchestrator:SourceControlOwner:OwnerBaseAddress`.
 
 ```mermaid
 flowchart LR
