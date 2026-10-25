@@ -276,16 +276,10 @@ public sealed class RuntimeCopilotSessionFactory : IRuntimeHostedModelReasoningC
                     registration, sdkVersion, status.Version, model.ModelId, resolvedModelBindingPin, maxPromptTokens);
                 if (cacheMatches)
                 {
-                    try
-                    {
-                        nativeFiles.Restore(recovery.Cache!.Bytes);
-                        recoveryMode = RuntimeSessionRecoveryMode.NativeCache;
-                    }
-                    catch (RuntimeAuthorizationException failure) when (
-                        failure.Code is "runtime_sdk_cache_invalid" or "runtime_sdk_cache_unavailable")
-                    {
-                        recoveryReason = failure.Code;
-                    }
+                    // An owner-verified, compatible cache that cannot be restored is corrupt or
+                    // unsafe, not absent. Rebuilding here would hide a committed material failure.
+                    nativeFiles.Restore(recovery.Cache!.Bytes);
+                    recoveryMode = RuntimeSessionRecoveryMode.NativeCache;
                 }
 
                 if (recoveryMode != RuntimeSessionRecoveryMode.NativeCache)

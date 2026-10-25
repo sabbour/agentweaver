@@ -9,7 +9,7 @@ using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
 
-public sealed class RuntimeSessionRecoveryTests
+public sealed partial class RuntimeSessionRecoveryTests
 {
     [Theory]
     [InlineData(20000, false)]
@@ -381,6 +381,8 @@ public sealed class RuntimeSessionRecoveryTests
     [InlineData("model")]
     [InlineData("selection")]
     [InlineData("corrupt")]
+    [InlineData("unsafe")]
+    [InlineData("unsupported")]
     public async Task LostOrIncompatibleCacheRebuildsNativeContextWithoutReplayingATurn(string change)
     {
         var registration = RuntimeCopilotSessionTests.Registration();
@@ -405,6 +407,13 @@ public sealed class RuntimeSessionRecoveryTests
             recovery = recovery with { Cache = null };
         else if (change == "corrupt")
             recovery = recovery with { Cache = Cache(registration, facts, [1, 2, 3]) };
+        else if (change is "unsafe" or "unsupported")
+            recovery = recovery with
+            {
+                Cache = Cache(registration, facts, change == "unsafe"
+                    ? NativeArchive("state/events.jsonl", external.SdkCredential)
+                    : NativeArchive("../outside", "opaque events"))
+            };
         else
         {
             var material = recovery.Cache!.Material;
@@ -427,6 +436,19 @@ public sealed class RuntimeSessionRecoveryTests
         }
         await using var replacement = new ControlledCopilotRuntime();
         var replacementRegistration = registration with { RuntimeInstanceId = Guid.NewGuid() };
+        if (change is "corrupt" or "unsafe" or "unsupported")
+        {
+            // Invalid or known-secret material must fail closed instead of degrading into a cache miss.
+            var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                RuntimeCopilotSessionTests.Factory(replacement).CreateAsync(
+                    replacementRegistration, registration.Binding.ModelSelectionReference!,
+                    RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token, recovery));
+            Assert.Equal(change == "unsafe" ? "runtime_sdk_cache_contains_credential" :
+                "runtime_sdk_cache_invalid", failure.Code);
+            Assert.DoesNotContain(replacement.Requests, request =>
+                request.Method is "session.resume" or "session.create" or "session.send");
+            return;
+        }
         await using var rebuilt = await RuntimeCopilotSessionTests.Factory(replacement).CreateAsync(
             replacementRegistration, registration.Binding.ModelSelectionReference!,
             RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token, recovery);
