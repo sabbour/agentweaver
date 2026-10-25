@@ -12,6 +12,7 @@ using Agentweaver.Providers;
 using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Agents.AI.Workflows;
 using Npgsql;
 using OpenIddict.Abstractions;
 
@@ -186,7 +187,7 @@ public static partial class CoordinationEndpoints
                     .ConfigureAwait(false);
                 var current = await execution.ReadLatestInTransactionAsync(
                     connection, transaction, cancellationToken).ConfigureAwait(false);
-                if (current?.Info != checkpoint?.Info)
+                if (!SameCheckpointInfo(current?.Info, checkpoint?.Info))
                     throw new CoordinationException(
                         "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
                 var next = (checkpoint?.State ??
@@ -303,10 +304,18 @@ public static partial class CoordinationEndpoints
                     throw new CoordinationException(
                         "maf_execution_egress_unavailable", StatusCodes.Status503ServiceUnavailable);
                 await RevalidateDispatchAsync(token).ConfigureAwait(false);
-                var registration = await registrationOwner.ReadCurrentForSessionAsync(
-                    context, projectId, runId, sessionId, token).ConfigureAwait(false);
-                return await VerifyEgressForRegistrationAsync(registration, sessionId, token)
-                    .ConfigureAwait(false);
+                try
+                {
+                    // Map both the current registration read and remote verification into stable endpoint failures.
+                    var registration = await registrationOwner.ReadCurrentForSessionAsync(
+                        context, projectId, runId, sessionId, token).ConfigureAwait(false);
+                    return await VerifyEgressForRegistrationAsync(registration, sessionId, token)
+                        .ConfigureAwait(false);
+                }
+                catch (RuntimeAuthorizationException failure)
+                {
+                    throw MafExecutionEgressGuard.MapVerificationFailure(failure);
+                }
             }
 
             async Task<RuntimeEgressVerificationReceipt> VerifyEgressForRegistrationAsync(
@@ -315,9 +324,11 @@ public static partial class CoordinationEndpoints
                 if (registrationOwner is null || environment is null || egress is null)
                     throw new CoordinationException(
                         "maf_execution_egress_unavailable", StatusCodes.Status503ServiceUnavailable);
-                var runtimeActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
+                RuntimeActorAuthorization? runtimeActor = null;
                 try
                 {
+                    // Actor expiry is an expected authorization outcome and must use the mapped response contract.
+                    runtimeActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
                     var binding = registration.Binding;
                     var readiness = await environment.ReadReadinessAsync(
                         runtimeActor, projectId, runId, targetSessionId,
@@ -337,9 +348,14 @@ public static partial class CoordinationEndpoints
                     await RevalidateDispatchAsync(token).ConfigureAwait(false);
                     return receipt;
                 }
+                catch (RuntimeAuthorizationException failure)
+                {
+                    // Readiness, actor, and Environment failures are expected fail-closed outcomes, not server faults.
+                    throw MafExecutionEgressGuard.MapVerificationFailure(failure);
+                }
                 finally
                 {
-                    runtimeActor.Bearer.Invalidate();
+                    runtimeActor?.Bearer.Invalidate();
                 }
             }
 
@@ -1523,6 +1539,17 @@ public static partial class CoordinationEndpoints
             FixedWorkAssociations = fixedAssociations,
             PendingDispatches = pendingDispatches
         };
+    }
+
+    /// <summary>Compares checkpoint identity across independently materialized database reads.</summary>
+    internal static bool SameCheckpointInfo(CheckpointInfo? left, CheckpointInfo? right)
+    {
+        // Null represents the uninitialized state; only two absent snapshots are the same checkpoint.
+        if (left is null || right is null)
+            return left is null && right is null;
+        // PostgreSQL rematerializes checkpoint objects per read, so compare their persisted identifiers.
+        return string.Equals(left.SessionId, right.SessionId, StringComparison.Ordinal) &&
+            string.Equals(left.CheckpointId, right.CheckpointId, StringComparison.Ordinal);
     }
 
     /// <summary>

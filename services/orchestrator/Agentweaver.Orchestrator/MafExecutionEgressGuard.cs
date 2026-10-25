@@ -7,6 +7,25 @@ namespace Agentweaver.Orchestrator;
 /// <summary>Checks current Environment-owner egress evidence before creating or delivering a MAF child intent.</summary>
 internal static class MafExecutionEgressGuard
 {
+    /// <summary>Maps expected Environment and registration authorization failures to controlled endpoint statuses.</summary>
+    internal static CoordinationException MapVerificationFailure(RuntimeAuthorizationException failure)
+    {
+        // Expired credentials and explicit owner authorization changes are caller failures, not transient egress state.
+        var statusCode = failure.Code switch
+        {
+            "runtime_actor_expired" => StatusCodes.Status401Unauthorized,
+            RuntimeEgressVerificationFailureCodes.AuthorizationChanged => StatusCodes.Status403Forbidden,
+            RuntimeEgressVerificationFailureCodes.StaleFence or
+            RuntimeEgressVerificationFailureCodes.GenerationUnverified or
+            RuntimeEgressVerificationFailureCodes.SelectionChanged or
+            "runtime_owner_context_stale" or
+            "runtime_registration_stale" => StatusCodes.Status409Conflict,
+            // Missing endpoints, malformed upstream evidence and unknown owner failures must remain unavailable.
+            _ => StatusCodes.Status503ServiceUnavailable
+        };
+        return new CoordinationException(failure.Code, statusCode, failure);
+    }
+
     /// <summary>Derives the only valid verification request from current session registration and owner readiness.</summary>
     internal static RuntimeEgressVerificationRequest RequireReadiness(
         RuntimeRegistration registration,

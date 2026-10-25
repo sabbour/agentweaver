@@ -84,6 +84,40 @@ public sealed class MafExecutionDispatchTests
     }
 
     [Fact]
+    public void CheckpointIdentityComparisonUsesPersistedIdsInsteadOfObjectIdentity()
+    {
+        var firstRead = new CheckpointInfo("session-1", "checkpoint-1");
+        var secondRead = new CheckpointInfo("session-1", "checkpoint-1");
+        var changedRead = new CheckpointInfo("session-1", "checkpoint-2");
+
+        // PostgreSQL reads create distinct instances for one row; changed identifiers must still be rejected.
+        Assert.NotSame(firstRead, secondRead);
+        Assert.True(CoordinationEndpoints.SameCheckpointInfo(firstRead, secondRead));
+        Assert.False(CoordinationEndpoints.SameCheckpointInfo(firstRead, changedRead));
+        Assert.True(CoordinationEndpoints.SameCheckpointInfo(null, null));
+        Assert.False(CoordinationEndpoints.SameCheckpointInfo(firstRead, null));
+    }
+
+    [Theory]
+    [InlineData(RuntimeEgressVerificationFailureCodes.AuthorizationChanged, 403)]
+    [InlineData(RuntimeEgressVerificationFailureCodes.StaleFence, 409)]
+    [InlineData(RuntimeEgressVerificationFailureCodes.GenerationUnverified, 409)]
+    [InlineData(RuntimeEgressVerificationFailureCodes.SelectionChanged, 409)]
+    [InlineData(RuntimeEgressVerificationFailureCodes.Unavailable, 503)]
+    [InlineData("runtime_actor_expired", 401)]
+    [InlineData("unexpected_environment_error", 503)]
+    public void EgressVerificationFailuresRetainTheirCodeAndControlledStatus(
+        string code, int expectedStatusCode)
+    {
+        var failure = new RuntimeAuthorizationException(code);
+
+        var mapped = MafExecutionEgressGuard.MapVerificationFailure(failure);
+
+        Assert.Equal(code, mapped.Code);
+        Assert.Equal(expectedStatusCode, mapped.StatusCode);
+    }
+
+    [Fact]
     public void LegacyCreditGuardIdentityKeepsItsOriginalRateCardProjection()
     {
         var multipliers = ImmutableDictionary<string, decimal>.Empty
