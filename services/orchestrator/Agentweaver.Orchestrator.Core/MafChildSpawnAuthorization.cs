@@ -116,7 +116,7 @@ public sealed record MafChildSpawnAuthorizationConsumeResult(
     MafChildSpawnAuthorizationEvidence Evidence,
     bool AlreadyConsumed);
 
-/// <summary>Pure validation and binding rules shared by the authorizer and its future owner-local consumer.</summary>
+/// <summary>Pure validation and binding rules shared by the authorizer and owner-local consumer.</summary>
 public static class MafChildSpawnAuthorizationContract
 {
     public const string ActionId = "maf.child.spawn";
