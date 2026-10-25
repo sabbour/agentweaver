@@ -170,9 +170,104 @@ public sealed class MafChildSpawnAuthorizationOwnerStoreTests(
         }
     }
 
-    private MafChildSpawnAuthorizationOwnerStore CreateStore() =>
+    [Fact]
+    public async Task AuthorizationRetryLocksOwnerStateBeforeAConcurrentGrantTransition()
+    {
+        var store = CreateStore();
+        var grant = await store.IssueGrantAsync(_intent, _authority, CancellationToken.None);
+        var applicationName = $"maf_spawn_lock_{Guid.NewGuid():N}";
+        var connectionString = new NpgsqlConnectionStringBuilder(fixture.DataSource.ConnectionString)
+        {
+            ApplicationName = applicationName,
+            CommandTimeout = 10
+        }.ConnectionString;
+        await using var retryDataSource = NpgsqlDataSource.Create(connectionString);
+        var retryStore = CreateStore(retryDataSource);
+        await using var transitionConnection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transition = await transitionConnection.BeginTransactionAsync();
+        await using (var lockOwner = new NpgsqlCommand($"""
+            SELECT r.run_id
+            FROM "{_schema}".accepted_runs AS r
+            INNER JOIN "{_schema}".coordination_sessions AS s
+              ON s.project_id = r.project_id AND s.run_id = r.run_id
+            WHERE r.project_id = @project AND r.run_id = @run AND s.session_id = @root
+            FOR UPDATE OF r, s
+            """, transitionConnection, transition))
+        {
+            lockOwner.Parameters.AddWithValue("project", _authority.ProjectId);
+            lockOwner.Parameters.AddWithValue("run", _authority.RunId);
+            lockOwner.Parameters.AddWithValue("root", _intent.RootSessionId);
+            Assert.Equal(_authority.RunId, await lockOwner.ExecuteScalarAsync());
+        }
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var retry = retryStore.IssueGrantAsync(_intent, _authority, cancellation.Token);
+        var transitionCommitted = false;
+        var retryObserved = false;
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            var waitingOnOwner = false;
+            while (DateTime.UtcNow < deadline)
+            {
+                await using var activity = new NpgsqlCommand("""
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_stat_activity
+                        WHERE datname = current_database()
+                          AND application_name = @application
+                          AND wait_event_type = 'Lock')
+                    """, transitionConnection, transition);
+                activity.Parameters.AddWithValue("application", applicationName);
+                waitingOnOwner = (bool)(await activity.ExecuteScalarAsync())!;
+                if (waitingOnOwner)
+                    break;
+                if (retry.IsCompleted)
+                    await retry;
+                await Task.Delay(TimeSpan.FromMilliseconds(25));
+            }
+            Assert.True(waitingOnOwner, "Authorization did not wait for the coordinator's owner-state lock.");
+
+            await using (var supersede = new NpgsqlCommand($"""
+                UPDATE "{_schema}".executable_action_grants
+                SET is_current = false, grant_state = 'superseded'
+                WHERE project_id = @project AND run_id = @run AND grant_id = @grant
+                  AND is_current AND grant_state = 'active'
+                """, transitionConnection, transition))
+            {
+                supersede.Parameters.AddWithValue("project", _authority.ProjectId);
+                supersede.Parameters.AddWithValue("run", _authority.RunId);
+                supersede.Parameters.AddWithValue("grant", grant.GrantId);
+                Assert.Equal(1, await supersede.ExecuteNonQueryAsync());
+            }
+            await transition.CommitAsync();
+            transitionCommitted = true;
+
+            var conflict = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => retry);
+            retryObserved = true;
+            Assert.Equal("maf_child_spawn_intent_conflict", conflict.Code);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            if (!transitionCommitted)
+                await transition.RollbackAsync();
+            if (!retryObserved)
+            {
+                try
+                {
+                    await retry;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+        }
+    }
+
+    private MafChildSpawnAuthorizationOwnerStore CreateStore(NpgsqlDataSource? source = null) =>
         new(
-            fixture.DataSource,
+            source ?? fixture.DataSource,
             new OrchestratorOptions(
                 "https://identity.example/",
                 "orchestrator",
