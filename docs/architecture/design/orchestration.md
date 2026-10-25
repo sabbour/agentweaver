@@ -363,13 +363,16 @@ subsequent revisions are journaled. The grammar validator also applies to built-
 and generated workflow definitions.
 
 This flowchart shows typed proposals passing deterministic validation into the
-owner-side execution frontier. Ready child work is checkpointed with its spawn
-outbox request. The configured wall-time limit is measured from the persisted
-root-session creation time. After a wall-time or hard-cap limit is reached, the
-dispatcher holds pending intents and reports the limit; already-running child
-turns can settle, but no new or replayed Host message is sent. A platform step
-without a registered executor remains blocked. Every protected Host send, capped
-or uncapped, also requires real Phase B admission bound to the actual current child
+owner-side execution frontier. The catalog binder resolves every accepted step
+snapshot to a registered executor by step mode; platform steps also resolve by
+gate. Unknown modes and missing registrations fail binding before dispatch. Fixed
+work remains prescribed, and platform gates remain platform-owned; a model task
+cannot replace either. Ready child work is checkpointed with its spawn outbox
+request. The configured wall-time limit is measured from the persisted root-session
+creation time. After a wall-time or hard-cap limit is reached, the dispatcher holds
+pending intents and reports the limit; already-running child turns can settle, but
+no new or replayed Host message is sent. Every protected Host send, capped or
+uncapped, also requires real Phase B admission bound to the actual current child
 registration, SDK source/native-turn identity, execution fence, pending intent and
 checkpoint, and applicable counters. Phase A and registration/readiness checks are
 not admission. No Phase B producer is wired, so all pending Host sends remain
@@ -390,7 +393,9 @@ flowchart TD
     V -->|"Yes; conflicts serialized"| H["Confirm generated workflow or scope change"]
     H --> N["Save decision and revision count"]
     N --> S["Snapshot executable definition"]
-    S --> DispatchWorkflow["Explicit typed dispatch"]
+    S --> BindExecutors{"Registered executor for every step?"}
+    BindExecutors -->|"No"| BindError["Reject binding with a step-scoped error"]
+    BindExecutors -->|"Yes"| DispatchWorkflow["Explicit typed dispatch"]
     DispatchWorkflow --> RecheckRun["Recheck plan, selection, fence and limits under root-run mutex"]
     RecheckRun --> O["Stage ready dependency frontier within remaining limits"]
     O --> X["Phase A: commit child association, spawn outbox, pending intent, Running checkpoint"]
@@ -713,10 +718,15 @@ and available verbs instead of duplicating state-machine rules.
 
 ## Execution, gates, and replanning
 
-The workflow grammar and step validator accept a definition before the
-`RunWorkflowGraphBinder` and `NodeExecutorRegistry` attach its steps to MAF
-executors. Platform executors own build/test and preview, RAI, rubber-duck,
-independent review, opening a PR, merge, Scribe, and the publish gate where included.
+The workflow grammar and step validator accept a definition before the catalog
+binder resolves its accepted snapshot to registered executors. It resolves fixed,
+open, and platform steps by mode, and platform steps by gate. Unknown modes or
+missing executor registrations return clear binding errors before dispatch.
+Platform executors own build/test and preview, RAI, rubber-duck, independent
+review, opening a PR, merge, Scribe, and the publish gate where included. A fixed
+step remains prescribed work; a platform gate cannot be represented as ordinary
+model work. This binding layer does not dispatch work, apply limits, join child
+work, or recover checkpoints. Later execution stages handle those responsibilities.
 A conservative fan-out policy limits child work. MAF checkpoints and recovery
 continue the workflow without asking the coordinator to reconstruct procedural
 state from a conversational transcript.
