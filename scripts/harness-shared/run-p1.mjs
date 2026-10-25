@@ -17,6 +17,10 @@ import {
 } from './p1-fixture-setup.mjs';
 import { createP1SetupApi, acquireP1RunIdentity, createP1SurfaceAdapters } from './p1-runtime-adapters.mjs';
 import { runP1SurfaceJourney } from './p1-surface-runner.mjs';
+import {
+  attachSessionMaterialAcceptance,
+  createSessionMaterialAcceptance,
+} from './session-material-acceptance.mjs';
 import { sanitizeP1Failure } from './p1-surface-common.mjs';
 import { redact } from './redaction.mjs';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from './safe-jsonl.mjs';
@@ -367,6 +371,11 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       } catch (error) {
         result = createFailureResult(surface, error, sourceEvidence, nativeProbeResults);
       }
+      result = attachSessionMaterialAcceptance(result, createSessionMaterialAcceptance({
+        sourceEvidence,
+        environment: validated.environment,
+        fixtureInput: fixture.input,
+      }));
       try {
         cleanup = await fixture.cleanup();
       } catch (error) {
