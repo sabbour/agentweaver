@@ -592,7 +592,7 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/knowledge/records",
             "searchProjectKnowledge",
             "Search project Knowledge records",
-            ["kind", "q", "includeInactive", "page", "pageSize"],
+            ["kind", "state", "q", "includeInactive", "page", "pageSize"],
             forwardTenantSelector: true);
 
         var run = "/projects/{projectId}/runs/{runId}";

@@ -370,6 +370,22 @@ describe('Gateway API client', () => {
     expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
   });
 
+  it('sends the pending proposal filter only for project Knowledge search', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => Response.json({ items: [], totalCount: 4, page: 1, pageSize: 1 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    const result = await client.searchProjectKnowledge(
+      'token', 'p1', { kind: 'proposal', state: 'pending', includeInactive: true, pageSize: 1 },
+    );
+
+    expect(result.totalCount).toBe(4);
+    expect(String(fetcher.mock.calls[0][0])).toBe(
+      'https://gateway.example.test/api/v1/projects/p1/knowledge/records?kind=proposal&state=pending&page=1&pageSize=1&includeInactive=true',
+    );
+  });
+
   it('uses the Knowledge revision, Decision lifecycle, and bounded transfer routes', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => Response.json({}),

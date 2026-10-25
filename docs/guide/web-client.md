@@ -505,9 +505,10 @@ the project configuration. Kind tabs filter by **All**, **Memories**,
 **Decisions**, **Proposals**, or **Session context**. It displays immutable revision history and supports the
 owner-authorized operations implemented for the record type:
 
-The summary row shows project-wide Decision and active Memory totals from
-Knowledge search. Pending proposal counts need a state filter on
-`GET /api/v1/projects/{projectId}/knowledge/records`, which is not available.
+The summary row shows project-wide pending Proposal, Decision, and active
+Memory totals from Knowledge search. The pending total counts stored proposals
+with the pending lifecycle state, not pending-trust decisions. Loading, denied,
+and failed reads never display a count of zero in place of an unknown result.
 The project-wide Sessions count is also unavailable; v1 exposes session history
 per run at `GET /api/v1/projects/{projectId}/runs/{runId}/history/sessions`.
 

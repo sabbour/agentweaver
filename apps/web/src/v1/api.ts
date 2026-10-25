@@ -2559,12 +2559,13 @@ export class AgentweaverGatewayClient {
   searchProjectKnowledge(
     token: string,
     projectId: string,
-    options: { query?: string; kind?: string; page?: number; pageSize?: number; includeInactive?: boolean } = {},
+    options: { query?: string; kind?: string; page?: number; pageSize?: number; includeInactive?: boolean; state?: 'pending' } = {},
     tenantSelector?: string | null,
   ): Promise<ProjectKnowledgeRecordPage> {
     const query = new URLSearchParams();
     if (options.query) query.set('q', options.query);
     if (options.kind) query.set('kind', options.kind);
+    if (options.state) query.set('state', options.state);
     query.set('page', String(options.page ?? 1));
     query.set('pageSize', String(options.pageSize ?? 50));
     query.set('includeInactive', String(options.includeInactive ?? true));

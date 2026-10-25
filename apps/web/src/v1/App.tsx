@@ -1430,7 +1430,7 @@ function ProjectKnowledgeDiscovery({
 function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string; refreshKey: number }) {
   const { apiCall, ensureSession } = useAuth();
   const [result, setResult] = useState<
-    | { key: string; status: 'loaded'; counts: { decisions: number; memories: number } }
+    | { key: string; status: 'loaded'; counts: { pending: number; decisions: number; memories: number } }
     | { key: string; status: 'needs-sign-in' }
     | { key: string; status: 'error'; error: unknown }
     | null
@@ -1441,14 +1441,21 @@ function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string;
   useEffect(() => {
     let active = true;
 
-    // These counts use the supported project-wide search; it has no proposal-state or project-session filter.
+    // Counts come from owner-filtered totals, not a page of records; sessions still lack a project-wide total.
     void (async () => {
       try {
         if (!await ensureSession(null, false)) {
           if (active) setResult({ key: requestKey, status: 'needs-sign-in' });
           return;
         }
-        const [decisions, memories] = await Promise.all([
+        const [pending, decisions, memories] = await Promise.all([
+          apiCall((token, tenantSelector) => gatewayClient.searchProjectKnowledge(token, projectId, {
+            kind: 'proposal',
+            state: 'pending',
+            includeInactive: true,
+            page: 1,
+            pageSize: 1,
+          }, tenantSelector), null),
           apiCall((token, tenantSelector) => gatewayClient.searchProjectKnowledge(token, projectId, {
             kind: 'decision',
             includeInactive: true,
@@ -1465,7 +1472,7 @@ function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string;
         if (active) setResult({
           key: requestKey,
           status: 'loaded',
-          counts: { decisions: decisions.totalCount, memories: memories.totalCount },
+          counts: { pending: pending.totalCount, decisions: decisions.totalCount, memories: memories.totalCount },
         });
       } catch (reason) {
         if (active) setResult({ key: requestKey, status: 'error', error: reason });
@@ -1487,7 +1494,7 @@ function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string;
   return (
     <section aria-label="Team memory summary">
       <MetricRow items={[
-        { label: 'Pending', value: 'Unavailable' },
+        { label: 'Pending proposals', value: countValue(currentResult?.status === 'loaded' ? currentResult.counts.pending : undefined) },
         { label: 'Decisions', value: countValue(currentResult?.status === 'loaded' ? currentResult.counts.decisions : undefined) },
         { label: 'Memories', value: countValue(currentResult?.status === 'loaded' ? currentResult.counts.memories : undefined) },
         { label: 'Sessions', value: 'Unavailable' },
@@ -1499,7 +1506,7 @@ function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string;
         <p className="v1-muted">Sign in without a run binding to load project-wide counts.</p>
       )}
       <p className="v1-muted">
-        Pending proposals and project-wide session counts aren't available yet.
+        Project-wide session counts aren't available yet.
       </p>
     </section>
   );
