@@ -40,6 +40,10 @@ public static class RuntimeRegistrationEndpoints
         services.AddScoped(serviceProvider => new RuntimeWorkspaceResumeHttpClient(
             serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
             serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress));
+        // Reuse the trusted Environment owner transport while keeping verification an explicit, read-only client.
+        services.AddScoped(serviceProvider => new RuntimeEgressVerificationHttpClient(
+            serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
+            serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress));
         services.AddScoped(serviceProvider => new RuntimeResumeBootstrapHttpClient(
             serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
             serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress));

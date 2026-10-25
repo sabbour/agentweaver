@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Providers;
 
 namespace Agentweaver.Environment;
@@ -325,6 +326,138 @@ public sealed class EnvironmentEgressManager(
             return Failure(
                 "upstream_timeout",
                 "Projects & Config or Kubernetes did not complete the operation; the environment remains not ready.");
+        }
+    }
+
+    /// <summary>Returns read-only current egress evidence bound to the requested fence and selection revision.</summary>
+    public async Task<RuntimeEgressVerificationResponse> VerifyCurrentAsync(
+        CurrentCallerRequest caller,
+        RuntimeEgressVerificationRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            request.Validate();
+            // Check the complete owner fence before reading authorization or provider state.
+            await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
+            var selection = await GetAuthorizedSelectionAsync(
+                caller, request.Fence.Owner, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(
+                    selection.RunSelection.ContextRevision, request.ContextRevision, StringComparison.Ordinal))
+                return VerificationFailure(
+                    RuntimeEgressVerificationFailureCodes.SelectionChanged,
+                    "The admitted run selection no longer has the requested context revision.");
+
+            var intent = Compile(selection);
+            _ = ResolveNetworkProvider(selection, providerOptions, cilium, intent);
+            var selector = EnvironmentEgressSelector.Create(
+                request.Fence.Owner.EnvironmentId,
+                selection.TenantId,
+                request.Fence.Owner.ProjectId,
+                request.Fence.Owner.RunId,
+                providerOptions.Namespace);
+            var expectedIntentHash = EgressIntentCompiler.Hash(intent, selector);
+
+            // A readback cannot authorize an unrecorded or incomplete policy generation.
+            await lifecycleStore.RequireVerifiedNetworkPolicyGenerationAsync(
+                request.Fence,
+                $"{selector.Namespace}/{selector.PolicyName}",
+                request.PolicyGeneration,
+                cancellationToken).ConfigureAwait(false);
+            var observed = await cilium.VerifyAsync(
+                selector, intent, request.PolicyGeneration, cancellationToken).ConfigureAwait(false);
+            if (!observed.ObjectVerified ||
+                observed.AppliedIntentGeneration != request.PolicyGeneration ||
+                !string.Equals(observed.IntentHash, expectedIntentHash, StringComparison.Ordinal))
+                return VerificationFailure(
+                    RuntimeEgressVerificationFailureCodes.GenerationUnverified,
+                    "The requested policy generation is not verified for the compiled egress intent.");
+
+            // Refresh both authority and selection after provider I/O so an intervening change cannot produce a receipt.
+            await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
+            var current = await GetAuthorizedSelectionAsync(
+                caller, request.Fence.Owner, cancellationToken).ConfigureAwait(false);
+            if (!SameAuthorizationContext(selection.Authorization, current.Authorization))
+                return VerificationFailure(
+                    RuntimeEgressVerificationFailureCodes.AuthorizationChanged,
+                    "The caller's effective Environment authorization changed while egress was being verified.");
+            if (!string.Equals(
+                    current.RunSelection.ContextRevision, request.ContextRevision, StringComparison.Ordinal))
+                return VerificationFailure(
+                    RuntimeEgressVerificationFailureCodes.SelectionChanged,
+                    "The admitted run selection changed while egress was being verified.");
+            var currentIntent = Compile(current);
+            var currentIntentHash = EgressIntentCompiler.Hash(currentIntent, selector);
+            if (!string.Equals(currentIntentHash, observed.IntentHash, StringComparison.Ordinal))
+                return VerificationFailure(
+                    RuntimeEgressVerificationFailureCodes.SelectionChanged,
+                    "The current egress intent differs from the provider observation.");
+
+            // Recheck both owner fences after all upstream reads so a concurrent lifecycle or policy advance is not receipted.
+            await lifecycleStore.RequireVerifiedNetworkPolicyGenerationAsync(
+                request.Fence,
+                $"{selector.Namespace}/{selector.PolicyName}",
+                request.PolicyGeneration,
+                cancellationToken).ConfigureAwait(false);
+            await lifecycleStore.RequireActiveAsync(request.Fence, cancellationToken).ConfigureAwait(false);
+
+            return RuntimeEgressVerificationResponse.Success(new RuntimeEgressVerificationReceipt(
+                1,
+                request.Fence,
+                request.PolicyGeneration,
+                current.RunSelection.ContextRevision,
+                observed.IntentHash!));
+        }
+        catch (ProjectsConfigApiException exception)
+        {
+            var code = exception.Code switch
+            {
+                "upstream_unavailable" or "upstream_timeout" or
+                    "projects_config_request_failed" or "projects_config_redirect_rejected" or
+                    "invalid_projects_config_response" or "cache_policy_missing" =>
+                    RuntimeEgressVerificationFailureCodes.Unavailable,
+                "invalid_run_selection" => RuntimeEgressVerificationFailureCodes.SelectionChanged,
+                _ => RuntimeEgressVerificationFailureCodes.AuthorizationChanged
+            };
+            return VerificationFailure(code, exception.Message);
+        }
+        catch (EnvironmentLifecycleException exception)
+        {
+            var code = exception.Code switch
+            {
+                "environment_unknown" => RuntimeEgressVerificationFailureCodes.Missing,
+                "environment_fence_stale" or "environment_released" =>
+                    RuntimeEgressVerificationFailureCodes.StaleFence,
+                "stale_policy_generation" or "policy_generation_unverified" or
+                    "environment_policy_generation_untracked" or "environment_effect_reconciliation_required" =>
+                    RuntimeEgressVerificationFailureCodes.GenerationUnverified,
+                _ => RuntimeEgressVerificationFailureCodes.Unavailable
+            };
+            return VerificationFailure(code, exception.Message);
+        }
+        catch (EgressCompilationException exception)
+        {
+            return VerificationFailure(
+                RuntimeEgressVerificationFailureCodes.SelectionChanged, exception.Message);
+        }
+        catch (CiliumPolicyException exception)
+        {
+            var code = exception.Code == "policy_generation_unverified"
+                ? RuntimeEgressVerificationFailureCodes.GenerationUnverified
+                : RuntimeEgressVerificationFailureCodes.Unavailable;
+            return VerificationFailure(code, exception.Message);
+        }
+        catch (HttpRequestException)
+        {
+            return VerificationFailure(
+                RuntimeEgressVerificationFailureCodes.Unavailable,
+                "Environment or an authorization dependency is unavailable; egress verification is withheld.");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return VerificationFailure(
+                RuntimeEgressVerificationFailureCodes.Unavailable,
+                "Environment or an authorization dependency timed out; egress verification is withheld.");
         }
     }
 
@@ -1186,6 +1319,10 @@ public sealed class EnvironmentEgressManager(
     /// <summary>Builds a not-ready result with a stable failure code and explanation.</summary>
     private static EnvironmentEgressOperationResult Failure(string code, string message) =>
         new(false, false, null, null, code, message);
+
+    /// <summary>Creates a sanitized failure response for a read-only egress verification.</summary>
+    private static RuntimeEgressVerificationResponse VerificationFailure(string code, string message) =>
+        RuntimeEgressVerificationResponse.Failure(code, message);
 
     /// <summary>Starts a trace span for an egress operation and records the requested generation when available.</summary>
     private static Activity? TraceOperation(string operation, long? requestedGeneration = null)

@@ -98,6 +98,30 @@ advertises `SessionsCapabilities.All`; other providers may advertise a smaller
 set, and a provider can be selected only when it satisfies the run's required
 capabilities.
 
+## Current Environment egress verification
+
+`POST /api/network-egress/verify` is a read-only Environment owner request. It
+accepts `RuntimeEgressVerificationRequest` with contract version, the complete
+Environment lifecycle fence, the policy generation, and the caller's expected
+authorized run-selection `contextRevision`. The existing caller bearer and
+optional tenant selector are forwarded to Environment; the request does not
+create or update policy state.
+
+Environment checks current project-write and run-selection authority, confirms
+the requested fence and latest owner-recorded policy generation, compiles the
+fresh selection, and reads back the matching policy. It rechecks authority and
+selection after that read. A successful `RuntimeEgressVerificationResponse`
+contains a receipt bound to the complete fence, policy generation,
+`contextRevision`, and nonempty policy `intentHash`. Orchestrator rejects a
+receipt whose owner, generation, or selection revision differs from its
+request. This receipt is evidence of policy-object verification only; it does
+not prove datapath enforcement, authorize a live action, or dispatch a run.
+
+The response fails closed with distinct codes for a missing Environment,
+stale lifecycle fence, unverified policy generation, changed authorization,
+changed selection, and unavailable Environment or authorization dependency.
+These outcomes are not interchangeable with an empty or cached success.
+
 `ProviderMeterSourceSelection` maps an explicit source to one enabled Cost provider.
 `CostProviderResolutionRequest` requires an exact adapter version, options schema
 and capability set. `ResolveCost` returns a checked `CostProviderResolution`
