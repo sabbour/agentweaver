@@ -2310,6 +2310,97 @@ describe('v1 web project scoping', () => {
     );
   });
 
+  it('shows project-wide decision and memory counts and names unsupported legacy totals', async () => {
+    mocks.ensureSession.mockResolvedValue(true);
+    mocks.searchProjectKnowledge.mockImplementation(async (
+      _token: string,
+      _projectId: string,
+      options: { kind?: string },
+    ) => ({
+      ...knowledgePage([]),
+      totalCount: options.kind === 'decision' ? 3 : options.kind === 'memory' ? 2 : 0,
+    }));
+    window.history.replaceState({}, '', '/projects/p1/knowledge');
+
+    render(<App />);
+
+    const summary = screen.getByRole('region', { name: 'Team memory summary' });
+    await waitFor(() => {
+      expect(within(summary).getByText('3')).toBeTruthy();
+      expect(within(summary).getByText('2')).toBeTruthy();
+    });
+    expect(within(summary).getAllByText('Unavailable')).toHaveLength(2);
+    expect(
+      within(summary).getByText("Pending proposals and project-wide session counts aren't available yet."),
+    ).toBeTruthy();
+    expect(mocks.searchProjectKnowledge).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      expect.objectContaining({ kind: 'decision', includeInactive: true, page: 1, pageSize: 1 }),
+      'tenant-1',
+    );
+    expect(mocks.searchProjectKnowledge).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      expect.objectContaining({ kind: 'memory', includeInactive: false, page: 1, pageSize: 1 }),
+      'tenant-1',
+    );
+  });
+
+  it('refreshes project counts when a successful mutation finishes after the record scope changes', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    mocks.ensureSession.mockResolvedValue(true);
+    const current = knowledgeRecord('record-1');
+    const archived = { ...current, state: 'archived' as const, revision: 2, revisionId: 'record-1-revision-2' };
+    const pendingArchive = deferred<{
+      status: 'updated';
+      record: typeof archived;
+      currentRevision: number;
+      isDuplicate: boolean;
+    }>();
+    let activeMemoryCount = 7;
+    mocks.searchKnowledge.mockResolvedValue(knowledgePage([current]));
+    mocks.searchProjectKnowledge.mockImplementation(async (
+      _token: string,
+      _projectId: string,
+      options: { kind?: string },
+    ) => ({
+      ...knowledgePage([]),
+      totalCount: options.kind === 'decision' ? 3 : activeMemoryCount,
+    }));
+    mocks.updateKnowledgeRecord.mockReturnValue(pendingArchive.promise);
+    window.history.replaceState({}, '', '/projects/p1/knowledge?runId=r1&agentId=a1');
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'record-1' });
+    const summary = screen.getByRole('region', { name: 'Team memory summary' });
+    await waitFor(() => expect(within(summary).getByText('7')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Archive record' }));
+    await waitFor(() => expect(mocks.updateKnowledgeRecord).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Decisions' }));
+    await waitFor(() => expect(mocks.searchKnowledge).toHaveBeenLastCalledWith(
+      'broker-token',
+      'p1',
+      'r1',
+      'a1',
+      expect.objectContaining({ kind: 'decision' }),
+      'tenant-1',
+    ));
+    activeMemoryCount = 6;
+    await act(async () => {
+      pendingArchive.resolve({
+        status: 'updated',
+        record: archived,
+        currentRevision: 2,
+        isDuplicate: false,
+      });
+    });
+
+    await waitFor(() => expect(within(summary).getByText('6')).toBeTruthy());
+  });
+
   it('opens project run history with project-read routes instead of run-owner snapshots', async () => {
     mocks.ensureSession.mockResolvedValue(true);
     mocks.getProjectRunHistorySessions.mockResolvedValue({
@@ -2384,28 +2475,36 @@ describe('v1 web project scoping', () => {
 
   it('moves to the last valid page when a refresh shrinks project-wide results', async () => {
     mocks.ensureSession.mockResolvedValue(true);
-    mocks.searchProjectKnowledge
-      .mockResolvedValueOnce({
+    const searchPages = [
+      {
         ...knowledgePage([
           { accessRunId: 'run-a', record: knowledgeRecord('first-page-record', 'p1', 'agent-a') },
         ]),
         totalCount: 51,
-      })
-      .mockResolvedValueOnce({
+      },
+      {
         ...knowledgePage([
           { accessRunId: 'run-b', record: knowledgeRecord('second-page-record', 'p1', 'agent-b') },
         ]),
         page: 2,
         totalCount: 51,
-      })
-      .mockResolvedValueOnce({
+      },
+      {
         ...knowledgePage([]),
         page: 2,
         totalCount: 3,
-      })
-      .mockResolvedValueOnce(knowledgePage([
+      },
+      knowledgePage([
         { accessRunId: 'run-a', record: knowledgeRecord('refreshed-record', 'p1', 'agent-a') },
-      ]));
+      ]),
+    ];
+    mocks.searchProjectKnowledge.mockImplementation(async (
+      _token: string,
+      _projectId: string,
+      options: { kind?: string },
+    ) => options.kind
+      ? knowledgePage([])
+      : searchPages.shift() ?? knowledgePage([]));
     window.history.replaceState({}, '', '/projects/p1/knowledge');
     render(<App />);
 
@@ -2426,10 +2525,21 @@ describe('v1 web project scoping', () => {
 
   it('shows empty, failed, and denied project-wide search states', async () => {
     mocks.ensureSession.mockResolvedValue(true);
-    mocks.searchProjectKnowledge
-      .mockResolvedValueOnce(knowledgePage([]))
-      .mockRejectedValueOnce(new Error('Search unavailable'))
-      .mockRejectedValueOnce(new GatewayError(403, { code: 'forbidden' }, 'Forbidden'));
+    const searchResults = [
+      knowledgePage([]),
+      new Error('Search unavailable'),
+      new GatewayError(403, { code: 'forbidden' }, 'Forbidden'),
+    ];
+    mocks.searchProjectKnowledge.mockImplementation(async (
+      _token: string,
+      _projectId: string,
+      options: { kind?: string },
+    ) => {
+      if (options.kind) return knowledgePage([]);
+      const result = searchResults.shift() ?? knowledgePage([]);
+      if (result instanceof Error) throw result;
+      return result;
+    });
     window.history.replaceState({}, '', '/projects/p1/knowledge');
     render(<App />);
 

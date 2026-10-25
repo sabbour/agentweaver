@@ -28,6 +28,7 @@ import {
 import { agentweaverLightTheme } from '../theme';
 import { PageSection } from '../components/ui/PageSection';
 import { Tile, TileGrid } from '../components/ui/TileGrid';
+import { MetricRow } from '../components/ui/Metric';
 import { AppDialog } from '../components/ui/AppDialog';
 import { EmptyState } from '../components/ui/States';
 import { Pager } from '../copilot-fluent-system';
@@ -1118,7 +1119,13 @@ function assertKnowledgeTransferBundleScope(
 }
 
 /** Discovers project-wide records and manages records within a selected run and agent. */
-function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
+function ProjectKnowledgeDiscovery({
+  projectId,
+  onRefreshCounts,
+}: {
+  projectId: string;
+  onRefreshCounts: () => void;
+}) {
   const { apiCall, authorize, ensureSession } = useAuth();
   const [draftQuery, setDraftQuery] = useState('');
   const [query, setQuery] = useState('');
@@ -1267,7 +1274,10 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
     <Panel
       title="Project-wide search"
       description="Find records across accessible runs and agents. Choose a run and agent below to manage records."
-      actions={<Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => void load()}>Refresh</Button>}
+      actions={<Button appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => {
+        void load();
+        onRefreshCounts();
+      }}>Refresh</Button>}
     >
       <form className="v1-form v1-inline-form" onSubmit={search}>
         <Field label="Search text">
@@ -1293,7 +1303,10 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
       {needsSignIn && (
         <div className="v1-scope-action">
           <p className="v1-muted">Sign in without a run binding to search project-wide Knowledge.</p>
-          <Button appearance="primary" onClick={() => void authorize(null).then(() => load())}>
+          <Button appearance="primary" onClick={() => void authorize(null).then(() => {
+            onRefreshCounts();
+            return load();
+          })}>
             Sign in for project-wide search
           </Button>
         </div>
@@ -1414,6 +1427,84 @@ function ProjectKnowledgeDiscovery({ projectId }: { projectId: string }) {
   );
 }
 
+function ProjectKnowledgeMetrics({ projectId, refreshKey }: { projectId: string; refreshKey: number }) {
+  const { apiCall, ensureSession } = useAuth();
+  const [result, setResult] = useState<
+    | { key: string; status: 'loaded'; counts: { decisions: number; memories: number } }
+    | { key: string; status: 'needs-sign-in' }
+    | { key: string; status: 'error'; error: unknown }
+    | null
+  >(null);
+  const requestKey = JSON.stringify([projectId, refreshKey]);
+  const currentResult = result?.key === requestKey ? result : null;
+
+  useEffect(() => {
+    let active = true;
+
+    // These counts use the supported project-wide search; it has no proposal-state or project-session filter.
+    void (async () => {
+      try {
+        if (!await ensureSession(null, false)) {
+          if (active) setResult({ key: requestKey, status: 'needs-sign-in' });
+          return;
+        }
+        const [decisions, memories] = await Promise.all([
+          apiCall((token, tenantSelector) => gatewayClient.searchProjectKnowledge(token, projectId, {
+            kind: 'decision',
+            includeInactive: true,
+            page: 1,
+            pageSize: 1,
+          }, tenantSelector), null),
+          apiCall((token, tenantSelector) => gatewayClient.searchProjectKnowledge(token, projectId, {
+            kind: 'memory',
+            includeInactive: false,
+            page: 1,
+            pageSize: 1,
+          }, tenantSelector), null),
+        ]);
+        if (active) setResult({
+          key: requestKey,
+          status: 'loaded',
+          counts: { decisions: decisions.totalCount, memories: memories.totalCount },
+        });
+      } catch (reason) {
+        if (active) setResult({ key: requestKey, status: 'error', error: reason });
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [apiCall, ensureSession, projectId, refreshKey, requestKey]);
+
+  const countValue = (value: number | undefined) => {
+    if (currentResult === null) return 'Loading';
+    if (currentResult.status === 'needs-sign-in') return 'Sign in required';
+    if (currentResult.status === 'error' || value === undefined) return 'Unavailable';
+    return value;
+  };
+
+  return (
+    <section aria-label="Team memory summary">
+      <MetricRow items={[
+        { label: 'Pending', value: 'Unavailable' },
+        { label: 'Decisions', value: countValue(currentResult?.status === 'loaded' ? currentResult.counts.decisions : undefined) },
+        { label: 'Memories', value: countValue(currentResult?.status === 'loaded' ? currentResult.counts.memories : undefined) },
+        { label: 'Sessions', value: 'Unavailable' },
+      ]} />
+      {currentResult?.status === 'error' && (
+        <ErrorNotice code={errorCode(currentResult.error)}>{errorMessage(currentResult.error)}</ErrorNotice>
+      )}
+      {currentResult?.status === 'needs-sign-in' && (
+        <p className="v1-muted">Sign in without a run binding to load project-wide counts.</p>
+      )}
+      <p className="v1-muted">
+        Pending proposals and project-wide session counts aren't available yet.
+      </p>
+    </section>
+  );
+}
+
 function KnowledgePage() {
   const { projectId = '' } = useParams();
   const { session, apiCall, authorize, ensureSession } = useAuth();
@@ -1431,6 +1522,7 @@ function KnowledgePage() {
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeScope, setNoticeScope] = useState<string | null>(null);
+  const [summaryRefreshKey, setSummaryRefreshKey] = useState(0);
   const [recordsScope, setRecordsScope] = useState<string | null>(null);
   const [errorScope, setErrorScope] = useState<string | null>(null);
   const [draft, setDraft] = useState({ kind: 'memory', type: '', title: '', content: '', rationale: '', importance: 'medium', tags: '' });
@@ -1501,6 +1593,7 @@ function KnowledgePage() {
     page,
   ]);
   const activeScope = useRef(requestScope);
+  const activeProjectId = useRef(projectId);
   const closeRevisionHistory = () => {
     activeRevisionScope.current = null;
     setRevisionRecordId(null);
@@ -1558,10 +1651,17 @@ function KnowledgePage() {
 
   useEffect(() => {
     activeScope.current = requestScope;
+    activeProjectId.current = projectId;
     if (!binding || !agentId.trim() || !correctlyScoped) return undefined;
     const timer = window.setTimeout(() => { void load(); }, 0);
     return () => window.clearTimeout(timer);
-  }, [binding, agentId, correctlyScoped, load, requestScope]);
+  }, [binding, agentId, correctlyScoped, load, projectId, requestScope]);
+
+  const refreshSummaryCounts = (mutationProjectId: string) => {
+    // List filters can change while a project-wide mutation is in flight.
+    if (activeProjectId.current === mutationProjectId)
+      setSummaryRefreshKey((current) => current + 1);
+  };
 
   const setScope = (event: FormEvent) => {
     event.preventDefault();
@@ -1601,8 +1701,9 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Record created (${result.status}). The list shows its saved state.`);
       setNoticeScope(scope);
       closeRevisionHistory();
@@ -1626,8 +1727,9 @@ function KnowledgePage() {
         : await apiCall((token, tenantSelector) => gatewayClient.rejectKnowledgeProposal(
           token, projectId, binding.runId, agentId.trim(), record.recordId, record.revision, idempotencyKey, tenantSelector,
         ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Proposal updated (${result.status}). The list shows its current state.`);
       setNoticeScope(scope);
       closeRevisionHistory();
@@ -1663,8 +1765,9 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Record archived (${result.status}). The list shows its current state.`);
       setNoticeScope(scope);
       closeCorrection();
@@ -1717,8 +1820,9 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Correction saved (${result.status}). The list shows the corrected record.`);
       setNoticeScope(scope);
       closeCorrection();
@@ -1747,8 +1851,9 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Decision approved (${result.status}). The list shows its trust state.`);
       setNoticeScope(scope);
       closeRevisionHistory();
@@ -1793,8 +1898,9 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Decision replaced (${result.status}). The list shows the new link.`);
       setNoticeScope(scope);
       closeRevisionHistory();
@@ -1866,8 +1972,9 @@ function KnowledgePage() {
         idempotencyKey,
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Revision restored (${result.status}). The list shows the restored record.`);
       setNoticeScope(scope);
       closeRevisionHistory();
@@ -1936,8 +2043,9 @@ function KnowledgePage() {
         crypto.randomUUID(),
         tenantSelector,
       ), binding);
-      if (activeScope.current !== scope) return;
       assertKnowledgeRecordsInScope(result.records, projectId, agentId.trim());
+      refreshSummaryCounts(projectId);
+      if (activeScope.current !== scope) return;
       setNotice(`Imported ${result.records.length} record(s). The list shows their saved state.`);
       setNoticeScope(scope);
       setImportConfirmed(false);
@@ -1970,9 +2078,13 @@ function KnowledgePage() {
   return (
     <>
       <PageHeading title="Memories" description="Search project-wide or choose a run and agent to manage records." page="Memories" />
+      <ProjectKnowledgeMetrics projectId={projectId} refreshKey={summaryRefreshKey} />
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="info"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
-      <ProjectKnowledgeDiscovery projectId={projectId} />
+      <ProjectKnowledgeDiscovery
+        projectId={projectId}
+        onRefreshCounts={() => setSummaryRefreshKey((current) => current + 1)}
+      />
       <Panel title="Show memories for">
         {projectRuns.error != null && <ErrorNotice code={errorCode(projectRuns.error)}>{runListErrorMessage(projectRuns.error)}</ErrorNotice>}
         {/* Wait for the run list before saying there are no runs. */}
