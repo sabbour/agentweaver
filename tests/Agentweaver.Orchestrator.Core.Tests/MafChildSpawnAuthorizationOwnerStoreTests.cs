@@ -176,7 +176,7 @@ public sealed class MafChildSpawnAuthorizationOwnerStoreTests(
         var store = CreateStore();
         var grant = await store.IssueGrantAsync(_intent, _authority, CancellationToken.None);
         var applicationName = $"maf_spawn_lock_{Guid.NewGuid():N}";
-        var connectionString = new NpgsqlConnectionStringBuilder(fixture.DataSource.ConnectionString)
+        var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
         {
             ApplicationName = applicationName,
             CommandTimeout = 10

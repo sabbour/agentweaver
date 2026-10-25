@@ -37,10 +37,11 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await RequireMigrationAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
-        var current = await RequireCurrentOwnerStateAsync(
-            connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false);
+        await LockAcceptedRunAsync(connection, transaction, authority, cancellationToken).ConfigureAwait(false);
         await RequireIntentHashAsync(
             connection, transaction, authority, intent, cancellationToken).ConfigureAwait(false);
+        var current = await RequireCurrentOwnerStateAsync(
+            connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false);
         var expiresAt = timeProvider.GetUtcNow().AddMinutes(15);
 
         await using (var insert = new NpgsqlCommand($"""
@@ -119,10 +120,11 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await RequireMigrationAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
-        _ = await RequireCurrentOwnerStateAsync(
-            connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false);
+        await LockAcceptedRunAsync(connection, transaction, authority, cancellationToken).ConfigureAwait(false);
         await RequireIntentHashAsync(
             connection, transaction, authority, intent, cancellationToken).ConfigureAwait(false);
+        _ = await RequireCurrentOwnerStateAsync(
+            connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false);
         var evidence = await ReadEvidenceAsync(
             connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false);
         if (evidence is not null)
@@ -157,10 +159,11 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await RequireMigrationAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
-        _ = await RequireCurrentOwnerStateAsync(
-            connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false);
+        await LockAcceptedRunAsync(connection, transaction, authority, cancellationToken).ConfigureAwait(false);
         await RequireIntentHashAsync(
             connection, transaction, authority, intent, cancellationToken).ConfigureAwait(false);
+        _ = await RequireCurrentOwnerStateAsync(
+            connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false);
 
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.{ReceiptTable}
@@ -218,11 +221,12 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
             throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
 
         await RequireMigrationAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await LockAcceptedRunAsync(connection, transaction, authority, cancellationToken).ConfigureAwait(false);
+        await RequireIntentHashAsync(
+            connection, transaction, authority, intent, cancellationToken).ConfigureAwait(false);
         // Keep the root decision and parent fence locked while the caller commits its child association and outbox.
         var current = await RequireCurrentOwnerStateAsync(
             connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false);
-        await RequireIntentHashAsync(
-            connection, transaction, authority, intent, cancellationToken).ConfigureAwait(false);
         var evidence = await ReadEvidenceAsync(
             connection, transaction, intent, authority, cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("maf_child_spawn_authorization_missing");
@@ -300,6 +304,23 @@ internal sealed class MafChildSpawnAuthorizationOwnerStore(
         var grantedHash = (string?)await grant.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         if (grantedHash is not null && !string.Equals(grantedHash, expectedHash, StringComparison.Ordinal))
             throw new RuntimeAuthorizationException("maf_child_spawn_intent_conflict");
+    }
+
+    private async Task LockAcceptedRunAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafChildSpawnAuthorizationAuthority authority,
+        CancellationToken cancellationToken)
+    {
+        // Acquire the coordinator transition's first owner lock before touching intent or grant rows.
+        await using var run = new NpgsqlCommand($"""
+            SELECT 1
+            FROM {_schema}.accepted_runs
+            WHERE project_id = @project AND run_id = @run
+            FOR SHARE
+            """, connection, transaction);
+        BindScope(run, authority);
+        await run.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<bool> InsertConsumptionAsync(
