@@ -300,7 +300,7 @@ public static class SessionMaterialEndpoints
     }
 
     /// <summary>Converts typed authorization, integrity, owner, and request failures into stable no-store responses.</summary>
-    private static async Task<IResult> ExecuteAsync<T>(
+    internal static async Task<IResult> ExecuteAsync<T>(
         HttpContext context, Func<Task<T>> action, bool missingCacheIsNotFound = false)
     {
         context.Response.Headers.CacheControl = "no-store";
@@ -340,9 +340,13 @@ public static class SessionMaterialEndpoints
         }
         catch (SessionMaterialIntegrityException exception)
         {
+            // Only an optional SDK cache uses expired or absent material as a recovery miss.
+            var optionalCacheMissing = missingCacheIsNotFound &&
+                exception.Code is ("session_material_object_missing" or "session_material_retention_expired");
             return Results.Json(new { error = exception.Code },
-                statusCode: missingCacheIsNotFound && exception.Code == "session_material_object_missing"
-                    ? StatusCodes.Status404NotFound : StatusCodes.Status503ServiceUnavailable);
+                statusCode: optionalCacheMissing
+                    ? StatusCodes.Status404NotFound
+                    : StatusCodes.Status503ServiceUnavailable);
         }
         catch (ArgumentException)
         {
