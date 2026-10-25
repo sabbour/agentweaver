@@ -395,6 +395,22 @@ npm run db:maintenance:projects-config -- --publication .\artifacts\release\publ
 npm run db:maintenance:projects-config -- --publication .\artifacts\release\publication.json --bootstrap-first-platform-admin --execute
 ```
 
+Before retrying a failed bootstrap, inspect its live state with the same
+publication and migration credentials:
+
+```powershell
+npm run db:maintenance:projects-config -- --publication .\artifacts\release\publication.json --inspect-first-platform-admin
+```
+
+Inspection runs directly without `--execute`. Its pinned-image Job uses the
+same Lease and temporary credential Secret, but the database transaction is
+`REPEATABLE READ` and `READ ONLY`; it verifies migration history and performs
+no writes or migrations. The sanitized receipt reports the approved
+membership, active assignment IDs/revisions/states, matching membership and
+role-assignment audit rows, and only a count of other active PlatformAdmins.
+Do not retry if an assignment is missing its matching audit evidence or the
+inspection result is incomplete or ambiguous.
+
 `npm run platform:runtime-defaults` signs in through the P1 browser helper with
 `P1_SETUP_SCOPES`, reads `/api/v1/platform/runtime-defaults`, and compares it
 with the reviewed `deploy/k8s/runtime-configs/platform-runtime-defaults.json`.

@@ -793,16 +793,41 @@ not rerun migrations or apply runtime grants.
 If the bootstrap Job fails unexpectedly, its receipt records the stable failure
 outcome, exception type, an allowlisted configuration category when applicable,
 and validated PostgreSQL metadata. It omits free-form exception messages. A
-failed receipt does not prove that no grant committed. Before retrying, require
-an exact read-only database readback of the active PlatformAdmin assignment
-and its matching `role_assigned` audit row for the approved issuer, subject,
-and tenant. Confirm the membership is active and
-that the assignment has `resource_type=Platform`, `resource_id=default`,
-`role=PlatformAdmin`, and active state; the audit row must match its assignment
-and membership IDs and identity, resource, and role fields. This repository
-does not yet provide a supported read-only readback for this check. Do not
-replace it with ad hoc database queries, and do not retry the bootstrap until a
-supported readback has confirmed the state.
+failed receipt does not prove that no grant committed. Before deciding
+whether a retry is appropriate, run the repository-owned read-only inspection
+from a clean checkout of the fetched `origin/v1` tip. Use the same publication
+receipt and protected migration connection and access-token environment
+variables shown above:
+
+```powershell
+npm run db:maintenance:projects-config -- `
+  --publication .\artifacts\release\publication.json `
+  --inspect-first-platform-admin
+```
+
+Inspection is an executing read-only operation; do not add `--execute`. It
+verifies the pinned published image, approved immutable identity configuration,
+and migration history, then runs under the database-maintenance lock using the
+same short-lived credential Secret and Job path. The database transaction is
+`REPEATABLE READ` and explicitly `READ ONLY`. The command does not grant,
+revoke, repair, or migrate data. The runner removes the Job and Secret and
+writes a sanitized receipt outside the checkout.
+
+Read the `platformAdminInspection` object in that receipt. `membership.state`
+is `active` or `absent`; `activeAssignments` lists each active platform
+assignment's ID, revision, state, resource type (`Platform`), and resource ID
+(`default`) and role (`PlatformAdmin`). The membership and role-assignment audit
+arrays include only matching `membership_granted` and `role_assigned` rows,
+with resource type, resource ID, role when applicable, timestamp, and the
+membership/assignment IDs they match (`membership_granted` has no resource type
+or resource ID, both represented as `null`). An empty
+audit array means no matching audit evidence was found. The
+`otherActivePlatformAdminCount` field reports only a count and never exposes
+other identities. If an assignment lacks its matching audit row, the approved
+membership is absent, the inspection fails, or the result is otherwise
+ambiguous, stop and investigate; do not retry. A successful readback is
+evidence for a separate operator decision, not authorization to retry. Do not
+replace this path with ad hoc database queries or `kubectl exec`.
 
 After the bootstrap succeeds, write the reviewed defaults in
 `deploy/k8s/runtime-configs/platform-runtime-defaults.json` through the public
