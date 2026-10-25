@@ -5,6 +5,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Agentweaver.Identity;
 using Agentweaver.Providers;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -169,6 +170,12 @@ public sealed class EnvironmentEgressManagerTests
             expectedPrevious,
             idempotencyKey ?? $"policy-{generation}-after-{expectedPrevious}");
 
+    private static RuntimeEgressVerificationRequest VerificationRequest(
+        EnvironmentGenerationFence? fence = null,
+        long policyGeneration = 1,
+        string contextRevision = "signed-selection-revision-1") =>
+        new(1, fence ?? ApplyRequest().Fence, policyGeneration, contextRevision);
+
     internal static EnvironmentEgressManager Manager(
         FakeProjectsConfigClient projects,
         FakeCiliumPolicyResourceStore store,
@@ -215,6 +222,91 @@ public sealed class EnvironmentEgressManagerTests
             tag => tag.Value is string value &&
                 new[] { TenantId, ProjectId, RunId, "validated.jwt.token", "api.github.com" }
                     .Contains(value, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task CurrentVerificationReturnsExactReceiptWithoutWritingPolicyOrOwnerState()
+    {
+        var projects = new FakeProjectsConfigClient(AuthorizationContext(), Selection());
+        var store = new FakeCiliumPolicyResourceStore();
+        var lifecycle = new FakeEnvironmentLifecycleStore(ApplyRequest().Fence);
+        var manager = Manager(projects, store, lifecycle);
+        var applied = await manager.ApplyAndVerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+        Assert.True(applied.ReadyForDispatch, applied.FailureMessage);
+        var before = Assert.Single(store.Resources).Value;
+        var ownerEffect = lifecycle.LastEffect;
+
+        var verified = await manager.VerifyCurrentAsync(
+            Caller(), VerificationRequest(), CancellationToken.None);
+
+        var receipt = Assert.IsType<RuntimeEgressVerificationReceipt>(verified.Receipt);
+        Assert.Null(verified.FailureCode);
+        Assert.Equal(ApplyRequest().Fence, receipt.Fence);
+        Assert.Equal(1, receipt.PolicyGeneration);
+        Assert.Equal("signed-selection-revision-1", receipt.ContextRevision);
+        Assert.Equal(applied.AppliedState!.IntentHash, receipt.IntentHash);
+        Assert.Equal(before.Metadata.ResourceVersion, Assert.Single(store.Resources).Value.Metadata.ResourceVersion);
+        Assert.Equal(ownerEffect, lifecycle.LastEffect);
+    }
+
+    [Fact]
+    public async Task CurrentVerificationRejectsStaleEnvironmentFence()
+    {
+        var manager = Manager(
+            new FakeProjectsConfigClient(AuthorizationContext(), Selection()),
+            new FakeCiliumPolicyResourceStore());
+        var staleFence = ApplyRequest(lifecycleGeneration: 2).Fence;
+
+        var response = await manager.VerifyCurrentAsync(
+            Caller(), VerificationRequest(staleFence), CancellationToken.None);
+
+        Assert.Equal(RuntimeEgressVerificationFailureCodes.StaleFence, response.FailureCode);
+    }
+
+    [Fact]
+    public async Task CurrentVerificationRejectsUntrackedPolicyGeneration()
+    {
+        var manager = Manager(
+            new FakeProjectsConfigClient(AuthorizationContext(), Selection()),
+            new FakeCiliumPolicyResourceStore());
+
+        var response = await manager.VerifyCurrentAsync(
+            Caller(), VerificationRequest(policyGeneration: 2), CancellationToken.None);
+
+        Assert.Equal(RuntimeEgressVerificationFailureCodes.GenerationUnverified, response.FailureCode);
+    }
+
+    [Fact]
+    public async Task CurrentVerificationRejectsDifferentAuthorizedSelectionRevision()
+    {
+        var manager = Manager(
+            new FakeProjectsConfigClient(AuthorizationContext(), Selection()),
+            new FakeCiliumPolicyResourceStore());
+
+        var response = await manager.VerifyCurrentAsync(
+            Caller(), VerificationRequest(contextRevision: "caller-selection-revision"), CancellationToken.None);
+
+        Assert.Equal(RuntimeEgressVerificationFailureCodes.SelectionChanged, response.FailureCode);
+    }
+
+    [Fact]
+    public async Task CurrentVerificationRejectsAuthorizationChangedDuringReadback()
+    {
+        var store = new FakeCiliumPolicyResourceStore();
+        var lifecycle = new FakeEnvironmentLifecycleStore(ApplyRequest().Fence);
+        var initialProjects = new FakeProjectsConfigClient(AuthorizationContext(), Selection());
+        Assert.True((await Manager(initialProjects, store, lifecycle)
+            .ApplyAndVerifyAsync(Caller(), ApplyRequest(), CancellationToken.None)).ReadyForDispatch);
+        var changedAuthorization = AuthorizationContext() with { MembershipRevision = 7 };
+        var verificationProjects = new FakeProjectsConfigClient(
+            [AuthorizationContext(), AuthorizationContext(), changedAuthorization, changedAuthorization],
+            Selection());
+        var manager = Manager(verificationProjects, store, lifecycle);
+
+        var response = await manager.VerifyCurrentAsync(
+            Caller(), VerificationRequest(), CancellationToken.None);
+
+        Assert.Equal(RuntimeEgressVerificationFailureCodes.AuthorizationChanged, response.FailureCode);
     }
 
     [Fact]

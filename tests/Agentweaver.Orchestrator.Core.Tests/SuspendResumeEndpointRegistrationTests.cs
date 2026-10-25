@@ -79,6 +79,29 @@ public sealed class SuspendResumeEndpointRegistrationTests
         Assert.NotEmpty(route.Metadata.GetOrderedMetadata<IAuthorizeData>());
     }
 
+    [Fact]
+    public void ConfiguredRuntimeOwnerResolvesReadOnlyEgressVerificationClient()
+    {
+        var options = new OrchestratorOptions(
+            "https://issuer.test/", "orchestrator-api", "https://projects.test/",
+            "projects-api", "https://events.test/", "events-api");
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress"] = "https://environment.test/"
+            }).Build();
+        var services = new ServiceCollection();
+        Assert.True(services.AddRuntimeRegistrationOwner(configuration, options));
+        // Avoid opening the production backend-CA handler while this test checks only service composition.
+        services.Configure<HttpClientFactoryOptions>(
+            "runtime-suspend-environment", registration => registration.HttpMessageHandlerBuilderActions.Clear());
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<RuntimeEgressVerificationHttpClient>());
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

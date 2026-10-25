@@ -211,6 +211,75 @@ public static class RuntimeOwnerHttpTransport
         }
     }
 
+    /// <summary>Sends a bounded owner request and returns a typed JSON body for success or coded failure statuses.</summary>
+    public static async Task<(System.Net.HttpStatusCode StatusCode, TResponse? Body)> SendBoundedOutcomeAsync<TResponse>(
+        HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
+        object body, int maximumBytes, CancellationToken cancellationToken)
+        where TResponse : class
+    {
+        if (maximumBytes is < 1 or > 4 * SessionMaterialValidation.MaximumBytes)
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+        ArgumentNullException.ThrowIfNull(body);
+        var owner = RequireOwnerAddress(ownerAddress);
+        var endpoint = new Uri(owner, path);
+        if (!path.StartsWith("/", StringComparison.Ordinal) ||
+            path.StartsWith("//", StringComparison.Ordinal) ||
+            endpoint.Scheme != owner.Scheme || endpoint.Authority != owner.Authority ||
+            endpoint.Fragment.Length != 0)
+            throw new RuntimeAuthorizationException("runtime_owner_address_invalid");
+        var payload = JsonSerializer.SerializeToUtf8Bytes(body, body.GetType(), JsonOptions);
+        if (payload.Length > maximumBytes)
+            throw new RuntimeAuthorizationException("runtime_owner_request_size_invalid");
+
+        // Keep both the response headers and body within the owner's bounded deadline.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (client.Timeout != Timeout.InfiniteTimeSpan)
+            deadline.CancelAfter(client.Timeout);
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", actor.Bearer.GetValue());
+        request.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, NoCache = true };
+        if (actor.TenantSelector is not null)
+            request.Headers.Add("X-Agentweaver-Tenant", actor.TenantSelector);
+        request.Content = new ByteArrayContent(payload);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        using var response = await client.SendAsync(
+            request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
+        if ((int)response.StatusCode is >= 300 and <= 399 || response.RequestMessage?.RequestUri != endpoint)
+            throw new RuntimeAuthorizationException("runtime_owner_redirect_rejected");
+
+        // Bare authentication responses carry no contract body; their status is still returned for fail-closed mapping.
+        if (!response.IsSuccessStatusCode &&
+            response.Content.Headers.ContentType?.MediaType != "application/json")
+            return (response.StatusCode, null);
+        if (response.Headers.CacheControl?.NoStore != true ||
+            response.Content.Headers.ContentType?.MediaType != "application/json" ||
+            response.Content.Headers.ContentLength is { } length && (length <= 0 || length > maximumBytes))
+            throw new RuntimeAuthorizationException("runtime_owner_response_size_invalid");
+        await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
+        using var bytes = new MemoryStream();
+        var buffer = new byte[8192];
+        int count;
+        while ((count = await stream.ReadAsync(
+                   buffer.AsMemory(0, (int)Math.Min(buffer.Length, maximumBytes - bytes.Length + 1)), deadline.Token)
+                   .ConfigureAwait(false)) != 0)
+        {
+            if (bytes.Length + count > maximumBytes)
+                throw new RuntimeAuthorizationException("runtime_owner_response_size_invalid");
+            bytes.Write(buffer, 0, count);
+        }
+        try
+        {
+            var result = JsonSerializer.Deserialize<TResponse>(
+                bytes.GetBuffer().AsSpan(0, (int)bytes.Length), JsonOptions);
+            return (response.StatusCode, result ??
+                throw new RuntimeAuthorizationException("runtime_owner_contract_invalid"));
+        }
+        catch (JsonException)
+        {
+            throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
+        }
+    }
+
     /// <summary>Reads seed bytes and verifies exact length and digest against owner metadata.</summary>
     public static async Task<byte[]> ReadBuildTestSeedAsync(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
