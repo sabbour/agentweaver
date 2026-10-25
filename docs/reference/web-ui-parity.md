@@ -153,13 +153,38 @@ Each row says what works and what is still missing. The missing parts link to
 | Platform settings | The web app version and build commit, and all 16 platform component areas with owner, readiness, and the active and available implementations with their versions. | BYOK providers, platform-default Copilot status, account AI access. |
 | Board | **Backlog**, **Ready**, **Active**, and **Done** columns with counts, summary strip, zoom, Intake, title and description edits, queue state, queue order, send all to Ready, archive, and prerequisite controls. | A task delete control, backlog settings, decompose, and the Human Review and Problems columns. |
 | Flow | Project task notifications, **Needs input** including dismissed gates, **Task stages**, and **Open**, **Working**, and **Done** run groups. | The live agent graph for the project and current provider-side PR state per run. |
-| Workflows | **Saved workflow references**: the default workflow and the workflow for each blueprint, from project configuration. | Workflow catalog, YAML, edit, run, generate, sync, default, and per-task override. |
+| Workflows | The saved project default and blueprint workflow references, shown as rich-list cards. **Use platform default** clears a saved default; **Refresh** and **Open Project settings** work. | Workflow catalog and definitions, graph, edit, run, generate, sync, schedule and event triggers, and choosing a different workflow as the default. |
 | Workspace | **Repository** from configuration, **Pull requests** that runs opened or reused, and **Issues** synced into the backlog. | Branches: `GET /api/v1/projects/{projectId}/source-control/refs`; file tree: `GET /api/v1/projects/{projectId}/source-control/tree?ref=`; file content: `GET /api/v1/projects/{projectId}/source-control/files/{path}?ref=`. |
 | Observability | Metric tiles, **Activity** chart, run totals, model and agent usage, and **Recent runs**. | Per-run traces and response-duration percentiles. |
 | Diagnostics | **Areas that are not ready** from the platform component report, and **Failed runs**. | Service self-checks and project diagnostic reports. |
 | Heartbeat | Seven-day metric tiles and **Active and blocked runs**. | Heartbeat records for each service process. |
 | Cluster | The web app version and build commit, and **Platform components** with owner, readiness, and implementations with their versions. | Node and replica topology. |
 | Apps and Canvas | Not shown. | Not planned for v1. |
+
+### Workflows page inventory
+
+The v1 route keeps the project breadcrumb and uses the shared 0.x
+`PageSection`, `RichList`, and `ListRow` components for the settings-backed
+cards. Workflow definitions are not inferred from saved identifiers.
+
+| 0.x section, card, control, or path | v1 equivalent or exact gap |
+| --- | --- |
+| `/projects/:projectId/workflows`, `Projects / project / Workflows` breadcrumb | The route and project breadcrumb work. **Open Project settings** links to that project's settings; **Refresh** reloads the saved configuration. |
+| Active workflow card, default badge, and workflow ID | A **Default workflow** rich-list card shows the configured ID. **Use platform default** clears it through `PUT /api/v1/projects/{projectId}/configuration`, preserving other settings and using the loaded revision. |
+| Available workflow cards, built-in/project badges, descriptions, source, trigger badges, and valid status | Missing catalog reads: `GET /api/v1/projects/{projectId}/workflows` and `GET /api/v1/projects/{projectId}/workflows/{workflowId}`. The v1 page does not invent these details. |
+| Invalid workflow cards and validation errors | Missing `GET /api/v1/projects/{projectId}/workflows`, which must return validation status and error text with the catalog. |
+| Global workflow search or filter | The 0.x page has no global catalog search or filter. Event-trigger conditions are the only filter controls; their missing routes are listed below. |
+| Blueprint workflow references | A **Blueprint workflows** rich-list card shows the saved blueprint and workflow IDs from project configuration. |
+| Set-as-default menu, project/built-in groups, and reset action | **Use platform default** works through the configuration update. Choosing a listed workflow needs the missing catalog read `GET /api/v1/projects/{projectId}/workflows`; the existing configuration update route can save the selected ID once the catalog is available. |
+| **View graph** inline detail panel | Missing `GET /api/v1/projects/{projectId}/workflows/{workflowId}/graph`. |
+| **New workflow**, YAML **Edit**, **Edit visually**, and editor save/validate/undo/redo/revert/discard controls | Missing workflow YAML read `GET /api/v1/projects/{projectId}/workflows/{workflowId}/yaml` and save `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`. The same save route must accept a new workflow ID. |
+| **Duplicate to project** and built-in copy-on-write for edits or triggers | Missing YAML read `GET /api/v1/projects/{projectId}/workflows/{workflowId}/yaml` and save `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`. |
+| **Run now** | Missing `POST /api/v1/projects/{projectId}/workflows/{workflowId}/runs`. |
+| Schedule dialog: cadence, weekday/month day, UTC time, save, remove, cancel | Missing YAML read `GET /api/v1/projects/{projectId}/workflows/{workflowId}/yaml` and save `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`. |
+| Event dialog: event, issue action, condition type/value, match-any, add/remove condition/value, save, remove, cancel | Missing YAML read `GET /api/v1/projects/{projectId}/workflows/{workflowId}/yaml` and save `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`. |
+| **Generate workflow** dialog and **Check status** for a pending job | Missing `POST /api/v1/projects/{projectId}/workflows/generate`, `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}`, and `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}/result`. |
+| **Sync** and the empty-state sync action | Missing `POST /api/v1/projects/{projectId}/workflows/sync`. |
+| Loading, empty, error, and denied states | The page shows these states from `GET /api/v1/projects/{projectId}/configuration`; a denied read is reported as a permission message. The reset action reports write errors, including denied writes. |
 
 ### Re-role comparison
 
@@ -221,11 +246,13 @@ work around missing routes.
 | Heartbeat | `GET /api/diagnostics/heartbeat` | `GET /api/v1/platform/heartbeat` | Return the last heartbeat of each service process; add a table on Heartbeat. |
 | Cluster topology | `GET /api/diagnostics/cluster`, `GET /api/diagnostics/cluster/topology` | `GET /api/v1/platform/cluster` | Return nodes and replicas; add a table on Cluster. |
 | System runtime | `GET /api/system/runtime` | `GET /api/v1/platform/runtime` | Return host details, such as the .NET runtime and operating system, and show them on Cluster. The web app version and each component version are already shown. |
-| Workflow catalog | `GET /api/projects/{p}/workflows`, `GET …/workflows/{id}`, `GET …/workflows/{id}/yaml` | `GET /api/v1/projects/{projectId}/workflows`, `GET /api/v1/projects/{projectId}/workflows/{workflowId}` | Return available workflows and their definitions; list them on Workflows. |
-| Workflow edit | `PUT /api/projects/{p}/workflows/{id}`, `POST …/workflows/generate` | `PUT /api/v1/projects/{projectId}/workflows/{workflowId}`, `POST /api/v1/projects/{projectId}/workflows/generate` | Save workflow definitions with a revision. |
+| Workflow catalog | `GET /api/projects/{p}/workflows`, `GET /api/projects/{p}/workflows/{id}` | `GET /api/v1/projects/{projectId}/workflows`, `GET /api/v1/projects/{projectId}/workflows/{workflowId}` | Return available workflow summaries, validation results, and details for the Workflows cards. |
+| Workflow YAML and graph | `GET /api/projects/{p}/workflows/{id}/yaml`, `GET /api/projects/{p}/workflows/{id}/graph` | `GET /api/v1/projects/{projectId}/workflows/{workflowId}/yaml`, `GET /api/v1/projects/{projectId}/workflows/{workflowId}/graph` | Return the saved YAML and graph descriptor for the editors and inline detail panel. |
+| Workflow edit and triggers | `PUT /api/projects/{p}/workflows/{id}` | `PUT /api/v1/projects/{projectId}/workflows/{workflowId}` | Create or save a workflow definition, including schedule and event trigger changes, with validation feedback. |
+| Workflow generation and resume | `POST /api/projects/{p}/workflows/generate`, `GET /api/projects/{p}/workflows/generation-jobs/{jobId}`, `GET /api/projects/{p}/workflows/generation-jobs/{jobId}/result` | `POST /api/v1/projects/{projectId}/workflows/generate`, `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}`, `GET /api/v1/projects/{projectId}/workflows/generation-jobs/{jobId}/result` | Return a reviewable YAML draft and support checking a pending generation job. |
 | Workflow sync | `POST /api/projects/{p}/workflows/sync` | `POST /api/v1/projects/{projectId}/workflows/sync` | Read workflow files from the repository. |
 | Workflow run | `POST /api/projects/{p}/workflows/{id}/run` | `POST /api/v1/projects/{projectId}/workflows/{workflowId}/runs` | Start a run with that workflow. |
-| Default workflow | `PUT /api/projects/{p}/workflows/default` | None needed: `PUT /api/v1/projects/{projectId}/configuration` saves `defaultWorkflowId` | Add an edit control once the catalog lists choices. |
+| Default workflow | `PUT /api/projects/{p}/workflows/default` | Available: `PUT /api/v1/projects/{projectId}/configuration` saves `defaultWorkflowId` | The Workflows page can clear a saved default. Choosing a different workflow needs the catalog route above. |
 | Task workflow override | `PUT /api/projects/{p}/backlog/tasks/{id}/workflow-override` | `PUT /api/v1/projects/{projectId}/backlog/tasks/{taskId}/workflow` | Store a workflow choice on a task; add it to the card editor. |
 | Workspace refs | `GET /api/projects/{p}/workspace/refs` | `GET /api/v1/projects/{projectId}/source-control/refs` | Return branches and tags; add a branch picker on Workspace. |
 | Workspace tree | `GET /api/projects/{p}/workspace?ref=` | `GET /api/v1/projects/{projectId}/source-control/tree?ref=` | Return the file tree at a ref. |

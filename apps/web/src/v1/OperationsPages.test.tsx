@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement, ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   readProjectBacklog: vi.fn(),
   listProjectIssues: vi.fn(),
   getProjectConfiguration: vi.fn(),
+  updateProjectConfiguration: vi.fn(),
   listProjectPullRequests: vi.fn(),
   getProjectMetrics: vi.fn(),
   getProjectUsage: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock('./api', async (importOriginal) => ({
     readProjectBacklog: mocks.readProjectBacklog,
     listProjectIssues: mocks.listProjectIssues,
     getProjectConfiguration: mocks.getProjectConfiguration,
+    updateProjectConfiguration: mocks.updateProjectConfiguration,
     listProjectPullRequests: mocks.listProjectPullRequests,
     getProjectMetrics: mocks.getProjectMetrics,
     getProjectUsage: mocks.getProjectUsage,
@@ -290,20 +292,81 @@ describe('WorkflowsPage', () => {
       blueprintWorkflowReferences: [{ blueprintId: 'bp-review', workflowId: 'wf-review' }],
     }, 7));
     renderPage('workflows', <WorkflowsPage />);
-    expect(await screen.findByText('wf-default')).toBeTruthy();
-    const table = screen.getByRole('table', { name: 'Workflow by blueprint' });
-    const row = within(table).getAllByRole('row')[1];
-    expect(within(row).getByRole('rowheader').textContent).toBe('bp-review');
-    expect(within(row).getByRole('cell').textContent).toBe('wf-review');
+    const defaultWorkflow = await screen.findByRole('list', { name: 'Default workflow' });
+    expect(within(defaultWorkflow).getByText('wf-default')).toBeTruthy();
+    expect(within(defaultWorkflow).getByText('Project default')).toBeTruthy();
+    const blueprintWorkflows = screen.getByRole('list', { name: 'Blueprint workflows' });
+    expect(within(blueprintWorkflows).getByText('bp-review')).toBeTruthy();
+    expect(within(blueprintWorkflows).getByText('wf-review')).toBeTruthy();
     expect(screen.getByText('Configuration revision 7')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Project settings' }).getAttribute('href')).toBe('/projects/p1/settings');
+  });
+
+  it('resets the saved default without changing other project settings', async () => {
+    const saved = configuration({
+      defaultWorkflowId: null,
+      blueprintWorkflowReferences: [{ blueprintId: 'bp-review', workflowId: 'wf-review' }],
+    }, 8);
+    mocks.getProjectConfiguration.mockResolvedValue(configuration({
+      defaultWorkflowId: 'wf-default',
+      blueprintWorkflowReferences: [{ blueprintId: 'bp-review', workflowId: 'wf-review' }],
+    }, 7));
+    mocks.updateProjectConfiguration.mockResolvedValue(saved);
+    renderPage('workflows', <WorkflowsPage />);
+
+    await screen.findByText('wf-default');
+    fireEvent.click(screen.getByRole('button', { name: 'Use platform default' }));
+
+    expect(await screen.findByText('None set. Runs use the platform default.')).toBeTruthy();
+    expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
+      'token',
+      'p1',
+      7,
+      expect.objectContaining({
+        defaultWorkflowId: null,
+        blueprintWorkflowReferences: [{ blueprintId: 'bp-review', workflowId: 'wf-review' }],
+      }),
+      'tenant-1',
+    );
+  });
+
+  it('keeps the saved default reset when an older refresh finishes later', async () => {
+    const current = configuration({ defaultWorkflowId: 'wf-default' }, 7);
+    const saved = configuration({ defaultWorkflowId: null }, 8);
+    let resolveRefresh!: (value: VersionedProjectConfiguration) => void;
+    mocks.getProjectConfiguration
+      .mockResolvedValueOnce(current)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveRefresh = resolve; }));
+    mocks.updateProjectConfiguration.mockResolvedValue(saved);
+    renderPage('workflows', <WorkflowsPage />);
+
+    await screen.findByText('wf-default');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(mocks.getProjectConfiguration).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Use platform default' }));
+    expect(await screen.findByText('None set. Runs use the platform default.')).toBeTruthy();
+
+    await act(async () => resolveRefresh(current));
+    expect(screen.getByText('None set. Runs use the platform default.')).toBeTruthy();
+  });
+
+  it('explains when the default workflow cannot be changed', async () => {
+    mocks.getProjectConfiguration.mockResolvedValue(configuration({ defaultWorkflowId: 'wf-default' }, 7));
+    mocks.updateProjectConfiguration.mockRejectedValue(forbidden());
+    renderPage('workflows', <WorkflowsPage />);
+
+    await screen.findByText('wf-default');
+    fireEvent.click(screen.getByRole('button', { name: 'Use platform default' }));
+
+    expect(await screen.findByText('You do not have permission to change the default workflow in this project.')).toBeTruthy();
+    expect(screen.getByText('wf-default')).toBeTruthy();
   });
 
   it('shows empty states', async () => {
     renderPage('workflows', <WorkflowsPage />);
     expect(await screen.findByText('None set. Runs use the platform default.')).toBeTruthy();
     expect(screen.getByText('No blueprint uses a specific workflow.')).toBeTruthy();
-    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByRole('list')).toBeNull();
   });
 
   it('explains a 403 in plain copy', async () => {
@@ -321,7 +384,7 @@ describe('WorkflowsPage', () => {
   it('names the missing workflow features in plain copy', async () => {
     renderPage('workflows', <WorkflowsPage />);
     await screen.findByText('No blueprint uses a specific workflow.');
-    expectPlainNote('The workflow catalog, the workflow graph, workflow sync, and per-task workflow overrides are not available.');
+    expectPlainNote('Workflow details, editing, triggers, runs, generation, sync, and graphs are not available yet.');
   });
 });
 
