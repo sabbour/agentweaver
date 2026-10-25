@@ -88,15 +88,15 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
-    public void MutationDenialPlanRequiresAllNineOneColumnGrantsToNameNonExecutableGuards()
+    public void MutationDenialPlanRequiresAllElevenOneColumnGrantsToNameNonExecutableGuards()
     {
         var services = MutationServices();
         InitializerChecks.AssertMutationDenialPlan(services);
 
         // Dropping any one protected table changes the reviewed count, so the plan is rejected.
-        var eightTables = MutationServices();
-        eightTables[4] = eightTables[4] with { Tables = eightTables[4].Tables[..^1] };
-        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(eightTables));
+        var tenTables = MutationServices();
+        tenTables[4] = tenTables[4] with { Tables = tenTables[4].Tables[..^1] };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(tenTables));
 
         var missingGuard = MutationServices();
         missingGuard[3] = missingGuard[3] with
@@ -772,6 +772,12 @@ public sealed class P1PostgresInitializerTests
                     "session consistency manifests are immutable", null),
                 LockTable("maf_root_model_turn_admissions", "request_id", "maf_root_model_turn_admissions_no_update",
                     "reject_row_lock_record_update()", 27,
+                    "Coordinator decision and MAF checkpoint records cannot be updated.", "55000"),
+                LockTable("maf_child_spawn_authorization_receipts", "spawn_intent_id",
+                    "maf_child_spawn_authorizations_no_update", "reject_row_lock_record_update()", 27,
+                    "Coordinator decision and MAF checkpoint records cannot be updated.", "55000"),
+                LockTable("maf_child_spawn_authorization_consumptions", "spawn_intent_id",
+                    "maf_child_spawn_consumptions_no_update", "reject_row_lock_record_update()", 27,
                     "Coordinator decision and MAF checkpoint records cannot be updated.", "55000"),
             ],
             Functions =

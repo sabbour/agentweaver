@@ -53,6 +53,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData(34)]
     [InlineData(35)]
     [InlineData(36)]
+    [InlineData(37)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         // A partial history must fail verification until every registered resource is installed.
@@ -106,6 +107,28 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     }
 
     [Fact]
+    public async Task ChildSpawnAuthorizationMigrationIsOptionalBeforeItIsApplied()
+    {
+        await ApplyMigrationsThroughAsync(36);
+
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 37),
+                to_regclass(@receipts) IS NOT NULL,
+                to_regclass(@consumptions) IS NOT NULL
+            """, connection);
+        command.Parameters.AddWithValue("receipts", $"{_schema}.maf_child_spawn_authorization_receipts");
+        command.Parameters.AddWithValue("consumptions", $"{_schema}.maf_child_spawn_authorization_consumptions");
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0L, reader.GetInt64(0));
+        Assert.False(reader.GetBoolean(1));
+        Assert.False(reader.GetBoolean(2));
+    }
+
+    [Fact]
     public async Task RootAdmissionMigrationUsesItsActualPrerequisiteWithoutReservedSiblingVersions()
     {
         await ApplyMigrationsThroughAsync(21);
@@ -119,6 +142,28 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             await apply.ExecuteNonQueryAsync();
         await using (var record = new NpgsqlCommand($"""
             INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (36)
+            """, connection))
+            await record.ExecuteNonQueryAsync();
+
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await AssertCurrentSchemaAsync();
+    }
+
+    [Fact]
+    public async Task ChildSpawnAuthorizationMigrationUsesItsActualPrerequisiteWithoutReservedSiblingVersions()
+    {
+        await ApplyMigrationsThroughAsync(21);
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        var resourceName = "Agentweaver.Orchestrator.Migrations.037_maf_child_spawn_authorization.sql";
+        await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Missing migration resource '{resourceName}'.");
+        using var reader = new StreamReader(resource);
+        var sql = (await reader.ReadToEndAsync()).Replace("{schema}", $"\"{_schema}\"", StringComparison.Ordinal);
+        await using (var apply = new NpgsqlCommand(sql, connection))
+            await apply.ExecuteNonQueryAsync();
+        await using (var record = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (37)
             """, connection))
             await record.ExecuteNonQueryAsync();
 
@@ -206,7 +251,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(1L, reader.GetInt64(2));
         // Old owner images cannot accept 033 or later migrations; deploy before applying them.
-        Assert.Equal(3L, reader.GetInt64(3));
+        Assert.Equal(4L, reader.GetInt64(3));
         Assert.True(reader.GetBoolean(4));
     }
 
@@ -345,6 +390,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
     [InlineData("user_notification_promotion_dismissals")]
     [InlineData("source_control_pull_requests")]
     [InlineData("maf_root_model_turn_admissions")]
+    [InlineData("maf_child_spawn_authorization_receipts")]
+    [InlineData("maf_child_spawn_authorization_consumptions")]
     public async Task VerificationRequiresRegisteredTables(string table)
     {
         // A version receipt alone is insufficient when its required table is missing.
@@ -398,6 +445,28 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             : $"ALTER TABLE \"{_schema}\".maf_root_model_turn_admissions DISABLE TRIGGER maf_root_model_turn_admissions_no_update";
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand(sql, connection))
+            await command.ExecuteNonQueryAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    [Theory]
+    [InlineData("maf_child_spawn_authorization_receipts", "maf_child_spawn_authorizations_no_update", false)]
+    [InlineData("maf_child_spawn_authorization_receipts", "maf_child_spawn_authorizations_no_update", true)]
+    [InlineData("maf_child_spawn_authorization_consumptions", "maf_child_spawn_consumptions_no_update", false)]
+    [InlineData("maf_child_spawn_authorization_consumptions", "maf_child_spawn_consumptions_no_update", true)]
+    public async Task VerificationRequiresEnabledChildSpawnEvidenceImmutabilityTriggers(
+        string table,
+        string trigger,
+        bool drop)
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        var operation = drop
+            ? $"DROP TRIGGER {trigger} ON \"{_schema}\".{table}"
+            : $"ALTER TABLE \"{_schema}\".{table} DISABLE TRIGGER {trigger}";
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(operation, connection))
             await command.ExecuteNonQueryAsync();
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -489,7 +558,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
             (32, "032_source_control_pull_request_records.sql"),
             (33, "033_priority_link_repository_identity.sql"),
             (35, "035_backlog_task_queue_position.sql"),
-            (36, "036_maf_root_model_turn_admissions.sql")
+            (36, "036_maf_root_model_turn_admissions.sql"),
+            (37, "037_maf_child_spawn_authorization.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -581,7 +651,13 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 (SELECT count(*) FROM pg_trigger
                  WHERE tgrelid = to_regclass(@rootModelTurnAdmissions)
                    AND tgname = 'maf_root_model_turn_admissions_no_update'
-                   AND tgenabled = 'O' AND NOT tgisinternal)
+                   AND tgenabled = 'O' AND NOT tgisinternal),
+                to_regclass(@childSpawnAuthorizations) IS NOT NULL,
+                to_regclass(@childSpawnConsumptions) IS NOT NULL,
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid IN (to_regclass(@childSpawnAuthorizations), to_regclass(@childSpawnConsumptions))
+                   AND tgname IN ('maf_child_spawn_authorizations_no_update', 'maf_child_spawn_consumptions_no_update')
+                   AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal)
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
         command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
@@ -603,6 +679,10 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         command.Parameters.AddWithValue("reservations", $"{_schema}.spend_budget_reservations");
         command.Parameters.AddWithValue("cursors", $"{_schema}.spend_budget_accounting_cursors");
         command.Parameters.AddWithValue("rootModelTurnAdmissions", $"{_schema}.maf_root_model_turn_admissions");
+        command.Parameters.AddWithValue("childSpawnAuthorizations",
+            $"{_schema}.maf_child_spawn_authorization_receipts");
+        command.Parameters.AddWithValue("childSpawnConsumptions",
+            $"{_schema}.maf_child_spawn_authorization_consumptions");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -626,7 +706,7 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
         // The default history skips reserved versions 017 and 034.
         Assert.Equal(
-            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36]),
+            Enumerable.Range(1, 16).Concat([18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37]),
             reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
@@ -647,6 +727,9 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.Equal(4L, reader.GetInt64(25));
         Assert.True(reader.GetBoolean(26));
         Assert.Equal(1L, reader.GetInt64(27));
+        Assert.True(reader.GetBoolean(28));
+        Assert.True(reader.GetBoolean(29));
+        Assert.Equal(2L, reader.GetInt64(30));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

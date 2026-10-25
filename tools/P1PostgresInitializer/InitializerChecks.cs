@@ -153,10 +153,10 @@ internal static class InitializerChecks
             service.Tables.Where(table => table.LockColumn is not null ||
                 table.MutationDenialRequired || table.MutationDenialGuard is not null)
                 .Select(table => (Service: service, Table: table))).ToArray();
-        // The reviewed plan protects nine tables: five Events tables and four Core tables. A different count
+        // The reviewed plan protects eleven tables: five Events tables and six Core tables. A different count
         // means the plan changed without this check being reviewed with it.
-        if (services.Length != 5 || protectedTables.Length != 9)
-            throw new InvalidOperationException("The exact nine protected row-lock columns are required.");
+        if (services.Length != 5 || protectedTables.Length != 11)
+            throw new InvalidOperationException("The exact eleven protected row-lock columns are required.");
 
         foreach (var (service, table) in protectedTables)
         {

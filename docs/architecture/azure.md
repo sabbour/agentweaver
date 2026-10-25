@@ -178,15 +178,21 @@ type, function source/owner, and runtime EXECUTE restriction. Its role stage
 checks all five mappings before commit. Its grant checks preserve existing
 ownership and permit only exact runtime grants. The source checks functions by
 owner and effective EXECUTE privileges, not counts alone.
-Its source catalog includes 34 Core migration versions (1 through 16, 18
-through 33, and 35-36), with version 17 excluded and reserved version 34
+Its source catalog includes 35 Core migration versions (1 through 16, 18
+through 33, and 35-37), with version 17 excluded and reserved version 34
 skipped, ten Events versions, and 11 Environment versions. The initializer
 compares that catalog with each migrator's compiled version list. The reviewed
 offline plan hash is
-`2d23dae8dd58c37671fd196a13550907c244694c5a54b0ec51c1ffcde47ff1a1`.
-It retains 115 tables, nine row-lock columns, and 33 exact function signatures.
+`19f861b4d240818f1021109fb9ad1e1b7efe711a94dc6c7eca9c1c4c897101d4`.
+It retains 117 tables, 11 row-lock columns, and 33 exact function signatures.
 Events migration 010 adds `session_object_inventory` with exactly
 `SELECT, INSERT, UPDATE` runtime access.
+Orchestrator migration 037 adds immutable child-spawn authorization receipts
+and consumption records. They bind a policy allow to the exact intent, actor,
+current root fence, confirmed plan step, accepted selection revision, and
+provider options revision. The runtime role has only `SELECT, INSERT` on both
+tables. The owner-local consumer checks and consumes the same intent hash
+inside the caller's transaction.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,
