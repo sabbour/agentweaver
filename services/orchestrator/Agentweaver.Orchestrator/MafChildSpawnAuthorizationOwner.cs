@@ -21,7 +21,7 @@ internal sealed class MafChildSpawnAuthorizationOwner(
 {
     internal async Task<MafChildSpawnAuthorizationEvidence> AuthorizeAsync(
         HttpContext context,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         CancellationToken cancellationToken)
     {
         MafChildSpawnAuthorizationContract.ValidateIntent(intent);
@@ -83,7 +83,7 @@ internal sealed class MafChildSpawnAuthorizationOwner(
         HttpContext context,
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         CancellationToken cancellationToken)
     {
         MafChildSpawnAuthorizationContract.ValidateIntent(intent);
@@ -104,7 +104,7 @@ internal sealed class MafChildSpawnAuthorizationOwner(
 
     private async Task<CurrentSelection> ReadCurrentSelectionAsync(
         HttpContext context,
-        MafChildSpawnIntent intent,
+        MafChildSpawnAuthorizationIntent intent,
         CancellationToken cancellationToken)
     {
         var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);

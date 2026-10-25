@@ -54,9 +54,10 @@ This source path does not claim live PostgreSQL or native model availability.
 
 Mapped child spawn checks the latest root decision envelope under the root-session
 owner lock and rejects a pending gate or a changed actor, accepted-selection hash,
-fence, dispatch state, or confirmed WorkPlan item. Interactive registration and spawn
-routes recheck live Projects authority before their owner transactions commit. MAF
-dispatch rechecks Projects before opening its spawn transaction, then binds the current
+fence, dispatch state, or confirmed open-step WorkPlan item or fixed workflow step.
+Interactive registration and spawn routes recheck live Projects authority before
+their owner transactions commit. MAF dispatch rechecks Projects before opening its
+spawn transaction, then binds the current
 decision, fence, and checkpoint inside that transaction. Before each Host send it repeats the
 authority check and verifies the durable pending intent; the transaction closes before
 the network request. The read-only runtime-owner
