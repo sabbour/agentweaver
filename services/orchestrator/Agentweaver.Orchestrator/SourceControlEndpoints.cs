@@ -653,8 +653,8 @@ internal static partial class SourceControlEndpoints
         SourceControlOwnerStore sourceControlOwner,
         ISourceControlAdapter adapter,
         SourceControlSecretRedemptionClient redemption,
-        CoordinatorRunSelectionContextStore runSelectionContexts,
-        NpgsqlDataSource dataSource,
+        [FromServices] CoordinatorRunSelectionContextStore runSelectionContexts,
+        [FromServices] NpgsqlDataSource dataSource,
         IServiceProvider services,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>

@@ -261,7 +261,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
       assert.ok(source.includes('(applied.Contains(30) && !applied.Contains(26))'));
       assert.ok(source.includes('(applied.Contains(31) && (!applied.Contains(30) || !applied.Contains(25)))'));
-      assert.ok(source.includes('Enumerable.Range(57, 48)'));
+      assert.ok(source.includes('Enumerable.Range(57, 49)'));
       assert.ok(source.includes('(applied.Contains(33) && !applied.Contains(24))'));
       assert.ok(source.includes('(applied.Contains(36) && !applied.Contains(21))'));
       assert.ok(source.includes('(applied.Contains(37) && !applied.Contains(21))'));

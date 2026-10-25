@@ -485,7 +485,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     patch = string.Empty,
                     workspaceIncarnationId = intent.Workspace.WorkspaceIncarnationId
                 });
-                return Response(payload);
+                return Response(payload, request);
             }
 
             Assert.EndsWith("/source-control/sessions/root/pull-requests", path, StringComparison.Ordinal);
@@ -498,6 +498,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             if (FailPullRequest)
                 return Response(
                     """{"error":"source_control_run_binding_changed"}""",
+                    request,
                     HttpStatusCode.Conflict);
             var created = ProviderCreates == 0;
             if (created)
@@ -515,15 +516,17 @@ public sealed partial class MafCheckpointStorePostgresTests
                 disposition = created ? "created" : "reused",
                 title = intent.Request.Title
             });
-            return Response(payloadBody);
+            return Response(payloadBody, request);
         }
 
         private static HttpResponseMessage Response(
             string payload,
+            HttpRequestMessage request,
             HttpStatusCode statusCode = HttpStatusCode.OK)
         {
             var response = new HttpResponseMessage(statusCode)
             {
+                RequestMessage = request,
                 Content = new StringContent(payload, Encoding.UTF8, "application/json")
             };
             response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
