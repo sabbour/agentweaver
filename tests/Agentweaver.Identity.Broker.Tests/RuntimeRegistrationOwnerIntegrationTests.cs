@@ -820,6 +820,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                                 currentOwner.ReadCurrentAsync(registration.RuntimeInstanceId, actor, timeout.Token));
                         }, setHistoricalReadAuthority, sourceClient, orchestratorServices, ownerSchema,
+                        eventsSchema, signingKey, routes, modelBindings,
                         materialClient, orchestratorClient, objects, timeout.Token, sdk.Byok ? async recorded =>
                         {
                             Assert.True(await usage.MoveNextAsync());
@@ -870,11 +871,42 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Console.WriteLine(message);
     }
 
+    private static async Task<int> CountOwnerEventOccurrencesAsync(
+        HttpClient client, string tenantId, SessionIdentity identity, Guid eventId,
+        string token, CancellationToken cancellationToken)
+    {
+        var occurrences = 0;
+        var cursors = new HashSet<string>(StringComparer.Ordinal);
+        string? cursor = null;
+        while (true)
+        {
+            var path = $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/events?limit=100";
+            if (cursor is not null)
+                path += $"&cursor={Uri.EscapeDataString(cursor)}";
+            using var response = await SendAsync(
+                client, HttpMethod.Get, path, token, [tenantId], cancellationToken: cancellationToken);
+            await AssertStatusAsync(response, HttpStatusCode.OK);
+            var page = await response.Content.ReadFromJsonAsync<SessionEventPage>(
+                CoordinationJsonOptions, cancellationToken)
+                ?? throw new InvalidOperationException("The Events owner returned no journal page.");
+            if (page.Events.IsDefault)
+                throw new InvalidOperationException("The Events owner returned an uninitialized journal page.");
+            occurrences += page.Events.Count(item => item.EventId == eventId);
+            if (!page.HasMore)
+                return occurrences;
+            if (page.NextCursor is not { Length: > 0 } next || !cursors.Add(next))
+                throw new InvalidOperationException("The Events owner returned a missing or repeated journal cursor.");
+            cursor = next;
+        }
+    }
+
     private async Task VerifyNativeSessionMaterialAsync(
         AuthorizedRuntimeSession session, string runToken, RuntimeActorAuthorization actor,
         ProjectsConfigResourceServer projects, ConcurrentQueue<string> failures, ControlledCopilotRuntime sdk,
         Func<Task> endRuntimeAuthority, Func<bool, Task> setHistoricalReadAuthority,
         RuntimeUsageSourceHttpClient sourceClient, IServiceProvider orchestratorServices, string ownerSchema,
+        string eventsSchema, SecurityKey signingKey,
+        Dictionary<string, Func<HttpMessageHandler>> routes, RuntimeModelBindingsResolver modelBindings,
         HttpClient materialClient, HttpClient orchestratorClient, RuntimeMaterialObjects objects,
         CancellationToken cancellationToken,
         Func<RuntimeNativeTurnRecordedReceipt, Task<ImmutableArray<RuntimeUsageCostReceiptReference>>>?
@@ -888,8 +920,33 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             materialClient, materialClient.BaseAddress!, actor);
         var eventId = Guid.NewGuid();
         const string userContent = "Run the accepted bounded turn.";
+        var droppedResponse = new DropCommittedMaterialResponseHandler(
+            new RuntimeServiceRouter(routes, failures), eventId);
+        using var lostResponseClient = new HttpClient(droppedResponse)
+        {
+            BaseAddress = materialClient.BaseAddress
+        };
+        var uncertain = new RuntimeSessionMaterialHttpClient(
+            lostResponseClient, lostResponseClient.BaseAddress!, actor);
+        // The owner commits this exact event before the handler drops its acknowledgment.
+        await Assert.ThrowsAsync<HttpRequestException>(() => session.CommitTurnContentAsync(
+            uncertain, eventId, "user", userContent, cancellationToken));
+        Assert.Equal(1, objects.Writes);
+        // Rotate source authority before retrying; the old credential must no longer be usable.
+        var refreshOperation = Guid.NewGuid();
+        var previousSource = session.Proof();
+        var refreshed = await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken);
+        Assert.Equal(previousSource.Revision + 1, refreshed.SourceGrant.Revision);
+        Assert.False(previousSource.Credential.IsUsable());
+        Assert.Equal(refreshed,
+            await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken));
+        var refreshedCredentialValue = session.Proof().Credential.GetValue();
+        // Reuse the original identity and bytes so the owner can return its committed acknowledgment.
         var receipt = await session.CommitTurnContentAsync(
             material, eventId, "user", userContent, cancellationToken);
+        var originalReceipt = droppedResponse.CommittedAcknowledgment
+            ?? throw new InvalidOperationException("The lost response did not capture the owner's committed receipt.");
+        Assert.Equal(originalReceipt, receipt);
         Assert.Equal(session.Registration.RuntimeInstanceId, receipt.Reference.Material!.RuntimeInstanceId);
         Assert.Equal(session.Facts.SdkVersion, receipt.Reference.Material.SdkVersion);
         Assert.Equal(session.Facts.ModelId, receipt.Reference.Material.ModelId);
@@ -902,6 +959,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             receipt.Identity, eventId, SessionMaterialKind.TurnContent, cancellationToken);
         Assert.Equal(receipt, read.Material);
         Assert.Equal(System.Text.Encoding.UTF8.GetBytes(userContent), read.Bytes);
+        Assert.Equal(1, await CountOwnerEventOccurrencesAsync(
+            materialClient, session.Registration.Binding.TenantId, receipt.Identity, eventId,
+            runToken, cancellationToken));
         var path = $"/internal/sessions/{session.Registration.Binding.SessionId}/material";
         var input = new SessionMaterialWriteRequest(1, Guid.NewGuid(), session.Registration.RuntimeInstanceId,
             session.Registration.Revision, session.Registration.Binding.ExecutionFence + 1,
@@ -916,14 +976,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(observeOnly, HttpStatusCode.Unauthorized);
         Assert.Equal(1, objects.Writes);
         Assert.True(staleFence.Headers.CacheControl?.NoStore);
-        var refreshOperation = Guid.NewGuid();
-        var previousSource = session.Proof();
-        var refreshed = await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken);
-        Assert.Equal(previousSource.Revision + 1, refreshed.SourceGrant.Revision);
-        Assert.False(previousSource.Credential.IsUsable());
-        Assert.Equal(refreshed,
-            await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken));
-        var refreshedCredentialValue = session.Proof().Credential.GetValue();
         TraceNativeStage(failures, "Guarded actual model turn and native cache begin.");
         var sendCount = sdk.Requests.Count(request => request.Method == "session.send");
         var legacyFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
@@ -1261,6 +1313,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Contains(recovery.Turns, turn => turn == ("user", "A bounded user request."));
         Assert.Contains(recovery.Turns, turn => turn == ("assistant", answer));
         Assert.Equal(session.Facts.SdkVersion, recovery.Cache.Material.Reference.Material!.SdkVersion);
+        await VerifyReplacementNativeRecoveryAsync(session, actor, projects, failures,
+            sdk, eventsSchema, signingKey, routes, modelBindings, objects, recovery, missingCache: false,
+            cancellationToken);
         Assert.DoesNotContain(sdk.SdkCredential, System.Text.Encoding.UTF8.GetString(recovery.Cache.Bytes));
         Assert.DoesNotContain(sourceCredentialValue,
             System.Text.Encoding.UTF8.GetString(recovery.Cache.Bytes));
@@ -1270,11 +1325,31 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var missing = await material.ReadRecoveryAsync(session.Registration, cancellationToken);
         Assert.Null(missing.Cache);
         Assert.Equal(recovery.Turns, missing.Turns);
-        await endRuntimeAuthority();
+        await VerifyReplacementNativeRecoveryAsync(session, actor, projects, failures,
+            sdk, eventsSchema, signingKey, routes, modelBindings, objects, missing, missingCache: true,
+            cancellationToken);
+        var unacknowledgedEventId = Guid.NewGuid();
+        var writesBeforeRevocation = objects.Writes;
+        objects.AfterWrite = async () =>
+        {
+            objects.AfterWrite = null;
+            await endRuntimeAuthority();
+        };
+        // Revoke after storage returns but before the owner can commit a reference or acknowledge the turn.
+        var revokedWrite = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            session.CommitTurnContentAsync(
+                material, unacknowledgedEventId, "user", "Must not be acknowledged.", cancellationToken));
+        Assert.Equal("runtime_owner_denied", revokedWrite.Code);
+        Assert.Equal(writesBeforeRevocation + 1, objects.Writes);
         var historical = await material.ReadRecordedAsync(
             receipt.Identity, eventId, SessionMaterialKind.TurnContent, cancellationToken);
         Assert.Equal(receipt, historical.Material);
         Assert.Equal(read.Bytes, historical.Bytes);
+        // Existing history remains readable, while the rejected event has no committed owner reference.
+        var uncommitted = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            material.ReadRecordedAsync(
+                receipt.Identity, unacknowledgedEventId, SessionMaterialKind.TurnContent, cancellationToken));
+        Assert.Equal("runtime_owner_unavailable", uncommitted.Code);
         using var camelCase = await SendAsync(materialClient, HttpMethod.Get,
             $"{path}/{eventId:D}/turnContent", runToken, [session.Registration.Binding.TenantId]);
         await AssertStatusAsync(camelCase, HttpStatusCode.OK);
@@ -1391,6 +1466,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         private readonly ConcurrentDictionary<ObjectKey, byte[]> _values = [];
         public int Writes;
+        public Func<Task>? AfterWrite { get; set; }
         public Func<Task>? AfterRead { get; set; }
 
         public async Task WriteAsync(ObjectKey key, Stream content, CancellationToken cancellationToken = default)
@@ -1400,6 +1476,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (!_values.TryAdd(key, buffer.ToArray()))
                 throw new InvalidOperationException("A material object already exists.");
             Interlocked.Increment(ref Writes);
+            // Revoke authority in the middle of the owner write protocol to exercise its post-storage check.
+            if (AfterWrite is not null)
+                await AfterWrite();
         }
 
         public async Task<ObjectRead?> ReadAsync(ObjectKey key, CancellationToken cancellationToken = default)

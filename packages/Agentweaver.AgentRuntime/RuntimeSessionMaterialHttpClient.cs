@@ -335,12 +335,13 @@ public sealed class RuntimeSessionMaterialHttpClient(
                     recorded.Identity.RunId != identity.RunId || recorded.EventId == Guid.Empty ||
                     recorded.Position <= lastPosition)
                     throw new RuntimeAuthorizationException("runtime_journal_page_invalid");
-                lastPosition = recorded.Position;
+                // Ignore the first event after the checkpoint; it cannot prove the requested prefix was read.
                 if (recorded.Position > throughPosition)
                 {
                     reachedBoundary = true;
                     break;
                 }
+                lastPosition = recorded.Position;
                 if (!eventIds.Add(recorded.EventId))
                     throw new RuntimeAuthorizationException("runtime_journal_page_invalid");
 
@@ -386,6 +387,9 @@ public sealed class RuntimeSessionMaterialHttpClient(
         }
 
         var immutablePrefix = prefix.ToImmutable();
+        // A missing checkpoint boundary must not yield a plausible hash for an incomplete journal.
+        if (lastPosition < throughPosition)
+            throw new RuntimeAuthorizationException("runtime_resume_journal_incomplete");
         var checkpoint = source.Checkpoint
             ?? throw new RuntimeAuthorizationException("runtime_resume_journal_source_missing");
         var receipt = new RuntimeResumeJournalRebuildReceipt(
