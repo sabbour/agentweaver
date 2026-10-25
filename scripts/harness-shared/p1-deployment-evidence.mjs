@@ -18,6 +18,15 @@ import { validateManifest } from '../release/validate.mjs';
 const SHA = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const preparedHostSources = new WeakMap();
+
+/** Only preparation may authorize an older build source; supplied evidence cannot opt into reuse. */
+export function p1AgentHostBuildSource(sourceEvidence, releaseSource) {
+  const binding = preparedHostSources.get(sourceEvidence);
+  return binding?.release.sourceSha === releaseSource.sourceSha
+    && binding.release.sourceTree === releaseSource.sourceTree
+    ? { ...binding.build } : releaseSource;
+}
 const IMAGE_REFERENCE = /^ghcr\.io\/([a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)@(sha256:[a-f0-9]{64})$/;
 const IMAGE_ACCEPT = [
   'application/vnd.oci.image.index.v1+json',
@@ -833,7 +842,11 @@ export function createP1ReleaseDeploymentEvidence({
     throw new Error('The release deployment readbacks are not bound to the exact source and target.');
   }
   // Revalidate image identities here so callers cannot create a receipt from unchecked image rows.
-  validateP1PublicationReceipt(publication, manifest, sourceSha, sourceTree, deploymentManifest);
+  const validatedImages = validateP1PublicationReceipt(
+    publication, manifest, sourceSha, sourceTree, deploymentManifest);
+  if (hashJson(images) !== hashJson(validatedImages)) {
+    throw new Error('The release deployment images differ from the validated publication.');
+  }
   const expected = new Map(images.filter(image => image.id !== 'Agentweaver.AgentHost')
     .map(image => [image.id, image]));
   const agentHostImages = images.filter(image => image.id === 'Agentweaver.AgentHost');
@@ -997,6 +1010,7 @@ export async function prepareP1DeploymentEvidence({
   fetchImpl = globalThis.fetch,
   readObjects = runKubectl,
   spawnSyncImpl = spawnSync,
+  measureAgentHostArchive = measureAgentHostArchiveSync,
 }) {
   let publication;
   let manifest;
@@ -1148,7 +1162,7 @@ export async function prepareP1DeploymentEvidence({
   const hostBuildSource = hostImage?.reusedFrom ?? source;
   let agentHostMeasurement;
   try {
-    agentHostMeasurement = measureAgentHostArchiveSync(agentHostArchivePath, repoRoot, hostBuildSource.sourceSha);
+    agentHostMeasurement = measureAgentHostArchive(agentHostArchivePath, repoRoot, hostBuildSource.sourceSha);
   } catch (error) {
     throw new Error(`The existing AgentHost image measurement failed: ${redact(error).message}`);
   }
@@ -1169,7 +1183,7 @@ export async function prepareP1DeploymentEvidence({
     || agentHostMeasurement.image?.compressedPullBytes !== hostImage.compressedPullBytes) {
     throw new Error('The measured AgentHost OCI archive does not match the exact source-bound publication receipt.');
   }
-  return {
+  const evidence = {
     source,
     ...(integrationDeployment ? { integrationDeployment } : { releaseDeployment }),
     providerCatalog: serviceEvidence.providerCatalog,
@@ -1185,4 +1199,11 @@ export async function prepareP1DeploymentEvidence({
     },
     agentHostRuntime: serviceEvidence.agentHostRuntime,
   };
+  // Keep this binding in memory, not in caller-editable JSON. The measurements still record
+  // the build source, while the source and deployment receipts keep the reviewed release source.
+  preparedHostSources.set(evidence, {
+    release: { sourceSha: source.sourceSha, sourceTree: source.sourceTree },
+    build: { sourceSha: hostBuildSource.sourceSha, sourceTree: hostBuildSource.sourceTree },
+  });
+  return evidence;
 }

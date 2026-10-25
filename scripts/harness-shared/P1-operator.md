@@ -22,6 +22,13 @@ stays pinned for this check but can't be deployed with the pre-acceptance
 bootstrap. v1.0.11 is pinned the same way, except its release tag is a
 lightweight tag on the published source commit.
 
+Deployment and service evidence stay pinned to the release commit and source
+tree. Reused images keep their original build labels. The harness verifies
+that build source against the publication before measuring the AgentHost
+archive and carries that checked binding into each journey. Do not replace
+the release source pins with an older image build source. An older source
+supplied in JSON alone does not authorize reuse.
+
 The one-account launcher cannot produce a distinct denied identity. If the
 manifest requests one, the launcher stops before sign-in. Do not use the
 signed-in actor as the denied actor. A missing denied identity or evidence item
@@ -57,6 +64,8 @@ Complete one interactive sign-in in the headed Chrome window with the approved
 account. Review the requested scopes and approve only the registered client
 request. The API, MCP, and UI flows reuse this browser session. Do not sign in
 again, use another account, or paste a token into a prompt.
+Keep the shared browser window open between setup and run-bound token requests.
+The launcher closes each completed authorization page, not the shared browser.
 
 For the UI flow, the launcher starts the app's silent authorization with the
 same Broker session. It does not ask you to sign in again.

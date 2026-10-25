@@ -456,7 +456,15 @@ It renders Broker consent when that response arrives through a redirect.
 The shared harness tests cover `--surface api,mcp`, separate evidence paths,
 one setup sign-in, and distinct run-bound tokens. These tests do not sign in
 to Entra, use an existing profile or credential cache, or prove live SSO.
+Each token request closes only its authorization page, keeping the shared
+browser alive until the launcher finishes.
 CI runs both the harness contract suite and this browser regression.
+
+The deployment evidence tests also check reused service labels and AgentHost
+archive measurements against the publication's original build source.
+Downstream journeys accept that checked binding without changing the release
+source pins, and reject mismatched measurements or an older source supplied
+without preparation. These are controlled local checks, not live acceptance.
 
 To check timing-sensitive changes, run the browser suite repeatedly, both
 normally and with `NODE_V8_COVERAGE` set to a local output directory. Keep
