@@ -17,6 +17,7 @@ import type {
 } from './contracts';
 import { errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
+import { WebAppVersionLine, useWebAppVersion } from './appVersion';
 
 const READINESS: Record<PlatformComponentReadiness, { label: string; color: 'success' | 'warning' | 'danger' | 'informative' | 'subtle' }> = {
   ready: { label: 'Ready', color: 'success' },
@@ -220,6 +221,7 @@ export function PlatformComponentsSection({
 /** Route page for `/platform-settings`. */
 export function PlatformSettingsPage() {
   const state = usePlatformComponentReport();
+  const appVersion = useWebAppVersion();
   return (
     <>
       <PageHeading
@@ -228,6 +230,8 @@ export function PlatformSettingsPage() {
         breadcrumb={false}
         actions={<Button icon={<ArrowSyncRegular />} disabled={state.loading} onClick={() => void state.load()}>Refresh</Button>}
       />
+      {/* Any signed-in user can see the web version, even when the component report is admin-only. */}
+      <WebAppVersionLine version={appVersion} />
       <PlatformComponentsSection state={state} />
     </>
   );

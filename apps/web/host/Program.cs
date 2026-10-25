@@ -105,9 +105,56 @@ app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", () => File.Exists(indexPath)
     ? Results.Ok(new { status = "ready" })
     : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
+
+// Report the web image's build identity for the app version badge. The image build bakes
+// the component version and source commit into the environment, so a reused image keeps
+// reporting the build it actually came from.
+var buildVersion = WebBuildVersion.FromEnvironment(
+    Environment.GetEnvironmentVariable("AGENTWEAVER_WEB_VERSION"),
+    Environment.GetEnvironmentVariable("AGENTWEAVER_WEB_GIT_SHA"));
+app.MapGet("/api/version", (HttpContext context) =>
+{
+    // A cached answer could show an old version after an upgrade.
+    context.Response.Headers["Cache-Control"] = "no-store";
+    return Results.Json(buildVersion);
+});
 // Let client-side routes resolve through the SPA entry document after explicit API/static routes.
 app.MapFallbackToFile("index.html");
 app.Run();
 
 /// <summary>Exposes the top-level host entry point as a partial type.</summary>
 public partial class Program { }
+
+/// <summary>Build identity returned by <c>/api/version</c>, in the shape the web app expects.</summary>
+/// <param name="Version">Semantic version of the web build, or null when the image did not record one.</param>
+/// <param name="GitSha">Full source commit of the web build, or null when it is not known.</param>
+/// <param name="IsRelease">True when the version is a plain release version without a prerelease suffix.</param>
+public sealed record WebBuildVersion(
+    [property: System.Text.Json.Serialization.JsonPropertyName("version")] string? Version,
+    [property: System.Text.Json.Serialization.JsonPropertyName("gitSha")] string? GitSha,
+    [property: System.Text.Json.Serialization.JsonPropertyName("isRelease")] bool IsRelease)
+{
+    // Strict SemVer core plus an optional prerelease: no leading zeros in numeric
+    // parts and no empty prerelease identifiers, so malformed tags show as unknown.
+    private static readonly System.Text.RegularExpressions.Regex SemanticVersion =
+        new(@"^v?((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex CommitSha =
+        new("^[0-9a-fA-F]{7,64}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>Validates the values baked into the image and drops anything that is not a real version or commit.</summary>
+    public static WebBuildVersion FromEnvironment(string? version, string? gitSha)
+    {
+        // Local and test runs have no build values, and the Dockerfile defaults ("dev" and
+        // "unknown") are placeholders. Report those as missing so the browser keeps its own
+        // fallback instead of showing a placeholder as a version.
+        var match = SemanticVersion.Match(version?.Trim() ?? string.Empty);
+        var sha = gitSha?.Trim();
+        var knownSha = sha is not null && CommitSha.IsMatch(sha) ? sha.ToLowerInvariant() : null;
+        if (!match.Success) return new WebBuildVersion(null, knownSha, false);
+
+        // Drop a leading "v" so the badge adds exactly one. Only a plain x.y.z version is a
+        // release; a prerelease suffix still shows its commit in the badge.
+        var normalized = match.Groups[1].Value + match.Groups[2].Value;
+        return new WebBuildVersion(normalized, knownSha, !match.Groups[2].Success);
+    }
+}

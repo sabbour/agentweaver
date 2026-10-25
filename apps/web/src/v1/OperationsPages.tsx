@@ -17,6 +17,7 @@ import { GatewayError } from './api';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
 import { PlatformComponentsSection, usePlatformComponentReport } from './PlatformSettingsPage';
+import { WebAppVersionLine, useWebAppVersion } from './appVersion';
 import { useProjectConfiguration, useProjectIssues, useProjectPullRequests } from './projectData';
 import { metricTiles, useProjectMetrics, type MetricsRangeKey } from './projectMetrics';
 import { ProjectMetricsSections } from './ProjectMetricsSections';
@@ -476,6 +477,7 @@ export function HeartbeatPage() {
  */
 export function ClusterPage() {
   const platform = usePlatformComponentReport();
+  const appVersion = useWebAppVersion();
   return (
     <>
       <PageHeading
@@ -484,6 +486,8 @@ export function ClusterPage() {
         page="Cluster"
         actions={<RefreshButton loading={platform.loading && !platform.report} onClick={() => void platform.load()} />}
       />
+      {/* The web build sits beside the service versions listed in the report below. */}
+      <WebAppVersionLine version={appVersion} />
       <PlatformComponentsSection state={platform} />
       <NotInThisVersion>
         Node and replica membership for the cluster is not available.

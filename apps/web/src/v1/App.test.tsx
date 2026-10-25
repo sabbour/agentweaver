@@ -698,6 +698,8 @@ describe('v1 web project scoping', () => {
     window.history.replaceState({}, '', '/projects/p1/cluster');
     render(<App />);
     expect(await screen.findByText('Only tenant or platform administrators can view platform components.')).toBeTruthy();
+    // The web version does not depend on the admin-only report.
+    expect(screen.getByTestId('web-app-version').textContent).toMatch(/^Web app version v\d+\.\d+\.\d+/);
   });
 
   it('counts backlog tasks by Board column on the Flow page', async () => {

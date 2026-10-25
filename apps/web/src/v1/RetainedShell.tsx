@@ -13,15 +13,16 @@ import { RunAttentionProvider, useSharedRunAttention } from './RunAttentionConte
 import { StartTaskAction } from './StartTaskAction';
 import { gatewayClient } from './api';
 import type { ProjectSummary } from './contracts';
-import packageInfo from '../../package.json';
+import { useWebAppVersion, type WebAppVersion } from './appVersion';
 
 /**
  * Keeps the 0.x persona trigger and menu layout without requesting legacy identity APIs.
  * The label is the display name from the Broker ID token (`name`, else `preferred_username`);
  * when the token carries neither, it stays "Account". The 0.x status dot polls a legacy
- * health route, so the menu footer shows only the version badge.
+ * health route, so the menu footer shows only the version badge. The shell reads the
+ * version once and passes it in, so opening the menu does not fetch it again.
  */
-export function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
+export function BrokerIdentity({ collapsed, version }: { collapsed: boolean; version: WebAppVersion }) {
   const { session, signOut } = useAuth();
   const styles = useIdentityMenuStyles();
   const displayName = session?.displayName ?? null;
@@ -60,9 +61,10 @@ export function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
                 className="aw-identity-menu-footer__version"
                 appearance="tint"
                 color="warning"
-                title={`Agentweaver is alpha software under active development. Full version: v${packageInfo.version}`}
+                // The tooltip keeps the full commit, which a release badge leaves out.
+                title={`Agentweaver is alpha software under active development. Full version: v${version.display}${version.gitSha && !version.display.includes('+') ? ` (build ${version.gitSha})` : ''}`}
               >
-                <span className="aw-identity-menu-footer__version-text">v{packageInfo.version}</span>
+                <span className="aw-identity-menu-footer__version-text">v{version.display}</span>
               </Badge>
             </div>
           </div>
@@ -143,6 +145,8 @@ export function RetainedShell({ children }: { children: ReactNode }) {
     () => new Map((current?.projects ?? []).map((project) => [project.projectId, project.name])),
     [current],
   );
+  // Read the running build's version once for both the rail and the account menu.
+  const appVersion = useWebAppVersion();
   return (
     // One provider for the bell and the page, so they share one notifications
     // state and one poll. A dismiss in either place shows in both.
@@ -157,7 +161,7 @@ export function RetainedShell({ children }: { children: ReactNode }) {
           projectId={projectId}
           pathname={location.pathname}
           activeKey={shellActiveKey(location.pathname, projectId, location.hash)}
-          version={packageInfo.version}
+          version={appVersion.display}
           projectSwitcher={(
             <ProjectSwitcherView
               projectId={switcherProjectId}
@@ -171,7 +175,7 @@ export function RetainedShell({ children }: { children: ReactNode }) {
               loadError={Boolean(current?.error)}
             />
           )}
-          identity={(collapsed) => <BrokerIdentity collapsed={collapsed} />}
+          identity={(collapsed) => <BrokerIdentity collapsed={collapsed} version={appVersion} />}
           notifications={<SharedAttentionBell projectNames={projectNames} />}
         />
         <div className="aw-shell-canvas">

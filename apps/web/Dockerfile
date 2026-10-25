@@ -6,6 +6,10 @@ ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.version="${IMAGE_TAG}" \
       org.opencontainers.image.revision="${GIT_SHA}"
 
+# The web host reports these at /api/version for the app version badge.
+ENV AGENTWEAVER_WEB_VERSION="${IMAGE_TAG}" \
+    AGENTWEAVER_WEB_GIT_SHA="${GIT_SHA}"
+
 WORKDIR /app
 COPY publish/ ./
 COPY wwwroot/ ./wwwroot/
