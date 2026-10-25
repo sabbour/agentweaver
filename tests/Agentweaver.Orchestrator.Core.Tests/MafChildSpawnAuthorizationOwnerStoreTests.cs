@@ -389,6 +389,18 @@ public sealed class MafChildSpawnAuthorizationOwnerStoreTests(
     private async Task SeedCurrentDecisionAsync()
     {
         var plan = new WorkPlan("plan-1", "workflow-1", "revision-1", "catalog-1", [_workItem]);
+        // Model the complete confirmed decision that production spawn validation requires.
+        var outcome = new CoordinatorOutcomeSpecification(
+            "outcome-1", "Implement feature", "Complete implementation",
+            "Implement the confirmed work plan.", "Use the accepted run selection.", []);
+        var workflow = WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn,
+            WorkflowTestData.Open(
+                "implementation", 0, [],
+                roles: ["developer"],
+                phases: ["execute"],
+                isolationChoices: ["isolated"],
+                requiredCapabilities: [])) with { Id = plan.WorkflowId };
         var envelope = new CoordinatorDecisionStateEnvelope(
             CoordinatorDecisionStateEnvelope.CurrentVersion,
             _authority.ActorIssuer,
@@ -403,10 +415,10 @@ public sealed class MafChildSpawnAuthorizationOwnerStoreTests(
             _authority.PlatformRuntimeRevision,
             _authority.ContextRevision,
             _intent.ExecutionFence,
-            null,
+            outcome,
             true,
             0,
-            null,
+            workflow,
             true,
             plan,
             null,
