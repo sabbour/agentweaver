@@ -853,6 +853,10 @@ export function createP1ReleaseDeploymentEvidence({
   for (const [id, image] of expected) {
     const readback = observed.get(id);
     const expectedDigest = imageParts(image.image).digest;
+    // A reused image carries the source labels of the commit that built it. The publication
+    // validator already bound that build commit to this release, so expect its labels here.
+    const expectedSourceSha = image.reusedFrom?.sourceSha ?? sourceSha;
+    const expectedSourceTree = image.reusedFrom?.sourceTree ?? sourceTree;
     if (!readback || readback.service?.name !== image.name || !readback.service.uid
       || !readback.service.resourceVersion || !SHA256.test(readback.service.sha256 ?? '')
       || !readback.deployment?.uid || readback.deployment.name !== image.name
@@ -868,7 +872,7 @@ export function createP1ReleaseDeploymentEvidence({
         || !registry || registry.manifestDigest !== expectedDigest
         || !DIGEST.test(registry.platformDigest ?? '')
         || podDigest !== registry.manifestDigest && podDigest !== registry.platformDigest
-        || registry.sourceSha !== sourceSha || registry.sourceTree !== sourceTree
+        || registry.sourceSha !== expectedSourceSha || registry.sourceTree !== expectedSourceTree
         || !DIGEST.test(registry.configDigest ?? '')) {
         throw new Error(`The release deployment image readback for ${id} differs from its source publication.`);
       }
@@ -1138,13 +1142,16 @@ export async function prepareP1DeploymentEvidence({
     images,
     serviceEvidence,
   });
+  const hostImage = images.find(image => image.id === 'Agentweaver.AgentHost');
+  // A reused AgentHost archive was built from an earlier commit, and its labels name that commit.
+  // Measure it against that build commit; the publication validator has already bound it to this release.
+  const hostBuildSource = hostImage?.reusedFrom ?? source;
   let agentHostMeasurement;
   try {
-    agentHostMeasurement = measureAgentHostArchiveSync(agentHostArchivePath, repoRoot, source.sourceSha);
+    agentHostMeasurement = measureAgentHostArchiveSync(agentHostArchivePath, repoRoot, hostBuildSource.sourceSha);
   } catch (error) {
     throw new Error(`The existing AgentHost image measurement failed: ${redact(error).message}`);
   }
-  const hostImage = images.find(image => image.id === 'Agentweaver.AgentHost');
   let archiveSha256;
   try {
     archiveSha256 = await sha256File(agentHostArchivePath);
@@ -1153,8 +1160,8 @@ export async function prepareP1DeploymentEvidence({
   }
   const publishedMeasurement = hostImage?.preparedOciMeasurement;
   if (agentHostMeasurement.kind !== 'agenthost-image'
-    || agentHostMeasurement.sourceSha !== source.sourceSha
-    || agentHostMeasurement.sourceTree !== source.sourceTree
+    || agentHostMeasurement.sourceSha !== hostBuildSource.sourceSha
+    || agentHostMeasurement.sourceTree !== hostBuildSource.sourceTree
     || agentHostMeasurement.image?.platform !== 'linux/amd64'
     || archiveSha256 !== hostImage.ociArchiveSha256
     || agentHostMeasurement.image?.digest !== publishedMeasurement?.image?.digest
