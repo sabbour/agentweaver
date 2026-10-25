@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "bac7ecc850ba930d02f634de15c9954fd2b66cb8",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "7390f03c8aaeac0bf14fe42d19cbb7d7039cd5a0ed1d73cb05496bd276d8d6f2",
+  "appliedAt": "2026-10-25T04:19:26.055Z",
+  "components": [
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.7.0",
+      "toVersion": "1.7.1",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/platform-admin-bootstrap-diagnostics.md",
+      "archivedPath": ".changeset/archive/platform-admin-bootstrap-diagnostics.md",
+      "sha256": "c910619cc9a1998ab36353090b03addad7365258002e86a0b9fed46da1b601ee"
+    },
+    {
+      "sourcePath": ".changeset/platform-admin-read-only-inspection.md",
+      "archivedPath": ".changeset/archive/platform-admin-read-only-inspection.md",
+      "sha256": "435b4c598de2abe6467ea70fde89b13ecbe4e6dcf99e8daea7355f18bbbf4e4e"
+    }
+  ]
+}
