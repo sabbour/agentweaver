@@ -88,6 +88,21 @@ stale operations that never started a provider call do not block release;
 operations with possible provider-state changes remain unresolved until exact
 reconciliation.
 
+The read-only `POST /api/network-egress/verify` owner contract lets Orchestrator
+ask Environment to verify current egress using the caller's existing bearer.
+The request carries the complete lifecycle fence, policy generation, and
+expected authorized run-selection `ContextRevision`. Environment compares that
+revision with the selection it freshly compiles, verifies the exact
+owner-recorded generation and Cilium object, and refreshes authorization and
+selection after provider readback. A receipt returns the same complete fence,
+generation, `ContextRevision`, and policy `IntentHash`; Orchestrator rejects a
+receipt that differs from any requested binding. Missing owners, stale fences,
+unverified generations, changed authorization or selection, and unavailable
+dependencies are distinct fail-closed outcomes. This request is read-only:
+it does not apply, revoke, reconcile, or otherwise mutate egress, and the
+receipt is not a live-action or dispatch authorization. Dispatch wiring remains
+a separate Orchestrator integration.
+
 The owner producer is registered in the host, but the existing run/environment
 registration producer is not yet bound to it. No public lifecycle-registration
 endpoint exists: Apply and Bind cannot create or default
@@ -159,11 +174,26 @@ owner fences, and explicit unsupported behavior remain unchanged.
 
 ```mermaid
 sequenceDiagram
+    participant O as Orchestrator
     participant E as Environment manager
     participant P as Projects & Config
     participant C as Egress compiler
     participant K as Kubernetes Cilium API
     participant R as ProviderResolver
+    opt Orchestrator requests current egress evidence
+        O->>E: POST /api/network-egress/verify with caller authorization, fence, generation, ContextRevision
+        E->>P: Read fresh authorization and immutable project/run selection
+        P-->>E: Current grants and selection revision
+        E->>E: Compare requested ContextRevision and exact owner fence
+        E->>C: Compile current admitted selection
+        C-->>E: Purpose-grouped intent or explicit failure
+        E->>E: Require latest owner-recorded policy generation
+        E->>K: Read and verify the exact policy object
+        K-->>E: Verified policy object or explicit failure
+        E->>P: Recheck current authorization and selection
+        P-->>E: Same grants and selection revision or changed outcome
+        E-->>O: No-store receipt bound to fence, generation, revision, and intent hash
+    end
     E->>P: GET authorization context (fresh validated caller, optional tenant)
     P-->>E: Current grouped permission and revisions (no-store)
     E->>E: Require target-project WriteProjects and owner intersection

@@ -118,16 +118,18 @@ public static class EnvironmentEndpoints
         });
 
         group.MapPost("/verify", async (
-            ApplyEnvironmentEgressRequest request,
+            RuntimeEgressVerificationRequest request,
             HttpContext context,
             EnvironmentEgressManager manager,
             CancellationToken cancellationToken) =>
         {
+            // Owner-to-owner verification responses must never be cached because their receipt is current evidence.
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             try
             {
-                return ToHttpResult(await manager.VerifyAsync(
+                return ToEgressVerificationHttpResult(await manager.VerifyCurrentAsync(
                     caller!,
                     request,
                     cancellationToken).ConfigureAwait(false));
@@ -1037,6 +1039,20 @@ public static class EnvironmentEndpoints
             _ => StatusCodes.Status409Conflict
         };
         return Results.Json(operation, statusCode: status);
+    }
+
+    /// <summary>Maps current egress verification outcomes to stable HTTP statuses without changing policy state.</summary>
+    private static IResult ToEgressVerificationHttpResult(RuntimeEgressVerificationResponse response)
+    {
+        var status = response.FailureCode switch
+        {
+            RuntimeEgressVerificationFailureCodes.Missing => StatusCodes.Status404NotFound,
+            RuntimeEgressVerificationFailureCodes.AuthorizationChanged => StatusCodes.Status403Forbidden,
+            RuntimeEgressVerificationFailureCodes.Unavailable => StatusCodes.Status503ServiceUnavailable,
+            null => StatusCodes.Status200OK,
+            _ => StatusCodes.Status409Conflict
+        };
+        return Results.Json(response, statusCode: status);
     }
 
     /// <summary>Maps Projects &amp; Config authorization failures to their public HTTP response contract.</summary>
