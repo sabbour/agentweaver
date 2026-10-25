@@ -261,6 +261,12 @@ test('PlatformAdmin inspection runs read-only without --execute and writes a san
     assert.equal(receipt.bootstrap, undefined);
     assert.equal(receipt.grants, undefined);
     assert.equal(world.calls.some(call => call.command === 'grants'), false);
+    const secretCreate = world.calls.find(call =>
+      call.command === 'kubectl' && call.args.includes('create') &&
+      JSON.parse(call.settings.input ?? '{}').kind === 'Secret');
+    const inspectionConnection = JSON.parse(secretCreate.settings.input).stringData['migration-connection'];
+    assert.ok(inspectionConnection.includes('SSL Mode=VerifyFull'));
+    assert.ok(inspectionConnection.endsWith(';GSS Encryption Mode=Disable'));
     assert.ok(world.kubeconfigOptions[0].requiredPermissions.some(permission =>
       JSON.stringify(permission) === JSON.stringify([
         'get', 'configmaps', DB_MAINTENANCE_TARGET.namespace,
@@ -297,6 +303,24 @@ test('PlatformAdmin inspection rejects spoofed or extra output and still cleans 
     assert.equal(world.objects.size, 0);
   } finally {
     world.dispose();
+  }
+});
+
+test('PlatformAdmin inspection rejects a non-protocol prelude and duplicate protocol output', async () => {
+  for (const inspectionLog of [
+    `Native loader diagnostic: optional library unavailable\n${inspectionOutput}`,
+    `${inspectionOutput}\nPLATFORM_ADMIN_INSPECTION_V1`,
+  ]) {
+    const world = createWorld({ inspectionLog });
+    try {
+      await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+        ...world.options, inspectFirstPlatformAdmin: true,
+      }, world.overrides)), /expected versioned output|extra output/);
+      assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+      assert.equal(world.objects.size, 0);
+    } finally {
+      world.dispose();
+    }
   }
 });
 
