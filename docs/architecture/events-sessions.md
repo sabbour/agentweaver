@@ -40,6 +40,11 @@ The broader Sessions and coordination design remains Proposed for those workflow
 
 ## Typed session material
 
+The [session-material composition decision](session-material-composition.md)
+separates implemented foundations from the remaining retention and combined
+production-evidence work. It keeps this owner boundary and does not add a generic
+content API.
+
 Events owns bounded `TurnContent` and `SdkCache` material through the existing
 `IObjectStore` provider. This interface is not a general Blob API.
 The caller supplies actual bytes and an existing execution identity, not an
@@ -69,7 +74,10 @@ An object without a committed journal reference is not acknowledged material.
 The Events owner checks inventory hourly. It deletes unreferenced objects after
 a 24-hour grace period and deletes referenced object bytes after their recorded
 retention deadline. Deletion preserves journal history and reference metadata;
-reads of expired or missing bytes fail instead of rebuilding them. Migration
+reads of missing required bytes fail instead of returning empty content. A missing
+optional SDK cache can trigger runtime journal-context rebuilding. Read-time expiry
+checks are not yet implemented, so expired bytes can remain readable until cleanup
+runs. The composition decision requires that gap to be closed. Migration
 010 backfills inventory from committed references, but earlier unreferenced
 objects cannot be discovered because `IObjectStore` has no listing contract.
 
