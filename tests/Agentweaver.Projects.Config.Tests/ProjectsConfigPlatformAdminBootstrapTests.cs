@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Agentweaver.Abstractions;
 using Agentweaver.Projects.Config;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
@@ -290,6 +291,164 @@ public sealed class ProjectsConfigPlatformAdminBootstrapTests(
         Assert.Equal(updated.Defaults!.RunLimits, readback.Defaults.RunLimits);
         Assert.Equal(8, readback.Defaults.ModelTaskDefaults.Length);
         await CleanupPlatformAdminAsync(subject, tenantId);
+    }
+
+    [Fact]
+    public async Task InspectionReportsApprovedActiveMembershipWithoutPlatformAssignment()
+    {
+        var options = CreateDbContextOptions();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var subject = "inspection-without-assignment-" + suffix;
+        var tenantId = "inspection-tenant-" + suffix;
+        var membership = await store.GrantMembershipAsync(TestIssuer, subject, tenantId, "fixture");
+
+        try
+        {
+            var snapshot = await store.InspectPlatformAdminAsync(TestIssuer, subject, tenantId);
+
+            Assert.Equal(new PlatformAdminMembershipSnapshot(membership.MembershipId, membership.Revision),
+                snapshot.Membership);
+            Assert.Empty(snapshot.Assignments);
+            Assert.Single(snapshot.MembershipAudits);
+            Assert.Equal(membership.MembershipId, snapshot.MembershipAudits[0].MembershipId);
+            Assert.Empty(snapshot.RoleAssignmentAudits);
+            Assert.Equal(0, snapshot.OtherActivePlatformAdminCount);
+        }
+        finally
+        {
+            await store.RevokeMembershipAsync(
+                membership.MembershipId, membership.Revision, "platform-inspection-test-cleanup");
+        }
+    }
+
+    [Fact]
+    public async Task InspectionReportsAssignmentAndBothMatchingAuditRows()
+    {
+        var options = CreateDbContextOptions();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var subject = "inspection-complete-" + suffix;
+        var tenantId = "inspection-tenant-" + suffix;
+
+        Assert.True(await store.BootstrapFirstPlatformAdminAsync(TestIssuer, subject, tenantId));
+        try
+        {
+            var snapshot = await store.InspectPlatformAdminAsync(TestIssuer, subject, tenantId);
+
+            var assignment = Assert.Single(snapshot.Assignments);
+            Assert.Equal(snapshot.Membership!.MembershipId, assignment.MembershipId);
+            Assert.True(assignment.Revision > 0);
+            Assert.Contains(PlatformAdminInspectionCommand.Format(snapshot), line =>
+                line == $"ASSIGNMENT|{assignment.AssignmentId:D}|{assignment.Revision}|Active|Platform|default|PlatformAdmin|{assignment.MembershipId:D}");
+            var membershipAudit = Assert.Single(snapshot.MembershipAudits);
+            Assert.Equal(snapshot.Membership.MembershipId, membershipAudit.MembershipId);
+            Assert.Null(membershipAudit.AssignmentId);
+            var roleAudit = Assert.Single(snapshot.RoleAssignmentAudits);
+            Assert.Equal(assignment.MembershipId, roleAudit.MembershipId);
+            Assert.Equal(assignment.AssignmentId, roleAudit.AssignmentId);
+            Assert.Equal(0, snapshot.OtherActivePlatformAdminCount);
+        }
+        finally
+        {
+            await CleanupPlatformAdminAsync(subject, tenantId);
+        }
+    }
+
+    [Fact]
+    public async Task InspectionReportsMissingRoleAssignmentAuditWithoutChangingTheAssignment()
+    {
+        var options = CreateDbContextOptions();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var subject = "inspection-missing-audit-" + suffix;
+        var tenantId = "inspection-tenant-" + suffix;
+        var membership = await store.GrantMembershipAsync(TestIssuer, subject, tenantId, "fixture");
+        var assignment = new ProjectRoleAssignmentRecord
+        {
+            AssignmentId = Guid.NewGuid(),
+            MembershipId = membership.MembershipId,
+            ResourceType = ProjectAuthorityResourceType.Platform,
+            ResourceId = ProjectAuthorizationOwner.PlatformResourceId,
+            Role = ProjectAuthorityRole.PlatformAdmin,
+            State = ProjectAuthorityRecordState.Active,
+            Revision = 1,
+            GrantedBy = "test-only-setup",
+            GrantedAt = DateTimeOffset.UtcNow,
+        };
+
+        try
+        {
+            await using (var setup = new ProjectsConfigDbContext(options))
+            {
+                // Insert only the active assignment so the test can model a partial prior bootstrap safely.
+                setup.RoleAssignments.Add(assignment);
+                await setup.SaveChangesAsync();
+            }
+
+            var snapshot = await store.InspectPlatformAdminAsync(TestIssuer, subject, tenantId);
+
+            Assert.Single(snapshot.Assignments);
+            Assert.Single(snapshot.MembershipAudits);
+            Assert.Empty(snapshot.RoleAssignmentAudits);
+        }
+        finally
+        {
+            await CleanupPlatformAdminAsync(subject, tenantId);
+            await store.RevokeMembershipAsync(
+                membership.MembershipId, membership.Revision, "platform-inspection-test-cleanup");
+        }
+    }
+
+    [Fact]
+    public async Task InspectionCountsOtherActivePlatformAdminsWithoutReturningTheirIdentity()
+    {
+        var options = CreateDbContextOptions();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var otherSubject = "inspection-other-admin-" + suffix;
+        var otherTenant = "inspection-other-tenant-" + suffix;
+        var approvedSubject = "inspection-approved-without-admin-" + suffix;
+        var approvedTenant = "inspection-approved-tenant-" + suffix;
+        var membership = await store.GrantMembershipAsync(TestIssuer, otherSubject, otherTenant, "fixture");
+        var assignment = await store.AssignRoleAsync(
+            membership.MembershipId,
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin,
+            "fixture");
+
+        try
+        {
+            var snapshot = await store.InspectPlatformAdminAsync(
+                TestIssuer, approvedSubject, approvedTenant);
+
+            Assert.Null(snapshot.Membership);
+            Assert.Empty(snapshot.Assignments);
+            Assert.Equal(1, snapshot.OtherActivePlatformAdminCount);
+        }
+        finally
+        {
+            await store.RevokeRoleAssignmentAsync(
+                assignment.AssignmentId, assignment.Revision, "platform-inspection-test-cleanup");
+            await store.RevokeMembershipAsync(
+                membership.MembershipId, membership.Revision, "platform-inspection-test-cleanup");
+        }
+    }
+
+    [Fact]
+    public async Task InspectionTransactionRejectsWritesAtTheDatabaseBoundary()
+    {
+        await using var db = CreateDbContext();
+        await using var transaction =
+            await ProjectsConfigPrivilegedAuthorityStore.BeginReadOnlyTransactionAsync(db, CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+            db.Database.ExecuteSqlRawAsync(
+                $"UPDATE \"{ProjectsConfigDbContext.Schema}\".\"tenant_memberships\" SET revision = revision WHERE false"));
+
+        Assert.Equal("25006", exception.SqlState);
+        await transaction.RollbackAsync();
     }
 
     private async Task CleanupPlatformAdminAsync(string subject, string tenantId)

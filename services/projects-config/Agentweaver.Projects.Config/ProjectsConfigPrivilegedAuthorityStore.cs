@@ -929,6 +929,143 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         }
     }
 
+    /// <summary>Reads the approved identity's active PlatformAdmin state and matching audit evidence.</summary>
+    internal async Task<PlatformAdminInspectionSnapshot> InspectPlatformAdminAsync(
+        string issuer,
+        string subject,
+        string tenantId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateIdentifier(issuer, nameof(issuer));
+        ValidateIdentifier(subject, nameof(subject));
+        ValidateIdentifier(tenantId, nameof(tenantId));
+
+        await using var db = new ProjectsConfigDbContext(options);
+        // Read all evidence from one PostgreSQL snapshot, and make the transaction reject every write.
+        await using var transaction = await BeginReadOnlyTransactionAsync(db, cancellationToken)
+            .ConfigureAwait(false);
+        var memberships = await db.TenantMemberships.AsNoTracking()
+            .Where(item =>
+                item.Issuer == issuer &&
+                item.Subject == subject &&
+                item.TenantId == tenantId &&
+                item.State == ProjectAuthorityRecordState.Active)
+            .Select(item => new PlatformAdminMembershipSnapshot(item.MembershipId, item.Revision))
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (memberships.Length > 1)
+            throw new InvalidOperationException("The approved identity has ambiguous active memberships.");
+
+        var membership = memberships.SingleOrDefault();
+        PlatformAdminAssignmentSnapshot[] assignments = membership is null
+            ? []
+            : await db.RoleAssignments.AsNoTracking()
+                .Where(item =>
+                    item.MembershipId == membership.MembershipId &&
+                    item.ResourceType == ProjectAuthorityResourceType.Platform &&
+                    item.ResourceId == ProjectAuthorizationOwner.PlatformResourceId &&
+                    item.Role == ProjectAuthorityRole.PlatformAdmin &&
+                    item.State == ProjectAuthorityRecordState.Active)
+                .OrderBy(item => item.AssignmentId)
+                .Select(item => new PlatformAdminAssignmentSnapshot(
+                    item.AssignmentId, item.MembershipId, item.Revision))
+                .ToArrayAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+        PlatformAdminAuditSnapshot[] membershipAudits = membership is null
+            ? []
+            // Match the grant event to the active membership's identity, ID, and current revision.
+            : (await db.AuthorityAudit.AsNoTracking()
+                .Where(item =>
+                    item.MembershipId == membership.MembershipId &&
+                    item.EventType == "membership_granted" &&
+                    item.Issuer == issuer &&
+                    item.Subject == subject &&
+                    item.TenantId == tenantId &&
+                    item.Revision == membership.Revision &&
+                    item.AssignmentId == null &&
+                    item.ResourceType == null &&
+                    item.ResourceId == null &&
+                    item.Role == null)
+                .OrderBy(item => item.CreatedAt)
+                .ThenBy(item => item.EventId)
+                .Select(item => new { item.CreatedAt, item.MembershipId })
+                .ToArrayAsync(cancellationToken)
+                .ConfigureAwait(false))
+                .Select(item => new PlatformAdminAuditSnapshot(item.CreatedAt, item.MembershipId, null))
+                .ToArray();
+
+        var assignmentIds = assignments.Select(item => item.AssignmentId).ToArray();
+        var assignmentRevisions = assignments.ToDictionary(item => item.AssignmentId, item => item.Revision);
+        PlatformAdminAuditSnapshot[] roleAssignmentAudits = assignmentIds.Length == 0
+            ? []
+            // Match each event to a current assignment ID, membership, identity, resource, role, and revision.
+            : (await db.AuthorityAudit.AsNoTracking()
+                .Where(item =>
+                    item.EventType == "role_assigned" &&
+                    item.MembershipId == membership!.MembershipId &&
+                    item.AssignmentId.HasValue &&
+                    assignmentIds.Contains(item.AssignmentId.Value) &&
+                    item.Issuer == issuer &&
+                    item.Subject == subject &&
+                    item.TenantId == tenantId &&
+                    item.ResourceType == ProjectAuthorityResourceType.Platform &&
+                    item.ResourceId == ProjectAuthorizationOwner.PlatformResourceId &&
+                    item.Role == ProjectAuthorityRole.PlatformAdmin)
+                .OrderBy(item => item.CreatedAt)
+                .ThenBy(item => item.EventId)
+                .Select(item => new { item.CreatedAt, item.MembershipId, item.AssignmentId, item.Revision })
+                .ToArrayAsync(cancellationToken)
+                .ConfigureAwait(false))
+                .Where(item => assignmentRevisions.TryGetValue(item.AssignmentId!.Value, out var revision) &&
+                    revision == item.Revision)
+                .Select(item => new PlatformAdminAuditSnapshot(
+                    item.CreatedAt, item.MembershipId, item.AssignmentId))
+                .ToArray();
+
+        // Count other grants without materializing any other identity values.
+        var otherActivePlatformAdminCount = await (
+            from assignment in db.RoleAssignments.AsNoTracking()
+            join activeMembership in db.TenantMemberships.AsNoTracking()
+                on assignment.MembershipId equals activeMembership.MembershipId
+            where assignment.ResourceType == ProjectAuthorityResourceType.Platform &&
+                  assignment.ResourceId == ProjectAuthorizationOwner.PlatformResourceId &&
+                  assignment.Role == ProjectAuthorityRole.PlatformAdmin &&
+                  assignment.State == ProjectAuthorityRecordState.Active &&
+                  activeMembership.State == ProjectAuthorityRecordState.Active &&
+                  (activeMembership.Issuer != issuer ||
+                   activeMembership.Subject != subject ||
+                   activeMembership.TenantId != tenantId)
+            select assignment.AssignmentId)
+            .LongCountAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new PlatformAdminInspectionSnapshot(
+            membership, assignments, membershipAudits, roleAssignmentAudits, otherActivePlatformAdminCount);
+    }
+
+    internal static async Task<IDbContextTransaction> BeginReadOnlyTransactionAsync(
+        ProjectsConfigDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
+            .ConfigureAwait(false);
+        try
+        {
+            // PostgreSQL accepts this only before any data statement and then rejects transaction writes.
+            await db.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken)
+                .ConfigureAwait(false);
+            return transaction;
+        }
+        catch
+        {
+            await transaction.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     /// <summary>Creates the first active platform administrator and its authority audit rows atomically.</summary>
     /// <returns><see langword="true"/> when created; <see langword="false"/> when the approved grant already exists.</returns>
     /// <exception cref="PlatformAdminBootstrapConflictException">A different active PlatformAdmin already exists.</exception>

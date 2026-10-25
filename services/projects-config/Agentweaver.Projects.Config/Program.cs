@@ -12,7 +12,7 @@ using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentityCredential;
 
-// Composes the host and keeps migration, privileged setup, and first-admin bootstrap on separate command paths.
+// Composes the host and keeps migrations, privileged setup, bootstrap, and read-only inspection on separate paths.
 // Runtime database access uses workload identity and verifies the applied schema and read-only authority boundary.
 var runMigrations = args.Length == 1 && args[0] == "--migrate";
 if (args.Contains("--migrate", StringComparer.Ordinal) && !runMigrations)
@@ -30,10 +30,15 @@ if (args.Contains(PlatformAdminBootstrapCommand.Argument, StringComparer.Ordinal
     !runFirstPlatformAdminBootstrap)
     throw new ArgumentException(
         "The --bootstrap-first-platform-admin command must be used by itself.", nameof(args));
+var runFirstPlatformAdminInspection = PlatformAdminInspectionCommand.IsCommandAlone(args);
+if (args.Contains(PlatformAdminInspectionCommand.Argument, StringComparer.Ordinal) &&
+    !runFirstPlatformAdminInspection)
+    throw new ArgumentException(
+        "The --inspect-first-platform-admin command must be used by itself.", nameof(args));
 
 var builder = WebApplication.CreateBuilder(
     runMigrations || runPrivilegedProjectSetup || runFirstTenantAdminBootstrap ||
-        runFirstPlatformAdminBootstrap ? [] : args);
+        runFirstPlatformAdminBootstrap || runFirstPlatformAdminInspection ? [] : args);
 if (runPrivilegedProjectSetup)
 {
     // This one-shot path reports only a stable error code; token and exception details never reach console output.
@@ -101,6 +106,25 @@ if (runFirstPlatformAdminBootstrap)
             "First PlatformAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.");
         await Console.Error.WriteLineAsync(
             $"PlatformAdmin bootstrap diagnostic: {BootstrapFailureDiagnostics.Format(exception)}");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (runFirstPlatformAdminInspection)
+{
+    try
+    {
+        var snapshot = await PlatformAdminInspectionCommand.RunAsync(builder.Configuration);
+        foreach (var line in PlatformAdminInspectionCommand.Format(snapshot))
+            await Console.Out.WriteLineAsync(line);
+    }
+    catch (Exception exception)
+    {
+        await Console.Error.WriteLineAsync(
+            "First PlatformAdmin inspection failed. Check the approved identity, migration settings, and database connectivity.");
+        await Console.Error.WriteLineAsync(
+            $"PlatformAdmin inspection diagnostic: {BootstrapFailureDiagnostics.Format(exception)}");
         Environment.ExitCode = 1;
     }
     return;

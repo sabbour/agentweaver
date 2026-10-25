@@ -18,7 +18,9 @@ try {
   const receipt = await runProjectsConfigMigration(options);
   const operation = receipt.operation === 'bootstrap-first-platform-admin'
     ? 'PlatformAdmin bootstrap'
-    : 'migration';
+    : receipt.operation === 'inspect-first-platform-admin'
+      ? 'PlatformAdmin inspection'
+      : 'migration';
   console.log(`Projects & Config ${operation} ${receipt.result} run=${receipt.runId}; receipt=${receipt.receiptPath}`);
 } catch (error) {
   console.error(error.message);

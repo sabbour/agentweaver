@@ -17,6 +17,19 @@ const image = 'ghcr.io/sabbour/agentweaver.projects.config@' + imageDigest;
 const bootstrapSubject = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
 const bootstrapTenantId = '11111111-2222-4333-8444-555555555555';
 const bootstrapIssuer = 'https://agentweaver.synthetic.example/';
+const inspectionMembershipId = '33333333-4444-4555-8666-777777777777';
+const inspectionAssignmentId = '22222222-3333-4444-8555-666666666666';
+const inspectionOutput = [
+  'PLATFORM_ADMIN_INSPECTION_V1',
+  `MEMBERSHIP|Active|${inspectionMembershipId}|2`,
+  'ACTIVE_ASSIGNMENT_COUNT|1',
+  `ASSIGNMENT|${inspectionAssignmentId}|3|Active|Platform|default|PlatformAdmin|${inspectionMembershipId}`,
+  'MEMBERSHIP_AUDIT_COUNT|1',
+  `AUDIT|membership_granted|-|-|2026-10-23T00:00:00.000000Z|${inspectionMembershipId}`,
+  'ROLE_ASSIGNMENT_AUDIT_COUNT|1',
+  `AUDIT|role_assigned|Platform|default|PlatformAdmin|2026-10-23T00:00:01.000000Z|${inspectionMembershipId}|${inspectionAssignmentId}`,
+  'OTHER_ACTIVE_PLATFORM_ADMIN_COUNT|1',
+].join('\n');
 const manifest = {
   stage: 'draft',
   components: [{ id: componentId, kind: 'service', version: '1.0.9' }],
@@ -48,6 +61,14 @@ function grantResult(overrides = {}) {
 function createWorld({
   jobOutcome = 'Complete',
   bootstrapLog = 'The first PlatformAdmin was created.',
+  inspectionLog = [
+    'PLATFORM_ADMIN_INSPECTION_V1',
+    'MEMBERSHIP|Absent|-|0',
+    'ACTIVE_ASSIGNMENT_COUNT|0',
+    'MEMBERSHIP_AUDIT_COUNT|0',
+    'ROLE_ASSIGNMENT_AUDIT_COUNT|0',
+    'OTHER_ACTIVE_PLATFORM_ADMIN_COUNT|0',
+  ].join('\n'),
   configMap = {
     kind: 'ConfigMap',
     metadata: { name: 'projects-config-runtime-config', namespace: DB_MAINTENANCE_TARGET.namespace },
@@ -113,7 +134,12 @@ function createWorld({
         stderr: '',
       };
     }
-    if (args.includes('logs')) return { status: 0, stdout: `${bootstrapLog}\n`, stderr: '' };
+    if (args.includes('logs')) {
+      const output = args.some(argument => argument.includes('platform-admin-inspection'))
+        ? inspectionLog
+        : bootstrapLog;
+      return { status: 0, stdout: `${output}\n`, stderr: '' };
+    }
     if (args.includes('get') && args.includes('pods')) {
       return { status: 0, stdout: JSON.stringify({ kind: 'List', items: [] }), stderr: '' };
     }
@@ -187,6 +213,112 @@ test('migration arguments are dry-run by default and require a publication', () 
   assert.equal(parseProjectsConfigMigrationArgs([
     '--publication', 'receipt.json', '--bootstrap-first-platform-admin',
   ]).bootstrapFirstPlatformAdmin, true);
+  assert.equal(parseProjectsConfigMigrationArgs([
+    '--publication', 'receipt.json', '--inspect-first-platform-admin',
+  ]).inspectFirstPlatformAdmin, true);
+  assert.throws(() => parseProjectsConfigMigrationArgs([
+    '--publication', 'receipt.json', '--inspect-first-platform-admin', '--execute',
+  ]), /must not be combined with --execute/);
+  assert.throws(() => parseProjectsConfigMigrationArgs([
+    '--publication', 'receipt.json', '--inspect-first-platform-admin', '--bootstrap-first-platform-admin',
+  ]), /mutually exclusive/);
+});
+
+test('PlatformAdmin inspection runs read-only without --execute and writes a sanitized receipt', async () => {
+  const world = createWorld({ inspectionLog: inspectionOutput });
+  try {
+    const receipt = await withMigrationCredentials(() => runProjectsConfigMigration({
+      ...world.options, inspectFirstPlatformAdmin: true,
+    }, world.overrides));
+
+    assert.equal(receipt.result, 'succeeded');
+    assert.equal(receipt.schemaVersion, 1);
+    assert.equal(receipt.mode, 'read-only-inspection');
+    assert.equal(receipt.operation, 'inspect-first-platform-admin');
+    assert.deepEqual(receipt.platformAdminInspection, {
+      outcome: 'inspected',
+      membership: { state: 'active', membershipId: inspectionMembershipId, revision: 2 },
+      activeAssignments: [{
+        assignmentId: inspectionAssignmentId, revision: 3, state: 'active',
+        resourceType: 'Platform', resourceId: 'default', role: 'PlatformAdmin',
+        membershipId: inspectionMembershipId,
+      }],
+      membershipAudits: [{
+        eventType: 'membership_granted', resourceType: null, resourceId: null,
+        timestamp: '2026-10-23T00:00:00.000000Z', membershipId: inspectionMembershipId,
+      }],
+      roleAssignmentAudits: [{
+        eventType: 'role_assigned', resourceType: 'Platform', resourceId: 'default', role: 'PlatformAdmin',
+        timestamp: '2026-10-23T00:00:01.000000Z',
+        membershipId: inspectionMembershipId, assignmentId: inspectionAssignmentId,
+      }],
+      otherActivePlatformAdminCount: 1,
+    });
+    assert.deepEqual(receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.ok(receipt.plannedSteps.includes('create-platform-admin-inspection-job'));
+    assert.equal(receipt.plannedSteps.includes('create-migration-job'), false);
+    assert.equal(receipt.plannedSteps.includes('apply-runtime-grants'), false);
+    assert.equal(receipt.bootstrap, undefined);
+    assert.equal(receipt.grants, undefined);
+    assert.equal(world.calls.some(call => call.command === 'grants'), false);
+    assert.ok(world.kubeconfigOptions[0].requiredPermissions.some(permission =>
+      JSON.stringify(permission) === JSON.stringify([
+        'get', 'configmaps', DB_MAINTENANCE_TARGET.namespace,
+      ])));
+    const jobCreate = world.calls.find(call =>
+      call.command === 'kubectl' && call.args.includes('create') &&
+      JSON.parse(call.settings.input ?? '{}').kind === 'Job');
+    const job = JSON.parse(jobCreate.settings.input);
+    const container = job.spec.template.spec.containers[0];
+    assert.deepEqual(container.command, [
+      'dotnet', 'Agentweaver.Projects.Config.dll', '--inspect-first-platform-admin',
+    ]);
+    assert.equal(container.image, image);
+    assert.equal(world.objects.size, 0);
+    const safeReceipt = JSON.stringify(receipt);
+    for (const secret of [bootstrapSubject, bootstrapTenantId, bootstrapIssuer, 'test-access-token', 'Username=']) {
+      assert.equal(safeReceipt.includes(secret), false);
+    }
+  } finally {
+    world.dispose();
+  }
+});
+
+test('PlatformAdmin inspection rejects spoofed or extra output and still cleans up', async () => {
+  const spoofed = `${inspectionOutput}\nissuer=${bootstrapIssuer}`;
+  const world = createWorld({ inspectionLog: spoofed });
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+      ...world.options, inspectFirstPlatformAdmin: true,
+    }, world.overrides)), /extra output/);
+    const receipt = JSON.stringify(world.receipts[0].receipt);
+    assert.equal(receipt.includes(bootstrapIssuer), false);
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.equal(world.objects.size, 0);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('PlatformAdmin inspection records sanitized command failures', async () => {
+  const world = createWorld({
+    jobOutcome: 'Failed',
+    inspectionLog: [
+      'First PlatformAdmin inspection failed. Check the approved identity, migration settings, and database connectivity.',
+      'PlatformAdmin inspection diagnostic: ExceptionType=InvalidOperationException; Category=invalid-bootstrap-configuration',
+    ].join('\n'),
+  });
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+      ...world.options, inspectFirstPlatformAdmin: true,
+    }, world.overrides)), /inspection command failed; review the sanitized diagnostic/);
+    assert.equal(world.receipts[0].receipt.platformAdminInspection.outcome, 'failed');
+    assert.equal(world.receipts[0].receipt.platformAdminInspection.diagnostic,
+      'ExceptionType=InvalidOperationException; Category=invalid-bootstrap-configuration');
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+  } finally {
+    world.dispose();
+  }
 });
 
 test('PlatformAdmin bootstrap dry run verifies the approved ConfigMap and avoids writes', async () => {
