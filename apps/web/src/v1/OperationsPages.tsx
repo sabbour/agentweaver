@@ -7,13 +7,15 @@
  * yet. No page shows placeholder data or controls that do nothing.
  */
 import { Badge, Button, MessageBar, MessageBarBody, MessageBarTitle, Text, makeStyles, tokens } from '@fluentui/react-components';
-import { ArrowSyncRegular } from '@fluentui/react-icons';
+import { ArrowSyncRegular, FlowRegular } from '@fluentui/react-icons';
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { PageSection } from '../components/ui/PageSection';
+import { ListRow, RichList } from '../components/ui/RichList';
 import { AttentionList } from './AttentionList';
 import { boardColumns, boardErrorMessage, useProjectBoard } from './boardData';
-import { GatewayError } from './api';
+import { useAuth } from './AuthContext';
+import { GatewayError, gatewayClient } from './api';
 import { errorCode, errorMessage } from './errors';
 import { ErrorNotice, Loading, PageHeading } from './pageParts';
 import { PlatformComponentsSection, usePlatformComponentReport } from './PlatformSettingsPage';
@@ -207,43 +209,98 @@ export function FlowPage() {
 }
 
 /**
- * Workflows: the workflow references saved in the project configuration. They
- * are read-only here; Project settings changes them. The 0.x workflow catalog,
- * graph editor, and sync need reads and writes this version does not have.
+ * Workflows: the saved project default and blueprint references. The Gateway
+ * does not expose the workflow catalog, so the page cannot offer choices.
  */
 export function WorkflowsPage() {
   const styles = useStyles();
   const { projectId = '' } = useParams();
+  const { apiCall } = useAuth();
   const configuration = useProjectConfiguration(projectId);
   const config = configuration.data?.configuration;
   const references = config?.blueprintWorkflowReferences ?? [];
+  const [settingDefault, setSettingDefault] = useState(false);
+  const [defaultError, setDefaultError] = useState<{ projectId: string; error: unknown } | null>(null);
+
+  const resetDefault = async () => {
+    const current = configuration.data;
+    if (!projectId || !current?.configuration.defaultWorkflowId) return;
+    setSettingDefault(true);
+    setDefaultError(null);
+    try {
+      // Fence the write with the loaded revision and preserve every other setting.
+      const updated = await apiCall(
+        (token, tenantSelector) => gatewayClient.updateProjectConfiguration(
+          token,
+          projectId,
+          current.revision,
+          { ...current.configuration, defaultWorkflowId: null },
+          tenantSelector,
+        ),
+        null,
+      );
+      if (updated.projectId !== projectId) throw new Error('The service returned configuration for a different project.');
+      configuration.replace(updated);
+    } catch (error: unknown) {
+      setDefaultError({ projectId, error });
+    } finally {
+      setSettingDefault(false);
+    }
+  };
+
+  const refresh = () => {
+    setDefaultError(null);
+    configuration.reload();
+  };
+  const currentDefaultError = defaultError?.projectId === projectId ? defaultError.error : null;
+  const defaultErrorMessage = currentDefaultError instanceof GatewayError && currentDefaultError.status === 403
+    ? 'You do not have permission to change the default workflow in this project.'
+    : currentDefaultError == null ? null : errorMessage(currentDefaultError);
+
   let body: ReactNode;
-  // Order: first load, then error, then the saved references.
+  // Do not keep presenting cached configuration after a failed refresh.
   if (configuration.loading && !config) body = <Loading label="Loading workflow references" />;
-  else if (configuration.error != null && !config)
+  else if (configuration.error != null)
     body = <ErrorNotice code={errorCode(configuration.error)}>{readErrorMessage(configuration.error, 'the configuration')}</ErrorNotice>;
   else if (config) body = (
     <>
-      <div className={styles.row}>
-        <Text weight="semibold">Default workflow</Text>
-        {config.defaultWorkflowId ? <code>{config.defaultWorkflowId}</code> : <Text className={styles.muted}>None set. Runs use the platform default.</Text>}
-      </div>
-      {references.length === 0 ? <Text>No blueprint uses a specific workflow.</Text> : (
-        <div className="v1-table-wrap">
-          <table className="v1-table">
-            <caption>Workflow by blueprint</caption>
-            <thead><tr><th scope="col">Blueprint</th><th scope="col">Workflow</th></tr></thead>
-            <tbody>
-              {references.map((reference) => (
-                <tr key={reference.blueprintId}>
-                  <th scope="row"><code>{reference.blueprintId}</code></th>
-                  <td><code>{reference.workflowId}</code></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {defaultErrorMessage && <ErrorNotice code={errorCode(currentDefaultError)}>{defaultErrorMessage}</ErrorNotice>}
+      <PageSection
+        title="Default workflow"
+        actions={config.defaultWorkflowId ? (
+          <Button appearance="secondary" disabled={settingDefault} onClick={() => { void resetDefault(); }}>
+            {settingDefault ? 'Saving…' : 'Use platform default'}
+          </Button>
+        ) : undefined}
+      >
+        {config.defaultWorkflowId ? (
+          <RichList aria-label="Default workflow">
+            <ListRow
+              stacked
+              media={<FlowRegular aria-hidden="true" />}
+              bubble
+              primary={<code>{config.defaultWorkflowId}</code>}
+              primaryAside={<Badge appearance="filled" color="brand">Project default</Badge>}
+            />
+          </RichList>
+        ) : <Text>None set. Runs use the platform default.</Text>}
+      </PageSection>
+      <PageSection title="Blueprint workflows">
+        {references.length === 0 ? <Text>No blueprint uses a specific workflow.</Text> : (
+          <RichList aria-label="Blueprint workflows">
+            {references.map((reference) => (
+              <ListRow
+                key={reference.blueprintId}
+                stacked
+                media={<FlowRegular aria-hidden="true" />}
+                bubble
+                primary={<code>{reference.blueprintId}</code>}
+                secondary={<>Workflow <code>{reference.workflowId}</code></>}
+              />
+            ))}
+          </RichList>
+        )}
+      </PageSection>
       {configuration.data && <Text className={styles.muted}>Configuration revision {configuration.data.revision}</Text>}
     </>
   );
@@ -251,19 +308,19 @@ export function WorkflowsPage() {
     <>
       <PageHeading
         title="Workflows"
-        description="Workflow choices saved for this project. New runs use them."
+        description="Workflow choices saved for this project."
         page="Workflows"
-        actions={<RefreshButton loading={configuration.loading && !config} onClick={configuration.reload} />}
+        actions={<>
+          <Link className="v1-link-button" to={`${projectBase(projectId)}/settings`}>Open Project settings</Link>
+          <RefreshButton loading={configuration.loading && !config} onClick={refresh} />
+        </>}
       />
-      <PageSection
-        title="Saved workflow references"
-        actions={<Link className="v1-link-button" to={`${projectBase(projectId)}/settings`}>Open Project settings</Link>}
-      >
-        {body}
-      </PageSection>
-      <NotInThisVersion>
-        The workflow catalog, the workflow graph, workflow sync, and per-task workflow overrides are not available.
-      </NotInThisVersion>
+      {body}
+      {config && configuration.error == null && (
+        <NotInThisVersion>
+          Workflow details, editing, triggers, runs, generation, sync, and graphs are not available yet.
+        </NotInThisVersion>
+      )}
     </>
   );
 }
