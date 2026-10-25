@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.Providers;
 using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
@@ -104,6 +105,9 @@ public static partial class CoordinationEndpoints
                     "maf_execution_work_plan_unavailable", StatusCodes.Status409Conflict);
 
             var plan = validated.Value;
+            // Bind the accepted snapshot, not a model-supplied executor name or an edited project catalog.
+            var bound = MafExecutionWorkflowBindings.RequireBound(
+                plan, context.RequestServices.GetService<MafBuildTestEnvironmentClient>() is not null);
             if (request.BuildTestWorkspaces is { } workspaces)
             {
                 if (workspaces.Count > plan.Workflow.Definition.Steps.Length ||
@@ -167,6 +171,24 @@ public static partial class CoordinationEndpoints
             if (checkpoint is null || reconciled != progress ||
                 checkpoint.State.DecisionStateVersion != decision.StateVersion)
             {
+                // Serialize reconciliation with the owner decision and latest checkpoint; a stale
+                // pre-I/O observation cannot append over an intervening dispatch or replan.
+                await using var connection = await context.RequestServices
+                    .GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                    connection, transaction, actor, identity, selection, selectionContext,
+                    decision.StateVersion, decision.State.Fence, plan.Plan.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                await execution.AcquireExecutionLockInTransactionAsync(connection, transaction, cancellationToken)
+                    .ConfigureAwait(false);
+                var current = await execution.ReadLatestInTransactionAsync(
+                    connection, transaction, cancellationToken).ConfigureAwait(false);
+                if (current?.Info != checkpoint?.Info)
+                    throw new CoordinationException(
+                        "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
                 var next = (checkpoint?.State ??
                     new MafExecutionCheckpoint(0, plan.Plan.Id, decision.StateVersion, reconciled)) with
                 {
@@ -174,9 +196,11 @@ public static partial class CoordinationEndpoints
                     DecisionStateVersion = decision.StateVersion,
                     Progress = reconciled
                 };
-                checkpoint = await execution.AppendAsync(
-                    Guid.NewGuid().ToString("N"), checkpoint?.Info, next, cancellationToken)
+                checkpoint = await execution.AppendInTransactionAsync(
+                    connection, transaction, Guid.NewGuid().ToString("N"),
+                    checkpoint?.Info, next, cancellationToken)
                     .ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
 
             var maxChildren = CoordinatorWorkflowCatalog.ReadMaxChildren(selection.Selection.Snapshot);
@@ -206,6 +230,10 @@ public static partial class CoordinationEndpoints
                     runStartedAt, maxWallTimeSeconds, timeProvider.GetUtcNow());
 
             var registrationOwner = context.RequestServices.GetService<RuntimeRegistrationOwner>();
+            var environment = context.RequestServices.GetService<RuntimeEnvironmentContextClient>();
+            var egress = context.RequestServices.GetService<RuntimeEgressVerificationHttpClient>();
+            var childSpawnAuthorization = context.RequestServices
+                .GetRequiredService<MafChildSpawnAuthorizationOwner>();
             var runtimeSourceOwner = context.RequestServices.GetService<RuntimeUsageSourceOwner>();
             var dataSource = context.RequestServices.GetRequiredService<NpgsqlDataSource>();
             var buildTestClient = context.RequestServices.GetService<MafBuildTestEnvironmentClient>();
@@ -269,6 +297,127 @@ public static partial class CoordinationEndpoints
                     CoordinationIdentity.ReadTenantSelector(context));
             }
 
+            async Task<RuntimeEgressVerificationReceipt> VerifyEgressAsync(CancellationToken token)
+            {
+                if (registrationOwner is null)
+                    throw new CoordinationException(
+                        "maf_execution_egress_unavailable", StatusCodes.Status503ServiceUnavailable);
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                var registration = await registrationOwner.ReadCurrentForSessionAsync(
+                    context, projectId, runId, sessionId, token).ConfigureAwait(false);
+                return await VerifyEgressForRegistrationAsync(registration, sessionId, token)
+                    .ConfigureAwait(false);
+            }
+
+            async Task<RuntimeEgressVerificationReceipt> VerifyEgressForRegistrationAsync(
+                RuntimeRegistration registration, string targetSessionId, CancellationToken token)
+            {
+                if (registrationOwner is null || environment is null || egress is null)
+                    throw new CoordinationException(
+                        "maf_execution_egress_unavailable", StatusCodes.Status503ServiceUnavailable);
+                var runtimeActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
+                try
+                {
+                    var binding = registration.Binding;
+                    var readiness = await environment.ReadReadinessAsync(
+                        runtimeActor, projectId, runId, targetSessionId,
+                        binding.EnvironmentId, binding.ProfileId, token)
+                        .ConfigureAwait(false);
+                    var request = MafExecutionEgressGuard.RequireReadiness(
+                        registration, readiness, projectId, runId, targetSessionId,
+                        selection.Selection.ContextRevision, decision.SelectionHash, decision.State.Fence,
+                        timeProvider.GetUtcNow());
+                    var receipt = await egress.VerifyAsync(request, runtimeActor, token).ConfigureAwait(false);
+                    // Re-read the owner after remote I/O: an old receipt cannot authorize a replaced registration.
+                    var current = await registrationOwner.ReadCurrentForSessionAsync(
+                        context, projectId, runId, targetSessionId, token).ConfigureAwait(false);
+                    if (current != registration)
+                        throw new CoordinationException(
+                            "maf_execution_egress_stale", StatusCodes.Status409Conflict);
+                    await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                    return receipt;
+                }
+                finally
+                {
+                    runtimeActor.Bearer.Invalidate();
+                }
+            }
+
+            CoordinationException MapChildSpawnAuthorizationFailure(RuntimeAuthorizationException failure)
+            {
+                // Preserve final denials and stale authority as 403/409; unavailable policy evidence is retryable.
+                var statusCode = failure.Code switch
+                {
+                    "maf_child_spawn_not_authorized" => StatusCodes.Status403Forbidden,
+                    "maf_child_spawn_policy_unavailable" or
+                    "maf_child_spawn_decision_unavailable" or
+                    "maf_child_spawn_authorization_unavailable" or
+                    "maf_child_spawn_authorization_missing" or
+                    "maf_child_spawn_policy_receipt_unavailable" =>
+                        StatusCodes.Status503ServiceUnavailable,
+                    // Unknown authorization failures indicate a stale or conflicting intent, never an implicit allow.
+                    _ => StatusCodes.Status409Conflict
+                };
+                return new CoordinationException(failure.Code, statusCode, failure);
+            }
+
+            async Task RequireChildSpawnAllowedAsync(
+                MafChildSpawnIntent intent, CancellationToken token)
+            {
+                try
+                {
+                    // The owner evaluates the pinned Policy provider and persists allow evidence for this exact intent.
+                    var evidence = await childSpawnAuthorization.AuthorizeAsync(
+                        context, intent, token).ConfigureAwait(false);
+                    // Confirm the owner returned evidence for the exact deterministic intent before spawning.
+                    if (evidence.IntentId != intent.IntentId ||
+                        !string.Equals(
+                            evidence.IntentHash,
+                            MafChildSpawnAuthorizationContract.ComputeIntentHash(intent),
+                            StringComparison.Ordinal) ||
+                        evidence.Outcome != PolicyEvaluationOutcome.Allow ||
+                        evidence.ReasonCode != PolicyEvaluationReasonCode.Allowed)
+                        throw new CoordinationException(
+                            "maf_child_spawn_authorization_invalid", StatusCodes.Status409Conflict);
+                }
+                // Convert owner-specific authorization failures into the endpoint's stable response contract.
+                catch (RuntimeAuthorizationException failure)
+                {
+                    throw MapChildSpawnAuthorizationFailure(failure);
+                }
+            }
+
+            async Task RequireChildSpawnConsumedAsync(
+                NpgsqlConnection connection,
+                NpgsqlTransaction transaction,
+                MafChildSpawnIntent intent,
+                CancellationToken token)
+            {
+                try
+                {
+                    // Consumption shares the child/outbox/checkpoint transaction; a failure rolls back all four writes.
+                    var consumed = await childSpawnAuthorization.CheckAndConsumeWithinTransactionAsync(
+                        context, connection, transaction, intent, token).ConfigureAwait(false);
+                    // Match the allow receipt to the same immutable intent and require its durable consumption row.
+                    if (consumed.Evidence.IntentId != intent.IntentId ||
+                        !string.Equals(
+                            consumed.Evidence.IntentHash,
+                            MafChildSpawnAuthorizationContract.ComputeIntentHash(intent),
+                            StringComparison.Ordinal) ||
+                        consumed.Evidence.Outcome != PolicyEvaluationOutcome.Allow ||
+                        consumed.Evidence.ReasonCode != PolicyEvaluationReasonCode.Allowed ||
+                        consumed.Evidence.ConsumedAt is null)
+                        throw new CoordinationException(
+                            "maf_child_spawn_authorization_invalid", StatusCodes.Status409Conflict);
+                    // Either first consumption or exact replay is valid because both refer to the committed spawn.
+                }
+                // A missing, stale, conflicting or revoked receipt must abort the enclosing spawn transaction.
+                catch (RuntimeAuthorizationException failure)
+                {
+                    throw MapChildSpawnAuthorizationFailure(failure);
+                }
+            }
+
             async Task<RuntimeRegistration?> ReadDispatchRegistrationAsync(
                 MafExecutionDispatchIntent intent, CancellationToken token)
             {
@@ -286,6 +435,13 @@ public static partial class CoordinationEndpoints
                         registration.ExpiresAt <= timeProvider.GetUtcNow())
                         throw new CoordinationException(
                             "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
+                    // The child can have its own Environment; native admission pins its own current registration.
+                    var receipt = intent.EgressReceipt;
+                    if (receipt is null ||
+                        registration.Binding.TenantId != receipt.Fence.Owner.TenantId ||
+                        registration.Binding.ContextRevision != receipt.ContextRevision)
+                        throw new CoordinationException(
+                            "maf_execution_egress_stale", StatusCodes.Status409Conflict);
                     return registration;
                 }
                 catch (CoordinationException failure) when (
@@ -315,6 +471,8 @@ public static partial class CoordinationEndpoints
                 var pending = await ReadCurrentDispatchIntentAsync(intent, token).ConfigureAwait(false);
                 if (!pending.ShouldSend)
                     return pending.Snapshot.State.Results[intent.AssociationId];
+                MafExecutionEgressGuard.RequireSameReceipt(
+                    intent.EgressReceipt, await VerifyEgressAsync(token).ConfigureAwait(false));
                 // A null registration means the child runtime is not registered or not ready yet.
                 // The dispatch is not sent now and is retried later.
                 var registration = await ReadDispatchRegistrationAsync(intent, token).ConfigureAwait(false);
@@ -331,6 +489,8 @@ public static partial class CoordinationEndpoints
                 if (current != registration)
                     throw new CoordinationException(
                         "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
+                _ = await VerifyEgressForRegistrationAsync(
+                    registration, intent.ChildSessionId, token).ConfigureAwait(false);
                 RuntimeHostReadinessReceipt? readiness;
                 // Ask the runtime host whether it is ready. The short-lived actor token is
                 // invalidated right after the call.
@@ -385,6 +545,8 @@ public static partial class CoordinationEndpoints
                     var currentIntent = await ReadCurrentDispatchIntentAsync(intent, token).ConfigureAwait(false);
                     if (!currentIntent.ShouldSend)
                         return currentIntent.Snapshot.State.Results[intent.AssociationId];
+                    MafExecutionEgressGuard.RequireSameReceipt(
+                        intent.EgressReceipt, await VerifyEgressAsync(token).ConfigureAwait(false));
                     // Native dispatches require the usage source owner to record admission and cost.
                     if (runtimeSourceOwner is null)
                         throw new CoordinationException(
@@ -408,6 +570,15 @@ public static partial class CoordinationEndpoints
                             projectSpendBudgets.Budgets.IsDefaultOrEmpty ? null : projectSpendBudgets))
                         .ConfigureAwait(false);
                     // Preparation committed, so the dispatch is admitted. Send it to the runtime host.
+                    MafExecutionEgressGuard.RequireSameReceipt(
+                        intent.EgressReceipt, await VerifyEgressAsync(token).ConfigureAwait(false));
+                    var sendingRegistration = await ReadDispatchRegistrationAsync(intent, token)
+                        .ConfigureAwait(false);
+                    if (sendingRegistration != registration)
+                        throw new CoordinationException(
+                            "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
+                    _ = await VerifyEgressForRegistrationAsync(
+                        registration, intent.ChildSessionId, token).ConfigureAwait(false);
                     response = await SendRuntimeHostMessageAsync(
                         hostClient,
                         registration,
@@ -537,7 +708,10 @@ public static partial class CoordinationEndpoints
                     intent.AssociationId,
                     MafExecutionPlanner.CreateChildSessionId(identity, plan.Plan.Id, intent.AssociationId),
                     MafExecutionPlanner.CreateDispatchMessageId(identity, plan.Plan.Id, intent.AssociationId),
-                    RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)));
+                    RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)))
+                {
+                    EgressReceipt = intent.EgressReceipt
+                };
             }
 
             async Task CompleteDispatchAsync(
@@ -582,6 +756,14 @@ public static partial class CoordinationEndpoints
                         "maf_execution_child_completion_stale", StatusCodes.Status409Conflict);
                 }
                 await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                MafExecutionEgressGuard.RequireSameReceipt(
+                    intent.EgressReceipt, await VerifyEgressAsync(token).ConfigureAwait(false));
+                var currentChild = await ReadDispatchRegistrationAsync(intent, token)
+                    .ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_child_registration_stale", StatusCodes.Status409Conflict);
+                _ = await VerifyEgressForRegistrationAsync(
+                    currentChild, intent.ChildSessionId, token).ConfigureAwait(false);
                 try
                 {
                     _ = await store.FinishTurnAsync(
@@ -1036,11 +1218,17 @@ public static partial class CoordinationEndpoints
                 var platformAdvanced = false;
                 foreach (var action in frontier.ReadyActions)
                 {
+                    MafExecutionWorkflowBindings.RequireBoundAction(bound, action);
                     if (IsWallTimeLimitReached())
                     {
                         wallTimeLimitReached = true;
                         break;
                     }
+                    // Fixed-work authorization is not part of the shared receipt contract yet; refuse before any I/O.
+                    if (action.Step.Mode == WorkflowStepMode.Fixed)
+                        throw new CoordinationException(
+                            "maf_child_spawn_fixed_authorization_unavailable",
+                            StatusCodes.Status503ServiceUnavailable);
                     if (MafBuildTestCommandContract.IsExecutable(action.Step))
                     {
                         var commandIntent = await PrepareBuildTestAsync(action.Step, cancellationToken)
@@ -1049,55 +1237,30 @@ public static partial class CoordinationEndpoints
                             .ConfigureAwait(false);
                         continue;
                     }
-                    MafExecutionFixedWorkAssociation? fixedAssociation = null;
-                    ConfirmedWorkPlanItemAssociation? workPlanAssociation = null;
-                    string associationId;
-                    string task;
-                    if (action.WorkItem is { } workItem)
-                    {
-                        associationId = workItem.Id;
-                        task = workItem.Task;
-                        workPlanAssociation = new ConfirmedWorkPlanItemAssociation(
-                            workItem.Id, decision.StateVersion, decision.SelectionHash);
-                    }
-                    else if (action.Step.Mode == WorkflowStepMode.Fixed)
-                    {
-                        var activationRevision = checkpoint.State.FixedWorkAssociations.Values
-                            .Where(association =>
-                                association.WorkPlanId == plan.Plan.Id && association.StepId == action.Step.Id)
-                            .Select(association => association.ActivationRevision)
-                            .DefaultIfEmpty(0)
-                            .Max() + 1;
-                        associationId = MafExecutionPlanner.CreateFixedWorkAssociationId(
-                            identity, plan.Plan.Id, action.Step.Id, activationRevision);
-                        var fixedChildSessionId = MafExecutionPlanner.CreateChildSessionId(
-                            identity, plan.Plan.Id, associationId);
-                        fixedAssociation = MafExecutionPlanner.CreateFixedWorkAssociation(
-                            plan,
-                            selectionContext,
-                            identity,
-                            action.Step,
-                            decision.SelectionHash,
-                            decision.State.Fence,
-                            decision.StateVersion,
-                            activationRevision,
-                            fixedChildSessionId);
-                        task = fixedAssociation.Specification.Task;
-                    }
-                    else
-                    {
+                    if (action.WorkItem is not { } workItem)
                         throw new CoordinationException(
                             "maf_execution_executor_unavailable", StatusCodes.Status409Conflict);
-                    }
-
-                    var childSessionId = fixedAssociation?.ChildSessionId ??
-                        MafExecutionPlanner.CreateChildSessionId(identity, plan.Plan.Id, associationId);
-                    var prompt = BuildPrompt(action, checkpoint.State, associationId, fixedAssociation);
+                    var associationId = workItem.Id;
+                    var task = workItem.Task;
+                    var workPlanAssociation = new ConfirmedWorkPlanItemAssociation(
+                        workItem.Id, decision.StateVersion, decision.SelectionHash);
+                    var childSessionId = MafExecutionPlanner.CreateChildSessionId(
+                        identity, plan.Plan.Id, associationId);
+                    var spawnAuthorizationIntent = MafExecutionWorkflowBindings.CreateOpenChildSpawnIntent(
+                        plan, identity, action, selection.Selection.ContextRevision,
+                        decision.StateVersion, decision.State.Fence);
+                    var prompt = BuildPrompt(action, checkpoint.State, associationId, null);
+                    await RequireChildSpawnAllowedAsync(
+                        spawnAuthorizationIntent, cancellationToken).ConfigureAwait(false);
+                    var egressReceipt = await VerifyEgressAsync(cancellationToken).ConfigureAwait(false);
                     var intent = new MafExecutionDispatchIntent(
                         associationId,
                         childSessionId,
-                        MafExecutionPlanner.CreateDispatchMessageId(identity, plan.Plan.Id, associationId),
-                        RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)));
+                        spawnAuthorizationIntent.IntentId,
+                        RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)))
+                    {
+                        EgressReceipt = egressReceipt
+                    };
                     var childIdentity = new SessionIdentity(projectId, runId, childSessionId);
                     var spawn = new SpawnSessionRequest(
                         childSessionId,
@@ -1110,6 +1273,8 @@ public static partial class CoordinationEndpoints
                     checkedActor.Bearer.Invalidate();
                     await events.EnsureSessionAsync(context, childIdentity, cancellationToken).ConfigureAwait(false);
                     await RevalidateDispatchAsync(cancellationToken).ConfigureAwait(false);
+                    MafExecutionEgressGuard.RequireSameReceipt(
+                        egressReceipt, await VerifyEgressAsync(cancellationToken).ConfigureAwait(false));
                     await store.SpawnSessionAsync(
                         actor,
                         identity,
@@ -1138,8 +1303,17 @@ public static partial class CoordinationEndpoints
                                  latest.State.DecisionStateVersion > decision.StateVersion))
                                 throw new CoordinationException(
                                     "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
+                            // The root owner lock serializes concurrent spawn callbacks. Recompute readiness
+                            // from the latest checkpoint, not from the pre-I/O frontier (including conflict edges).
+                            if (latest?.State.PendingDispatches.TryGetValue(associationId, out var existing) != true ||
+                                existing != intent)
+                                MafExecutionPlanner.RequireReadyDispatchAction(
+                                    plan, latest?.State.Progress ?? MafExecutionProgress.Empty,
+                                    latest?.State.FixedWorkAssociations, action);
+                            await RequireChildSpawnConsumedAsync(
+                                connection, transaction, spawnAuthorizationIntent, token).ConfigureAwait(false);
                             var next = PrepareRunningCheckpoint(
-                                latest, plan.Plan.Id, decision.StateVersion, associationId, fixedAssociation, intent);
+                                latest, plan.Plan.Id, decision.StateVersion, associationId, null, intent);
                             if (next is null)
                                 return;
                             _ = await execution.AppendInTransactionAsync(

@@ -171,6 +171,112 @@ public sealed class MafChildSpawnAuthorizationOwnerStoreTests(
     }
 
     [Fact]
+    public async Task ChildSpawnCheckpointOutboxAndAllowConsumptionCommitOrRollbackTogether()
+    {
+        // Seed the exact policy allow so the spawn transaction can consume durable evidence, not a provider binding.
+        var authorizationStore = CreateStore();
+        var grant = await authorizationStore.IssueGrantAsync(
+            _intent, _authority, CancellationToken.None);
+        var policyReceiptId = Guid.NewGuid();
+        await InsertPolicyAllowAsync(grant, policyReceiptId);
+        _ = await authorizationStore.StoreAllowAsync(
+            _intent, _authority, policyReceiptId, CancellationToken.None);
+
+        // Use the same owner stores and checkpoint binding as production dispatch.
+        var actor = new CoordinationActor(_authority.ActorIssuer, _authority.ActorId);
+        var root = new SessionIdentity(_authority.ProjectId, _authority.RunId, _intent.RootSessionId);
+        var owner = new CoordinationOwnerStore(fixture.DataSource, _schema);
+        var execution = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(fixture.DataSource, _schema, null),
+            new MafCheckpointBinding(
+                root, actor, _intent.ExecutionFence, "maf-test-sdk", "model:provider/alpha", null));
+        var childSessionId = MafExecutionPlanner.CreateChildSessionId(
+            root, _intent.PlanId, _intent.WorkItemId);
+        var dispatchIntent = new MafExecutionDispatchIntent(
+            _intent.WorkItemId, childSessionId, _intent.IntentId, new string('a', 64));
+        var request = new SpawnSessionRequest(
+            childSessionId,
+            CoordinationSessionKind.ChildWork,
+            _intent.IntentId.ToString("N"),
+            _workItem.Task,
+            WorkPlanItemId: _workItem.Id);
+        var association = new ConfirmedWorkPlanItemAssociation(
+            _workItem.Id, _intent.PlanRevision, _authority.AcceptedSelectionHash);
+
+        // A callback failure after consumption must roll back the session, outbox, receipt consumption and checkpoint.
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            SpawnAsync(failAfterConsumption: true));
+        Assert.Equal((0L, 0L, 0L), await CountSpawnStateAsync());
+        Assert.Null(await execution.ReadLatestAsync(CancellationToken.None));
+
+        // The successful retry consumes the same allow atomically with all durable dispatch state.
+        var spawned = await SpawnAsync(failAfterConsumption: false);
+        var checkpoint = await execution.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(checkpoint);
+        Assert.Equal(MafExecutionTaskStatus.Running,
+            checkpoint.State.Progress.WorkItems[_workItem.Id]);
+        Assert.Equal((1L, 1L, 1L), await CountSpawnStateAsync());
+
+        // Replaying the same command preserves the one child, outbox row, checkpoint and consumed receipt.
+        var replay = await SpawnAsync(failAfterConsumption: false);
+        Assert.Equal(spawned.CommandId, replay.CommandId);
+        Assert.Equal((1L, 1L, 1L), await CountSpawnStateAsync());
+
+        async Task<SpawnedSession> SpawnAsync(bool failAfterConsumption)
+        {
+            // The callback runs inside the spawn transaction, matching the production owner-local boundary.
+            return await owner.SpawnSessionAsync(
+                actor, root, request, 100, 32, CancellationToken.None, association,
+                persistSpawnedInTransaction: async (connection, transaction, spawnedSession, token) =>
+                {
+                    Assert.Equal(childSessionId, spawnedSession.Node.Identity.SessionId);
+                    var consumed = await authorizationStore.CheckAndConsumeWithinTransactionAsync(
+                        connection, transaction, _intent, _authority, token);
+                    Assert.Equal(_intent.IntentId, consumed.Evidence.IntentId);
+                    Assert.Equal(
+                        MafChildSpawnAuthorizationContract.ComputeIntentHash(_intent),
+                        consumed.Evidence.IntentHash);
+                    if (failAfterConsumption)
+                        throw new InvalidOperationException("checkpoint append failed after receipt consumption");
+
+                    // Prepare and append the Running checkpoint only after the exact allow is consumed.
+                    var latest = await execution.ReadLatestInTransactionAsync(
+                        connection, transaction, token);
+                    var next = CoordinationEndpoints.PrepareRunningCheckpoint(
+                        latest, _intent.PlanId, _intent.PlanRevision, _workItem.Id, null, dispatchIntent);
+                    if (next is not null)
+                        _ = await execution.AppendInTransactionAsync(
+                            connection, transaction, Guid.NewGuid().ToString("N"), latest?.Info, next, token);
+                });
+        }
+
+        async Task<(long Children, long Spawns, long Consumptions)> CountSpawnStateAsync()
+        {
+            // Count only rows owned by this test's root and exact spawn intent.
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand($"""
+                SELECT
+                    (SELECT count(*) FROM "{_schema}".coordination_sessions
+                     WHERE project_id = @project AND run_id = @run AND parent_session_id = @root),
+                    (SELECT count(*) FROM "{_schema}".outbox_events
+                     WHERE event_type = 'orchestrator.session.spawn_requested'
+                       AND stream_id = @stream),
+                    (SELECT count(*) FROM "{_schema}".maf_child_spawn_authorization_consumptions
+                     WHERE project_id = @project AND run_id = @run AND spawn_intent_id = @intent)
+                """, connection);
+            command.Parameters.AddWithValue("project", _authority.ProjectId);
+            command.Parameters.AddWithValue("run", _authority.RunId);
+            command.Parameters.AddWithValue("root", _intent.RootSessionId);
+            command.Parameters.AddWithValue(
+                "stream", $"coordination/{_authority.ProjectId}/{_authority.RunId}/{_intent.RootSessionId}");
+            command.Parameters.AddWithValue("intent", _intent.IntentId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
+        }
+    }
+
+    [Fact]
     public async Task AuthorizationRetryLocksOwnerStateBeforeAConcurrentGrantTransition()
     {
         var store = CreateStore();

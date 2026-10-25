@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.Http;
@@ -72,7 +73,11 @@ internal sealed record MafExecutionDispatchIntent(
     string AssociationId,
     string ChildSessionId,
     Guid MessageId,
-    string PromptHash);
+    string PromptHash)
+{
+    /// <summary>Exact Environment generation, policy and selection verified before the owner committed this intent.</summary>
+    public RuntimeEgressVerificationReceipt? EgressReceipt { get; init; }
+}
 
 /// <summary>
 /// The persisted, authority-bound intent for one platform BuildTest command.
@@ -351,6 +356,23 @@ internal static class MafExecutionCheckpointContract
     {
         ValidateState(previous);
         ValidateState(next);
+        foreach (var (associationId, intent) in previous.PendingDispatches)
+        {
+            // Once recorded, an intent can only remain identical or be replaced by its terminal result.
+            if (next.PendingDispatches.TryGetValue(associationId, out var retained)
+                ? retained != intent
+                : !next.Results.ContainsKey(associationId))
+                throw new ArgumentException(
+                    "A persisted dispatch intent cannot be changed or dropped without a result.", nameof(next));
+        }
+        // Terminal output is append-only, so a retry cannot rewrite a child's completed answer.
+        foreach (var (associationId, result) in previous.Results)
+        {
+            if (!next.Results.TryGetValue(associationId, out var retained) ||
+                !string.Equals(result, retained, StringComparison.Ordinal))
+                throw new ArgumentException(
+                    "A completed dispatch result cannot be changed or removed.", nameof(next));
+        }
         foreach (var (stepId, intent) in previous.BuildTestIntents)
         {
             if (!next.BuildTestIntents.TryGetValue(stepId, out var retained) ||
@@ -439,6 +461,10 @@ internal static class MafExecutionCheckpointContract
                 state.Progress.WorkItems.GetValueOrDefault(associationId,
                     state.Progress.FixedWorkItems.GetValueOrDefault(associationId)) != MafExecutionTaskStatus.Running)
                 throw new ArgumentException("MAF execution dispatch intents are invalid.", nameof(state));
+            // Older checkpoints remain readable, but a present receipt must be a complete bound proof.
+            if (intent.EgressReceipt is { } receipt)
+                _ = receipt.ValidateFor(new RuntimeEgressVerificationRequest(
+                    1, receipt.Fence, receipt.PolicyGeneration, receipt.ContextRevision));
         }
 
         foreach (var (associationId, result) in state.Results)
