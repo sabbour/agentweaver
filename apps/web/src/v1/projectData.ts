@@ -41,6 +41,7 @@ function useScopedLoad<T>(
   );
   // Bumping the generation re-runs the load effect; reload() uses it.
   const [generation, setGeneration] = useState(0);
+  const readVersion = useRef(0);
   // Callers pass new inline functions on every render. Keeping them in refs lets the
   // effect use the latest ones without restarting the load each render.
   const readRef = useRef(read);
@@ -56,6 +57,7 @@ function useScopedLoad<T>(
     if (!hasReader) return;
     // `active` turns false on cleanup so a late response cannot overwrite newer state.
     let active = true;
+    const version = ++readVersion.current;
     // Start the read on the next tick instead of inside the effect body.
     const timer = window.setTimeout(() => {
       const reader = readRef.current;
@@ -63,7 +65,8 @@ function useScopedLoad<T>(
       // `null` binding: these reads use the unbound session token.
       void apiCall(reader, null)
         .then((value) => {
-          if (!active) return;
+          // A successful write supersedes reads that started before it.
+          if (!active || version !== readVersion.current) return;
           // The caller's check confirms the response is for the requested item.
           // A mismatch is treated as an error so another project's data is never shown.
           if (!acceptRef.current(value)) throw new Error('The service returned data for a different project.');
@@ -72,7 +75,7 @@ function useScopedLoad<T>(
         .catch((reason: unknown) => {
           // On failure, keep the last good data for the same scope so the page does not go blank.
           // Data from a different scope is dropped.
-          if (active) setState((previous) => ({
+          if (active && version === readVersion.current) setState((previous) => ({
             scope,
             data: previous.scope === scope ? previous.data : null,
             error: reason,
@@ -88,7 +91,10 @@ function useScopedLoad<T>(
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
   // After a successful save, the page can store the returned value directly instead of reading again.
-  const replace = useCallback((next: T) => setState({ scope, data: next, error: null, loadedAt: new Date() }), [scope]);
+  const replace = useCallback((next: T) => {
+    readVersion.current += 1;
+    setState({ scope, data: next, error: null, loadedAt: new Date() });
+  }, [scope]);
   // Hide state that belongs to an older scope.
   const current = state.scope === scope;
   return {
