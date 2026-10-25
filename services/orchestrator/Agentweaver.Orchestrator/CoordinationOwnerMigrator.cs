@@ -591,7 +591,7 @@ public static class CoordinationOwnerMigrator
             // checks, the six version 030 checks, and the two version 031 checks precede the
             // optional-033, optional-032, optional-036, optional-035, optional-037, and optional-038 shape checks.
             // A partial apply never counts as ready.
-            Enumerable.Range(57, 48).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(57, 49).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }
