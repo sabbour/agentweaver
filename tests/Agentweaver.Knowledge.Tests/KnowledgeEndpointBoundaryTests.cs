@@ -262,17 +262,26 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 .GetProperty("record").GetProperty("state").GetString()));
 
         // The new filter must not bypass the unbound-token and current private-knowledge checks.
+        owner.ClearPaths();
         using var runBound = new HttpRequestMessage(HttpMethod.Get,
             "/api/projects/project-a/knowledge/records?kind=proposal&state=pending");
         runBound.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
         using var denied = await client.SendAsync(runBound);
+        using var deniedBody = JsonDocument.Parse(await denied.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal(
+            "project_wide_authority_required",
+            deniedBody.RootElement.GetProperty("code").GetString());
+        Assert.Equal(["/api/authorization/context"], owner.Paths);
+
         owner.DenyRunSelectionPermission();
+        owner.ClearPaths();
         using var unbound = new HttpRequestMessage(HttpMethod.Get,
             "/api/projects/project-a/knowledge/records?kind=proposal&state=pending");
         unbound.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "unbound-token");
         using var revoked = await client.SendAsync(unbound);
         Assert.Equal(HttpStatusCode.Forbidden, revoked.StatusCode);
+        Assert.Equal(["/api/authorization/context"], owner.Paths);
     }
 
     [Theory]
@@ -1718,7 +1727,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             _cacheControlHeaders.Enqueue(request.Headers.CacheControl?.ToString());
             object payload;
             if (path == "/api/authorization/context")
-                payload = Authority();
+                payload = Authority(request.Headers.Authorization?.Parameter);
             else if (path.StartsWith("/internal/projects/project-a/runs/", StringComparison.Ordinal) &&
                      path.EndsWith("/knowledge-selection", StringComparison.Ordinal))
             {
@@ -1745,8 +1754,10 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             });
         }
 
-        private ProjectAuthorizationContextResponse Authority()
+        private ProjectAuthorizationContextResponse Authority(string? token)
         {
+            // The owner context must mirror each request's token; a test can use bound and unbound callers in sequence.
+            var callerIsBound = bindCaller || !string.Equals(token, "unbound-token", StringComparison.Ordinal);
             var permissions = ImmutableArray.CreateBuilder<ProjectAuthorizationPermissionGrant>();
             permissions.Add(new ProjectAuthorizationPermissionGrant(
                 ProjectAuthorizationPermission.ReadProjects, 1));
@@ -1766,8 +1777,8 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 "actor-a",
                 "tenant-a",
                 1,
-                bindCaller ? "project-a" : null,
-                bindCaller ? "run-a" : null,
+                callerIsBound ? "project-a" : null,
+                callerIsBound ? "run-a" : null,
                 [new EffectiveProjectAuthorization(
                     ProjectAuthorityResourceType.Project,
                     "project-a",
