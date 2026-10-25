@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
@@ -14,6 +14,9 @@ const sourceTree = 'b'.repeat(40);
 const imageDigest = `sha256:${'1'.repeat(64)}`;
 const componentId = 'Agentweaver.Projects.Config';
 const image = 'ghcr.io/sabbour/agentweaver.projects.config@' + imageDigest;
+const bootstrapSubject = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const bootstrapTenantId = '11111111-2222-4333-8444-555555555555';
+const bootstrapIssuer = 'https://agentweaver.synthetic.example/';
 const manifest = {
   stage: 'draft',
   components: [{ id: componentId, kind: 'service', version: '1.0.9' }],
@@ -50,16 +53,18 @@ function createWorld({
     metadata: { name: 'projects-config-runtime-config', namespace: DB_MAINTENANCE_TARGET.namespace },
     immutable: true,
     data: {
-      ProjectsConfig__Authentication__Authority: 'https://agentweaver.example.aksapp.io/',
-      ProjectsConfig__PrivilegedSetup__ApprovedIssuer: 'https://agentweaver.example.aksapp.io/',
-      ProjectsConfig__PrivilegedSetup__ApprovedSubject: 'approved-subject',
-      ProjectsConfig__PrivilegedSetup__ApprovedTenantId: 'approved-tenant',
+      ProjectsConfig__Authentication__Authority: bootstrapIssuer,
+      ProjectsConfig__PrivilegedSetup__ApprovedIssuer: bootstrapIssuer,
+      ProjectsConfig__PrivilegedSetup__ApprovedSubject: bootstrapSubject,
+      ProjectsConfig__PrivilegedSetup__ApprovedTenantId: bootstrapTenantId,
     },
   },
   originV1 = deploymentSourceSha,
   grants = async () => grantResult(),
 } = {}) {
-  const directory = mkdtempSync(path.join(tmpdir(), 'projects-config-migration-test-'));
+  const directory = path.join(
+    process.cwd(), '.test-scratch', `projects-config-migration-test-${randomUUID()}`);
+  mkdirSync(directory, { recursive: true });
   const calls = [];
   const kubeconfigOptions = [];
   const objects = new Map();
@@ -123,14 +128,16 @@ function createWorld({
   return {
     calls, kubeconfigOptions, objects, receipts,
     options: parseProjectsConfigMigrationArgs([
-      '--publication', 'publication.json', '--receipt-dir', directory,
+      '--publication', 'publication.json', '--receipt-dir', path.join(directory, 'receipts'),
     ]),
     overrides: {
-      root: process.cwd(),
+      root: path.join(directory, 'checkout'),
       exec,
       readFile: file => file.endsWith('publication.json')
         ? JSON.stringify(publication)
-        : readFileSync(file, 'utf8'),
+        : readFileSync(file.endsWith('job.yaml')
+          ? path.join(process.cwd(), 'deploy', 'k8s', 'migrations', 'projects-config', 'job.yaml')
+          : file, 'utf8'),
       verifyImage: async () => ({
         digest: imageDigest, sourceSha: publicationSourceSha, sourceTree, version: '1.0.9',
       }),
@@ -241,8 +248,72 @@ test('PlatformAdmin bootstrap creates one pinned Job, parses the stable outcome,
           container.env.find(entry => entry.name === key)?.valueFrom?.configMapKeyRef,
           { name: 'projects-config-runtime-config', key });
       }
+      assert.equal(
+        container.env.find(entry =>
+          entry.name === 'ProjectsConfig__Authentication__Authority')?.valueFrom?.configMapKeyRef?.key,
+        'ProjectsConfig__Authentication__Authority');
+      assert.equal(
+        container.env.find(entry =>
+          entry.name === 'ProjectsConfig__PrivilegedSetup__ApprovedIssuer')?.valueFrom?.configMapKeyRef?.key,
+        'ProjectsConfig__PrivilegedSetup__ApprovedIssuer');
       assert.equal(world.objects.size, 0);
-      assert.equal(JSON.stringify(receipt).includes('approved-subject'), false);
+      assert.equal(JSON.stringify(receipt).includes(bootstrapSubject), false);
+      assert.equal(JSON.stringify(receipt).includes(bootstrapTenantId), false);
+      assert.equal(JSON.stringify(receipt).includes(bootstrapIssuer), false);
+    } finally {
+      world.dispose();
+    }
+  }
+});
+
+test('PlatformAdmin bootstrap failure records its stable outcome and sanitized diagnostic', async () => {
+  const world = createWorld({
+    jobOutcome: 'Failed',
+    bootstrapLog: [
+      'First PlatformAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.',
+      'PlatformAdmin bootstrap diagnostic: ExceptionType=DbUpdateException; InnerExceptionType=PostgresException; SqlState=23505; ConstraintName=unknown; TableName=unknown',
+    ].join('\n'),
+  });
+  try {
+    await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+      ...world.options, execute: true, bootstrapFirstPlatformAdmin: true,
+    }, world.overrides)), /command failed; review the sanitized diagnostic in the receipt/);
+    assert.equal(world.receipts[0].receipt.result, 'failed');
+    assert.equal(world.receipts[0].receipt.bootstrap.outcome, 'failed');
+    assert.equal(
+      world.receipts[0].receipt.bootstrap.diagnostic,
+      'ExceptionType=DbUpdateException; InnerExceptionType=PostgresException; SqlState=23505; ConstraintName=unknown; TableName=unknown');
+    assert.deepEqual(world.receipts[0].receipt.cleanup, { job: true, secret: true, lock: true });
+    assert.equal(world.objects.size, 0);
+  } finally {
+    world.dispose();
+  }
+});
+
+test('PlatformAdmin bootstrap rejects untrusted diagnostic text without persisting it', async () => {
+  const untrustedMessages = [
+    'password="secret with spaces"',
+    'authority=https://user:pass@example.test/path',
+    'token=first-line\nsecond-line-secret',
+  ];
+
+  for (const message of untrustedMessages) {
+    const world = createWorld({
+      jobOutcome: 'Failed',
+      bootstrapLog: [
+        'First PlatformAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.',
+        `PlatformAdmin bootstrap diagnostic: ExceptionType=InvalidOperationException; Category=invalid-bootstrap-configuration; ${message}`,
+      ].join('\n'),
+    });
+    try {
+      await assert.rejects(withMigrationCredentials(() => runProjectsConfigMigration({
+        ...world.options, execute: true, bootstrapFirstPlatformAdmin: true,
+      }, world.overrides)), /unexpected diagnostic output/);
+      const receipt = JSON.stringify(world.receipts[0].receipt);
+      assert.equal(receipt.includes(message), false);
+      assert.equal(receipt.includes('secret with spaces'), false);
+      assert.equal(receipt.includes('user:pass@'), false);
+      assert.equal(receipt.includes('second-line-secret'), false);
     } finally {
       world.dispose();
     }
@@ -464,7 +535,7 @@ test('execute and dry run require the fetched origin/v1 tip before any Kubernete
 test('the receipt directory must be outside the source checkout', async () => {
   const world = createWorld();
   try {
-    const options = { ...world.options, receiptDir: path.join(process.cwd(), 'receipts') };
+    const options = { ...world.options, receiptDir: path.join(world.overrides.root, 'receipts') };
     await assert.rejects(runProjectsConfigMigration(options, world.overrides), /--receipt-dir must be outside/);
     assert.equal(world.calls.length, 0);
     assert.equal(world.receipts.length, 0);
@@ -474,8 +545,11 @@ test('the receipt directory must be outside the source checkout', async () => {
 });
 
 test('grant stage receipts move out of Temp and leave unrelated files in place', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'projects-config-grants-root-'));
-  const destination = mkdtempSync(path.join(tmpdir(), 'projects-config-grants-receipts-'));
+  const scratch = path.join(process.cwd(), '.test-scratch', `projects-config-grants-${randomUUID()}`);
+  const root = path.join(scratch, 'checkout');
+  const destination = path.join(scratch, 'receipts');
+  mkdirSync(root, { recursive: true });
+  mkdirSync(destination, { recursive: true });
   try {
     assert.deepEqual(collectGrantStageReceipts(root, destination, 'abcdef123456'), []);
     const temp = path.join(root, 'Temp');
@@ -494,7 +568,6 @@ test('grant stage receipts move out of Temp and leave unrelated files in place',
     assert.deepEqual(collectGrantStageReceipts(root, destination, 'abcdef123456'), []);
     assert.equal(existsSync(path.join(temp, 'unrelated.txt')), true);
   } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(destination, { recursive: true, force: true });
+    rmSync(scratch, { recursive: true, force: true });
   }
 });

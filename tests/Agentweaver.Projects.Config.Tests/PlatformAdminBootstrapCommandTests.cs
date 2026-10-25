@@ -50,6 +50,25 @@ public sealed class PlatformAdminBootstrapCommandTests
     }
 
     [Fact]
+    public void ReadsSyntheticConfigMapEnvironmentValuesWithTrailingSlashIssuer()
+    {
+        const string issuer = "https://agentweaver.synthetic.example/";
+        const string subject = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        const string tenantId = "11111111-2222-4333-8444-555555555555";
+        var configuration = CreateConfiguration(
+            ("ProjectsConfig:Authentication:Authority", issuer),
+            ("ProjectsConfig:PrivilegedSetup:ApprovedIssuer", issuer),
+            ("ProjectsConfig:PrivilegedSetup:ApprovedSubject", subject),
+            ("ProjectsConfig:PrivilegedSetup:ApprovedTenantId", tenantId));
+
+        var identity = PlatformAdminBootstrapCommand.ReadApprovedIdentity(configuration);
+
+        Assert.Equal(issuer, identity.Issuer);
+        Assert.Equal(subject, identity.Subject);
+        Assert.Equal(tenantId, identity.TenantId);
+    }
+
+    [Fact]
     public void BootstrapArgumentMustBeUsedAlone()
     {
         Assert.True(PlatformAdminBootstrapCommand.IsCommandAlone(
