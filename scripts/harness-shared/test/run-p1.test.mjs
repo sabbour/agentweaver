@@ -654,6 +654,70 @@ test('P1 CLI still cleans up the owned fixture when surface adapter creation fai
   }
 });
 
+test('P1 CLI cleans up the owned fixture before a session-material attachment failure', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+  const inputPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  const output = [];
+  const calls = [];
+  const invocationId = '00000000-0000-4000-8000-000000000325';
+  const sourceEvidence = {
+    services: { status: 'passed' },
+    agentHostImageMeasurement: { status: 'passed' },
+  };
+  try {
+    await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
+    await writeFile(outputPath, `${JSON.stringify(invocationRecord(validInput(), 'api', invocationId))}\n`, { encoding: 'utf8' });
+    const code = await runP1Cli([
+      '--surface', 'api', '--input', inputPath, '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+    ], { AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token' },
+    { log: text => output.push(text), error: text => output.push(text) }, {
+      async prepareDeploymentEvidence() { return sourceEvidence; },
+      createSetupApi() { return {}; },
+      async createFixture(validated, { invocationId: currentInvocationId }) {
+        calls.push('fixture');
+        assert.equal(currentInvocationId, invocationId);
+        const state = {
+          invocationId,
+          setup: { projectId: 'runner-owned-project' },
+          selection: { runId: 'runner-owned-run' },
+        };
+        return {
+          input: validated,
+          state,
+          async cleanup() {
+            calls.push('cleanup');
+            return { state: 'retainedPending', invocationId };
+          },
+        };
+      },
+      async createSurfaceAdapters() {
+        calls.push('adapters');
+        return { api: {}, deniedApi: {} };
+      },
+      async runSurfaceJourney(surface) {
+        calls.push('journey');
+        return createP1AcceptanceResult({ surface, surfaceStatus: 'passed', sourceEvidence });
+      },
+      attachSessionMaterialAcceptance() {
+        calls.push('attach');
+        throw new Error('Controlled session-material attachment failure.');
+      },
+    });
+    assert.equal(code, 1);
+    assert.deepEqual(calls, ['fixture', 'adapters', 'journey', 'cleanup', 'attach']);
+    const result = JSON.parse(output.at(-1));
+    assert.equal(result.surfaceStatus, 'passed');
+    assert.equal(result.fullP1Status, 'failed');
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.observations.fixtureSetup.cleanup.state, 'retainedPending');
+    assert.match(result.failure.message, /Controlled session-material attachment failure/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('P1 CLI does not persist a blocked result over an input, envelope, or deployment artifact', async () => {
   for (const artifact of ['input', 'native-envelope', 'dispatch-envelope', 'publication', 'integration-deployment']) {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
