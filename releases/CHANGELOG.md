@@ -2,6 +2,20 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-26T06:47:14.901Z — source `6765db541836bf7737db9b56206baabbf9174327`
+
+- `Agentweaver.Abstractions`: 1.5.0 -> 1.6.0 (minor) — .changeset/open-pull-request-platform-gate.md, .changeset/pending-proposal-summary.md
+- `Agentweaver.AgentRuntime`: 1.3.0 -> 1.3.1 (patch) — .changeset/rubberduck-local-review.md, .changeset/runtime-material-recovery-2351.md
+- `Agentweaver.Environment`: 1.3.0 -> 1.3.1 (patch) — .changeset/current-egress-verification.md
+- `Agentweaver.EventsAndSessions`: 1.4.0 -> 1.5.0 (minor) — .changeset/session-material-owner-retention.md
+- `Agentweaver.Gateway`: 1.6.0 -> 1.7.0 (minor) — .changeset/maf-execution-recovery-status.md, .changeset/pending-proposal-summary.md
+- `Agentweaver.Identity`: 1.5.0 -> 1.6.0 (minor) — .changeset/current-egress-verification.md
+- `Agentweaver.Knowledge`: 1.1.1 -> 1.2.0 (minor) — .changeset/pending-proposal-summary.md
+- `Agentweaver.Orchestrator`: 1.6.0 -> 1.7.0 (minor) — .changeset/bounded-owner-dispatch-egress-1855.md, .changeset/current-egress-verification.md, .changeset/fixed-work-dispatch.md, .changeset/fixed-work-spawn-authorization.md, .changeset/independent-review-executor.md, .changeset/maf-child-spawn-authorization.md, .changeset/maf-execution-recovery-status.md, .changeset/maf-merge-recovery-projection.md, .changeset/merge-platform-gate.md, .changeset/open-pull-request-platform-gate.md, .changeset/rubberduck-local-review.md
+- `Agentweaver.Orchestrator.Core`: 1.3.0 -> 1.4.0 (minor) — .changeset/catalog-executor-binding.md, .changeset/fixed-work-dispatch.md, .changeset/fixed-work-spawn-authorization.md, .changeset/maf-child-spawn-authorization.md
+- `Agentweaver.SourceControl`: 1.2.0 -> 1.3.0 (minor) — .changeset/open-pull-request-platform-gate.md
+- `Agentweaver.Web`: 1.6.0 -> 1.7.0 (minor) — .changeset/memories-summary-metrics.md, .changeset/pending-proposal-summary.md, .changeset/workflows-page-parity.md
+
 ## 2026-10-25T11:34:38.557Z — source `5b943d4fb22850ef2116df54147692ae802d9975`
 
 - `Agentweaver.Web`: 1.5.0 -> 1.6.0 (minor) — .changeset/web-app-version.md

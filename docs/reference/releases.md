@@ -20,31 +20,31 @@ digests or release evidence, so it is not an accepted platform release.
 
 | Component | Kind | Draft version |
 | --- | --- | --- |
-| `Agentweaver.Abstractions` | Contract | `1.2.0` |
+| `Agentweaver.Abstractions` | Contract | `1.6.0` |
 | `Agentweaver.Providers` | Library | `1.1.0` |
-| `Agentweaver.SourceControl` | Library | `1.1.0` |
-| `Agentweaver.Orchestrator.Core` | Library | `1.2.0` |
-| `Agentweaver.Persistence.Postgres` | Library | `1.1.1` |
+| `Agentweaver.SourceControl` | Library | `1.3.0` |
+| `Agentweaver.Orchestrator.Core` | Library | `1.4.0` |
+| `Agentweaver.Persistence.Postgres` | Library | `1.2.2` |
 | `Agentweaver.Secrets.AzureKeyVault` | Library | `1.0.2` |
-| `Agentweaver.Identity` | Library | `1.4.0` |
-| `Agentweaver.AgentRuntime` | Library | `1.2.0` |
-| `Agentweaver.AgentHost` | Service | `1.0.3` |
+| `Agentweaver.Identity` | Library | `1.6.0` |
+| `Agentweaver.AgentRuntime` | Library | `1.3.1` |
+| `Agentweaver.AgentHost` | Service | `1.1.0` |
 | `Agentweaver.Telemetry` | Library | `1.0.2` |
 | `Agentweaver.Telemetry.AzureMonitor` | Library | `1.0.2` |
 | `Agentweaver.ObjectStore.AzureBlob` | Library | `1.0.2` |
-| `Agentweaver.Identity.Broker` | Service | `1.2.0` |
-| `Agentweaver.EventsAndSessions` | Service | `1.3.0` |
-| `Agentweaver.Gateway` | Service | `1.3.0` |
-| `Agentweaver.Mcp` | Service | `1.0.4` |
-| `Agentweaver.Web` | Service | `1.2.0` |
-| `Agentweaver.Orchestrator` | Service | `1.3.0` |
-| `Agentweaver.Environment` | Service | `1.2.0` |
-| `Agentweaver.Knowledge` | Service | `1.1.0` |
-| `Agentweaver.Projects.Config` | Service | `1.3.0` |
+| `Agentweaver.Identity.Broker` | Service | `1.3.0` |
+| `Agentweaver.EventsAndSessions` | Service | `1.5.0` |
+| `Agentweaver.Gateway` | Service | `1.7.0` |
+| `Agentweaver.Mcp` | Service | `1.0.5` |
+| `Agentweaver.Web` | Service | `1.7.0` |
+| `Agentweaver.Orchestrator` | Service | `1.7.0` |
+| `Agentweaver.Environment` | Service | `1.3.1` |
+| `Agentweaver.Knowledge` | Service | `1.2.0` |
+| `Agentweaver.Projects.Config` | Service | `1.7.1` |
 | `Agentweaver.FoundationProbe` | Acceptance-only service | `0.0.4` |
 | `Agentweaver.Providers.Storage.AzureFiles` | Library | `1.0.4` |
 | `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `1.1.4` |
-| `Agentweaver.Providers.Sessions.AgentSessions` | Library | `0.1.0` |
+| `Agentweaver.Providers.Sessions.AgentSessions` | Library | `0.2.0` |
 
 The manifest pins project-reference compatibility but does not yet pin service
 images. Its compatibility table contains 59 direct dependency relationships.
@@ -116,16 +116,20 @@ semantic-version intent. Documentation-only changes do not require a changeset.
    CI verifies the integrated source and the original plan source independently.
    Wait for the new receipt's CI and docs checks to pass before publication.
 
-After applying versions, restore the separate PostgreSQL initializer from the
-repository root and commit its generated lock file with the release changes:
+After applying versions, refresh and verify the project lock files from the
+repository root:
 
 ```powershell
-dotnet restore tools/P1PostgresInitializer/P1PostgresInitializer.csproj
+dotnet restore Agentweaver.slnx --force-evaluate
+dotnet restore tools/P1PostgresInitializer/P1PostgresInitializer.csproj --force-evaluate
+dotnet restore Agentweaver.slnx --locked-mode
+dotnet restore tools/P1PostgresInitializer/P1PostgresInitializer.csproj --locked-mode
 ```
 
-Use the SDK selected by `global.json`. Restoring the solution does not include
-this tool. CI checks its lock file separately with `--locked-mode`; a stale
-file fails validation rather than dirtying an operator's checkout at runtime.
+Use the SDK selected by `global.json`. The initializer is not part of the
+solution, so restore it separately. Commit refreshed lock files with the
+version changes; a stale lock fails validation rather than dirtying an
+operator's checkout at runtime.
 
 The current manifest remains a draft after version application. Applying a plan
 does not build, publish, deploy, or accept a release.
