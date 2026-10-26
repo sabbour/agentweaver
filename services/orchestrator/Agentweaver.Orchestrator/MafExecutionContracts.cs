@@ -226,6 +226,36 @@ internal sealed record MafOpenPullRequestTerminalReceipt(
     string HeadSha,
     string RequestFingerprint);
 
+/// <summary>The persisted, authority-bound Source Control merge request for one Merge gate.</summary>
+internal sealed record MafExecutionMergeIntent(
+    Guid OperationId,
+    string IdempotencyKey,
+    string OwnerIntentId,
+    string ApprovalRequestId,
+    SessionIdentity Identity,
+    string CheckpointId,
+    long CheckpointRevision,
+    string WorkPlanId,
+    string WorkflowId,
+    string DefinitionRevision,
+    string StepId,
+    long DecisionStateVersion,
+    long ExecutionFence,
+    string AcceptedSelectionHash,
+    string SourceControlPinId,
+    SourceControlRepositoryIdentity Repository,
+    long PullRequestNumber,
+    string ExpectedHeadSha,
+    SourceControlMergeMethod Method);
+
+/// <summary>Compact proof that the Source Control owner recorded the expected pull request as merged.</summary>
+internal sealed record MafMergeTerminalReceipt(
+    Guid OperationId,
+    string OwnerIntentId,
+    long PullRequestNumber,
+    string ExpectedHeadSha,
+    string MergeSha);
+
 /// <summary>
 /// A versioned checkpoint state for one work plan, including progress, pending dispatches, results, and platform evidence.
 /// State validation and transition checks prevent accepted intents and terminal receipts from being rewritten.
@@ -250,6 +280,10 @@ internal sealed record MafExecutionCheckpoint(
         ImmutableDictionary<string, MafExecutionOpenPullRequestIntent>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, MafOpenPullRequestTerminalReceipt> OpenPullRequestReceipts { get; init; } =
         ImmutableDictionary<string, MafOpenPullRequestTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafExecutionMergeIntent> MergeIntents { get; init; } =
+        ImmutableDictionary<string, MafExecutionMergeIntent>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafMergeTerminalReceipt> MergeReceipts { get; init; } =
+        ImmutableDictionary<string, MafMergeTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -446,6 +480,25 @@ internal static class MafExecutionCheckpointContract
                 throw new ArgumentException(
                     "A persisted OpenPullRequest terminal receipt cannot be removed or changed.", nameof(next));
         }
+        foreach (var (stepId, intent) in previous.MergeIntents)
+        {
+            if (!next.MergeIntents.TryGetValue(stepId, out var retained) ||
+                !MergeIntentsMatch(intent, retained))
+                throw new ArgumentException(
+                    "A persisted Merge intent cannot be removed or changed.", nameof(next));
+        }
+        if (next.MergeIntents.Any(item =>
+                !previous.MergeIntents.ContainsKey(item.Key) &&
+                (item.Value.CheckpointRevision != next.Revision ||
+                 item.Value.DecisionStateVersion != next.DecisionStateVersion)))
+            throw new ArgumentException(
+                "A new Merge intent must bind to the checkpoint that first stores it.", nameof(next));
+        foreach (var (stepId, receipt) in previous.MergeReceipts)
+        {
+            if (!next.MergeReceipts.TryGetValue(stepId, out var retained) || retained != receipt)
+                throw new ArgumentException(
+                    "A persisted Merge terminal receipt cannot be removed or changed.", nameof(next));
+        }
     }
 
     /// <summary>
@@ -500,6 +553,12 @@ internal static class MafExecutionCheckpointContract
             JsonSerializer.SerializeToElement(left, JsonOptions),
             JsonSerializer.SerializeToElement(right, JsonOptions));
 
+    /// <summary>Compares immutable Merge intent data after checkpoint serialization.</summary>
+    internal static bool MergeIntentsMatch(MafExecutionMergeIntent left, MafExecutionMergeIntent right) =>
+        JsonElement.DeepEquals(
+            JsonSerializer.SerializeToElement(left, JsonOptions),
+            JsonSerializer.SerializeToElement(right, JsonOptions));
+
     /// <summary>
     /// Validates bounded identifiers, status maps, dispatches, results, intents, receipts, and fixed-work associations.
     /// </summary>
@@ -516,7 +575,8 @@ internal static class MafExecutionCheckpointContract
             throw new ArgumentException("MAF execution fixed-work associations are required.", nameof(state));
         if (state.PendingDispatches is null || state.Results is null ||
             state.BuildTestIntents is null || state.BuildTestReceipts is null ||
-            state.OpenPullRequestIntents is null || state.OpenPullRequestReceipts is null)
+            state.OpenPullRequestIntents is null || state.OpenPullRequestReceipts is null ||
+            state.MergeIntents is null || state.MergeReceipts is null)
             throw new ArgumentException("MAF execution dispatch state is required.", nameof(state));
         if (state.Progress.WorkItems.Any(item =>
                 string.IsNullOrWhiteSpace(item.Key) || item.Key.Length > 128 ||
@@ -615,6 +675,35 @@ internal static class MafExecutionCheckpointContract
                     state.Progress.NonModelSteps.GetValueOrDefault(stepId))
                 throw new ArgumentException(
                     "The OpenPullRequest receipt does not match checkpoint progress.", nameof(state));
+        }
+        foreach (var (stepId, intent) in state.MergeIntents)
+        {
+            if (intent is null || stepId != intent.StepId ||
+                !IsIdentifier(intent.StepId) ||
+                intent.OperationId == Guid.Empty || !operationIds.Add(intent.OperationId) ||
+                !IsMetadataValue(intent.Identity.ProjectId) ||
+                !IsMetadataValue(intent.Identity.RunId) ||
+                !IsMetadataValue(intent.Identity.SessionId) ||
+                !IsIdentifier(intent.CheckpointId) ||
+                intent.CheckpointRevision < 1 || intent.CheckpointRevision > state.Revision ||
+                intent.WorkPlanId != state.WorkPlanId ||
+                intent.DecisionStateVersion < 1 ||
+                intent.DecisionStateVersion > state.DecisionStateVersion ||
+                intent.ExecutionFence < 1 ||
+                !MafMergeContract.IsValidIntent(intent) ||
+                !state.Progress.NonModelSteps.TryGetValue(stepId, out var status) ||
+                status == MafExecutionTaskStatus.Pending)
+                throw new ArgumentException("MAF Merge checkpoint intents are invalid.", nameof(state));
+            if (status != MafExecutionTaskStatus.Running && !state.MergeReceipts.ContainsKey(stepId))
+                throw new ArgumentException(
+                    "A terminal Merge step requires an owner-verified receipt.", nameof(state));
+        }
+        foreach (var (stepId, receipt) in state.MergeReceipts)
+        {
+            if (receipt is null || !state.MergeIntents.TryGetValue(stepId, out var intent) ||
+                MafMergeContract.ValidateReceipt(intent, receipt) !=
+                    state.Progress.NonModelSteps.GetValueOrDefault(stepId))
+                throw new ArgumentException("The Merge receipt does not match checkpoint progress.", nameof(state));
         }
 
         var childSessionIds = new HashSet<string>(StringComparer.Ordinal);

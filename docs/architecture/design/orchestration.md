@@ -429,7 +429,7 @@ intent; a failed callback rolls all three writes back. Results are immutable and
 terminal child status is joined in the owner transaction.
 
 The binder recognizes fixed/open child routes, the executable BuildTest gate,
-and OpenPullRequest when the authenticated Source Control owner is configured.
+OpenPullRequest, and Merge when the authenticated Source Control owner is configured.
 A workflow requiring another platform executor fails binding before child
 dispatch; this slice does not substitute a model task or fabricate a gate result.
 For fixed child work, dispatch constructs the fixed-work intent from the confirmed
@@ -474,6 +474,17 @@ flowchart TD
     VerifyPullRequest -->|"Yes"| SavePullRequestReceipt["Commit compact PR receipt and Succeeded status"]
     SavePullRequestReceipt --> DispatchWorkflow
     VerifyPullRequest -->|"No or owner error"| HoldPullRequest["Retain incomplete gate; report Source Control error"]
+    DispatchWorkflow --> MergeGate{"Ready Merge gate?"}
+    MergeGate -->|"Yes"| SaveMergeIntent["Persist exact operation and expected head"]
+    SaveMergeIntent --> PrepareMerge["Authenticated Source Control owner records merge intent"]
+    PrepareMerge --> MergeApproval{"Exact approval receipt and current authority?"}
+    MergeApproval -->|"No: approval pending"| HoldMergeApproval["Keep Merge running; return pending gate; block dependents"]
+    HoldMergeApproval --> DispatchWorkflow
+    MergeApproval -->|"Yes"| ExecuteMerge["Owner rechecks exact head and executes the same merge intent"]
+    ExecuteMerge --> VerifyMerge{"Owner has durable merged result?"}
+    VerifyMerge -->|"Yes"| SaveMergeReceipt["Commit compact merge receipt and Succeeded status"]
+    SaveMergeReceipt --> DispatchWorkflow
+    VerifyMerge -->|"No or owner error"| HoldMerge["Retain incomplete gate; report Source Control error"]
     DispatchWorkflow --> ChildWork{"Ready open or fixed child-work action?"}
     ChildWork -->|"Yes"| AuthorizeSpawn{"Pinned Policy allows exact open-item or fixed-spec-and-role intent?"}
     AuthorizeSpawn -->|"No"| BlockPolicy
@@ -704,6 +715,18 @@ conflict and does not call the merge endpoint; the same applies when the post-ma
 authority check fails. Once GitHub accepts a merge, Orchestrator persists its merge
 SHA even if the following authority check detects revocation. A retry after restart
 reads that durable outcome and never repeats the merge request.
+
+The MAF dispatcher binds Merge only when the authenticated Source Control owner is
+configured. It checkpoints the merge operation and exact expected PR head before
+calling the existing `/merge-intents` route. A Merge step may use the unique
+completed OpenPullRequest ancestor's number and head, or supply both explicitly.
+The owner records its typed approval gate; dispatch returns with the Merge step
+running and its dependents blocked while that gate is pending. After approval, a
+later dispatch recovers the same owner intent and calls its `/execute` route. The
+Orchestrator verifies the owner's repository, PR, head, method, approval evidence,
+and merged SHA before storing a compact receipt. Stale authority, changed heads,
+owner errors, or uncertain outcomes leave the gate incomplete; retries never
+create a new intent or repeat an uncertain merge effect.
 
 The run-bound webhook relay is separate from the merge grant: it verifies exact
 GitHub raw bytes with the pinned webhook SecretRef and durably deduplicates deliveries

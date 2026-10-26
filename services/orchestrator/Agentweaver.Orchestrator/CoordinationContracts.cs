@@ -138,7 +138,20 @@ public sealed record MafExecutionDispatchRequest(long ExpectedStateVersion, stri
     [System.Text.Json.Serialization.JsonIgnore(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public ImmutableDictionary<string, SourceControlPullRequestWorkspaceLocator>? OpenPullRequestWorkspaces { get; init; }
+
+    /// <summary>
+    /// Gets the optional pull-request identity used by Merge gates without an OpenPullRequest prerequisite.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableDictionary<string, SourceControlMergeStepInput>? MergeInputs { get; init; }
 }
+
+/// <summary>Verified merge method and optional pull-request identity, keyed by workflow step.</summary>
+public sealed record SourceControlMergeStepInput(
+    SourceControlMergeMethod Method,
+    long? PullRequestNumber = null,
+    string? ExpectedHeadSha = null);
 
 /// <summary>
 /// Identifies a Source Control workspace and the immutable base and branch selected for a build-and-test step.

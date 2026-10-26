@@ -1648,6 +1648,13 @@ internal static partial class SourceControlEndpoints
                 actor, identity, selection, request.IdempotencyKey, cancellationToken).ConfigureAwait(false);
             if (existing is not null)
             {
+                // A retry must retain the original exact pull-request head and merge method for this key.
+                if (existing.PullRequestNumber != request.PullRequestNumber ||
+                    existing.Method != request.Method ||
+                    request.ExpectedHeadSha is { } expectedHeadSha &&
+                        !string.Equals(existing.HeadSha, expectedHeadSha, StringComparison.OrdinalIgnoreCase))
+                    throw new CoordinationException(
+                        "source_control_intent_idempotency_conflict", StatusCodes.Status409Conflict);
                 if (existing.State != "approval_pending")
                     return Results.Ok(ToView(existing));
                 if (current.State.PendingGate?.RequestId == existing.ApprovalRequestId &&
@@ -1704,6 +1711,10 @@ internal static partial class SourceControlEndpoints
                         operationContext, SourceControlCapabilities.Merge, token).ConfigureAwait(false);
                     var pullRequest = await adapter.ReadPullRequestAsync(
                         operationContext, request.PullRequestNumber, token).ConfigureAwait(false);
+                    if (request.ExpectedHeadSha is { } expectedHead &&
+                        !string.Equals(pullRequest.HeadSha, expectedHead, StringComparison.OrdinalIgnoreCase))
+                        throw new CoordinationException(
+                            "source_control_run_binding_changed", StatusCodes.Status409Conflict);
                     return (Pin: repositoryPin, PullRequest: pullRequest);
                 },
                 cancellationToken).ConfigureAwait(false);
@@ -3034,6 +3045,7 @@ internal static partial class SourceControlEndpoints
             !request.IdempotencyKey.All(character =>
                 char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':') ||
             request.PullRequestNumber <= 0 ||
+            request.ExpectedHeadSha is not null && !IsGitSha(request.ExpectedHeadSha) ||
             !Enum.IsDefined(request.Method))
             throw new CoordinationException(
                 "source_control_merge_request_invalid", StatusCodes.Status400BadRequest);
@@ -3164,7 +3176,10 @@ internal sealed record PrepareSourceControlMergeIntentRequest(
     string WorkPlanId,
     string WorkflowStepId,
     long PullRequestNumber,
-    SourceControlMergeMethod Method);
+    SourceControlMergeMethod Method)
+{
+    public string? ExpectedHeadSha { get; init; }
+}
 
 /// <summary>
 /// The actor, accepted selection, pinned repository, and decision version captured for one Source Control operation.
