@@ -206,7 +206,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         var planResult = WorkPlanValidator.ValidateAndSnapshot(
             WorkflowTestData.Snapshot(WorkflowTestData.Definition(
                 WorkflowDefinitionOrigin.BuiltIn, steps)),
-            WorkflowTestData.Plan(WorkflowTestData.Item("first")),
+            WorkflowTestData.Plan(WorkflowTestData.Item(
+                "first", providerId: ReviewSandboxProviderId)),
             _reviewSelectionContext);
         Assert.True(planResult.IsValid,
             string.Join("; ", planResult.Issues.Select(issue => issue.Message)));

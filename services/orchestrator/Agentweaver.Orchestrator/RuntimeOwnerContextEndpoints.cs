@@ -129,7 +129,7 @@ public static partial class CoordinationEndpoints
                 fixedCheckpoint is null ||
                 !fixedCheckpoint.State.FixedWorkAssociations.TryGetValue(
                     fixedAssociation.AssociationId, out var persistedAssociation) ||
-                persistedAssociation != fixedAssociation ||
+                !FixedAssociationsMatch(persistedAssociation, fixedAssociation) ||
                 !MatchesFixedRuntimeAssociation(fixedAssociation, plan, selectionContext, root,
                     sessionId, owner.AcceptedSelectionHash, owner.ExecutionFence,
                     fixedCheckpoint.State, decision))
@@ -200,7 +200,7 @@ public static partial class CoordinationEndpoints
                 currentCheckpoint is null ||
                 !currentCheckpoint.State.FixedWorkAssociations.TryGetValue(
                     currentAssociation.AssociationId, out var currentPersistedAssociation) ||
-                currentPersistedAssociation != currentAssociation ||
+                !FixedAssociationsMatch(currentPersistedAssociation, currentAssociation) ||
                 !MatchesFixedRuntimeAssociation(currentAssociation, currentPlan.Value, selectionContext,
                     root, sessionId, currentDecision.SelectionHash, owner.ExecutionFence,
                     currentCheckpoint.State, currentDecision) ||
