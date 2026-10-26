@@ -42,7 +42,6 @@ public sealed partial class MafCheckpointStorePostgresTests
     {
         var fixture = await PersistMergeIntentAsync();
         var intent = fixture.Intent;
-        var source = fixture.Source;
         var owner = new MergeOwnerHandler(intent);
         var (executor, client) = CreateMergeExecutor(
             fixture, owner, fixture.Approved, intent.DecisionStateVersion + 1);
@@ -66,23 +65,29 @@ public sealed partial class MafCheckpointStorePostgresTests
             Assert.Equal(1, owner.MergeEffects);
             Assert.Equal(1, owner.PrepareRequests);
 
-            Assert.Equal(
-                MafMergeExecutionOutcome.Completed,
-                await executor.ExecuteAsync(intent, CancellationToken.None));
-            var recovered = await _executionStore.ReadLatestAsync(CancellationToken.None);
-            Assert.NotNull(recovered);
-            Assert.Equal(MafExecutionTaskStatus.Succeeded, recovered.State.Progress.NonModelSteps["merge"]);
-            Assert.Equal(new string('b', 40), recovered.State.MergeReceipts["merge"].MergeSha);
-            Assert.Equal(1, owner.MergeEffects);
-            Assert.Equal(2, owner.PrepareRequests);
-            Assert.Equal(1, owner.ExecuteRequests);
+            // A fresh executor represents restart recovery from the persisted intent and durable owner result.
+            var (recoveryExecutor, recoveryClient) = CreateMergeExecutor(
+                fixture, owner, fixture.Approved, intent.DecisionStateVersion + 1);
+            using (recoveryClient)
+            {
+                Assert.Equal(
+                    MafMergeExecutionOutcome.Completed,
+                    await recoveryExecutor.ExecuteAsync(intent, CancellationToken.None));
+                var recovered = await _executionStore.ReadLatestAsync(CancellationToken.None);
+                Assert.NotNull(recovered);
+                Assert.Equal(MafExecutionTaskStatus.Succeeded, recovered.State.Progress.NonModelSteps["merge"]);
+                Assert.Equal(new string('b', 40), recovered.State.MergeReceipts["merge"].MergeSha);
+                Assert.Equal(1, owner.MergeEffects);
+                Assert.Equal(2, owner.PrepareRequests);
+                Assert.Equal(1, owner.ExecuteRequests);
 
-            Assert.Equal(
-                MafMergeExecutionOutcome.NoProgress,
-                await executor.ExecuteAsync(intent, CancellationToken.None));
-            Assert.Equal(1, owner.MergeEffects);
-            Assert.Equal(2, owner.PrepareRequests);
-            Assert.Equal(1, owner.ExecuteRequests);
+                Assert.Equal(
+                    MafMergeExecutionOutcome.NoProgress,
+                    await recoveryExecutor.ExecuteAsync(intent, CancellationToken.None));
+                Assert.Equal(1, owner.MergeEffects);
+                Assert.Equal(2, owner.PrepareRequests);
+                Assert.Equal(1, owner.ExecuteRequests);
+            }
         }
     }
 

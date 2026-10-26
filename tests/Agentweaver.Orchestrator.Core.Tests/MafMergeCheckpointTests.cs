@@ -7,6 +7,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.Providers;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Xunit;
@@ -277,6 +278,46 @@ public sealed class MafMergeCheckpointTests
     }
 
     [Fact]
+    public void AlreadyMergedAndClosedPullRequestsCannotCreateMergeIntents()
+    {
+        var fixture = CreateFixture();
+        var (currentDecision, assembly) = CreateMergeReadyDecisionState(fixture);
+        var mergeCapablePin = CreateMergeCapablePin(fixture.Source.Pin);
+        SourceControlPullRequest PullRequest(string state, bool merged) => new(
+            fixture.Intent.PullRequestNumber,
+            new Uri("https://github.com/octo/repo/pull/42"),
+            state,
+            "feature",
+            fixture.Intent.ExpectedHeadSha,
+            "main",
+            new string('c', 40),
+            merged,
+            SourceControlPullRequestDisposition.Reused);
+
+        foreach (var pullRequest in new[]
+                 {
+                     PullRequest("closed", merged: false),
+                     PullRequest("closed", merged: true),
+                     PullRequest("open", merged: true)
+                 })
+        {
+            var failure = Assert.Throws<ArgumentException>(() =>
+                SourceControlMergeIntentRequest.Create(
+                    fixture.Intent.OwnerIntentId,
+                    fixture.Intent.ApprovalRequestId,
+                    mergeCapablePin.AcceptedRun,
+                    mergeCapablePin,
+                    fixture.Intent.DecisionStateVersion,
+                    currentDecision,
+                    assembly,
+                    pullRequest,
+                    fixture.Intent.Method,
+                    DateTimeOffset.UnixEpoch));
+            Assert.Equal("pullRequest", failure.ParamName);
+        }
+    }
+
+    [Fact]
     public void MergeInputRequiresCompleteOptionalPullRequestBinding()
     {
         Assert.True(MafMergeContract.IsValidInput(
@@ -412,6 +453,109 @@ public sealed class MafMergeCheckpointTests
             new(
                 new CheckpointInfo(source.Identity.SessionId, "initial"),
                 new(1, plan.Plan.Id, intent.DecisionStateVersion, progress)));
+    }
+
+    private static (CoordinatorDecisionState State, CoordinatorAssemblyRequestSnapshot Assembly)
+        CreateMergeReadyDecisionState(FixtureState fixture)
+    {
+        // Recreate the accepted outcome, workflow, and plan before requesting a merge approval.
+        var outcome = new CoordinatorOutcomeSpecification(
+            "outcome-1",
+            "Implement the requested change.",
+            "The requested change is available.",
+            "Only requested workflow behavior changes.",
+            "Existing provider pins remain authoritative.",
+            []);
+        var proposedOutcome = CoordinatorDecisionFlow.ProposeOutcomeSpec(
+            CoordinatorDecisionState.Create(fixture.Intent.ExecutionFence),
+            outcome,
+            "outcome-approval-1",
+            fixture.Source.Actor.Subject);
+        var confirmedOutcome = proposedOutcome.State!.ApplyGateAnswer(new CoordinatorGateAnswer(
+            proposedOutcome.State.PendingGate!.RequestId,
+            fixture.Source.Actor.Subject,
+            fixture.Intent.ExecutionFence,
+            CoordinatorGateChoices.Approve,
+            null)).State;
+        var catalog = new AuthorizedWorkflowCatalog(fixture.Workflow, [fixture.Workflow]);
+        var selected = CoordinatorDecisionFlow.SelectWorkflow(
+            confirmedOutcome,
+            catalog,
+            requestedWorkflowId: null,
+            firstUseRequestId: null,
+            authorizedActorId: null);
+        var proposedPlan = CoordinatorDecisionFlow.ProposeWorkPlan(
+            selected.State,
+            fixture.Plan.Plan,
+            WorkflowTestData.SelectionContext(),
+            "plan-approval-1",
+            fixture.Source.Actor.Subject);
+        var confirmedPlan = proposedPlan.State!.ApplyGateAnswer(new CoordinatorGateAnswer(
+            proposedPlan.State.PendingGate!.RequestId,
+            fixture.Source.Actor.Subject,
+            fixture.Intent.ExecutionFence,
+            CoordinatorGateChoices.Approve,
+            null)).State;
+        var assembly = CoordinatorDecisionFlow.RequestAssembly(
+            confirmedPlan,
+            new CoordinatorAssemblyRequest(
+                "merge-assembly-1",
+                fixture.Workflow.Id,
+                fixture.Workflow.Revision,
+                fixture.Intent.WorkPlanId,
+                fixture.Intent.StepId,
+                WorkflowPlatformGate.Merge));
+        Assert.True(assembly.IsSuccess);
+        return (confirmedPlan, assembly.Value!);
+    }
+
+    private static SourceControlRepositoryPin CreateMergeCapablePin(SourceControlRepositoryPin pin)
+    {
+        // Model the provider negotiation required before the Source Control owner accepts a merge intent.
+        var capabilities = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            SourceControlCapabilities.RepositoryRead,
+            SourceControlCapabilities.Merge);
+        var catalog = ProviderCatalog.Create(
+            [new ProviderRegistration(
+                new ProviderDescriptor(
+                    ProviderSeam.SourceControl,
+                    pin.ProviderBinding.ProviderId,
+                    pin.ProviderBinding.AdapterVersion,
+                    pin.ProviderBinding.OptionsSchemaVersion,
+                    pin.ProviderBinding.Hosting,
+                    capabilities),
+                true,
+                pin.ProviderBinding.OptionsRevision,
+                pin.ProviderBinding.OptionsSchemaVersion)],
+            [new ProviderSelection(ProviderSeam.SourceControl, pin.ProviderBinding.ProviderId)],
+            []).Value!;
+        var resolver = new ProviderResolver(catalog);
+        var candidate = resolver.Resolve(new ProviderResolutionRequest(
+            ProviderSeam.SourceControl,
+            null,
+            pin.ProviderBinding.AdapterVersion,
+            pin.ProviderBinding.OptionsSchemaVersion,
+            ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal))).Value!.Candidate!;
+        var binding = resolver.Pin(
+            pin.AcceptedRun.RunId,
+            candidate,
+            pin.ProviderBinding.Resource.ResourceId,
+            new ResourceNegotiation(pin.ProviderBinding.Resource, capabilities)).Value!;
+
+        return new SourceControlRepositoryPin(
+            pin.PinId,
+            pin.AcceptedRun,
+            binding,
+            pin.Repository,
+            pin.ApiCredential,
+            pin.CheckoutCredential,
+            pin.WebhookCredential,
+            pin.ProviderRepositoryId,
+            pin.DefaultBranch,
+            pin.IsPrivate,
+            pin.PinnedAt,
+            pin.GitHubAppBinding);
     }
 
     private static MafMergeOwnerIntent OwnerIntent(
