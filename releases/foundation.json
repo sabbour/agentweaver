@@ -90,7 +90,7 @@
     {
       "id": "Agentweaver.Gateway",
       "kind": "service",
-      "version": "1.7.0",
+      "version": "1.7.1",
       "project": "services/gateway/Agentweaver.Gateway/Agentweaver.Gateway.csproj"
     },
     {
@@ -126,7 +126,7 @@
     {
       "id": "Agentweaver.Projects.Config",
       "kind": "service",
-      "version": "1.7.1",
+      "version": "1.7.2",
       "project": "services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj"
     },
     {
