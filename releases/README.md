@@ -6,8 +6,8 @@ Those planning records do not replace the component changesets, manifest or
 source-bound publication and acceptance evidence described below.
 
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
-It tracks the current prepared source versions for 23 product components:
-13 packages and 10 service images, plus the separate acceptance-only
+It tracks the current prepared source versions for 24 product components:
+14 contracts or libraries and 10 service images, plus the separate acceptance-only
 `Agentweaver.FoundationProbe`. Version application updates source versions; it
 does not build or publish packages or images.
 The eight original .NET foundation NuGet packages were:
@@ -16,11 +16,11 @@ The eight original .NET foundation NuGet packages were:
 `Agentweaver.Identity`, `Agentweaver.Telemetry`,
 `Agentweaver.Telemetry.AzureMonitor`, and `Agentweaver.ObjectStore.AzureBlob`.
 Their historical P0 package baseline was `0.0.0`; its records remain unchanged.
-`Agentweaver.Identity.Broker` has current source version `1.2.0`; it is not one
+`Agentweaver.Identity.Broker` has current source version `1.3.0`; it is not one
 of the NuGet packages.
-`Agentweaver.Orchestrator` has prepared source version `1.2.0`;
+`Agentweaver.Orchestrator` has prepared source version `1.7.0`;
 its `Agentweaver.Orchestrator.Core` dependency remains a separately versioned library.
-`Agentweaver.FoundationProbe` has a separate prepared source version at `0.0.3`.
+`Agentweaver.FoundationProbe` has a separate prepared source version at `0.0.4`.
 The manifest uses the `service` artifact kind for its executable container.
 The Probe remains acceptance-only, not a product service.
 Its exact `tools/Agentweaver.FoundationProbe` project path is the sole tools
