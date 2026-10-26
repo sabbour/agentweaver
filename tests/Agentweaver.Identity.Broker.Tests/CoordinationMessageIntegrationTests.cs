@@ -4717,7 +4717,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             signingKey,
             projects.CreateHandler,
             () => eventsFactory.Server.CreateHandler(),
-            providerCatalog: CreateSourceControlProviderCatalog());
+            cacheObjectStore,
+            sandboxProvider,
+            () => _brokerFactory.Server.CreateHandler(),
+            sourceControlGitHub.CreateHandler,
+            CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
+            policyOptions: sourceControlPolicyOptions,
+            gitWorkspaceManager: gitWorkspaceManager);
         using var gateRecoveryOrchestrator = gateRecoveryFactory.CreateClient(
             new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://orchestrator.test") });
         using var gateRecoveryDecisionResponse = await SendAsync(
