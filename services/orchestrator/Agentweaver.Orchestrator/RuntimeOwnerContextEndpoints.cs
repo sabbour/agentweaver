@@ -365,7 +365,7 @@ public static partial class CoordinationEndpoints
         MafExecutionCheckpoint checkpoint,
         CoordinatorDecisionCurrentState decision)
     {
-        // A fixed child may outlive review, but its original version remains valid only through the exact checkpointed gate history.
+        // Require checkpointed review history only after the decision version advances; the same version needs no review proof.
         if (association.AcceptedSelectionHash != acceptedSelectionHash ||
             association.ExecutionFence != executionFence ||
             !MafIndependentReviewContract.AllowsDecisionVersionAdvance(

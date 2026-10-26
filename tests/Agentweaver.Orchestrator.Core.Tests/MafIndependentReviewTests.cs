@@ -175,6 +175,58 @@ public sealed class MafIndependentReviewTests
     }
 
     [Fact]
+    public void UnchangedDecisionVersionDoesNotRequireReviewHistoryWhenAnotherGateIsPending()
+    {
+        // Existing fixed-child runtime access must remain valid at its exact decision version, including a pending gate.
+        var plan = Plan();
+        const string actor = "reviewer-1";
+        var state = ConfirmedDecision(plan, actor);
+        var pending = CoordinatorDecisionFlow.RequestApproval(
+            state, "unrelated-request", "unrelated-subject", actor);
+        Assert.True(pending.IsSuccess);
+        var checkpoint = new MafExecutionCheckpoint(
+            1, plan.Plan.Id, 4, MafExecutionProgress.Empty);
+
+        Assert.True(MafIndependentReviewContract.AllowsDecisionVersionAdvance(
+            checkpoint,
+            new(pending.State!, 4, new string('a', 64)),
+            4));
+    }
+
+    [Fact]
+    public void ConfirmedIndependentReviewDecisionEnvelopeRestores()
+    {
+        // The durable owner must be able to rehydrate the accepted review workflow after a restart.
+        var plan = Plan();
+        const string actorId = "reviewer-1";
+        const string issuer = "https://identity.example/";
+        using var snapshot = System.Text.Json.JsonDocument.Parse(
+            """{"modelSelection":{"reference":"model:provider/alpha"}}""");
+        var selection = new AuthorizedRunSelection(
+            new("project-1", "run-1", 1, 1, 1, "context-v1", snapshot.RootElement.Clone()),
+            new ProjectsAuthorizationContext(
+                1, issuer, actorId, "tenant-1", 1, "project-1", "run-1",
+                ImmutableArray.Create(new ProjectsAuthority(
+                    "project", "project-1",
+                    ImmutableArray.Create(new ProjectsPermissionGrant("acceptRunSelection", 1))))));
+        var identity = new SessionIdentity("project-1", "run-1", "root");
+        var binding = CoordinatorDecisionBinding.Create(
+            new CoordinationActor(issuer, actorId), identity, selection, 1);
+        var selectionContext = WorkflowTestData.SelectionContext();
+        var confirmed = ConfirmedDecision(plan, actorId, selectionContext);
+        var envelope = CoordinatorDecisionStateEnvelope.Capture(
+            confirmed, binding, selectionContext);
+
+        var untrusted = envelope.Restore(binding);
+        Assert.False(untrusted.IsValid);
+        var restored = envelope.Restore(
+            binding, _ => selectionContext.IsolationProviderBinding);
+
+        Assert.True(restored.IsValid,
+            string.Join("; ", restored.Issues.Select(issue => $"{issue.Path}: {issue.Message}")));
+    }
+
+    [Fact]
     public void ReviewRejectsChangedBuildTestWorkspaceManifest()
     {
         // A BuildTest source is current only while its canonical file manifest and Git tree remain unchanged.
@@ -267,8 +319,10 @@ public sealed class MafIndependentReviewTests
             WorkflowTestData.SelectionContext()).Value!;
     }
 
-    private static CoordinatorDecisionState ConfirmedDecision(WorkPlanSnapshot plan, string actor)
+    private static CoordinatorDecisionState ConfirmedDecision(
+        WorkPlanSnapshot plan, string actor, WorkPlanRunSelectionContext? selectionContext = null)
     {
+        selectionContext ??= WorkflowTestData.SelectionContext();
         var outcome = CoordinatorDecisionFlow.ProposeOutcomeSpec(
             CoordinatorDecisionState.Create(1),
             new("outcome-1", "Implement the change.", "The result is reviewed.",
@@ -280,9 +334,10 @@ public sealed class MafIndependentReviewTests
             confirmedOutcome, new(plan.Workflow.Definition, [plan.Workflow.Definition]),
             null, null, null);
         var proposed = CoordinatorDecisionFlow.ProposeWorkPlan(
-            selected.State, plan.Plan, WorkflowTestData.SelectionContext(), "plan-request", actor);
+            selected.State, plan.Plan, selectionContext, "plan-request", actor);
         Assert.True(proposed.IsSuccess);
         return proposed.State!.ApplyGateAnswer(
             new("plan-request", actor, 1, CoordinatorGateChoices.Approve, null)).State;
     }
+
 }

@@ -29,6 +29,21 @@ public sealed class RuntimeOwnerContextTests
             Checkpoint(plan), CurrentDecision()));
     }
 
+    [Fact]
+    public void FixedRuntimeAtTheSameDecisionVersionAllowsAnUnrelatedPendingGate()
+    {
+        // A pending unrelated approval must not invalidate a fixed child whose association has not advanced.
+        var (plan, context, parent, association) = CreateFixedAssociation();
+        var current = CurrentDecision();
+        var pending = CoordinatorDecisionFlow.RequestApproval(
+            current.State, "unrelated-request", "unrelated-subject", "reviewer-1");
+        Assert.True(pending.IsSuccess);
+
+        Assert.True(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
+            association, plan, context, parent, association.ChildSessionId, SelectionHash, 3,
+            Checkpoint(plan), current with { State = pending.State! }));
+    }
+
     [Theory]
     [InlineData("selection")]
     [InlineData("fence")]

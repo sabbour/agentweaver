@@ -215,6 +215,9 @@ internal static class MafIndependentReviewContract
         // Fixed work and completed BuildTest evidence may span only durable review transitions.
         if (recordedVersion < 1 || current.StateVersion < recordedVersion)
             return false;
+        // An unchanged owner version needs no review proof and may still have an unrelated pending gate.
+        if (recordedVersion == current.StateVersion)
+            return true;
         var version = recordedVersion;
         while (version < current.StateVersion)
         {
