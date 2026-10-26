@@ -31,9 +31,10 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
                 new System.Security.Claims.Claim("scope", "api.read projects.orchestrator")
             ], "controlled-owner"))
         };
-        rootContext.Request.Headers.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "controlled-owner").ToString();
-        rootContext.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        rootContext.Request.Headers.Authorization = _context.Request.Headers.Authorization;
+        rootContext.Request.Headers["X-Agentweaver-Tenant"] = _context.Request.Headers["X-Agentweaver-Tenant"];
+        // Grant lookup rereads Projects authority through the store's HttpContextAccessor.
+        _context = rootContext;
         var grants = GrantStore();
 
         var staleEvidenceFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
