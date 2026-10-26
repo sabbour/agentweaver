@@ -131,6 +131,13 @@ public static class GatewayRouteCatalog
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}/role-assignments",
             "/api/projects/{projectId}/role-assignments",
             "listProjectRoleAssignments", "List active project role assignments", forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/project-setup-invocations/{invocationId}/authority-audit",
+            "/api/project-setup-invocations/{invocationId}/authority-audit",
+            "readProjectSetupAuthorityAudit", "Read authority audit for a setup invocation",
+            forwardTenantSelector: true,
+            exposedResponseHeaders: ["Cache-Control"],
+            maximumResponseBytes: 128 * 1024,
+            excludeFromMcp: true);
         Add("POST", GatewayOwner.Projects, "/projects/{projectId}/role-assignments",
             "/api/projects/{projectId}/role-assignments",
             "assignProjectRole", "Assign a project role", body: true, forwardTenantSelector: true);

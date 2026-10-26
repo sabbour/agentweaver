@@ -180,6 +180,7 @@ builder.Services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
     .RedactLoggedHeaders(["Authorization", "X-Agentweaver-Tenant"])
     .ConfigurePrimaryHttpMessageHandler(Agentweaver.Identity.RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddScoped<ProjectRoleAssignmentService>();
+builder.Services.AddScoped<ProjectSetupAuthorityAuditService>();
 builder.Services.AddScoped<MarketplaceSourceStore>();
 builder.Services.AddScoped<IProjectMarketplaceSourceStore>(
     provider => provider.GetRequiredService<MarketplaceSourceStore>());

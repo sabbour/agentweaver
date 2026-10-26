@@ -49,23 +49,27 @@ npm run harness:p1:signin-run -- --reconcile <invocation-id> --input <manifest.j
 
 Use the same target manifest that identifies the approved environment and setup
 actor. The command uses one interactive sign-in with the existing registered
-client and setup scopes. It reads the Gateway contract, the visible project
-list, and the actor's current authorization context. `listProjects` has no
-invocation-name query, so the harness compares the exact `p1-<invocation-id>`
-name in the returned list. That list is permission-filtered: a missing project
-is not proof that it is gone unless the authority context confirms tenant-wide
-project visibility.
+client and setup scopes. It reads the Gateway contract, visible project list,
+the actor's current authorization context, the matched project's active role
+assignments, and the authority-audit records linked to the invocation.
+`listProjects` has no invocation-name query, so the harness compares the exact
+`p1-<invocation-id>` name in the returned list. That list is
+permission-filtered: a missing project is not proof that it is gone unless the
+authority context confirms tenant-wide project visibility.
 
-The current Gateway API contract does not expose a read operation for project
-authority audit records. The evidence records that audit read as unavailable
-and the verdict remains **needs review**; do not treat this output as proof
-that cleanup is complete or safe. Do not start another live journey until the
-missing audit evidence has been reviewed through an approved source.
+The audit read is bounded to 32 records. A denied, malformed, missing,
+truncated, or otherwise incomplete read produces **needs review**. If a
+project is visible, the role assignments and audit events must match the
+expected P1 Owner and Orchestrator setup before the result can say
+**safe to clean up**. A complete audit read and tenant-wide visibility with no
+matching project can establish **already clean** only when it proves both the
+setup Owner and Orchestrator assignments were later revoked. An empty audit
+result is not positive cleanup evidence and remains **needs review**.
 
 Reconciliation is an assessment only. It writes one redacted JSON evidence
 file and issues only reads. It never writes a fixture or grant, performs
 cleanup, starts or admits a journey, or approves a cleanup action. Even a
-future **safe to clean up** verdict would be an assessment, not authorization
+**safe to clean up** verdict is an assessment, not authorization
 for the harness to clean up; cleanup must remain a separate reviewed action.
 
 ## Check the manifest without contacting the target

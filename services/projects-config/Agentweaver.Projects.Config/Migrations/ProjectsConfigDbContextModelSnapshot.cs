@@ -164,6 +164,10 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("character varying(32)")
                         .HasColumnName("event_type");
 
+                    b.Property<Guid?>("InvocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invocation_id");
+
                     b.Property<string>("Issuer")
                         .IsRequired()
                         .HasMaxLength(512)
@@ -208,6 +212,10 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasKey("EventId");
 
                     b.HasIndex("MembershipId", "CreatedAt");
+
+                    b.HasIndex("TenantId", "InvocationId", "CreatedAt")
+                        .HasDatabaseName("IX_authority_audit_tenant_invocation_created_at")
+                        .HasFilter("\"invocation_id\" IS NOT NULL");
 
                     b.ToTable("authority_audit", "projects_config", t =>
                         {

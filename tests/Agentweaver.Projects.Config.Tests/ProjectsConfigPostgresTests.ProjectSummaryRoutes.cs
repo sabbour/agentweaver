@@ -95,6 +95,42 @@ public sealed partial class ProjectsConfigPostgresTests
         AssertContainsRole(projectDocument.RootElement, "project", project.ProjectId, "owner");
     }
 
+    [Fact]
+    public async Task ProjectOwnerWithoutLinkedAuditRowsReceivesExplicitForbidden()
+    {
+        await using var db = CreateDbContext();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var projects = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = $"audit-denial-tenant-{suffix}";
+        var admin = await SeedCallerAsync(db, store, $"audit-denial-admin-{suffix}", tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await projects.CreateProjectAsync(admin, $"Audit denial {suffix}", CancellationToken.None);
+        var ownerSubject = $"audit-denial-owner-{suffix}";
+        var ownerMembership = await SeedMembershipAsync(store, ownerSubject, tenantId);
+        await store.AssignRoleAsync(
+            ownerMembership,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Owner,
+            "fixture");
+        var invocationId = Guid.NewGuid();
+        Assert.False(await db.AuthorityAudit.AsNoTracking()
+            .AnyAsync(record => record.TenantId == tenantId && record.InvocationId == invocationId));
+
+        using var host = await StartProjectSummaryEndpointHostAsync(fixture.DataSource);
+        using var client = host.GetTestClient();
+        client.DefaultRequestHeaders.Add("X-Test-Subject", ownerSubject);
+        client.DefaultRequestHeaders.Add("X-Test-Scope", "api.read");
+        client.DefaultRequestHeaders.Add(ProjectAuthorizationOwner.TenantSelectorHeader, tenantId);
+
+        using var response = await client.GetAsync(
+            $"/api/project-setup-invocations/{invocationId:D}/authority-audit");
+
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
     private static async Task<IHost> StartProjectSummaryEndpointHostAsync(
         Npgsql.NpgsqlDataSource dataSource,
         HostedModelCatalogPublicationTls? publicationTls = null,
@@ -121,6 +157,7 @@ public sealed partial class ProjectsConfigPostgresTests
                     services.AddSingleton(new ProjectsConfigIdentityOptions(TestIssuer));
                     services.AddScoped<ProjectAuthorizationOwner>();
                     services.AddScoped<ProjectsConfigService>();
+                    services.AddScoped<ProjectSetupAuthorityAuditService>();
                     // The route client uses the test handler so endpoint tests never contact a live owner.
                     services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
                             client.BaseAddress = new Uri("https://knowledge.test/"))

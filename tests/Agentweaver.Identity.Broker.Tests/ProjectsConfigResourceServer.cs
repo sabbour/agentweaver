@@ -162,6 +162,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 services.AddPlatformComponentCollector(new ConfigurationBuilder().Build());
                 services.AddScoped<ProjectsConfigService>();
                 services.AddScoped<ProjectRoleAssignmentService>();
+                services.AddScoped<ProjectSetupAuthorityAuditService>();
                 // Preserve service binding while failing fast if the test host reaches a remote Knowledge owner.
                 services.AddHttpClient<KnowledgeAgentHistoryClient>(client =>
                     client.BaseAddress = new Uri("https://knowledge.test/"))

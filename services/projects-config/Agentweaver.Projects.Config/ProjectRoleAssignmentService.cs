@@ -186,8 +186,14 @@ public sealed class ProjectRoleAssignmentService(
                 GrantedAt = now,
             };
             db.RoleAssignments.Add(assignment);
+            // The P1 fixture name carries its invocation ID; ordinary project role audits remain unlinked.
             db.AuthorityAudit.Add(ProjectAuthorityRules.CreateRoleAudit(
-                membership, assignment, "role_assigned", caller.ActorId, now));
+                membership,
+                assignment,
+                "role_assigned",
+                caller.ActorId,
+                now,
+                ProjectAuthorityRules.P1SetupInvocationId(project.Name)));
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             return ToView(assignment, membership.Subject);
         }, cancellationToken).ConfigureAwait(false);
@@ -266,7 +272,12 @@ public sealed class ProjectRoleAssignmentService(
             assignment.RevokedBy = caller.ActorId;
             assignment.RevokedAt = now;
             db.AuthorityAudit.Add(ProjectAuthorityRules.CreateRoleAudit(
-                membership, assignment, "role_revoked", caller.ActorId, now));
+                membership,
+                assignment,
+                "role_revoked",
+                caller.ActorId,
+                now,
+                ProjectAuthorityRules.P1SetupInvocationId(project.Name)));
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             return ToView(assignment, membership.Subject);
         }, cancellationToken).ConfigureAwait(false);

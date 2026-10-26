@@ -276,7 +276,8 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             },
             assignment,
             "role_assigned",
-            caller.ActorId);
+            caller.ActorId,
+            request.InvocationId);
         var ownerAudit = ToAudit(
             new ProjectTenantMembershipRecord
             {
@@ -291,7 +292,8 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             },
             ownerAssignment,
             "role_assigned",
-            caller.ActorId);
+            caller.ActorId,
+            request.InvocationId);
         var receipt = new ProjectSetupReceipt(
             request.InvocationId,
             caller.Issuer,
@@ -476,7 +478,8 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                 },
                 assignment,
                 "role_revoked",
-                caller.ActorId);
+                caller.ActorId,
+                request.InvocationId);
             db.AuthorityAudit.Add(audit);
             if (ownerAssignment is not null)
             {
@@ -498,7 +501,8 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                     },
                     ownerAssignment,
                     "role_revoked",
-                    caller.ActorId);
+                    caller.ActorId,
+                    request.InvocationId);
                 db.AuthorityAudit.Add(ownerAudit);
             }
         }
@@ -1541,8 +1545,10 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         ProjectTenantMembershipRecord membership,
         ProjectRoleAssignmentRecord assignment,
         string eventType,
-        string actor) =>
-        ProjectAuthorityRules.CreateRoleAudit(membership, assignment, eventType, actor, timeProvider.GetUtcNow());
+        string actor,
+        Guid? invocationId = null) =>
+        ProjectAuthorityRules.CreateRoleAudit(
+            membership, assignment, eventType, actor, timeProvider.GetUtcNow(), invocationId);
 
     private static bool IsSerializationFailure(Exception exception) =>
         ProjectAuthorityRules.IsSerializationFailure(exception);

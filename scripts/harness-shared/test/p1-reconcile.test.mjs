@@ -8,6 +8,7 @@ import { persistP1ReconcileEvidence, reconcileP1Run } from '../p1-reconcile.mjs'
 
 const INVOCATION_ID = '5749fb6f-543b-427d-a04e-b7f836180ef4';
 const PROJECT_NAME = `p1-${INVOCATION_ID}`;
+const PROJECT_ID = 'run-5-project';
 const TOKEN = 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJhY2NlcHRhbmNlLWFjdG9yIn0.signature';
 const ENVIRONMENT = {
   baseUrl: 'https://environment.controlled.test/',
@@ -15,6 +16,59 @@ const ENVIRONMENT = {
   audience: 'agentweaver-controlled',
   actorId: 'acceptance-actor',
   tenantId: 'acceptance-tenant',
+};
+
+const ROLE_ASSIGNMENTS = {
+  projectId: PROJECT_ID,
+  assignments: [
+    {
+      assignmentId: 'a0000000-0000-4000-8000-000000000001',
+      principalId: ENVIRONMENT.actorId,
+      role: 'owner',
+      revision: 1,
+      createdBy: 'acceptance-admin',
+      createdAt: '2026-10-13T00:00:00.000Z',
+    },
+    {
+      assignmentId: 'a0000000-0000-4000-8000-000000000002',
+      principalId: ENVIRONMENT.actorId,
+      role: 'orchestrator',
+      revision: 1,
+      createdBy: 'acceptance-admin',
+      createdAt: '2026-10-13T00:00:00.000Z',
+    },
+  ],
+};
+const AUDIT_RECORDS = {
+  invocationId: INVOCATION_ID,
+  complete: true,
+  truncated: false,
+  accessToken: TOKEN,
+  records: [
+    {
+      eventId: 'b0000000-0000-4000-8000-000000000001',
+      eventType: 'role_assigned',
+      assignmentId: ROLE_ASSIGNMENTS.assignments[0].assignmentId,
+      resourceType: 'project',
+      resourceId: PROJECT_ID,
+      role: 'owner',
+      revision: 1,
+      actor: ENVIRONMENT.actorId,
+      createdAt: '2026-10-13T00:00:00.000Z',
+    },
+    {
+      eventId: 'b0000000-0000-4000-8000-000000000002',
+      eventType: 'role_assigned',
+      assignmentId: ROLE_ASSIGNMENTS.assignments[1].assignmentId,
+      resourceType: 'project',
+      resourceId: PROJECT_ID,
+      role: 'orchestrator',
+      revision: 1,
+      createdBy: 'acceptance-admin',
+      createdAt: '2026-10-13T00:00:00.000Z',
+      actor: ENVIRONMENT.actorId,
+    },
+  ],
 };
 
 function project(projectId, name = PROJECT_NAME) {
@@ -44,7 +98,15 @@ function authorizationContext(effectiveAuthority = []) {
   };
 }
 
-function makeClient({ projects = [], authority = authorizationContext(), authorityStatus = 200 } = {}) {
+function makeClient({
+  projects = [],
+  authority = authorizationContext(),
+  authorityStatus = 200,
+  roleAssignments = ROLE_ASSIGNMENTS,
+  roleAssignmentStatus = 200,
+  auditRecords = AUDIT_RECORDS,
+  auditStatus = 200,
+} = {}) {
   const requests = [];
   const contract = {
     openapi: '3.1.0',
@@ -52,6 +114,18 @@ function makeClient({ projects = [], authority = authorizationContext(), authori
       '/api/v1/projects': { get: { operationId: 'listProjects', parameters: [] } },
       '/api/v1/authorization/context': {
         get: { operationId: 'getAuthorizationContext', parameters: [] },
+      },
+      '/api/v1/projects/{projectId}/role-assignments': {
+        get: {
+          operationId: 'listProjectRoleAssignments',
+          parameters: [{ in: 'path', name: 'projectId', required: true }],
+        },
+      },
+      '/api/v1/project-setup-invocations/{invocationId}/authority-audit': {
+        get: {
+          operationId: 'readProjectSetupAuthorityAudit',
+          parameters: [{ in: 'path', name: 'invocationId', required: true }],
+        },
       },
     },
   };
@@ -75,13 +149,19 @@ function makeClient({ projects = [], authority = authorizationContext(), authori
       if (pathName === '/api/v1/authorization/context') {
         return Response.json(authority, { status: authorityStatus });
       }
+      if (pathName === `/api/v1/projects/${PROJECT_ID}/role-assignments`) {
+        return Response.json(roleAssignments, { status: roleAssignmentStatus });
+      }
+      if (pathName === `/api/v1/project-setup-invocations/${INVOCATION_ID}/authority-audit`) {
+        return Response.json(auditRecords, { status: auditStatus });
+      }
       return Response.json({ error: 'unexpected request' }, { status: 404 });
     },
   });
   return { client, requests };
 }
 
-test('reconcile only issues GETs, exact-filters the project, redacts tokens, and writes one JSON file', async () => {
+test('reconcile reads roles and audit records, assesses setup without writes, redacts tokens, and writes one JSON file', async () => {
   const { client, requests } = makeClient({
     projects: [project('run-5-project'), project('another-project', 'p1-another-invocation')],
     authority: authorizationContext([{
@@ -99,12 +179,18 @@ test('reconcile only issues GETs, exact-filters the project, redacts tokens, and
     { method: 'GET', path: '/openapi/v1.json' },
     { method: 'GET', path: '/api/v1/projects' },
     { method: 'GET', path: '/api/v1/authorization/context' },
+    { method: 'GET', path: `/api/v1/projects/${PROJECT_ID}/role-assignments` },
+    { method: 'GET', path: `/api/v1/project-setup-invocations/${INVOCATION_ID}/authority-audit` },
   ]);
   assert.equal(evidence.projectMatch.status, 'found');
   assert.deepEqual(evidence.projectMatch.matches.map(item => item.projectId), ['run-5-project']);
   assert.equal(evidence.effectiveAuthority.tenantWideProjectVisibility, true);
-  assert.equal(evidence.auditRecords.status, 'unavailable');
-  assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.roleAssignments.status, 'complete');
+  assert.equal(evidence.auditRecords.status, 'complete');
+  assert.equal(evidence.auditRecords.records.length, 2);
+  assert.equal(evidence.verdict, 'safe to clean up');
+  assert.match(evidence.verdictReason, /assessment only/);
+  assert.equal(requests.every(request => request.method === 'GET'), true);
   assert.deepEqual(evidence.actions, {
     assessmentOnly: true,
     writeRequestsIssued: false,
@@ -119,7 +205,7 @@ test('reconcile only issues GETs, exact-filters the project, redacts tokens, and
     const output = path.join(directory, 'reconciliation.json');
     await persistP1ReconcileEvidence(output, evidence);
     const content = await readFile(output, 'utf8');
-    assert.equal(JSON.parse(content).verdict, 'needs review');
+    assert.equal(JSON.parse(content).verdict, 'safe to clean up');
     assert.equal(content.includes(TOKEN), false);
     assert.match(content, /"accessToken": "\[REDACTED\]"/);
     assert.deepEqual(await readdir(directory), ['reconciliation.json']);
@@ -135,6 +221,7 @@ test('a filtered not-found result with incomplete authority and audit remains ne
   const { client, requests } = makeClient({
     projects: [],
     authority: incompleteAuthority,
+    auditRecords: { ...AUDIT_RECORDS, complete: false },
   });
   const evidence = await reconcileP1Run({
     api: client,
@@ -189,6 +276,7 @@ test('tenant-wide visibility is not enough to call a missing project clean witho
       resourceId: ENVIRONMENT.tenantId,
       permissions: [{ permission: 'readProjects', roleRevision: 4 }],
     }]),
+    auditRecords: { ...AUDIT_RECORDS, complete: false },
   });
   const evidence = await reconcileP1Run({
     api: client,
@@ -198,7 +286,148 @@ test('tenant-wide visibility is not enough to call a missing project clean witho
 
   assert.equal(evidence.projectMatch.status, 'not-found');
   assert.equal(evidence.effectiveAuthority.tenantWideProjectVisibility, true);
-  assert.equal(evidence.auditRecords.status, 'unavailable');
+  assert.equal(evidence.auditRecords.status, 'incomplete');
+  assert.equal(evidence.verdict, 'needs review');
+});
+
+test('a Run 5 not-found and complete empty audit read do not establish already clean', async () => {
+  const { client, requests } = makeClient({
+    projects: [],
+    authority: authorizationContext([{
+      resourceType: 'tenant',
+      resourceId: ENVIRONMENT.tenantId,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    auditRecords: { ...AUDIT_RECORDS, records: [] },
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.projectMatch.status, 'not-found');
+  assert.equal(evidence.auditRecords.complete, true);
+  assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.roleAssignments.status, 'not-applicable');
+  assert.equal(requests.some(request => request.path.includes('/role-assignments')), false);
+  assert.equal(requests.every(request => request.method === 'GET'), true);
+});
+
+test('tenant-wide visibility and complete setup revocation evidence establish already clean', async () => {
+  const { client, requests } = makeClient({
+    projects: [],
+    authority: authorizationContext([{
+      resourceType: 'tenant',
+      resourceId: ENVIRONMENT.tenantId,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    auditRecords: {
+      ...AUDIT_RECORDS,
+      records: [
+        ...AUDIT_RECORDS.records,
+        {
+          eventId: 'b0000000-0000-4000-8000-000000000003',
+          eventType: 'role_revoked',
+          assignmentId: ROLE_ASSIGNMENTS.assignments[0].assignmentId,
+          resourceType: 'project',
+          resourceId: PROJECT_ID,
+          role: 'owner',
+          revision: 2,
+          actor: 'cleanup-actor',
+          createdAt: '2026-10-13T00:01:00.000Z',
+        },
+        {
+          eventId: 'b0000000-0000-4000-8000-000000000004',
+          eventType: 'role_revoked',
+          assignmentId: ROLE_ASSIGNMENTS.assignments[1].assignmentId,
+          resourceType: 'project',
+          resourceId: PROJECT_ID,
+          role: 'orchestrator',
+          revision: 2,
+          actor: 'cleanup-actor',
+          createdAt: '2026-10-13T00:01:00.000Z',
+        },
+      ],
+    },
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.projectMatch.status, 'not-found');
+  assert.equal(evidence.auditRecords.complete, true);
+  assert.equal(evidence.verdict, 'already clean');
+  assert.equal(evidence.roleAssignments.status, 'not-applicable');
+  assert.equal(requests.some(request => request.path.includes('/role-assignments')), false);
+  assert.equal(requests.every(request => request.method === 'GET'), true);
+});
+
+test('a denied role-assignment read remains needs review', async () => {
+  const { client } = makeClient({
+    projects: [project(PROJECT_ID)],
+    authority: authorizationContext([{
+      resourceType: 'tenant',
+      resourceId: ENVIRONMENT.tenantId,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    roleAssignments: { error: 'forbidden' },
+    roleAssignmentStatus: 403,
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.roleAssignments.status, 'denied');
+  assert.equal(evidence.verdict, 'needs review');
+});
+
+test('a denied audit read remains needs review', async () => {
+  const { client } = makeClient({
+    projects: [],
+    authority: authorizationContext([{
+      resourceType: 'tenant',
+      resourceId: ENVIRONMENT.tenantId,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    auditRecords: { error: 'forbidden' },
+    auditStatus: 403,
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.auditRecords.status, 'denied');
+  assert.equal(evidence.auditRecords.complete, false);
+  assert.equal(evidence.auditRecords.reason, 'The read request was denied with HTTP 403.');
+  assert.equal(evidence.projectMatch.status, 'not-found');
+  assert.equal(evidence.verdict, 'needs review');
+});
+
+test('a truncated audit response is incomplete and cannot establish a verdict', async () => {
+  const { client } = makeClient({
+    projects: [],
+    authority: authorizationContext([{
+      resourceType: 'tenant',
+      resourceId: ENVIRONMENT.tenantId,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    auditRecords: { ...AUDIT_RECORDS, complete: false, truncated: true },
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.auditRecords.status, 'incomplete');
+  assert.equal(evidence.auditRecords.truncated, true);
   assert.equal(evidence.verdict, 'needs review');
 });
 

@@ -29,6 +29,7 @@ internal static partial class GatewayOpenApi
             ["getProject"] = C(null, "ProjectSummary", "200"),
             ["updateProject"] = C("UpdateProjectRequest", "ProjectSummary", "200"),
             ["listProjectRoleAssignments"] = C(null, "ProjectRoleAssignmentList", "200"),
+            ["readProjectSetupAuthorityAudit"] = C(null, "ProjectSetupAuthorityAuditRead", "200"),
             ["assignProjectRole"] = C("AssignProjectRoleRequest", "ProjectRoleAssignment", "201"),
             ["revokeProjectRoleAssignment"] = C(null, "ProjectRoleAssignment", "200"),
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
@@ -353,6 +354,7 @@ internal static partial class GatewayOpenApi
                             : "Owner response; returned by the owning service.",
                         (route.OperationId is "readRuntimeObservationV1" or "getProjectConfigurationChoices" or
                         "getHostedModelReasoningCatalog" or "getProjectAgentHistory" or
+                        "readProjectSetupAuthorityAudit" or
                         "readProjectTeamSync" or "commitProjectTeamSync") && status == "200"
                             ? new Dictionary<string, object>(StringComparer.Ordinal)
                             {
@@ -366,6 +368,8 @@ internal static partial class GatewayOpenApi
                                             "Project configuration choice responses are not cacheable.",
                                         "getHostedModelReasoningCatalog" =>
                                             "Hosted reasoning catalog responses are not cacheable.",
+                                        "readProjectSetupAuthorityAudit" =>
+                                            "Authority audit responses are not cacheable.",
                                         "readProjectTeamSync" or "commitProjectTeamSync" =>
                                             "Private repository team-sync responses are not cacheable.",
                                         _ => "Runtime evidence responses are not cacheable.",
@@ -566,6 +570,12 @@ else if (route.OperationId is
                 "The caller is not a tenant admin or a project Owner, or the token lacks api.read or is resource-bound.");
             responses["404"] = ProblemResponse("The owner did not find the project in the caller's tenant.");
         }
+        else if (route.OperationId == "readProjectSetupAuthorityAudit")
+        {
+            responses["400"] = ProblemResponse("The request included an invalid invocation ID or query parameters.");
+            responses["403"] = ProblemResponse(
+                "The caller is not a current tenant admin or Owner of every linked project, or the token lacks api.read or is resource-bound.");
+        }
         else if (route.OperationId is "assignProjectRole" or "revokeProjectRoleAssignment")
         {
             responses["400"] = ProblemResponse(
@@ -590,6 +600,13 @@ else if (route.OperationId is
         {
             description +=
                 " Returns only active assignments. A current tenant admin or a project Owner can read the list.";
+        }
+        else if (route.OperationId == "readProjectSetupAuthorityAudit")
+        {
+            description +=
+                " Requires an unbound api.read token and current TenantAdmin authority, or current Owner authority " +
+                "for every linked project in the selected tenant. The result contains no tokens or secret fields. " +
+                "Responses are no-store. When the bounded result exceeds 32 records, complete is false and truncated is true.";
         }
         else if (route.OperationId == "sendProjectRunMessage")
         {
@@ -1101,6 +1118,19 @@ else if (route.OperationId is
             ("principalId", Str()), ("role", Enum("owner", "contributor", "viewer", "orchestrator"))),
         ["ProjectRoleAssignmentList"] = Obj(["projectId", "assignments"],
             ("projectId", Str()), ("assignments", Arr(Ref("ProjectRoleAssignmentSummary")))),
+        ["ProjectSetupAuthorityAuditRead"] = StrictObj(
+            ["invocationId", "complete", "truncated", "records"],
+            ("invocationId", Uuid()), ("complete", Bool()), ("truncated", Bool()),
+            ("records", BoundedArray(Ref("ProjectSetupAuthorityAuditEvent"), 0, 32))),
+        ["ProjectSetupAuthorityAuditEvent"] = StrictObj(
+            ["eventId", "eventType", "assignmentId", "resourceType", "resourceId", "role", "revision", "actor", "createdAt"],
+            ("eventId", Uuid()),
+            ("eventType", Enum("membership_granted", "membership_revoked", "role_assigned", "role_revoked")),
+            ("assignmentId", Nullable(Uuid())),
+            ("resourceType", Nullable(Enum("platform", "tenant", "project"))),
+            ("resourceId", NullableStr()),
+            ("role", Nullable(Enum("platformAdmin", "tenantAdmin", "owner", "contributor", "viewer", "orchestrator"))),
+            ("revision", Int()), ("actor", Str()), ("createdAt", Date())),
         ["ProjectRoleAssignmentSummary"] = Obj(
             ["assignmentId", "principalId", "role", "revision", "createdBy", "createdAt"],
             ("assignmentId", Uuid()), ("principalId", Str()),

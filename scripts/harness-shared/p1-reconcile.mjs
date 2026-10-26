@@ -6,22 +6,41 @@ import { redact } from './redaction.mjs';
 const INVOCATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PROJECTS_PATH = '/api/v1/projects';
 const AUTHORITY_PATH = '/api/v1/authorization/context';
+const ROLE_ASSIGNMENTS_PATH = '/api/v1/projects/{projectId}/role-assignments';
+const AUTHORITY_AUDIT_PATH = '/api/v1/project-setup-invocations/{invocationId}/authority-audit';
+const AUDIT_EVENT_TYPES = new Set([
+  'membership_granted',
+  'membership_revoked',
+  'role_assigned',
+  'role_revoked',
+]);
+const AUTHORITY_ROLES = new Set([
+  'platformAdmin',
+  'tenantAdmin',
+  'owner',
+  'contributor',
+  'viewer',
+  'orchestrator',
+]);
 
 function readFailure(call) {
   if (call?.status === 401 || call?.status === 403) {
-    return { status: 'denied', reason: 'The read request was denied.' };
+    return { status: 'denied', reason: `The read request was denied with HTTP ${call.status}.` };
   }
   return { status: 'incomplete', reason: 'The read request did not return a complete successful response.' };
 }
 
-async function invokeRead(api, operationId, expectedPath, signal) {
+async function invokeRead(api, operationId, expectedPath, signal, pathParameters) {
   const operation = api.operations?.get(operationId);
   if (!operation || operation.method !== 'GET' || operation.path !== expectedPath) {
     return { status: 'unavailable', reason: 'The expected read operation is not present in the discovered Gateway contract.' };
   }
 
   try {
-    const call = await api.invoke(operationId, { signal });
+    const call = await api.invoke(operationId, {
+      ...(pathParameters ? { pathParameters } : {}),
+      signal,
+    });
     if (call.status !== 200) return readFailure(call);
     return { status: 'complete', value: call.transientResponseBody };
   } catch {
@@ -74,6 +93,122 @@ function summarizeProjectRead(read, projectName) {
       configurationRevision: project.configurationRevision ?? null,
       effectiveRoles: project.effectiveRoles ?? [],
     })),
+  };
+}
+
+function summarizeRoleAssignments(read, expectedProjectId) {
+  if (read.status !== 'complete') {
+    return {
+      status: read.status,
+      complete: false,
+      projectId: expectedProjectId,
+      assignments: [],
+      reason: read.reason,
+    };
+  }
+
+  const result = read.value;
+  const valid = result && typeof result === 'object' && !Array.isArray(result)
+    && result.projectId === expectedProjectId
+    && Array.isArray(result.assignments)
+    && result.assignments.every(assignment =>
+      assignment && typeof assignment === 'object' && !Array.isArray(assignment)
+      && typeof assignment.assignmentId === 'string' && INVOCATION_ID.test(assignment.assignmentId)
+      && typeof assignment.principalId === 'string' && assignment.principalId.length > 0
+      && ['owner', 'contributor', 'viewer', 'orchestrator'].includes(assignment.role)
+      && Number.isSafeInteger(assignment.revision) && assignment.revision > 0
+      && typeof assignment.createdBy === 'string'
+      && typeof assignment.createdAt === 'string' && assignment.createdAt.length > 0);
+  if (!valid) {
+    return {
+      status: 'incomplete',
+      complete: false,
+      projectId: expectedProjectId,
+      assignments: [],
+      reason: 'The role-assignment response was incomplete or did not match the visible project.',
+    };
+  }
+
+  return {
+    status: 'complete',
+    complete: true,
+    projectId: expectedProjectId,
+    assignments: result.assignments.map(assignment => ({
+      assignmentId: assignment.assignmentId,
+      principalId: assignment.principalId,
+      role: assignment.role,
+      revision: assignment.revision,
+      createdBy: assignment.createdBy,
+      createdAt: assignment.createdAt,
+    })),
+  };
+}
+
+function isValidAuditRecord(record) {
+  return record && typeof record === 'object' && !Array.isArray(record)
+    && typeof record.eventId === 'string' && INVOCATION_ID.test(record.eventId)
+    && AUDIT_EVENT_TYPES.has(record.eventType)
+    && (record.assignmentId == null
+      || typeof record.assignmentId === 'string' && INVOCATION_ID.test(record.assignmentId))
+    && (record.resourceType == null || ['platform', 'tenant', 'project'].includes(record.resourceType))
+    && (record.resourceId == null || typeof record.resourceId === 'string')
+    && (record.role == null || AUTHORITY_ROLES.has(record.role))
+    && Number.isSafeInteger(record.revision) && record.revision > 0
+    && typeof record.actor === 'string' && record.actor.length > 0
+    && typeof record.createdAt === 'string' && record.createdAt.length > 0;
+}
+
+function summarizeAuditRead(read, invocationId) {
+  if (read.status !== 'complete') {
+    return {
+      status: read.status,
+      complete: false,
+      truncated: false,
+      operationId: 'readProjectSetupAuthorityAudit',
+      records: [],
+      reason: read.reason,
+    };
+  }
+
+  const result = read.value;
+  if (!result || typeof result !== 'object' || Array.isArray(result)
+    || typeof result.invocationId !== 'string'
+    || result.invocationId.toLowerCase() !== invocationId.toLowerCase()
+    || !Array.isArray(result.records)) {
+    return {
+      status: 'incomplete',
+      complete: false,
+      truncated: false,
+      operationId: 'readProjectSetupAuthorityAudit',
+      records: [],
+      reason: 'The authority-audit response did not match the requested invocation.',
+    };
+  }
+
+  const records = result.records.filter(isValidAuditRecord).map(record => ({
+    eventId: record.eventId,
+    eventType: record.eventType,
+    assignmentId: record.assignmentId ?? null,
+    resourceType: record.resourceType ?? null,
+    resourceId: record.resourceId ?? null,
+    role: record.role ?? null,
+    revision: record.revision,
+    actor: record.actor,
+    createdAt: record.createdAt,
+  }));
+  const complete = result.complete === true
+    && result.truncated === false
+    && result.records.length === records.length
+    && records.length <= 32;
+  return {
+    status: complete ? 'complete' : 'incomplete',
+    complete,
+    truncated: result.truncated === true,
+    operationId: 'readProjectSetupAuthorityAudit',
+    records,
+    ...(complete ? {} : {
+      reason: 'The authority-audit response was partial, truncated, malformed, or incomplete.',
+    }),
   };
 }
 
@@ -152,21 +287,102 @@ function summarizeAuthorityRead(read, environment, projectMatch) {
   };
 }
 
-function reconcileVerdict(projectMatch, effectiveAuthority, auditRecords) {
+function hasCompleteSetupRevocationEvidence(records, environment) {
+  if (records.length === 0) return false;
+
+  const recordsByAssignment = new Map();
+  const projectIds = new Set();
+  for (const record of records) {
+    if (!['role_assigned', 'role_revoked'].includes(record.eventType)
+      || typeof record.assignmentId !== 'string'
+      || record.resourceType !== 'project'
+      || typeof record.resourceId !== 'string'
+      || !['owner', 'orchestrator'].includes(record.role)) return false;
+
+    projectIds.add(record.resourceId);
+    const events = recordsByAssignment.get(record.assignmentId) ?? [];
+    events.push(record);
+    recordsByAssignment.set(record.assignmentId, events);
+  }
+
+  // An empty complete read is not positive cleanup evidence; require both P1 role grants and their revocations.
+  if (projectIds.size !== 1 || recordsByAssignment.size !== 2) return false;
+
+  const roles = new Set();
+  for (const events of recordsByAssignment.values()) {
+    if (events.length !== 2) return false;
+    const [assigned, revoked] = [...events].sort((left, right) => left.revision - right.revision);
+    if (assigned.eventType !== 'role_assigned'
+      || assigned.revision !== 1
+      || assigned.actor !== environment.actorId
+      || revoked.eventType !== 'role_revoked'
+      || revoked.revision !== 2
+      || assigned.resourceId !== revoked.resourceId
+      || assigned.role !== revoked.role) return false;
+    roles.add(assigned.role);
+  }
+
+  return roles.size === 2 && roles.has('owner') && roles.has('orchestrator');
+}
+
+function matchesSetupAssignments(projectMatch, roleAssignments, effectiveAuthority, auditRecords, environment) {
+  if (projectMatch.status !== 'found'
+    || projectMatch.matches[0]?.state !== 'active'
+    || !['all-tenant-projects', 'matched-project'].includes(effectiveAuthority.targetVisibility)
+    || roleAssignments.status !== 'complete'
+    || roleAssignments.complete !== true
+    || auditRecords.records.length !== 2) return false;
+
+  const projectId = projectMatch.matches[0].projectId;
+  const setupEvents = auditRecords.records;
+  if (!setupEvents.every(record =>
+    record.eventType === 'role_assigned'
+    && record.resourceType === 'project'
+    && record.resourceId === projectId
+    && record.revision === 1
+    && record.actor === environment.actorId
+    && typeof record.assignmentId === 'string')
+  ) return false;
+
+  const roles = new Set(setupEvents.map(record => record.role));
+  if (roles.size !== 2 || !roles.has('owner') || !roles.has('orchestrator')) return false;
+
+  const assignmentIds = new Set(setupEvents.map(record => record.assignmentId));
+  if (assignmentIds.size !== 2 || roleAssignments.assignments.length !== 2) return false;
+  return setupEvents.every(event => roleAssignments.assignments.some(assignment =>
+    assignment.assignmentId === event.assignmentId
+    && assignment.principalId === environment.actorId
+    && assignment.role === event.role
+    && assignment.revision === event.revision));
+}
+
+function reconcileVerdict(projectMatch, effectiveAuthority, roleAssignments, auditRecords, environment) {
   if (!['found', 'not-found'].includes(projectMatch.status)
     || effectiveAuthority.status !== 'complete'
     || auditRecords.status !== 'complete' || auditRecords.complete !== true) {
     return {
       verdict: 'needs review',
-      reason: 'Project, effective-authority, and complete matching audit evidence are all required for a conclusive assessment.',
+      reason: 'Project visibility, effective authority, and a complete matching audit read are all required for a conclusive assessment.',
     };
   }
 
-  // A not-found result is conclusive only for a caller proven to see every project in the selected tenant.
+  // A permission-filtered list cannot prove absence; only tenant-wide ReadProjects plus a complete audit read can.
   if (projectMatch.status === 'not-found' && !effectiveAuthority.tenantWideProjectVisibility) {
     return {
       verdict: 'needs review',
       reason: 'The permission-filtered project list cannot prove that the invocation-named project is gone.',
+    };
+  }
+  if (projectMatch.status === 'not-found') {
+    if (!hasCompleteSetupRevocationEvidence(auditRecords.records, environment)) {
+      return {
+        verdict: 'needs review',
+        reason: 'The complete audit read does not prove that both setup assignments were revoked.',
+      };
+    }
+    return {
+      verdict: 'already clean',
+      reason: 'The caller can see every project in the tenant, no invocation-named project is visible, and the complete audit read proves both setup assignments were revoked.',
     };
   }
   if (projectMatch.status === 'found'
@@ -176,11 +392,23 @@ function reconcileVerdict(projectMatch, effectiveAuthority, auditRecords) {
       reason: 'The authorization context does not confirm current visibility of the matched project.',
     };
   }
+  if (roleAssignments.status !== 'complete' || roleAssignments.complete !== true) {
+    return {
+      verdict: 'needs review',
+      reason: 'A complete read of the visible project role assignments is required for a conclusive assessment.',
+    };
+  }
+  if (!matchesSetupAssignments(projectMatch, roleAssignments, effectiveAuthority, auditRecords, environment)) {
+    return {
+      verdict: 'needs review',
+      reason: 'The visible project, active assignments, and invocation-linked audit records do not prove an unchanged P1 setup fixture.',
+    };
+  }
 
-  // The current Gateway contract has no authority-audit read operation, so it cannot support either positive verdict.
+  // Cleanup is guarded separately by the owner; this read-only verdict never authorizes or performs that mutation.
   return {
-    verdict: 'needs review',
-    reason: 'The Gateway contract does not expose matching authority audit records; cleanup state cannot be verified.',
+    verdict: 'safe to clean up',
+    reason: 'The visible active project, its Owner and Orchestrator assignments, and complete invocation-linked audit records match the setup actor. This is an assessment only; it does not authorize or perform cleanup.',
   };
 }
 
@@ -211,7 +439,7 @@ export async function reconcileP1Run({ api, environment, invocationId, signal } 
     };
   }
 
-  // Invoke only these two known GET operations; an absent or changed contract fails closed without trying another route.
+  // Invoke only known GET operations; an absent or changed contract fails closed without trying another route.
   const projectRead = discovery.status === 'complete'
     ? await invokeRead(api, 'listProjects', PROJECTS_PATH, signal)
     : { status: 'unavailable', reason: discovery.reason };
@@ -222,15 +450,38 @@ export async function reconcileP1Run({ api, environment, invocationId, signal } 
     : { status: 'unavailable', reason: discovery.reason };
   const effectiveAuthority = summarizeAuthorityRead(authorityRead, environment, projectMatch);
 
-  // No audit-read operation is declared in the current Gateway API contract; never guess a path or query the database.
-  const auditRecords = {
-    status: 'unavailable',
-    complete: false,
-    operationId: null,
-    records: [],
-    reason: 'The current Gateway API contract has no authority-audit read operation for this invocation.',
-  };
-  const assessment = reconcileVerdict(projectMatch, effectiveAuthority, auditRecords);
+  const roleAssignments = projectMatch.status === 'found' && discovery.status === 'complete'
+    ? summarizeRoleAssignments(
+      await invokeRead(
+        api,
+        'listProjectRoleAssignments',
+        ROLE_ASSIGNMENTS_PATH,
+        signal,
+        { projectId: projectMatch.matches[0].projectId },
+      ),
+      projectMatch.matches[0].projectId,
+    )
+    : {
+      status: 'not-applicable',
+      complete: false,
+      projectId: null,
+      assignments: [],
+      reason: 'No single visible project was available for a role-assignment read.',
+    };
+
+  const auditRead = discovery.status === 'complete'
+    ? await invokeRead(
+      api,
+      'readProjectSetupAuthorityAudit',
+      AUTHORITY_AUDIT_PATH,
+      signal,
+      { invocationId: invocationId.toLowerCase() },
+    )
+    : { status: 'unavailable', reason: discovery.reason };
+  const auditRecords = summarizeAuditRead(auditRead, invocationId);
+  const assessment = reconcileVerdict(
+    projectMatch, effectiveAuthority, roleAssignments, auditRecords, environment,
+  );
 
   // Include explicit action flags so this assessment cannot be mistaken for cleanup or approval to resume a journey.
   return redact({
@@ -241,6 +492,7 @@ export async function reconcileP1Run({ api, environment, invocationId, signal } 
     projectName,
     projectMatch,
     effectiveAuthority,
+    roleAssignments,
     auditRecords,
     verdict: assessment.verdict,
     verdictReason: assessment.reason,
