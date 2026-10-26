@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "sourceSha": "7eef3978f29df574f059b3462427311a0c331385",
+  "planSourceSha": "59d49fb43db169284739392d2925efde121a1ed3",
+  "preparationBaseSha": "59d49fb43db169284739392d2925efde121a1ed3",
+  "originalReceiptSha256": "309e72e0eb6a4527f7e51bcc8ce98a0a90501cc98c4980c512d07d5c07187b85",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "b335b2574e4b4dd95ee980c4faad993e2501b96b1b9d66a0135ccc6435d4e347",
+  "appliedAt": "2026-10-26T19:52:05.901Z",
+  "components": [
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.7.0",
+      "toVersion": "1.7.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.7.1",
+      "toVersion": "1.7.2",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/quiet-mice-reconcile.md",
+      "archivedPath": ".changeset/archive/quiet-mice-reconcile.md",
+      "sha256": "51279bd5eafb473eaf034afcb2832fea85aa07c4b96161f11d2f5e872561e56d"
+    }
+  ]
+}
