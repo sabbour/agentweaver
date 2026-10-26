@@ -1,4 +1,8 @@
 using System.Collections.Immutable;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
@@ -6,6 +10,7 @@ using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
 using Microsoft.Agents.AI.Workflows;
+using Microsoft.AspNetCore.Http;
 using Npgsql;
 using NpgsqlTypes;
 using Xunit;
@@ -106,7 +111,7 @@ public sealed partial class MafCheckpointStorePostgresTests
     }
 
     [Fact]
-    public async Task PostgresReviewRevokedAuthorityDoesNotDuplicateDecision()
+    public async Task PostgresReviewRejectsNonOwnerActorWithoutDuplicateDecision()
     {
         var (plan, intent, decisions) = await PrepareReviewOwnerAsync();
         var executor = CreateReviewExecutor(plan, decisions);
@@ -130,6 +135,71 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Empty(latest.State.ReviewReceipts);
         Assert.Equal(MafExecutionTaskStatus.Running,
             latest.State.Progress.NonModelSteps[intent.StepId]);
+    }
+
+    [Fact]
+    public async Task PostgresReviewRejectsRevokedSelectionPermissionWithoutDecisionChanges()
+    {
+        var (plan, intent, decisions) = await PrepareReviewOwnerAsync();
+        var authorityHandler = new ReviewSelectionAuthorityHandler(
+            _selection.Selection, _actor.Issuer, _actor.Subject);
+        using var httpClient = new HttpClient(authorityHandler);
+        var projects = new ProjectsRunSelectionClient(
+            httpClient,
+            new OrchestratorOptions(
+                _actor.Issuer, "orchestrator-api", "https://projects.test/",
+                "projects-api", string.Empty, string.Empty),
+            new ReviewNoSnapshotResolver());
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer review-test-token";
+        context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", _actor.Subject),
+            new Claim("aud", "projects-api"),
+            new Claim("project_id", _binding.Identity.ProjectId),
+            new Claim("run_id", _binding.Identity.RunId),
+            new Claim("scope", "api.read projects.orchestrator")
+        ], "review-test"));
+        async Task RequireCurrentAuthorityAsync(CancellationToken token)
+        {
+            // The real selection client must see this same actor's current project grant before reading the decision.
+            _ = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, _binding.Identity.ProjectId, _binding.Identity.RunId, token);
+        }
+
+        var executor = CreateReviewExecutor(
+            plan, decisions, requireCurrentAuthority: RequireCurrentAuthorityAsync);
+        Assert.Null(await executor.ExecuteAsync(intent, CancellationToken.None));
+        var pending = await decisions.ReadCurrentAsync(
+            _actor, _binding.Identity, _selection, CancellationToken.None);
+        Assert.Equal(_actor.Subject, pending.State.PendingGate?.AuthorizedActorId);
+        Assert.Equal(intent.ApprovalRequestId, pending.State.PendingGate?.RequestId);
+        Assert.Equal(1, await CountReviewGateRequestsAsync(intent.ApprovalRequestId));
+        var transitionsBeforeRevocation = await CountDecisionTransitionsAsync();
+
+        // Revoke acceptRunSelection for the same subject while preserving the pending durable request.
+        authorityHandler.RevokeAcceptRunSelection();
+        var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+            executor.ExecuteAsync(intent, CancellationToken.None));
+
+        Assert.Equal("run_selection_permission_denied", failure.Code);
+        Assert.Equal(5, authorityHandler.AuthorizationReadCount);
+        Assert.Equal(2, authorityHandler.SelectionReadCount);
+        var after = await decisions.ReadCurrentAsync(
+            _actor, _binding.Identity, _selection, CancellationToken.None);
+        var latest = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(latest);
+        Assert.Equal(pending.StateVersion, after.StateVersion);
+        Assert.Equal(transitionsBeforeRevocation, await CountDecisionTransitionsAsync());
+        Assert.Equal(intent.ApprovalRequestId, after.State.PendingGate?.RequestId);
+        Assert.Equal(1, await CountReviewGateRequestsAsync(intent.ApprovalRequestId));
+        Assert.Empty(latest.State.ReviewReceipts);
+        Assert.Equal(MafExecutionTaskStatus.Running,
+            latest.State.Progress.NonModelSteps[intent.StepId]);
+        Assert.False(MafExecutionPlanner.BuildFrontier(
+                plan, latest.State.Progress, 0, 0, 10, 10, _ => true)
+            .ReadyActions.Any(action => action.Step.Id == "merge"));
     }
 
     [Fact]
@@ -453,12 +523,18 @@ public sealed partial class MafCheckpointStorePostgresTests
     private MafIndependentReviewExecutor CreateReviewExecutor(
         WorkPlanSnapshot plan, CoordinatorDecisionOwnerStore decisions,
         MafExecutionCheckpointStore? execution = null, bool changedEvidence = false,
-        CoordinationActor? actor = null)
+        CoordinationActor? actor = null,
+        Func<CancellationToken, Task>? requireCurrentAuthority = null)
     {
         execution ??= _executionStore;
         actor ??= _actor;
-        async Task<CoordinatorDecisionCurrentState> Current(CancellationToken token) =>
-            await decisions.ReadCurrentAsync(actor, _binding.Identity, _selection, token);
+        async Task<CoordinatorDecisionCurrentState> Current(CancellationToken token)
+        {
+            // Match production ordering: current project authority is rechecked before reading owner decision state.
+            if (requireCurrentAuthority is not null)
+                await requireCurrentAuthority(token);
+            return await decisions.ReadCurrentAsync(actor, _binding.Identity, _selection, token);
+        }
         async Task Open(MafExecutionReviewIntent intent, CancellationToken token)
         {
             // Opening uses the same idempotent durable transition and exact actor as the endpoint.
@@ -511,6 +587,101 @@ public sealed partial class MafCheckpointStorePostgresTests
         query.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _binding.Identity.RunId);
         query.Parameters.AddWithValue("request", NpgsqlDbType.Varchar, requestId);
         return Convert.ToInt32(await query.ExecuteScalarAsync());
+    }
+
+    private async Task<int> CountDecisionTransitionsAsync()
+    {
+        // Count durable owner rows so authority loss cannot silently append an unrelated decision version.
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var query = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".coordinator_decisions
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        query.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _binding.Identity.ProjectId);
+        query.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _binding.Identity.RunId);
+        return Convert.ToInt32(await query.ExecuteScalarAsync());
+    }
+
+    private sealed class ReviewNoSnapshotResolver : IReviewedRemoteToolSnapshotResolver
+    {
+        public Task<ReviewedRemoteToolSnapshot?> ResolveAsync(
+            ReviewedRemoteToolSnapshotReference reference,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<ReviewedRemoteToolSnapshot?>(null);
+    }
+
+    private sealed class ReviewSelectionAuthorityHandler(
+        EffectiveRunSelection selection,
+        string issuer,
+        string actorId) : HttpMessageHandler
+    {
+        private bool _acceptRunSelection = true;
+
+        public int AuthorizationReadCount { get; private set; }
+        public int SelectionReadCount { get; private set; }
+
+        public void RevokeAcceptRunSelection()
+        {
+            // Keep the actor binding stable while removing only the permission under test.
+            _acceptRunSelection = false;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath
+                ?? throw new InvalidOperationException("The fake Projects request has no absolute path.");
+            if (path == "/api/authorization/context")
+            {
+                AuthorizationReadCount++;
+                var permissions = _acceptRunSelection
+                    ? ImmutableArray.Create(new ProjectsPermissionGrant("acceptRunSelection", 1))
+                    : ImmutableArray<ProjectsPermissionGrant>.Empty;
+                var authority = new ProjectsAuthorizationContext(
+                    1, issuer, actorId, "tenant-1", _acceptRunSelection ? 1 : 2,
+                    selection.ProjectId, selection.RunId,
+                    [new ProjectsAuthority("project", selection.ProjectId, permissions)]);
+                return Task.FromResult(CreateResponse(request, authority));
+            }
+
+            var selectionPath =
+                $"/api/projects/{Uri.EscapeDataString(selection.ProjectId)}/runs/" +
+                $"{Uri.EscapeDataString(selection.RunId)}/selection";
+            if (path == selectionPath)
+            {
+                SelectionReadCount++;
+                var snapshot = selection.Snapshot;
+                var acceptedSelection = new
+                {
+                    projectId = selection.ProjectId,
+                    runId = selection.RunId,
+                    projectRevision = selection.ProjectRevision,
+                    projectConfigurationRevision = selection.ProjectConfigurationRevision,
+                    platformRuntimeRevision = selection.PlatformRuntimeRevision,
+                    contextRevision = selection.ContextRevision,
+                    projectConfiguration = snapshot.GetProperty("projectConfiguration"),
+                    runLimits = snapshot.GetProperty("runLimits"),
+                    modelSelection = snapshot.GetProperty("modelSelection"),
+                    providers = snapshot.GetProperty("providers")
+                };
+                return Task.FromResult(CreateResponse(request, acceptedSelection));
+            }
+
+            throw new InvalidOperationException($"Unexpected fake Projects route '{path}'.");
+        }
+
+        private static HttpResponseMessage CreateResponse(HttpRequestMessage request, object body)
+        {
+            // Bind every fake response to its request so client response checks observe normal HTTP metadata.
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = JsonContent.Create(body)
+            };
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+            return response;
+        }
     }
 
     private sealed class ReviewSandboxResourceProvider : ICoordinatorSandboxResourceProvider
