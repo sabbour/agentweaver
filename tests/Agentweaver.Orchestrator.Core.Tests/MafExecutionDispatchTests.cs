@@ -118,8 +118,21 @@ public sealed class MafExecutionDispatchTests
     }
 
     [Fact]
-    public void DispatchRegistersOnlyTheImplementedOpenPullRequestPlatformGate()
+    public void DispatchRegistersSourceControlGatesOnlyWhenTheirOwnerIsConfigured()
     {
+        var mergeSupported = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+                WorkflowDefinitionOrigin.BuiltIn,
+                WorkflowTestData.Open("implement", 0, []),
+                WorkflowTestData.Platform("merge", 1, ["implement"], WorkflowPlatformGate.Merge))),
+            WorkflowTestData.Plan(WorkflowTestData.Item("first")),
+            WorkflowTestData.SelectionContext()).Value!;
+        var mergeBound = MafExecutionWorkflowBindings.RequireBound(mergeSupported, false, true, true);
+        var mergeAction = new MafExecutionAction(mergeBound.Steps[1].Definition, null);
+        MafExecutionWorkflowBindings.RequireBoundAction(mergeBound, mergeAction);
+        Assert.Equal(WorkflowPlatformGate.Merge, Assert.IsType<BoundWorkflowStep.Platform>(
+            mergeBound.Steps[1]).Gate);
+
         var supported = WorkPlanValidator.ValidateAndSnapshot(
             WorkflowTestData.Snapshot(WorkflowTestData.Definition(
                 WorkflowDefinitionOrigin.BuiltIn,

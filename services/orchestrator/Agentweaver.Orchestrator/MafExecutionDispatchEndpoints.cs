@@ -112,6 +112,7 @@ public static partial class CoordinationEndpoints
             var bound = MafExecutionWorkflowBindings.RequireBound(
                 plan,
                 buildTestClient is not null,
+                sourceControlClient is not null,
                 sourceControlClient is not null);
             if (request.BuildTestWorkspaces is { } workspaces)
             {
@@ -135,6 +136,16 @@ public static partial class CoordinationEndpoints
                     throw new CoordinationException(
                         "source_control_pull_request_request_invalid", StatusCodes.Status400BadRequest);
             }
+            if (request.MergeInputs is { } mergeInputs &&
+                (mergeInputs.Count > plan.Workflow.Definition.Steps.Length ||
+                 mergeInputs.Any(item =>
+                     !plan.Workflow.Definition.Steps.Any(step =>
+                         step.Id == item.Key &&
+                         step.Mode == WorkflowStepMode.Platform &&
+                         step.PlatformGate == WorkflowPlatformGate.Merge) ||
+                     !MafMergeContract.IsValidInput(item.Value))))
+                throw new CoordinationException(
+                    "source_control_merge_request_invalid", StatusCodes.Status400BadRequest);
             var checkpointBinding = CreateExecutionCheckpointBinding(
                 identity,
                 actor,
@@ -169,6 +180,26 @@ public static partial class CoordinationEndpoints
                     MafOpenPullRequestContract.RequireCurrentSource(
                         intent, actor, identity, selection.Authorization.TenantId,
                         decision.StateVersion, decision.State.Fence, decision.SelectionHash, currentPin);
+                }
+            if (checkpoint is not null)
+                foreach (var intent in checkpoint.State.MergeIntents.Values)
+                {
+                    if (request.MergeInputs?.TryGetValue(intent.StepId, out var mergeInput) == true &&
+                        (mergeInput.Method != intent.Method ||
+                         mergeInput.PullRequestNumber is { } suppliedNumber &&
+                             suppliedNumber != intent.PullRequestNumber ||
+                         mergeInput.ExpectedHeadSha is { } suppliedHead &&
+                             !string.Equals(
+                                 suppliedHead, intent.ExpectedHeadSha, StringComparison.OrdinalIgnoreCase)))
+                        throw new CoordinationException(
+                            "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+                    var currentPin = await context.RequestServices.GetRequiredService<SourceControlOwnerStore>()
+                        .ReadRepositoryPinAsync(actor, identity, selection, cancellationToken)
+                        .ConfigureAwait(false);
+                    MafMergeContract.RequireCurrentSource(
+                        intent, actor, identity, selection.Authorization.TenantId,
+                        decision.StateVersion, decision.State, decision.State.Fence,
+                        decision.SelectionHash, currentPin);
                 }
             if (checkpoint is not null)
                 foreach (var intent in checkpoint.State.BuildTestIntents.Values)
@@ -273,12 +304,14 @@ public static partial class CoordinationEndpoints
                  checkpoint.State.BuildTestIntents.ContainsKey(step.Id));
             bool HasPlatformExecutor(WorkflowStepDefinition step) =>
                 (sourceControlClient is not null &&
-                    step.PlatformGate == WorkflowPlatformGate.OpenPullRequest) ||
+                    step.PlatformGate is WorkflowPlatformGate.OpenPullRequest or WorkflowPlatformGate.Merge) ||
                 HasBuildTestExecutor(step);
             var hostClient = context.RequestServices.GetRequiredService<IHttpClientFactory>()
                 .CreateClient("maf-execution-host");
             var dispatched = ImmutableArray.CreateBuilder<string>();
             var unavailable = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+            (string OwnerIntentId, string ApprovalRequestId)? pendingMergeApproval = null;
+            var responseDecisionStateVersion = decision.StateVersion;
 
             async Task RevalidateDispatchAsync(CancellationToken token)
             {
@@ -286,9 +319,18 @@ public static partial class CoordinationEndpoints
                     context, projectId, runId, selection, projects, token).ConfigureAwait(false);
                 var current = await decisions.ReadCurrentAsync(
                     actor, identity, selection, token).ConfigureAwait(false);
-                if (current.StateVersion != decision.StateVersion ||
-                    current.State.Fence != decision.State.Fence ||
-                    !current.State.CanDispatch ||
+                var dispatchStillCurrent =
+                    current.StateVersion == decision.StateVersion &&
+                    current.State.Fence == decision.State.Fence &&
+                    current.State.CanDispatch;
+                var exactPendingMergeApproval =
+                    pendingMergeApproval is { } pending &&
+                    current.StateVersion == checked(decision.StateVersion + 1) &&
+                    current.State.Fence == decision.State.Fence &&
+                    current.State.PendingGate is { } gate &&
+                    gate.RequestId == pending.ApprovalRequestId &&
+                    gate.SubjectId == pending.OwnerIntentId;
+                if ((!dispatchStillCurrent && !exactPendingMergeApproval) ||
                     current.State.ConfirmedWorkPlan?.Plan.Id != plan.Plan.Id)
                     throw new CoordinationException(
                         "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
@@ -719,10 +761,20 @@ public static partial class CoordinationEndpoints
                         : throw new CoordinationException(
                             "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
                     .ToArray();
+                var mergeResults = plan.Workflow.Definition.Steps
+                    .Where(step =>
+                        dependencySteps.Contains(step.Id) &&
+                        step.PlatformGate == WorkflowPlatformGate.Merge)
+                    .Select(step => state.MergeReceipts.TryGetValue(step.Id, out var receipt)
+                        ? (step.Id, Receipt: receipt)
+                        : throw new CoordinationException(
+                            "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
+                    .ToArray();
 
                 if (requiredResults.Count == 0 &&
                     platformResults.Length == 0 &&
-                    pullRequestResults.Length == 0)
+                    pullRequestResults.Length == 0 &&
+                    mergeResults.Length == 0)
                 {
                     if (workItem is not null)
                         return workItem.Task;
@@ -753,6 +805,9 @@ public static partial class CoordinationEndpoints
                 foreach (var (stepId, receipt) in pullRequestResults)
                     prompt.Append("\n\n[").Append(stepId).Append("]\n")
                         .Append(MafOpenPullRequestContract.ResultSummary(receipt));
+                foreach (var (stepId, receipt) in mergeResults)
+                    prompt.Append("\n\n[").Append(stepId).Append("]\n")
+                        .Append(MafMergeContract.ResultSummary(receipt));
                 var value = prompt.ToString();
                 if (value.Length > AddressedMessageValidation.MaximumTextLength ||
                     value.Any(character => char.IsControl(character) &&
@@ -1221,6 +1276,160 @@ public static partial class CoordinationEndpoints
                 return intent;
             }
 
+            async Task RevalidateMergeDispatchAsync(CancellationToken token)
+            {
+                // A stale coordinator snapshot is a Source Control binding failure at this owner boundary.
+                try
+                {
+                    await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                }
+                catch (CoordinationException failure) when (failure.Code == "maf_execution_dispatch_stale")
+                {
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict, failure);
+                }
+            }
+
+            async Task RequireCurrentMergeAsync(
+                MafExecutionMergeIntent intent, CancellationToken token)
+            {
+                // Re-read the decision and pin after approval; the original checkpoint may predate the gate answer.
+                await RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, token).ConfigureAwait(false);
+                var currentDecision = await decisions.ReadCurrentAsync(
+                    actor, identity, selection, token).ConfigureAwait(false);
+                var sourceOwner = context.RequestServices.GetRequiredService<SourceControlOwnerStore>();
+                var pin = await sourceOwner.ReadRepositoryPinAsync(
+                    actor, identity, selection, token).ConfigureAwait(false);
+                MafMergeContract.RequireCurrentSource(
+                    intent, actor, identity, selection.Authorization.TenantId,
+                    currentDecision.StateVersion, currentDecision.State, currentDecision.State.Fence,
+                    currentDecision.SelectionHash, pin);
+                var latest = await execution.ReadLatestAsync(token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (latest.State.WorkPlanId != intent.WorkPlanId ||
+                    latest.State.DecisionStateVersion != currentDecision.StateVersion ||
+                    !latest.State.MergeIntents.TryGetValue(intent.StepId, out var retained) ||
+                    !MafExecutionCheckpointContract.MergeIntentsMatch(intent, retained) ||
+                    latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) !=
+                        MafExecutionTaskStatus.Running)
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+            }
+
+            async Task RequireMergeDecisionInTransactionAsync(
+                NpgsqlConnection connection,
+                NpgsqlTransaction transaction,
+                CancellationToken token)
+            {
+                // Keep the decision version check in the same transaction as the checkpoint lock.
+                try
+                {
+                    await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                        connection, transaction, actor, identity, selection, selectionContext,
+                        decision.StateVersion, decision.State.Fence, plan.Plan.Id, token)
+                        .ConfigureAwait(false);
+                }
+                catch (CoordinationException failure) when (failure.Code == "maf_execution_dispatch_stale")
+                {
+                    throw new CoordinationException(
+                        "source_control_run_binding_changed", StatusCodes.Status409Conflict, failure);
+                }
+            }
+
+            var mergeExecutor = sourceControlClient is null
+                ? null
+                : new MafMergeExecutor(
+                    execution,
+                    sourceControlClient,
+                    dataSource,
+                    CreateRuntimeActorAsync,
+                    RequireCurrentMergeAsync,
+                    RequireMergeDecisionInTransactionAsync,
+                    IsWallTimeLimitReached,
+                    () => wallTimeLimitReached = true,
+                    snapshot => checkpoint = snapshot,
+                    (ownerIntentId, approvalRequestId) =>
+                    {
+                        pendingMergeApproval = (ownerIntentId, approvalRequestId);
+                        responseDecisionStateVersion = checked(decision.StateVersion + 1);
+                    });
+
+            async Task<MafExecutionMergeIntent> PrepareMergeAsync(
+                WorkflowStepDefinition step, CancellationToken token)
+            {
+                // Persist one exact owner identity before the first merge-intent request.
+                if (sourceControlClient is null)
+                    throw new CoordinationException(
+                        "source_control_owner_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (step.Mode != WorkflowStepMode.Platform ||
+                    step.PlatformGate != WorkflowPlatformGate.Merge ||
+                    request.MergeInputs?.GetValueOrDefault(step.Id) is not { } input ||
+                    !MafMergeContract.IsValidInput(input))
+                    throw new CoordinationException(
+                        "source_control_merge_request_invalid", StatusCodes.Status400BadRequest);
+
+                await RevalidateMergeDispatchAsync(token).ConfigureAwait(false);
+                var sourceOwner = context.RequestServices.GetRequiredService<SourceControlOwnerStore>();
+                var pin = await sourceOwner.ReadRepositoryPinAsync(
+                    actor, identity, selection, token).ConfigureAwait(false);
+
+                await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+                await RequireMergeDecisionInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false);
+                await execution.AcquireExecutionLockInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false);
+                var latest = await execution.ReadLatestInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (latest.State.MergeIntents.TryGetValue(step.Id, out var retained))
+                {
+                    MafMergeContract.RequireCurrentSource(
+                        retained, actor, identity, selection.Authorization.TenantId,
+                        decision.StateVersion, decision.State, decision.State.Fence,
+                        decision.SelectionHash, pin);
+                    if (retained.Method != input.Method ||
+                        input.PullRequestNumber is { } suppliedNumber &&
+                            suppliedNumber != retained.PullRequestNumber ||
+                        input.ExpectedHeadSha is { } suppliedHead &&
+                            !string.Equals(
+                                suppliedHead, retained.ExpectedHeadSha, StringComparison.OrdinalIgnoreCase))
+                        throw new CoordinationException(
+                            "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+                    checkpoint = latest;
+                    await transaction.CommitAsync(token).ConfigureAwait(false);
+                    return retained;
+                }
+
+                var (pullRequestNumber, expectedHeadSha) = MafMergeContract.ResolvePullRequest(
+                    plan.Workflow.Definition, step, latest.State, input);
+                var checkpointId = Guid.NewGuid().ToString("N");
+                var intent = MafMergeContract.CreateIntent(
+                    Guid.NewGuid(), identity, checkpointId, checked(latest.State.Revision + 1),
+                    plan.Plan.Id, plan.Workflow.Definition.Id, plan.Workflow.Definition.Revision,
+                    step.Id, decision.StateVersion, decision.State.Fence, decision.SelectionHash,
+                    pin, pullRequestNumber, expectedHeadSha, input.Method);
+                var next = PrepareMergeCheckpoint(latest, intent)
+                    ?? throw new CoordinationException(
+                        "maf_execution_merge_intent_conflict", StatusCodes.Status409Conflict);
+                checkpoint = await execution.AppendInTransactionAsync(
+                    connection, transaction, checkpointId, latest.Info, next, token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return intent;
+            }
+
+            async Task<MafMergeExecutionOutcome> ExecuteMergeAsync(
+                MafExecutionMergeIntent intent, CancellationToken token)
+            {
+                if (mergeExecutor is null)
+                    throw new CoordinationException(
+                        "source_control_owner_unavailable", StatusCodes.Status503ServiceUnavailable);
+                return await mergeExecutor.ExecuteAsync(intent, token).ConfigureAwait(false);
+            }
+
             async Task RequireCurrentOpenPullRequestAsync(
                 MafExecutionOpenPullRequestIntent intent, CancellationToken token)
             {
@@ -1368,8 +1577,18 @@ public static partial class CoordinationEndpoints
                              MafExecutionTaskStatus.Running)
                          .OrderBy(intent => intent.StepId, StringComparer.Ordinal).ToArray())
                 _ = await ExecuteOpenPullRequestAsync(intent, cancellationToken).ConfigureAwait(false);
+            foreach (var intent in checkpoint.State.MergeIntents.Values
+                         .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
+                             MafExecutionTaskStatus.Running)
+                         .OrderBy(intent => intent.StepId, StringComparer.Ordinal).ToArray())
+            {
+                if (await ExecuteMergeAsync(intent, cancellationToken).ConfigureAwait(false) ==
+                    MafMergeExecutionOutcome.AwaitingApproval)
+                    break;
+            }
 
-            var pendingDeliveries = checkpoint.State.PendingDispatches.Values
+            var pendingDeliveries = pendingMergeApproval is null
+                ? checkpoint.State.PendingDispatches.Values
                 .OrderBy(intent => intent.AssociationId, StringComparer.Ordinal)
                 .Select(intent =>
                 {
@@ -1377,7 +1596,8 @@ public static partial class CoordinationEndpoints
                     return (Intent: intent, Action: action,
                         Prompt: BuildPrompt(action, checkpoint.State, intent.AssociationId));
                 })
-                .ToArray();
+                .ToArray()
+                : Array.Empty<(MafExecutionDispatchIntent Intent, MafExecutionAction Action, string Prompt)>();
             var pendingResults = await Task.WhenAll(pendingDeliveries.Select(async delivery =>
                 (delivery.Intent, delivery.Action,
                     Answer: await DeliverIntentAsync(
@@ -1420,6 +1640,7 @@ public static partial class CoordinationEndpoints
 
                 var readyDispatches = new List<(
                     MafExecutionAction Action, MafExecutionDispatchIntent Intent, string Prompt)>();
+                var mergeActions = new List<MafExecutionAction>();
                 var platformAdvanced = false;
                 foreach (var action in frontier.ReadyActions)
                 {
@@ -1428,6 +1649,11 @@ public static partial class CoordinationEndpoints
                     {
                         wallTimeLimitReached = true;
                         break;
+                    }
+                    if (action.Step.PlatformGate == WorkflowPlatformGate.Merge)
+                    {
+                        mergeActions.Add(action);
+                        continue;
                     }
                     if (action.Step.PlatformGate == WorkflowPlatformGate.OpenPullRequest)
                     {
@@ -1588,34 +1814,52 @@ public static partial class CoordinationEndpoints
                     readyDispatches.Add((action, intent, prompt));
                 }
 
-                if (readyDispatches.Count == 0)
-                {
-                    if (platformAdvanced)
-                        continue;
-                    break;
-                }
                 if (IsWallTimeLimitReached())
                 {
                     wallTimeLimitReached = true;
                     break;
                 }
-                var deliveryResults = await Task.WhenAll(readyDispatches.Select(async dispatch =>
-                    (dispatch.Action, dispatch.Intent,
-                        Answer: await DeliverIntentAsync(
-                            dispatch.Intent, dispatch.Prompt, cancellationToken).ConfigureAwait(false))))
-                    .ConfigureAwait(false);
-                foreach (var result in deliveryResults)
+                if (readyDispatches.Count > 0)
                 {
-                    if (result.Answer is null)
+                    var deliveryResults = await Task.WhenAll(readyDispatches.Select(async dispatch =>
+                        (dispatch.Action, dispatch.Intent,
+                            Answer: await DeliverIntentAsync(
+                                dispatch.Intent, dispatch.Prompt, cancellationToken).ConfigureAwait(false))))
+                        .ConfigureAwait(false);
+                    foreach (var result in deliveryResults)
                     {
-                        if (IsWallTimeLimitReached())
-                            wallTimeLimitReached = true;
+                        if (result.Answer is null)
+                        {
+                            if (IsWallTimeLimitReached())
+                                wallTimeLimitReached = true;
+                            else
+                                unavailable.Add(result.Action.Step.Id);
+                        }
                         else
-                            unavailable.Add(result.Action.Step.Id);
+                            await CompleteDispatchAsync(
+                                result.Intent, result.Answer, cancellationToken).ConfigureAwait(false);
                     }
-                    else
-                        await CompleteDispatchAsync(
-                            result.Intent, result.Answer, cancellationToken).ConfigureAwait(false);
+                }
+                foreach (var action in mergeActions)
+                {
+                    if (IsWallTimeLimitReached())
+                    {
+                        wallTimeLimitReached = true;
+                        break;
+                    }
+                    var intent = await PrepareMergeAsync(action.Step, cancellationToken).ConfigureAwait(false);
+                    var outcome = await ExecuteMergeAsync(intent, cancellationToken).ConfigureAwait(false);
+                    platformAdvanced |= outcome == MafMergeExecutionOutcome.Completed;
+                    if (outcome == MafMergeExecutionOutcome.AwaitingApproval)
+                        break;
+                }
+                if (pendingMergeApproval is not null || wallTimeLimitReached)
+                    break;
+                if (readyDispatches.Count == 0)
+                {
+                    if (platformAdvanced)
+                        continue;
+                    break;
                 }
             }
 
@@ -1636,7 +1880,7 @@ public static partial class CoordinationEndpoints
             await RevalidateDispatchAsync(cancellationToken).ConfigureAwait(false);
             return Results.Ok(new MafExecutionDispatchResponse(
                 plan.Plan.Id,
-                decision.StateVersion,
+                responseDecisionStateVersion,
                 checkpoint.State.Revision,
                 dispatched.ToImmutable(),
                 unavailable.Order(StringComparer.Ordinal).ToImmutableArray(),
@@ -1837,6 +2081,90 @@ public static partial class CoordinationEndpoints
     }
 
     /// <summary>Adds one immutable OpenPullRequest request before its Source Control owner call.</summary>
+    internal static MafExecutionCheckpoint? PrepareMergeCheckpoint(
+        MafExecutionCheckpointSnapshot latest,
+        MafExecutionMergeIntent intent)
+    {
+        // The checkpoint becomes the retry authority before any Source Control owner request is sent.
+        ArgumentNullException.ThrowIfNull(latest);
+        ArgumentNullException.ThrowIfNull(intent);
+        var state = latest.State;
+        if (!MafMergeContract.IsValidIntent(intent))
+            throw new CoordinationException(
+                "source_control_merge_request_invalid", StatusCodes.Status400BadRequest);
+        if (state.MergeIntents.TryGetValue(intent.StepId, out var existing))
+        {
+            if (!MafExecutionCheckpointContract.MergeIntentsMatch(existing, intent))
+                throw new CoordinationException(
+                    "maf_execution_merge_intent_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        if (intent.CheckpointRevision != checked(state.Revision + 1) ||
+            intent.WorkPlanId != state.WorkPlanId ||
+            intent.Identity.SessionId != latest.Info.SessionId ||
+            intent.DecisionStateVersion != state.DecisionStateVersion ||
+            state.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != MafExecutionTaskStatus.Pending ||
+            state.Progress.NonModelSteps.Values.Any(status => status == MafExecutionTaskStatus.Running))
+            throw new CoordinationException(
+                "maf_execution_merge_checkpoint_stale", StatusCodes.Status409Conflict);
+
+        var next = state with
+        {
+            Revision = intent.CheckpointRevision,
+            MergeIntents = state.MergeIntents.Add(intent.StepId, intent),
+            Progress = state.Progress with
+            {
+                NonModelSteps = state.Progress.NonModelSteps.SetItem(
+                    intent.StepId, MafExecutionTaskStatus.Running)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(state, next);
+        return next;
+    }
+
+    /// <summary>Stores the owner's compact terminal proof and releases only the Merge gate's dependents.</summary>
+    internal static MafExecutionCheckpoint? PrepareMergeCompletionCheckpoint(
+        MafExecutionCheckpointSnapshot latest,
+        MafExecutionMergeIntent intent,
+        MafMergeTerminalReceipt receipt)
+    {
+        // A receipt and Succeeded progress are one append-only transition, never separate writes.
+        ArgumentNullException.ThrowIfNull(latest);
+        ArgumentNullException.ThrowIfNull(intent);
+        ArgumentNullException.ThrowIfNull(receipt);
+        _ = MafMergeContract.ValidateReceipt(intent, receipt);
+        if (!latest.State.MergeIntents.TryGetValue(intent.StepId, out var retained) ||
+            !MafExecutionCheckpointContract.MergeIntentsMatch(intent, retained))
+            throw new CoordinationException(
+                "maf_execution_merge_intent_conflict", StatusCodes.Status409Conflict);
+        if (latest.State.MergeReceipts.TryGetValue(intent.StepId, out var previous))
+        {
+            if (previous != receipt ||
+                latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) !=
+                    MafExecutionTaskStatus.Succeeded)
+                throw new CoordinationException(
+                    "maf_execution_merge_terminal_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        if (latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) !=
+            MafExecutionTaskStatus.Running)
+            throw new CoordinationException(
+                "maf_execution_merge_checkpoint_stale", StatusCodes.Status409Conflict);
+
+        var next = latest.State with
+        {
+            Revision = checked(latest.State.Revision + 1),
+            MergeReceipts = latest.State.MergeReceipts.Add(intent.StepId, receipt),
+            Progress = latest.State.Progress with
+            {
+                NonModelSteps = latest.State.Progress.NonModelSteps.SetItem(
+                    intent.StepId, MafExecutionTaskStatus.Succeeded)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(latest.State, next);
+        return next;
+    }
+
     internal static MafExecutionCheckpoint? PrepareOpenPullRequestCheckpoint(
         MafExecutionCheckpointSnapshot latest,
         MafExecutionOpenPullRequestIntent intent)

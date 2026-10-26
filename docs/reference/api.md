@@ -962,6 +962,19 @@ decision, source binding, or workspace leaves the gate incomplete, so dependent
 steps do not run. This executor requires the private
 `Orchestrator:SourceControlOwner:OwnerBaseAddress` configuration.
 
+For each `Merge` step, dispatch may include a `mergeInputs` entry keyed by step ID.
+Each entry contains `method` and may contain `pullRequestNumber` with
+`expectedHeadSha`; the number and head must be supplied together. When there is
+exactly one completed OpenPullRequest ancestor, the dispatcher can derive that
+pair and the caller may omit both. Without such an ancestor, both are required.
+The dispatcher stores the operation and expected head before it calls the
+authenticated Source Control owner's `POST /merge-intents` route. An approval
+pending response leaves the checkpoint running and dependents blocked. After the
+exact approval is recorded, a later dispatch recovers that same intent through
+`POST /merge-intents/{intentId}/execute`. The Merge gate succeeds only after the
+owner returns the matching repository, PR, head, method, approval evidence, and
+durable merge SHA, which the Orchestrator stores as a compact receipt.
+
 ### Backlog claims
 
 Native owner prefix: `/api/projects/{projectId}/runs/{runId}/backlog`.

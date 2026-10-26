@@ -17,10 +17,17 @@ internal static class MafExecutionWorkflowBindings
     {
         public WorkflowPlatformGate Gate => WorkflowPlatformGate.OpenPullRequest;
     }
+    private sealed class MergeExecutor : IPlatformWorkflowStepExecutor
+    {
+        public WorkflowPlatformGate Gate => WorkflowPlatformGate.Merge;
+    }
 
     /// <summary>Binds the accepted catalog before any child is spawned or platform intent is prepared.</summary>
     internal static BoundWorkflowDefinition RequireBound(
-        WorkPlanSnapshot plan, bool hasBuildTestOwner, bool hasOpenPullRequestOwner = false)
+        WorkPlanSnapshot plan,
+        bool hasBuildTestOwner,
+        bool hasOpenPullRequestOwner = false,
+        bool hasMergeOwner = false)
     {
         // Do not impersonate an unsupported platform gate with a model child or a no-op executor.
         var registrations = new List<KeyValuePair<WorkflowStepExecutorType, IWorkflowStepExecutor>>
@@ -32,6 +39,10 @@ internal static class MafExecutionWorkflowBindings
             registrations.Add(new(
                 WorkflowStepExecutorType.ForPlatformGate(WorkflowPlatformGate.OpenPullRequest),
                 new OpenPullRequestExecutor()));
+        if (hasMergeOwner)
+            registrations.Add(new(
+                WorkflowStepExecutorType.ForPlatformGate(WorkflowPlatformGate.Merge),
+                new MergeExecutor()));
         if (hasBuildTestOwner &&
             plan.Workflow.Definition.Steps.Any(step =>
                 step.PlatformGate == WorkflowPlatformGate.BuildTest &&

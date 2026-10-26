@@ -155,7 +155,16 @@ contacting the provider. Recovery reuses the exact pull request across open and
 closed states; a missing or ambiguous result never triggers another create.
 Managed workspace changes wait while the owner holds the revision lease for
 the write. A changed source, workspace, or decision leaves the gate incomplete.
-Other platform gates still require their own registered executors.
+Merge is available through the same authenticated Source Control owner. Dispatch
+persists its idempotency key, repository pin, workflow binding, PR number, and
+expected head before calling `/merge-intents`. It derives the PR only from one
+completed OpenPullRequest ancestor or accepts an explicit number and head pair.
+If the owner creates an approval gate, dispatch returns with the Merge checkpoint
+still running; dependents remain blocked until an exact approval receipt is
+current. A later dispatch reuses the saved intent, calls `/merge-intents/{id}/execute`,
+and stores only the owner-verified merge SHA. Changed authority or head,
+ambiguous results, and interrupted execution fail closed without repeating a
+merge effect. Other platform gates still require their own registered executors.
 
 Candidate and confirmed plans are separate states. Pending gates prevent
 decomposition or dispatch according to transition rules. Gate answers bind a

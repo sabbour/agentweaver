@@ -1,6 +1,8 @@
 using System.Net;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
@@ -14,6 +16,7 @@ internal sealed class MafSourceControlOwnerClient(
 {
     private const int MaximumPullRequestResponseBytes = 128 * 1024;
     private const int MaximumWorkspaceRevisionResponseBytes = 32 * 1024;
+    private const int MaximumMergeIntentResponseBytes = 16 * 1024;
 
     private sealed record PullRequestResponse(
         string? Error,
@@ -36,6 +39,22 @@ internal sealed class MafSourceControlOwnerClient(
         string? Status,
         string? Patch,
         Guid? WorkspaceIncarnationId);
+
+    private sealed record MergeIntentResponse(
+        string? Error,
+        string? IntentId,
+        string? ApprovalRequestId,
+        string? State,
+        string? Repository,
+        long? PullRequestNumber,
+        string? HeadSha,
+        SourceControlMergeMethod? Method,
+        Guid? ApprovalDecisionId,
+        long? ApprovalStateVersion,
+        JsonElement? GrantReference,
+        string? MergeSha,
+        string? FailureCode,
+        string? LastFailureCode);
 
     internal async Task<SourceControlWorkspaceDiffView> ReadWorkspaceDiffAsync(
         RuntimeActorAuthorization actor,
@@ -104,6 +123,44 @@ internal sealed class MafSourceControlOwnerClient(
             response.Title);
     }
 
+    internal async Task<MafMergeOwnerIntent> PrepareMergeIntentAsync(
+        RuntimeActorAuthorization actor,
+        SessionIdentity identity,
+        PrepareSourceControlMergeIntentRequest request,
+        CancellationToken cancellationToken)
+    {
+        // Use the same durable owner route as interactive merge approval and preserve its exact response state.
+        var (status, response) = await SendAsync<MergeIntentResponse>(
+            SourceControlPath(identity) + "/merge-intents",
+            actor,
+            request,
+            MaximumMergeIntentResponseBytes,
+            cancellationToken).ConfigureAwait(false);
+        RequireSuccess(status, response?.Error);
+        if (response?.IntentId is null || response.State is null)
+            throw InvalidOwnerResponse();
+        return ToMergeOwnerIntent(response);
+    }
+
+    internal async Task<MafMergeOwnerIntent> ExecuteMergeIntentAsync(
+        RuntimeActorAuthorization actor,
+        SessionIdentity identity,
+        string intentId,
+        CancellationToken cancellationToken)
+    {
+        // The owner serializes execution and resolves merge_started without repeating a possibly applied effect.
+        var (status, response) = await SendAsync<MergeIntentResponse>(
+            SourceControlPath(identity) + "/merge-intents/" + Uri.EscapeDataString(intentId) + "/execute",
+            actor,
+            new { },
+            MaximumMergeIntentResponseBytes,
+            cancellationToken).ConfigureAwait(false);
+        RequireSuccess(status, response?.Error);
+        if (response?.IntentId is null || response.State is null)
+            throw InvalidOwnerResponse();
+        return ToMergeOwnerIntent(response);
+    }
+
     private async Task<(HttpStatusCode StatusCode, TResponse? Response)> SendAsync<TResponse>(
         string path,
         RuntimeActorAuthorization actor,
@@ -164,4 +221,22 @@ internal sealed class MafSourceControlOwnerClient(
 
     private static CoordinationException InvalidOwnerResponse() =>
         new("source_control_owner_response_invalid", StatusCodes.Status502BadGateway);
+
+    private static MafMergeOwnerIntent ToMergeOwnerIntent(MergeIntentResponse response)
+    {
+        // Retain only fields needed to prove the approval, exact PR binding, and terminal merge result.
+        return new(
+            response.IntentId!,
+            response.State!,
+            response.ApprovalRequestId,
+            response.Repository,
+            response.PullRequestNumber,
+            response.HeadSha,
+            response.Method,
+            response.ApprovalDecisionId,
+            response.ApprovalStateVersion,
+            response.GrantReference is { ValueKind: JsonValueKind.Object },
+            response.MergeSha,
+            response.FailureCode ?? response.LastFailureCode);
+    }
 }
