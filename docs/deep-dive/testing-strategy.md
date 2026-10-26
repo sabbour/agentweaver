@@ -48,6 +48,14 @@ Do not replace a required database case with an in-memory provider and claim
 the same evidence: row locks, advisory locks, transactional rollback, and
 lease races require PostgreSQL.
 
+The Orchestrator Core suite covers RubberDuck's deterministic contract and
+recovery rules with pure tests, and exercises durable restart behavior with
+PostgreSQL. The durable cases verify that an owner retry after restart reuses
+the checkpointed operation and recorded response, that `REQUEST_CHANGES` stores
+a failed receipt and blocks Merge, and that changed recorded evidence is
+rejected before an owner call. These cases are not covered by the focused
+non-PostgreSQL test filter.
+
 The Broker migration and bootstrap suites use disposable PostgreSQL to
 reproduce SQLSTATE `42501` on migration history, verify the production
 migration/grant path, repair a missing grant on a no-pending-migrations rerun,

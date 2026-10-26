@@ -164,7 +164,24 @@ still running; dependents remain blocked until an exact approval receipt is
 current. A later dispatch reuses the saved intent, calls `/merge-intents/{id}/execute`,
 and stores only the owner-verified merge SHA. Changed authority or head,
 ambiguous results, and interrupted execution fail closed without repeating a
-merge effect. Other platform gates still require their own registered executors.
+merge effect.
+
+RubberDuck is available only when the current coordinator-root AgentHost
+registration and action-grant owner are available. It is a platform executor,
+not an ordinary work-plan child. The dispatcher stores an immutable intent
+before sending the exact recorded ancestor results and platform receipts to
+that AgentHost in read-only mode. The intent binds the accepted workflow
+revision, actor, selection, execution fence, and current runtime registration.
+The owner turn uses the checkpointed operation ID, and its completed response
+uses a stable journal event ID so a restarted host can return the recorded
+answer without running another review. If only part of the turn was recorded,
+the host refuses to send it again; the gate stays incomplete.
+
+Only a response whose first nonempty line is `PASS` can release dependent work.
+`REQUEST_CHANGES`, a malformed verdict, stale evidence, a changed owner, or
+unavailable owner leaves the gate failed or incomplete and keeps dependents
+blocked. Recovery reports the operation, evidence hash, verdict, and any stable
+failure code. Other platform gates still require their own registered executors.
 
 Candidate and confirmed plans are separate states. Pending gates prevent
 decomposition or dispatch according to transition rules. Gate answers bind a

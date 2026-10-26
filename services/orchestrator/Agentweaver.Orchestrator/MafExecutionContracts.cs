@@ -284,6 +284,38 @@ internal sealed record MafReviewTerminalReceipt(
     string ChoiceId,
     string Reason);
 
+/// <summary>Immutable identity of one platform-owned RubberDuck review operation.</summary>
+internal sealed record MafExecutionRubberduckIntent(
+    Guid OperationId,
+    SessionIdentity Identity,
+    string CheckpointId,
+    long CheckpointRevision,
+    string WorkPlanId,
+    string WorkflowId,
+    string DefinitionRevision,
+    string StepId,
+    long DecisionStateVersion,
+    string AuthorizedActorId,
+    long ExecutionFence,
+    string AcceptedSelectionHash,
+    Guid OwnerRuntimeInstanceId,
+    long OwnerRegistrationRevision,
+    string EvidenceHash,
+    string EvidenceSummary);
+
+/// <summary>Recorded evidence returned by the authorized AgentHost review turn.</summary>
+internal sealed record MafRubberduckTerminalReceipt(
+    Guid OperationId,
+    Guid OwnerRuntimeInstanceId,
+    long OwnerRegistrationRevision,
+    string EvidenceHash,
+    string ActorId,
+    long Fence,
+    string Outcome,
+    string OutputSha256,
+    string? FailureCode,
+    string? Feedback);
+
 /// <summary>
 /// A versioned checkpoint state for one work plan, including progress, pending dispatches, results, and platform evidence.
 /// State validation and transition checks prevent accepted intents and terminal receipts from being rewritten.
@@ -316,6 +348,12 @@ internal sealed record MafExecutionCheckpoint(
         ImmutableDictionary<string, MafExecutionReviewIntent>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, MafReviewTerminalReceipt> ReviewReceipts { get; init; } =
         ImmutableDictionary<string, MafReviewTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafExecutionRubberduckIntent> RubberduckIntents { get; init; } =
+        ImmutableDictionary<string, MafExecutionRubberduckIntent>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafRubberduckTerminalReceipt> RubberduckReceipts { get; init; } =
+        ImmutableDictionary<string, MafRubberduckTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, string> RubberduckFailureCodes { get; init; } =
+        ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -548,6 +586,22 @@ internal static class MafExecutionCheckpointContract
             if (!next.ReviewReceipts.TryGetValue(stepId, out var retained) || retained != receipt)
                 throw new ArgumentException("A review receipt cannot be changed.", nameof(next));
         }
+        foreach (var (stepId, intent) in previous.RubberduckIntents)
+        {
+            if (!next.RubberduckIntents.TryGetValue(stepId, out var retained) || retained != intent)
+                throw new ArgumentException("A persisted RubberDuck intent cannot be changed.", nameof(next));
+        }
+        if (next.RubberduckIntents.Any(item =>
+                !previous.RubberduckIntents.ContainsKey(item.Key) &&
+                (item.Value.CheckpointRevision != next.Revision ||
+                 item.Value.DecisionStateVersion != next.DecisionStateVersion)))
+            throw new ArgumentException(
+                "A new RubberDuck intent must bind to the checkpoint that first stores it.", nameof(next));
+        foreach (var (stepId, receipt) in previous.RubberduckReceipts)
+        {
+            if (!next.RubberduckReceipts.TryGetValue(stepId, out var retained) || retained != receipt)
+                throw new ArgumentException("A RubberDuck receipt cannot be changed.", nameof(next));
+        }
     }
 
     /// <summary>
@@ -597,6 +651,19 @@ internal static class MafExecutionCheckpointContract
         }
     }
 
+    /// <summary>Ensures RubberDuck intents belong to this root, fence, and originating checkpoint.</summary>
+    internal static void ValidateRubberduckBinding(
+        MafExecutionCheckpoint state, SessionIdentity identity, long executionFence, string checkpointId)
+    {
+        foreach (var intent in state.RubberduckIntents.Values)
+        {
+            if (intent.Identity != identity || intent.ExecutionFence != executionFence ||
+                intent.CheckpointRevision == state.Revision && intent.CheckpointId != checkpointId)
+                throw new ArgumentException(
+                    "The RubberDuck intent does not match its checkpoint binding.", nameof(state));
+        }
+    }
+
     /// <summary>
     /// Compares two BuildTest intents using their serialized contract, excluding transient seed bytes.
     /// </summary>
@@ -639,7 +706,9 @@ internal static class MafExecutionCheckpointContract
             state.BuildTestIntents is null || state.BuildTestReceipts is null ||
             state.OpenPullRequestIntents is null || state.OpenPullRequestReceipts is null ||
             state.MergeIntents is null || state.MergeReceipts is null ||
-            state.ReviewIntents is null || state.ReviewReceipts is null)
+            state.ReviewIntents is null || state.ReviewReceipts is null ||
+            state.RubberduckIntents is null || state.RubberduckReceipts is null ||
+            state.RubberduckFailureCodes is null)
             throw new ArgumentException("MAF execution dispatch state is required.", nameof(state));
         if (state.Progress.WorkItems.Any(item =>
                 string.IsNullOrWhiteSpace(item.Key) || item.Key.Length > 128 ||
@@ -789,6 +858,35 @@ internal static class MafExecutionCheckpointContract
                 MafIndependentReviewContract.ValidateReceipt(intent, receipt) !=
                     state.Progress.NonModelSteps.GetValueOrDefault(stepId))
                 throw new ArgumentException("MAF review checkpoint receipt is invalid.", nameof(state));
+        }
+        foreach (var (stepId, intent) in state.RubberduckIntents)
+        {
+            if (intent is null || stepId != intent.StepId ||
+                intent.OperationId == Guid.Empty || !operationIds.Add(intent.OperationId) ||
+                intent.CheckpointRevision < 1 || intent.CheckpointRevision > state.Revision ||
+                intent.WorkPlanId != state.WorkPlanId ||
+                intent.DecisionStateVersion < 1 || intent.DecisionStateVersion > state.DecisionStateVersion ||
+                !MafRubberduckReviewContract.IsValidIntent(intent) ||
+                !state.Progress.NonModelSteps.TryGetValue(stepId, out var status) ||
+                status == MafExecutionTaskStatus.Pending ||
+                status != MafExecutionTaskStatus.Running && !state.RubberduckReceipts.ContainsKey(stepId))
+                throw new ArgumentException("MAF RubberDuck checkpoint intent is invalid.", nameof(state));
+        }
+        foreach (var (stepId, receipt) in state.RubberduckReceipts)
+        {
+            if (receipt is null ||
+                !state.RubberduckIntents.TryGetValue(stepId, out var intent) ||
+                MafRubberduckReviewContract.ValidateReceipt(intent, receipt) !=
+                    state.Progress.NonModelSteps.GetValueOrDefault(stepId))
+                throw new ArgumentException("MAF RubberDuck checkpoint receipt is invalid.", nameof(state));
+        }
+        foreach (var (stepId, failureCode) in state.RubberduckFailureCodes)
+        {
+            if (!state.RubberduckIntents.ContainsKey(stepId) ||
+                state.Progress.NonModelSteps.GetValueOrDefault(stepId) != MafExecutionTaskStatus.Running ||
+                !MafRubberduckReviewContract.IsValidFailureCode(failureCode) ||
+                state.RubberduckReceipts.ContainsKey(stepId))
+                throw new ArgumentException("MAF RubberDuck failure details are invalid.", nameof(state));
         }
 
         var childSessionIds = new HashSet<string>(StringComparer.Ordinal);

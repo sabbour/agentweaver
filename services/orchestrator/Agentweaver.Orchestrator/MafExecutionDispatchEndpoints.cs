@@ -107,6 +107,8 @@ public static partial class CoordinationEndpoints
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
             var buildTestClient = context.RequestServices.GetService<MafBuildTestEnvironmentClient>();
             var sourceControlClient = context.RequestServices.GetService<MafSourceControlOwnerClient>();
+            var registrationOwner = context.RequestServices.GetService<RuntimeRegistrationOwner>();
+            var actionGrants = context.RequestServices.GetService<ExecutableActionGrantOwnerStore>();
             var identity = new SessionIdentity(projectId, runId, sessionId);
             var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
@@ -136,13 +138,42 @@ public static partial class CoordinationEndpoints
                     "maf_execution_work_plan_unavailable", StatusCodes.Status409Conflict);
 
             var plan = validated.Value;
+            RuntimeRegistration? rubberduckOwnerRegistration = null;
+            var hasRubberduckOwner = false;
+            if (plan.Workflow.Definition.Steps.Any(step =>
+                    step.PlatformGate == WorkflowPlatformGate.RubberDuck) &&
+                registrationOwner is not null && actionGrants is not null)
+            {
+                try
+                {
+                    rubberduckOwnerRegistration = await registrationOwner.ReadCurrentForSessionAsync(
+                        context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false);
+                    CastingGenerationExecutionContract.RequireCurrentRegistration(
+                        rubberduckOwnerRegistration,
+                        projectId,
+                        runId,
+                        sessionId,
+                        decision.State.Fence,
+                        decision.SelectionHash,
+                        context.RequestServices.GetRequiredService<TimeProvider>());
+                    hasRubberduckOwner =
+                        rubberduckOwnerRegistration.Binding.WorkflowStepId is null &&
+                        rubberduckOwnerRegistration.Binding.AgentId == RuntimeActionContract.CoordinatorRootStepId;
+                }
+                catch (Exception failure) when (
+                    failure is CoordinationException or RuntimeAuthorizationException)
+                {
+                    rubberduckOwnerRegistration = null;
+                }
+            }
             // Bind the accepted snapshot, not a model-supplied executor name or an edited project catalog.
             var bound = MafExecutionWorkflowBindings.RequireBound(
                 plan,
                 buildTestClient is not null,
                 sourceControlClient is not null,
                 sourceControlClient is not null,
-                hasIndependentReviewOwner: true);
+                hasIndependentReviewOwner: true,
+                hasRubberduckOwner: hasRubberduckOwner);
             if (request.BuildTestWorkspaces is { } workspaces)
             {
                 if (workspaces.Count > plan.Workflow.Definition.Steps.Length ||
@@ -328,7 +359,6 @@ public static partial class CoordinationEndpoints
                 CoordinatorWorkflowCatalog.IsWallTimeLimitReached(
                     runStartedAt, maxWallTimeSeconds, timeProvider.GetUtcNow());
 
-            var registrationOwner = context.RequestServices.GetService<RuntimeRegistrationOwner>();
             var environment = context.RequestServices.GetService<RuntimeEnvironmentContextClient>();
             var egress = context.RequestServices.GetService<RuntimeEgressVerificationHttpClient>();
             var childSpawnAuthorization = context.RequestServices
@@ -343,6 +373,7 @@ public static partial class CoordinationEndpoints
                 (sourceControlClient is not null &&
                     step.PlatformGate is WorkflowPlatformGate.OpenPullRequest or WorkflowPlatformGate.Merge) ||
                 step.PlatformGate == WorkflowPlatformGate.IndependentReview ||
+                step.PlatformGate == WorkflowPlatformGate.RubberDuck && hasRubberduckOwner ||
                 HasBuildTestExecutor(step);
             var hostClient = context.RequestServices.GetRequiredService<IHttpClientFactory>()
                 .CreateClient("maf-execution-host");
@@ -1739,6 +1770,156 @@ public static partial class CoordinationEndpoints
                 }
             }
 
+            async Task RequireCurrentRubberduckAsync(
+                MafExecutionRubberduckIntent intent, CancellationToken token)
+            {
+                await RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, token).ConfigureAwait(false);
+                var current = await decisions.ReadCurrentAsync(
+                    actor, identity, selection, token).ConfigureAwait(false);
+                var latest = await execution.ReadLatestAsync(token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (intent.Identity != identity ||
+                    intent.AuthorizedActorId != selection.Authorization.ActorId ||
+                    intent.ExecutionFence != decision.State.Fence ||
+                    intent.AcceptedSelectionHash != decision.SelectionHash ||
+                    intent.WorkPlanId != plan.Plan.Id ||
+                    intent.WorkflowId != plan.Workflow.Definition.Id ||
+                    intent.DefinitionRevision != plan.Workflow.Definition.Revision ||
+                    current.State.Fence != intent.ExecutionFence ||
+                    current.SelectionHash != intent.AcceptedSelectionHash ||
+                    current.State.ConfirmedWorkPlan?.Plan.Id != intent.WorkPlanId ||
+                    current.State.SelectedWorkflow?.Definition.Id != intent.WorkflowId ||
+                    current.State.SelectedWorkflow.Definition.Revision != intent.DefinitionRevision ||
+                    !current.State.CanDispatch ||
+                    !MafIndependentReviewContract.AllowsDecisionVersionAdvance(
+                        latest.State, current, intent.DecisionStateVersion))
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_binding_changed", StatusCodes.Status409Conflict);
+                _ = await ReadCurrentRubberduckOwnerAsync(intent, token).ConfigureAwait(false);
+            }
+
+            async Task<RuntimeRegistration> ReadCurrentRubberduckOwnerAsync(
+                MafExecutionRubberduckIntent? intent, CancellationToken token)
+            {
+                if (registrationOwner is null || rubberduckOwnerRegistration is null)
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_owner_unavailable", StatusCodes.Status503ServiceUnavailable);
+                var current = await registrationOwner.ReadCurrentForSessionAsync(
+                    context, projectId, runId, sessionId, token).ConfigureAwait(false);
+                CastingGenerationExecutionContract.RequireCurrentRegistration(
+                    current, projectId, runId, sessionId, decision.State.Fence,
+                    decision.SelectionHash, context.RequestServices.GetRequiredService<TimeProvider>());
+                if (current.Binding.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+                    intent is not null &&
+                    (current.RuntimeInstanceId != intent.OwnerRuntimeInstanceId ||
+                     current.Revision != intent.OwnerRegistrationRevision) ||
+                    current.RuntimeInstanceId != rubberduckOwnerRegistration.RuntimeInstanceId ||
+                    current.Revision != rubberduckOwnerRegistration.Revision)
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_owner_changed", StatusCodes.Status409Conflict);
+                return current;
+            }
+
+            Task RequireRubberduckEvidenceAsync(
+                MafExecutionRubberduckIntent intent, MafExecutionCheckpoint state, CancellationToken token)
+            {
+                token.ThrowIfCancellationRequested();
+                var step = plan.Workflow.Definition.Steps.SingleOrDefault(candidate =>
+                    candidate.Id == intent.StepId && candidate.PlatformGate == WorkflowPlatformGate.RubberDuck);
+                if (step is null || rubberduckOwnerRegistration is null)
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_binding_changed", StatusCodes.Status409Conflict);
+                var current = MafRubberduckReviewContract.CreateIntent(
+                    intent.OperationId,
+                    identity,
+                    intent.CheckpointId,
+                    intent.CheckpointRevision,
+                    plan,
+                    step,
+                    state,
+                    intent.DecisionStateVersion,
+                    intent.AuthorizedActorId,
+                    intent.ExecutionFence,
+                    intent.AcceptedSelectionHash,
+                    rubberduckOwnerRegistration);
+                if (current != intent)
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_evidence_changed", StatusCodes.Status409Conflict);
+                return Task.CompletedTask;
+            }
+
+            async Task<string> RunRubberduckOwnerAsync(
+                MafExecutionRubberduckIntent intent, string prompt, CancellationToken token)
+            {
+                if (actionGrants is null)
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_owner_unavailable", StatusCodes.Status503ServiceUnavailable);
+                await RequireCurrentRubberduckAsync(intent, token).ConfigureAwait(false);
+                var registration = await ReadCurrentRubberduckOwnerAsync(intent, token).ConfigureAwait(false);
+                var promptHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt));
+                await actionGrants.AdmitCoordinatorRootModelTurnAsync(
+                    context, registration, intent.OperationId, promptHash,
+                    intent.DecisionStateVersion, token).ConfigureAwait(false);
+
+                var time = context.RequestServices.GetRequiredService<TimeProvider>();
+                var readinessActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
+                RuntimeHostReadinessReceipt? readiness;
+                try
+                {
+                    readiness = await SendRuntimeHostAsync<RuntimeHostReadinessReceipt>(
+                        hostClient,
+                        RuntimeHostEndpoint(registration.Binding.ConfigureEndpoint, "/runtime/v1/readiness"),
+                        readinessActor,
+                        null,
+                        allowNotReady: true,
+                        token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    readinessActor.Bearer.Invalidate();
+                }
+                if (readiness is null)
+                    throw new CoordinationException(
+                        "maf_execution_rubberduck_owner_unavailable", StatusCodes.Status503ServiceUnavailable);
+                ValidateHostReadiness(readiness, registration, time);
+                await RequireCurrentRubberduckAsync(intent, token).ConfigureAwait(false);
+
+                var proof = new RuntimeHostSessionProof(
+                    1,
+                    registration,
+                    readiness.SourceGrant.GrantId,
+                    readiness.SourceGrant.Revision,
+                    RuntimeCredentialPurpose.Observe);
+                var message = new RuntimeA2AMessage(
+                    "message",
+                    intent.OperationId,
+                    RuntimeContractValidation.NativeSessionId(registration.Binding),
+                    "user",
+                    [new("text", prompt)],
+                    new(
+                        proof,
+                        AddressedMessageDeliveryMode.Immediate,
+                        ContinueAfterCallerDisconnect: true,
+                        ReadOnlyToolsOnly: true));
+                var sendActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
+                RuntimeA2AResponse response;
+                try
+                {
+                    response = await SendRuntimeHostMessageAsync(
+                        hostClient, registration, readiness, sendActor, new(message), time, token)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    sendActor.Bearer.Invalidate();
+                }
+                await RequireCurrentRubberduckAsync(intent, token).ConfigureAwait(false);
+                return MafRubberduckReviewContract.ReadOwnerResponse(
+                    response, RuntimeContractValidation.NativeSessionId(registration.Binding));
+            }
+
             async Task OpenReviewApprovalAsync(MafExecutionReviewIntent intent, CancellationToken token)
             {
                 // The checkpoint already owns the operation; the decision owner owns exactly one request.
@@ -1792,6 +1973,32 @@ public static partial class CoordinationEndpoints
                     responseDecisionStateVersion = version;
                 });
 
+            async Task RequireRubberduckDecisionInTransactionAsync(
+                NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token)
+            {
+                await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                    connection, transaction, actor, identity, selection, selectionContext,
+                    decision.StateVersion, decision.State.Fence, plan.Plan.Id, token).ConfigureAwait(false);
+            }
+
+            var rubberduckExecutor = new MafRubberduckReviewExecutor(
+                execution,
+                dataSource,
+                RunRubberduckOwnerAsync,
+                RequireCurrentRubberduckAsync,
+                RequireRubberduckDecisionInTransactionAsync,
+                RequireRubberduckEvidenceAsync,
+                snapshot => checkpoint = snapshot);
+
+            foreach (var intent in checkpoint.State.RubberduckIntents.Values
+                         .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) is
+                             MafExecutionTaskStatus.Succeeded or MafExecutionTaskStatus.Failed)
+                         .OrderBy(intent => intent.StepId, StringComparer.Ordinal).ToArray())
+            {
+                if (await rubberduckExecutor.ExecuteAsync(intent, cancellationToken).ConfigureAwait(false) is null)
+                    unavailable.Add(intent.StepId);
+            }
+
             foreach (var intent in checkpoint.State.ReviewIntents.Values
                          .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
                              MafExecutionTaskStatus.Succeeded))
@@ -1843,6 +2050,70 @@ public static partial class CoordinationEndpoints
                 return intent;
             }
 
+            async Task<MafExecutionRubberduckIntent> PrepareRubberduckAsync(
+                WorkflowStepDefinition step, CancellationToken token)
+            {
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                var owner = await ReadCurrentRubberduckOwnerAsync(null, token).ConfigureAwait(false);
+                await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+                await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                    connection, transaction, actor, identity, selection, selectionContext,
+                    decision.StateVersion, decision.State.Fence, plan.Plan.Id, token).ConfigureAwait(false);
+                await execution.AcquireExecutionLockInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false);
+                var latest = await execution.ReadLatestInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (latest.State.RubberduckIntents.TryGetValue(step.Id, out var retained))
+                {
+                    var current = MafRubberduckReviewContract.CreateIntent(
+                        retained.OperationId,
+                        identity,
+                        retained.CheckpointId,
+                        retained.CheckpointRevision,
+                        plan,
+                        step,
+                        latest.State,
+                        retained.DecisionStateVersion,
+                        retained.AuthorizedActorId,
+                        retained.ExecutionFence,
+                        retained.AcceptedSelectionHash,
+                        owner);
+                    if (retained != current ||
+                        retained.OwnerRuntimeInstanceId != owner.RuntimeInstanceId ||
+                        retained.OwnerRegistrationRevision != owner.Revision)
+                        throw new CoordinationException(
+                            "maf_execution_rubberduck_evidence_changed", StatusCodes.Status409Conflict);
+                    checkpoint = latest;
+                    await transaction.CommitAsync(token).ConfigureAwait(false);
+                    return retained;
+                }
+
+                var checkpointId = Guid.NewGuid().ToString("N");
+                var intent = MafRubberduckReviewContract.CreateIntent(
+                    Guid.NewGuid(),
+                    identity,
+                    checkpointId,
+                    checked(latest.State.Revision + 1),
+                    plan,
+                    step,
+                    latest.State,
+                    decision.StateVersion,
+                    selection.Authorization.ActorId,
+                    decision.State.Fence,
+                    decision.SelectionHash,
+                    owner);
+                var next = PrepareRubberduckCheckpoint(latest, intent)
+                    ?? throw new CoordinationException(
+                        "maf_execution_rubberduck_intent_conflict", StatusCodes.Status409Conflict);
+                checkpoint = await execution.AppendInTransactionAsync(
+                    connection, transaction, checkpointId, latest.Info, next, token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return intent;
+            }
+
             foreach (var intent in checkpoint.State.BuildTestIntents.Values
                          .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
                              MafExecutionTaskStatus.Running)
@@ -1861,6 +2132,14 @@ public static partial class CoordinationEndpoints
                 if (await ExecuteMergeAsync(intent, cancellationToken).ConfigureAwait(false) ==
                     MafMergeExecutionOutcome.AwaitingApproval)
                     break;
+            }
+            foreach (var intent in checkpoint.State.RubberduckIntents.Values
+                         .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
+                             MafExecutionTaskStatus.Running)
+                         .OrderBy(intent => intent.StepId, StringComparer.Ordinal).ToArray())
+            {
+                if (await rubberduckExecutor.ExecuteAsync(intent, cancellationToken).ConfigureAwait(false) is null)
+                    unavailable.Add(intent.StepId);
             }
             foreach (var intent in checkpoint.State.ReviewIntents.Values
                          .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
@@ -1923,6 +2202,7 @@ public static partial class CoordinationEndpoints
                     MafExecutionAction Action, MafExecutionDispatchIntent Intent, string Prompt)>();
                 var mergeActions = new List<MafExecutionAction>();
                 var reviewActions = new List<MafExecutionAction>();
+                var rubberduckActions = new List<MafExecutionAction>();
                 var platformAdvanced = false;
                 foreach (var action in frontier.ReadyActions)
                 {
@@ -1940,6 +2220,11 @@ public static partial class CoordinationEndpoints
                     if (action.Step.PlatformGate == WorkflowPlatformGate.IndependentReview)
                     {
                         reviewActions.Add(action);
+                        continue;
+                    }
+                    if (action.Step.PlatformGate == WorkflowPlatformGate.RubberDuck)
+                    {
+                        rubberduckActions.Add(action);
                         continue;
                     }
                     if (action.Step.PlatformGate == WorkflowPlatformGate.OpenPullRequest)
@@ -2139,6 +2424,22 @@ public static partial class CoordinationEndpoints
                     platformAdvanced |= outcome == MafMergeExecutionOutcome.Completed;
                     if (outcome == MafMergeExecutionOutcome.AwaitingApproval)
                         break;
+                }
+                foreach (var action in rubberduckActions.OrderBy(action => action.Step.Order))
+                {
+                    if (pendingReviewApproval is not null || IsWallTimeLimitReached())
+                    {
+                        wallTimeLimitReached |= IsWallTimeLimitReached();
+                        break;
+                    }
+                    var intent = await PrepareRubberduckAsync(action.Step, cancellationToken)
+                        .ConfigureAwait(false);
+                    var result = await rubberduckExecutor.ExecuteAsync(intent, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (result is null)
+                        unavailable.Add(action.Step.Id);
+                    else
+                        platformAdvanced = true;
                 }
                 foreach (var action in reviewActions)
                 {
@@ -2415,6 +2716,108 @@ public static partial class CoordinationEndpoints
             }
         };
         MafExecutionCheckpointContract.ValidateTransition(state, next);
+        return next;
+    }
+
+    /// <summary>Atomically records an immutable RubberDuck intent and marks its gate running.</summary>
+    internal static MafExecutionCheckpoint? PrepareRubberduckCheckpoint(
+        MafExecutionCheckpointSnapshot latest,
+        MafExecutionRubberduckIntent intent)
+    {
+        ArgumentNullException.ThrowIfNull(latest);
+        ArgumentNullException.ThrowIfNull(intent);
+        if (!MafRubberduckReviewContract.IsValidIntent(intent))
+            throw new CoordinationException(
+                "maf_execution_rubberduck_evidence_invalid", StatusCodes.Status409Conflict);
+        var state = latest.State;
+        if (state.RubberduckIntents.TryGetValue(intent.StepId, out var previous))
+        {
+            if (previous != intent)
+                throw new CoordinationException(
+                    "maf_execution_rubberduck_intent_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        if (intent.CheckpointRevision != checked(state.Revision + 1) ||
+            intent.WorkPlanId != state.WorkPlanId ||
+            intent.Identity.SessionId != latest.Info.SessionId ||
+            intent.DecisionStateVersion != state.DecisionStateVersion ||
+            state.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != MafExecutionTaskStatus.Pending ||
+            state.Progress.NonModelSteps.Values.Any(status => status == MafExecutionTaskStatus.Running))
+            throw new CoordinationException(
+                "maf_execution_rubberduck_checkpoint_stale", StatusCodes.Status409Conflict);
+        var next = state with
+        {
+            Revision = intent.CheckpointRevision,
+            RubberduckIntents = state.RubberduckIntents.Add(intent.StepId, intent),
+            Progress = state.Progress with
+            {
+                NonModelSteps = state.Progress.NonModelSteps.SetItem(
+                    intent.StepId, MafExecutionTaskStatus.Running)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(state, next);
+        return next;
+    }
+
+    /// <summary>Persists a retryable owner failure without releasing any dependent workflow step.</summary>
+    internal static MafExecutionCheckpoint? PrepareRubberduckFailureCheckpoint(
+        MafExecutionCheckpointSnapshot latest,
+        MafExecutionRubberduckIntent intent,
+        string failureCode)
+    {
+        ArgumentNullException.ThrowIfNull(latest);
+        if (!MafRubberduckReviewContract.IsValidFailureCode(failureCode) ||
+            !latest.State.RubberduckIntents.TryGetValue(intent.StepId, out var retained) ||
+            retained != intent ||
+            latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != MafExecutionTaskStatus.Running ||
+            latest.State.RubberduckReceipts.ContainsKey(intent.StepId))
+            throw new CoordinationException(
+                "maf_execution_rubberduck_intent_conflict", StatusCodes.Status409Conflict);
+        if (latest.State.RubberduckFailureCodes.GetValueOrDefault(intent.StepId) == failureCode)
+            return null;
+        var next = latest.State with
+        {
+            Revision = checked(latest.State.Revision + 1),
+            RubberduckFailureCodes = latest.State.RubberduckFailureCodes.SetItem(intent.StepId, failureCode)
+        };
+        MafExecutionCheckpointContract.ValidateTransition(latest.State, next);
+        return next;
+    }
+
+    /// <summary>Records an authorized RubberDuck result and releases dependents only for PASS.</summary>
+    internal static MafExecutionCheckpoint? PrepareRubberduckCompletionCheckpoint(
+        MafExecutionCheckpointSnapshot latest,
+        MafExecutionRubberduckIntent intent,
+        MafRubberduckTerminalReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(latest);
+        var status = MafRubberduckReviewContract.ValidateReceipt(intent, receipt);
+        if (!latest.State.RubberduckIntents.TryGetValue(intent.StepId, out var retained) ||
+            retained != intent)
+            throw new CoordinationException(
+                "maf_execution_rubberduck_intent_conflict", StatusCodes.Status409Conflict);
+        if (latest.State.RubberduckReceipts.TryGetValue(intent.StepId, out var previous))
+        {
+            if (previous != receipt ||
+                latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != status)
+                throw new CoordinationException(
+                    "maf_execution_rubberduck_terminal_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        if (latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != MafExecutionTaskStatus.Running)
+            throw new CoordinationException(
+                "maf_execution_rubberduck_checkpoint_stale", StatusCodes.Status409Conflict);
+        var next = latest.State with
+        {
+            Revision = checked(latest.State.Revision + 1),
+            RubberduckReceipts = latest.State.RubberduckReceipts.Add(intent.StepId, receipt),
+            RubberduckFailureCodes = latest.State.RubberduckFailureCodes.Remove(intent.StepId),
+            Progress = latest.State.Progress with
+            {
+                NonModelSteps = latest.State.Progress.NonModelSteps.SetItem(intent.StepId, status)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(latest.State, next);
         return next;
     }
 

@@ -29,6 +29,11 @@ internal static class MafIndependentReviewContract
             if (workflow.Steps.Any(step => step.PlatformGate == WorkflowPlatformGate.IndependentReview &&
                                            !Ancestors(workflow, merge).Contains(step.Id)))
                 throw Conflict("maf_execution_review_order_invalid");
+        // A selected local review must also be an ancestor of merge; the gate cannot be skipped on a parallel path.
+        foreach (var merge in workflow.Steps.Where(step => step.PlatformGate == WorkflowPlatformGate.Merge))
+            if (workflow.Steps.Any(step => step.PlatformGate == WorkflowPlatformGate.RubberDuck &&
+                                           !Ancestors(workflow, merge).Contains(step.Id)))
+                throw Conflict("maf_execution_review_order_invalid");
     }
 
     internal static MafExecutionReviewIntent CreateIntent(

@@ -21,6 +21,10 @@ internal static class MafExecutionWorkflowBindings
     {
         public WorkflowPlatformGate Gate => WorkflowPlatformGate.Merge;
     }
+    private sealed class RubberduckExecutor : IPlatformWorkflowStepExecutor
+    {
+        public WorkflowPlatformGate Gate => WorkflowPlatformGate.RubberDuck;
+    }
     private sealed class IndependentReviewExecutor : IPlatformWorkflowStepExecutor
     {
         public WorkflowPlatformGate Gate => WorkflowPlatformGate.IndependentReview;
@@ -32,7 +36,8 @@ internal static class MafExecutionWorkflowBindings
         bool hasBuildTestOwner,
         bool hasOpenPullRequestOwner = false,
         bool hasMergeOwner = false,
-        bool hasIndependentReviewOwner = false)
+        bool hasIndependentReviewOwner = false,
+        bool hasRubberduckOwner = false)
     {
         // Do not impersonate an unsupported platform gate with a model child or a no-op executor.
         MafIndependentReviewContract.RequireGateOrder(plan.Workflow.Definition);
@@ -49,6 +54,10 @@ internal static class MafExecutionWorkflowBindings
             registrations.Add(new(
                 WorkflowStepExecutorType.ForPlatformGate(WorkflowPlatformGate.Merge),
                 new MergeExecutor()));
+        if (hasRubberduckOwner)
+            registrations.Add(new(
+                WorkflowStepExecutorType.ForPlatformGate(WorkflowPlatformGate.RubberDuck),
+                new RubberduckExecutor()));
         if (hasIndependentReviewOwner)
             registrations.Add(new(
                 WorkflowStepExecutorType.ForPlatformGate(WorkflowPlatformGate.IndependentReview),

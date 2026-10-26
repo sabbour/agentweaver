@@ -26,6 +26,9 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 [Collection("Coordination PostgreSQL")]
 public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
 {
+    private const string RubberduckSandboxProviderId = "sandbox.test";
+    private const string RubberduckSandboxResourceId = "runtime-numeric-rubberduck";
+
     private static readonly JsonSerializerOptions OwnerJson = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
@@ -52,13 +55,49 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         var run = Guid.NewGuid().ToString("N");
+        var sandboxCapabilities = ImmutableHashSet.Create(
+            StringComparer.Ordinal, "sandbox.workspace.write");
+        var sandboxCandidate = new EffectiveProviderCandidate(
+            ProviderSeam.Sandbox,
+            RubberduckSandboxProviderId,
+            "1.0.0",
+            1,
+            "options-v1",
+            ProviderHostingPattern.InProcess,
+            sandboxCapabilities.Order(StringComparer.Ordinal).ToImmutableArray(),
+            sandboxCapabilities.Order(StringComparer.Ordinal).ToImmutableArray());
+        var selectionJson = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
         var snapshot = JsonSerializer.SerializeToElement(new
         {
             projectId = "numeric-project", runId = run, projectRevision = 1,
             projectConfigurationRevision = 1, platformRuntimeRevision = 1, contextRevision = "context-1",
             modelSelection = new { reference = "model:selected", sourceMode = "hostedCopilot" },
-            runLimits = new { maxModelTurns = 1, maxToolCalls = 1 }
-        });
+            projectConfiguration = new
+            {
+                blueprintWorkflowReferences = Array.Empty<object>(),
+                agentCharters = new[]
+                {
+                    new { agentId = "agent-1", role = "engineer", charter = "Implement the requested change." }
+                },
+                casting = new[] { new { agentId = "agent-1", role = "engineer" } }
+            },
+            providers = new[]
+            {
+                new EffectiveProviderSelection(
+                    ProviderCardinality.Exclusive, ProviderSeam.Sandbox, [sandboxCandidate])
+            },
+            runLimits = new
+            {
+                maxChildren = 100,
+                maxConcurrentChildren = 32,
+                maxWallTimeSeconds = 3600,
+                maxModelTurns = 1,
+                maxToolCalls = 1
+            }
+        }, selectionJson);
         _selection = new(new("numeric-project", run, 1, 1, 1, "context-1", snapshot),
             new(1, _actor.Issuer, _actor.Subject, "tenant-1", 1, "numeric-project", run,
                 [new("project", "numeric-project", [new("acceptRunSelection", 1)])]));
@@ -80,9 +119,24 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         var coordination = new CoordinationOwnerStore(fixture.DataSource, _schema);
         var accepted = await coordination.AcceptRootAsync(_actor, _selection, "root", default);
         _root = new(_selection.Selection.ProjectId, run, accepted.RootSessionId);
-        var catalog = ProviderCatalog.Create([], [], []).Value!;
+        var sandboxRegistration = new ProviderRegistration(
+            new ProviderDescriptor(
+                ProviderSeam.Sandbox,
+                RubberduckSandboxProviderId,
+                new Version(1, 0, 0),
+                1,
+                ProviderHostingPattern.InProcess,
+                sandboxCapabilities),
+            true,
+            "options-v1",
+            1);
+        var catalog = ProviderCatalog.Create(
+            [sandboxRegistration],
+            [new ProviderSelection(ProviderSeam.Sandbox, RubberduckSandboxProviderId)],
+            []).Value!;
         _runSelectionContexts = new CoordinatorRunSelectionContextStore(
-            fixture.DataSource, _schema, catalog, new ProviderResolver(catalog), []);
+            fixture.DataSource, _schema, catalog, new ProviderResolver(catalog),
+            [new RuntimeNumericSandboxResourceProvider()]);
         _decisions = new(fixture.DataSource, _schema, _runSelectionContexts);
         var decision = await _decisions.InitializeRootAsync(_actor, _root, _selection, default);
         for (var index = 0; index < _registrations.Length; index++)

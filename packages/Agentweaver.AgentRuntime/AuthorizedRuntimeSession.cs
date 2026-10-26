@@ -108,10 +108,10 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 if (recordedId == Guid.Empty)
                     throw new ArgumentException("A non-empty A2A message identity is required.", nameof(userEventId));
                 await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
-                if (await material.ReadOptionalTurnAsync(
-                    Registration, Facts, recordedId, cancellationToken)
-                    .ConfigureAwait(false) is not null)
-                    throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
+                var recorded = await ReadRecordedA2ATurnAsync(
+                    material, recordedId, prompt, cancellationToken).ConfigureAwait(false);
+                if (recorded is not null)
+                    return recorded;
             }
             RequireSupportedCostTurnAffinity();
             await CommitTurnContentAsync(material, turnId, "user", prompt, cancellationToken)
@@ -126,7 +126,12 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             // Preserve the A2A caller's read-only restriction through the authorized runtime wrapper.
             var answer = await _session.SendTurnAsync(
                 prompt, cancellationToken, userEventId, readOnlyToolsOnly).ConfigureAwait(false);
-            await CommitTurnContentAsync(material, Guid.NewGuid(), "assistant", answer, cancellationToken).ConfigureAwait(false);
+            await CommitTurnContentAsync(
+                material,
+                userEventId is { } messageId ? CreateA2AAssistantEventId(messageId) : Guid.NewGuid(),
+                "assistant",
+                answer,
+                cancellationToken).ConfigureAwait(false);
             await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
             return answer;
         }
@@ -134,6 +139,39 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         {
             _executionGate.Release();
         }
+    }
+
+    private async Task<string?> ReadRecordedA2ATurnAsync(
+        RuntimeSessionMaterialHttpClient material,
+        Guid messageId,
+        string prompt,
+        CancellationToken cancellationToken)
+    {
+        var user = await material.ReadOptionalTurnAsync(
+            Registration, Facts, messageId, cancellationToken).ConfigureAwait(false);
+        var assistant = await material.ReadOptionalTurnAsync(
+            Registration, Facts, CreateA2AAssistantEventId(messageId), cancellationToken)
+            .ConfigureAwait(false);
+        await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        if (user is null && assistant is null)
+            return null;
+        if (user is null || assistant is null)
+            throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
+
+        var recordedPrompt = System.Text.Encoding.UTF8.GetString(user.Bytes);
+        if (!string.Equals(recordedPrompt, prompt, StringComparison.Ordinal))
+            throw new RuntimeAuthorizationException("runtime_a2a_message_conflict");
+        var recordedAnswer = System.Text.Encoding.UTF8.GetString(assistant.Bytes);
+        if (string.IsNullOrWhiteSpace(recordedAnswer))
+            throw new RuntimeAuthorizationException("runtime_turn_record_invalid");
+        return recordedAnswer;
+    }
+
+    private static Guid CreateA2AAssistantEventId(Guid messageId)
+    {
+        // Deriving the response event ID from the request lets a restarted host replay one recorded turn.
+        var material = System.Text.Encoding.UTF8.GetBytes($"agentweaver:a2a:assistant:{messageId:N}");
+        return new Guid(System.Security.Cryptography.SHA256.HashData(material).AsSpan(0, 16));
     }
 
     /// <summary>Rejects hosted Copilot hard-credit limits that cannot be tied to a workflow-step turn.</summary>

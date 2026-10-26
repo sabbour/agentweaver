@@ -48,6 +48,8 @@ public sealed record MafExecutionRecoveryPlatformOperationSnapshot(
     public string? EvidenceHash { get; init; }
     /// <summary>Recorded typed human answer; absent while approval is pending.</summary>
     public string? ReviewDecision { get; init; }
+    /// <summary>Stable owner failure code retained while a RubberDuck operation may be retried.</summary>
+    public string? FailureCode { get; init; }
 }
 
 /// <summary>Projects checkpoint evidence without reconciling, mutating, or advancing execution.</summary>
@@ -179,6 +181,10 @@ internal static class MafExecutionRecoveryProjector
             PlatformOperationsMatchPlan(
                 state.ReviewIntents.Keys.Concat(state.ReviewReceipts.Keys),
                 WorkflowPlatformGate.IndependentReview,
+                steps) &&
+            PlatformOperationsMatchPlan(
+                state.RubberduckIntents.Keys.Concat(state.RubberduckReceipts.Keys),
+                WorkflowPlatformGate.RubberDuck,
                 steps);
     }
 
@@ -301,7 +307,8 @@ internal static class MafExecutionRecoveryProjector
         var hasIntent = state.BuildTestIntents.ContainsKey(stepId) ||
             state.OpenPullRequestIntents.ContainsKey(stepId) ||
             state.MergeIntents.ContainsKey(stepId) ||
-            state.ReviewIntents.ContainsKey(stepId);
+            state.ReviewIntents.ContainsKey(stepId) ||
+            state.RubberduckIntents.ContainsKey(stepId);
         if (hasIntent && !HasPlatformReceipt(stepId, state))
             return "mayRepeat";
         if (status == MafExecutionTaskStatus.Running && !HasPlatformReceipt(stepId, state))
@@ -353,6 +360,21 @@ internal static class MafExecutionRecoveryProjector
                 ReviewDecision = hasReceipt ? state.ReviewReceipts[stepId].ChoiceId : null
             });
         }
+        foreach (var (stepId, intent) in state.RubberduckIntents.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            var hasReceipt = state.RubberduckReceipts.ContainsKey(stepId);
+            operations.Add(new MafExecutionRecoveryPlatformOperationSnapshot(
+                stepId, WorkflowPlatformGate.RubberDuck, intent.OperationId,
+                hasReceipt ? "terminalReceiptRecorded" : "intentOnly",
+                hasReceipt ? null : "mayRepeat")
+            {
+                EvidenceHash = intent.EvidenceHash,
+                ReviewDecision = hasReceipt ? state.RubberduckReceipts[stepId].Outcome : null,
+                FailureCode = hasReceipt
+                    ? state.RubberduckReceipts[stepId].FailureCode
+                    : state.RubberduckFailureCodes.GetValueOrDefault(stepId)
+            });
+        }
 
         return operations
             .OrderBy(operation => operation.StepId, StringComparer.Ordinal)
@@ -364,7 +386,8 @@ internal static class MafExecutionRecoveryProjector
         state.BuildTestReceipts.ContainsKey(stepId) ||
         state.OpenPullRequestReceipts.ContainsKey(stepId) ||
         state.MergeReceipts.ContainsKey(stepId) ||
-        state.ReviewReceipts.ContainsKey(stepId);
+        state.ReviewReceipts.ContainsKey(stepId) ||
+        state.RubberduckReceipts.ContainsKey(stepId);
 
     private static string ToStatus(MafExecutionTaskStatus status) =>
         status.ToString().ToLowerInvariant();

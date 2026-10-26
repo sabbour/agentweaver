@@ -948,9 +948,11 @@ accepting owner state does not start an automatic scheduler.
 For coordinator sessions, the status response also includes `executionRecovery`,
 a read-only view of the latest bound MAF checkpoint. It reports checkpoint status
 and dependency readiness, pending child dispatches, BuildTest, OpenPullRequest,
-Merge, and IndependentReview intent/receipt evidence, failed dependencies, and
-the current pending decision blocker. External-effect intents without receipts
-are marked `mayRepeat`; unresolved running effects are `indeterminate`. A saved
+Merge, IndependentReview, and RubberDuck intent/receipt evidence, failed
+dependencies, and the current pending decision blocker. RubberDuck operations
+also expose `failureCode` for a retryable owner failure or invalid verdict.
+External-effect intents without receipts are marked `mayRepeat`; unresolved
+running effects are `indeterminate`. A saved
 terminal receipt is reported only
 as recorded evidence, not as proof of physical exactly-once execution. Missing or
 plan-mismatched checkpoints, or checkpoint progress incompatible with the
@@ -970,6 +972,20 @@ leaves dependents blocked. An unrelated decision, changed workspace or provider
 pull request head, or revoked run authority cannot complete the gate. A software
 workflow must order build/test before review; a workflow
 with review must put merge after review. Content-only workflows may omit build/test.
+
+For `RubberDuck`, dispatch requires the current coordinator-root AgentHost
+registration and action-grant owner; otherwise the platform gate is unavailable
+and is not replaced by ordinary model work. The checkpoint stores the operation
+and a digest of the accepted workflow revision, actor, fence, selection, and
+exact recorded ancestor results and receipts before the owner call. The owner
+receives only that bounded evidence in a read-only turn. The same operation ID
+is used for retries. A fully recorded owner response can be replayed after a
+host restart; a partial turn is not sent again and cannot complete the gate.
+`reviewDecision` records `passed`, `requestChanges`, or `failed`. Only `passed`
+releases dependent steps. A request for changes or invalid verdict records a
+failed gate; stale bindings and unavailable owner calls leave the gate
+incomplete. The recovery operation's `failureCode` identifies the recorded
+owner failure or invalid response.
 
 The dispatch body may include `openPullRequestWorkspaces`, an object keyed by
 OpenPullRequest step ID. Each value contains `workspaceId`,
