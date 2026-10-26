@@ -10,9 +10,12 @@ import {
   validateP1BrokerToken,
   withFreshP1BrowserContext,
 } from './p1-signin.mjs';
+import { createP1SetupApi } from './p1-runtime-adapters.mjs';
+import { persistP1ReconcileEvidence, reconcileP1Run } from './p1-reconcile.mjs';
 import { runP1Cli } from './run-p1.mjs';
 
 const OPTION_NAMES = new Set([
+  '--reconcile',
   '--surface',
   '--input',
   '--output',
@@ -39,7 +42,7 @@ export function parseP1SigninArguments(argv) {
     if (!OPTION_NAMES.has(option)
       || typeof argv[index + 1] !== 'string'
       || argv[index + 1].startsWith('--')) {
-      throw new Error('Use --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>].');
+      throw new Error('Use --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>], or --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>.');
     }
     const key = option.slice(2).replaceAll('-', '');
     if (result[key] !== undefined) throw new Error(`The ${option} option can only be used once.`);
@@ -58,6 +61,16 @@ function printP1OperatorSteps(io, { dryRun = false } = {}) {
   io.log?.('No token path, token environment variable, provider module, second account, or second sign-in is required.');
   if (dryRun) {
     io.log?.('Dry run only: the manifest shape is checked. No browser, network request, evidence file, project, or assignment is created.');
+  }
+}
+
+function printP1ReconcileSteps(io, { dryRun = false } = {}) {
+  io.log?.('Read-only P1 reconciliation: inspect one invocation before considering another live journey.');
+  io.log?.('The mode signs in once with the registered agentweaver-web client and setup scopes.');
+  io.log?.('It reads the invocation-named project and the setup actor\'s effective authority, then writes one redacted JSON evidence file.');
+  io.log?.('It never changes grants or fixtures, performs cleanup, starts or admits a journey, or approves cleanup.');
+  if (dryRun) {
+    io.log?.('Dry run only: the manifest and invocation ID are checked. No browser, network request, or evidence file is created.');
   }
 }
 
@@ -121,6 +134,9 @@ export function p1SigninSurfaceArguments(argv, surface, output, multiple) {
 export async function runP1SigninCli(argv = process.argv.slice(2), env = process.env, io = console, {
   runP1 = runP1Cli,
   signIn = authorizeP1InBrowser,
+  createSetupApi = createP1SetupApi,
+  reconcile = reconcileP1Run,
+  persistEvidence = persistP1ReconcileEvidence,
   chromium,
   signal,
   loadChromium = async () => (await import('playwright')).chromium,
@@ -136,10 +152,78 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
   }
   if (options.help) {
     io.log?.('Usage: npm run harness:p1:signin-run -- --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run]');
+    io.log?.('Usage: npm run harness:p1:signin-run -- --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json> [--dry-run]');
     io.log?.('The launcher signs in with the registered agentweaver-web client. Broker tokens stay in memory and are not written to evidence.');
     io.log?.('Multiple surfaces run sequentially with separate evidence files: evidence.api.jsonl and evidence.mcp.jsonl for --output evidence.jsonl. All surfaces run even if one returns a blocked or failed result.');
     printP1OperatorSteps(io);
     return 0;
+  }
+  if (options.reconcile !== undefined) {
+    if (!options.input || !options.output
+      || options.surface || Object.hasOwn(options, 'nativeprobeenvelope')
+      || Object.hasOwn(options, 'dispatchrecoveryenvelope')
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(options.reconcile)) {
+      io.error?.('Read-only reconciliation requires --reconcile <invocation-id>, --input <manifest.json>, and --output <reconciliation.json>; journey and probe options are not accepted.');
+      return 2;
+    }
+    let validated;
+    try {
+      validated = await readP1SignInInput(argv);
+    } catch (error) {
+      io.error?.(error.message);
+      return 2;
+    }
+    if (options.dryRun) {
+      printP1ReconcileSteps(io, { dryRun: true });
+      return 0;
+    }
+
+    let setupToken;
+    try {
+      printP1ReconcileSteps(io);
+      const browser = chromium ?? await loadChromium();
+      return await withBrowserContext({
+        chromium: browser,
+        authRoot,
+        signal,
+      }, async context => {
+        // Keep the setup actor unbound and reuse the same registered client, scopes, and browser session.
+        setupToken = await signIn({
+          environment: validated.environment,
+          actorId: validated.environment.actorId,
+          scopes: P1_SETUP_SCOPES,
+          chromium: browser,
+          context,
+          signal,
+          io,
+        });
+        validateP1BrokerToken(setupToken, tokenRequirements(
+          validated.environment,
+          validated.environment.actorId,
+          P1_SETUP_SCOPES,
+        ));
+
+        // Only the reconciler receives the setup-scoped API client; it whitelists the two documented GET operations.
+        const api = createSetupApi({
+          environment: validated.environment,
+          setupToken,
+        });
+        const evidence = await reconcile({
+          api,
+          environment: validated.environment,
+          invocationId: options.reconcile,
+          signal,
+        });
+        await persistEvidence(options.output, evidence);
+        io.log?.(`Reconciliation verdict: ${evidence.verdict}. No cleanup, fixture write, grant change, or new journey was performed.`);
+        return evidence.verdict === 'already clean' ? 0 : 1;
+      });
+    } catch {
+      io.error?.('P1 reconciliation could not be completed. No token values were written or displayed.');
+      return 1;
+    } finally {
+      setupToken = undefined;
+    }
   }
   const surfaces = options.surface?.split(',') ?? [];
   if (surfaces.length === 0 || new Set(surfaces).size !== surfaces.length
