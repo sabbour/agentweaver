@@ -70,6 +70,8 @@ A complete empty audit read is reported as `no_invocation_linked_audit_evidence`
 An explicit denial for a visible current Owner is reported as
 `owner_audit_read_denied`; other audit denials use
 `authority_audit_read_denied`. These are never interpreted as empty results.
+An HTTP 401 is reported as `authority_audit_read_unauthenticated`, not as an
+Owner authorization denial.
 An HTTP 404 from the audit endpoint is reported as
 `authority_audit_read_not_found`, not proof that the invocation has no linked
 records.

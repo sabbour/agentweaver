@@ -39,6 +39,8 @@ it does not prove that setup had no authority effects and remains **needs
 review**. A visible current Owner's explicit audit-read denial is reported as
 `owner_audit_read_denied`; other explicit audit denials are reported as
 `authority_audit_read_denied`. Neither is converted into an empty result.
+An HTTP 401 is reported as `authority_audit_read_unauthenticated`, not as an
+Owner authorization denial.
 An HTTP 404 from the audit endpoint is reported as
 `authority_audit_read_not_found`, not proof that the invocation has no linked
 records. These distinct `verdictReasonCode` values preserve why reconciliation

@@ -24,11 +24,18 @@ const AUTHORITY_ROLES = new Set([
 ]);
 
 function readFailure(call) {
-  if (call?.status === 401 || call?.status === 403) {
+  if (call?.status === 401) {
+    return {
+      status: 'denied',
+      reasonCode: 'read_unauthenticated',
+      reason: 'The read request was not authenticated with HTTP 401; no absence was inferred.',
+    };
+  }
+  if (call?.status === 403) {
     return {
       status: 'denied',
       reasonCode: 'read_denied',
-      reason: `The read request was explicitly denied with HTTP ${call.status}; no absence was inferred.`,
+      reason: 'The read request was explicitly denied with HTTP 403; no absence was inferred.',
     };
   }
   if (call?.status === 404) {
@@ -409,6 +416,8 @@ function reconcileVerdict(projectMatch, effectiveAuthority, roleAssignments, aud
     let reasonCode = 'authority_audit_read_incomplete';
     if (auditRecords.reasonCode === 'owner_audit_read_denied') {
       reasonCode = 'owner_audit_read_denied';
+    } else if (auditRecords.reasonCode === 'read_unauthenticated') {
+      reasonCode = 'authority_audit_read_unauthenticated';
     } else if (auditRecords.status === 'denied') {
       reasonCode = 'authority_audit_read_denied';
     } else if (auditRecords.reasonCode === 'read_not_found') {
@@ -537,6 +546,7 @@ export async function reconcileP1Run({ api, environment, invocationId, signal } 
     : { status: 'unavailable', reason: discovery.reason };
   const auditRecords = summarizeAuditRead(auditRead, invocationId);
   if (auditRecords.status === 'denied'
+    && auditRecords.reasonCode === 'read_denied'
     && projectMatch.status === 'found'
     && roleAssignments.status === 'complete'
     && roleAssignments.assignments.some(assignment =>

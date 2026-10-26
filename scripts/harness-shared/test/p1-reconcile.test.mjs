@@ -420,6 +420,31 @@ test('an Owner-style denial with no returned audit rows is explicit evidence, ne
   assert.equal(evidence.verdict, 'needs review');
 });
 
+test('an unauthenticated audit read is not mislabeled as an Owner authorization denial', async () => {
+  const { client } = makeClient({
+    projects: [project(PROJECT_ID)],
+    authority: authorizationContext([{
+      resourceType: 'project',
+      resourceId: PROJECT_ID,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    auditRecords: { error: 'unauthorized' },
+    auditStatus: 401,
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.auditRecords.status, 'denied');
+  assert.equal(evidence.auditRecords.reasonCode, 'read_unauthenticated');
+  assert.match(evidence.auditRecords.reason, /not authenticated with HTTP 401/);
+  assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.verdictReasonCode, 'authority_audit_read_unauthenticated');
+  assert.doesNotMatch(evidence.verdictReason, /Owner was explicitly denied/);
+});
+
 test('a denied audit read without visible Owner evidence keeps its explicit denial reason', async () => {
   const { client } = makeClient({
     projects: [],

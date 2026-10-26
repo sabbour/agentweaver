@@ -70,6 +70,7 @@ Common results:
 | `assign-*` | `404 principal_not_found` | The setup actor has no active membership in the selected tenant. |
 | `revoke-*` | `409 revision_conflict` | Another request changed the assignment. Reconcile it before you do anything else. |
 | `revoke-owner` | `409 last_project_owner` | The project isn't archived yet. Confirm the archive step result first. |
+| Audit read | `401 unauthorized` | The read was not authenticated; this is not a denial of the visible Owner's access. Check the setup actor's unbound `api.read` token. |
 | Audit read | `403 forbidden` | This is an explicit denial, not an empty result. A visible current Owner's denial is recorded as `owner_audit_read_denied`; Owners with no linked rows are denied. Use the setup actor's unbound `api.read` token and confirm current TenantAdmin or ownership of every linked project. |
 | Audit read | `complete: false` | The result is truncated or incomplete. Do not use it for a conclusive verdict. |
 | Audit read | `404 not found` | The endpoint did not return an audit read. Do not treat this as proof that the invocation has no linked records. |
