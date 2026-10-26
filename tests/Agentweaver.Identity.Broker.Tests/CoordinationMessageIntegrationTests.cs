@@ -4709,6 +4709,44 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             [TenantId]);
         await AssertStatusAsync(rootStatusResponse, HttpStatusCode.OK);
         var rootStatus = await ReadJsonAsync<SessionStatusSnapshot>(rootStatusResponse);
+        Assert.Equal("failure-pending-gate-once", rootStatus.ExecutionRecovery?.PendingGate?.RequestId);
+        // Recreate endpoint-scoped stores while retaining the same PostgreSQL decision and checkpoint state.
+        await using var gateRecoveryFactory = new OrchestratorIntegrationFactory(
+            _connectionString,
+            ownerSchema,
+            signingKey,
+            projects.CreateHandler,
+            () => eventsFactory.Server.CreateHandler(),
+            cacheObjectStore,
+            sandboxProvider,
+            () => _brokerFactory.Server.CreateHandler(),
+            sourceControlGitHub.CreateHandler,
+            CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
+            policyOptions: sourceControlPolicyOptions,
+            gitWorkspaceManager: gitWorkspaceManager);
+        using var gateRecoveryOrchestrator = gateRecoveryFactory.CreateClient(
+            new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://orchestrator.test") });
+        using var gateRecoveryDecisionResponse = await SendAsync(
+            gateRecoveryOrchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(gateRecoveryDecisionResponse, HttpStatusCode.OK);
+        var gateRecoveryDecision =
+            await ReadJsonAsync<CoordinatorDecisionStateView>(gateRecoveryDecisionResponse);
+        Assert.Equal(pendingGateStateVersion, gateRecoveryDecision.StateVersion);
+        Assert.Equal("failure-pending-gate-once", gateRecoveryDecision.PendingGate?.RequestId);
+        Assert.False(gateRecoveryDecision.CanDispatch);
+        using var gateRecoveryStatusResponse = await SendAsync(
+            gateRecoveryOrchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(gateRecoveryStatusResponse, HttpStatusCode.OK);
+        var gateRecoveryStatus = await ReadJsonAsync<SessionStatusSnapshot>(gateRecoveryStatusResponse);
+        Assert.Equal("failure-pending-gate-once", gateRecoveryStatus.ExecutionRecovery?.PendingGate?.RequestId);
         var failureRequest = new ReportRunFailureRequest(
             runStatus.ExecutionFence,
             runStatus.StateVersion,

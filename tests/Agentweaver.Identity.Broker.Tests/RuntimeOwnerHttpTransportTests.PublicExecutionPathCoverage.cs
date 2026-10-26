@@ -531,6 +531,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(scenario == "failed" ? MafExecutionTaskStatus.Failed : MafExecutionTaskStatus.Succeeded,
                 checkpoint.State.Progress.NonModelSteps["build-test"]);
             Assert.Equal(acceptedCommand.OperationId, checkpoint.State.BuildTestReceipts["build-test"].OperationId);
+            using var statusResponse = await SendAsync(
+                orchestrator,
+                HttpMethod.Get,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/status",
+                runToken,
+                [TenantId]);
+            await AssertStatusAsync(statusResponse, HttpStatusCode.OK);
+            var status = await ReadJsonAsync<SessionStatusSnapshot>(statusResponse);
+            Assert.Equal("available", status.ExecutionRecovery?.State);
+            var recoveryOperation = Assert.Single(status.ExecutionRecovery!.PlatformGateOperations);
+            Assert.Equal(WorkflowPlatformGate.BuildTest, recoveryOperation.Gate);
+            Assert.Equal("terminalReceiptRecorded", recoveryOperation.EvidenceState);
         }
         Assert.Equal(scenario is "completed" or "lost-acknowledgment" ? 1 : 0, outputCaptureCount);
         if (scenario != "revoked-authority")
