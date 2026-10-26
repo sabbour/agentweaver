@@ -947,12 +947,14 @@ accepting owner state does not start an automatic scheduler.
 
 For coordinator sessions, the status response also includes `executionRecovery`,
 a read-only view of the latest bound MAF checkpoint. It reports checkpoint status
-and dependency readiness, pending child dispatches, BuildTest and OpenPullRequest
-intent/receipt evidence, failed dependencies, and the current pending decision
-blocker. Intent-only effects are marked `mayRepeat`; unresolved running effects
-are `indeterminate`. Missing or plan-mismatched checkpoints, or checkpoint
-progress incompatible with the accepted plan, are marked unavailable, not safe
-or complete. The projection does not dispatch work or reconcile children.
+and dependency readiness, pending child dispatches, BuildTest, OpenPullRequest,
+and Merge intent/receipt evidence, failed dependencies, and the current pending
+decision blocker. An intent without a receipt is marked `mayRepeat`; unresolved
+running effects are `indeterminate`. A saved terminal receipt is reported only
+as recorded evidence, not as proof of physical exactly-once execution. Missing or
+plan-mismatched checkpoints, or checkpoint progress incompatible with the
+accepted plan, are marked unavailable, not safe or complete. The projection
+does not dispatch work or reconcile children.
 
 The dispatch body may include `openPullRequestWorkspaces`, an object keyed by
 OpenPullRequest step ID. Each value contains `workspaceId`,

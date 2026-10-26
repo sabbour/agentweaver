@@ -197,6 +197,52 @@ public sealed class MafExecutionRecoveryProjectionTests
     }
 
     [Fact]
+    public void MergeIntentMayRepeatAndTerminalReceiptIsReportedAsRecordedEvidence()
+    {
+        var (plan, checkpoint, intent) = CreateMergeRecoveryFixture();
+
+        var intentRecovery = MafExecutionRecoveryProjector.Project(
+            Snapshot(checkpoint), plan, intent.DecisionStateVersion, true, null);
+
+        var intentOperation = Assert.Single(intentRecovery.PlatformGateOperations);
+        Assert.Equal(WorkflowPlatformGate.Merge, intentOperation.Gate);
+        Assert.Equal(intent.OperationId, intentOperation.OperationId);
+        Assert.Equal("intentOnly", intentOperation.EvidenceState);
+        Assert.Equal("mayRepeat", intentOperation.EffectRecoveryState);
+        Assert.Equal("mayRepeat",
+            Assert.Single(intentRecovery.Steps, step => step.StepId == "merge").EffectRecoveryState);
+
+        var receipt = new MafMergeTerminalReceipt(
+            intent.OperationId, intent.OwnerIntentId, intent.PullRequestNumber,
+            intent.ExpectedHeadSha, new string('b', 40));
+        var completed = checkpoint with
+        {
+            Revision = 3,
+            Progress = checkpoint.Progress with
+            {
+                NonModelSteps = checkpoint.Progress.NonModelSteps.SetItem(
+                    intent.StepId, MafExecutionTaskStatus.Succeeded)
+            },
+            MergeReceipts = checkpoint.MergeReceipts.Add(intent.StepId, receipt)
+        };
+        var receiptRecovery = MafExecutionRecoveryProjector.Project(
+            Snapshot(completed), plan, intent.DecisionStateVersion, true, null);
+
+        var receiptOperation = Assert.Single(receiptRecovery.PlatformGateOperations);
+        Assert.Equal("terminalReceiptRecorded", receiptOperation.EvidenceState);
+        Assert.Null(receiptOperation.EffectRecoveryState);
+        Assert.Equal("terminalReceiptRecorded",
+            Assert.Single(receiptRecovery.Steps, step => step.StepId == "merge").EffectRecoveryState);
+
+        // The persisted receipt is not current evidence if a replan changes this step to another gate.
+        var mismatchedPlan = CreateMergePlan(WorkflowPlatformGate.OpenPullRequest);
+        var mismatched = MafExecutionRecoveryProjector.Project(
+            Snapshot(completed), mismatchedPlan, intent.DecisionStateVersion, true, null);
+        Assert.Equal("unavailable", mismatched.State);
+        Assert.Equal("maf_execution_checkpoint_progress_mismatch", mismatched.UnavailableCode);
+    }
+
+    [Fact]
     public void MissingOrMismatchedCheckpointNeverClaimsWorkIsReady()
     {
         var plan = CreatePlan(WorkflowTestData.Item("accepted-work"));
@@ -215,6 +261,59 @@ public sealed class MafExecutionRecoveryProjectionTests
         Assert.Equal("unavailable", mismatched.State);
         Assert.Equal("maf_execution_checkpoint_plan_mismatch", mismatched.UnavailableCode);
         Assert.Empty(mismatched.Steps);
+    }
+
+    private static (WorkPlanSnapshot Plan, MafExecutionCheckpoint Checkpoint, MafExecutionMergeIntent Intent)
+        CreateMergeRecoveryFixture()
+    {
+        var plan = CreateMergePlan(WorkflowPlatformGate.Merge);
+        var source = MafBuildTestSourceInputTests.Fixture().Run;
+        var intent = MafMergeContract.CreateIntent(
+            Guid.NewGuid(),
+            source.Identity,
+            "merge-intent",
+            2,
+            plan.Plan.Id,
+            plan.Workflow.Definition.Id,
+            plan.Workflow.Definition.Revision,
+            "merge",
+            1,
+            source.Pin.AcceptedRun.Fence,
+            source.Pin.AcceptedRun.AcceptedSelectionHash,
+            source.Pin,
+            42,
+            new string('a', 40),
+            SourceControlMergeMethod.Rebase);
+        var progress = MafExecutionProgress.Empty with
+        {
+            NonModelSteps = MafExecutionProgress.Empty.NonModelSteps.Add(
+                intent.StepId, MafExecutionTaskStatus.Running)
+        };
+        var checkpoint = new MafExecutionCheckpoint(
+            intent.CheckpointRevision,
+            intent.WorkPlanId,
+            intent.DecisionStateVersion,
+            progress)
+        {
+            MergeIntents = ImmutableDictionary<string, MafExecutionMergeIntent>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add(intent.StepId, intent)
+        };
+        return (plan, checkpoint, intent);
+    }
+
+    private static WorkPlanSnapshot CreateMergePlan(WorkflowPlatformGate gate)
+    {
+        var workflow = WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn,
+            WorkflowTestData.Open("implement", 0, []),
+            WorkflowTestData.Platform("merge", 1, ["implement"], gate)));
+        var result = WorkPlanValidator.ValidateAndSnapshot(
+            workflow,
+            WorkflowTestData.Plan(WorkflowTestData.Item("implementation")),
+            WorkflowTestData.SelectionContext());
+        Assert.True(result.IsValid, string.Join("; ", result.Issues.Select(issue => issue.Message)));
+        return result.Value!;
     }
 
     private static MafExecutionCheckpointSnapshot Snapshot(MafExecutionCheckpoint state) =>

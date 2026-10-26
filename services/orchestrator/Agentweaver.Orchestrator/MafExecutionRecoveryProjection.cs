@@ -163,6 +163,10 @@ internal static class MafExecutionRecoveryProjector
             PlatformOperationsMatchPlan(
                 state.OpenPullRequestIntents.Keys.Concat(state.OpenPullRequestReceipts.Keys),
                 WorkflowPlatformGate.OpenPullRequest,
+                steps) &&
+            PlatformOperationsMatchPlan(
+                state.MergeIntents.Keys.Concat(state.MergeReceipts.Keys),
+                WorkflowPlatformGate.Merge,
                 steps);
     }
 
@@ -281,7 +285,8 @@ internal static class MafExecutionRecoveryProjector
     {
         // Only a saved terminal receipt can resolve whether the external gate call returned.
         var hasIntent = state.BuildTestIntents.ContainsKey(stepId) ||
-            state.OpenPullRequestIntents.ContainsKey(stepId);
+            state.OpenPullRequestIntents.ContainsKey(stepId) ||
+            state.MergeIntents.ContainsKey(stepId);
         if (hasIntent && !HasPlatformReceipt(stepId, state))
             return "mayRepeat";
         if (status == MafExecutionTaskStatus.Running && !HasPlatformReceipt(stepId, state))
@@ -310,6 +315,15 @@ internal static class MafExecutionRecoveryProjector
                 hasReceipt ? "terminalReceiptRecorded" : "intentOnly",
                 hasReceipt ? null : "mayRepeat"));
         }
+        // Merge uses the same recorded-evidence rule; a receipt is not a claim of physical exactly-once execution.
+        foreach (var (stepId, intent) in state.MergeIntents.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            var hasReceipt = state.MergeReceipts.ContainsKey(stepId);
+            operations.Add(new MafExecutionRecoveryPlatformOperationSnapshot(
+                stepId, WorkflowPlatformGate.Merge, intent.OperationId,
+                hasReceipt ? "terminalReceiptRecorded" : "intentOnly",
+                hasReceipt ? null : "mayRepeat"));
+        }
 
         return operations
             .OrderBy(operation => operation.StepId, StringComparer.Ordinal)
@@ -318,7 +332,9 @@ internal static class MafExecutionRecoveryProjector
     }
 
     private static bool HasPlatformReceipt(string stepId, MafExecutionCheckpoint state) =>
-        state.BuildTestReceipts.ContainsKey(stepId) || state.OpenPullRequestReceipts.ContainsKey(stepId);
+        state.BuildTestReceipts.ContainsKey(stepId) ||
+        state.OpenPullRequestReceipts.ContainsKey(stepId) ||
+        state.MergeReceipts.ContainsKey(stepId);
 
     private static string ToStatus(MafExecutionTaskStatus status) =>
         status.ToString().ToLowerInvariant();
