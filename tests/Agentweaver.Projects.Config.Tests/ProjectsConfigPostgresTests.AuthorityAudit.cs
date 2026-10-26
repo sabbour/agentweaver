@@ -195,19 +195,9 @@ public sealed partial class ProjectsConfigPostgresTests
         await migrator.MigrateAsync(beforeInvocationAudit);
         try
         {
-            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
-            await using (var command = new NpgsqlCommand(
-                """
-                UPDATE projects_config.project_setup_operations
-                SET invocation_id = @conflicting_invocation_id
-                WHERE invocation_id = @invocation_id AND operation_kind = 'Setup'
-                """,
-                connection))
-            {
-                command.Parameters.AddWithValue("conflicting_invocation_id", conflictingInvocationId);
-                command.Parameters.AddWithValue("invocation_id", invocationId);
-                Assert.Equal(1, await command.ExecuteNonQueryAsync());
-            }
+            Assert.Equal(
+                1,
+                await RewriteSetupInvocationForMigrationConflictAsync(invocationId, conflictingInvocationId));
 
             var migrationError = await Assert.ThrowsAsync<PostgresException>(
                 () => migrator.MigrateAsync(invocationAudit));
@@ -269,21 +259,49 @@ public sealed partial class ProjectsConfigPostgresTests
         finally
         {
             await migrator.MigrateAsync(beforeInvocationAudit);
-            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
-            await using (var command = new NpgsqlCommand(
+            await RewriteSetupInvocationForMigrationConflictAsync(conflictingInvocationId, invocationId);
+            await migrator.MigrateAsync(invocationAudit);
+        }
+    }
+
+    private async Task<int> RewriteSetupInvocationForMigrationConflictAsync(
+        Guid currentInvocationId,
+        Guid replacementInvocationId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using (var disable = new NpgsqlCommand(
+            """
+            ALTER TABLE projects_config.project_setup_operations
+            DISABLE TRIGGER project_setup_operations_immutable
+            """,
+            connection))
+        {
+            await disable.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            // Only this migration-failure fixture bypasses the immutable operation guard.
+            await using var update = new NpgsqlCommand(
                 """
                 UPDATE projects_config.project_setup_operations
-                SET invocation_id = @invocation_id
-                WHERE invocation_id = @conflicting_invocation_id AND operation_kind = 'Setup'
+                SET invocation_id = @replacement_invocation_id
+                WHERE invocation_id = @current_invocation_id AND operation_kind = 'Setup'
                 """,
-                connection))
-            {
-                command.Parameters.AddWithValue("invocation_id", invocationId);
-                command.Parameters.AddWithValue("conflicting_invocation_id", conflictingInvocationId);
-                await command.ExecuteNonQueryAsync();
-            }
-
-            await migrator.MigrateAsync(invocationAudit);
+                connection);
+            update.Parameters.AddWithValue("replacement_invocation_id", replacementInvocationId);
+            update.Parameters.AddWithValue("current_invocation_id", currentInvocationId);
+            return await update.ExecuteNonQueryAsync();
+        }
+        finally
+        {
+            await using var enable = new NpgsqlCommand(
+                """
+                ALTER TABLE projects_config.project_setup_operations
+                ENABLE TRIGGER project_setup_operations_immutable
+                """,
+                connection);
+            await enable.ExecuteNonQueryAsync();
         }
     }
 
