@@ -31,7 +31,8 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
                 new System.Security.Claims.Claim("scope", "api.read projects.orchestrator")
             ], "controlled-owner"))
         };
-        rootContext.Request.Headers.Authorization = "******";
+        rootContext.Request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "controlled-owner").ToString();
         rootContext.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
         var grants = GrantStore();
 
@@ -50,6 +51,11 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             grants.AdmitCoordinatorRootModelTurnAsync(
                 rootContext, staleOwner, intent.OperationId, promptHash, stateVersion, default));
         Assert.Equal("runtime_action_owner_unavailable", staleOwnerFailure.Code);
+        var unrelatedOperationId = Guid.NewGuid();
+        var unrelatedIntentFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            grants.AdmitCoordinatorRootModelTurnAsync(
+                rootContext, registration, unrelatedOperationId, promptHash, stateVersion, default));
+        Assert.Equal("runtime_action_owner_unavailable", unrelatedIntentFailure.Code);
         Assert.Equal(0, await CountRuntimeGrantsAsync());
 
         await grants.AdmitCoordinatorRootModelTurnAsync(
@@ -76,23 +82,23 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             };
             var toolFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 grants.IssueRuntimeActionGrantAsync(
-                    _context, registration, toolRequest, default, reserveToolInvocation: true));
+                    rootContext, registration, toolRequest, default, reserveToolInvocation: true));
             Assert.Equal("runtime_action_owner_unavailable", toolFailure.Code);
             Assert.Equal(0, await CountRuntimeGrantsAsync());
         }
 
         var grant = await grants.IssueRuntimeActionGrantAsync(
-            _context, registration, request, default);
+            rootContext, registration, request, default);
         Assert.Equal(ExecutableActionGrantLookupStatus.Current,
             (await grants.GetCurrentAsync(grant)).Status);
 
         var unrelated = request with
         {
-            EventId = Guid.NewGuid(),
-            DispatchId = Guid.NewGuid()
+            EventId = unrelatedOperationId,
+            DispatchId = unrelatedOperationId
         };
         var unrelatedFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
-            grants.IssueRuntimeActionGrantAsync(_context, registration, unrelated, default));
+            grants.IssueRuntimeActionGrantAsync(rootContext, registration, unrelated, default));
         Assert.Equal("runtime_action_owner_unavailable", unrelatedFailure.Code);
         Assert.Equal(1, await CountRuntimeGrantsAsync());
     }
@@ -274,6 +280,12 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             checkpointBinding);
         var initial = await execution.AppendAsync(
             checkpointId, _checkpoint.Info, reviewedState, CancellationToken.None);
+        Assert.Equal(_intents.Length, initial.State.PendingDispatches.Count);
+        foreach (var pending in _intents)
+        {
+            Assert.Equal(pending, initial.State.PendingDispatches[pending.AssociationId]);
+            Assert.DoesNotContain(plan.Plan.Items, item => item.Id == pending.AssociationId);
+        }
         var rubberduckStep = workflow.Steps.Single(
             step => step.PlatformGate == WorkflowPlatformGate.RubberDuck);
         var intent = MafRubberduckReviewContract.CreateIntent(
@@ -290,6 +302,10 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             registration.Binding.AcceptedSelectionHash,
             registration);
         var running = CoordinationEndpoints.PrepareRubberduckCheckpoint(initial, intent)!;
+        Assert.Equal(initial.State.PendingDispatches, running.PendingDispatches);
+        Assert.Equal(MafExecutionTaskStatus.Running,
+            running.Progress.NonModelSteps[rubberduckStep.Id]);
+        Assert.Empty(running.RubberduckReceipts);
         _ = await execution.AppendAsync(
             "rubberduck-intent", initial.Info, running, CancellationToken.None);
         return (registration, intent, persisted.StateVersion);
