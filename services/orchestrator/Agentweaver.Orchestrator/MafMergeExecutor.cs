@@ -9,7 +9,7 @@ internal sealed class MafMergeExecutor(
     MafSourceControlOwnerClient sourceControlClient,
     NpgsqlDataSource dataSource,
     Func<CancellationToken, Task<RuntimeActorAuthorization>> createRuntimeActorAsync,
-    Func<MafExecutionMergeIntent, CancellationToken, Task> requireCurrentAsync,
+    Func<MafExecutionMergeIntent, long?, CancellationToken, Task> requireCurrentAsync,
     Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> requireDecisionAsync,
     Func<bool> isWallTimeLimitReached,
     Action markWallTimeLimitReached,
@@ -36,7 +36,7 @@ internal sealed class MafMergeExecutor(
             updateCheckpoint(beforeCall);
             return MafMergeExecutionOutcome.NoProgress;
         }
-        await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
+        await requireCurrentAsync(intent, null, cancellationToken).ConfigureAwait(false);
 
         var prepareActor = await createRuntimeActorAsync(cancellationToken).ConfigureAwait(false);
         MafMergeOwnerIntent prepared;
@@ -75,17 +75,22 @@ internal sealed class MafMergeExecutor(
             return MafMergeExecutionOutcome.AwaitingApproval;
         }
 
+        if (prepared.State is "conflict" or "outcome_uncertain")
+            throw FailureForOwnerState(prepared.State, prepared.FailureCode);
         MafMergeContract.ValidatePreparedOwnerIntent(intent, prepared);
         if (prepared.State == "merged")
         {
-            // A response lost after a successful remote merge is recovered from the owner's durable result.
+            // Recheck current authority and approval before accepting the owner's durable result.
+            await requireCurrentAsync(
+                intent, prepared.ApprovalStateVersion, cancellationToken).ConfigureAwait(false);
             var receipt = MafMergeContract.CreateReceipt(intent, prepared, prepared);
             return await CompleteAsync(intent, receipt, cancellationToken).ConfigureAwait(false)
                 ? MafMergeExecutionOutcome.Completed
                 : MafMergeExecutionOutcome.NoProgress;
         }
 
-        await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
+        await requireCurrentAsync(
+            intent, prepared.ApprovalStateVersion, cancellationToken).ConfigureAwait(false);
         var executeActor = await createRuntimeActorAsync(cancellationToken).ConfigureAwait(false);
         MafMergeOwnerIntent executed;
         try
@@ -97,7 +102,8 @@ internal sealed class MafMergeExecutor(
         {
             executeActor.Bearer.Invalidate();
         }
-        await requireCurrentAsync(intent, cancellationToken).ConfigureAwait(false);
+        await requireCurrentAsync(
+            intent, prepared.ApprovalStateVersion, cancellationToken).ConfigureAwait(false);
         if (executed.State != "merged")
             throw FailureForOwnerState(executed.State, executed.FailureCode);
 

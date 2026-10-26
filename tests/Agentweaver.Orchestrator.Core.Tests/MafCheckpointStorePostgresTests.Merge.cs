@@ -5,6 +5,7 @@ using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
+using Microsoft.Agents.AI.Workflows;
 using Npgsql;
 using Xunit;
 
@@ -15,9 +16,12 @@ public sealed partial class MafCheckpointStorePostgresTests
     [Fact]
     public async Task PostgresMergeApprovalPendingKeepsCheckpointRunningAndNoReceipt()
     {
-        var (_, intent, source) = await PersistMergeIntentAsync();
+        var fixture = await PersistMergeIntentAsync();
+        var intent = fixture.Intent;
+        var source = fixture.Source;
         var owner = new MergeOwnerHandler(intent) { ApprovalPending = true };
-        var (executor, client) = CreateMergeExecutor(intent, source, owner);
+        var (executor, client) = CreateMergeExecutor(
+            fixture, owner, fixture.ConfirmedPlan, intent.DecisionStateVersion);
         using (client)
         {
             var outcome = await executor.ExecuteAsync(intent, CancellationToken.None);
@@ -36,9 +40,12 @@ public sealed partial class MafCheckpointStorePostgresTests
     [Fact]
     public async Task PostgresMergeRecoveryAfterCheckpointRollbackReusesOwnerResultWithoutSecondMerge()
     {
-        var (_, intent, source) = await PersistMergeIntentAsync();
+        var fixture = await PersistMergeIntentAsync();
+        var intent = fixture.Intent;
+        var source = fixture.Source;
         var owner = new MergeOwnerHandler(intent);
-        var (executor, client) = CreateMergeExecutor(intent, source, owner);
+        var (executor, client) = CreateMergeExecutor(
+            fixture, owner, fixture.Approved, intent.DecisionStateVersion + 1);
         using (client)
         {
             await SetMergeTerminalCheckpointFailureAsync(true);
@@ -82,12 +89,14 @@ public sealed partial class MafCheckpointStorePostgresTests
     [Fact]
     public async Task PostgresMergeRejectsChangedOwnerHeadBeforeCallingExecuteRoute()
     {
-        var (_, intent, source) = await PersistMergeIntentAsync();
+        var fixture = await PersistMergeIntentAsync();
+        var intent = fixture.Intent;
         var owner = new MergeOwnerHandler(intent)
         {
             PreparedHeadSha = new string('d', 40)
         };
-        var (executor, client) = CreateMergeExecutor(intent, source, owner);
+        var (executor, client) = CreateMergeExecutor(
+            fixture, owner, fixture.Approved, intent.DecisionStateVersion + 1);
         using (client)
         {
             var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
@@ -102,12 +111,121 @@ public sealed partial class MafCheckpointStorePostgresTests
         }
     }
 
-    private async Task<(MafExecutionCheckpointSnapshot Running,
-        MafExecutionMergeIntent Intent,
-        SourceControlRunContext Source)> PersistMergeIntentAsync()
+    [Fact]
+    public async Task PostgresMergeApprovalContinuationRejectsUnrelatedDecisionAdvance()
+    {
+        var fixture = await PersistMergeIntentAsync();
+        var owner = new MergeOwnerHandler(fixture.Intent);
+        var (executor, client) = CreateMergeExecutor(
+            fixture, owner, fixture.Approved, fixture.Intent.DecisionStateVersion + 2);
+        using (client)
+        {
+            var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+                executor.ExecuteAsync(fixture.Intent, CancellationToken.None));
+
+            Assert.Equal("source_control_run_binding_changed", failure.Code);
+            Assert.Equal(1, owner.PrepareRequests);
+            Assert.Equal(0, owner.ExecuteRequests);
+            Assert.Equal(0, owner.MergeEffects);
+            var latest = await _executionStore.ReadLatestAsync(CancellationToken.None);
+            Assert.NotNull(latest);
+            Assert.Equal(MafExecutionTaskStatus.Running, latest.State.Progress.NonModelSteps["merge"]);
+            Assert.Empty(latest.State.MergeReceipts);
+            AssertMergeDependentBlocked(fixture, latest.State);
+        }
+    }
+
+    [Fact]
+    public async Task PostgresMergeRejectsRevokedAuthorityBeforeOwnerCall()
+    {
+        var fixture = await PersistMergeIntentAsync();
+        var acceptedRun = fixture.Source.Pin.AcceptedRun;
+        var revokedRun = new SourceControlAcceptedRunBinding(
+            acceptedRun.Issuer,
+            "revoked-actor",
+            acceptedRun.TenantId,
+            acceptedRun.ProjectId,
+            acceptedRun.RunId,
+            acceptedRun.RootSessionId,
+            acceptedRun.AcceptedSelectionHash,
+            acceptedRun.ProjectRevision,
+            acceptedRun.ProjectConfigurationRevision,
+            acceptedRun.PlatformRuntimeRevision,
+            acceptedRun.ContextRevision,
+            acceptedRun.Fence);
+        var revokedPin = new SourceControlRepositoryPin(
+            fixture.Source.Pin.PinId,
+            revokedRun,
+            fixture.Source.Pin.ProviderBinding,
+            fixture.Source.Pin.Repository,
+            fixture.Source.Pin.ApiCredential,
+            fixture.Source.Pin.CheckoutCredential,
+            fixture.Source.Pin.WebhookCredential,
+            fixture.Source.Pin.ProviderRepositoryId,
+            fixture.Source.Pin.DefaultBranch,
+            fixture.Source.Pin.IsPrivate,
+            fixture.Source.Pin.PinnedAt,
+            fixture.Source.Pin.GitHubAppBinding);
+        var owner = new MergeOwnerHandler(fixture.Intent);
+        var (executor, client) = CreateMergeExecutor(
+            fixture, owner, fixture.Approved, fixture.Intent.DecisionStateVersion + 1, revokedPin);
+        using (client)
+        {
+            var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+                executor.ExecuteAsync(fixture.Intent, CancellationToken.None));
+
+            Assert.Equal("source_control_run_binding_changed", failure.Code);
+            Assert.Equal(0, owner.PrepareRequests);
+            Assert.Equal(0, owner.MergeEffects);
+            var latest = await _executionStore.ReadLatestAsync(CancellationToken.None);
+            Assert.NotNull(latest);
+            Assert.Equal(MafExecutionTaskStatus.Running, latest.State.Progress.NonModelSteps["merge"]);
+            Assert.Empty(latest.State.MergeReceipts);
+            AssertMergeDependentBlocked(fixture, latest.State);
+        }
+    }
+
+    [Fact]
+    public async Task PostgresUncertainOwnerOutcomeStaysBlockedAndIsNotRetried()
+    {
+        var fixture = await PersistMergeIntentAsync();
+        var owner = new MergeOwnerHandler(fixture.Intent) { ExecuteOutcome = "outcome_uncertain" };
+        var (executor, client) = CreateMergeExecutor(
+            fixture, owner, fixture.Approved, fixture.Intent.DecisionStateVersion + 1);
+        using (client)
+        {
+            var failure = await Assert.ThrowsAsync<CoordinationException>(() =>
+                executor.ExecuteAsync(fixture.Intent, CancellationToken.None));
+            Assert.Equal("source_control_merge_outcome_uncertain", failure.Code);
+
+            var retryFailure = await Assert.ThrowsAsync<CoordinationException>(() =>
+                executor.ExecuteAsync(fixture.Intent, CancellationToken.None));
+            Assert.Equal("source_control_merge_outcome_uncertain", retryFailure.Code);
+            Assert.Equal(1, owner.ExecuteRequests);
+            Assert.Equal(1, owner.MergeEffects);
+            var latest = await _executionStore.ReadLatestAsync(CancellationToken.None);
+            Assert.NotNull(latest);
+            Assert.Equal(MafExecutionTaskStatus.Running, latest.State.Progress.NonModelSteps["merge"]);
+            Assert.Empty(latest.State.MergeReceipts);
+            AssertMergeDependentBlocked(fixture, latest.State);
+        }
+    }
+
+    private async Task<MergePersistenceFixture> PersistMergeIntentAsync()
     {
         // Start from a real PostgreSQL checkpoint so restart and rollback behavior exercise the production store.
         var source = CreateCurrentSourceControlRun();
+        var workflow = WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn,
+            WorkflowTestData.Open("implement", 0, []),
+            WorkflowTestData.Platform("merge", 1, ["implement"], WorkflowPlatformGate.Merge),
+            WorkflowTestData.Open("followup", 2, ["merge"]));
+        var plan = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(workflow),
+            WorkflowTestData.Plan(
+                WorkflowTestData.Item("implementation"),
+                WorkflowTestData.Item("follow-up", "followup", dependsOn: ["implementation"])),
+            WorkflowTestData.SelectionContext()).Value!;
         var initialProgress = MafExecutionProgress.Empty with
         {
             NonModelSteps = MafExecutionProgress.Empty.NonModelSteps.Add(
@@ -116,16 +234,16 @@ public sealed partial class MafCheckpointStorePostgresTests
         var initial = await _executionStore.AppendAsync(
             "merge-initial",
             null,
-            new(1, "plan-1", 1, initialProgress),
+            new(1, plan.Plan.Id, 1, initialProgress),
             CancellationToken.None);
         var intent = MafMergeContract.CreateIntent(
             Guid.Parse("c252ff87-659a-45dc-a307-41369cbe61f7"),
             _binding.Identity,
             "merge-intent",
             2,
-            "plan-1",
-            "workflow.core",
-            "revision-1",
+            plan.Plan.Id,
+            workflow.Id,
+            workflow.Revision,
             "merge",
             1,
             _binding.ExecutionFence,
@@ -134,18 +252,65 @@ public sealed partial class MafCheckpointStorePostgresTests
             42,
             new string('a', 40),
             SourceControlMergeMethod.Rebase);
+        var decisions = CreateMergeDecisionStates(source, intent, workflow, plan);
         var next = CoordinationEndpoints.PrepareMergeCheckpoint(initial, intent)!;
         var running = await _executionStore.AppendAsync(
             intent.CheckpointId, initial.Info, next, CancellationToken.None);
-        return (running, intent, source);
+        return new(running, intent, source, workflow, plan, decisions.ConfirmedPlan, decisions.Approved);
     }
 
     private (MafMergeExecutor Executor, HttpClient Client) CreateMergeExecutor(
-        MafExecutionMergeIntent intent,
-        SourceControlRunContext source,
-        MergeOwnerHandler owner)
+        MergePersistenceFixture fixture,
+        MergeOwnerHandler owner,
+        CoordinatorDecisionState currentDecision,
+        long currentDecisionVersion,
+        SourceControlRepositoryPin? currentPin = null)
     {
-        // Only the checkpoint and owner HTTP boundary are real here; the test isolates merge recovery semantics.
+        // Exercise the production binding and approval contract alongside the real PostgreSQL checkpoint store.
+        var intent = fixture.Intent;
+        var source = fixture.Source;
+        var pin = currentPin ?? source.Pin;
+        long? currentApprovalStateVersion = currentDecisionVersion == intent.DecisionStateVersion
+            ? null
+            : currentDecisionVersion;
+        Task RequireCurrent(
+            MafExecutionMergeIntent currentIntent,
+            long? ownerApprovalStateVersion,
+            CancellationToken _)
+        {
+            MafMergeContract.RequireCurrentSource(
+                currentIntent,
+                source.Actor,
+                intent.Identity,
+                "tenant-1",
+                currentDecisionVersion,
+                currentDecision,
+                _binding.ExecutionFence,
+                CoordinationOwnerStore.HashSelection(_selection.Selection),
+                pin,
+                ownerApprovalStateVersion);
+            return Task.CompletedTask;
+        }
+
+        Task RequireDecision(
+            Npgsql.NpgsqlConnection _,
+            Npgsql.NpgsqlTransaction __,
+            CancellationToken ___)
+        {
+            MafMergeContract.RequireCurrentSource(
+                intent,
+                source.Actor,
+                intent.Identity,
+                "tenant-1",
+                currentDecisionVersion,
+                currentDecision,
+                _binding.ExecutionFence,
+                CoordinationOwnerStore.HashSelection(_selection.Selection),
+                pin,
+                currentApprovalStateVersion);
+            return Task.CompletedTask;
+        }
+
         var client = new HttpClient(owner) { Timeout = TimeSpan.FromSeconds(2) };
         var sourceControl = new MafSourceControlOwnerClient(
             client, new MafSourceControlOwnerOptions(new Uri("https://orchestrator.example/")));
@@ -156,18 +321,87 @@ public sealed partial class MafCheckpointStorePostgresTests
             _ => Task.FromResult(new RuntimeActorAuthorization(
                 new SecretCredential("test-owner-token", DateTimeOffset.UtcNow.AddMinutes(1)),
                 "tenant-1")),
-            (currentIntent, _) =>
-            {
-                Assert.Equal(intent.Identity, currentIntent.Identity);
-                Assert.Equal(source.Pin.PinId, currentIntent.SourceControlPinId);
-                return Task.CompletedTask;
-            },
-            (_, _, _) => Task.CompletedTask,
+            RequireCurrent,
+            RequireDecision,
             () => false,
             () => { },
             _ => { },
             (_, _) => { });
         return (executor, client);
+    }
+
+    private static (CoordinatorDecisionState ConfirmedPlan, CoordinatorDecisionState Approved)
+        CreateMergeDecisionStates(
+            SourceControlRunContext source,
+            MafExecutionMergeIntent intent,
+            WorkflowDefinition workflow,
+            WorkPlanSnapshot plan)
+    {
+        // Recreate the confirmed workflow and typed merge-approval decision used by dispatch.
+        var outcome = new CoordinatorOutcomeSpecification(
+            "outcome-1",
+            "Implement the requested change.",
+            "The requested change is available.",
+            "Only requested workflow behavior changes.",
+            "Existing provider pins remain authoritative.",
+            []);
+        var proposedOutcome = CoordinatorDecisionFlow.ProposeOutcomeSpec(
+            CoordinatorDecisionState.Create(intent.ExecutionFence),
+            outcome,
+            "outcome-approval-1",
+            source.Actor.Subject);
+        var confirmedOutcome = proposedOutcome.State!.ApplyGateAnswer(new CoordinatorGateAnswer(
+            proposedOutcome.State.PendingGate!.RequestId,
+            source.Actor.Subject,
+            intent.ExecutionFence,
+            CoordinatorGateChoices.Approve,
+            null)).State;
+        var catalog = new AuthorizedWorkflowCatalog(workflow, [workflow]);
+        var selected = CoordinatorDecisionFlow.SelectWorkflow(
+            confirmedOutcome, catalog, requestedWorkflowId: null,
+            firstUseRequestId: null, authorizedActorId: null);
+        var proposedPlan = CoordinatorDecisionFlow.ProposeWorkPlan(
+            selected.State,
+            plan.Plan,
+            WorkflowTestData.SelectionContext(),
+            "plan-approval-1",
+            source.Actor.Subject);
+        var confirmedPlan = proposedPlan.State!.ApplyGateAnswer(new CoordinatorGateAnswer(
+            proposedPlan.State.PendingGate!.RequestId,
+            source.Actor.Subject,
+            intent.ExecutionFence,
+            CoordinatorGateChoices.Approve,
+            null)).State;
+        var pending = CoordinatorDecisionFlow.RequestApproval(
+            confirmedPlan,
+            intent.ApprovalRequestId,
+            intent.OwnerIntentId,
+            source.Actor.Subject);
+        var approved = pending.State!.ApplyGateAnswer(new CoordinatorGateAnswer(
+            pending.Value!.RequestId,
+            source.Actor.Subject,
+            intent.ExecutionFence,
+            CoordinatorGateChoices.Approve,
+            null));
+        Assert.True(approved.IsAccepted);
+        return (confirmedPlan, approved.State);
+    }
+
+    private static void AssertMergeDependentBlocked(
+        MergePersistenceFixture fixture,
+        MafExecutionCheckpoint checkpoint)
+    {
+        // A running Merge gate cannot release workflow steps that depend on its completion.
+        var progress = checkpoint.Progress with
+        {
+            WorkItems = checkpoint.Progress.WorkItems
+                .SetItem("implementation", MafExecutionTaskStatus.Succeeded)
+                .SetItem("follow-up", MafExecutionTaskStatus.Pending)
+        };
+        var frontier = MafExecutionPlanner.BuildFrontier(
+            fixture.Plan, progress, 0, 0, 10, 10,
+            hasNonModelExecutor: step => step.PlatformGate == WorkflowPlatformGate.Merge);
+        Assert.DoesNotContain(frontier.ReadyActions, action => action.Step.Id == "followup");
     }
 
     private async Task SetMergeTerminalCheckpointFailureAsync(bool enabled)
@@ -202,11 +436,13 @@ public sealed partial class MafCheckpointStorePostgresTests
     {
         public bool ApprovalPending { get; init; }
         public string? PreparedHeadSha { get; init; }
+        public string? ExecuteOutcome { get; init; }
         public int PrepareRequests { get; private set; }
         public int ExecuteRequests { get; private set; }
         public int MergeEffects { get; private set; }
         public string? LastIntentId { get; private set; }
         public string? LastApprovalRequestId { get; private set; }
+        private string _durableState = "approved";
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -234,7 +470,13 @@ public sealed partial class MafCheckpointStorePostgresTests
                         state = "approval_pending"
                     }), request, HttpStatusCode.Accepted);
 
-                var state = MergeEffects == 0 ? "approved" : "merged";
+                if (_durableState == "outcome_uncertain")
+                    return Response(
+                        """{"error":"source_control_merge_outcome_uncertain"}""",
+                        request,
+                        HttpStatusCode.BadGateway);
+
+                var state = _durableState;
                 return Response(JsonSerializer.Serialize(new
                 {
                     intentId = intent.OwnerIntentId,
@@ -248,7 +490,7 @@ public sealed partial class MafCheckpointStorePostgresTests
                     baseSha = new string('c', 40),
                     method = intent.Method,
                     approvalDecisionId = Guid.Parse("daab7d19-85f9-4e68-9bc0-7d3533f355e6"),
-                    approvalStateVersion = intent.DecisionStateVersion,
+                    approvalStateVersion = intent.DecisionStateVersion + 1,
                     grantReference = new { kind = "merge-approval" },
                     mergeSha = state == "merged" ? new string('b', 40) : null,
                     lastFailureCode = (string?)null
@@ -259,6 +501,15 @@ public sealed partial class MafCheckpointStorePostgresTests
                 path, StringComparison.Ordinal);
             ExecuteRequests++;
             MergeEffects++;
+            if (ExecuteOutcome == "outcome_uncertain")
+            {
+                _durableState = "outcome_uncertain";
+                return Response(
+                    """{"error":"source_control_merge_outcome_uncertain"}""",
+                    request,
+                    HttpStatusCode.BadGateway);
+            }
+            _durableState = "merged";
             return Response(JsonSerializer.Serialize(new
             {
                 intentId = intent.OwnerIntentId,
@@ -282,4 +533,13 @@ public sealed partial class MafCheckpointStorePostgresTests
             return response;
         }
     }
+
+    private sealed record MergePersistenceFixture(
+        MafExecutionCheckpointSnapshot Running,
+        MafExecutionMergeIntent Intent,
+        SourceControlRunContext Source,
+        WorkflowDefinition Workflow,
+        WorkPlanSnapshot Plan,
+        CoordinatorDecisionState ConfirmedPlan,
+        CoordinatorDecisionState Approved);
 }

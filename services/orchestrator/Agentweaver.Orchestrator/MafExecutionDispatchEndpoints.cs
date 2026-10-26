@@ -49,6 +49,33 @@ public static partial class CoordinationEndpoints
             CacheReference: null,
             StoreName: MafExecutionCheckpointContract.StoreName);
 
+    internal static void RequireOpenPullRequestDispatchSource(
+        MafExecutionOpenPullRequestIntent intent,
+        MafExecutionCheckpoint checkpoint,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        string tenantId,
+        long decisionStateVersion,
+        long executionFence,
+        string acceptedSelectionHash,
+        SourceControlRepositoryPin pin)
+    {
+        // A completed PR receipt remains valid across a later Merge approval, but all source bindings stay current.
+        var sourceDecisionVersion = decisionStateVersion;
+        if (checkpoint.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
+            MafExecutionTaskStatus.Succeeded)
+        {
+            if (!checkpoint.OpenPullRequestReceipts.TryGetValue(intent.StepId, out var receipt) ||
+                MafOpenPullRequestContract.ValidateReceipt(intent, receipt) != MafExecutionTaskStatus.Succeeded)
+                throw new CoordinationException(
+                    "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+            sourceDecisionVersion = intent.DecisionStateVersion;
+        }
+        MafOpenPullRequestContract.RequireCurrentSource(
+            intent, actor, identity, tenantId, sourceDecisionVersion,
+            executionFence, acceptedSelectionHash, pin);
+    }
+
     /// <summary>
     /// Advances a confirmed work plan by reconciling children, executing eligible platform steps, and dispatching ready work.
     /// </summary>
@@ -177,9 +204,16 @@ public static partial class CoordinationEndpoints
                     var currentPin = await context.RequestServices.GetRequiredService<SourceControlOwnerStore>()
                         .ReadRepositoryPinAsync(actor, identity, selection, cancellationToken)
                         .ConfigureAwait(false);
-                    MafOpenPullRequestContract.RequireCurrentSource(
-                        intent, actor, identity, selection.Authorization.TenantId,
-                        decision.StateVersion, decision.State.Fence, decision.SelectionHash, currentPin);
+                    RequireOpenPullRequestDispatchSource(
+                        intent,
+                        checkpoint.State,
+                        actor,
+                        identity,
+                        selection.Authorization.TenantId,
+                        decision.StateVersion,
+                        decision.State.Fence,
+                        decision.SelectionHash,
+                        currentPin);
                 }
             if (checkpoint is not null)
                 foreach (var intent in checkpoint.State.MergeIntents.Values)
@@ -1291,7 +1325,7 @@ public static partial class CoordinationEndpoints
             }
 
             async Task RequireCurrentMergeAsync(
-                MafExecutionMergeIntent intent, CancellationToken token)
+                MafExecutionMergeIntent intent, long? ownerApprovalStateVersion, CancellationToken token)
             {
                 // Re-read the decision and pin after approval; the original checkpoint may predate the gate answer.
                 await RequireUnchangedAuthorizedSelectionAsync(
@@ -1304,7 +1338,7 @@ public static partial class CoordinationEndpoints
                 MafMergeContract.RequireCurrentSource(
                     intent, actor, identity, selection.Authorization.TenantId,
                     currentDecision.StateVersion, currentDecision.State, currentDecision.State.Fence,
-                    currentDecision.SelectionHash, pin);
+                    currentDecision.SelectionHash, pin, ownerApprovalStateVersion);
                 var latest = await execution.ReadLatestAsync(token).ConfigureAwait(false)
                     ?? throw new CoordinationException(
                         "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);

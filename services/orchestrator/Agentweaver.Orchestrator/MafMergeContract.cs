@@ -169,9 +169,10 @@ internal static class MafMergeContract
         CoordinatorDecisionState decision,
         long executionFence,
         string acceptedSelectionHash,
-        SourceControlRepositoryPin pin)
+        SourceControlRepositoryPin pin,
+        long? ownerApprovalStateVersion = null)
     {
-        // Approval legitimately advances the decision version, but only its exact typed receipt may do so.
+        // Approval may advance the decision version once; the owner must bind that receipt to the current version.
         var accepted = pin.AcceptedRun;
         var matchesBinding =
             intent.Identity == identity &&
@@ -192,9 +193,12 @@ internal static class MafMergeContract
             accepted.TenantId == tenantId &&
             accepted.Fence == executionFence &&
             string.Equals(accepted.AcceptedSelectionHash, acceptedSelectionHash, StringComparison.OrdinalIgnoreCase);
+        var decisionAdvanced = decisionStateVersion != intent.DecisionStateVersion;
         if (!matchesBinding ||
-            decisionStateVersion != intent.DecisionStateVersion &&
-                !HasCurrentApproval(intent, actor.Subject, decision))
+            decisionAdvanced &&
+                (!HasCurrentApproval(intent, actor.Subject, decision) ||
+                 ownerApprovalStateVersion is { } approvalVersion &&
+                    approvalVersion != decisionStateVersion))
             throw new CoordinationException(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
     }
@@ -210,6 +214,8 @@ internal static class MafMergeContract
             executed.State != "merged" ||
             !IsGitSha(executed.MergeSha))
             throw InvalidOwnerResult();
+        if (executed.FailureCode is not null)
+            throw UncertainOwnerResult();
         if (prepared.State == "merged" &&
             !string.Equals(prepared.MergeSha, executed.MergeSha, StringComparison.OrdinalIgnoreCase))
             throw InvalidOwnerResult();
@@ -226,13 +232,15 @@ internal static class MafMergeContract
         MafMergeOwnerIntent prepared)
     {
         // Verify the exact head and approval evidence before the owner is asked to perform the merge effect.
+        if (prepared.State == "merged" && prepared.FailureCode is not null)
+            throw UncertainOwnerResult();
         if (!MatchesOwnerRequest(intent, prepared) ||
             prepared.State is not ("approved" or "merge_started" or "merged") ||
-            (prepared.State is "approved" or "merge_started") &&
-                (prepared.ApprovalDecisionId is null ||
-                 prepared.ApprovalStateVersion is null ||
-                 prepared.ApprovalStateVersion < intent.DecisionStateVersion ||
-                 !prepared.HasGrantReference))
+            prepared.FailureCode is not null ||
+            prepared.ApprovalDecisionId is null ||
+            prepared.ApprovalStateVersion is null ||
+            prepared.ApprovalStateVersion < intent.DecisionStateVersion ||
+            prepared.State != "merged" && !prepared.HasGrantReference)
             throw InvalidOwnerResult();
     }
 
@@ -330,4 +338,7 @@ internal static class MafMergeContract
 
     private static CoordinationException InvalidOwnerResult() =>
         new("source_control_merge_response_invalid", StatusCodes.Status502BadGateway);
+
+    private static CoordinationException UncertainOwnerResult() =>
+        new("source_control_merge_outcome_uncertain", StatusCodes.Status502BadGateway);
 }
