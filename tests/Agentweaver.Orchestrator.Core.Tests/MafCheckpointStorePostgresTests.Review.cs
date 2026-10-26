@@ -283,7 +283,8 @@ public sealed partial class MafCheckpointStorePostgresTests
         var reviewStep = plan.Workflow.Definition.Steps.Single(
             step => step.PlatformGate == WorkflowPlatformGate.IndependentReview);
         var intent = MafIndependentReviewContract.CreateIntent(
-            Guid.NewGuid(), _binding.Identity, initial.Info.CheckpointId, initial.State.Revision,
+            Guid.NewGuid(), _binding.Identity, "review-intent",
+            checked(initial.State.Revision + 1),
             plan, reviewStep, initial.State, 2,
             _actor.Subject, _binding.ExecutionFence,
             CoordinationOwnerStore.HashSelection(_selection.Selection));
@@ -429,7 +430,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             running, intent, operation) ??
             throw new InvalidOperationException("The review test BuildTest operation did not complete.");
         return await _executionStore.AppendAsync(
-            intent.CheckpointId, running.Info, completedState, CancellationToken.None);
+            "review-build-test-completed", running.Info, completedState, CancellationToken.None);
     }
 
     private static SandboxProviderBindingSnapshot CreateReviewSandboxBindingSnapshot()
