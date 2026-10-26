@@ -38,6 +38,36 @@ The launcher does not change registered clients, redirect addresses, scopes,
 tenant settings, roles, or permissions. Any trust change needs separate
 approval for the exact client, redirects, scopes, resources, and consequences.
 
+## Reconcile an interrupted run
+
+Before starting another live journey, inspect the invocation from the existing
+evidence file:
+
+```powershell
+npm run harness:p1:signin-run -- --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>
+```
+
+Use the same target manifest that identifies the approved environment and setup
+actor. The command uses one interactive sign-in with the existing registered
+client and setup scopes. It reads the Gateway contract, the visible project
+list, and the actor's current authorization context. `listProjects` has no
+invocation-name query, so the harness compares the exact `p1-<invocation-id>`
+name in the returned list. That list is permission-filtered: a missing project
+is not proof that it is gone unless the authority context confirms tenant-wide
+project visibility.
+
+The current Gateway API contract does not expose a read operation for project
+authority audit records. The evidence records that audit read as unavailable
+and the verdict remains **needs review**; do not treat this output as proof
+that cleanup is complete or safe. Do not start another live journey until the
+missing audit evidence has been reviewed through an approved source.
+
+Reconciliation is an assessment only. It writes one redacted JSON evidence
+file and issues only reads. It never writes a fixture or grant, performs
+cleanup, starts or admits a journey, or approves a cleanup action. Even a
+future **safe to clean up** verdict would be an assessment, not authorization
+for the harness to clean up; cleanup must remain a separate reviewed action.
+
 ## Check the manifest without contacting the target
 
 ```powershell

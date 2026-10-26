@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -1309,5 +1309,106 @@ test('surface output names are deterministic and invalid surface lists never ope
     ], {}, { error() {} }, {
       loadChromium: async () => { assert.fail('invalid input must not launch a browser'); },
     }), 2);
+  }
+});
+
+test('reconcile launcher signs in once and never invokes the live journey runner', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-reconcile-launcher-'));
+  const inputPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'reconciliation.json');
+  const invocationId = '5749fb6f-543b-427d-a04e-b7f836180ef4';
+  const signIns = [];
+  const apiCalls = [];
+  let journeyRuns = 0;
+  await writeFile(inputPath, JSON.stringify(validInput()), 'utf8');
+  const api = {
+    operations: new Map([
+      ['listProjects', { method: 'GET', path: '/api/v1/projects' }],
+      ['getAuthorizationContext', { method: 'GET', path: '/api/v1/authorization/context' }],
+    ]),
+    async discover() {},
+    async invoke(operationId) {
+      apiCalls.push(operationId);
+      if (operationId === 'listProjects') {
+        return {
+          status: 200,
+          transientResponseBody: [{
+            projectId: 'run-5-project',
+            name: `p1-${invocationId}`,
+            state: 'active',
+            revision: 2,
+            configurationRevision: 1,
+            createdAt: '2026-10-13T00:00:00.000Z',
+            updatedAt: '2026-10-13T00:00:00.000Z',
+            effectiveRoles: [],
+          }],
+        };
+      }
+      return {
+        status: 200,
+        transientResponseBody: {
+          contractVersion: 1,
+          issuer: ENVIRONMENT.issuer,
+          actorId: ENVIRONMENT.actorId,
+          tenantId: ENVIRONMENT.tenantId,
+          boundProjectId: null,
+          boundRunId: null,
+          effectiveAuthority: [],
+        },
+      };
+    },
+  };
+  try {
+    const code = await runP1SigninCli([
+      '--reconcile', invocationId,
+      '--input', inputPath,
+      '--output', outputPath,
+    ], {}, { log() {}, error: assert.fail }, {
+      signIn: async request => {
+        signIns.push(request);
+        return jwt({ actorId: request.actorId, scopes: request.scopes });
+      },
+      chromium: {},
+      withBrowserContext: async (_options, useContext) => useContext({}),
+      createSetupApi: ({ setupToken }) => {
+        assert.equal(setupToken, jwt({ scopes: P1_SETUP_SCOPES }));
+        return api;
+      },
+      async runP1() {
+        journeyRuns += 1;
+        return 0;
+      },
+    });
+    assert.equal(code, 1);
+    assert.equal(signIns.length, 1);
+    assert.deepEqual(signIns[0].scopes, P1_SETUP_SCOPES);
+    assert.equal(signIns[0].projectId, undefined);
+    assert.equal(signIns[0].runId, undefined);
+    assert.deepEqual(apiCalls, ['listProjects', 'getAuthorizationContext']);
+    assert.equal(journeyRuns, 0);
+    const evidence = JSON.parse(await readFile(outputPath, 'utf8'));
+    assert.equal(evidence.verdict, 'needs review');
+    assert.equal(evidence.actions.newJourneyStarted, false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('reconcile launcher rejects probe options before sign-in', async () => {
+  for (const option of ['--native-probe-envelope', '--dispatch-recovery-envelope']) {
+    let signIns = 0;
+    let browserLoads = 0;
+    const code = await runP1SigninCli([
+      '--reconcile', '5749fb6f-543b-427d-a04e-b7f836180ef4',
+      '--input', 'manifest.json',
+      '--output', 'reconciliation.json',
+      option, 'probe.json',
+    ], {}, { error() {} }, {
+      signIn: async () => { signIns += 1; },
+      loadChromium: async () => { browserLoads += 1; },
+    });
+    assert.equal(code, 2);
+    assert.equal(signIns, 0);
+    assert.equal(browserLoads, 0);
   }
 });
