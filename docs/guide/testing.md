@@ -71,6 +71,13 @@ dotnet test tests\Agentweaver.Providers.Sessions.AgentSessions.Tests\Agentweaver
 dotnet test tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~SessionsProviderAbsenceTests
 ```
 
+For the RubberDuck contract, binder, checkpoint, and recovery tests without
+running the PostgreSQL fixture, use:
+
+```powershell
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~MafRubberduckTests
+```
+
 These project suites use test-owned fixtures. Some include disposable
 PostgreSQL; none of these commands publishes packages or deploys a service.
 The AgentSessions suite checks export verification and replay behavior. The

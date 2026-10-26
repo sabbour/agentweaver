@@ -114,6 +114,47 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task RecordedA2ATurnReplayReturnsAssistantMaterialWithoutAnotherModelCall()
+    {
+        await using var fixture = new HostFixture(coordinatorRoot: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var material = fixture.MaterialClient();
+        await using var session = await fixture.ConfigureSessionAsync(material, timeout.Token);
+        await session.RegisterUsageAsync(fixture.SourceClient(), timeout.Token);
+        var messageId = Guid.NewGuid();
+        const string prompt = "Review the recorded workflow evidence.";
+        fixture.Sdk.ExpectedPrompt = prompt;
+
+        var first = await session.SendTurnAsync(prompt, material, timeout.Token, messageId, readOnlyToolsOnly: true);
+        var replay = await session.SendTurnAsync(prompt, material, timeout.Token, messageId, readOnlyToolsOnly: true);
+
+        Assert.Equal(first, replay);
+        Assert.Equal(fixture.Sdk.AssistantResponse, first);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Single(fixture.Material, item => item.Role == "user" && item.EventId == messageId);
+        Assert.Single(fixture.Material, item => item.Role == "assistant");
+    }
+
+    [Fact]
+    public async Task PartiallyRecordedA2ATurnIsNotSentAgain()
+    {
+        await using var fixture = new HostFixture(coordinatorRoot: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var material = fixture.MaterialClient();
+        await using var session = await fixture.ConfigureSessionAsync(material, timeout.Token);
+        await session.RegisterUsageAsync(fixture.SourceClient(), timeout.Token);
+        var messageId = Guid.NewGuid();
+        const string prompt = "Review the recorded workflow evidence.";
+        await session.CommitTurnContentAsync(material, messageId, "user", prompt, timeout.Token);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            session.SendTurnAsync(prompt, material, timeout.Token, messageId, readOnlyToolsOnly: true));
+
+        Assert.Equal("runtime_turn_already_recorded", failure.Code);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Fact]
     public async Task OrdinarySessionCacheWritesCannotBypassTheGuardedSuspendPath()
     {
         await using var fixture = new HostFixture(workflowBound: true);

@@ -110,7 +110,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
             connection, transaction, binding, cancellationToken).ConfigureAwait(false);
         if (owner.StateVersion != decisionStateVersion)
             throw new RuntimeAuthorizationException("runtime_model_turn_admission_stale");
-        RequireCoordinatorRootDecision(owner.DecisionJson, binding, owner.StateVersion);
+        await RequireCoordinatorRootDecisionAsync(
+            connection, transaction, owner.DecisionJson, registration, owner.StateVersion,
+            requestId, promptHash, "model.turn", cancellationToken).ConfigureAwait(false);
         // Keep the run, root session, and accepted decision locked through the immutable admission write.
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.{RootModelTurnAdmissionTable}
@@ -273,7 +275,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
             throw new RuntimeAuthorizationException("runtime_action_selection_changed");
         if (isCoordinatorRoot)
         {
-            RequireCoordinatorRootDecision(rootDecisionJson, binding, decisionVersion);
+            await RequireCoordinatorRootDecisionAsync(
+                connection, transaction, rootDecisionJson, registration, decisionVersion,
+                request.EventId, request.InputHash, request.ActionId, cancellationToken).ConfigureAwait(false);
             var selectedModel = RuntimeAcceptedModelSelection.Read(authorized.Selection.Snapshot);
             var limits = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(authorized.Selection.Snapshot);
             if (selectedModel.Reference != binding.ModelSelectionReference ||
@@ -572,12 +576,20 @@ internal sealed class ExecutableActionGrantOwnerStore(
             throw new RuntimeAuthorizationException(SpendBudgetAdmissionMath.EvidenceUnavailable);
     }
 
-    private static void RequireCoordinatorRootDecision(
-        string? decisionJson, RuntimeBinding binding, long stateVersion)
+    private async Task RequireCoordinatorRootDecisionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string? decisionJson,
+        RuntimeRegistration registration,
+        long stateVersion,
+        Guid operationId,
+        string promptHash,
+        string actionId,
+        CancellationToken cancellationToken)
     {
+        var binding = registration.Binding;
         try
         {
-            // Root generation is allowed only before a plan or gate creates executable child work.
             using var document = JsonDocument.Parse(decisionJson
                 ?? throw new JsonException("Coordinator decision is missing."));
             if (!document.RootElement.TryGetProperty("envelope", out var envelopeElement))
@@ -598,13 +610,88 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 envelope.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
                 envelope.ContextRevision != binding.ContextRevision ||
                 envelope.Fence != binding.ExecutionFence ||
-                envelope.ConfirmedWorkPlan is not null ||
+                stateVersion < 1)
+                throw new JsonException("Coordinator decision does not match the root runtime binding.");
+
+            // Ordinary root turns stay pre-plan; a confirmed plan permits only its exact persisted RubberDuck turn.
+            if (envelope.ConfirmedWorkPlan is null &&
+                envelope.CandidateWorkPlan is null &&
+                envelope.PendingGate is null)
+                return;
+
+            var plan = envelope.ConfirmedWorkPlan;
+            var workflow = envelope.SelectedWorkflow;
+            if (registration.State != RuntimeRegistrationState.Active ||
+                registration.ExpiresAt <= timeProvider.GetUtcNow() ||
+                binding.AgentId != RuntimeActionContract.CoordinatorRootStepId ||
+                binding.WorkflowStepId is not null ||
+                plan is null ||
                 envelope.CandidateWorkPlan is not null ||
                 envelope.PendingGate is not null ||
-                stateVersion < 1)
-                throw new JsonException("Coordinator decision does not authorize a root model turn.");
+                !envelope.OutcomeConfirmed ||
+                !envelope.WorkflowConfirmed ||
+                workflow is null ||
+                plan.WorkflowId != workflow.Id ||
+                plan.DefinitionRevision != workflow.Revision ||
+                operationId == Guid.Empty ||
+                actionId != "model.turn")
+                throw new JsonException("A confirmed plan permits only its persisted RubberDuck operation.");
+
+            var checkpointBinding = new MafCheckpointBinding(
+                new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId),
+                new CoordinationActor(binding.ActorIssuer, binding.ActorId),
+                binding.ExecutionFence,
+                MafExecutionCheckpointStore.CurrentSdkVersion,
+                binding.ModelSelectionReference ?? string.Empty,
+                null,
+                MafExecutionCheckpointContract.StoreName);
+            var checkpointStore = new MafExecutionCheckpointStore(
+                new PostgresMafCheckpointStore(dataSource, options.Schema, null, timeProvider),
+                checkpointBinding);
+            await checkpointStore.AcquireExecutionLockInTransactionAsync(
+                connection, transaction, cancellationToken).ConfigureAwait(false);
+            var latest = await checkpointStore.ReadLatestInTransactionAsync(
+                connection, transaction, cancellationToken).ConfigureAwait(false);
+            if (latest is null)
+                throw new JsonException("The RubberDuck checkpoint is unavailable.");
+
+            var state = latest.State;
+            MafExecutionCheckpointContract.ValidateRubberduckBinding(
+                state, checkpointBinding.Identity, checkpointBinding.ExecutionFence,
+                latest.Info.CheckpointId);
+            var intents = state.RubberduckIntents.Values
+                .Where(intent => intent.OperationId == operationId)
+                .Take(2)
+                .ToArray();
+            if (intents.Length != 1)
+                throw new JsonException("The operation is not a unique persisted RubberDuck intent.");
+            var intent = intents[0];
+            var reviewStep = workflow.Steps.SingleOrDefault(step =>
+                step.Id == intent.StepId &&
+                step.Mode == WorkflowStepMode.Platform &&
+                step.PlatformGate == WorkflowPlatformGate.RubberDuck);
+            if (!MafRubberduckReviewContract.IsValidIntent(intent) ||
+                intent.OwnerRuntimeInstanceId != registration.RuntimeInstanceId ||
+                intent.OwnerRegistrationRevision != registration.Revision ||
+                intent.Identity != checkpointBinding.Identity ||
+                intent.AuthorizedActorId != binding.ActorId ||
+                intent.ExecutionFence != binding.ExecutionFence ||
+                intent.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+                intent.WorkPlanId != plan.Id ||
+                intent.WorkflowId != workflow.Id ||
+                intent.DefinitionRevision != workflow.Revision ||
+                intent.DecisionStateVersion != stateVersion ||
+                state.DecisionStateVersion != stateVersion ||
+                state.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != MafExecutionTaskStatus.Running ||
+                state.RubberduckReceipts.ContainsKey(intent.StepId) ||
+                reviewStep is null ||
+                MafRubberduckReviewContract.CreateEvidenceSummary(
+                    workflow, plan, reviewStep, state) != intent.EvidenceSummary ||
+                RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                    MafRubberduckReviewContract.CreatePrompt(intent))) != promptHash)
+                throw new JsonException("The RubberDuck operation does not match the current plan and owner.");
         }
-        catch (JsonException exception)
+        catch (Exception exception) when (exception is JsonException or ArgumentException or InvalidOperationException)
         {
             throw new RuntimeAuthorizationException(
                 "runtime_action_owner_unavailable", null, exception);

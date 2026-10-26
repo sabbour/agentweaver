@@ -429,9 +429,11 @@ intent; a failed callback rolls all three writes back. Results are immutable and
 terminal child status is joined in the owner transaction.
 
 The binder recognizes fixed/open child routes, the executable BuildTest gate,
-OpenPullRequest, and Merge when the authenticated Source Control owner is configured.
-A workflow requiring another platform executor fails binding before child
-dispatch; this slice does not substitute a model task or fabricate a gate result.
+OpenPullRequest, Merge when the authenticated Source Control owner is configured,
+and RubberDuck when the current coordinator-root AgentHost and action-grant owner
+are available. RubberDuck is a read-only platform review of checkpointed ancestor
+evidence, not a child model task. A workflow requiring an unavailable executor
+fails binding before dispatch; the dispatcher does not fabricate a gate result.
 For fixed child work, dispatch constructs the fixed-work intent from the confirmed
 definition, step specification, and selected role binding. The owner re-derives and
 checks those values against the current decision before authorization and consumption.
@@ -474,6 +476,16 @@ flowchart TD
     VerifyPullRequest -->|"Yes"| SavePullRequestReceipt["Commit compact PR receipt and Succeeded status"]
     SavePullRequestReceipt --> DispatchWorkflow
     VerifyPullRequest -->|"No or owner error"| HoldPullRequest["Retain incomplete gate; report Source Control error"]
+    DispatchWorkflow --> RubberduckGate{"Ready RubberDuck gate?"}
+    RubberduckGate -->|"Yes"| SaveRubberduckIntent["Persist exact evidence and operation"]
+    SaveRubberduckIntent --> CurrentReviewer{"Current coordinator-root AgentHost and action grant?"}
+    CurrentReviewer -->|"No"| HoldRubberduck["Keep gate incomplete; report owner failure"]
+    CurrentReviewer -->|"Yes"| ReviewRubberduck["Send bounded read-only review with the same operation ID"]
+    ReviewRubberduck --> RubberduckVerdict{"One valid recorded verdict?"}
+    RubberduckVerdict -->|"PASS"| SaveRubberduckReceipt["Commit terminal review receipt and Succeeded status"]
+    SaveRubberduckReceipt --> DispatchWorkflow
+    RubberduckVerdict -->|"Request changes or invalid verdict"| FailRubberduck["Record failed gate; block dependents"]
+    ReviewRubberduck -->|"Unavailable or stale"| HoldRubberduck
     DispatchWorkflow --> MergeGate{"Ready Merge gate?"}
     MergeGate -->|"Yes"| SaveMergeIntent["Persist exact operation and expected head"]
     SaveMergeIntent --> PrepareMerge["Authenticated Source Control owner records merge intent"]
@@ -879,8 +891,8 @@ The dispatcher persists child-delivery intents and platform-gate intents before
 their external effects. After restart, an unresolved child intent may be sent
 again with its stable association and message identifiers; a join remains closed
 until the terminal child result is checkpointed. Failed or indeterminate child
-outcomes keep dependent work blocked. Build/test, OpenPullRequest, and Merge
-intents without receipts are reported as possibly repeating. IndependentReview
+outcomes keep dependent work blocked. Build/test, OpenPullRequest, Merge, and
+RubberDuck intents without receipts are reported as possibly repeating. IndependentReview
 records the exact completed ancestor results, workspace/build-test receipt, and
 pull request head as hashed evidence in its checkpoint intent. The dispatcher
 then opens one durable Approval request through the coordinator decision owner.
@@ -895,6 +907,18 @@ exactly-once execution. Session status reads this checkpoint without reconciling
 children or advancing execution. It marks missing or plan-mismatched checkpoint
 state, or progress incompatible with the accepted plan, unavailable rather than
 inferring completion or safety.
+
+RubberDuck is a separate platform gate. Its checkpoint intent binds the accepted
+workflow revision, actor, selection hash, execution fence, current root runtime
+registration, and a digest of exact recorded ancestor results and receipts. The
+executor sends that bounded evidence to the current coordinator-root AgentHost
+as a read-only turn; it does not create a child or allow tool use. The first
+nonempty response line must be `PASS` or `REQUEST_CHANGES`. Only `PASS` releases
+dependent work. A request for changes or invalid verdict records a failed gate.
+An owner failure keeps the same operation and failure code for recovery. The
+AgentHost uses the operation ID for the request and response journal entries,
+so a restart can replay a fully recorded response; a partial turn is not sent
+again and cannot complete the gate.
 
 The selected gates remain visible in the executable snapshot and journal. For
 software work, classification requires one build/test gate followed by human review;

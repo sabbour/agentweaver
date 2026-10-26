@@ -205,6 +205,8 @@ internal sealed class MafExecutionCheckpointStore
             state, _binding.Identity, _binding.ExecutionFence, checkpointId);
         MafExecutionCheckpointContract.ValidateReviewBinding(
             state, _binding.Identity, _binding.ExecutionFence, checkpointId);
+        MafExecutionCheckpointContract.ValidateRubberduckBinding(
+            state, _binding.Identity, _binding.ExecutionFence, checkpointId);
         var originIntents = state.BuildTestIntents.Values.Where(intent =>
             intent.WorkspaceSeedReference?.Origin.CheckpointId == checkpointId).ToArray();
         if (originIntents.Length > 1)
