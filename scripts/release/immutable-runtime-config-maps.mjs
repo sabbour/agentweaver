@@ -4,11 +4,13 @@ export const REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS = new Set([
   'agenthost-runtime-v1',
   'projects-config-runtime-config',
   'gateway-runtime-config',
+  'orchestrator-runtime-config',
 ]);
 
 export const IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENTS = new Map([
   ['projects-config-runtime-config', ['projects-config']],
   ['gateway-runtime-config', ['gateway']],
+  ['orchestrator-runtime-config', ['orchestrator']],
 ]);
 
 export const IMMUTABLE_RUNTIME_CONFIG_MAP_ROLLOUT_DEPLOYMENT_NAMES = new Set(
