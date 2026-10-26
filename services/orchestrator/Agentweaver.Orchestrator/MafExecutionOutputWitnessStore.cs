@@ -70,7 +70,8 @@ internal sealed partial class MafExecutionOutputWitnessStore
         string acceptedSelectionHash,
         MafBacklogOutputSetSnapshot outputSet,
         JsonElement ownerEvidenceJson,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CoordinatorDecisionCurrentState? currentDecision = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -80,7 +81,8 @@ internal sealed partial class MafExecutionOutputWitnessStore
         ArgumentNullException.ThrowIfNull(checkpoint);
         ValidateBinding(root, executionFence, checkpoint, decisionStateVersion, acceptedSelectionHash, outputSet);
         ValidateCompletedPlan(
-            root, executionFence, plan, checkpoint, decisionStateVersion, acceptedSelectionHash, outputSet);
+            root, executionFence, plan, checkpoint, decisionStateVersion, acceptedSelectionHash, outputSet,
+            currentDecision);
         await RequireCurrentCheckpointInTransactionAsync(
             connection, transaction, checkpointStore, checkpointBinding, root, executionFence, checkpoint,
             requireCompletedRootEvidence: false, cancellationToken).ConfigureAwait(false);
@@ -162,7 +164,8 @@ internal sealed partial class MafExecutionOutputWitnessStore
         long decisionStateVersion,
         string acceptedSelectionHash,
         MafBacklogOutputSetSnapshot outputSet,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CoordinatorDecisionCurrentState? currentDecision = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -172,7 +175,8 @@ internal sealed partial class MafExecutionOutputWitnessStore
         ArgumentNullException.ThrowIfNull(checkpoint);
         ValidateBinding(root, executionFence, checkpoint, decisionStateVersion, acceptedSelectionHash, outputSet);
         ValidateCompletedPlan(
-            root, executionFence, plan, checkpoint, decisionStateVersion, acceptedSelectionHash, outputSet);
+            root, executionFence, plan, checkpoint, decisionStateVersion, acceptedSelectionHash, outputSet,
+            currentDecision);
         await RequireCurrentCheckpointInTransactionAsync(
             connection, transaction, checkpointStore, checkpointBinding, root, executionFence, checkpoint,
             requireCompletedRootEvidence: true, cancellationToken).ConfigureAwait(false);
@@ -352,7 +356,8 @@ internal sealed partial class MafExecutionOutputWitnessStore
         MafExecutionCheckpointSnapshot checkpoint,
         long decisionStateVersion,
         string acceptedSelectionHash,
-        MafBacklogOutputSetSnapshot outputSet)
+        MafBacklogOutputSetSnapshot outputSet,
+        CoordinatorDecisionCurrentState? currentDecision = null)
     {
         var created = MafExecutionOutputWitness.CreateCompletePlanOutputSet(plan, checkpoint, root);
         if (!created.MissingFixedAssociationIds.IsEmpty ||
@@ -361,6 +366,14 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 "maf_execution_output_witness_plan_incomplete", StatusCodes.Status409Conflict);
 
         var state = checkpoint.State;
+        // Completed actions may keep their original version only when the decision owner records review-only transitions.
+        bool HasCurrentDecisionVersion(long recordedVersion) =>
+            recordedVersion == decisionStateVersion ||
+            currentDecision is not null &&
+            currentDecision.StateVersion == decisionStateVersion &&
+            currentDecision.SelectionHash == acceptedSelectionHash &&
+            MafIndependentReviewContract.AllowsDecisionVersionAdvance(
+                state, currentDecision, recordedVersion);
         if (state.PendingDispatches.Count != 0 ||
             state.Progress.WorkItems.Values.Any(status => status != MafExecutionTaskStatus.Succeeded) ||
             state.Progress.FixedWorkItems.Values.Any(status => status != MafExecutionTaskStatus.Succeeded) ||
@@ -372,7 +385,7 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 association.WorkPlanId != plan.Plan.Id ||
                 association.AcceptedSelectionHash != acceptedSelectionHash ||
                 association.ExecutionFence != executionFence ||
-                association.DecisionStateVersion != decisionStateVersion ||
+                !HasCurrentDecisionVersion(association.DecisionStateVersion) ||
                 state.Progress.FixedWorkItems.GetValueOrDefault(association.AssociationId) !=
                     MafExecutionTaskStatus.Succeeded ||
                 !state.Results.ContainsKey(association.AssociationId)) ||
@@ -380,7 +393,7 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 intent.Identity != root || intent.WorkPlanId != plan.Plan.Id ||
                 intent.AcceptedSelectionHash != acceptedSelectionHash ||
                 intent.ExecutionFence != executionFence ||
-                intent.DecisionStateVersion != decisionStateVersion ||
+                !HasCurrentDecisionVersion(intent.DecisionStateVersion) ||
                 !MafBuildTestCommandContract.MatchesProvider(
                     plan.IsolationProviderBinding, intent.ExpectedBinding, root.RunId) ||
                 !plan.Workflow.Definition.Steps.Any(step =>

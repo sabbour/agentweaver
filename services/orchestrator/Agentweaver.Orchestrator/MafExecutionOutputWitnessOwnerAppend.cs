@@ -117,7 +117,8 @@ internal sealed partial class MafExecutionOutputWitnessStore
             root.AcceptedSelectionHash,
             root.OutputSet,
             ownerEvidence,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            root.CurrentDecision).ConfigureAwait(false);
     }
 
     /// <summary>

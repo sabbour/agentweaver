@@ -85,6 +85,7 @@ public static partial class CoordinationEndpoints
         ModelTaskSelectionReference modelTaskSelection;
         MafExecutionCheckpointStore? execution = null;
         MafExecutionFixedWorkAssociation? fixedAssociation = null;
+        MafExecutionCheckpointSnapshot? fixedCheckpoint = null;
         // Derive the route from accepted task and assignment data; a work item cannot override it.
         if (owner.WorkPlanItemId is { } workPlanItemId)
         {
@@ -123,9 +124,15 @@ public static partial class CoordinationEndpoints
                     sessionId, plan.Plan.Id, cancellationToken)
                 : execution.ReadFixedWorkAssociationAsync(
                     sessionId, plan.Plan.Id, cancellationToken)).ConfigureAwait(false);
+            fixedCheckpoint = await execution.ReadLatestAsync(cancellationToken).ConfigureAwait(false);
             if (fixedAssociation is null ||
+                fixedCheckpoint is null ||
+                !fixedCheckpoint.State.FixedWorkAssociations.TryGetValue(
+                    fixedAssociation.AssociationId, out var persistedAssociation) ||
+                persistedAssociation != fixedAssociation ||
                 !MatchesFixedRuntimeAssociation(fixedAssociation, plan, selectionContext, root,
-                    sessionId, owner.AcceptedSelectionHash, owner.ExecutionFence, decision.StateVersion))
+                    sessionId, owner.AcceptedSelectionHash, owner.ExecutionFence,
+                    fixedCheckpoint.State, decision))
                 throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
             agentId = fixedAssociation.AgentId;
             workflowStepId = fixedAssociation.StepId;
@@ -188,13 +195,18 @@ public static partial class CoordinationEndpoints
                     sessionId, currentPlan.Value.Plan.Id, cancellationToken)
                 : execution!.ReadFixedWorkAssociationAsync(
                     sessionId, currentPlan.Value.Plan.Id, cancellationToken)).ConfigureAwait(false);
+            var currentCheckpoint = await execution.ReadLatestAsync(cancellationToken).ConfigureAwait(false);
             if (currentAssociation is null ||
+                currentCheckpoint is null ||
+                !currentCheckpoint.State.FixedWorkAssociations.TryGetValue(
+                    currentAssociation.AssociationId, out var currentPersistedAssociation) ||
+                currentPersistedAssociation != currentAssociation ||
                 !MatchesFixedRuntimeAssociation(currentAssociation, currentPlan.Value, selectionContext,
                     root, sessionId, currentDecision.SelectionHash, owner.ExecutionFence,
-                    currentDecision.StateVersion) ||
+                    currentCheckpoint.State, currentDecision) ||
                 !MatchesFixedRuntimeAssociation(fixedAssociation!, currentPlan.Value, selectionContext,
                     root, sessionId, currentDecision.SelectionHash, owner.ExecutionFence,
-                    currentDecision.StateVersion))
+                    currentCheckpoint.State, currentDecision))
                 throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
             var currentFixedOwner = await (allowTerminalChild
                 ? store.ReadRuntimeOwnerStateForObservationAsync(actor, identity, cancellationToken)
@@ -350,11 +362,14 @@ public static partial class CoordinationEndpoints
         string childSessionId,
         string acceptedSelectionHash,
         long executionFence,
-        long decisionStateVersion)
+        MafExecutionCheckpoint checkpoint,
+        CoordinatorDecisionCurrentState decision)
     {
+        // A fixed child may outlive review, but its original version remains valid only through the exact checkpointed gate history.
         if (association.AcceptedSelectionHash != acceptedSelectionHash ||
             association.ExecutionFence != executionFence ||
-            association.DecisionStateVersion != decisionStateVersion)
+            !MafIndependentReviewContract.AllowsDecisionVersionAdvance(
+                checkpoint, decision, association.DecisionStateVersion))
             return false;
         var step = snapshot.Workflow.Definition.Steps.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, association.StepId, StringComparison.Ordinal));
@@ -366,7 +381,7 @@ public static partial class CoordinationEndpoints
         {
             expected = MafExecutionPlanner.CreateFixedWorkAssociation(
                 snapshot, selectionContext, parent, step, acceptedSelectionHash,
-                executionFence, decisionStateVersion, association.ActivationRevision, childSessionId);
+                executionFence, association.DecisionStateVersion, association.ActivationRevision, childSessionId);
         }
         catch (CoordinationException exception) when (exception.Code is
             "maf_fixed_work_unavailable" or "maf_fixed_work_selection_unavailable" or

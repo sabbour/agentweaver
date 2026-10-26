@@ -12,6 +12,7 @@ using Agentweaver.Providers;
 using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Agents.AI.Workflows;
 using Npgsql;
 using OpenIddict.Abstractions;
@@ -86,13 +87,13 @@ public static partial class CoordinationEndpoints
         string sessionId,
         MafExecutionDispatchRequest request,
         HttpContext context,
-        OrchestratorOptions options,
-        ProjectsRunSelectionClient projects,
-        CoordinatorDecisionOwnerStore decisions,
-        CoordinationOwnerStore store,
-        CoordinatorRunSelectionContextStore runSelectionContexts,
-        PostgresMafCheckpointStore checkpoints,
-        EventsAddressedMessageClient events,
+        [FromServices] OrchestratorOptions options,
+        [FromServices] ProjectsRunSelectionClient projects,
+        [FromServices] CoordinatorDecisionOwnerStore decisions,
+        [FromServices] CoordinationOwnerStore store,
+        [FromServices] CoordinatorRunSelectionContextStore runSelectionContexts,
+        [FromServices] PostgresMafCheckpointStore checkpoints,
+        [FromServices] EventsAddressedMessageClient events,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
@@ -140,7 +141,8 @@ public static partial class CoordinationEndpoints
                 plan,
                 buildTestClient is not null,
                 sourceControlClient is not null,
-                sourceControlClient is not null);
+                sourceControlClient is not null,
+                hasIndependentReviewOwner: true);
             if (request.BuildTestWorkspaces is { } workspaces)
             {
                 if (workspaces.Count > plan.Workflow.Definition.Steps.Length ||
@@ -191,7 +193,8 @@ public static partial class CoordinationEndpoints
                 checkpoint.State.FixedWorkAssociations.Values.Any(association =>
                     checkpoint.State.Progress.FixedWorkItems.GetValueOrDefault(association.AssociationId) ==
                         MafExecutionTaskStatus.Running &&
-                    association.DecisionStateVersion != decision.StateVersion))
+                    !MafIndependentReviewContract.AllowsDecisionVersionAdvance(
+                        checkpoint.State, decision, association.DecisionStateVersion)))
                 throw new CoordinationException(
                     "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
             if (checkpoint is not null)
@@ -339,12 +342,14 @@ public static partial class CoordinationEndpoints
             bool HasPlatformExecutor(WorkflowStepDefinition step) =>
                 (sourceControlClient is not null &&
                     step.PlatformGate is WorkflowPlatformGate.OpenPullRequest or WorkflowPlatformGate.Merge) ||
+                step.PlatformGate == WorkflowPlatformGate.IndependentReview ||
                 HasBuildTestExecutor(step);
             var hostClient = context.RequestServices.GetRequiredService<IHttpClientFactory>()
                 .CreateClient("maf-execution-host");
             var dispatched = ImmutableArray.CreateBuilder<string>();
             var unavailable = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
             (string OwnerIntentId, string ApprovalRequestId)? pendingMergeApproval = null;
+            (string EvidenceHash, string ApprovalRequestId)? pendingReviewApproval = null;
             var responseDecisionStateVersion = decision.StateVersion;
 
             async Task RevalidateDispatchAsync(CancellationToken token)
@@ -364,7 +369,14 @@ public static partial class CoordinationEndpoints
                     current.State.PendingGate is { } gate &&
                     gate.RequestId == pending.ApprovalRequestId &&
                     gate.SubjectId == pending.OwnerIntentId;
-                if ((!dispatchStillCurrent && !exactPendingMergeApproval) ||
+                var exactPendingReviewApproval =
+                    pendingReviewApproval is { } review &&
+                    current.StateVersion == checked(decision.StateVersion + 1) &&
+                    current.State.Fence == decision.State.Fence &&
+                    current.State.PendingGate is { } reviewGate &&
+                    reviewGate.RequestId == review.ApprovalRequestId &&
+                    reviewGate.SubjectId == review.EvidenceHash;
+                if ((!dispatchStillCurrent && !exactPendingMergeApproval && !exactPendingReviewApproval) ||
                     current.State.ConfirmedWorkPlan?.Plan.Id != plan.Plan.Id)
                     throw new CoordinationException(
                         "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
@@ -1601,6 +1613,236 @@ public static partial class CoordinationEndpoints
                 return await openPullRequestExecutor.ExecuteAsync(intent, token).ConfigureAwait(false);
             }
 
+            async Task<CoordinatorDecisionCurrentState> ReadCurrentReviewAsync(CancellationToken token)
+            {
+                // Both the accepted selection and decision owner must still authorize this actor.
+                await RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, token).ConfigureAwait(false);
+                return await decisions.ReadCurrentAsync(actor, identity, selection, token).ConfigureAwait(false);
+            }
+
+            async Task RequireReviewEvidenceAsync(
+                MafExecutionReviewIntent intent, MafExecutionCheckpoint state, CancellationToken token)
+            {
+                // Recompute the exact evidence from the accepted graph and append-only predecessor receipts.
+                var step = plan.Workflow.Definition.Steps.SingleOrDefault(candidate =>
+                    candidate.Id == intent.StepId && candidate.PlatformGate == WorkflowPlatformGate.IndependentReview);
+                if (step is null || intent.Identity != identity || intent.ExecutionFence != decision.State.Fence ||
+                    intent.AcceptedSelectionHash != decision.SelectionHash ||
+                    intent.AuthorizedActorId != selection.Authorization.ActorId ||
+                    intent.WorkPlanId != plan.Plan.Id)
+                    throw new CoordinationException(
+                        "maf_execution_review_binding_changed", StatusCodes.Status409Conflict);
+                var current = MafIndependentReviewContract.CreateIntent(
+                    intent.OperationId, identity, intent.CheckpointId, intent.CheckpointRevision,
+                    plan, step, state, intent.DecisionStateVersion, intent.AuthorizedActorId,
+                    intent.ExecutionFence,
+                    intent.AcceptedSelectionHash);
+                if (current != intent)
+                    throw new CoordinationException(
+                        "maf_execution_review_evidence_changed", StatusCodes.Status409Conflict);
+                // BuildTest receipts bind a seed, not the live workspace; re-capture the exact source tree before every decision transition.
+                foreach (var ancestorId in MafIndependentReviewContract.Ancestors(
+                             plan.Workflow.Definition, step))
+                {
+                    if (!state.BuildTestIntents.TryGetValue(ancestorId, out var buildTest) ||
+                        buildTest.EffectiveWorkspaceSource is not { } source)
+                        continue;
+                    var reference = CreateBuildTestDispatchAuthorizationReference(
+                        buildTest, state.Progress, identity, decision);
+                    var sourceOwner = context.RequestServices.GetRequiredService<SourceControlOwnerStore>();
+                    await SourceControlEndpoints.RequireCurrentBuildTestInputAsync(
+                        context, source, reference, options, projects, decisions, sourceOwner, token)
+                        .ConfigureAwait(false);
+                    var pin = await sourceOwner.ReadRepositoryPinAsync(
+                        actor, identity, selection, token).ConfigureAwait(false);
+                    var repository = SourceControlProjectConfigurationResolver.Resolve(
+                        selection.Selection.Snapshot).Repository;
+                    if (pin.PinId != source.SourceControlPinId ||
+                        pin.Repository != repository ||
+                        pin.ProviderBinding.Resource != source.SourceControlResource)
+                        throw new CoordinationException(
+                            "maf_execution_review_binding_changed", StatusCodes.Status409Conflict);
+                    var workspaceManager = context.RequestServices.GetService<GitWorkspaceManager>()
+                        ?? throw new CoordinationException(
+                            "source_control_workspace_unavailable", StatusCodes.Status503ServiceUnavailable);
+                    var captureRequest = new GitWorkspaceCaptureRequest(
+                        pin.ProviderBinding, repository, source.WorkspaceId, source.BaseSha, source.BranchName);
+                    var workspace = await workspaceManager.OpenExistingAsync(
+                        captureRequest, token).ConfigureAwait(false);
+                    if (workspace.WorkspaceIncarnationId != source.WorkspaceIncarnationId)
+                        throw new CoordinationException(
+                            "maf_execution_review_evidence_changed", StatusCodes.Status409Conflict);
+                    await using var revisionLease = await workspaceManager.AcquireWorkspaceRevisionLeaseAsync(
+                        identity.RunId, source.WorkspaceId, token).ConfigureAwait(false);
+                    var capture = await workspaceManager.CaptureAsync(
+                        captureRequest, workspace, token).ConfigureAwait(false);
+                    var document = GitWorkspaceCapturePackage.Create(capture);
+                    if (!MafIndependentReviewContract.MatchesBuildTestWorkspaceSource(source, document))
+                        throw new CoordinationException(
+                            "maf_execution_review_evidence_changed", StatusCodes.Status409Conflict);
+                    await SourceControlEndpoints.RequireCurrentBuildTestInputAsync(
+                        context, source, reference, options, projects, decisions, sourceOwner, token)
+                        .ConfigureAwait(false);
+                }
+                // A PR workspace that advanced since review was requested cannot use the old answer.
+                foreach (var ancestorId in MafIndependentReviewContract.Ancestors(
+                             plan.Workflow.Definition, step))
+                {
+                    if (!state.OpenPullRequestIntents.TryGetValue(ancestorId, out var pullRequest) ||
+                        sourceControlClient is null)
+                        continue;
+                    var currentActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
+                    try
+                    {
+                        var diff = await sourceControlClient.ReadWorkspaceDiffAsync(
+                            currentActor, identity, pullRequest.Workspace, token).ConfigureAwait(false);
+                        MafOpenPullRequestContract.RequireWorkspaceRevision(pullRequest, diff);
+                    }
+                    finally
+                    {
+                        currentActor.Bearer.Invalidate();
+                    }
+
+                    // The workspace revision alone does not prove that the provider's PR head is unchanged.
+                    var pin = await context.RequestServices.GetRequiredService<SourceControlOwnerStore>()
+                        .ReadRepositoryPinAsync(actor, identity, selection, token).ConfigureAwait(false);
+                    var adapter = context.RequestServices.GetService<ISourceControlAdapter>();
+                    var redemption = context.RequestServices.GetService<SourceControlSecretRedemptionClient>();
+                    if (pin.PinId != pullRequest.SourceControlPinId ||
+                        pin.Repository != pullRequest.Repository ||
+                        adapter?.ProviderId != pin.ProviderBinding.ProviderId ||
+                        redemption is null)
+                        throw new CoordinationException(
+                            "maf_execution_review_binding_changed", StatusCodes.Status409Conflict);
+                    var repository = SourceControlProjectConfigurationResolver.Resolve(
+                        selection.Selection.Snapshot).Repository;
+                    var providerPullRequest = await redemption.WithCredentialAsync(
+                        context, pin, pin.ApiCredential,
+                        async (credential, currentToken) =>
+                        {
+                            var operation = new SourceControlOperationContext(
+                                pin.ProviderBinding, repository, credential);
+                            await adapter.VerifyCurrentBindingAsync(
+                                operation, SourceControlCapabilities.PullRequestRead, currentToken)
+                                .ConfigureAwait(false);
+                            return await adapter.ReadPullRequestAsync(
+                                operation, state.OpenPullRequestReceipts[ancestorId].PullRequestNumber,
+                                currentToken).ConfigureAwait(false);
+                        }, token).ConfigureAwait(false);
+                    if (!string.Equals(providerPullRequest.HeadSha,
+                            state.OpenPullRequestReceipts[ancestorId].HeadSha,
+                            StringComparison.OrdinalIgnoreCase) ||
+                        providerPullRequest.Number != state.OpenPullRequestReceipts[ancestorId].PullRequestNumber)
+                        throw new CoordinationException(
+                            "maf_execution_review_evidence_changed", StatusCodes.Status409Conflict);
+                }
+            }
+
+            async Task OpenReviewApprovalAsync(MafExecutionReviewIntent intent, CancellationToken token)
+            {
+                // The checkpoint already owns the operation; the decision owner owns exactly one request.
+                var current = await ReadCurrentReviewAsync(token).ConfigureAwait(false);
+                if (current.StateVersion != intent.DecisionStateVersion)
+                    throw new CoordinationException(
+                        "maf_execution_review_decision_conflict", StatusCodes.Status409Conflict);
+                var transition = CoordinatorDecisionFlow.RequestApproval(
+                    current.State, intent.ApprovalRequestId, intent.EvidenceHash,
+                    selection.Authorization.ActorId, "Review the recorded evidence: " + intent.EvidenceSummary);
+                if (!transition.IsSuccess)
+                    throw new CoordinationException(
+                        "maf_execution_review_decision_conflict", StatusCodes.Status409Conflict);
+                await RequireReviewEvidenceAsync(
+                    intent, (await execution.ReadLatestAsync(token).ConfigureAwait(false))!.State, token)
+                    .ConfigureAwait(false);
+                var saved = await decisions.PersistTransitionAsync(
+                    actor, identity, selection, intent.DecisionStateVersion,
+                    intent.ApprovalRequestId, intent.ApprovalRequestId, "approval.request",
+                    CoordinatorDecisionOwnerStore.ComputeCommandHash(new
+                    {
+                        intent.DecisionStateVersion, intent.ApprovalRequestId,
+                        intent.EvidenceHash, intent.EvidenceSummary
+                    }),
+                    transition.State!, true, transition.Issues,
+                    confirmedSelectionContext: null, candidateSelectionContext: null,
+                    validatedTransitionValue: transition.Value, token).ConfigureAwait(false);
+                if (!saved.TransitionAccepted || saved.State.PendingGate?.RequestId != intent.ApprovalRequestId)
+                    throw new CoordinationException(
+                        "maf_execution_review_decision_conflict", StatusCodes.Status409Conflict);
+                pendingReviewApproval = (intent.EvidenceHash, intent.ApprovalRequestId);
+                responseDecisionStateVersion = saved.StateVersion;
+            }
+
+            async Task RequireReviewDecisionInTransactionAsync(
+                NpgsqlConnection connection, NpgsqlTransaction transaction, long version, CancellationToken token)
+            {
+                // Lock the owner's current approved decision before appending a review result.
+                await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                    connection, transaction, actor, identity, selection, selectionContext,
+                    version, decision.State.Fence, plan.Plan.Id, token).ConfigureAwait(false);
+            }
+
+            var reviewExecutor = new MafIndependentReviewExecutor(
+                execution, dataSource, ReadCurrentReviewAsync, OpenReviewApprovalAsync,
+                RequireReviewDecisionInTransactionAsync, RequireReviewEvidenceAsync,
+                selection.Authorization.ActorId, snapshot => checkpoint = snapshot,
+                (intent, version) =>
+                {
+                    pendingReviewApproval = (intent.EvidenceHash, intent.ApprovalRequestId);
+                    responseDecisionStateVersion = version;
+                });
+
+            foreach (var intent in checkpoint.State.ReviewIntents.Values
+                         .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
+                             MafExecutionTaskStatus.Succeeded))
+                _ = await reviewExecutor.ExecuteAsync(intent, cancellationToken).ConfigureAwait(false);
+
+            async Task<MafExecutionReviewIntent> PrepareReviewAsync(
+                WorkflowStepDefinition step, CancellationToken token)
+            {
+                // Write the immutable evidence and running state in the same checkpoint transaction.
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+                await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                    connection, transaction, actor, identity, selection, selectionContext,
+                    decision.StateVersion, decision.State.Fence, plan.Plan.Id, token).ConfigureAwait(false);
+                await execution.AcquireExecutionLockInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false);
+                var latest = await execution.ReadLatestInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (latest.State.ReviewIntents.TryGetValue(step.Id, out var retained))
+                {
+                    // Compare checkpoint evidence while holding the lock; external Source Control reads follow outside it.
+                    var current = MafIndependentReviewContract.CreateIntent(
+                        retained.OperationId, identity, retained.CheckpointId, retained.CheckpointRevision,
+                        plan, step, latest.State, retained.DecisionStateVersion, retained.AuthorizedActorId,
+                        retained.ExecutionFence,
+                        retained.AcceptedSelectionHash);
+                    if (retained != current)
+                        throw new CoordinationException(
+                            "maf_execution_review_evidence_changed", StatusCodes.Status409Conflict);
+                    checkpoint = latest;
+                    await transaction.CommitAsync(token).ConfigureAwait(false);
+                    return retained;
+                }
+                var checkpointId = Guid.NewGuid().ToString("N");
+                var intent = MafIndependentReviewContract.CreateIntent(
+                    Guid.NewGuid(), identity, checkpointId, checked(latest.State.Revision + 1),
+                    plan, step, latest.State, decision.StateVersion, selection.Authorization.ActorId,
+                    decision.State.Fence,
+                    decision.SelectionHash);
+                var next = PrepareReviewCheckpoint(latest, intent)
+                    ?? throw new CoordinationException(
+                        "maf_execution_review_intent_conflict", StatusCodes.Status409Conflict);
+                checkpoint = await execution.AppendInTransactionAsync(
+                    connection, transaction, checkpointId, latest.Info, next, token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return intent;
+            }
+
             foreach (var intent in checkpoint.State.BuildTestIntents.Values
                          .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
                              MafExecutionTaskStatus.Running)
@@ -1620,8 +1862,13 @@ public static partial class CoordinationEndpoints
                     MafMergeExecutionOutcome.AwaitingApproval)
                     break;
             }
+            foreach (var intent in checkpoint.State.ReviewIntents.Values
+                         .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
+                             MafExecutionTaskStatus.Running)
+                         .OrderBy(intent => intent.StepId, StringComparer.Ordinal).ToArray())
+                _ = await reviewExecutor.ExecuteAsync(intent, cancellationToken).ConfigureAwait(false);
 
-            var pendingDeliveries = pendingMergeApproval is null
+            var pendingDeliveries = pendingMergeApproval is null && pendingReviewApproval is null
                 ? checkpoint.State.PendingDispatches.Values
                 .OrderBy(intent => intent.AssociationId, StringComparer.Ordinal)
                 .Select(intent =>
@@ -1675,6 +1922,7 @@ public static partial class CoordinationEndpoints
                 var readyDispatches = new List<(
                     MafExecutionAction Action, MafExecutionDispatchIntent Intent, string Prompt)>();
                 var mergeActions = new List<MafExecutionAction>();
+                var reviewActions = new List<MafExecutionAction>();
                 var platformAdvanced = false;
                 foreach (var action in frontier.ReadyActions)
                 {
@@ -1687,6 +1935,11 @@ public static partial class CoordinationEndpoints
                     if (action.Step.PlatformGate == WorkflowPlatformGate.Merge)
                     {
                         mergeActions.Add(action);
+                        continue;
+                    }
+                    if (action.Step.PlatformGate == WorkflowPlatformGate.IndependentReview)
+                    {
+                        reviewActions.Add(action);
                         continue;
                     }
                     if (action.Step.PlatformGate == WorkflowPlatformGate.OpenPullRequest)
@@ -1887,7 +2140,20 @@ public static partial class CoordinationEndpoints
                     if (outcome == MafMergeExecutionOutcome.AwaitingApproval)
                         break;
                 }
-                if (pendingMergeApproval is not null || wallTimeLimitReached)
+                foreach (var action in reviewActions)
+                {
+                    if (pendingMergeApproval is not null || IsWallTimeLimitReached())
+                    {
+                        wallTimeLimitReached |= IsWallTimeLimitReached();
+                        break;
+                    }
+                    var intent = await PrepareReviewAsync(action.Step, cancellationToken).ConfigureAwait(false);
+                    platformAdvanced |= await reviewExecutor.ExecuteAsync(
+                        intent, cancellationToken).ConfigureAwait(false) is not null;
+                    if (pendingReviewApproval is not null)
+                        break;
+                }
+                if (pendingMergeApproval is not null || pendingReviewApproval is not null || wallTimeLimitReached)
                     break;
                 if (readyDispatches.Count == 0)
                 {
@@ -2114,7 +2380,79 @@ public static partial class CoordinationEndpoints
         return next;
     }
 
-    /// <summary>Adds one immutable OpenPullRequest request before its Source Control owner call.</summary>
+    /// <summary>Atomically records the review evidence and marks its platform step running.</summary>
+    internal static MafExecutionCheckpoint? PrepareReviewCheckpoint(
+        MafExecutionCheckpointSnapshot latest, MafExecutionReviewIntent intent)
+    {
+        ArgumentNullException.ThrowIfNull(latest);
+        // A retry must reuse the original operation and cannot substitute a changed evidence identity.
+        if (!MafIndependentReviewContract.IsValidIntent(intent))
+            throw new CoordinationException(
+                "maf_execution_review_evidence_invalid", StatusCodes.Status409Conflict);
+        var state = latest.State;
+        if (state.ReviewIntents.TryGetValue(intent.StepId, out var previous))
+        {
+            if (previous != intent)
+                throw new CoordinationException(
+                    "maf_execution_review_intent_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        if (intent.CheckpointRevision != checked(state.Revision + 1) ||
+            intent.WorkPlanId != state.WorkPlanId ||
+            intent.Identity.SessionId != latest.Info.SessionId ||
+            intent.DecisionStateVersion != state.DecisionStateVersion ||
+            state.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != MafExecutionTaskStatus.Pending ||
+            state.Progress.NonModelSteps.Values.Any(status => status == MafExecutionTaskStatus.Running))
+            throw new CoordinationException(
+                "maf_execution_review_checkpoint_stale", StatusCodes.Status409Conflict);
+        var next = state with
+        {
+            Revision = intent.CheckpointRevision,
+            ReviewIntents = state.ReviewIntents.Add(intent.StepId, intent),
+            Progress = state.Progress with
+            {
+                NonModelSteps = state.Progress.NonModelSteps.SetItem(intent.StepId, MafExecutionTaskStatus.Running)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(state, next);
+        return next;
+    }
+
+    /// <summary>Records a typed owner answer and blocks dependents if the human rejected it.</summary>
+    internal static MafExecutionCheckpoint? PrepareReviewCompletionCheckpoint(
+        MafExecutionCheckpointSnapshot latest, MafExecutionReviewIntent intent, MafReviewTerminalReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(latest);
+        // A receipt belongs to exactly one checkpointed request and is immutable after append.
+        var status = MafIndependentReviewContract.ValidateReceipt(intent, receipt);
+        if (!latest.State.ReviewIntents.TryGetValue(intent.StepId, out var retained) || retained != intent)
+            throw new CoordinationException(
+                "maf_execution_review_intent_conflict", StatusCodes.Status409Conflict);
+        if (latest.State.ReviewReceipts.TryGetValue(intent.StepId, out var previous))
+        {
+            if (previous != receipt ||
+                latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != status)
+                throw new CoordinationException(
+                    "maf_execution_review_terminal_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        if (latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != MafExecutionTaskStatus.Running)
+            throw new CoordinationException(
+                "maf_execution_review_checkpoint_stale", StatusCodes.Status409Conflict);
+        var next = latest.State with
+        {
+            Revision = checked(latest.State.Revision + 1),
+            ReviewReceipts = latest.State.ReviewReceipts.Add(intent.StepId, receipt),
+            Progress = latest.State.Progress with
+            {
+                NonModelSteps = latest.State.Progress.NonModelSteps.SetItem(intent.StepId, status)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(latest.State, next);
+        return next;
+    }
+
+    /// <summary>Adds one immutable Merge request before its Source Control owner call.</summary>
     internal static MafExecutionCheckpoint? PrepareMergeCheckpoint(
         MafExecutionCheckpointSnapshot latest,
         MafExecutionMergeIntent intent)

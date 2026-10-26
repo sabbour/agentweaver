@@ -15,7 +15,8 @@ public sealed class RuntimeOwnerContextTests
         var (plan, context, parent, association) = CreateFixedAssociation();
 
         Assert.True(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
-            association, plan, context, parent, association.ChildSessionId, SelectionHash, 3, 4));
+            association, plan, context, parent, association.ChildSessionId, SelectionHash, 3,
+            Checkpoint(plan), CurrentDecision()));
         var copied = association with
         {
             Specification = association.Specification with
@@ -24,7 +25,8 @@ public sealed class RuntimeOwnerContextTests
             }
         };
         Assert.True(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
-            copied, plan, context, parent, association.ChildSessionId, SelectionHash, 3, 4));
+            copied, plan, context, parent, association.ChildSessionId, SelectionHash, 3,
+            Checkpoint(plan), CurrentDecision()));
     }
 
     [Theory]
@@ -67,7 +69,8 @@ public sealed class RuntimeOwnerContextTests
         };
 
         Assert.False(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
-            invalid, plan, context, parent, association.ChildSessionId, SelectionHash, 3, 4));
+            invalid, plan, context, parent, association.ChildSessionId, SelectionHash, 3,
+            Checkpoint(plan), CurrentDecision()));
     }
 
     [Fact]
@@ -77,12 +80,12 @@ public sealed class RuntimeOwnerContextTests
         var foreignParent = Assert.Throws<CoordinationException>(() =>
             CoordinationEndpoints.MatchesFixedRuntimeAssociation(
                 association, plan, context, new SessionIdentity(parent.ProjectId, parent.RunId, "another-root"),
-                association.ChildSessionId, SelectionHash, 3, 4));
+                association.ChildSessionId, SelectionHash, 3, Checkpoint(plan), CurrentDecision()));
         Assert.Equal("maf_fixed_work_child_identity_invalid", foreignParent.Code);
         var activation = Assert.Throws<CoordinationException>(() =>
             CoordinationEndpoints.MatchesFixedRuntimeAssociation(
                 association with { ActivationRevision = 2 }, plan, context, parent,
-                association.ChildSessionId, SelectionHash, 3, 4));
+                association.ChildSessionId, SelectionHash, 3, Checkpoint(plan), CurrentDecision()));
         Assert.Equal("maf_fixed_work_child_identity_invalid", activation.Code);
     }
 
@@ -95,7 +98,8 @@ public sealed class RuntimeOwnerContextTests
             Roles = [new RoleRunSelection("engineer", ["agent-1"], ["model:provider/beta"], ["worktree"])]
         };
         Assert.False(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
-            association, plan, changed, parent, association.ChildSessionId, SelectionHash, 3, 4));
+            association, plan, changed, parent, association.ChildSessionId, SelectionHash, 3,
+            Checkpoint(plan), CurrentDecision()));
     }
 
     [Fact]
@@ -105,7 +109,7 @@ public sealed class RuntimeOwnerContextTests
 
         Assert.False(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
             association, plan, context with { Roles = [] }, parent,
-            association.ChildSessionId, SelectionHash, 3, 4));
+            association.ChildSessionId, SelectionHash, 3, Checkpoint(plan), CurrentDecision()));
     }
 
     private static (WorkPlanSnapshot Plan, WorkPlanRunSelectionContext Context,
@@ -138,4 +142,10 @@ public sealed class RuntimeOwnerContextTests
         return (plan, context, parent, MafExecutionPlanner.CreateFixedWorkAssociation(
             plan, context, parent, step, SelectionHash, 3, 4, 1, child));
     }
+
+    private static MafExecutionCheckpoint Checkpoint(WorkPlanSnapshot plan) =>
+        new(1, plan.Plan.Id, 4, MafExecutionProgress.Empty);
+
+    private static CoordinatorDecisionCurrentState CurrentDecision() =>
+        new(CoordinatorDecisionState.Create(3), 4, SelectionHash);
 }

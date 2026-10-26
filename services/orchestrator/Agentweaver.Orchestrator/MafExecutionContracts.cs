@@ -256,6 +256,34 @@ internal sealed record MafMergeTerminalReceipt(
     string ExpectedHeadSha,
     string MergeSha);
 
+/// <summary>Immutable identity of the exact evidence submitted to the accountable human.</summary>
+internal sealed record MafExecutionReviewIntent(
+    Guid OperationId,
+    SessionIdentity Identity,
+    string CheckpointId,
+    long CheckpointRevision,
+    string WorkPlanId,
+    string WorkflowId,
+    string DefinitionRevision,
+    string StepId,
+    long DecisionStateVersion,
+    string AuthorizedActorId,
+    long ExecutionFence,
+    string AcceptedSelectionHash,
+    string ApprovalRequestId,
+    string EvidenceHash,
+    string EvidenceSummary);
+
+/// <summary>The decision owner's typed answer bound to the reviewed evidence.</summary>
+internal sealed record MafReviewTerminalReceipt(
+    Guid OperationId,
+    string ApprovalRequestId,
+    string EvidenceHash,
+    string ActorId,
+    long Fence,
+    string ChoiceId,
+    string Reason);
+
 /// <summary>
 /// A versioned checkpoint state for one work plan, including progress, pending dispatches, results, and platform evidence.
 /// State validation and transition checks prevent accepted intents and terminal receipts from being rewritten.
@@ -284,6 +312,10 @@ internal sealed record MafExecutionCheckpoint(
         ImmutableDictionary<string, MafExecutionMergeIntent>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableDictionary<string, MafMergeTerminalReceipt> MergeReceipts { get; init; } =
         ImmutableDictionary<string, MafMergeTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafExecutionReviewIntent> ReviewIntents { get; init; } =
+        ImmutableDictionary<string, MafExecutionReviewIntent>.Empty.WithComparers(StringComparer.Ordinal);
+    public ImmutableDictionary<string, MafReviewTerminalReceipt> ReviewReceipts { get; init; } =
+        ImmutableDictionary<string, MafReviewTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
 }
 
 /// <summary>
@@ -499,6 +531,23 @@ internal static class MafExecutionCheckpointContract
                 throw new ArgumentException(
                     "A persisted Merge terminal receipt cannot be removed or changed.", nameof(next));
         }
+        foreach (var (stepId, intent) in previous.ReviewIntents)
+        {
+            // The review identity must survive every checkpoint, including a rejected gate.
+            if (!next.ReviewIntents.TryGetValue(stepId, out var retained) || retained != intent)
+                throw new ArgumentException("A persisted review intent cannot be changed.", nameof(next));
+        }
+        if (next.ReviewIntents.Any(item =>
+                !previous.ReviewIntents.ContainsKey(item.Key) &&
+                (item.Value.CheckpointRevision != next.Revision ||
+                 item.Value.DecisionStateVersion != next.DecisionStateVersion)))
+            throw new ArgumentException("A new review intent must bind to its originating checkpoint.", nameof(next));
+        foreach (var (stepId, receipt) in previous.ReviewReceipts)
+        {
+            // A terminal rejection cannot be overwritten by a later approval.
+            if (!next.ReviewReceipts.TryGetValue(stepId, out var retained) || retained != receipt)
+                throw new ArgumentException("A review receipt cannot be changed.", nameof(next));
+        }
     }
 
     /// <summary>
@@ -532,6 +581,19 @@ internal static class MafExecutionCheckpointContract
                 intent.CheckpointRevision == state.Revision && intent.CheckpointId != checkpointId)
                 throw new ArgumentException(
                     "The OpenPullRequest intent does not match its checkpoint binding.", nameof(state));
+        }
+    }
+
+    /// <summary>Requires every review intent to belong to this session, fence, and originating checkpoint.</summary>
+    internal static void ValidateReviewBinding(
+        MafExecutionCheckpoint state, SessionIdentity identity, long executionFence, string checkpointId)
+    {
+        foreach (var intent in state.ReviewIntents.Values)
+        {
+            // Only the originating append checks the checkpoint ID; later appends retain its immutable identity.
+            if (intent.Identity != identity || intent.ExecutionFence != executionFence ||
+                intent.CheckpointRevision == state.Revision && intent.CheckpointId != checkpointId)
+                throw new ArgumentException("The review intent does not match its checkpoint binding.", nameof(state));
         }
     }
 
@@ -576,7 +638,8 @@ internal static class MafExecutionCheckpointContract
         if (state.PendingDispatches is null || state.Results is null ||
             state.BuildTestIntents is null || state.BuildTestReceipts is null ||
             state.OpenPullRequestIntents is null || state.OpenPullRequestReceipts is null ||
-            state.MergeIntents is null || state.MergeReceipts is null)
+            state.MergeIntents is null || state.MergeReceipts is null ||
+            state.ReviewIntents is null || state.ReviewReceipts is null)
             throw new ArgumentException("MAF execution dispatch state is required.", nameof(state));
         if (state.Progress.WorkItems.Any(item =>
                 string.IsNullOrWhiteSpace(item.Key) || item.Key.Length > 128 ||
@@ -704,6 +767,28 @@ internal static class MafExecutionCheckpointContract
                 MafMergeContract.ValidateReceipt(intent, receipt) !=
                     state.Progress.NonModelSteps.GetValueOrDefault(stepId))
                 throw new ArgumentException("The Merge receipt does not match checkpoint progress.", nameof(state));
+        }
+        foreach (var (stepId, intent) in state.ReviewIntents)
+        {
+            // An unverified intent cannot be used to advance a platform join.
+            if (intent is null || stepId != intent.StepId ||
+                intent.OperationId == Guid.Empty || !operationIds.Add(intent.OperationId) ||
+                intent.CheckpointRevision < 1 || intent.CheckpointRevision > state.Revision ||
+                intent.WorkPlanId != state.WorkPlanId ||
+                intent.DecisionStateVersion < 1 || intent.DecisionStateVersion > state.DecisionStateVersion ||
+                !MafIndependentReviewContract.IsValidIntent(intent) ||
+                !state.Progress.NonModelSteps.TryGetValue(stepId, out var status) ||
+                status == MafExecutionTaskStatus.Pending ||
+                status != MafExecutionTaskStatus.Running && !state.ReviewReceipts.ContainsKey(stepId))
+                throw new ArgumentException("MAF review checkpoint intent is invalid.", nameof(state));
+        }
+        foreach (var (stepId, receipt) in state.ReviewReceipts)
+        {
+            // Status and answer must agree, so rejected reviews never pass the join.
+            if (receipt is null || !state.ReviewIntents.TryGetValue(stepId, out var intent) ||
+                MafIndependentReviewContract.ValidateReceipt(intent, receipt) !=
+                    state.Progress.NonModelSteps.GetValueOrDefault(stepId))
+                throw new ArgumentException("MAF review checkpoint receipt is invalid.", nameof(state));
         }
 
         var childSessionIds = new HashSet<string>(StringComparer.Ordinal);
