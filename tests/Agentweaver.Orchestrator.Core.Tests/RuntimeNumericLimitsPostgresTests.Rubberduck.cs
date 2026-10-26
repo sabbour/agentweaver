@@ -207,18 +207,22 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
         };
         var plan = acceptedPlan;
         var checkpointId = Guid.NewGuid().ToString("N");
-        var progress = MafExecutionProgress.Empty with
+        // InitializeAsync already started this root binding's single checkpoint chain, so the
+        // reviewed state must be its next revision. The earlier pending dispatches are carried
+        // forward unchanged because a persisted dispatch cannot be dropped without a result.
+        var previous = _checkpoint.State;
+        var reviewedRevision = checked(previous.Revision + 1);
+        var progress = previous.Progress with
         {
-            WorkItems = ImmutableDictionary<string, MafExecutionTaskStatus>.Empty
-                .WithComparers(StringComparer.Ordinal)
-                .Add("first", MafExecutionTaskStatus.Succeeded)
+            WorkItems = previous.Progress.WorkItems.SetItem("first", MafExecutionTaskStatus.Succeeded)
         };
-        var initialState = new MafExecutionCheckpoint(
-            1, plan.Plan.Id, persisted.StateVersion, progress)
+        var initialState = previous with
         {
-            Results = ImmutableDictionary<string, string>.Empty
-                .WithComparers(StringComparer.Ordinal)
-                .Add("first", "Recorded implementation output.")
+            Revision = reviewedRevision,
+            WorkPlanId = plan.Plan.Id,
+            DecisionStateVersion = persisted.StateVersion,
+            Progress = progress,
+            Results = previous.Results.SetItem("first", "Recorded implementation output.")
         };
         var reviewStep = workflow.Steps.Single(
             step => step.PlatformGate == WorkflowPlatformGate.IndependentReview);
@@ -226,7 +230,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             Guid.NewGuid(),
             _root,
             checkpointId,
-            1,
+            reviewedRevision,
             plan,
             reviewStep,
             initialState,
@@ -269,14 +273,14 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
             new PostgresMafCheckpointStore(fixture.DataSource, _schema, null),
             checkpointBinding);
         var initial = await execution.AppendAsync(
-            checkpointId, null, reviewedState, CancellationToken.None);
+            checkpointId, _checkpoint.Info, reviewedState, CancellationToken.None);
         var rubberduckStep = workflow.Steps.Single(
             step => step.PlatformGate == WorkflowPlatformGate.RubberDuck);
         var intent = MafRubberduckReviewContract.CreateIntent(
             Guid.NewGuid(),
             _root,
             "rubberduck-intent",
-            2,
+            checked(reviewedRevision + 1),
             plan,
             rubberduckStep,
             initial.State,
