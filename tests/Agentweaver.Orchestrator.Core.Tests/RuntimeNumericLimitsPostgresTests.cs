@@ -89,7 +89,14 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
                 new EffectiveProviderSelection(
                     ProviderCardinality.Exclusive, ProviderSeam.Sandbox, [sandboxCandidate])
             },
-            runLimits = new { maxModelTurns = 1, maxToolCalls = 1 }
+            runLimits = new
+            {
+                maxChildren = 100,
+                maxConcurrentChildren = 32,
+                maxWallTimeSeconds = 3600,
+                maxModelTurns = 1,
+                maxToolCalls = 1
+            }
         }, selectionJson);
         _selection = new(new("numeric-project", run, 1, 1, 1, "context-1", snapshot),
             new(1, _actor.Issuer, _actor.Subject, "tenant-1", 1, "numeric-project", run,

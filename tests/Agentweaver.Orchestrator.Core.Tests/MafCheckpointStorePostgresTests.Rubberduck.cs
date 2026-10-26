@@ -90,7 +90,14 @@ public sealed partial class MafCheckpointStorePostgresTests
         Assert.Contains("merge", frontier.FailedDependencyIds);
         Assert.DoesNotContain(frontier.ReadyActions, action => action.Step.Id == "merge");
         var recovery = MafExecutionRecoveryProjector.Project(latest, plan, 1, true, null);
-        var operation = Assert.Single(recovery.PlatformGateOperations);
+        var reviewOperation = Assert.Single(
+            recovery.PlatformGateOperations,
+            operation => operation.Gate == WorkflowPlatformGate.IndependentReview);
+        Assert.Equal(CoordinatorGateChoices.Approve, reviewOperation.ReviewDecision);
+        Assert.Equal("terminalReceiptRecorded", reviewOperation.EvidenceState);
+        var operation = Assert.Single(
+            recovery.PlatformGateOperations,
+            operation => operation.Gate == WorkflowPlatformGate.RubberDuck);
         Assert.Equal(intent.OperationId, operation.OperationId);
         Assert.Equal("requestChanges", operation.ReviewDecision);
         Assert.Equal("terminalReceiptRecorded", operation.EvidenceState);
