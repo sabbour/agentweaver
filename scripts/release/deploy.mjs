@@ -283,6 +283,15 @@ const BOOTSTRAP_RELEASES = Object.freeze({
     allowLightweightTag: true,
     additionalProductComponents: Object.freeze(['Agentweaver.Providers.Sessions.AgentSessions']),
   }),
+  // Pin v1.0.14 for P1 evidence only; its lightweight tag and publication asset are exact.
+  'v1.0.14': Object.freeze({
+    sourceSha: '4105e2f2520659e7c9c636cf34972661fa26342f',
+    publicationSha256: '21dc5b63e3bab229e8e8df07cc083ce94d48c031c045af3f7ba438a93fbe5538',
+    continuation: false,
+    wholeReleaseDeployed: true,
+    allowLightweightTag: true,
+    additionalProductComponents: Object.freeze(['Agentweaver.Providers.Sessions.AgentSessions']),
+  }),
 });
 
 /**
@@ -1849,9 +1858,13 @@ async function verifyRelease(tag, publication, { root, run }) {
  * Verifies a supported bootstrap publication while allowing a clean, newer helper checkout.
  * The image source remains bound to the published release tag, not the helper commit.
  */
-export async function verifyBootstrapRelease(tag, publication, { root, run }) {
+export async function verifyBootstrapRelease(tag, publication, { root, run, publicationSha256 }) {
   verifyCleanCheckout(root, run, 'deployment helper');
   validateBootstrapPublication(tag, publication);
+  const expectedPublicationSha256 = BOOTSTRAP_RELEASES[tag].publicationSha256;
+  if (expectedPublicationSha256 && publicationSha256 !== expectedPublicationSha256) {
+    fail(`${tag} publication.json does not match its pinned SHA-256`);
+  }
   return verifyPublishedSource(tag, publication, BOOTSTRAP_RELEASES[tag].sourceSha, {
     root,
     run,

@@ -1093,6 +1093,7 @@ export async function prepareP1DeploymentEvidence({
       const verifiedSource = await verifyBootstrapRelease(releaseTag, publication, {
         root: repoRoot,
         run,
+        publicationSha256: await sha256File(publicationPath),
       });
       if (verifiedSource !== source.sourceSha) {
         throw new Error('The bootstrap publication result differs from the exact reviewed source commit.');

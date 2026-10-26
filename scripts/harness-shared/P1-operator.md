@@ -21,6 +21,10 @@ pinned with an annotated tag. It was deployed by the whole-release script, so it
 stays pinned for this check but can't be deployed with the pre-acceptance
 bootstrap. v1.0.11 is pinned the same way, except its release tag is a
 lightweight tag on the published source commit.
+v1.0.14 is also pinned for P1 evidence only. Its lightweight tag resolves to
+source commit `4105e2f2520659e7c9c636cf34972661fa26342f`, and its
+`publication.json` asset is pinned to SHA-256
+`21dc5b63e3bab229e8e8df07cc083ce94d48c031c045af3f7ba438a93fbe5538`.
 
 Deployment and service evidence stay pinned to the release commit and source
 tree. Reused images keep their original build labels. The harness verifies
