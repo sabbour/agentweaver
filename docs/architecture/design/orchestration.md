@@ -852,6 +852,17 @@ A conservative fan-out policy limits child work. MAF checkpoints and recovery
 continue the workflow without asking the coordinator to reconstruct procedural
 state from a conversational transcript.
 
+The dispatcher persists child-delivery intents and platform-gate intents before
+their external effects. After restart, an unresolved child intent may be sent
+again with its stable association and message identifiers; a join remains closed
+until the terminal child result is checkpointed. Failed or indeterminate child
+outcomes keep dependent work blocked. Build/test and OpenPullRequest intent-only
+operations are reported as possibly repeating, while a saved terminal receipt is
+reported only as recorded evidence. Session status reads this checkpoint without
+reconciling children or advancing execution. It marks missing or plan-mismatched
+checkpoint state, or progress incompatible with the accepted plan, unavailable
+rather than inferring completion or safety.
+
 The selected gates remain visible in the executable snapshot and journal. For
 software work, classification requires one build/test gate followed by human review;
 content-only work can omit build/test where the workflow permits. Publication is a
@@ -872,6 +883,8 @@ before the changed work can dispatch
 ([R12](../decisions/0001-platform-architecture.md#risk-register)).
 The coordinator cannot loop in its prompt to silently authorize a new stage. An
 exhausted budget or invalid revision leaves a visible blocker for the operator.
+Scope-changing candidates are revalidated against the current catalog and remain
+non-dispatchable until the pending confirmation gate is answered.
 The wall-time limit uses the persisted root-session creation time and is checked
 before every Host send. In-flight child turns can settle after the deadline, but
 the dispatch response reports `wallTimeLimitReached` and dependent work cannot

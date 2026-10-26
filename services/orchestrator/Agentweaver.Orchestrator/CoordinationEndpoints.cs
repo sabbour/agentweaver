@@ -218,6 +218,7 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         CoordinationOwnerStore store,
         CoordinatorDecisionOwnerStore decisions,
+        [Microsoft.AspNetCore.Mvc.FromServices] PostgresMafCheckpointStore checkpoints,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
@@ -235,11 +236,29 @@ public static partial class CoordinationEndpoints
                 if (decision.State.Fence != status.ExecutionFence)
                     throw new CoordinationException(
                         "session_status_fence_conflict", StatusCodes.Status409Conflict);
+                var pendingGate = decision.State.PendingGate is { } gate
+                    ? ToStatusBlocker(gate)
+                    : null;
+                // Read the checkpoint bound to this accepted selection; status never starts recovery work.
+                var checkpointBinding = CreateExecutionCheckpointBinding(
+                    identity,
+                    actor,
+                    status.ExecutionFence,
+                    MafExecutionCheckpointStore.CurrentSdkVersion,
+                    PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot));
+                var checkpoint = await new MafExecutionCheckpointStore(checkpoints, checkpointBinding)
+                    .ReadLatestAsync(cancellationToken).ConfigureAwait(false);
                 status = status with
                 {
-                    Blockers = decision.State.PendingGate is { } gate
-                        ? [ToStatusBlocker(gate)]
-                        : []
+                    Blockers = pendingGate is not null
+                        ? [pendingGate]
+                        : [],
+                    ExecutionRecovery = MafExecutionRecoveryProjector.Project(
+                        checkpoint,
+                        decision.State.ConfirmedWorkPlan,
+                        decision.StateVersion,
+                        decision.State.CanDispatch,
+                        pendingGate)
                 };
             }
             await RequireUnchangedAuthorizedSelectionAsync(
