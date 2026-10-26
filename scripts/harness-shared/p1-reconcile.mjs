@@ -24,10 +24,32 @@ const AUTHORITY_ROLES = new Set([
 ]);
 
 function readFailure(call) {
-  if (call?.status === 401 || call?.status === 403) {
-    return { status: 'denied', reason: `The read request was denied with HTTP ${call.status}.` };
+  if (call?.status === 401) {
+    return {
+      status: 'denied',
+      reasonCode: 'read_unauthenticated',
+      reason: 'The read request was not authenticated with HTTP 401; no absence was inferred.',
+    };
   }
-  return { status: 'incomplete', reason: 'The read request did not return a complete successful response.' };
+  if (call?.status === 403) {
+    return {
+      status: 'denied',
+      reasonCode: 'read_denied',
+      reason: 'The read request was explicitly denied with HTTP 403; no absence was inferred.',
+    };
+  }
+  if (call?.status === 404) {
+    return {
+      status: 'incomplete',
+      reasonCode: 'read_not_found',
+      reason: 'The read endpoint returned HTTP 404; this is not evidence that the invocation has no linked records.',
+    };
+  }
+  return {
+    status: 'incomplete',
+    reasonCode: 'read_incomplete',
+    reason: 'The read request did not return a complete successful response.',
+  };
 }
 
 async function invokeRead(api, operationId, expectedPath, signal, pathParameters) {
@@ -166,6 +188,7 @@ function summarizeAuditRead(read, invocationId) {
       truncated: false,
       operationId: 'readProjectSetupAuthorityAudit',
       records: [],
+      reasonCode: read.reasonCode ?? 'audit_read_incomplete',
       reason: read.reason,
     };
   }
@@ -181,6 +204,7 @@ function summarizeAuditRead(read, invocationId) {
       truncated: false,
       operationId: 'readProjectSetupAuthorityAudit',
       records: [],
+      reasonCode: 'audit_response_mismatch',
       reason: 'The authority-audit response did not match the requested invocation.',
     };
   }
@@ -206,7 +230,12 @@ function summarizeAuditRead(read, invocationId) {
     truncated: result.truncated === true,
     operationId: 'readProjectSetupAuthorityAudit',
     records,
+    ...(complete && records.length === 0 ? {
+      reasonCode: 'no_invocation_linked_audit_evidence',
+      reason: 'The complete audit read returned no invocation-linked records; this does not prove that setup had no authority effects.',
+    } : {}),
     ...(complete ? {} : {
+      reasonCode: 'audit_response_incomplete',
       reason: 'The authority-audit response was partial, truncated, malformed, or incomplete.',
     }),
   };
@@ -357,57 +386,94 @@ function matchesSetupAssignments(projectMatch, roleAssignments, effectiveAuthori
 }
 
 function reconcileVerdict(projectMatch, effectiveAuthority, roleAssignments, auditRecords, environment) {
-  if (!['found', 'not-found'].includes(projectMatch.status)
-    || effectiveAuthority.status !== 'complete'
-    || auditRecords.status !== 'complete' || auditRecords.complete !== true) {
-    return {
-      verdict: 'needs review',
-      reason: 'Project visibility, effective authority, and a complete matching audit read are all required for a conclusive assessment.',
-    };
+  const needsReview = (reasonCode, reason) => ({
+    verdict: 'needs review',
+    reasonCode,
+    reason,
+  });
+
+  if (!['found', 'not-found'].includes(projectMatch.status)) {
+    return needsReview(
+      `project_list_${projectMatch.status}`,
+      projectMatch.reason ?? 'The project list read did not establish matching-project visibility.',
+    );
+  }
+  if (effectiveAuthority.status !== 'complete') {
+    return needsReview(
+      `authorization_context_${effectiveAuthority.status}`,
+      effectiveAuthority.reason ?? 'The authorization context read did not establish current visibility.',
+    );
   }
 
   // A permission-filtered list cannot prove absence; only tenant-wide ReadProjects plus a complete audit read can.
   if (projectMatch.status === 'not-found' && !effectiveAuthority.tenantWideProjectVisibility) {
-    return {
-      verdict: 'needs review',
-      reason: 'The permission-filtered project list cannot prove that the invocation-named project is gone.',
-    };
+    return needsReview(
+      'project_not_found_visibility_unconfirmed',
+      'The permission-filtered project list cannot prove that the invocation-named project is gone.',
+    );
+  }
+  if (auditRecords.status !== 'complete' || auditRecords.complete !== true) {
+    let reasonCode = 'authority_audit_read_incomplete';
+    if (auditRecords.reasonCode === 'owner_audit_read_denied') {
+      reasonCode = 'owner_audit_read_denied';
+    } else if (auditRecords.reasonCode === 'read_unauthenticated') {
+      reasonCode = 'authority_audit_read_unauthenticated';
+    } else if (auditRecords.status === 'denied') {
+      reasonCode = 'authority_audit_read_denied';
+    } else if (auditRecords.reasonCode === 'read_not_found') {
+      reasonCode = 'authority_audit_read_not_found';
+    }
+    return needsReview(
+      reasonCode,
+      auditRecords.reason ?? 'A complete authority-audit read is required; no absence was inferred.',
+    );
+  }
+  if (auditRecords.records.length === 0) {
+    return needsReview(
+      'no_invocation_linked_audit_evidence',
+      auditRecords.reason ?? 'The complete audit read returned no invocation-linked records; this does not prove that setup had no authority effects.',
+    );
   }
   if (projectMatch.status === 'not-found') {
     if (!hasCompleteSetupRevocationEvidence(auditRecords.records, environment)) {
-      return {
-        verdict: 'needs review',
-        reason: 'The complete audit read does not prove that both setup assignments were revoked.',
-      };
+      return needsReview(
+        'setup_revocation_evidence_incomplete',
+        'The complete audit read does not prove that both setup assignments were revoked.',
+      );
     }
     return {
       verdict: 'already clean',
+      reasonCode: 'positive_setup_revocation_evidence',
       reason: 'The caller can see every project in the tenant, no invocation-named project is visible, and the complete audit read proves both setup assignments were revoked.',
     };
   }
   if (projectMatch.status === 'found'
     && !['all-tenant-projects', 'matched-project'].includes(effectiveAuthority.targetVisibility)) {
-    return {
-      verdict: 'needs review',
-      reason: 'The authorization context does not confirm current visibility of the matched project.',
-    };
+    return needsReview(
+      'matched_project_visibility_unconfirmed',
+      'The authorization context does not confirm current visibility of the matched project.',
+    );
   }
   if (roleAssignments.status !== 'complete' || roleAssignments.complete !== true) {
-    return {
-      verdict: 'needs review',
-      reason: 'A complete read of the visible project role assignments is required for a conclusive assessment.',
-    };
+    const reasonCode = roleAssignments.status === 'denied'
+      ? 'role_assignment_read_denied'
+      : `role_assignment_read_${roleAssignments.status}`;
+    return needsReview(
+      reasonCode,
+      roleAssignments.reason ?? 'A complete read of the visible project role assignments is required for a conclusive assessment.',
+    );
   }
   if (!matchesSetupAssignments(projectMatch, roleAssignments, effectiveAuthority, auditRecords, environment)) {
-    return {
-      verdict: 'needs review',
-      reason: 'The visible project, active assignments, and invocation-linked audit records do not prove an unchanged P1 setup fixture.',
-    };
+    return needsReview(
+      'setup_evidence_mismatch',
+      'The visible project, active assignments, and invocation-linked audit records do not prove an unchanged P1 setup fixture.',
+    );
   }
 
   // Cleanup is guarded separately by the owner; this read-only verdict never authorizes or performs that mutation.
   return {
     verdict: 'safe to clean up',
+    reasonCode: 'positive_active_setup_evidence',
     reason: 'The visible active project, its Owner and Orchestrator assignments, and complete invocation-linked audit records match the setup actor. This is an assessment only; it does not authorize or perform cleanup.',
   };
 }
@@ -479,6 +545,16 @@ export async function reconcileP1Run({ api, environment, invocationId, signal } 
     )
     : { status: 'unavailable', reason: discovery.reason };
   const auditRecords = summarizeAuditRead(auditRead, invocationId);
+  if (auditRecords.status === 'denied'
+    && auditRecords.reasonCode === 'read_denied'
+    && projectMatch.status === 'found'
+    && roleAssignments.status === 'complete'
+    && roleAssignments.assignments.some(assignment =>
+      assignment.principalId === environment.actorId && assignment.role === 'owner')) {
+    // A visible Owner's explicit denial is evidence, never an empty audit result or proof of absence.
+    auditRecords.reasonCode = 'owner_audit_read_denied';
+    auditRecords.reason = 'The current project Owner was explicitly denied the authority-audit read; this is not an empty result and does not prove that setup had no authority effects.';
+  }
   const assessment = reconcileVerdict(
     projectMatch, effectiveAuthority, roleAssignments, auditRecords, environment,
   );
@@ -495,6 +571,7 @@ export async function reconcileP1Run({ api, environment, invocationId, signal } 
     roleAssignments,
     auditRecords,
     verdict: assessment.verdict,
+    verdictReasonCode: assessment.reasonCode,
     verdictReason: assessment.reason,
     actions: {
       assessmentOnly: true,

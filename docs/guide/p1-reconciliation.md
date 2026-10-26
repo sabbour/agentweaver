@@ -34,11 +34,29 @@ authorize or perform cleanup.
 
 The project list is filtered by current permissions. A not-found result
 without tenant-wide project visibility does not prove that a project is absent.
-An empty audit result is not positive cleanup evidence and remains **needs
-review**. The audit endpoint returns at most 32 records and marks a larger
+An empty audit result is reported as `no_invocation_linked_audit_evidence`;
+it does not prove that setup had no authority effects and remains **needs
+review**. A visible current Owner's explicit audit-read denial is reported as
+`owner_audit_read_denied`; other explicit audit denials are reported as
+`authority_audit_read_denied`. Neither is converted into an empty result.
+An HTTP 401 is reported as `authority_audit_read_unauthenticated`, not as an
+Owner authorization denial.
+An HTTP 404 from the audit endpoint is reported as
+`authority_audit_read_not_found`, not proof that the invocation has no linked
+records. These distinct `verdictReasonCode` values preserve why reconciliation
+needs review. The audit endpoint returns at most 32 records and marks a larger
 result incomplete. Neither an incomplete read nor **safe to clean up** is
 permission to mutate state. Resolve the evidence through the normal reviewed
 process before any separate cleanup or new journey.
+
+## Migration 039 safety
+
+Migration 039 validates existing audit links before it backfills them. If live
+data is inconsistent, PostgreSQL aborts the migration transaction; the new
+column, backfill, migration-history entry, and trigger changes are rolled back
+without partial writes. Resolve the inconsistency through the reviewed P1
+setup/cleanup workflow that owns the invocation. Do not edit authority-audit
+or setup-operation rows by hand.
 
 `--dry-run` validates the manifest and prints the reconciliation steps without
 sign-in, target requests, or evidence output. A completed assessment that

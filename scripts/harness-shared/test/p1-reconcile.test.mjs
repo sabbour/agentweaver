@@ -308,7 +308,10 @@ test('a Run 5 not-found and complete empty audit read do not establish already c
 
   assert.equal(evidence.projectMatch.status, 'not-found');
   assert.equal(evidence.auditRecords.complete, true);
+  assert.equal(evidence.auditRecords.reasonCode, 'no_invocation_linked_audit_evidence');
   assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.verdictReasonCode, 'no_invocation_linked_audit_evidence');
+  assert.match(evidence.verdictReason, /does not prove that setup had no authority effects/);
   assert.equal(evidence.roleAssignments.status, 'not-applicable');
   assert.equal(requests.some(request => request.path.includes('/role-assignments')), false);
   assert.equal(requests.every(request => request.method === 'GET'), true);
@@ -360,6 +363,7 @@ test('tenant-wide visibility and complete setup revocation evidence establish al
   assert.equal(evidence.projectMatch.status, 'not-found');
   assert.equal(evidence.auditRecords.complete, true);
   assert.equal(evidence.verdict, 'already clean');
+  assert.equal(evidence.verdictReasonCode, 'positive_setup_revocation_evidence');
   assert.equal(evidence.roleAssignments.status, 'not-applicable');
   assert.equal(requests.some(request => request.path.includes('/role-assignments')), false);
   assert.equal(requests.every(request => request.method === 'GET'), true);
@@ -384,9 +388,64 @@ test('a denied role-assignment read remains needs review', async () => {
 
   assert.equal(evidence.roleAssignments.status, 'denied');
   assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.verdictReasonCode, 'role_assignment_read_denied');
 });
 
-test('a denied audit read remains needs review', async () => {
+test('an Owner-style denial with no returned audit rows is explicit evidence, never absence', async () => {
+  const { client } = makeClient({
+    projects: [project(PROJECT_ID)],
+    authority: authorizationContext([{
+      resourceType: 'project',
+      resourceId: PROJECT_ID,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    auditRecords: { error: 'forbidden' },
+    auditStatus: 403,
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.auditRecords.status, 'denied');
+  assert.equal(evidence.auditRecords.complete, false);
+  assert.deepEqual(evidence.auditRecords.records, []);
+  assert.equal(evidence.auditRecords.reasonCode, 'owner_audit_read_denied');
+  assert.match(evidence.auditRecords.reason, /current project Owner was explicitly denied/);
+  assert.equal(evidence.verdictReasonCode, 'owner_audit_read_denied');
+  assert.match(evidence.verdictReason, /not an empty result/);
+  assert.equal(evidence.projectMatch.status, 'found');
+  assert.equal(evidence.effectiveAuthority.targetVisibility, 'matched-project');
+  assert.equal(evidence.verdict, 'needs review');
+});
+
+test('an unauthenticated audit read is not mislabeled as an Owner authorization denial', async () => {
+  const { client } = makeClient({
+    projects: [project(PROJECT_ID)],
+    authority: authorizationContext([{
+      resourceType: 'project',
+      resourceId: PROJECT_ID,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    auditRecords: { error: 'unauthorized' },
+    auditStatus: 401,
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.auditRecords.status, 'denied');
+  assert.equal(evidence.auditRecords.reasonCode, 'read_unauthenticated');
+  assert.match(evidence.auditRecords.reason, /not authenticated with HTTP 401/);
+  assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.verdictReasonCode, 'authority_audit_read_unauthenticated');
+  assert.doesNotMatch(evidence.verdictReason, /Owner was explicitly denied/);
+});
+
+test('a denied audit read without visible Owner evidence keeps its explicit denial reason', async () => {
   const { client } = makeClient({
     projects: [],
     authority: authorizationContext([{
@@ -404,9 +463,33 @@ test('a denied audit read remains needs review', async () => {
   });
 
   assert.equal(evidence.auditRecords.status, 'denied');
-  assert.equal(evidence.auditRecords.complete, false);
-  assert.equal(evidence.auditRecords.reason, 'The read request was denied with HTTP 403.');
-  assert.equal(evidence.projectMatch.status, 'not-found');
+  assert.equal(evidence.auditRecords.reasonCode, 'read_denied');
+  assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.verdictReasonCode, 'authority_audit_read_denied');
+  assert.match(evidence.verdictReason, /no absence was inferred/);
+});
+
+test('an audit endpoint not-found is not treated as no linked evidence', async () => {
+  const { client } = makeClient({
+    projects: [],
+    authority: authorizationContext([{
+      resourceType: 'tenant',
+      resourceId: ENVIRONMENT.tenantId,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    auditRecords: { error: 'not found' },
+    auditStatus: 404,
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.auditRecords.status, 'incomplete');
+  assert.equal(evidence.auditRecords.reasonCode, 'read_not_found');
+  assert.equal(evidence.verdictReasonCode, 'authority_audit_read_not_found');
+  assert.match(evidence.verdictReason, /not evidence that the invocation has no linked records/);
   assert.equal(evidence.verdict, 'needs review');
 });
 
@@ -446,6 +529,8 @@ test('a denied authority read remains needs review even when the visible project
   assert.equal(evidence.projectMatch.status, 'not-found');
   assert.equal(evidence.effectiveAuthority.status, 'denied');
   assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.verdictReasonCode, 'authorization_context_denied');
+  assert.match(evidence.verdictReason, /explicitly denied/);
 });
 
 test('refuses to invoke a discovered project write operation', async () => {
