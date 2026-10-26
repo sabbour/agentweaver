@@ -98,7 +98,12 @@ async function replaceWithRealDelete(api) {
     throw new Error(`unexpected kubectl ${args.join(' ')}`);
   };
   const replacements = findImmutableRuntimeConfigMapReplacements({
-    items: [desired, desiredMap('agenthost-runtime-v1', 'same'), desiredMap('gateway-runtime-config', 'same')],
+    items: [
+      desired,
+      desiredMap('agenthost-runtime-v1', 'same'),
+      desiredMap('gateway-runtime-config', 'same'),
+      desiredMap('orchestrator-runtime-config', 'same'),
+    ],
   }, namespace, { root: '.', run });
   assert.deepEqual(replacements.map(resource => resource.metadata.name), [name]);
 

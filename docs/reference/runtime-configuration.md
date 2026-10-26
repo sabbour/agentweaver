@@ -160,11 +160,14 @@ the replacement process.
 
 The source-bound `release:deploy-bootstrap` flow has a narrowly scoped
 replacement path for `agenthost-runtime-v1`,
-`projects-config-runtime-config`, and `gateway-runtime-config`. AgentHost's
-immutable `appsettings.json` includes the receipt-verified image digest and
-measured image size. The Projects & Config map contains the approved
-privileged-setup identity values. The Gateway map contains its owner service
-addresses. These maps can change between patch releases.
+`projects-config-runtime-config`, `gateway-runtime-config`, and
+`orchestrator-runtime-config`. AgentHost's immutable `appsettings.json` includes
+the receipt-verified image digest and measured image size. The Projects & Config
+map contains the approved privileged-setup identity values. The Gateway map
+contains its owner service addresses. The Orchestrator map contains internal
+owner service addresses; its values can change between releases when a release
+adds or updates an owner route, such as the Source Control endpoint used by the
+OpenPullRequest workflow gate.
 
 The command compares every rendered immutable ConfigMap with the same-named
 live map. When a changed map is eligible for guarded replacement,
@@ -180,12 +183,14 @@ during planning, so the API server refuses it if the live map changed in the
 meantime. Unchanged data follows the normal apply path.
 
 This exception is limited to `agenthost-runtime-v1`,
-`projects-config-runtime-config`, and `gateway-runtime-config`. It never
+`projects-config-runtime-config`, `gateway-runtime-config`, and
+`orchestrator-runtime-config`. It never
 replaces `environment-cilium-config` or
 `projects-config-provider-catalog`. Other changed immutable maps require the
 reviewed maintenance procedure above. After replacement, the bootstrap
-restarts the `gateway` Deployment for its runtime map and the `projects-config`
-Deployment for its runtime map; live verification waits for the rollouts.
+restarts the `gateway` Deployment for its runtime map, the `projects-config`
+Deployment for its runtime map, and the `orchestrator` Deployment for its
+runtime map; live verification waits for the rollouts.
 Before cluster writes, it checkpoints required Deployment restarts. If an apply
 or restart fails, rerun the command with `--resume`; it retries unfinished
 rollouts even when the ConfigMap data now matches and no longer shows drift.
@@ -195,15 +200,16 @@ recreate an affected Sandbox through its owning Environment lifecycle before
 relying on changed AgentHost settings.
 
 The source-bound `release:deploy-whole` flow uses the same replacement
-allow-list and guarded delete/create. Before replacing the Projects & Config or
-Gateway runtime map, it checks create and exact-name delete permission, scales
-the owning Deployment to zero, waits for referencing Pods to terminate, and
-waits 70 seconds for kubelet's default immutable-map cache to expire. It then
-recreates and verifies the map before restoring the Deployment in the normal
-rollout order. It refuses changed immutable maps outside the allow-list and
-refuses to replace a map while an active Pod outside its managed Deployment
-set still references it. AgentHost Sandbox Pods remain owned by the Environment
-lifecycle and are not stopped by a whole-release rollout.
+allow-list and guarded delete/create. Before replacing the Projects & Config,
+Gateway, or Orchestrator runtime map, it checks create and exact-name delete
+permission, scales the owning Deployment to zero, waits for referencing Pods
+to terminate, and waits 70 seconds for kubelet's default immutable-map cache
+to expire. It then recreates and verifies the map before restoring the
+Deployment and waiting for its rollout. It refuses changed immutable maps
+outside the allow-list and refuses to replace a map while an active Pod outside
+its managed Deployment set still references it. AgentHost Sandbox Pods remain
+owned by the Environment lifecycle and are not stopped by a whole-release
+rollout.
 
 `events-and-sessions-runtime-config` is mutable in the checked-in profile.
 Apply its reviewed data with the bundle, then restart the Events & Sessions

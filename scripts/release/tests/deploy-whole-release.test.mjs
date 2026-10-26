@@ -51,6 +51,11 @@ function runtimeConfigMaps() {
         Identity__Issuer: 'https://agentweaver.example.test/',
         Identity__Audience: 'https://agentweaver.example.test/',
       } },
+    { kind: 'ConfigMap', metadata: { name: 'orchestrator-runtime-config', namespace: 'agentweaver' },
+      immutable: true, data: {
+        Orchestrator__SourceControlOwner__OwnerBaseAddress:
+          'https://orchestrator.agentweaver.svc.cluster.local:8443/',
+      } },
   ];
 }
 
@@ -101,7 +106,7 @@ function makeFixture({
   }]));
   if (changedRuntimeConfigMap) {
     const live = liveMaps.get(changedRuntimeConfigMap);
-    if (live) delete live.data.ProjectsConfig__Knowledge__BaseAddress;
+    if (live) delete live.data[Object.keys(live.data)[0]];
   }
   if (mutableRuntimeConfigMap) liveMaps.get(mutableRuntimeConfigMap).immutable = false;
   if (unapprovedRuntimeConfigMap) {
@@ -166,7 +171,10 @@ function makeFixture({
     if (action === 'get' && args.includes('pods')) {
       const items = state.filter(deployment => deployment.spec.replicas > 0).map(deployment => {
         const service = WHOLE_RELEASE_SERVICES.find(item => item.deployment === deployment.metadata.name);
-        const references = service.deployment === 'projects-config';
+        const configMap = {
+          'projects-config': 'projects-config-runtime-config',
+          orchestrator: 'orchestrator-runtime-config',
+        }[service.deployment];
         return {
           apiVersion: 'v1', kind: 'Pod',
           metadata: {
@@ -174,8 +182,8 @@ function makeFixture({
             labels: { 'app.kubernetes.io/name': service.deployment },
           },
           spec: {
-            ...(references ? { volumes: [{
-              name: 'runtime', configMap: { name: 'projects-config-runtime-config' },
+            ...(configMap ? { volumes: [{
+              name: 'runtime', configMap: { name: configMap },
             }] } : {}),
             containers: [{ name: service.container, image: deployment.spec.template.spec.containers[0].image }],
           },
@@ -441,6 +449,33 @@ test('whole-release replaces only approved immutable ConfigMaps after cache expi
     call.args[call.args.indexOf('deployment') + 1] === 'projects-config');
   assert.ok(permissionCheck >= 0 && permissionCheck < drain);
   assert.ok(drain < deletion && deletion < replacementCreate && replacementCreate < restore);
+});
+
+test('whole-release replaces the orchestrator runtime ConfigMap and rolls out Orchestrator', async () => {
+  const world = makeFixture({ changedRuntimeConfigMap: 'orchestrator-runtime-config' });
+  const receipt = await runWholeRelease({ ...world.options, execute: true }, world.overrides);
+
+  assert.equal(receipt.result, 'succeeded');
+  assert.deepEqual(receipt.configMaps.replacements, ['orchestrator-runtime-config']);
+  assert.deepEqual(receipt.configMaps.cacheDrainDeployments, ['orchestrator']);
+  assert.equal(world.liveMaps.get('orchestrator-runtime-config').data
+    .Orchestrator__SourceControlOwner__OwnerBaseAddress,
+  'https://orchestrator.agentweaver.svc.cluster.local:8443/');
+  const drain = world.calls.findIndex(call =>
+    call.command === 'kubectl' && call.args.includes('patch') &&
+    call.args[call.args.indexOf('deployment') + 1] === 'orchestrator');
+  const deletion = world.calls.findIndex(call =>
+    call.command === 'kubectl' && call.args.includes('delete') && call.args.includes('--raw'));
+  const replacementCreate = world.calls.findIndex(call =>
+    call.command === 'kubectl' && call.args.includes('create') && call.args.includes('--filename'));
+  const restore = world.calls.findIndex((call, index) =>
+    index > replacementCreate && call.command === 'kubectl' && call.args.includes('patch') &&
+    call.args[call.args.indexOf('deployment') + 1] === 'orchestrator');
+  const rollout = world.calls.findIndex(call =>
+    call.command === 'kubectl' && call.args.includes('rollout') &&
+    call.args.includes('status') && call.args.includes('deployment/orchestrator'));
+  assert.ok(drain >= 0 && drain < deletion);
+  assert.ok(deletion < replacementCreate && replacementCreate < restore && restore < rollout);
 });
 
 test('whole-release refuses changed immutable ConfigMaps outside the replacement allow-list', async () => {
