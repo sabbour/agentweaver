@@ -360,6 +360,12 @@ public sealed partial class MafCheckpointStorePostgresTests
                 },
                 casting = new[] { new { agentId = "agent-1", role = "engineer" } }
             },
+            runLimits = new
+            {
+                maxChildren = 100,
+                maxConcurrentChildren = 32,
+                maxWallTimeSeconds = 3600
+            },
             modelSelection = new { reference = "model:provider/alpha" },
             providers = new[]
             {
