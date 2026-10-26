@@ -66,11 +66,25 @@ matching project can establish **already clean** only when it proves both the
 setup Owner and Orchestrator assignments were later revoked. An empty audit
 result is not positive cleanup evidence and remains **needs review**.
 
+A complete empty audit read is reported as `no_invocation_linked_audit_evidence`.
+An explicit denial for a visible current Owner is reported as
+`owner_audit_read_denied`; other audit denials use
+`authority_audit_read_denied`. These are never interpreted as empty results.
+An HTTP 404 from the audit endpoint is reported as
+`authority_audit_read_not_found`, not proof that the invocation has no linked
+records.
+
 Reconciliation is an assessment only. It writes one redacted JSON evidence
 file and issues only reads. It never writes a fixture or grant, performs
 cleanup, starts or admits a journey, or approves a cleanup action. Even a
 **safe to clean up** verdict is an assessment, not authorization
 for the harness to clean up; cleanup must remain a separate reviewed action.
+
+Migration 039 validates existing audit links before backfilling them. A live
+inconsistency aborts its PostgreSQL transaction without partial writes,
+including restoring the migration-history state and append-only trigger.
+Resolve it through the reviewed P1 setup/cleanup workflow that owns the
+invocation; do not edit authority-audit or setup-operation rows by hand.
 
 ## Check the manifest without contacting the target
 

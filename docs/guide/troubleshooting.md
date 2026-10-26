@@ -70,8 +70,9 @@ Common results:
 | `assign-*` | `404 principal_not_found` | The setup actor has no active membership in the selected tenant. |
 | `revoke-*` | `409 revision_conflict` | Another request changed the assignment. Reconcile it before you do anything else. |
 | `revoke-owner` | `409 last_project_owner` | The project isn't archived yet. Confirm the archive step result first. |
-| Audit read | `403 forbidden` | Use the setup actor's unbound `api.read` token and confirm current TenantAdmin or ownership of every linked project. |
+| Audit read | `403 forbidden` | This is an explicit denial, not an empty result. A visible current Owner's denial is recorded as `owner_audit_read_denied`; Owners with no linked rows are denied. Use the setup actor's unbound `api.read` token and confirm current TenantAdmin or ownership of every linked project. |
 | Audit read | `complete: false` | The result is truncated or incomplete. Do not use it for a conclusive verdict. |
+| Audit read | `404 not found` | The endpoint did not return an audit read. Do not treat this as proof that the invocation has no linked records. |
 
 The reconcile output is an assessment only. A permission-filtered project
 list can hide a matching project, so a not-found result without tenant-wide
@@ -80,6 +81,13 @@ reads also remain **needs review**. An empty audit read is not evidence that
 the setup Owner and Orchestrator assignments were revoked, so it cannot
 establish **already clean**. The command never changes a grant, writes a
 fixture, performs cleanup, or starts another journey.
+
+Migration 039 validates existing authority-audit links before backfilling
+invocation IDs. A live inconsistency aborts the PostgreSQL transaction without
+partial writes, so the migration-history entry and append-only trigger remain
+unchanged. Resolve the inconsistency through the reviewed P1 setup/cleanup
+workflow that owns the invocation. Do not repair audit or setup-operation rows
+by hand.
 
 ## Escalate unresolved issues
 
