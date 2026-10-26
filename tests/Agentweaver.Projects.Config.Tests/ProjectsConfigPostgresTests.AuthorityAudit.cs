@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Npgsql;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
@@ -103,6 +104,17 @@ public sealed partial class ProjectsConfigPostgresTests
                 Role = ProjectAuthorityRole.Orchestrator,
             },
             CancellationToken.None);
+        var setupInvocationId = Guid.NewGuid();
+        var setupReceipt = Assert.IsType<ProjectSetupReceipt>((await store.ExecuteProjectSetupOperationAsync(
+            admin,
+            new ProjectSetupOperationRequest(
+                1, setupInvocationId, ProjectSetupOperationKind.Setup, tenantId, null, null))).Setup);
+        await db.Projects
+            .Where(item => item.ProjectId == setupReceipt.ProjectId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                item => item.Name,
+                $"operation-backfill-{setupInvocationId:N}"));
+
         var originalEventIds = await db.AuthorityAudit.AsNoTracking()
             .Where(record => record.TenantId == tenantId && record.InvocationId == invocationId)
             .Select(record => record.EventId)
@@ -124,6 +136,16 @@ public sealed partial class ProjectsConfigPostgresTests
                 .ToArrayAsync();
             var read = await new ProjectSetupAuthorityAuditService(verificationDb)
                 .ReadAsync(admin, invocationId, CancellationToken.None);
+            var setupEventIds = new[]
+            {
+                setupReceipt.AuthorityAuditEventId,
+                setupReceipt.OwnerAuthorityAuditEventId!.Value,
+            };
+            var setupRows = await verificationDb.AuthorityAudit.AsNoTracking()
+                .Where(record => setupEventIds.Contains(record.EventId))
+                .ToArrayAsync();
+            var setupRead = await new ProjectSetupAuthorityAuditService(verificationDb)
+                .ReadAsync(admin, setupInvocationId, CancellationToken.None);
 
             Assert.Equal(originalEventIds.Order(), invocationRows.Order());
             Assert.True(read.Complete);
@@ -134,12 +156,133 @@ public sealed partial class ProjectsConfigPostgresTests
             Assert.Contains(read.Records, record =>
                 record.AssignmentId == orchestrator.AssignmentId &&
                 record.Role == ProjectAuthorityRole.Orchestrator);
+            Assert.Equal(setupEventIds.Order(), setupRows.Select(record => record.EventId).Order());
+            Assert.All(setupRows, record => Assert.Equal(setupInvocationId, record.InvocationId));
+            Assert.True(setupRead.Complete);
+            Assert.False(setupRead.Truncated);
+            Assert.Equal(setupEventIds.Order(), setupRead.Records.Select(record => record.EventId).Order());
             await AssertImmutableAsync(
                 "UPDATE projects_config.authority_audit SET actor = 'migration-test' WHERE event_id = @event_id",
                 ("event_id", originalEventIds[0]));
         }
         finally
         {
+            await migrator.MigrateAsync(invocationAudit);
+        }
+    }
+
+    [Fact]
+    public async Task Migration039RejectsAmbiguousAuditInvocationLinksAtomically()
+    {
+        await using var db = CreateDbContext();
+        var options = CreateDbContextOptions();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var tenantId = $"authority-audit-conflict-{Guid.NewGuid():N}";
+        var admin = await SeedCallerAsync(
+            db, store, $"authority-audit-conflict-admin-{Guid.NewGuid():N}", tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var invocationId = Guid.NewGuid();
+        var setupReceipt = Assert.IsType<ProjectSetupReceipt>((await store.ExecuteProjectSetupOperationAsync(
+            admin,
+            new ProjectSetupOperationRequest(
+                1, invocationId, ProjectSetupOperationKind.Setup, tenantId, null, null))).Setup);
+
+        var migrator = db.GetService<IMigrator>();
+        const string beforeInvocationAudit = "20261023201615_AddHostedModelReasoningCatalogAfterCasting";
+        const string invocationAudit = "20261026183946_039_LinkProjectSetupAuthorityAuditInvocation";
+        var conflictingInvocationId = Guid.NewGuid();
+        await migrator.MigrateAsync(beforeInvocationAudit);
+        try
+        {
+            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            await using (var command = new NpgsqlCommand(
+                """
+                UPDATE projects_config.project_setup_operations
+                SET invocation_id = @conflicting_invocation_id
+                WHERE invocation_id = @invocation_id AND operation_kind = 'Setup'
+                """,
+                connection))
+            {
+                command.Parameters.AddWithValue("conflicting_invocation_id", conflictingInvocationId);
+                command.Parameters.AddWithValue("invocation_id", invocationId);
+                Assert.Equal(1, await command.ExecuteNonQueryAsync());
+            }
+
+            var migrationError = await Assert.ThrowsAsync<PostgresException>(
+                () => migrator.MigrateAsync(invocationAudit));
+            Assert.Contains(
+                "authority audit event is linked to multiple setup invocations",
+                migrationError.MessageText,
+                StringComparison.Ordinal);
+
+            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            {
+                await using (var history = new NpgsqlCommand(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM projects_config.__ef_migrations_history
+                        WHERE "MigrationId" = @migration_id)
+                    """,
+                    connection))
+                {
+                    history.Parameters.AddWithValue("migration_id", invocationAudit);
+                    Assert.False((bool)(await history.ExecuteScalarAsync()
+                        ?? throw new InvalidOperationException("Migration history check returned no result.")));
+                }
+
+                await using (var column = new NpgsqlCommand(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'projects_config'
+                            AND table_name = 'authority_audit'
+                            AND column_name = 'invocation_id')
+                    """,
+                    connection))
+                {
+                    Assert.False((bool)(await column.ExecuteScalarAsync()
+                        ?? throw new InvalidOperationException("Column check returned no result.")));
+                }
+
+                await using var trigger = new NpgsqlCommand(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_catalog.pg_trigger AS trg
+                        JOIN pg_catalog.pg_class AS relation ON relation.oid = trg.tgrelid
+                        JOIN pg_catalog.pg_namespace AS schema ON schema.oid = relation.relnamespace
+                        WHERE schema.nspname = 'projects_config'
+                            AND relation.relname = 'authority_audit'
+                            AND trg.tgname = 'authority_audit_immutable'
+                            AND NOT trg.tgisinternal)
+                    """,
+                    connection);
+                Assert.True((bool)(await trigger.ExecuteScalarAsync()
+                    ?? throw new InvalidOperationException("Trigger check returned no result.")));
+            }
+
+            await AssertImmutableAsync(
+                "UPDATE projects_config.authority_audit SET actor = 'migration-conflict-test' WHERE event_id = @event_id",
+                ("event_id", setupReceipt.AuthorityAuditEventId));
+        }
+        finally
+        {
+            await migrator.MigrateAsync(beforeInvocationAudit);
+            await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+            await using (var command = new NpgsqlCommand(
+                """
+                UPDATE projects_config.project_setup_operations
+                SET invocation_id = @invocation_id
+                WHERE invocation_id = @conflicting_invocation_id AND operation_kind = 'Setup'
+                """,
+                connection))
+            {
+                command.Parameters.AddWithValue("invocation_id", invocationId);
+                command.Parameters.AddWithValue("conflicting_invocation_id", conflictingInvocationId);
+                await command.ExecuteNonQueryAsync();
+            }
+
             await migrator.MigrateAsync(invocationAudit);
         }
     }
