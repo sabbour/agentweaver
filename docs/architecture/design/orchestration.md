@@ -879,12 +879,13 @@ The dispatcher persists child-delivery intents and platform-gate intents before
 their external effects. After restart, an unresolved child intent may be sent
 again with its stable association and message identifiers; a join remains closed
 until the terminal child result is checkpointed. Failed or indeterminate child
-outcomes keep dependent work blocked. Build/test and OpenPullRequest intent-only
-operations are reported as possibly repeating, while a saved terminal receipt is
-reported only as recorded evidence. Session status reads this checkpoint without
-reconciling children or advancing execution. It marks missing or plan-mismatched
-checkpoint state, or progress incompatible with the accepted plan, unavailable
-rather than inferring completion or safety.
+outcomes keep dependent work blocked. Build/test, OpenPullRequest, and Merge
+intents without receipts are reported as possibly repeating. A saved terminal
+receipt is reported only as recorded evidence; it does not prove physical
+exactly-once execution. Session status reads this checkpoint without reconciling
+children or advancing execution. It marks missing or plan-mismatched checkpoint
+state, or progress incompatible with the accepted plan, unavailable rather than
+inferring completion or safety.
 
 The selected gates remain visible in the executable snapshot and journal. For
 software work, classification requires one build/test gate followed by human review;

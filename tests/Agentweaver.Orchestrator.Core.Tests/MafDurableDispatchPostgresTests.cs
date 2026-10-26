@@ -145,6 +145,61 @@ public sealed class MafDurableDispatchPostgresTests(CoordinationPostgresFixture 
             checkpoint.State.Progress.WorkItems.GetValueOrDefault(followupItem.Id));
     }
 
+    [Theory]
+    [InlineData(nameof(MafExecutionTaskStatus.Failed))]
+    [InlineData(nameof(MafExecutionTaskStatus.Indeterminate))]
+    public async Task RestartWithNonSuccessTerminalChildDoesNotDispatchItsJoin(
+        string terminalStatusName)
+    {
+        var terminalStatus = Enum.Parse<MafExecutionTaskStatus>(terminalStatusName);
+        var plan = ConflictingPlan();
+        var firstItem = plan.Plan.Items[0];
+        var followupItem = plan.Plan.Items[1];
+        var step = plan.Workflow.Definition.Steps[0];
+        _ = await SpawnAsync(plan, new MafExecutionAction(step, firstItem));
+
+        // The owner records the child outcome and result together before a fresh owner reads the checkpoint.
+        var latest = (await _checkpoints.ReadLatestAsync(CancellationToken.None))!;
+        var terminal = latest.State with
+        {
+            Revision = latest.State.Revision + 1,
+            Progress = latest.State.Progress with
+            {
+                WorkItems = latest.State.Progress.WorkItems.SetItem(firstItem.Id, terminalStatus)
+            },
+            PendingDispatches = latest.State.PendingDispatches.Remove(firstItem.Id),
+            Results = latest.State.Results.Add(firstItem.Id, $"Child ended as {terminalStatus}.")
+        };
+        _ = await _checkpoints.AppendAsync(
+            $"terminal-first-{terminalStatus}", latest.Info, terminal, CancellationToken.None);
+
+        var blockedBeforeRestart = await Assert.ThrowsAsync<CoordinationException>(() =>
+            SpawnAsync(plan, new MafExecutionAction(step, followupItem)));
+        Assert.Equal("maf_execution_frontier_stale", blockedBeforeRestart.Code);
+        Assert.Equal((1L, 1L), await CountChildrenAndSpawnsAsync());
+
+        // A restarted owner must reject the join even though the predecessor now has a terminal result.
+        _owner = new CoordinationOwnerStore(fixture.DataSource, _schema);
+        _checkpoints = CreateCheckpoints(_fence);
+        var blockedJoin = await Assert.ThrowsAsync<CoordinationException>(() =>
+            SpawnAsync(plan, new MafExecutionAction(step, followupItem)));
+
+        Assert.Equal("maf_execution_frontier_stale", blockedJoin.Code);
+        Assert.Equal((1L, 1L), await CountChildrenAndSpawnsAsync());
+        var recovered = (await _checkpoints.ReadLatestAsync(CancellationToken.None))!;
+        Assert.Empty(recovered.State.PendingDispatches);
+        Assert.Equal(terminalStatus, recovered.State.Progress.WorkItems[firstItem.Id]);
+        Assert.Equal(MafExecutionTaskStatus.Pending,
+            recovered.State.Progress.WorkItems.GetValueOrDefault(followupItem.Id));
+
+        var recovery = MafExecutionRecoveryProjector.Project(recovered, plan, 1, true, null);
+        Assert.Equal("available", recovery.State);
+        Assert.Contains(followupItem.Id, recovery.FailedDependencyIds);
+        Assert.Equal(
+            "blockedByFailedDependency",
+            Assert.Single(recovery.Steps, item => item.WorkItemId == followupItem.Id).Readiness);
+    }
+
     [Fact]
     public async Task StaleOwnerFenceRollsBackChildOutboxAndCheckpointTogether()
     {
