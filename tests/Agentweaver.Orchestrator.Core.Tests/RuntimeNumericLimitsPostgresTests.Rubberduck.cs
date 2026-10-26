@@ -4,6 +4,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.Providers;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
 using Xunit;
@@ -109,7 +110,22 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
                 "rubberduck", 2, ["independent-review"], WorkflowPlatformGate.RubberDuck),
             WorkflowTestData.Platform(
                 "merge", 3, ["rubberduck"], WorkflowPlatformGate.Merge));
-        var selectionContext = WorkflowTestData.SelectionContext();
+        var selectionResolution = await _runSelectionContexts.ResolveForPlanAsync(
+            _selection.Selection, _registrations[0].Binding.ExecutionFence, CancellationToken.None);
+        var selectionContext = selectionResolution.Context;
+        if (selectionResolution.PendingBinding is { } pendingBinding)
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            await _runSelectionContexts.PersistBindingAsync(
+                connection,
+                transaction,
+                _selection.Selection,
+                _registrations[0].Binding.ExecutionFence,
+                pendingBinding,
+                CancellationToken.None);
+            await transaction.CommitAsync();
+        }
         var proposed = CoordinatorDecisionFlow.ProposeOutcomeSpec(
             CoordinatorDecisionState.Create(_registrations[0].Binding.ExecutionFence),
             new CoordinatorOutcomeSpecification(
@@ -138,7 +154,7 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
         Assert.True(selected.IsSuccess);
         var proposedPlan = CoordinatorDecisionFlow.ProposeWorkPlan(
             selected.State,
-            WorkflowTestData.Plan(WorkflowTestData.Item("first")),
+            WorkflowTestData.Plan(WorkflowTestData.Item("first", modelSelection: "model:selected")),
             selectionContext,
             "rubberduck-plan-confirmation",
             _actor.Subject);
@@ -273,5 +289,28 @@ public sealed partial class RuntimeNumericLimitsPostgresTests
         _ = await execution.AppendAsync(
             "rubberduck-intent", initial.Info, running, CancellationToken.None);
         return (registration, intent, persisted.StateVersion);
+    }
+
+    private sealed class RuntimeNumericSandboxResourceProvider : ICoordinatorSandboxResourceProvider
+    {
+        public string ProviderId => RubberduckSandboxProviderId;
+
+        public ImmutableArray<string> IsolationChoices => ["worktree", "sandboxed"];
+
+        public Task<ProviderResult<ResourceNegotiation>> NegotiateAsync(
+            ProviderCandidate candidate,
+            EffectiveRunSelection selection,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (candidate.Seam != ProviderSeam.Sandbox || candidate.ProviderId != ProviderId)
+                return Task.FromResult(ProviderResult<ResourceNegotiation>.Failure(
+                    ProviderErrorCode.ProviderSeamMismatch,
+                    "The runtime numeric fixture selected an unexpected Sandbox provider."));
+            return Task.FromResult(ProviderResult<ResourceNegotiation>.Success(new ResourceNegotiation(
+                new ProviderResourceRef(
+                    ProviderSeam.Sandbox, ProviderId, RubberduckSandboxResourceId, 1),
+                candidate.RequiredCapabilities.ToImmutableHashSet(StringComparer.Ordinal))));
+        }
     }
 }

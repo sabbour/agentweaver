@@ -200,7 +200,7 @@ public sealed partial class MafCheckpointStorePostgresTests
             1,
             1,
             _selection.Selection.ContextRevision,
-            selectionHash,
+            selectionHash.ToLowerInvariant(),
             _binding.ExecutionFence,
             "environment-1",
             "placement-1",
