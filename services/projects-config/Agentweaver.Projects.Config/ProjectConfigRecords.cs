@@ -76,6 +76,7 @@ public sealed class ProjectRoleAssignmentRecord
 public sealed class ProjectAuthorityAuditRecord
 {
     public Guid EventId { get; set; }
+    public Guid? InvocationId { get; set; }
     public required string EventType { get; set; }
     public Guid MembershipId { get; set; }
     public Guid? AssignmentId { get; set; }

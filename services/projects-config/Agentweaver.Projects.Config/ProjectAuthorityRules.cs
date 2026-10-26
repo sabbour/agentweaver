@@ -16,6 +16,17 @@ internal static class ProjectAuthorityRules
         role is ProjectAuthorityRole.Owner or ProjectAuthorityRole.Contributor or
             ProjectAuthorityRole.Viewer or ProjectAuthorityRole.Orchestrator;
 
+    /// <summary>Links audit events from an exact P1 fixture project name to its persisted invocation.</summary>
+    public static Guid? P1SetupInvocationId(string projectName)
+    {
+        if (!projectName.StartsWith("p1-", StringComparison.OrdinalIgnoreCase) ||
+            !Guid.TryParseExact(projectName.AsSpan(3), "D", out var invocationId) ||
+            invocationId == Guid.Empty)
+            return null;
+
+        return invocationId;
+    }
+
     /// <summary>Serializes concurrent Owner mutations for one project within the current transaction.</summary>
     public static Task LockProjectOwnersAsync(
         ProjectsConfigDbContext db,
@@ -49,9 +60,11 @@ internal static class ProjectAuthorityRules
         ProjectRoleAssignmentRecord assignment,
         string eventType,
         string actor,
-        DateTimeOffset createdAt) => new()
+        DateTimeOffset createdAt,
+        Guid? invocationId = null) => new()
     {
         EventId = Guid.NewGuid(),
+        InvocationId = invocationId,
         EventType = eventType,
         MembershipId = membership.MembershipId,
         AssignmentId = assignment.AssignmentId,

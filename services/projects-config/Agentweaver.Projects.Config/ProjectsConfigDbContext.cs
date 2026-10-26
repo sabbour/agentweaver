@@ -141,6 +141,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             });
             entity.HasKey(audit => audit.EventId);
             entity.Property(audit => audit.EventId).HasColumnName("event_id");
+            entity.Property(audit => audit.InvocationId).HasColumnName("invocation_id");
             entity.Property(audit => audit.EventType).HasColumnName("event_type").HasMaxLength(32).IsRequired();
             entity.Property(audit => audit.MembershipId).HasColumnName("membership_id");
             entity.Property(audit => audit.AssignmentId).HasColumnName("assignment_id");
@@ -154,6 +155,9 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.Property(audit => audit.Actor).HasColumnName("actor").HasMaxLength(256).IsRequired();
             entity.Property(audit => audit.CreatedAt).HasColumnName("created_at");
             entity.HasIndex(audit => new { audit.MembershipId, audit.CreatedAt });
+            entity.HasIndex(audit => new { audit.TenantId, audit.InvocationId, audit.CreatedAt })
+                .HasDatabaseName("IX_authority_audit_tenant_invocation_created_at")
+                .HasFilter("\"invocation_id\" IS NOT NULL");
         });
 
         modelBuilder.Entity<ProjectConfigurationRevisionRecord>(entity =>

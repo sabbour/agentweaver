@@ -55,22 +55,11 @@ database credentials while collecting evidence.
 
 ## Diagnose an indeterminate P1 project setup
 
-The P1 acceptance harness runs API and MCP checks against a deployment.
-Its runners set up and clean up their fixture project through the public
-Gateway API with the signed-in setup token:
-
-1. `createProject` creates a project named `p1-<invocation-uuid>`.
-2. `assignProjectRole` assigns the setup actor the Owner role, then the
-   Orchestrator role.
-3. Cleanup revokes the Orchestrator assignment, archives the project with
-   `updateProject`, and then revokes the Owner assignment.
-
-The runner records each failed mutating request under
-`observations.fixtureSetup.requestFailures`. Each entry contains `step`,
-`operationId`, `status`, and `problemCode`. A `null` status means the response
-wasn't received, such as a timeout or transport failure. The runner doesn't
-save response bodies, error messages, or tokens. When a failure leaves the
-state unknown, `diagnosis.projectName` contains the fixture project name.
+The P1 acceptance harness records an invocation ID and creates a project named
+`p1-<invocation-id>`. If setup or cleanup is interrupted, do not retry it or
+start a new journey before reviewing that invocation. Use the read-only
+[P1 reconciliation guide](./p1-reconciliation.md) with the same approved
+manifest and invocation ID.
 
 Common results:
 
@@ -81,37 +70,14 @@ Common results:
 | `assign-*` | `404 principal_not_found` | The setup actor has no active membership in the selected tenant. |
 | `revoke-*` | `409 revision_conflict` | Another request changed the assignment. Reconcile it before you do anything else. |
 | `revoke-owner` | `409 last_project_owner` | The project isn't archived yet. Confirm the archive step result first. |
+| Audit read | `403 forbidden` | Use the setup actor's unbound `api.read` token and confirm current TenantAdmin or ownership of every linked project. |
+| Audit read | `complete: false` | The result is truncated or incomplete. Do not use it for a conclusive verdict. |
 
-Any failure after the runner sends a mutating request makes setup or cleanup
-indeterminate. The runner doesn't retry the request or run cleanup. Don't
-retry setup, start a replacement invocation, or run cleanup until you have
-reviewed the original invocation state. Use the persisted invocation UUID
-from the evidence, not a new UUID.
-
-1. As a tenant admin, call `listProjects` and find the project whose name
-   matches `diagnosis.projectName`. If no project has that name, the create
-   request didn't commit at that snapshot.
-2. Call `listProjectRoleAssignments` for that project. Compare the active
-   assignments, their IDs, and revisions with `setup` in the evidence.
-3. Call `getAuthorizationContext` with the setup actor's token to confirm its
-   current tenant membership and roles.
-4. Treat a missing project or assignment as absence **at that snapshot**, not
-   proof that an earlier request can't commit later. Keep projects with
-   accepted run selections as retained fixtures. Don't adopt, archive, or
-   revoke a fixture as part of diagnosis. Make any repair as a separate,
-   reviewed change.
-
-Each assignment and revocation also writes an `authority_audit` row in the
-same transaction. A database operator can review those rows with an existing
-approved read-only session.
-
-Evidence from runs before this change can still contain
-`commandFailures` from the privileged `kubectl exec` path. For those runs,
-generate the read-only query with
-`node scripts\harness-shared\diagnose-p1-setup.mjs --invocation-id <invocation-uuid>`
-and have a database operator run it against the attested Projects Config
-database. The readback always returns `retryAuthorized: false`; it isn't
-permission to replay a write.
+The reconcile output is an assessment only. A permission-filtered project
+list can hide a matching project, so a not-found result without tenant-wide
+visibility remains **needs review**. Missing, denied, malformed, or truncated
+reads also remain **needs review**. The command never changes a grant, writes
+a fixture, performs cleanup, or starts another journey.
 
 ## Escalate unresolved issues
 

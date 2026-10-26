@@ -161,6 +161,64 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             entry.GetProperty("required").EnumerateArray().Select(item => item.GetString()).Order(StringComparer.Ordinal));
     }
 
+    [Fact]
+    public async Task SetupAuthorityAuditRouteIsReadOnlyPrivateAndBounded()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa), () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException("OpenAPI must not call owners."));
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var operation = document.RootElement.GetProperty("paths")
+            .GetProperty("/api/v1/project-setup-invocations/{invocationId}/authority-audit")
+            .GetProperty("get");
+        Assert.Equal("readProjectSetupAuthorityAudit", operation.GetProperty("operationId").GetString());
+        Assert.Equal("Projects", operation.GetProperty("x-agentweaver-owner").GetString());
+        Assert.True(operation.GetProperty("x-agentweaver-mcp-excluded").GetBoolean());
+        Assert.Contains("unbound api.read", operation.GetProperty("description").GetString());
+        Assert.Contains("no-store", operation.GetProperty("description").GetString());
+        Assert.True(operation.GetProperty("responses").TryGetProperty("400", out _));
+        Assert.True(operation.GetProperty("responses").TryGetProperty("403", out _));
+        Assert.Equal(
+            "no-store",
+            operation.GetProperty("responses").GetProperty("200").GetProperty("headers")
+                .GetProperty("Cache-Control").GetProperty("schema").GetProperty("example").GetString());
+        var pathParameter = Assert.Single(
+            operation.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("name").GetString() == "invocationId");
+        Assert.Equal("path", pathParameter.GetProperty("in").GetString());
+        Assert.True(pathParameter.GetProperty("required").GetBoolean());
+        Assert.DoesNotContain(operation.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("in").GetString() == "query");
+        Assert.Equal(
+            "#/components/schemas/ProjectSetupAuthorityAuditRead",
+            operation.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+
+        var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        var auditRead = schemas.GetProperty("ProjectSetupAuthorityAuditRead");
+        Assert.False(auditRead.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(32, auditRead.GetProperty("properties").GetProperty("records").GetProperty("maxItems").GetInt32());
+        Assert.Equal(
+            ["invocationId", "complete", "truncated", "records"],
+            auditRead.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        var auditEvent = schemas.GetProperty("ProjectSetupAuthorityAuditEvent");
+        Assert.False(auditEvent.GetProperty("additionalProperties").GetBoolean());
+        Assert.False(auditEvent.GetProperty("properties").TryGetProperty("accessToken", out _));
+        Assert.False(auditEvent.GetProperty("properties").TryGetProperty("secret", out _));
+
+        var route = Assert.Single(
+            GatewayHost::Agentweaver.Gateway.GatewayRouteCatalog.Routes,
+            item => item.OperationId == "readProjectSetupAuthorityAudit");
+        Assert.Equal("GET", route.Method);
+        Assert.Equal("/api/project-setup-invocations/{invocationId}/authority-audit", route.OwnerPath);
+        Assert.Equal((long?)(128 * 1024), route.MaximumResponseBytes);
+        Assert.True(route.ExcludeFromMcp);
+        Assert.Equal("Cache-Control", Assert.Single(route.ExposedResponseHeaders));
+    }
+
     private static readonly string[] IdempotentWriteOperationIds =
     [
         "createProjectRun",

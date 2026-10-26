@@ -459,6 +459,48 @@ Owner.
 > `GET /projects/{projectId}/access` route that doesn't exist. The web client
 > must use the contract on this page.
 
+### P1 setup authority audit
+
+`GET /api/project-setup-invocations/{invocationId:guid}/authority-audit` is
+also available through the Gateway at
+`GET /api/v1/project-setup-invocations/{invocationId}/authority-audit`. It
+returns only authority-audit events linked to that invocation in the caller's
+selected tenant. P1 fixture role events are linked by the exact project name
+`p1-<invocation-id>`.
+
+The caller needs an unbound token with `api.read` and must be a current
+TenantAdmin or a current Owner of every project represented in the result.
+An Owner is denied if the invocation has no linked events or includes a
+project they do not own. The route accepts no query parameters and returns
+`Cache-Control: no-store`. It is a REST operation, not an MCP tool.
+
+The response contains at most 32 records. `complete` is true only when the
+full result fits in that bound; otherwise `complete` is false and `truncated`
+is true. An incomplete response is not evidence that unreturned events do not
+exist. Records include event and assignment IDs, event type, resource, role,
+revision, actor, and timestamp. They never include access tokens or secrets.
+
+```json
+{
+  "invocationId": "uuid",
+  "complete": true,
+  "truncated": false,
+  "records": [
+    {
+      "eventId": "uuid",
+      "eventType": "role_assigned",
+      "assignmentId": "uuid",
+      "resourceType": "project",
+      "resourceId": "project-id",
+      "role": "owner",
+      "revision": 1,
+      "actor": "subject-id",
+      "createdAt": "date-time"
+    }
+  ]
+}
+```
+
 ### Catalog and platform routes
 
 | Method | Native full path | Auth | Purpose | Gateway full path |

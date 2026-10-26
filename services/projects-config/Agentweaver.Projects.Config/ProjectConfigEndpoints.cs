@@ -221,6 +221,30 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        app.MapGet("/api/project-setup-invocations/{invocationId:guid}/authority-audit", async (
+            Guid invocationId,
+            HttpContext context,
+            ProjectSetupAuthorityAuditService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Invalid(
+                        "invalid_request", "This operation does not accept query parameters.");
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.ReadAsync(caller, invocationId, cancellationToken)
+                    .ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).RequireAuthorization().WithName("ReadProjectSetupAuthorityAudit");
+
         projects.MapPost("/{projectId}/role-assignments", async (
             string projectId,
             AssignProjectRoleRequest request,
