@@ -2,6 +2,11 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-26T19:52:05.901Z — source `59d49fb43db169284739392d2925efde121a1ed3`
+
+- `Agentweaver.Gateway`: 1.7.0 -> 1.7.1 (patch) — .changeset/quiet-mice-reconcile.md
+- `Agentweaver.Projects.Config`: 1.7.1 -> 1.7.2 (patch) — .changeset/quiet-mice-reconcile.md
+
 ## 2026-10-26T06:47:14.901Z — source `6765db541836bf7737db9b56206baabbf9174327`
 
 - `Agentweaver.Abstractions`: 1.5.0 -> 1.6.0 (minor) — .changeset/open-pull-request-platform-gate.md, .changeset/pending-proposal-summary.md
