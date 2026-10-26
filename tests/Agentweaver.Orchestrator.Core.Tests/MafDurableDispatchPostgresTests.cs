@@ -118,6 +118,34 @@ public sealed class MafDurableDispatchPostgresTests(CoordinationPostgresFixture 
     }
 
     [Fact]
+    public async Task RestartWithPendingChildDoesNotDispatchItsJoin()
+    {
+        var plan = ConflictingPlan();
+        var firstItem = plan.Plan.Items[0];
+        var followupItem = plan.Plan.Items[1];
+        var step = plan.Workflow.Definition.Steps[0];
+        var first = await SpawnAsync(plan, new MafExecutionAction(step, firstItem));
+
+        // New owner and checkpoint-store instances read the same committed child intent after restart.
+        _owner = new CoordinationOwnerStore(fixture.DataSource, _schema);
+        _checkpoints = CreateCheckpoints(_fence);
+        var replay = await SpawnAsync(plan, new MafExecutionAction(step, firstItem));
+
+        Assert.Equal(first.CommandId, replay.CommandId);
+        var blockedJoin = await Assert.ThrowsAsync<CoordinationException>(() =>
+            SpawnAsync(plan, new MafExecutionAction(step, followupItem)));
+        Assert.Equal("maf_execution_frontier_stale", blockedJoin.Code);
+        Assert.Equal((1L, 1L), await CountChildrenAndSpawnsAsync());
+        var checkpoint = (await _checkpoints.ReadLatestAsync(CancellationToken.None))!;
+        Assert.Single(checkpoint.State.PendingDispatches);
+        Assert.False(checkpoint.State.Results.ContainsKey(firstItem.Id));
+        Assert.Equal(MafExecutionTaskStatus.Running, checkpoint.State.Progress.WorkItems[firstItem.Id]);
+        Assert.Equal(
+            MafExecutionTaskStatus.Pending,
+            checkpoint.State.Progress.WorkItems.GetValueOrDefault(followupItem.Id));
+    }
+
+    [Fact]
     public async Task StaleOwnerFenceRollsBackChildOutboxAndCheckpointTogether()
     {
         var plan = ConflictingPlan();

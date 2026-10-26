@@ -2047,7 +2047,35 @@ else if (route.OperationId is
             ("lifecycle", Enum("active", "cancelled", "completed", "archived")), ("executionFence", Int()),
             ("stateVersion", Int()), ("blockers", Arr(Ref("SessionStatusBlocker"))),
             ("runtimeEffectsState", Str()), ("runtimeEffectsUnavailableCode", Str()),
+            ("executionRecovery", Nullable(Ref("MafExecutionRecoverySnapshot"))),
             ("interruptionIntent", Ref("SessionInterruptionIntentSnapshot")), ("runExecution", Ref("OwnerRunExecutionSnapshot"))),
+        ["MafExecutionRecoverySnapshot"] = Obj(
+            ["state", "currentDecisionStateVersion", "steps", "pendingChildDispatches",
+                "platformGateOperations", "failedDependencyIds"],
+            ("state", Enum("available", "unavailable")), ("unavailableCode", NullableStr()),
+            ("checkpointId", NullableStr()), ("checkpointRevision", NullableInt()),
+            ("workPlanId", NullableStr()), ("checkpointDecisionStateVersion", NullableInt()),
+            ("currentDecisionStateVersion", Int()), ("steps", Arr(Ref("MafExecutionRecoveryStepSnapshot"))),
+            ("pendingChildDispatches", Arr(Ref("MafExecutionRecoveryPendingDispatchSnapshot"))),
+            ("platformGateOperations", Arr(Ref("MafExecutionRecoveryPlatformOperationSnapshot"))),
+            ("failedDependencyIds", Arr(Str())), ("pendingGate", Nullable(Ref("SessionStatusBlocker")))),
+        ["MafExecutionRecoveryStepSnapshot"] = Obj(
+            ["stepId", "checkpointStatus"],
+            ("stepId", Str()), ("workItemId", NullableStr()), ("associationId", NullableStr()),
+            ("checkpointStatus", Enum("pending", "running", "succeeded", "failed", "indeterminate")),
+            ("readiness", Nullable(Enum(
+                "dependencyReady", "blockedByDecisionGate", "blockedByFailedDependency", "waitingOnDependencies"))),
+            ("effectRecoveryState", Nullable(Enum(
+                "mayRepeat", "indeterminate", "checkpointResultRecorded", "terminalReceiptRecorded")))),
+        ["MafExecutionRecoveryPendingDispatchSnapshot"] = Obj(
+            ["associationId", "childSessionId", "messageId", "effectRecoveryState"],
+            ("associationId", Str()), ("childSessionId", Str()), ("messageId", Uuid()),
+            ("effectRecoveryState", Enum("mayRepeat"))),
+        ["MafExecutionRecoveryPlatformOperationSnapshot"] = Obj(
+            ["stepId", "gate", "operationId", "evidenceState"],
+            ("stepId", Str()), ("gate", Enum("buildTest", "openPullRequest")),
+            ("operationId", Uuid()), ("evidenceState", Enum("intentOnly", "terminalReceiptRecorded")),
+            ("effectRecoveryState", Nullable(Enum("mayRepeat")))),
         ["SessionStatusBlocker"] = Obj(["kind", "requestId", "choices", "allowsFreeform", "prompt"],
             ("kind", Enum("awaitingInput", "awaitingPlanApproval", "awaitingApproval", "awaitingOutcomeConfirmation")),
             ("requestId", Str()), ("choices", Arr(Str())), ("allowsFreeform", Bool()), ("prompt", NullableStr())),

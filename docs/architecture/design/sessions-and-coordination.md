@@ -600,6 +600,16 @@ The run page answers "what is happening?", "what needs my action?", and "what wi
 next action repeat or preserve?" using that snapshot. Recovery effects come from
 workflow transitions and the manifest, not a guess from the UI. This carries forward
 the 0.x run-state and blocker reporting.
+For coordinator sessions, `executionRecovery` is a read-only projection of the latest
+bound MAF checkpoint. It reports dependency-ready or running work, pending child
+dispatch intents, build/test and OpenPullRequest gate intents or receipts, failed
+dependencies, and the current decision blocker. An intent without a terminal receipt
+is marked `mayRepeat`; checkpointed running work without enough delivery evidence is
+`indeterminate`. A terminal receipt is shown as recorded evidence, not as an
+independent claim that an external effect is complete or safe. Missing or
+plan-mismatched checkpoint data or progress incompatible with the accepted plan
+is explicitly unavailable, and a scope-changing candidate is not shown as
+dispatchable before confirmation.
 Harness subagents used only inside a Copilot turn remain ephemeral and are not session
 tree nodes; durable, isolated workflow child work is.
 

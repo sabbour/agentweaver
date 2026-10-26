@@ -177,6 +177,45 @@ public sealed partial class MafCheckpointStorePostgresTests
     }
 
     [Fact]
+    public async Task OpenPullRequestGateIntentIsProjectedAndResumedWithSameOperationAfterRestart()
+    {
+        var (_, intent, source) = await PersistOpenPullRequestIntentAsync();
+        _executionStore = new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null), _binding);
+        var recovered = await _executionStore.ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(recovered);
+
+        var workflow = WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn,
+            WorkflowTestData.Open("implement", 0, []),
+            WorkflowTestData.Platform(
+                "publish", 1, ["implement"], WorkflowPlatformGate.OpenPullRequest)));
+        var validPlan = WorkPlanValidator.ValidateAndSnapshot(
+            workflow,
+            WorkflowTestData.Plan(WorkflowTestData.Item("implementation")),
+            WorkflowTestData.SelectionContext());
+        Assert.True(validPlan.IsValid, string.Join("; ", validPlan.Issues.Select(issue => issue.Message)));
+        var recovery = MafExecutionRecoveryProjector.Project(
+            recovered, validPlan.Value, intent.DecisionStateVersion, true, null);
+
+        var operation = Assert.Single(recovery.PlatformGateOperations);
+        Assert.Equal(WorkflowPlatformGate.OpenPullRequest, operation.Gate);
+        Assert.Equal(intent.OperationId, operation.OperationId);
+        Assert.Equal("intentOnly", operation.EvidenceState);
+        Assert.Equal("mayRepeat", operation.EffectRecoveryState);
+
+        // A fresh executor resumes the saved operation ID instead of creating another pull request.
+        var owner = new DispatchOwnerHandler(intent);
+        var (executor, client) = CreateDispatchExecutor(intent, source, owner);
+        using (client)
+        {
+            Assert.True(await executor.ExecuteAsync(intent, CancellationToken.None));
+            Assert.Equal(1, owner.ProviderCreates);
+            Assert.All(owner.OperationIds, operationId => Assert.Equal(intent.OperationId, operationId));
+        }
+    }
+
+    [Fact]
     public async Task PostgresDispatchRecoveryAfterPullRequestClosureFailsClosedWithoutSecondCreate()
     {
         var (_, intent, source) = await PersistOpenPullRequestIntentAsync();

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 
@@ -527,7 +528,11 @@ public sealed record SessionStatusSnapshot(
     string RuntimeEffectsState,
     string RuntimeEffectsUnavailableCode,
     SessionInterruptionIntentSnapshot InterruptionIntent,
-    OwnerRunExecutionSnapshot RunExecution);
+    OwnerRunExecutionSnapshot RunExecution)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MafExecutionRecoverySnapshot? ExecutionRecovery { get; init; }
+}
 
 /// <summary>
 /// Reports the state and failure reference held by the run owner.
