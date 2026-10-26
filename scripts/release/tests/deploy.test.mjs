@@ -840,6 +840,8 @@ test('P0 target and every required deployment target input are explicit and exac
     !['--provider-catalog-configmap', '--provider-catalog-source-commit'].includes(values[index - 1]));
   assert.throws(() => parseArgs(missingCatalogArgs), /--provider-catalog-configmap is required/);
   assert.equal(parseArgs(argsFor()).providerCatalogConfigMapName, 'projects-config-provider-catalog');
+  assert.equal(parseArgs([...argsFor(), '--broker-run-binding', 'binding.json'])
+    .brokerRunBindingPath, 'binding.json');
   assert.throws(() => parseArgs([...argsFor(), '--execute', '--dry-run']), /mutually exclusive/);
 });
 
@@ -4308,6 +4310,81 @@ test('default dry-run validates and renders without issuing any external write',
   assert.equal(imagesVerified, 1);
   assert.equal(targetVerified, 1);
   assert.equal(prerequisitesVerified, 1);
+  assert.equal(commands.length, 2);
+});
+
+test('release dry-run renders validated run-binding settings, policies, and workload fingerprints', async () => {
+  const manifest = releaseManifest();
+  const publication = publicationReceipt(manifest);
+  const binding = {
+    projectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
+    projectsAudience: 'https://projects.agentweaver.io/run-binding',
+    projectsServerCertificateSha256: 'a'.repeat(64),
+    projectsTrustBundleSha256: 'b'.repeat(64),
+  };
+  const rendered = [];
+  const commands = [];
+  const result = await deployRelease({
+    releaseTag: 'v1.0.0',
+    target,
+    manifest,
+    publication,
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: sourceSha,
+    brokerRunBinding: binding,
+    dryRun: true,
+  }, {
+    ...agentSandboxTestDependencies(),
+    root: p0Root,
+    verifyRelease: async () => sourceSha,
+    verifyImages: async () => verifiedImageDigests(manifest),
+    verifyTarget: async () => ({ exact: true }),
+    verifyPrerequisites: (_runtime, _target, options) => {
+      assert.deepEqual(options.brokerRunBinding, binding);
+    },
+    verifyBrokerRunBindingConfiguration: (descriptor, _target, options) => {
+      assert.deepEqual(descriptor, binding);
+      assert.equal(options.allowMissingSettings, true);
+      return { runBindingSettingsConfigured: false };
+    },
+    run: (file, args) => {
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        const output = execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+        rendered.push(...parseKustomizeResources(output).items);
+        return output;
+      }
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') return '';
+      commands.push(args);
+      assert.equal(file, 'kubectl');
+      assert.equal(args[0], 'apply');
+      assert.ok(args.includes('--dry-run=client'));
+      return '';
+    },
+  });
+
+  const configMaps = new Map(rendered.filter(resource => resource.kind === 'ConfigMap')
+    .map(resource => [resource.metadata.name, resource]));
+  const broker = rendered.find(resource => resource.kind === 'Deployment' &&
+    resource.metadata.name === 'identity-broker');
+  const projects = rendered.find(resource => resource.kind === 'Deployment' &&
+    resource.metadata.name === 'projects-config');
+  const expectedPolicies = createBrokerRunBindingPolicies(target.namespace);
+  assert.equal(result.dryRun, true);
+  assert.deepEqual(result.brokerRunBinding, { settingsConfigured: false, policiesRendered: 2 });
+  assert.equal(result.immutableRuntimeConfigMapReplacements.length, 0);
+  assert.equal(configMaps.get('identity-broker-runtime-config-v2').data
+    .IdentityBroker__RunBinding__ProjectsAudience, binding.projectsAudience);
+  assert.equal(configMaps.get('projects-config-runtime-config').data
+    .ProjectsConfig__Authentication__BrokerRunBindingAudience, binding.projectsAudience);
+  assert.equal(broker.spec.template.metadata.annotations['agentweaver.io/broker-run-binding-sha256'],
+    brokerRunBindingFingerprint(binding));
+  assert.equal(projects.spec.template.metadata.annotations['agentweaver.io/broker-run-binding-sha256'],
+    brokerRunBindingFingerprint(binding));
+  assert.ok(broker.spec.template.spec.containers[0].ports.some(port =>
+    port.name === 'hosted-catalog' && port.containerPort === 8444));
+  assert.deepEqual(rendered.filter(resource => resource.kind === 'CiliumNetworkPolicy' &&
+    resource.metadata.labels?.['agentweaver.io/run-binding'] === 'projects'), expectedPolicies);
+  assert.ok(commands.every(args => args.includes('--dry-run=client')));
   assert.equal(commands.length, 2);
 });
 

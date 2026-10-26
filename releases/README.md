@@ -1233,6 +1233,22 @@ npm run release:deploy -- v1.0.0 `
   --provider-catalog-source-commit <40-character-source-sha>
 ```
 
+For the optional P0 Broker run-binding path, create a local descriptor from
+the current `agentweaver-aks` context:
+
+```powershell
+npm run release:prepare-broker-run-binding -- --output artifacts/release/broker-run-binding.json
+```
+
+The preparation command reads only the public `service-backend-ca` bundle and
+Projects Config `tls.crt`; it never reads or writes `tls.key`. Add
+`--broker-run-binding artifacts/release/broker-run-binding.json` to the
+deployment command to render the run-binding settings and policies. The final
+deployment stays read-only without `--execute`. Before apply, it verifies the
+certificate and configuration inputs and checks any changed immutable runtime
+ConfigMaps; only `identity-broker-runtime-config-v2` and
+`projects-config-runtime-config` can be replaced in this opt-in path.
+
 The default is a read-only dry-run. It verifies the annotated GitHub tag and
 published Release, the source-bound immutable publication result, all 23
 product components, and ten GHCR image digests. It checks the exact

@@ -12,6 +12,7 @@ import {
   verifyIntegrationPublicationRemote,
 } from '../deploy-integration.mjs';
 import { verifyBrokerRunBindingConfiguration } from '../deploy.mjs';
+import { prepareBrokerRunBinding } from '../prepare-broker-run-binding.mjs';
 import { componentImageRepository } from '../pack.mjs';
 import { WEB_LOCK_PATH, WEB_PROJECT_PATH } from '../validate.mjs';
 import { agentHostComponent } from './agenthost-fixture.mjs';
@@ -568,6 +569,42 @@ test('Broker run-binding preflight checks the full server chain and raw CA bytes
   assert.equal(shadowMocks.rawCalls, 0);
 });
 
+test('release preflight allows run-binding settings only when both runtime ConfigMaps are absent or configured', () => {
+  const binding = runBinding();
+  const configMaps = runBindingConfigMaps(binding);
+  const bindingKeys = {
+    'identity-broker-runtime-config-v2': [
+      'IdentityBroker__RunBinding__ProjectsOwnerAddress',
+      'IdentityBroker__RunBinding__ProjectsAudience',
+      'IdentityBroker__RunBinding__ProjectsServerCertificateSha256',
+      'IdentityBroker__RunBinding__ProjectsTrustBundleSha256',
+    ],
+    'projects-config-runtime-config': [
+      'ProjectsConfig__Tls__CertificatePath',
+      'ProjectsConfig__Tls__KeyPath',
+      'ProjectsConfig__Tls__ServerCertificateSha256',
+      'ProjectsConfig__Authentication__BrokerRunBindingAudience',
+    ],
+  };
+  for (const [name, keys] of Object.entries(bindingKeys)) {
+    for (const key of keys) delete configMaps[name][key];
+  }
+  const unconfigured = brokerRunBindingMocks(binding, { configMaps });
+  const evidence = verifyBrokerRunBindingConfiguration(binding, target, {
+    ...unconfigured, allowMissingSettings: true,
+  });
+  assert.equal(evidence.runBindingSettingsConfigured, false);
+
+  const brokerConfiguredOnly = runBindingConfigMaps(binding);
+  for (const key of bindingKeys['projects-config-runtime-config']) {
+    delete brokerConfiguredOnly['projects-config-runtime-config'][key];
+  }
+  const partial = brokerRunBindingMocks(binding, { configMaps: brokerConfiguredOnly });
+  assert.throws(() => verifyBrokerRunBindingConfiguration(binding, target, {
+    ...partial, allowMissingSettings: true,
+  }), /wholly absent or present in both runtime ConfigMaps/);
+});
+
 test('Broker run-binding validates the chain with the platform X.509 path builder', { skip: !hasPowerShell7 }, () => {
   const binding = runBinding();
   const mocks = brokerRunBindingMocks(binding, { usePowerShell: true });
@@ -703,6 +740,50 @@ test('integration deployment arguments default to read-only and require an exact
     !['--provider-catalog-configmap', '--provider-catalog-source-commit'].includes(value) &&
     !['--provider-catalog-configmap', '--provider-catalog-source-commit'].includes(values[index - 1]));
   assert.throws(() => parseIntegrationArgs(missingCatalog), /--provider-catalog-configmap is required/);
+});
+
+test('run-binding descriptor preparation reads only the approved context and public certificate values', () => {
+  const calls = [];
+  let written;
+  const result = prepareBrokerRunBinding({
+    argv: ['--output', 'artifacts/release/broker-run-binding.json'],
+  }, {
+    root,
+    run: (_file, args) => {
+      calls.push(args);
+      if (args[0] === 'config' && args[1] === 'current-context') return 'agentweaver-aks';
+      if (args.includes('configmap')) {
+        return JSON.stringify({
+          metadata: { name: 'service-backend-ca', namespace: 'agentweaver' },
+          data: { 'ca.crt': testCaBundle },
+        });
+      }
+      assert.deepEqual(args.slice(-3), [
+        '--namespace', 'agentweaver', '--output=jsonpath={.data.tls\\.crt}',
+      ]);
+      assert.ok(!args.some(argument => argument.includes('tls.key')));
+      return testLeafBase64;
+    },
+    mkdir: () => undefined,
+    writeFile: (file, contents, options) => { written = { file, contents, options }; },
+  });
+
+  assert.deepEqual(result.binding, runBinding());
+  assert.equal(written.file, path.join(root, 'artifacts', 'release', 'broker-run-binding.json'));
+  assert.equal(written.options.flag, 'wx');
+  assert.deepEqual(JSON.parse(written.contents), runBinding());
+  assert.deepEqual(calls.map(args => args[0]), ['config', '--context', '--context']);
+});
+
+test('run-binding descriptor preparation refuses a different kubectl context before reading resources', () => {
+  let reads = 0;
+  assert.throws(() => prepareBrokerRunBinding({}, {
+    root,
+    run: () => { reads++; return 'another-cluster'; },
+    mkdir: () => assert.fail('an invalid context must not write a descriptor'),
+    writeFile: () => assert.fail('an invalid context must not write a descriptor'),
+  }), /current kubectl context must be agentweaver-aks/);
+  assert.equal(reads, 1);
 });
 
 test('source-only integration deployment remains local without a separate GitHub publication workflow', () => {

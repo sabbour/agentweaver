@@ -598,9 +598,19 @@ Pod templates so a binding change rolls both workloads. Before apply, it checks
 the existing configuration and TLS inputs. After apply, it checks those inputs
 again, then verifies both template fingerprints, exactly those two live
 policies, and a Projects-owned EndpointSlice with one ready endpoint whose IP
-matches the ready Projects Config pod. This opt-in is supported only by the
-local integration command; it is not enabled by the image workflow or the
-final-release deploy command.
+matches the ready Projects Config pod.
+
+The final-release `release:deploy` command accepts the same descriptor. The
+repository-owned `release:prepare-broker-run-binding` command can create it
+from the current P0 context by reading only the public CA ConfigMap and
+Projects Config `tls.crt`; it never reads `tls.key`. With the descriptor,
+`release:deploy` adds the same four Broker settings, four Projects Config
+settings, two narrow Cilium policies, and Pod-template fingerprints to a
+temporary Kustomize copy. It verifies the current certificates and settings,
+plans guarded replacement only for the two immutable Broker and Projects
+Config runtime ConfigMaps, and verifies the applied configuration and live
+readbacks. Both deploy commands remain opt-in; `release:deploy` is read-only
+without `--execute`. The image workflow does not enable run binding.
 
 ### Local published-image deployment
 
@@ -625,9 +635,13 @@ in the supplied runtime List. It does not create a shared AgentHost Deployment
 or Service; the Sandbox controller owns each per-run Host Service.
 Existing identities, TLS Secrets, runtime ConfigMaps, storage claims, SQL
 mappings/grants, Cilium policies, and routing are prerequisites owned elsewhere,
-not resources the release tool creates. Resume state is keyed to the exact tag,
-source, publication and runtime manifests, and target; live image, target, and
-health verification always runs again.
+not resources the release tool creates, except that an explicit
+`--broker-run-binding` descriptor adds its exact settings to the two existing
+Broker and Projects Config runtime ConfigMaps in the temporary render. If
+either immutable map must change, execution preflights and replaces only those
+two maps. Resume state is keyed to the exact tag, source, publication and
+runtime manifests, and target; live image, target, and health verification
+always runs again.
 
 No v1 release-stage manifest or successful product publication exists in the
 current source. The checked-in `scripts/release/runtime-list.mjs` source creates
