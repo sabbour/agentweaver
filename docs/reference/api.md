@@ -948,13 +948,28 @@ accepting owner state does not start an automatic scheduler.
 For coordinator sessions, the status response also includes `executionRecovery`,
 a read-only view of the latest bound MAF checkpoint. It reports checkpoint status
 and dependency readiness, pending child dispatches, BuildTest, OpenPullRequest,
-and Merge intent/receipt evidence, failed dependencies, and the current pending
-decision blocker. An intent without a receipt is marked `mayRepeat`; unresolved
-running effects are `indeterminate`. A saved terminal receipt is reported only
+Merge, and IndependentReview intent/receipt evidence, failed dependencies, and
+the current pending decision blocker. External-effect intents without receipts
+are marked `mayRepeat`; unresolved running effects are `indeterminate`. A saved
+terminal receipt is reported only
 as recorded evidence, not as proof of physical exactly-once execution. Missing or
 plan-mismatched checkpoints, or checkpoint progress incompatible with the
 accepted plan, are marked unavailable, not safe or complete. The projection
 does not dispatch work or reconcile children.
+
+For `IndependentReview`, `platformGateOperations` carries `approvalRequestId`,
+`evidenceHash`, and `reviewDecision` (null while pending). Its effect recovery
+state is `awaitingApproval` until an answer is checkpointed. When dependency
+results are ready, dispatch records the immutable review intent before opening
+one coordinator Approval decision. Its prompt identifies the reviewed source,
+workspace/build-test receipt, or pull request head. The accountable actor answers
+the existing `/decisions/gates/{requestId}/answer` route with `approve` or
+`reject` (also used when requesting changes). A matching approval releases the
+gate only after its terminal receipt is saved. Rejection saves a failed gate and
+leaves dependents blocked. An unrelated decision, changed workspace or provider
+pull request head, or revoked run authority cannot complete the gate. A software
+workflow must order build/test before review; a workflow
+with review must put merge after review. Content-only workflows may omit build/test.
 
 The dispatch body may include `openPullRequestWorkspaces`, an object keyed by
 OpenPullRequest step ID. Each value contains `workspaceId`,

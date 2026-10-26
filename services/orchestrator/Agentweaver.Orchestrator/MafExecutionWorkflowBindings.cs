@@ -21,15 +21,21 @@ internal static class MafExecutionWorkflowBindings
     {
         public WorkflowPlatformGate Gate => WorkflowPlatformGate.Merge;
     }
+    private sealed class IndependentReviewExecutor : IPlatformWorkflowStepExecutor
+    {
+        public WorkflowPlatformGate Gate => WorkflowPlatformGate.IndependentReview;
+    }
 
     /// <summary>Binds the accepted catalog before any child is spawned or platform intent is prepared.</summary>
     internal static BoundWorkflowDefinition RequireBound(
         WorkPlanSnapshot plan,
         bool hasBuildTestOwner,
         bool hasOpenPullRequestOwner = false,
-        bool hasMergeOwner = false)
+        bool hasMergeOwner = false,
+        bool hasIndependentReviewOwner = false)
     {
         // Do not impersonate an unsupported platform gate with a model child or a no-op executor.
+        MafIndependentReviewContract.RequireGateOrder(plan.Workflow.Definition);
         var registrations = new List<KeyValuePair<WorkflowStepExecutorType, IWorkflowStepExecutor>>
         {
             new(WorkflowStepExecutorType.Fixed, new FixedChildExecutor()),
@@ -43,6 +49,10 @@ internal static class MafExecutionWorkflowBindings
             registrations.Add(new(
                 WorkflowStepExecutorType.ForPlatformGate(WorkflowPlatformGate.Merge),
                 new MergeExecutor()));
+        if (hasIndependentReviewOwner)
+            registrations.Add(new(
+                WorkflowStepExecutorType.ForPlatformGate(WorkflowPlatformGate.IndependentReview),
+                new IndependentReviewExecutor()));
         if (hasBuildTestOwner &&
             plan.Workflow.Definition.Steps.Any(step =>
                 step.PlatformGate == WorkflowPlatformGate.BuildTest &&

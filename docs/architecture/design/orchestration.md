@@ -866,8 +866,8 @@ The workflow grammar and step validator accept a definition before the catalog
 binder resolves its accepted snapshot to registered executors. It resolves fixed,
 open, and platform steps by mode, and platform steps by gate. Unknown modes or
 missing executor registrations return clear binding errors before dispatch.
-Platform executors own build/test and preview, RAI, rubber-duck, independent
-review, opening a PR, merge, Scribe, and the publish gate where included. A fixed
+Platform executors own the supported build/test, independent review, opening a
+PR, and merge gates. Other gate types are not dispatched without an owner. A fixed
 step remains prescribed work; a platform gate cannot be represented as ordinary
 model work. This binding layer does not dispatch work, apply limits, join child
 work, or recover checkpoints. Later execution stages handle those responsibilities.
@@ -880,7 +880,16 @@ their external effects. After restart, an unresolved child intent may be sent
 again with its stable association and message identifiers; a join remains closed
 until the terminal child result is checkpointed. Failed or indeterminate child
 outcomes keep dependent work blocked. Build/test, OpenPullRequest, and Merge
-intents without receipts are reported as possibly repeating. A saved terminal
+intents without receipts are reported as possibly repeating. IndependentReview
+records the exact completed ancestor results, workspace/build-test receipt, and
+pull request head as hashed evidence in its checkpoint intent. The dispatcher
+then opens one durable Approval request through the coordinator decision owner.
+A pending review parks the gate; restart reuses its request ID. Only an answer
+from the run's authorized human actor to that exact request and evidence can
+complete it. Rejection or a request for changes uses the `reject` choice,
+records a failed gate, and blocks its dependents; changed
+evidence or authority cannot approve it. The recovery view shows the pending
+request, evidence hash, and the recorded answer when available. A saved terminal
 receipt is reported only as recorded evidence; it does not prove physical
 exactly-once execution. Session status reads this checkpoint without reconciling
 children or advancing execution. It marks missing or plan-mismatched checkpoint

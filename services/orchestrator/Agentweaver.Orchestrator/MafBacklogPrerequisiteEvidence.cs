@@ -624,7 +624,8 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
                     decision.StateVersion,
                     binding.SelectionHash,
                     output.OutputSet,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    decision).ConfigureAwait(false);
             }
             catch (CoordinationException exception) when (
                 exception.Code == "maf_execution_output_witness_plan_incomplete")

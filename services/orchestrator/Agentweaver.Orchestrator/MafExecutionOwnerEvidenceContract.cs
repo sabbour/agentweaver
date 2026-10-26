@@ -56,7 +56,8 @@ internal static class MafExecutionOwnerEvidenceContract
             root.Checkpoint,
             root.CurrentDecision.StateVersion,
             root.AcceptedSelectionHash,
-            root.OutputSet);
+            root.OutputSet,
+            root.CurrentDecision);
         ValidateRootBinding(root);
         _ = MafExecutionOutputWitness.SerializeCanonicalOutputSet(root.OutputSet);
 

@@ -40,7 +40,15 @@ public sealed record MafExecutionRecoveryPlatformOperationSnapshot(
     WorkflowPlatformGate Gate,
     Guid OperationId,
     string EvidenceState,
-    string? EffectRecoveryState);
+    string? EffectRecoveryState)
+{
+    /// <summary>Durable human decision request; present only for IndependentReview.</summary>
+    public string? ApprovalRequestId { get; init; }
+    /// <summary>SHA-256 of the exact source, workspace, build/test, or pull request evidence.</summary>
+    public string? EvidenceHash { get; init; }
+    /// <summary>Recorded typed human answer; absent while approval is pending.</summary>
+    public string? ReviewDecision { get; init; }
+}
 
 /// <summary>Projects checkpoint evidence without reconciling, mutating, or advancing execution.</summary>
 internal static class MafExecutionRecoveryProjector
@@ -167,6 +175,10 @@ internal static class MafExecutionRecoveryProjector
             PlatformOperationsMatchPlan(
                 state.MergeIntents.Keys.Concat(state.MergeReceipts.Keys),
                 WorkflowPlatformGate.Merge,
+                steps) &&
+            PlatformOperationsMatchPlan(
+                state.ReviewIntents.Keys.Concat(state.ReviewReceipts.Keys),
+                WorkflowPlatformGate.IndependentReview,
                 steps);
     }
 
@@ -284,9 +296,12 @@ internal static class MafExecutionRecoveryProjector
         MafExecutionCheckpoint state)
     {
         // Only a saved terminal receipt can resolve whether the external gate call returned.
+        if (state.ReviewIntents.ContainsKey(stepId) && !state.ReviewReceipts.ContainsKey(stepId))
+            return "awaitingApproval";
         var hasIntent = state.BuildTestIntents.ContainsKey(stepId) ||
             state.OpenPullRequestIntents.ContainsKey(stepId) ||
-            state.MergeIntents.ContainsKey(stepId);
+            state.MergeIntents.ContainsKey(stepId) ||
+            state.ReviewIntents.ContainsKey(stepId);
         if (hasIntent && !HasPlatformReceipt(stepId, state))
             return "mayRepeat";
         if (status == MafExecutionTaskStatus.Running && !HasPlatformReceipt(stepId, state))
@@ -324,6 +339,20 @@ internal static class MafExecutionRecoveryProjector
                 hasReceipt ? "terminalReceiptRecorded" : "intentOnly",
                 hasReceipt ? null : "mayRepeat"));
         }
+        foreach (var (stepId, intent) in state.ReviewIntents.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            // Pending human review is a parked decision, not an external effect to repeat.
+            var hasReceipt = state.ReviewReceipts.ContainsKey(stepId);
+            operations.Add(new MafExecutionRecoveryPlatformOperationSnapshot(
+                stepId, WorkflowPlatformGate.IndependentReview, intent.OperationId,
+                hasReceipt ? "terminalReceiptRecorded" : "intentOnly",
+                hasReceipt ? null : "awaitingApproval")
+            {
+                ApprovalRequestId = intent.ApprovalRequestId,
+                EvidenceHash = intent.EvidenceHash,
+                ReviewDecision = hasReceipt ? state.ReviewReceipts[stepId].ChoiceId : null
+            });
+        }
 
         return operations
             .OrderBy(operation => operation.StepId, StringComparer.Ordinal)
@@ -334,7 +363,8 @@ internal static class MafExecutionRecoveryProjector
     private static bool HasPlatformReceipt(string stepId, MafExecutionCheckpoint state) =>
         state.BuildTestReceipts.ContainsKey(stepId) ||
         state.OpenPullRequestReceipts.ContainsKey(stepId) ||
-        state.MergeReceipts.ContainsKey(stepId);
+        state.MergeReceipts.ContainsKey(stepId) ||
+        state.ReviewReceipts.ContainsKey(stepId);
 
     private static string ToStatus(MafExecutionTaskStatus status) =>
         status.ToString().ToLowerInvariant();

@@ -80,6 +80,85 @@ public sealed class MafExecutionOutputWitnessTests
     }
 
     [Fact]
+    public void CompletedPlanWitnessAcceptsFixedWorkVersionBoundToApprovedReview()
+    {
+        // Fixed work retains its launch version; only the exact durable approval may carry it to plan completion.
+        const string actor = "reviewer-1";
+        const string selectionHash = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        const long fence = 2;
+        var identity = new SessionIdentity("project-1", "run-1", "root");
+        var definition = WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn,
+            WorkflowTestData.Fixed("setup", 0, [], ["docs/plan.md"]),
+            WorkflowTestData.Platform("review", 1, ["setup"]));
+        var context = new WorkPlanRunSelectionContext(
+        [
+            new RoleRunSelection("planner", ["planner-agent"], ["model:provider/alpha"], ["worktree"]),
+            new RoleRunSelection("engineer", ["agent-1"], ["model:provider/alpha"], ["worktree"])
+        ], WorkflowTestData.PinnedSandboxBinding())
+        {
+            ModelTaskSelections =
+            [
+                new(Agentweaver.Abstractions.ModelTaskKind.Straightforward, null, null,
+                    "model:provider/alpha")
+            ]
+        };
+        var planResult = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(definition), WorkflowTestData.Plan(), context);
+        Assert.True(planResult.IsValid, string.Join("; ", planResult.Issues.Select(issue => issue.Message)));
+        var plan = planResult.Value!;
+        var association = CreateAssociation(
+            plan, context, plan.Workflow.Definition.Steps.Single(step => step.Id == "setup"), identity);
+        var progress = MafExecutionProgress.Empty with
+        {
+            FixedWorkItems = MafExecutionProgress.Empty.FixedWorkItems.Add(
+                association.AssociationId, MafExecutionTaskStatus.Succeeded)
+        };
+        var initialState = new MafExecutionCheckpoint(1, plan.Plan.Id, 3, progress)
+        {
+            FixedWorkAssociations = ImmutableDictionary<string, MafExecutionFixedWorkAssociation>.Empty
+                .WithComparers(StringComparer.Ordinal).Add(association.AssociationId, association),
+            Results = ImmutableDictionary<string, string>.Empty
+                .WithComparers(StringComparer.Ordinal).Add(association.AssociationId, "Plan prepared.")
+        };
+        var reviewStep = plan.Workflow.Definition.Steps.Single(step => step.Id == "review");
+        var reviewIntent = MafIndependentReviewContract.CreateIntent(
+            Guid.NewGuid(), identity, "review-checkpoint", 2, plan, reviewStep,
+            initialState, 3, actor, fence, selectionHash);
+        var running = CoordinationEndpoints.PrepareReviewCheckpoint(
+            new(new(identity.SessionId, "initial"), initialState), reviewIntent)!;
+        var confirmed = ConfirmedDecision(plan, context, actor, fence);
+        var approval = CoordinatorDecisionFlow.RequestApproval(
+            confirmed, reviewIntent.ApprovalRequestId, reviewIntent.EvidenceHash, actor);
+        Assert.True(approval.IsSuccess);
+        var answered = approval.State!.ApplyGateAnswer(new(
+            reviewIntent.ApprovalRequestId, actor, fence, CoordinatorGateChoices.Approve, null));
+        Assert.True(answered.IsAccepted);
+        var current = new CoordinatorDecisionCurrentState(
+            answered.State, 5, selectionHash);
+        var receipt = MafIndependentReviewContract.ReadDecision(reviewIntent, current, actor)!;
+        var completed = CoordinationEndpoints.PrepareReviewCompletionCheckpoint(
+            new(new(identity.SessionId, reviewIntent.CheckpointId),
+                running with { DecisionStateVersion = current.StateVersion }),
+            reviewIntent, receipt)!;
+        var checkpoint = new MafExecutionCheckpointSnapshot(
+            new CheckpointInfo(identity.SessionId, "review-complete"), completed);
+        var output = MafExecutionOutputWitness.CreateCompletePlanOutputSet(plan, checkpoint, identity).OutputSet;
+
+        Assert.Equal(MafExecutionTaskStatus.Succeeded, completed.Progress.NonModelSteps["review"]);
+        Assert.Equal(MafExecutionTaskStatus.Succeeded,
+            completed.Progress.FixedWorkItems[association.AssociationId]);
+        Assert.True(MafIndependentReviewContract.AllowsDecisionVersionAdvance(completed, current, 3));
+        MafExecutionOutputWitnessStore.ValidateCompletedPlan(
+            identity, fence, plan, checkpoint, current.StateVersion, selectionHash, output, current);
+        // The same checkpoint is rejected without the decision owner proof, so ordinary version jumps stay invalid.
+        var staleFailure = Assert.Throws<CoordinationException>(() =>
+            MafExecutionOutputWitnessStore.ValidateCompletedPlan(
+                identity, fence, plan, checkpoint, current.StateVersion, selectionHash, output));
+        Assert.Equal("maf_execution_output_witness_plan_incomplete", staleFailure.Code);
+    }
+
+    [Fact]
     public void OwnerEvidenceSerializerEmitsNullableMergeIntentIdAsRequiredJsonProperty()
     {
         const string outputPath = "src/result.cs";
@@ -683,6 +762,30 @@ public sealed class MafExecutionOutputWitnessTests
             checkpoint,
             plan,
             outputSet);
+    }
+
+    private static Agentweaver.Orchestrator.Core.CoordinatorDecisionState ConfirmedDecision(
+        WorkPlanSnapshot plan,
+        WorkPlanRunSelectionContext context,
+        string actor,
+        long fence)
+    {
+        var outcome = CoordinatorDecisionFlow.ProposeOutcomeSpec(
+            Agentweaver.Orchestrator.Core.CoordinatorDecisionState.Create(fence),
+            new("outcome-1", "Prepare the plan.", "The plan is ready.",
+                "Only prescribed work is included.", "The source is available.", []),
+            "outcome-request", actor);
+        Assert.True(outcome.IsSuccess);
+        var confirmedOutcome = outcome.State!.ApplyGateAnswer(new(
+            "outcome-request", actor, fence, CoordinatorGateChoices.Approve, null)).State;
+        var selected = CoordinatorDecisionFlow.SelectWorkflow(
+            confirmedOutcome, new(plan.Workflow.Definition, [plan.Workflow.Definition]), null, null, null);
+        Assert.True(selected.IsSuccess);
+        var proposed = CoordinatorDecisionFlow.ProposeWorkPlan(
+            selected.State!, plan.Plan, context, "plan-request", actor);
+        Assert.True(proposed.IsSuccess);
+        return proposed.State!.ApplyGateAnswer(new(
+            "plan-request", actor, fence, CoordinatorGateChoices.Approve, null)).State;
     }
 
     private static (WorkPlanSnapshot Plan, WorkPlanRunSelectionContext Context,
