@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { redact } from './redaction.mjs';
+import { runP1CleanupOperations } from './p1-cleanup-operations.mjs';
 
 /** Create invocation-bound API and Projects Config fixtures for a bounded P1 surface journey. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -385,45 +386,36 @@ export async function createP1Fixture(plan, {
       throw new Error('P1 fixture cleanup was already attempted for this invocation and is never retried.');
     }
     const setup = state.setup;
-    const step = async (name, send) => {
-      try {
-        return await send();
-      } catch (error) {
-        recordRequestFailure(state, name, error);
-        throw error;
-      }
-    };
     state.cleanup = {
       invocationId,
       state: 'indeterminate',
       reason: 'Cleanup was attempted, but not every cleanup receipt was verified.',
     };
-    const revokedOrchestrator = await step('revoke-orchestrator', async () => requireAssignment((await invoke(
-      api, 'revokeProjectRoleAssignment',
-      { projectId: setup.projectId, assignmentId: setup.assignmentId }, undefined, [200],
-      { expectedRevision: setup.assignmentRevision })).value,
-    setup.projectId, actor, 'orchestrator', 'revoked', setup.assignmentRevision + 1, setup.assignmentId));
-    const archived = await step('archive-project', async () => requireProject((await invoke(
-      api, 'updateProject', { projectId: setup.projectId },
-      { expectedRevision: setup.projectRevision, name: state.projectName, state: 'archived' }, [200])).value,
-    invocationId, 'archived', setup.projectId, setup.projectRevision + 1));
-    const revokedOwner = await step('revoke-owner', async () => requireAssignment((await invoke(
-      api, 'revokeProjectRoleAssignment',
-      { projectId: setup.projectId, assignmentId: setup.ownerAssignmentId }, undefined, [200],
-      { expectedRevision: setup.ownerAssignmentRevision })).value,
-    setup.projectId, actor, 'owner', 'revoked', setup.ownerAssignmentRevision + 1, setup.ownerAssignmentId));
+    const cleanup = await runP1CleanupOperations({
+      api,
+      invocationId,
+      projectName: state.projectName,
+      projectId: setup.projectId,
+      projectRevision: setup.projectRevision,
+      ownerAssignmentId: setup.ownerAssignmentId,
+      ownerAssignmentRevision: setup.ownerAssignmentRevision,
+      orchestratorAssignmentId: setup.assignmentId,
+      orchestratorAssignmentRevision: setup.assignmentRevision,
+      actorId: actor.actorId,
+      onFailure(step, error) { recordRequestFailure(state, step, error); },
+    });
     return state.cleanup = {
       invocationId,
       state: 'cleaned',
       tenantId: actor.tenantId,
       projectId: setup.projectId,
-      projectRevision: archived.revision,
-      projectState: archived.state,
+      projectRevision: cleanup.archived.revision,
+      projectState: cleanup.archived.state,
       projectConfigurationRevision: setup.projectConfigurationRevision,
-      assignmentId: revokedOrchestrator.assignmentId,
-      assignmentRevision: revokedOrchestrator.revision,
-      ownerAssignmentId: revokedOwner.assignmentId,
-      ownerAssignmentRevision: revokedOwner.revision,
+      assignmentId: cleanup.revokedOrchestrator.assignmentId,
+      assignmentRevision: cleanup.revokedOrchestrator.revision,
+      ownerAssignmentId: cleanup.revokedOwner.assignmentId,
+      ownerAssignmentRevision: cleanup.revokedOwner.revision,
     };
   };
 

@@ -1,8 +1,8 @@
 # Reconcile an interrupted P1 run
 
-Use read-only reconciliation before retrying setup, cleanup, or a live
-journey. Keep the invocation ID from the existing evidence; do not generate a
-replacement ID.
+Use read-only reconciliation before attempting recovery cleanup, retrying
+setup, or starting a live journey. Keep the invocation ID from the existing
+evidence; do not generate a replacement ID.
 
 ```powershell
 npm run harness:p1:signin-run -- --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>
@@ -46,8 +46,48 @@ An HTTP 404 from the audit endpoint is reported as
 records. These distinct `verdictReasonCode` values preserve why reconciliation
 needs review. The audit endpoint returns at most 32 records and marks a larger
 result incomplete. Neither an incomplete read nor **safe to clean up** is
-permission to mutate state. Resolve the evidence through the normal reviewed
-process before any separate cleanup or new journey.
+permission to mutate state. Use the guarded recovery-cleanup mode below as a
+separate, explicit action; it cannot start or resume a journey.
+
+## Run guarded recovery cleanup
+
+Use the original manifest and the saved **safe to clean up** reconciliation
+file from before cleanup. The mode validates both files locally, signs in once
+with the setup scopes, then performs a fresh reconciliation in that same
+signed-in session. It refuses before any write unless the invocation, setup
+actor, project, both assignment IDs and revisions, and the complete audit with
+no revocations exactly match the saved assessment. The project metadata and
+configuration revisions must also match. The current authorization context
+must show tenant-admin project-write authority.
+Run it only after separate approval of the exact cleanup target; the saved
+assessment alone is not that approval.
+
+```powershell
+npm run harness:p1:signin-run -- --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json>
+```
+
+The mode uses only the public Projects API. It revokes the Orchestrator
+assignment at its expected revision, archives the project at its expected
+revision, and then revokes the Owner assignment at its expected revision. The
+order preserves the active-project last-Owner rule. Each write is sent once;
+there is no retry. If a request fails or its receipt does not match, the mode
+stops further writes, reports **indeterminate**, performs read-only
+reconciliation, and writes a redacted receipt. Do not retry from that receipt;
+review its readback first.
+
+The output path must be new. The harness reserves it before sign-in so an
+existing evidence file cannot block the cleanup receipt after writes. If the
+receipt cannot be written, the redacted result is printed; do not retry an
+indeterminate outcome.
+
+After all three writes, the mode reconciles again. A visible archived project
+with no active assignments and complete audit evidence for both setup grants
+and later revocations is **already clean**. Partial states remain **needs
+review**. The cleanup receipt keeps the preflight **safe to clean up**
+assessment separate from the final readback verdict.
+
+Add `--dry-run` to validate the manifest and saved evidence without opening a
+browser, contacting the target, sending writes, or creating output.
 
 ## Migration 039 safety
 
@@ -58,7 +98,7 @@ without partial writes. Resolve the inconsistency through the reviewed P1
 setup/cleanup workflow that owns the invocation. Do not edit authority-audit
 or setup-operation rows by hand.
 
-`--dry-run` validates the manifest and prints the reconciliation steps without
-sign-in, target requests, or evidence output. A completed assessment that
-returns **needs review** or **safe to clean up** uses a nonzero exit code;
-read the `verdict` in the evidence file.
+`--dry-run` on `--reconcile` validates the manifest and prints the
+reconciliation steps without sign-in, target requests, or evidence output. A
+completed assessment that returns **needs review** or **safe to clean up** uses
+a nonzero exit code; read the `verdict` in the evidence file.

@@ -135,6 +135,83 @@ function validInput() {
   };
 }
 
+function validRecoveryEvidence() {
+  const invocationId = '5749fb6f-543b-427d-a04e-b7f836180ef4';
+  const projectId = 'fixture-project';
+  const assignments = [
+    { assignmentId: 'c0000000-0000-4000-8000-000000000001', role: 'owner' },
+    { assignmentId: 'c0000000-0000-4000-8000-000000000002', role: 'orchestrator' },
+  ];
+  return {
+    kind: 'p1-run-reconciliation',
+    schemaVersion: 1,
+    mode: 'read-only-assessment',
+    invocationId,
+    projectName: `p1-${invocationId}`,
+    projectMatch: {
+      status: 'found',
+      matches: [{
+        projectId,
+        name: `p1-${invocationId}`,
+        state: 'active',
+        revision: 2,
+        configurationRevision: 1,
+      }],
+    },
+    effectiveAuthority: {
+      status: 'complete',
+      context: {
+        contractVersion: 1,
+        actorId: ENVIRONMENT.actorId,
+        issuer: ENVIRONMENT.issuer,
+        tenantId: ENVIRONMENT.tenantId,
+        membershipRevision: 1,
+        boundProjectId: null,
+        boundRunId: null,
+        effectiveAuthority: [],
+      },
+    },
+    roleAssignments: {
+      status: 'complete',
+      complete: true,
+      projectId,
+      assignments: assignments.map(assignment => ({
+        ...assignment,
+        principalId: ENVIRONMENT.actorId,
+        revision: 1,
+        createdBy: ENVIRONMENT.actorId,
+        createdAt: '2026-10-13T00:00:00.000Z',
+      })),
+    },
+    auditRecords: {
+      status: 'complete',
+      complete: true,
+      truncated: false,
+      records: assignments.map((assignment, index) => ({
+        eventId: `d0000000-0000-4000-8000-00000000000${index + 1}`,
+        eventType: 'role_assigned',
+        assignmentId: assignment.assignmentId,
+        resourceType: 'project',
+        resourceId: projectId,
+        role: assignment.role,
+        revision: 1,
+        actor: ENVIRONMENT.actorId,
+        createdAt: '2026-10-13T00:00:00.000Z',
+      })),
+    },
+    verdict: 'safe to clean up',
+    verdictReasonCode: 'positive_active_setup_evidence',
+    actions: {
+      assessmentOnly: true,
+      writeRequestsIssued: false,
+      cleanupPerformed: false,
+      fixtureWritesPerformed: false,
+      grantsChanged: false,
+      newJourneyStarted: false,
+    },
+  };
+}
+
 test('authorization request uses the registered public client, S256, and exact optional run selectors', () => {
   let randomCall = 0;
   const request = createP1AuthorizationRequest({
@@ -1047,6 +1124,182 @@ test('launcher dry-run validates the manifest without opening a browser or writi
     assert.match(output.join('\n'), /Owner and Orchestrator/);
     assert.match(output.join('\n'), /No browser, network request, evidence file, project, or assignment is created/);
     await assert.rejects(access(outputPath), { code: 'ENOENT' });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('recovery cleanup dry-run checks local evidence without sign-in, browser, network, or writes', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-recovery-dry-run-'));
+  const manifestPath = path.join(directory, 'input.json');
+  const savedPath = path.join(directory, 'reconciliation.json');
+  const outputPath = path.join(directory, 'cleanup.json');
+  await writeFile(manifestPath, JSON.stringify(validInput()), 'utf8');
+  await writeFile(savedPath, JSON.stringify(validRecoveryEvidence()), 'utf8');
+  const output = [];
+  let browserLoads = 0;
+  let signIns = 0;
+  let apiClients = 0;
+  try {
+    const code = await runP1SigninCli([
+      '--recover-cleanup', '5749fb6f-543b-427d-a04e-b7f836180ef4',
+      '--input', manifestPath,
+      '--reconcile-evidence', savedPath,
+      '--output', outputPath,
+      '--dry-run',
+    ], {}, {
+      log: message => output.push(message),
+      error: message => output.push(message),
+    }, {
+      loadChromium: async () => { browserLoads += 1; },
+      signIn: async () => { signIns += 1; },
+      createSetupApi: () => { apiClients += 1; },
+    });
+
+    assert.equal(code, 0);
+    assert.equal(browserLoads, 0);
+    assert.equal(signIns, 0);
+    assert.equal(apiClients, 0);
+    assert.match(output.join('\n'), /Each write uses its current expected revision and is sent once/);
+    assert.match(output.join('\n'), /No browser, network request, target write, or evidence output/);
+    await assert.rejects(access(outputPath), { code: 'ENOENT' });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('recovery cleanup refuses an existing output path before sign-in or target writes', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-recovery-output-collision-'));
+  const manifestPath = path.join(directory, 'input.json');
+  const savedPath = path.join(directory, 'reconciliation.json');
+  await writeFile(manifestPath, JSON.stringify(validInput()), 'utf8');
+  await writeFile(savedPath, JSON.stringify(validRecoveryEvidence()), 'utf8');
+  const savedContents = await readFile(savedPath, 'utf8');
+  const errors = [];
+  let browserLoads = 0;
+  let signIns = 0;
+  let cleanupCalls = 0;
+  try {
+    const code = await runP1SigninCli([
+      '--recover-cleanup', '5749fb6f-543b-427d-a04e-b7f836180ef4',
+      '--input', manifestPath,
+      '--reconcile-evidence', savedPath,
+      '--output', savedPath,
+    ], {}, {
+      log() {},
+      error: message => errors.push(message),
+    }, {
+      loadChromium: async () => { browserLoads += 1; },
+      signIn: async () => { signIns += 1; },
+      recoverCleanup: async () => { cleanupCalls += 1; },
+    });
+
+    assert.equal(code, 2);
+    assert.equal(browserLoads, 0);
+    assert.equal(signIns, 0);
+    assert.equal(cleanupCalls, 0);
+    assert.equal(await readFile(savedPath, 'utf8'), savedContents);
+    assert.match(errors.join('\n'), /new output path.*no sign-in or target writes/i);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('recovery cleanup prints a redacted receipt when output writing fails', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-recovery-output-failure-'));
+  const manifestPath = path.join(directory, 'input.json');
+  const savedPath = path.join(directory, 'reconciliation.json');
+  const outputPath = path.join(directory, 'cleanup.json');
+  await writeFile(manifestPath, JSON.stringify(validInput()), 'utf8');
+  await writeFile(savedPath, JSON.stringify(validRecoveryEvidence()), 'utf8');
+  const output = [];
+  try {
+    const code = await runP1SigninCli([
+      '--recover-cleanup', '5749fb6f-543b-427d-a04e-b7f836180ef4',
+      '--input', manifestPath,
+      '--reconcile-evidence', savedPath,
+      '--output', outputPath,
+    ], {}, {
+      log: message => output.push(message),
+      error: message => output.push(message),
+    }, {
+      chromium: {},
+      withBrowserContext: async (_options, useContext) => useContext({}),
+      signIn: async request => jwt({ actorId: request.actorId, scopes: request.scopes }),
+      createSetupApi: () => ({ calls: [] }),
+      recoverCleanup: async () => ({
+        outcome: 'indeterminate',
+        accessToken: 'controlled-secret-token',
+      }),
+      reserveEvidenceOutput: async () => ({
+        async write() { throw new Error('disk full'); },
+        async release() {},
+      }),
+    });
+
+    assert.equal(code, 1);
+    assert.match(output.join('\n'), /redacted result follows/);
+    assert.match(output.join('\n'), /indeterminate/);
+    assert.match(output.join('\n'), /\[REDACTED\]/);
+    assert.equal(output.join('\n').includes('controlled-secret-token'), false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('recovery cleanup uses one setup sign-in and never invokes the journey runner', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentweaver-p1-recovery-launcher-'));
+  const inputPath = path.join(directory, 'input.json');
+  const savedPath = path.join(directory, 'reconciliation.json');
+  const outputPath = path.join(directory, 'cleanup.json');
+  const invocationId = '5749fb6f-543b-427d-a04e-b7f836180ef4';
+  await writeFile(inputPath, JSON.stringify(validInput()), 'utf8');
+  await writeFile(savedPath, JSON.stringify(validRecoveryEvidence()), 'utf8');
+  const signIns = [];
+  let cleanupCalls = 0;
+  let journeyRuns = 0;
+  try {
+    const code = await runP1SigninCli([
+      '--recover-cleanup', invocationId,
+      '--input', inputPath,
+      '--reconcile-evidence', savedPath,
+      '--output', outputPath,
+    ], {}, { log() {}, error: assert.fail }, {
+      chromium: {},
+      withBrowserContext: async (_options, useContext) => useContext({}),
+      signIn: async request => {
+        signIns.push(request);
+        return jwt({ actorId: request.actorId, scopes: request.scopes });
+      },
+      createSetupApi: ({ setupToken }) => {
+        assert.equal(setupToken, jwt({ scopes: P1_SETUP_SCOPES }));
+        return { calls: [] };
+      },
+      async recoverCleanup(options) {
+        cleanupCalls += 1;
+        assert.equal(options.invocationId, invocationId);
+        assert.equal(options.environment.actorId, ENVIRONMENT.actorId);
+        assert.equal(options.savedEvidence.kind, 'p1-run-reconciliation');
+        return {
+          outcome: 'completed',
+          readback: { verdict: 'already clean' },
+        };
+      },
+      async runP1() {
+        journeyRuns += 1;
+        return 0;
+      },
+    });
+
+    assert.equal(code, 0);
+    assert.equal(signIns.length, 1);
+    assert.deepEqual(signIns[0].scopes, P1_SETUP_SCOPES);
+    assert.equal(signIns[0].projectId, undefined);
+    assert.equal(signIns[0].runId, undefined);
+    assert.equal(cleanupCalls, 1);
+    assert.equal(journeyRuns, 0);
+    const persisted = JSON.parse(await readFile(outputPath, 'utf8'));
+    assert.equal(persisted.outcome, 'completed');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

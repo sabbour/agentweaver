@@ -6,6 +6,19 @@ import { AgentweaverClient } from '../lib/client.mjs';
 
 const document = {
   openapi: '3.1.0',
+  components: {
+    schemas: {
+      UpdateProjectRequest: {
+        type: 'object',
+        required: ['expectedRevision', 'name', 'state'],
+        properties: {
+          expectedRevision: { type: 'integer' },
+          name: { type: 'string' },
+          state: { type: 'string', enum: ['active', 'archived'] },
+        },
+      },
+    },
+  },
   paths: {
     '/api/v1/projects/{projectId}': {
       get: {
@@ -58,6 +71,7 @@ test('actual loopback HTTP discovers the contract and retains redacted correlate
   const host = await fixture();
   try {
     await host.client.discover();
+    assert.equal(host.client.schemas.get('UpdateProjectRequest').properties.expectedRevision.type, 'integer');
     const result = await host.client.invoke('getProject', {
       pathParameters: { projectId: 'controlled-project' }, query: { runId: 'controlled-run' },
     });

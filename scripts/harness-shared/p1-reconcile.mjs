@@ -1,4 +1,4 @@
-import { mkdir, open } from 'node:fs/promises';
+import { mkdir, open, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { p1FixtureProjectName } from './p1-fixture-setup.mjs';
 import { redact } from './redaction.mjs';
@@ -316,7 +316,7 @@ function summarizeAuthorityRead(read, environment, projectMatch) {
   };
 }
 
-function hasCompleteSetupRevocationEvidence(records, environment) {
+function hasCompleteSetupRevocationEvidence(records, environment, expectedProjectId = null) {
   if (records.length === 0) return false;
 
   const recordsByAssignment = new Map();
@@ -335,7 +335,8 @@ function hasCompleteSetupRevocationEvidence(records, environment) {
   }
 
   // An empty complete read is not positive cleanup evidence; require both P1 role grants and their revocations.
-  if (projectIds.size !== 1 || recordsByAssignment.size !== 2) return false;
+  if (projectIds.size !== 1 || expectedProjectId && !projectIds.has(expectedProjectId)
+    || recordsByAssignment.size !== 2) return false;
 
   const roles = new Set();
   for (const events of recordsByAssignment.values()) {
@@ -352,6 +353,17 @@ function hasCompleteSetupRevocationEvidence(records, environment) {
   }
 
   return roles.size === 2 && roles.has('owner') && roles.has('orchestrator');
+}
+
+function hasArchivedSetupRevocationEvidence(projectMatch, roleAssignments, auditRecords, environment) {
+  const project = projectMatch.matches[0];
+  // The assignment endpoint lists active grants only; the audit must prove both setup grants were revoked.
+  return projectMatch.status === 'found'
+    && project?.state === 'archived'
+    && roleAssignments.status === 'complete'
+    && roleAssignments.complete === true
+    && roleAssignments.assignments.length === 0
+    && hasCompleteSetupRevocationEvidence(auditRecords.records, environment, project.projectId);
 }
 
 function matchesSetupAssignments(projectMatch, roleAssignments, effectiveAuthority, auditRecords, environment) {
@@ -461,6 +473,21 @@ function reconcileVerdict(projectMatch, effectiveAuthority, roleAssignments, aud
     return needsReview(
       reasonCode,
       roleAssignments.reason ?? 'A complete read of the visible project role assignments is required for a conclusive assessment.',
+    );
+  }
+  if (projectMatch.matches[0]?.state === 'archived') {
+    if (hasArchivedSetupRevocationEvidence(
+      projectMatch, roleAssignments, auditRecords, environment,
+    )) {
+      return {
+        verdict: 'already clean',
+        reasonCode: 'positive_archived_setup_revocation_evidence',
+        reason: 'The visible archived project has no active role assignments, and the complete invocation-linked audit proves that both setup assignments were granted and later revoked.',
+      };
+    }
+    return needsReview(
+      'archived_setup_evidence_incomplete',
+      'The archived project does not have complete evidence that both setup assignments were revoked.',
     );
   }
   if (!matchesSetupAssignments(projectMatch, roleAssignments, effectiveAuthority, auditRecords, environment)) {
@@ -584,18 +611,47 @@ export async function reconcileP1Run({ api, environment, invocationId, signal } 
   });
 }
 
-/** Write exactly one redacted JSON evidence object without replacing an existing output file. */
-export async function persistP1ReconcileEvidence(file, evidence) {
+/** Reserve an exclusive evidence path before any recovery-cleanup write can be sent. */
+export async function reserveP1EvidenceOutput(file) {
   if (typeof file !== 'string' || !file.trim()) {
     throw new Error('A reconciliation evidence output path is required.');
   }
 
-  // Exclusive creation preserves prior evidence and ensures each invocation produces one standalone JSON record.
-  await mkdir(path.dirname(path.resolve(file)), { recursive: true });
-  const handle = await open(file, 'wx', 0o600);
+  const destination = path.resolve(file);
+  await mkdir(path.dirname(destination), { recursive: true });
+  // Reserving the exact destination prevents an existing assessment from being reused as cleanup output.
+  const handle = await open(destination, 'wx', 0o600);
+  let writeAttempted = false;
+  let closed = false;
+  const close = async () => {
+    if (!closed) {
+      await handle.close();
+      closed = true;
+    }
+  };
+  return {
+    async write(evidence) {
+      if (writeAttempted) throw new Error('The evidence output reservation can only be written once.');
+      writeAttempted = true;
+      try {
+        await handle.writeFile(`${JSON.stringify(redact(evidence), null, 2)}\n`, 'utf8');
+      } finally {
+        await close();
+      }
+    },
+    async release() {
+      await close();
+      if (!writeAttempted) await unlink(destination);
+    },
+  };
+}
+
+/** Write exactly one redacted JSON evidence object without replacing an existing output file. */
+export async function persistP1ReconcileEvidence(file, evidence) {
+  const output = await reserveP1EvidenceOutput(file);
   try {
-    await handle.writeFile(`${JSON.stringify(redact(evidence), null, 2)}\n`, 'utf8');
+    await output.write(evidence);
   } finally {
-    await handle.close();
+    await output.release();
   }
 }

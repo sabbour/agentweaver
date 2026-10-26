@@ -79,8 +79,45 @@ records.
 Reconciliation is an assessment only. It writes one redacted JSON evidence
 file and issues only reads. It never writes a fixture or grant, performs
 cleanup, starts or admits a journey, or approves a cleanup action. Even a
-**safe to clean up** verdict is an assessment, not authorization
-for the harness to clean up; cleanup must remain a separate reviewed action.
+**safe to clean up** verdict is an assessment, not authorization for the
+harness to clean up.
+
+## Guarded recovery cleanup
+
+Use the exact original manifest and saved **safe to clean up** reconciliation
+file. The recovery mode signs in once, reads the invocation again, and refuses
+before writing unless the fresh result has the same setup actor, project,
+Owner and Orchestrator assignment IDs and revisions, and complete audit with no
+revocations. The project metadata and configuration revisions must also
+match. It also requires current
+tenant-admin project-write authority.
+Run it only after separate approval of the exact cleanup target; the saved
+assessment alone is not that approval.
+
+```powershell
+npm run harness:p1:signin-run -- --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json>
+```
+
+The mode uses the public Projects API to revoke Orchestrator, archive the
+project, and revoke Owner, with an expected revision on each write. This order
+keeps the active project's last Owner until after archive. Each write is sent
+once and is never retried. A failed request or unverified receipt stops the
+remaining writes as **indeterminate**; the harness then performs read-only
+reconciliation and records a redacted receipt. Review that readback before
+taking any further action.
+
+Choose a new output path. The harness reserves it before sign-in so an
+existing evidence file cannot block the cleanup receipt after writes. If the
+receipt cannot be written, the redacted result is printed; do not retry an
+indeterminate outcome.
+
+When all receipts are exact, a second reconciliation must report **already
+clean**: the project is archived, its active assignment list is empty, and
+the complete invocation audit proves both setup assignments were granted and
+revoked. Partial states stay **needs review**. The cleanup receipt separates
+the preflight assessment from the residual-state readback. Add `--dry-run` to
+validate the local manifest and saved evidence without sign-in, network
+requests, writes, or output.
 
 Migration 039 validates existing audit links before backfilling them. A live
 inconsistency aborts its PostgreSQL transaction without partial writes,
@@ -127,8 +164,10 @@ profile is removed when the run finishes, fails, or is cancelled.
 
 The runner uses the public Projects API to create an invocation-owned project
 and assign the signed-in actor Owner and then Orchestrator. It runs only the
-selected journey. Cleanup revokes Orchestrator, archives the project, and then
-revokes Owner. The evidence records the receipts for setup and cleanup.
+selected journey. In-process cleanup revokes Orchestrator, archives the
+project, and then revokes Owner. Guarded recovery cleanup uses the same
+revision-checked sequence for an existing invocation after a fresh evidence
+match. The evidence records the receipts for setup and cleanup.
 
 ## Review the result
 

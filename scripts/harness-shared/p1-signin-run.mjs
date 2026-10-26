@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
 import {
   authorizeP1InBrowser,
@@ -11,11 +12,15 @@ import {
   withFreshP1BrowserContext,
 } from './p1-signin.mjs';
 import { createP1SetupApi } from './p1-runtime-adapters.mjs';
-import { persistP1ReconcileEvidence, reconcileP1Run } from './p1-reconcile.mjs';
+import { persistP1ReconcileEvidence, reconcileP1Run, reserveP1EvidenceOutput } from './p1-reconcile.mjs';
+import { isValidP1RecoveryEvidence, recoverP1RunCleanup } from './p1-recovery-cleanup.mjs';
+import { redact } from './redaction.mjs';
 import { runP1Cli } from './run-p1.mjs';
 
 const OPTION_NAMES = new Set([
   '--reconcile',
+  '--recover-cleanup',
+  '--reconcile-evidence',
   '--surface',
   '--input',
   '--output',
@@ -42,7 +47,7 @@ export function parseP1SigninArguments(argv) {
     if (!OPTION_NAMES.has(option)
       || typeof argv[index + 1] !== 'string'
       || argv[index + 1].startsWith('--')) {
-      throw new Error('Use --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>], or --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>.');
+      throw new Error('Use --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>], --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json>, or --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json>.');
     }
     const key = option.slice(2).replaceAll('-', '');
     if (result[key] !== undefined) throw new Error(`The ${option} option can only be used once.`);
@@ -71,6 +76,30 @@ function printP1ReconcileSteps(io, { dryRun = false } = {}) {
   io.log?.('It never changes grants or fixtures, performs cleanup, starts or admits a journey, or approves cleanup.');
   if (dryRun) {
     io.log?.('Dry run only: the manifest and invocation ID are checked. No browser, network request, or evidence file is created.');
+  }
+}
+
+function printP1RecoveryCleanupSteps(io, { dryRun = false } = {}) {
+  io.log?.('Guarded recovery cleanup: verify the saved assessment against a fresh read in one sign-in.');
+  io.log?.('The signed-in actor must still be a tenant admin and the project, actor, assignments, revisions, and no-revocation audit must match exactly.');
+  io.log?.('The harness revokes Orchestrator, archives the project, then revokes Owner. Each write uses its current expected revision and is sent once.');
+  io.log?.('Any failed or unverified write stops further writes as indeterminate; the harness then performs read-only reconciliation and writes a redacted receipt.');
+  if (dryRun) {
+    io.log?.('Dry run only: local manifest and saved evidence are checked. No browser, network request, target write, or evidence output is created.');
+  }
+}
+
+async function readP1RecoveryEvidence(file) {
+  let content;
+  try {
+    content = await readFile(file, 'utf8');
+  } catch {
+    throw new Error('The saved reconciliation evidence file could not be read.');
+  }
+  try {
+    return JSON.parse(content);
+  } catch {
+    throw new Error('The saved reconciliation evidence is not valid JSON.');
   }
 }
 
@@ -136,7 +165,9 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
   signIn = authorizeP1InBrowser,
   createSetupApi = createP1SetupApi,
   reconcile = reconcileP1Run,
+  recoverCleanup = recoverP1RunCleanup,
   persistEvidence = persistP1ReconcileEvidence,
+  reserveEvidenceOutput = reserveP1EvidenceOutput,
   chromium,
   signal,
   loadChromium = async () => (await import('playwright')).chromium,
@@ -153,6 +184,7 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
   if (options.help) {
     io.log?.('Usage: npm run harness:p1:signin-run -- --surface api|mcp|api,mcp|ui --input <manifest.json> --output <evidence.jsonl> [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>] [--dry-run]');
     io.log?.('Usage: npm run harness:p1:signin-run -- --reconcile <invocation-id> --input <manifest.json> --output <reconciliation.json> [--dry-run]');
+    io.log?.('Usage: npm run harness:p1:signin-run -- --recover-cleanup <invocation-id> --input <manifest.json> --reconcile-evidence <reconciliation.json> --output <cleanup.json> [--dry-run]');
     io.log?.('The launcher signs in with the registered agentweaver-web client. Broker tokens stay in memory and are not written to evidence.');
     io.log?.('Multiple surfaces run sequentially with separate evidence files: evidence.api.jsonl and evidence.mcp.jsonl for --output evidence.jsonl. All surfaces run even if one returns a blocked or failed result.');
     printP1OperatorSteps(io);
@@ -162,6 +194,7 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
     if (!options.input || !options.output
       || options.surface || Object.hasOwn(options, 'nativeprobeenvelope')
       || Object.hasOwn(options, 'dispatchrecoveryenvelope')
+      || options.recovercleanup || Object.hasOwn(options, 'reconcileevidence')
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(options.reconcile)) {
       io.error?.('Read-only reconciliation requires --reconcile <invocation-id>, --input <manifest.json>, and --output <reconciliation.json>; journey and probe options are not accepted.');
       return 2;
@@ -225,11 +258,106 @@ export async function runP1SigninCli(argv = process.argv.slice(2), env = process
       setupToken = undefined;
     }
   }
+  if (options.recovercleanup !== undefined) {
+    if (!options.input || !options.output || !options.reconcileevidence || options.surface
+      || options.reconcile || Object.hasOwn(options, 'nativeprobeenvelope')
+      || Object.hasOwn(options, 'dispatchrecoveryenvelope')
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(options.recovercleanup)) {
+      io.error?.('Guarded recovery cleanup requires --recover-cleanup <invocation-id>, --input <manifest.json>, --reconcile-evidence <reconciliation.json>, and --output <cleanup.json>; journey and probe options are not accepted.');
+      return 2;
+    }
+    let validated;
+    let savedEvidence;
+    try {
+      validated = await readP1SignInInput(argv);
+      savedEvidence = await readP1RecoveryEvidence(options.reconcileevidence);
+      if (!isValidP1RecoveryEvidence(savedEvidence, {
+        invocationId: options.recovercleanup,
+        environment: validated.environment,
+      })) {
+        throw new Error('The saved reconciliation evidence does not authorize recovery for this invocation and setup actor.');
+      }
+    } catch (error) {
+      io.error?.(error.message);
+      return 2;
+    }
+    if (options.dryRun) {
+      printP1RecoveryCleanupSteps(io, { dryRun: true });
+      return 0;
+    }
+
+    let evidenceOutput;
+    try {
+      evidenceOutput = await reserveEvidenceOutput(options.output);
+    } catch {
+      io.error?.('P1 recovery cleanup requires a new output path; no sign-in or target writes were attempted.');
+      return 2;
+    }
+
+    let setupToken;
+    try {
+      printP1RecoveryCleanupSteps(io);
+      const browser = chromium ?? await loadChromium();
+      return await withBrowserContext({
+        chromium: browser,
+        authRoot,
+        signal,
+      }, async context => {
+        setupToken = await signIn({
+          environment: validated.environment,
+          actorId: validated.environment.actorId,
+          scopes: P1_SETUP_SCOPES,
+          chromium: browser,
+          context,
+          signal,
+          io,
+        });
+        validateP1BrokerToken(setupToken, tokenRequirements(
+          validated.environment,
+          validated.environment.actorId,
+          P1_SETUP_SCOPES,
+        ));
+
+        const api = createSetupApi({
+          environment: validated.environment,
+          setupToken,
+        });
+        const evidence = await recoverCleanup({
+          api,
+          environment: validated.environment,
+          invocationId: options.recovercleanup,
+          savedEvidence,
+          signal,
+          reconcile,
+        });
+        try {
+          await evidenceOutput.write(evidence);
+        } catch {
+          io.error?.('The recovery result could not be saved. The redacted result follows; do not retry an indeterminate outcome.');
+          io.error?.(JSON.stringify(redact(evidence), null, 2));
+          return 1;
+        }
+        io.log?.(`Recovery cleanup outcome: ${evidence.outcome}; readback verdict: ${evidence.readback?.verdict ?? 'not performed'}.`);
+        return evidence.outcome === 'completed' ? 0 : 1;
+      });
+    } catch {
+      io.error?.('P1 recovery cleanup could not be completed. No token values were written or displayed.');
+      return 1;
+    } finally {
+      setupToken = undefined;
+      try {
+        await evidenceOutput.release();
+      } catch {
+        io.error?.('The reserved recovery output could not be closed or removed; inspect that exact path before another attempt.');
+      }
+    }
+  }
   const surfaces = options.surface?.split(',') ?? [];
   if (surfaces.length === 0 || new Set(surfaces).size !== surfaces.length
     || surfaces.some(surface => !['api', 'mcp', 'ui'].includes(surface))
     || (surfaces.includes('ui') && surfaces.length > 1)
-    || !options.input || !options.output) {
+    || !options.input || !options.output || options.reconcile
+    || options.recovercleanup || Object.hasOwn(options, 'reconcileevidence')) {
     io.error?.('Select api, mcp, api,mcp, or ui and supply an input manifest and evidence output path.');
     return 2;
   }
