@@ -25,7 +25,7 @@ const AUTHORITY_ROLES = new Set([
 
 function readFailure(call) {
   if (call?.status === 401 || call?.status === 403) {
-    return { status: 'denied', reason: 'The read request was denied.' };
+    return { status: 'denied', reason: `The read request was denied with HTTP ${call.status}.` };
   }
   return { status: 'incomplete', reason: 'The read request did not return a complete successful response.' };
 }
@@ -287,25 +287,42 @@ function summarizeAuthorityRead(read, environment, projectMatch) {
   };
 }
 
-function hasUnrevokedAuditAssignment(records) {
-  const latestByAssignment = new Map();
+function hasCompleteSetupRevocationEvidence(records, environment) {
+  if (records.length === 0) return false;
+
+  const recordsByAssignment = new Map();
+  const projectIds = new Set();
   for (const record of records) {
     if (!['role_assigned', 'role_revoked'].includes(record.eventType)
       || typeof record.assignmentId !== 'string'
       || record.resourceType !== 'project'
       || typeof record.resourceId !== 'string'
-      || typeof record.role !== 'string') return true;
-    const previous = latestByAssignment.get(record.assignmentId);
-    if (!previous) {
-      if (record.eventType !== 'role_assigned') return true;
-      latestByAssignment.set(record.assignmentId, record);
-    } else if (record.revision <= previous.revision) {
-      return true;
-    } else {
-      latestByAssignment.set(record.assignmentId, record);
-    }
+      || !['owner', 'orchestrator'].includes(record.role)) return false;
+
+    projectIds.add(record.resourceId);
+    const events = recordsByAssignment.get(record.assignmentId) ?? [];
+    events.push(record);
+    recordsByAssignment.set(record.assignmentId, events);
   }
-  return [...latestByAssignment.values()].some(record => record.eventType === 'role_assigned');
+
+  // An empty complete read is not positive cleanup evidence; require both P1 role grants and their revocations.
+  if (projectIds.size !== 1 || recordsByAssignment.size !== 2) return false;
+
+  const roles = new Set();
+  for (const events of recordsByAssignment.values()) {
+    if (events.length !== 2) return false;
+    const [assigned, revoked] = [...events].sort((left, right) => left.revision - right.revision);
+    if (assigned.eventType !== 'role_assigned'
+      || assigned.revision !== 1
+      || assigned.actor !== environment.actorId
+      || revoked.eventType !== 'role_revoked'
+      || revoked.revision !== 2
+      || assigned.resourceId !== revoked.resourceId
+      || assigned.role !== revoked.role) return false;
+    roles.add(assigned.role);
+  }
+
+  return roles.size === 2 && roles.has('owner') && roles.has('orchestrator');
 }
 
 function matchesSetupAssignments(projectMatch, roleAssignments, effectiveAuthority, auditRecords, environment) {
@@ -357,15 +374,15 @@ function reconcileVerdict(projectMatch, effectiveAuthority, roleAssignments, aud
     };
   }
   if (projectMatch.status === 'not-found') {
-    if (hasUnrevokedAuditAssignment(auditRecords.records)) {
+    if (!hasCompleteSetupRevocationEvidence(auditRecords.records, environment)) {
       return {
         verdict: 'needs review',
-        reason: 'The complete audit read still contains an unrevoked setup assignment or inconsistent evidence.',
+        reason: 'The complete audit read does not prove that both setup assignments were revoked.',
       };
     }
     return {
       verdict: 'already clean',
-      reason: 'The caller can see every project in the tenant, no invocation-named project is visible, and the complete audit read has no unrevoked setup assignment.',
+      reason: 'The caller can see every project in the tenant, no invocation-named project is visible, and the complete audit read proves both setup assignments were revoked.',
     };
   }
   if (projectMatch.status === 'found'

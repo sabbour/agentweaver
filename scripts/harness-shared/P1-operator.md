@@ -62,7 +62,9 @@ truncated, or otherwise incomplete read produces **needs review**. If a
 project is visible, the role assignments and audit events must match the
 expected P1 Owner and Orchestrator setup before the result can say
 **safe to clean up**. A complete audit read and tenant-wide visibility with no
-matching project can establish **already clean**.
+matching project can establish **already clean** only when it proves both the
+setup Owner and Orchestrator assignments were later revoked. An empty audit
+result is not positive cleanup evidence and remains **needs review**.
 
 Reconciliation is an assessment only. It writes one redacted JSON evidence
 file and issues only reads. It never writes a fixture or grant, performs

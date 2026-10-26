@@ -76,8 +76,10 @@ Common results:
 The reconcile output is an assessment only. A permission-filtered project
 list can hide a matching project, so a not-found result without tenant-wide
 visibility remains **needs review**. Missing, denied, malformed, or truncated
-reads also remain **needs review**. The command never changes a grant, writes
-a fixture, performs cleanup, or starts another journey.
+reads also remain **needs review**. An empty audit read is not evidence that
+the setup Owner and Orchestrator assignments were revoked, so it cannot
+establish **already clean**. The command never changes a grant, writes a
+fixture, performs cleanup, or starts another journey.
 
 ## Escalate unresolved issues
 

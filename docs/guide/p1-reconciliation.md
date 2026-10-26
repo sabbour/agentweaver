@@ -23,8 +23,8 @@ authorize or perform cleanup.
 ## Read the verdict
 
 - **already clean**: the caller has tenant-wide project visibility, no project
-  has the exact `p1-<invocation-id>` name, and a complete audit read shows no
-  unrevoked setup assignment.
+  has the exact `p1-<invocation-id>` name, and a complete audit read proves
+  both setup assignments (Owner and Orchestrator) were later revoked.
 - **safe to clean up**: one active matching project is visible, a complete
   assignment read shows the setup actor's Owner and Orchestrator roles, and
   the complete invocation audit read matches those assignments.
@@ -34,10 +34,11 @@ authorize or perform cleanup.
 
 The project list is filtered by current permissions. A not-found result
 without tenant-wide project visibility does not prove that a project is absent.
-The audit endpoint returns at most 32 records and marks a larger result
-incomplete. Neither an incomplete read nor **safe to clean up** is permission
-to mutate state. Resolve the evidence through the normal reviewed process
-before any separate cleanup or new journey.
+An empty audit result is not positive cleanup evidence and remains **needs
+review**. The audit endpoint returns at most 32 records and marks a larger
+result incomplete. Neither an incomplete read nor **safe to clean up** is
+permission to mutate state. Resolve the evidence through the normal reviewed
+process before any separate cleanup or new journey.
 
 `--dry-run` validates the manifest and prints the reconciliation steps without
 sign-in, target requests, or evidence output. A completed assessment that

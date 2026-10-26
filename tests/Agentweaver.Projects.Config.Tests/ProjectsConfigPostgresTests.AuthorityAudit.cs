@@ -3,6 +3,7 @@ using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
@@ -64,6 +65,83 @@ public sealed partial class ProjectsConfigPostgresTests
                 .Where(record => record.ResourceId == project.ProjectId)
                 .ToArrayAsync(),
             record => Assert.Equal(invocationId, record.InvocationId));
+    }
+
+    [Fact]
+    public async Task Migration039BackfillsExistingP1AuditRowsAndRestoresAppendOnlyProtection()
+    {
+        await using var db = CreateDbContext();
+        var options = CreateDbContextOptions();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var tenantId = $"authority-audit-migration-{Guid.NewGuid():N}";
+        var admin = await SeedCallerAsync(
+            db, store, $"authority-audit-migration-admin-{Guid.NewGuid():N}", tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant, tenantId, ProjectAuthorityRole.TenantAdmin);
+        var projects = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var roles = new ProjectRoleAssignmentService(
+            new PooledDbContextFactory<ProjectsConfigDbContext>(options), TimeProvider.System);
+        var invocationId = Guid.NewGuid();
+        var project = await projects.CreateProjectAsync(
+            admin, $"p1-{invocationId:D}", CancellationToken.None);
+
+        var owner = await roles.AssignAsync(
+            admin,
+            project.ProjectId,
+            new AssignProjectRoleRequest
+            {
+                PrincipalId = admin.ActorId,
+                Role = ProjectAuthorityRole.Owner,
+            },
+            CancellationToken.None);
+        var orchestrator = await roles.AssignAsync(
+            admin,
+            project.ProjectId,
+            new AssignProjectRoleRequest
+            {
+                PrincipalId = admin.ActorId,
+                Role = ProjectAuthorityRole.Orchestrator,
+            },
+            CancellationToken.None);
+        var originalEventIds = await db.AuthorityAudit.AsNoTracking()
+            .Where(record => record.TenantId == tenantId && record.InvocationId == invocationId)
+            .Select(record => record.EventId)
+            .ToArrayAsync();
+        Assert.Equal(2, originalEventIds.Length);
+
+        var migrator = db.GetService<IMigrator>();
+        const string beforeInvocationAudit = "20261023201615_AddHostedModelReasoningCatalogAfterCasting";
+        const string invocationAudit = "20261026183946_039_LinkProjectSetupAuthorityAuditInvocation";
+        await migrator.MigrateAsync(beforeInvocationAudit);
+        try
+        {
+            await migrator.MigrateAsync(invocationAudit);
+
+            await using var verificationDb = CreateDbContext();
+            var invocationRows = await verificationDb.AuthorityAudit.AsNoTracking()
+                .Where(record => record.TenantId == tenantId && record.InvocationId == invocationId)
+                .Select(record => record.EventId)
+                .ToArrayAsync();
+            var read = await new ProjectSetupAuthorityAuditService(verificationDb)
+                .ReadAsync(admin, invocationId, CancellationToken.None);
+
+            Assert.Equal(originalEventIds.Order(), invocationRows.Order());
+            Assert.True(read.Complete);
+            Assert.Equal(originalEventIds.Order(), read.Records.Select(record => record.EventId).Order());
+            Assert.Contains(read.Records, record =>
+                record.AssignmentId == owner.AssignmentId &&
+                record.Role == ProjectAuthorityRole.Owner);
+            Assert.Contains(read.Records, record =>
+                record.AssignmentId == orchestrator.AssignmentId &&
+                record.Role == ProjectAuthorityRole.Orchestrator);
+            await AssertImmutableAsync(
+                "UPDATE projects_config.authority_audit SET actor = 'migration-test' WHERE event_id = @event_id",
+                ("event_id", originalEventIds[0]));
+        }
+        finally
+        {
+            await migrator.MigrateAsync(invocationAudit);
+        }
     }
 
     [Fact]

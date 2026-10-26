@@ -290,7 +290,7 @@ test('tenant-wide visibility is not enough to call a missing project clean witho
   assert.equal(evidence.verdict, 'needs review');
 });
 
-test('tenant-wide visibility and a complete empty audit read positively establish an already-clean state', async () => {
+test('a Run 5 not-found and complete empty audit read do not establish already clean', async () => {
   const { client, requests } = makeClient({
     projects: [],
     authority: authorizationContext([{
@@ -306,8 +306,60 @@ test('tenant-wide visibility and a complete empty audit read positively establis
     invocationId: INVOCATION_ID,
   });
 
-  assert.equal(evidence.verdict, 'already clean');
+  assert.equal(evidence.projectMatch.status, 'not-found');
   assert.equal(evidence.auditRecords.complete, true);
+  assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.roleAssignments.status, 'not-applicable');
+  assert.equal(requests.some(request => request.path.includes('/role-assignments')), false);
+  assert.equal(requests.every(request => request.method === 'GET'), true);
+});
+
+test('tenant-wide visibility and complete setup revocation evidence establish already clean', async () => {
+  const { client, requests } = makeClient({
+    projects: [],
+    authority: authorizationContext([{
+      resourceType: 'tenant',
+      resourceId: ENVIRONMENT.tenantId,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    auditRecords: {
+      ...AUDIT_RECORDS,
+      records: [
+        ...AUDIT_RECORDS.records,
+        {
+          eventId: 'b0000000-0000-4000-8000-000000000003',
+          eventType: 'role_revoked',
+          assignmentId: ROLE_ASSIGNMENTS.assignments[0].assignmentId,
+          resourceType: 'project',
+          resourceId: PROJECT_ID,
+          role: 'owner',
+          revision: 2,
+          actor: 'cleanup-actor',
+          createdAt: '2026-10-13T00:01:00.000Z',
+        },
+        {
+          eventId: 'b0000000-0000-4000-8000-000000000004',
+          eventType: 'role_revoked',
+          assignmentId: ROLE_ASSIGNMENTS.assignments[1].assignmentId,
+          resourceType: 'project',
+          resourceId: PROJECT_ID,
+          role: 'orchestrator',
+          revision: 2,
+          actor: 'cleanup-actor',
+          createdAt: '2026-10-13T00:01:00.000Z',
+        },
+      ],
+    },
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.projectMatch.status, 'not-found');
+  assert.equal(evidence.auditRecords.complete, true);
+  assert.equal(evidence.verdict, 'already clean');
   assert.equal(evidence.roleAssignments.status, 'not-applicable');
   assert.equal(requests.some(request => request.path.includes('/role-assignments')), false);
   assert.equal(requests.every(request => request.method === 'GET'), true);
@@ -336,7 +388,7 @@ test('a denied role-assignment read remains needs review', async () => {
 
 test('a denied audit read remains needs review', async () => {
   const { client } = makeClient({
-    projects: [project(PROJECT_ID)],
+    projects: [],
     authority: authorizationContext([{
       resourceType: 'tenant',
       resourceId: ENVIRONMENT.tenantId,
@@ -353,6 +405,8 @@ test('a denied audit read remains needs review', async () => {
 
   assert.equal(evidence.auditRecords.status, 'denied');
   assert.equal(evidence.auditRecords.complete, false);
+  assert.equal(evidence.auditRecords.reason, 'The read request was denied with HTTP 403.');
+  assert.equal(evidence.projectMatch.status, 'not-found');
   assert.equal(evidence.verdict, 'needs review');
 });
 
