@@ -26,6 +26,7 @@ export class AgentweaverClient {
     this.fetchImpl = fetchImpl;
     this.calls = [];
     this.operations = new Map();
+    this.schemas = new Map();
   }
 
   /**
@@ -109,6 +110,10 @@ export class AgentweaverClient {
     }
     if (!operations.size) throw new Error('The live Gateway advertises no P1 operations.');
     this.operations = operations;
+    const schemas = document.components?.schemas;
+    this.schemas = schemas && typeof schemas === 'object' && !Array.isArray(schemas)
+      ? new Map(Object.entries(schemas))
+      : new Map();
     return document;
   }
 

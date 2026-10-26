@@ -35,6 +35,29 @@ function apiFor({
   let gateResolved = false;
   const calls = [];
   const baseUrl = 'https://environment.controlled.test/';
+  const methods = {
+    getAuthorizationContext: 'GET',
+    createProject: 'POST',
+    updateProject: 'PATCH',
+    assignProjectRole: 'POST',
+    revokeProjectRoleAssignment: 'DELETE',
+    getProjectConfiguration: 'GET',
+    getPlatformRuntimeDefaults: 'GET',
+    acceptRunSelection: 'POST',
+    getRunSelection: 'GET',
+    acceptRunRoot: 'POST',
+    readRunStatus: 'GET',
+    readSessionStatus: 'GET',
+    readDecisions: 'GET',
+    readSessionTree: 'GET',
+    registerChild: 'POST',
+    askQuestion: 'POST',
+    requestApproval: 'POST',
+    answerGate: 'POST',
+    approveGate: 'POST',
+    rejectGate: 'POST',
+    sendMessage: 'POST',
+  };
   const paths = {
     getAuthorizationContext: '/api/v1/authorization/context',
     createProject: '/api/v1/projects',
@@ -62,7 +85,37 @@ function apiFor({
     target: new URL(baseUrl),
     tenantId,
     authProvider: { origin: new URL(baseUrl).origin, issuer: ISSUER, audience: AUDIENCE, actorId },
-    operations: new Map(Object.entries(paths).map(([operationId, path]) => [operationId, { path }])),
+    operations: new Map(Object.entries(paths).map(([operationId, path]) => {
+      const operation = { path, method: methods[operationId] };
+      operation.parameters = [];
+      if (operationId === 'revokeProjectRoleAssignment') {
+        operation.parameters = [
+          { in: 'path', name: 'projectId', required: true },
+          { in: 'path', name: 'assignmentId', required: true },
+          { in: 'query', name: 'expectedRevision', required: true },
+        ];
+      }
+      if (operationId === 'updateProject') {
+        operation.requestBody = {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/UpdateProjectRequest' },
+            },
+          },
+        };
+      }
+      return [operationId, operation];
+    })),
+    schemas: new Map([['UpdateProjectRequest', {
+      type: 'object',
+      required: ['expectedRevision', 'name', 'state'],
+      properties: {
+        expectedRevision: { type: 'integer' },
+        name: { type: 'string' },
+        state: { type: 'string', enum: ['active', 'archived'] },
+      },
+    }]]),
     calls,
     resolveGate() { gateResolved = true; },
     async discover() {},

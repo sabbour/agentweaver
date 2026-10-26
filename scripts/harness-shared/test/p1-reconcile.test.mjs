@@ -71,12 +71,12 @@ const AUDIT_RECORDS = {
   ],
 };
 
-function project(projectId, name = PROJECT_NAME) {
+function project(projectId, name = PROJECT_NAME, state = 'active') {
   return {
     projectId,
     name,
-    state: 'active',
-    revision: 2,
+    state,
+    revision: state === 'archived' ? 3 : 2,
     configurationRevision: 1,
     createdAt: '2026-10-13T00:00:00.000Z',
     updatedAt: '2026-10-13T00:00:00.000Z',
@@ -367,6 +367,89 @@ test('tenant-wide visibility and complete setup revocation evidence establish al
   assert.equal(evidence.roleAssignments.status, 'not-applicable');
   assert.equal(requests.some(request => request.path.includes('/role-assignments')), false);
   assert.equal(requests.every(request => request.method === 'GET'), true);
+});
+
+test('an archived project with no active assignments and complete revocation audit is already clean', async () => {
+  const { client, requests } = makeClient({
+    projects: [project(PROJECT_ID, PROJECT_NAME, 'archived')],
+    authority: authorizationContext([{
+      resourceType: 'tenant',
+      resourceId: ENVIRONMENT.tenantId,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    roleAssignments: { projectId: PROJECT_ID, assignments: [] },
+    auditRecords: {
+      ...AUDIT_RECORDS,
+      records: [
+        ...AUDIT_RECORDS.records,
+        ...[
+          ROLE_ASSIGNMENTS.assignments[0],
+          ROLE_ASSIGNMENTS.assignments[1],
+        ].map((assignment, index) => ({
+          eventId: `b0000000-0000-4000-8000-00000000000${index + 3}`,
+          eventType: 'role_revoked',
+          assignmentId: assignment.assignmentId,
+          resourceType: 'project',
+          resourceId: PROJECT_ID,
+          role: assignment.role,
+          revision: 2,
+          actor: 'cleanup-actor',
+          createdAt: '2026-10-13T00:01:00.000Z',
+        })),
+      ],
+    },
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.projectMatch.matches[0].state, 'archived');
+  assert.equal(evidence.roleAssignments.assignments.length, 0);
+  assert.equal(evidence.verdict, 'already clean');
+  assert.equal(evidence.verdictReasonCode, 'positive_archived_setup_revocation_evidence');
+  assert.equal(requests.every(request => request.method === 'GET'), true);
+});
+
+test('an archived project with only partial setup revocation evidence stays needs review', async () => {
+  const { client } = makeClient({
+    projects: [project(PROJECT_ID, PROJECT_NAME, 'archived')],
+    authority: authorizationContext([{
+      resourceType: 'tenant',
+      resourceId: ENVIRONMENT.tenantId,
+      permissions: [{ permission: 'readProjects', roleRevision: 4 }],
+    }]),
+    roleAssignments: {
+      projectId: PROJECT_ID,
+      assignments: [ROLE_ASSIGNMENTS.assignments[0]],
+    },
+    auditRecords: {
+      ...AUDIT_RECORDS,
+      records: [
+        ...AUDIT_RECORDS.records,
+        {
+          eventId: 'b0000000-0000-4000-8000-000000000003',
+          eventType: 'role_revoked',
+          assignmentId: ROLE_ASSIGNMENTS.assignments[1].assignmentId,
+          resourceType: 'project',
+          resourceId: PROJECT_ID,
+          role: 'orchestrator',
+          revision: 2,
+          actor: 'cleanup-actor',
+          createdAt: '2026-10-13T00:01:00.000Z',
+        },
+      ],
+    },
+  });
+  const evidence = await reconcileP1Run({
+    api: client,
+    environment: ENVIRONMENT,
+    invocationId: INVOCATION_ID,
+  });
+
+  assert.equal(evidence.verdict, 'needs review');
+  assert.equal(evidence.verdictReasonCode, 'archived_setup_evidence_incomplete');
 });
 
 test('a denied role-assignment read remains needs review', async () => {
