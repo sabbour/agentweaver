@@ -97,7 +97,7 @@ public sealed partial class ProjectsConfigPostgresTests
         try
         {
             await migrator.MigrateAsync(beforeInvocationAudit);
-            legacy = await SeedMigration039LegacyRowsAsync("valid");
+            legacy = await SeedMigration039LegacyRowsAsync("valid", tenantId);
             var eventIds = legacy.EventIds
                 .Concat([
                     setupReceipt.AuthorityAuditEventId,
@@ -208,14 +208,16 @@ public sealed partial class ProjectsConfigPostgresTests
         }
     }
 
-    private async Task<Migration039AuditFixture> SeedMigration039LegacyRowsAsync(string scenario)
+    private async Task<Migration039AuditFixture> SeedMigration039LegacyRowsAsync(
+        string scenario,
+        string? tenantId = null)
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
         var now = DateTimeOffset.UtcNow;
         var legacy = new Migration039AuditFixture
         {
-            TenantId = $"migration039-{Guid.NewGuid():N}",
+            TenantId = tenantId ?? $"migration039-{Guid.NewGuid():N}",
             Issuer = TestIssuer,
             Subject = $"migration039-actor-{Guid.NewGuid():N}",
             Actor = $"migration039-actor-{Guid.NewGuid():N}",
