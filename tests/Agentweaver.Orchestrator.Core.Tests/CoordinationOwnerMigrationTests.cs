@@ -726,7 +726,12 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 to_regclass(@runtimeEvidenceReceipts) IS NOT NULL,
                 (SELECT count(*) FROM pg_trigger
                  WHERE tgrelid = to_regclass(@runtimeEvidenceReceipts)
-                   AND tgname IN ('maf_runtime_evidence_receipts_immutable', 'maf_runtime_evidence_receipts_no_truncate')
+                   AND tgname = 'maf_runtime_evidence_receipts_immutable'
+                   AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal),
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid = to_regclass(@runtimeEvidenceReceipts)
+                   AND tgname = 'maf_runtime_evidence_receipts_no_truncate'
+                   AND tgtype = 34
                    AND tgenabled = 'O' AND NOT tgisinternal)
             """, connection);
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
@@ -803,9 +808,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(reader.GetBoolean(29));
         Assert.Equal(2L, reader.GetInt64(30));
         Assert.True(reader.GetBoolean(31));
-        Assert.Equal(2L, reader.GetInt64(32));
-        Assert.True(reader.GetBoolean(33));
-        Assert.Equal(2L, reader.GetInt64(34));
+        Assert.Equal(1L, reader.GetInt64(32));
+        Assert.Equal(1L, reader.GetInt64(33));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

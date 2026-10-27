@@ -395,7 +395,8 @@ public sealed class RuntimeContractTests
     [Fact]
     public void NumericLimitDenialReadBindsTheExactAttemptRegistrationAndFence()
     {
-        var registration = CreateRegistration();
+        var registration = CreateRegistration() with { Revision = 7 };
+        RuntimeContractValidation.Validate(registration);
         var attemptId = Guid.NewGuid();
         var hash = new string('b', 64);
         var receipt = RuntimeNumericLimitDenialReceipt.Seal(new(
@@ -412,6 +413,7 @@ public sealed class RuntimeContractTests
 
         Assert.Same(receipt, RuntimeNumericLimitDenialReadContract.ValidateResult(
             new(receipt), registration, request).Receipt);
+        Assert.NotEqual(registration.Revision.ToString(), receipt.GrantRevision);
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeNumericLimitDenialReadContract.ValidateResult(
                 new(receipt), registration, request with { AttemptId = Guid.NewGuid() }));

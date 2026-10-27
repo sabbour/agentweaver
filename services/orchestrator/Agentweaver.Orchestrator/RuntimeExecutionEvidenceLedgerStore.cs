@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using System.Text;
 using System.Security.Cryptography;
 using Agentweaver.Identity;
+using Microsoft.AspNetCore.Http;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -117,6 +118,7 @@ internal sealed class RuntimeExecutionEvidenceLedgerStore(string schema)
         CancellationToken cancellationToken)
     {
         receipt.Validate();
+        await RequireLedgerAvailableAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var json = JsonSerializer.Serialize(receipt, JsonOptions);
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_table}
@@ -149,6 +151,7 @@ internal sealed class RuntimeExecutionEvidenceLedgerStore(string schema)
         NpgsqlConnection connection, NpgsqlTransaction? transaction,
         string projectId, string runId, Guid attemptId, CancellationToken cancellationToken)
     {
+        await RequireLedgerAvailableAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand($"""
             SELECT receipt_json::text
             FROM {_table}
@@ -164,6 +167,17 @@ internal sealed class RuntimeExecutionEvidenceLedgerStore(string schema)
         var receipt = JsonSerializer.Deserialize<RuntimeNumericLimitDenialReceipt>(json, JsonOptions)
             ?? throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_corrupt");
         return receipt.Validate();
+    }
+
+    private async Task RequireLedgerAvailableAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("SELECT to_regclass(@table) IS NOT NULL", connection, transaction);
+        command.Parameters.AddWithValue("table", NpgsqlDbType.Text, _table);
+        if (!(bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
+            throw new CoordinationException("database_update_pending", StatusCodes.Status503ServiceUnavailable);
     }
 
     private async Task<string> ReadJsonAsync(

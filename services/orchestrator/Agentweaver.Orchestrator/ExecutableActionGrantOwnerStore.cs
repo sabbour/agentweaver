@@ -465,16 +465,6 @@ internal sealed class ExecutableActionGrantOwnerStore(
             acquire.Parameters.AddWithValue("runScope", $"{binding.ProjectId}/{binding.RunId}");
             await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
-        else if (binding.AgentId == RuntimeActionContract.CoordinatorRootStepId &&
-                 binding.WorkflowStepId is null)
-        {
-            await using var acquire = new NpgsqlCommand(
-                "SELECT pg_advisory_xact_lock(hashtext('agentweaver.maf.execution'), hashtext(@scope))",
-                connection, transaction);
-            acquire.Parameters.AddWithValue("scope", JsonSerializer.Serialize(
-                new[] { binding.ProjectId, binding.RunId, binding.SessionId }));
-            await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
 
         await using (var current = new NpgsqlCommand($"""
             SELECT h.current_revision, r.state, r.expires_at, r.binding_hash
@@ -482,7 +472,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             JOIN {_schema}.runtime_registration_revisions r
               ON r.runtime_instance_id = h.runtime_instance_id AND r.revision = h.current_revision
             WHERE h.runtime_instance_id = @runtime
-            FOR SHARE OF h, r
+            FOR SHARE OF h
             """, connection, transaction))
         {
             current.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, registration.RuntimeInstanceId);
@@ -490,14 +480,17 @@ internal sealed class ExecutableActionGrantOwnerStore(
             if (!await reader.ReadAsync(cancellationToken) ||
                 reader.GetInt64(0) != registration.Revision || reader.GetInt32(1) != 0 ||
                 reader.GetFieldValue<DateTimeOffset>(2) != registration.ExpiresAt ||
-                reader.GetString(3).Trim() != RuntimeContractValidation.RegistrationHash(registration))
+                reader.GetFieldValue<DateTimeOffset>(2) <= timeProvider.GetUtcNow() ||
+                reader.GetString(3).Trim() != RuntimeContractValidation.Hash(
+                    JsonSerializer.SerializeToUtf8Bytes(binding)))
                 throw new RuntimeAuthorizationException("runtime_registration_stale");
         }
 
         long ownerRevision;
+        Guid decisionId;
         string rootSessionId;
         await using (var owner = new NpgsqlCommand($"""
-            SELECT s.root_session_id, d.state_version
+            SELECT s.root_session_id, d.decision_id, d.state_version
             FROM {_schema}.coordination_sessions s
             JOIN {_schema}.accepted_runs r ON r.project_id = s.project_id AND r.run_id = s.run_id
             JOIN {_schema}.coordinator_decisions d
@@ -516,10 +509,59 @@ internal sealed class ExecutableActionGrantOwnerStore(
             if (!await reader.ReadAsync(cancellationToken))
                 throw new RuntimeAuthorizationException("runtime_action_owner_unavailable");
             rootSessionId = reader.GetString(0);
-            ownerRevision = reader.GetInt64(1);
+            decisionId = reader.GetGuid(1);
+            ownerRevision = reader.GetInt64(2);
         }
         if (ownerRevision != denial.OwnerRevision)
             throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_incomplete");
+
+        if (denial.Kind == RuntimeNumericLimitKind.ModelTurns &&
+            binding.AgentId == RuntimeActionContract.CoordinatorRootStepId &&
+            binding.WorkflowStepId is null)
+        {
+            // Match native preparation and root grant admission: lock the active owner before the MAF execution lock.
+            await using var acquire = new NpgsqlCommand(
+                "SELECT pg_advisory_xact_lock(hashtext('agentweaver.maf.execution'), hashtext(@scope))",
+                connection, transaction);
+            acquire.Parameters.AddWithValue("scope", JsonSerializer.Serialize(
+                new[] { binding.ProjectId, binding.RunId, binding.SessionId }));
+            await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var currentAuthorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        var currentRoleRevisions = currentAuthorized.Authorization.EffectiveAuthority
+            .Where(item => item.ResourceType == "project" && item.ResourceId == binding.ProjectId)
+            .SelectMany(item => item.Permissions)
+            .Where(item => item.Permission == "acceptRunSelection")
+            .Select(item => item.RoleRevision).Distinct().Take(2).ToArray();
+        var currentActor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        if (currentRoleRevisions.Length != 1 || currentActor.Issuer != binding.ActorIssuer ||
+            currentActor.Subject != binding.ActorId ||
+            currentAuthorized.Authorization.ActorId != binding.ActorId ||
+            currentAuthorized.Authorization.Issuer != binding.ActorIssuer ||
+            currentAuthorized.Authorization.TenantId != binding.TenantId ||
+            currentAuthorized.Selection.ProjectId != binding.ProjectId ||
+            currentAuthorized.Selection.RunId != binding.RunId ||
+            currentAuthorized.Selection.ProjectRevision != binding.ProjectRevision ||
+            currentAuthorized.Selection.ProjectConfigurationRevision != binding.ProjectConfigurationRevision ||
+            currentAuthorized.Selection.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
+            currentAuthorized.Selection.ContextRevision != binding.ContextRevision ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+                currentAuthorized.Selection.Snapshot.GetRawText())) != binding.AcceptedSelectionHash ||
+            registration.ExpiresAt <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_incomplete");
+
+        if (denial.Kind == RuntimeNumericLimitKind.ModelTurns &&
+            binding.AgentId == RuntimeActionContract.CoordinatorRootStepId &&
+            binding.WorkflowStepId is null)
+        {
+            if (request.DispatchId != request.EventId ||
+                !await HasCoordinatorRootModelTurnAdmissionAsync(
+                    connection, transaction, binding, request, decisionId, ownerRevision, cancellationToken)
+                    .ConfigureAwait(false))
+                throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_incomplete");
+        }
 
         var source = await _runtimeSources.ReadCurrentSourceAsync(
             connection, transaction, registration, cancellationToken).ConfigureAwait(false);
@@ -557,26 +599,33 @@ internal sealed class ExecutableActionGrantOwnerStore(
         string? associationId = null;
         if (request.DispatchId is { } admittedDispatch)
         {
-            await using var checkpoint = new NpgsqlCommand($"""
-                SELECT d.root_session_id, d.checkpoint_id, d.checkpoint_revision,
-                    d.decision_state_version, d.work_plan_id, d.association_id, c.payload::text
-                FROM {_schema}.maf_execution_dispatches d
-                JOIN {_schema}.maf_workflow_checkpoints c
-                  ON c.project_id = d.project_id AND c.run_id = d.run_id
-                    AND c.session_id = d.root_session_id AND c.store_name = d.checkpoint_store_name
-                    AND c.checkpoint_id = d.checkpoint_id
-                WHERE d.project_id = @project AND d.run_id = @run AND d.dispatch_id = @dispatch
-                  AND d.child_session_id = @session AND d.runtime_instance_id = @runtime
-                  AND d.registration_revision = @registration AND d.execution_fence = @fence
-                  AND d.accepted_selection_hash = @selectionHash
-                """, connection, transaction);
-            BindRuntime(checkpoint, binding);
-            checkpoint.Parameters.AddWithValue("dispatch", NpgsqlDbType.Uuid, admittedDispatch);
-            checkpoint.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, registration.RuntimeInstanceId);
-            checkpoint.Parameters.AddWithValue("registration", NpgsqlDbType.Bigint, registration.Revision);
-            await using var reader = await checkpoint.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            if (await reader.ReadAsync(cancellationToken))
+            if (!(denial.Kind == RuntimeNumericLimitKind.ModelTurns &&
+                  binding.AgentId == RuntimeActionContract.CoordinatorRootStepId &&
+                  binding.WorkflowStepId is null))
             {
+                await using var checkpoint = new NpgsqlCommand($"""
+                    SELECT d.root_session_id, d.checkpoint_id, d.checkpoint_revision,
+                        d.decision_state_version, d.work_plan_id, d.association_id, c.payload::text
+                    FROM {_schema}.maf_execution_dispatches d
+                    JOIN {_schema}.maf_workflow_checkpoints c
+                      ON c.project_id = d.project_id AND c.run_id = d.run_id
+                        AND c.session_id = d.root_session_id AND c.store_name = d.checkpoint_store_name
+                        AND c.checkpoint_id = d.checkpoint_id
+                    WHERE d.project_id = @project AND d.run_id = @run AND d.dispatch_id = @dispatch
+                      AND d.child_session_id = @session AND d.runtime_instance_id = @runtime
+                      AND d.registration_revision = @registration AND d.execution_fence = @fence
+                      AND d.accepted_selection_hash = @dispatchSelectionHash
+                    FOR SHARE OF d, c
+                    """, connection, transaction);
+                BindRuntime(checkpoint, binding);
+                checkpoint.Parameters.AddWithValue("dispatch", NpgsqlDbType.Uuid, admittedDispatch);
+                checkpoint.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, registration.RuntimeInstanceId);
+                checkpoint.Parameters.AddWithValue("registration", NpgsqlDbType.Bigint, registration.Revision);
+                checkpoint.Parameters.AddWithValue(
+                    "dispatchSelectionHash", NpgsqlDbType.Char, binding.AcceptedSelectionHash);
+                await using var reader = await checkpoint.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                if (!await reader.ReadAsync(cancellationToken))
+                    throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_incomplete");
                 if (reader.GetString(0) != rootSessionId)
                     throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
                 checkpointId = reader.GetString(1);
@@ -592,7 +641,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             1, RuntimeNumericLimitDenialIdentity.ReceiptId(binding.ProjectId, binding.RunId, request.EventId),
             binding.ProjectId, binding.RunId, rootSessionId, binding.SessionId,
             registration.RuntimeInstanceId, registration.Revision, source.RegistrationRevision,
-            source.SourceGrantId, source.CanonicalPayloadHash, request.EventId, "1",
+            source.SourceGrantId, source.CanonicalPayloadHash, request.EventId,
+            "1",
             binding.ExecutionFence, binding.AcceptedSelectionHash, ownerRevision, denial.Kind,
             denial.Limit, count, request.EventId, RuntimeActionContract.Hash(request), dispatchId,
             checkpointId, checkpointRevision, checkpointHash, checkpointDecisionVersion,
@@ -685,7 +735,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             WHERE d.project_id = @project AND d.run_id = @run AND d.dispatch_id = @dispatch
               AND d.child_session_id = @session AND d.runtime_instance_id = @runtime
               AND d.registration_revision = @registration AND d.execution_fence = @fence
-              AND d.accepted_selection_hash = @selectionHash
+              AND d.accepted_selection_hash = @dispatchSelectionHash
               AND r.execution_fence = @fence AND r.tenant_id = @tenant
               AND r.accepted_selection_hash = @selectionHash
               AND r.execution_state <> 'completed'
@@ -697,6 +747,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             dispatch.Parameters.AddWithValue("dispatch", NpgsqlDbType.Uuid, request.DispatchId);
             dispatch.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, registration.RuntimeInstanceId);
             dispatch.Parameters.AddWithValue("registration", NpgsqlDbType.Bigint, registration.Revision);
+            dispatch.Parameters.AddWithValue(
+                "dispatchSelectionHash", NpgsqlDbType.Char, binding.AcceptedSelectionHash);
             await using var reader = await dispatch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 throw new RuntimeAuthorizationException("runtime_replacement_comparison_conflict");

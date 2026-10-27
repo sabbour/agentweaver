@@ -141,11 +141,23 @@ const LOCK_GUARDS = {
       function: 'reject_row_lock_record_update()', triggerType: 27,
       message: 'Coordinator decision and MAF checkpoint records cannot be updated.', sqlState: '55000',
     },
-    maf_runtime_evidence_receipts: {
-      column: 'receipt_id', trigger: 'maf_runtime_evidence_receipts_immutable',
-      function: 'reject_maf_runtime_evidence_mutation()', triggerType: 27,
-      message: 'MAF runtime evidence receipts are append-only', sqlState: null,
-    },
+  },
+};
+
+const APPEND_ONLY_GUARDS = {
+  orchestrator: {
+    maf_runtime_evidence_receipts: [
+      {
+        trigger: 'maf_runtime_evidence_receipts_immutable',
+        function: 'reject_maf_runtime_evidence_mutation()', triggerType: 27,
+        message: 'MAF runtime evidence receipts are append-only', sqlState: null,
+      },
+      {
+        trigger: 'maf_runtime_evidence_receipts_no_truncate',
+        function: 'reject_maf_runtime_evidence_mutation()', triggerType: 34,
+        message: 'MAF runtime evidence receipts are append-only', sqlState: null,
+      },
+    ],
   },
 };
 
@@ -225,23 +237,31 @@ export function buildP1PostgresPlan() {
     ownerOnlyTables: OWNER_ONLY_OBJECTS[schema]?.tables ?? [],
     ownerOnlySequences: OWNER_ONLY_OBJECTS[schema]?.sequences ?? [],
     tables: Object.entries(GROUPS[schema]).flatMap(([privileges, names]) =>
-      names.split(' ').map(table => ({
-        table,
-        privileges: privileges.split(','),
-        // Only tables with planned column updates carry this key, so every other table's plan entry is unchanged.
-        ...(UPDATE_COLUMNS[schema]?.[table] ? { updateColumns: [...UPDATE_COLUMNS[schema][table]] } : {}),
-        ...(LOCK_GUARDS[schema]?.[table] ? {
-          lockColumn: LOCK_GUARDS[schema][table].column,
-          mutationDenialRequired: true,
-          mutationDenialGuard: {
-            trigger: LOCK_GUARDS[schema][table].trigger,
-            function: LOCK_GUARDS[schema][table].function,
-            triggerType: LOCK_GUARDS[schema][table].triggerType,
-            message: LOCK_GUARDS[schema][table].message,
-            sqlState: LOCK_GUARDS[schema][table].sqlState,
-          },
-        } : {}),
-      }))),
+      names.split(' ').map(table => {
+        const appendOnlyGuards = APPEND_ONLY_GUARDS[schema]?.[table];
+        const lockGuard = LOCK_GUARDS[schema]?.[table];
+        return {
+          table,
+          privileges: privileges.split(','),
+          // Only tables with planned column updates carry this key, so every other table's plan entry is unchanged.
+          ...(UPDATE_COLUMNS[schema]?.[table] ? { updateColumns: [...UPDATE_COLUMNS[schema][table]] } : {}),
+          ...(lockGuard ? {
+            lockColumn: lockGuard.column,
+            mutationDenialRequired: true,
+            mutationDenialGuard: {
+              trigger: lockGuard.trigger,
+              function: lockGuard.function,
+              triggerType: lockGuard.triggerType,
+              message: lockGuard.message,
+              sqlState: lockGuard.sqlState,
+            },
+          } : {}),
+          ...(appendOnlyGuards ? {
+            mutationDenialRequired: true,
+            mutationDenialGuards: appendOnlyGuards,
+          } : {}),
+        };
+      })),
     functions: FUNCTIONS[schema].map(signature => ({
       signature,
       execute: signature.startsWith('lock_casting_authority('),

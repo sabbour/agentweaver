@@ -104,11 +104,11 @@ test('DELETE grants cover only source-owned rollback, backlog deletion, edge, an
     'orchestrator.backlog_tasks', 'orchestrator.chief_of_staff_priority_links']);
 });
 
-test('Row locks use one column, never blanket UPDATE on append-only tables', () => {
+test('Row locks use one column and append-only ledgers grant no UPDATE', () => {
   const plan = buildP1PostgresPlan();
   const locks = plan.services.flatMap(service =>
     service.tables.filter(table => table.lockColumn).map(table => ({ service, table })));
-  assert.equal(locks.length, 13);
+  assert.equal(locks.length, 12);
   for (const { service, table } of locks) {
     assert.deepEqual(table.privileges, ['SELECT', 'INSERT']);
     assert.equal(table.mutationDenialRequired, true);
@@ -136,8 +136,21 @@ test('Row locks use one column, never blanket UPDATE on append-only tables', () 
     'orchestrator.maf_workflow_checkpoints:maf_workflow_checkpoints_no_update:reject_row_lock_record_update():19',
     'orchestrator.maf_root_model_turn_admissions:maf_root_model_turn_admissions_no_update:reject_row_lock_record_update():27',
     'orchestrator.session_consistency_manifests:session_consistency_manifests_immutable:reject_session_consistency_manifest_mutation():27',
-    'orchestrator.maf_runtime_evidence_receipts:maf_runtime_evidence_receipts_immutable:reject_maf_runtime_evidence_mutation():27',
   ].sort());
+
+  const orchestrator = plan.services.find(service => service.schema === 'orchestrator');
+  const ledger = orchestrator.tables.find(table => table.table === 'maf_runtime_evidence_receipts');
+  assert.deepEqual(ledger.privileges, ['SELECT', 'INSERT']);
+  assert.ok(!('lockColumn' in ledger));
+  assert.equal(ledger.mutationDenialRequired, true);
+  assert.deepEqual(ledger.mutationDenialGuards.map(guard =>
+    [guard.trigger, guard.function, guard.triggerType]), [
+    ['maf_runtime_evidence_receipts_immutable', 'reject_maf_runtime_evidence_mutation()', 27],
+    ['maf_runtime_evidence_receipts_no_truncate', 'reject_maf_runtime_evidence_mutation()', 34],
+  ]);
+  for (const guard of ledger.mutationDenialGuards)
+    assert.ok(orchestrator.functions.some(item =>
+      item.signature === guard.function && !item.execute));
 });
 
 test('Only the existing casting authority function receives direct runtime EXECUTE', () => {
@@ -221,9 +234,12 @@ test('Initializer protected-table count matches the plan', () => {
   // The initializer rejects any plan whose one-column row-lock table count differs from its reviewed number.
   // A new protected table must update that number in the same change, or every initializer mode stops.
   const plan = buildP1PostgresPlan();
-  const protectedTables = plan.services.flatMap(service => service.tables.filter(table => table.lockColumn));
+  const protectedTables = plan.services.flatMap(service =>
+    service.tables.filter(table => table.mutationDenialRequired));
+  const lockTables = plan.services.flatMap(service => service.tables.filter(table => table.lockColumn));
   const checks = readFileSync(new URL('../../../tools/P1PostgresInitializer/InitializerChecks.cs', import.meta.url), 'utf8');
-  assert.ok(checks.includes(`protectedTables.Length != ${protectedTables.length})`));
+  assert.ok(checks.includes(`protectedTables.Length != ${protectedTables.length} ||`));
+  assert.ok(checks.includes(`lockTables.Length != ${lockTables.length})`));
 });
 
 // Both owner catalogs must agree with the separately reviewed initializer plan.
@@ -369,7 +385,6 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     'orchestrator.maf_root_model_turn_admissions.request_id',
     'orchestrator.maf_child_spawn_authorization_receipts.spawn_intent_id',
     'orchestrator.maf_child_spawn_authorization_consumptions.spawn_intent_id',
-    'orchestrator.maf_runtime_evidence_receipts.receipt_id',
   ]);
   const directories = [
     'projects-config/Agentweaver.Projects.Config',

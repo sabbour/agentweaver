@@ -192,6 +192,12 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Assert.Equal("runtime_model_turn_limit_exhausted",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareAsync(1))).Code);
         Assert.Equal(1, await CountAsync("maf_execution_dispatches"));
+        var nativeDenial = Assert.IsType<RuntimeNumericLimitDenialReceipt>(
+            await ReadNumericLimitDenialAsync(_intents[1].MessageId));
+        Assert.Equal(_intents[1].MessageId, nativeDenial.DispatchId);
+        Assert.Equal(_checkpoint.Info.CheckpointId, nativeDenial.CheckpointId);
+        Assert.Equal(_messages[1].Message.Metadata.Runtime.SourceGrantRevision.ToString(
+            System.Globalization.CultureInfo.InvariantCulture), nativeDenial.GrantRevision);
     }
 
     [Fact]
@@ -1594,16 +1600,39 @@ public sealed partial class RuntimeNumericLimitsPostgresTests(CoordinationPostgr
         Func<UsageSpendEvidenceRequest, CancellationToken, Task<UsageSpendEvidence>>? readSpendEvidence = null)
     {
         var store = SourceStore();
+        var registration = _registrations[index];
         var snapshot = readCostSnapshot ?? NoCreditSnapshot;
-        return store.ExecuteLockedAsync(_registrations[index].RuntimeInstanceId,
-            async (connection, transaction, token) =>
+        return PrepareAndRecordAsync();
+
+        async Task<RuntimeNativePreparationOutcome> PrepareAndRecordAsync()
+        {
+            try
             {
-                var prepared = await store.PrepareNativeTurnWithinTransactionAsync(
-                    connection, transaction, _root, _checkpoint, _intents[index], _registrations[index],
-                    _messages[index], snapshot, token, spendBudgets, readSpendEvidence);
-                await transaction.CommitAsync(token);
-                return prepared;
-            }, default);
+                return await store.ExecuteLockedAsync(registration.RuntimeInstanceId,
+                    async (connection, transaction, token) =>
+                    {
+                        var prepared = await store.PrepareNativeTurnWithinTransactionAsync(
+                            connection, transaction, _root, _checkpoint, _intents[index], registration,
+                            _messages[index], snapshot, token, spendBudgets, readSpendEvidence);
+                        await transaction.CommitAsync(token);
+                        return prepared;
+                    }, default);
+            }
+            catch (RuntimeNumericLimitDeniedException denial)
+            {
+                if (denial.SendStateEmpty)
+                    await store.ExecuteLockedAsync(registration.RuntimeInstanceId,
+                        async (connection, transaction, token) =>
+                        {
+                            await store.RecordNativeNumericLimitDenialWithinTransactionAsync(
+                                connection, transaction, _root, _checkpoint, _intents[index],
+                                registration, _messages[index], denial, token);
+                            await transaction.CommitAsync(token);
+                            return true;
+                        }, default);
+                throw new RuntimeAuthorizationException(denial.Code);
+            }
+        }
     }
 
     private Task<RuntimeNativeTurnBeginResult> BeginAsync(

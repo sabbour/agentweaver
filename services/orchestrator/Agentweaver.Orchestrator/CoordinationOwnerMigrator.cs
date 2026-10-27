@@ -468,12 +468,14 @@ public static class CoordinationOwnerMigrator
                         WHERE tgrelid = to_regclass(@runtimeEvidenceReceipts)
                           AND tgname = 'maf_runtime_evidence_receipts_immutable'
                           AND tgfoid = to_regprocedure(@runtimeEvidenceMutationFunction)
-                          AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal)
+                          AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal
+                          AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0)
                     AND EXISTS (SELECT 1 FROM pg_trigger
                         WHERE tgrelid = to_regclass(@runtimeEvidenceReceipts)
                           AND tgname = 'maf_runtime_evidence_receipts_no_truncate'
                           AND tgfoid = to_regprocedure(@runtimeEvidenceMutationFunction)
-                          AND tgtype = 34 AND tgenabled = 'O' AND NOT tgisinternal))))
+                          AND tgtype = 34 AND tgenabled = 'O' AND NOT tgisinternal
+                          AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0))))
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");

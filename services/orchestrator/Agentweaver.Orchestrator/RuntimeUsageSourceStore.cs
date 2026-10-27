@@ -986,7 +986,7 @@ internal sealed class RuntimeUsageSourceStore(
             registration.Binding.ProjectId, registration.Binding.RunId, root.SessionId,
             registration.Binding.SessionId, registration.RuntimeInstanceId, registration.Revision,
             source.RegistrationRevision, source.SourceGrantId, source.CanonicalPayloadHash,
-            source.SourceGrantId, registration.Revision.ToString(
+            source.SourceGrantId, message.Message.Metadata.Runtime.SourceGrantRevision.ToString(
                 System.Globalization.CultureInfo.InvariantCulture),
             registration.Binding.ExecutionFence, registration.Binding.AcceptedSelectionHash,
             denial.OwnerRevision, denial.Kind, denial.Limit, count, intent.MessageId,
