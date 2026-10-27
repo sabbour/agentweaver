@@ -24,6 +24,7 @@ public static class UserNotificationEndpoints
             var page = await store.ListAsync(
                 authority, size, cursor, cancellationToken, projectId, includeDismissed).ConfigureAwait(false);
             var current = await projects.ReadNotificationAuthorityAsync(context, cancellationToken).ConfigureAwait(false);
+            // Do not return a page assembled under access that changed during the database read.
             RequireUnchangedAuthority(authority, current);
             return Results.Ok(page);
         }, cancellationToken);

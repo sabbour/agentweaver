@@ -787,6 +787,7 @@ internal sealed class CoordinatorDecisionOwnerStore
                 stateVersion
             },
             cancellationToken).ConfigureAwait(false);
+        // Even a rejected transition advances decision state, so old grants must stop being current.
         await SupersedeCurrentGrantsAsync(
             connection, transaction, identity, cancellationToken).ConfigureAwait(false);
         if (transitionAccepted)

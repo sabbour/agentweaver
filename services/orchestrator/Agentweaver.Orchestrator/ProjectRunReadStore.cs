@@ -135,6 +135,7 @@ public sealed class ProjectRunReadStore
             else
                 throw new CoordinationException("run_state_filter_invalid", StatusCodes.Status400BadRequest);
         }
+        // The empty set represents no filter, including an explicit selection of every state.
         return states.Count == States.Length ? [] : [.. states];
     }
 

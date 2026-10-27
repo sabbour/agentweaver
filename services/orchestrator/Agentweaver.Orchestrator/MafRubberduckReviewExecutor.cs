@@ -43,6 +43,7 @@ internal sealed class MafRubberduckReviewExecutor(
         }
         catch (CoordinationException failure) when (failure.StatusCode >= StatusCodes.Status500InternalServerError)
         {
+            // Owner outages record retryable failure state, not a terminal review receipt.
             await RecordFailureAsync(
                 intent, failure.Code, cancellationToken).ConfigureAwait(false);
             return null;
@@ -73,6 +74,7 @@ internal sealed class MafRubberduckReviewExecutor(
         }
         catch (CoordinationException)
         {
+            // Do not publish a late failure after the intent has lost current authority.
             return;
         }
 

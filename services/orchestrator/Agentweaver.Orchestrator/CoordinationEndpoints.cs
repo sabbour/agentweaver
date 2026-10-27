@@ -395,6 +395,7 @@ public static partial class CoordinationEndpoints
                 return Results.Conflict(prepared);
 
             SessionForkResult eventsFork;
+            // Events lineage and owner registration are separate steps; retain the pending command for retries.
             try
             {
                 eventsFork = await events.ForkFromExplicitEventAsync(
@@ -1731,6 +1732,7 @@ public static partial class CoordinationEndpoints
             var boundary = await store.AdvanceTurnBoundaryAsync(
                 actor, identity, request.ExecutionFence, request.ExpectedStateVersion, cancellationToken)
                 .ConfigureAwait(false);
+            // Reserve the logical turn before Events I/O so a retry resumes the same presentation boundary.
             var claim = await events.ClaimNextAsync(context, identity, cancellationToken).ConfigureAwait(false);
             if (claim is not null)
             {

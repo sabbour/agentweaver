@@ -117,6 +117,7 @@ internal static class MafExecutionPlanner
         var agents = role?.EligibleAgentIds.IsDefault == false
             ? role.EligibleAgentIds.Order(StringComparer.Ordinal).ToArray()
             : [];
+        // Stable ordering makes the prescribed role resolve to the same eligible agent on retries.
         var agentId = agents.FirstOrDefault();
         var modelSelectionReference = agentId is null
             ? null
@@ -234,6 +235,7 @@ internal static class MafExecutionPlanner
                             "maf_execution_child_checkpoint_conflict", StatusCodes.Status409Conflict);
                     continue;
                 }
+                // Delivery must settle before child state can be joined into checkpoint progress.
                 if (pendingDispatchIds?.Contains(child.AssociationId) == true)
                     continue;
                 if (child.Detached)
@@ -375,6 +377,7 @@ internal static class MafExecutionPlanner
 
             if (step.Mode == WorkflowStepMode.Platform)
             {
+                // Platform effects are serialized separately from the concurrent child-work slots.
                 if (stepStatus != MafExecutionTaskStatus.Pending)
                     continue;
                 if (nonModelEffectRunning || nonModelEffectScheduled)

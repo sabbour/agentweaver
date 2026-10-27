@@ -590,6 +590,7 @@ internal sealed class BacklogOwnerStore
                 "backlog_claim_idempotency_conflict", StatusCodes.Status409Conflict);
 
         BacklogPrerequisiteEvidencePreparation? preparedEvidence = null;
+        // Fetch external evidence before taking graph locks, then validate its current owner state below.
         if (existingClaimPreview is null)
         {
             var preflightGraph = await ReadGraphAsync(task.ProjectId, cancellationToken).ConfigureAwait(false);
@@ -624,6 +625,7 @@ internal sealed class BacklogOwnerStore
             return await RollbackFailureAsync<BacklogTaskClaimReceipt>(
                 transaction, graph.Issues).ConfigureAwait(false);
 
+        // Root admission, initial decision and task claim commit together or all roll back.
         var acceptedRoot = await coordination.AcceptRootInTransactionAsync(
             connection, transaction, actor, selection, rootSessionId, cancellationToken,
             readRunAdmission, revalidateCurrentAuthority)

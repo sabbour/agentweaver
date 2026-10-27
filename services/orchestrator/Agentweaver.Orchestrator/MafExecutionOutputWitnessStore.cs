@@ -132,6 +132,7 @@ internal sealed partial class MafExecutionOutputWitnessStore
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        // Never replace a witness: a duplicate key must reproduce the same canonical evidence and proof.
         var saved = await ReadByKeyInTransactionAsync(
             connection, transaction, root, executionFence, checkpoint, cancellationToken).ConfigureAwait(false);
         if (saved is null ||
@@ -524,6 +525,7 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 break;
             }
             case JsonValueKind.Array:
+                // Array order is evidence order; only object property order is normalized.
                 writer.WriteStartArray();
                 foreach (var item in value.EnumerateArray())
                     WriteCanonicalJson(writer, item);

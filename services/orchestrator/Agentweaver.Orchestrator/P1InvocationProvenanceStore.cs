@@ -71,6 +71,7 @@ internal sealed partial class CoordinationOwnerStore
             .ConfigureAwait(false);
         if (existing is not null)
         {
+            // A retry can reuse the saved provenance but cannot replace its verified setup receipt.
             if (existing.SetupInvocationId != receipt.InvocationId ||
                 existing.SetupReceiptHash != hash || existing.ReceiptSnapshot != receipt ||
                 existing.TenantId != tenantId || existing.ProjectId != projectId ||

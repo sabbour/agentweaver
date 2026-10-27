@@ -166,6 +166,7 @@ internal sealed class SourceControlOwnerStore(
         var inserted = await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is Guid;
         if (inserted)
         {
+            // Commit the attempt before the remote call so a lost response cannot authorize a fresh create.
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new(true, null);
         }
@@ -1381,6 +1382,7 @@ internal sealed class SourceControlOwnerStore(
     {
         ArgumentNullException.ThrowIfNull(repository);
         var key = repository.FullName.ToLowerInvariant();
+        // A session lock spans remote merge work and survives individual database transactions.
         var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         try
         {
@@ -1597,6 +1599,7 @@ internal sealed class SourceControlOwnerStore(
             return true;
         }
 
+        // Only a superseded, unstarted approval can become a pre-effect conflict at a newer fence.
         if (stored.State != "approved" || stored.GrantReference is not null ||
             !await IsSupersededMergeGrantAsync(
                 connection, transaction, identity, expected, cancellationToken).ConfigureAwait(false))

@@ -683,6 +683,7 @@ internal sealed partial class CoordinationOwnerStore
         if (capacityError is not null)
             throw new CoordinationException(capacityError, StatusCodes.Status409Conflict);
 
+        // Reserve capacity and target identity before Events performs the separate fork operation.
         var pending = new CoordinationSessionForkResult(
             Guid.NewGuid(),
             source,
@@ -1045,6 +1046,7 @@ internal sealed partial class CoordinationOwnerStore
         var requestedWorkPlanItemId = spawnRequest is null
             ? workPlanItemAssociation?.WorkPlanItemId
             : spawnRequest.WorkPlanItemId;
+        // A caller-supplied item ID is not authority; verify it against the current root decision.
         if (requestedWorkPlanItemId is { } workPlanItemId)
         {
             CoordinationIdentity.ValidateIdentity(workPlanItemId, nameof(workPlanItemId));
@@ -1188,6 +1190,7 @@ internal sealed partial class CoordinationOwnerStore
                     "session_work_plan_item_conflict", StatusCodes.Status409Conflict);
         }
 
+        // The run lock serializes capacity checks, including forks reserved but not yet registered.
         await using (var countChildren = new NpgsqlCommand($"""
             SELECT count(*)::integer
             FROM {_sessions}
@@ -3382,6 +3385,7 @@ internal sealed partial class CoordinationOwnerStore
         RequireCurrentActiveSession(session, run);
         if (session.ExecutionFence != expectedFence || expectedFence != run.Fence)
             throw new CoordinationException("execution_fence_stale", StatusCodes.Status409Conflict);
+        // A retry resumes the reserved boundary without allocating another logical turn.
         var resumedBoundary = session.TurnState == "presenting" &&
             session.TurnBoundaryRequestVersion == expectedStateVersion &&
             session.StateVersion > expectedStateVersion;
@@ -3465,6 +3469,7 @@ internal sealed partial class CoordinationOwnerStore
             session.StateVersion < presentingStateVersion)
             throw new CoordinationException("turn_boundary_conflict", StatusCodes.Status409Conflict);
 
+        // Clear the original wake only if nothing changed while message presentation was in progress.
         var pendingWake = session.StateVersion == requestStateVersion + 1
             ? false
             : session.PendingWake;
@@ -3567,6 +3572,7 @@ internal sealed partial class CoordinationOwnerStore
         var operationId = Guid.NewGuid();
         var fencedSessions = ImmutableArray.CreateBuilder<SessionExecutionFenceChange>();
         var targetStateVersion = 0L;
+        // Other in-flight turns have unknown outcomes; fencing them does not undo their side effects.
         await using (var updateSessions = new NpgsqlCommand($"""
             UPDATE {_sessions}
             SET execution_fence = @nextFence,
@@ -3750,6 +3756,7 @@ internal sealed partial class CoordinationOwnerStore
         var operationId = Guid.NewGuid();
         var fencedSessions = ImmutableArray.CreateBuilder<SessionExecutionFenceChange>();
         var rootStateVersion = 0L;
+        // Recovery restores owner state at a new fence; it does not replay physical runtime effects.
         await using (var updateSessions = new NpgsqlCommand($"""
             UPDATE {_sessions}
             SET execution_fence = @nextFence,

@@ -88,6 +88,7 @@ internal sealed partial class CoordinationOwnerStore
             return existingBinding.Binding;
         }
 
+        // An existing root without its binding is inconsistent, not permission to adopt that root.
         await using (var exists = new NpgsqlCommand($"""
             SELECT EXISTS (SELECT 1 FROM {_runs} WHERE project_id = @project AND run_id = @run)
             """, connection, transaction))

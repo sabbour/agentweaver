@@ -244,6 +244,7 @@ internal static class MafOpenPullRequestContract
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(pullRequest);
+        // A reused PR can already be merged, but a newly created result cannot claim that outcome.
         if (pullRequest.Number < 1 ||
             pullRequest.State is not ("open" or "closed") ||
             pullRequest.State == "open" && pullRequest.Merged ||

@@ -142,6 +142,7 @@ internal sealed class RuntimeExecutionEvidenceLedgerStore(string schema)
         var stored = JsonSerializer.Deserialize<RuntimeNumericLimitDenialReceipt>(storedJson, JsonOptions)
             ?? throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
         _ = stored.Validate();
+        // Preserve the first receipt's timestamp while requiring the retry's substantive evidence to match.
         if (stored with { RecordedAt = receipt.RecordedAt, CanonicalPayloadHash = receipt.CanonicalPayloadHash } != receipt)
             throw new RuntimeAuthorizationException("runtime_numeric_limit_denial_conflict");
         return stored;

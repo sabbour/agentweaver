@@ -343,6 +343,7 @@ internal sealed class ProjectsRunSelectionClient(
             if (root.ValueKind != JsonValueKind.Object)
                 throw InvalidP1SetupReceipt();
             var names = new HashSet<string>(StringComparer.Ordinal);
+            // Validate the wire shape before deserialization can hide duplicate or missing receipt fields.
             foreach (var property in root.EnumerateObject())
                 if (!names.Add(property.Name))
                     throw InvalidP1SetupReceipt();
@@ -790,6 +791,7 @@ internal sealed class ProjectsRunSelectionClient(
         var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         CoordinationIdentity.RequireScopes(context.User);
         var cancelling = requiredPermission == "cancelRun";
+        // Cancellation uses fresh project authority; ordinary owner operations require the exact run binding.
         if (!cancelling)
         {
             var scope = CoordinationIdentity.RequireRunScope(context.User);
@@ -868,6 +870,7 @@ internal sealed class ProjectsRunSelectionClient(
                 root, projectId, cancellationToken).ConfigureAwait(false);
             if (refreshAuthority)
             {
+                // Snapshot and remote-tool reads can outlast an authority revision; refresh before returning.
                 authorization = cancelling
                     ? await ReadProjectRunAuthorityAsync(context, projectId, cancellationToken, "cancelRun")
                     : await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken).ConfigureAwait(false);

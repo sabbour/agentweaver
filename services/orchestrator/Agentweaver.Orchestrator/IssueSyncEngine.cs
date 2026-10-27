@@ -115,6 +115,7 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
                     {
                         if (receipt?.CreatePending == true)
                         {
+                            // An unknown POST outcome must be recovered by marker import, not another POST.
                             pendingCreation = true;
                             cursor = task.Reference.TaskId;
                             continue;
@@ -207,6 +208,7 @@ internal sealed class IssueSyncEngine(IssueSyncStore store, BacklogOwnerStore ba
             new(taskReference.TaskId, context.Repository.FullName.ToLowerInvariant(), number, desired, false), ct);
     }
 
+    // Local edits win per field; untouched fields take remote changes since the last shared baseline.
     internal static SourceControlIssueContent Merge(SourceControlIssueContent local,
         SourceControlIssueContent remote, SourceControlIssueContent baseline) => new(remote.Number,
         local.Title != baseline.Title ? local.Title : remote.Title,
