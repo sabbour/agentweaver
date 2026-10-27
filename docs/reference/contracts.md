@@ -1409,6 +1409,24 @@ absolute HTTPS audience. Configuring this audience activates the private
 run-binding route. Projects & Config validates its short-lived signed Broker
 request tokens separately from public bearer tokens.
 
+For P0 deployment, the optional descriptor has exactly four fields:
+`projectsOwnerAddress`, `projectsAudience`,
+`projectsServerCertificateSha256`, and `projectsTrustBundleSha256`.
+`npm run release:prepare-broker-run-binding` reads only the public CA bundle
+and Projects Config `tls.crt` from the exact P0 context; it does not read
+`tls.key`. Both `release:deploy` and `release:deploy-integration` accept the
+descriptor with `--broker-run-binding`. The final-release path renders the
+matching Broker and Projects Config settings, Pod fingerprints, and two
+port-8443 Cilium policies only in a temporary Kustomize copy. It remains
+read-only unless `--execute` is supplied and can replace only those two
+immutable runtime ConfigMaps after its guarded preflight.
+Preflight also permits a partially completed rollout in which one map is
+absent and the other already matches; incomplete values within either map
+still fail, and post-apply verification requires both maps.
+For v1.0.14 run-binding redeployment only, a clean newer helper checkout may
+be used after it verifies the pinned release receipt and unchanged
+source-owned deployment inputs.
+
 ## Identity PostgreSQL access
 
 Runtime and schema migration use separate connection strings, projected workload identities, and Entra PostgreSQL roles. Both connections use passwordless async Npgsql token acquisition, `VerifyFull`, and the scope `https://ossrdbms-aad.database.windows.net/.default`.

@@ -43,14 +43,15 @@ function reject(message, fail) {
 }
 
 export function findImmutableRuntimeConfigMapReplacements(installationManifest, namespace, {
-  root, run, fail,
+  root, run, fail, replaceableNames = REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS,
 }) {
   const replacements = [];
   const unapprovedChanges = [];
+  const allowedReplacements = new Set(replaceableNames);
   const desiredMaps = installationManifest.items.filter(resource =>
     resource.kind === 'ConfigMap' && resource.immutable === true);
 
-  for (const name of REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS) {
+  for (const name of allowedReplacements) {
     const desired = desiredMaps.find(resource => resource.metadata?.name === name);
     if (!desired || desired.metadata?.namespace !== namespace) {
       reject(`source bundle must include immutable ConfigMap/${name} in namespace ${namespace}`, fail);
@@ -93,7 +94,7 @@ export function findImmutableRuntimeConfigMapReplacements(installationManifest, 
     const desiredProjection = projectRuntimeConfigMap(desired);
     if (current.dataDigest === desiredProjection.dataDigest &&
         current.binaryDataDigest === desiredProjection.binaryDataDigest) continue;
-    if (!REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS.has(name)) {
+    if (!allowedReplacements.has(name)) {
       unapprovedChanges.push(name);
       continue;
     }

@@ -24,6 +24,7 @@ import {
   verifyRegistryImage,
   verifyAzureTarget,
   verifyBootstrapRelease,
+  verifyRunBindingRelease,
   verifyRuntimePrerequisites,
 } from '../deploy.mjs';
 import { componentImageRepository, componentImageTag } from '../pack.mjs';
@@ -840,6 +841,8 @@ test('P0 target and every required deployment target input are explicit and exac
     !['--provider-catalog-configmap', '--provider-catalog-source-commit'].includes(values[index - 1]));
   assert.throws(() => parseArgs(missingCatalogArgs), /--provider-catalog-configmap is required/);
   assert.equal(parseArgs(argsFor()).providerCatalogConfigMapName, 'projects-config-provider-catalog');
+  assert.equal(parseArgs([...argsFor(), '--broker-run-binding', 'binding.json'])
+    .brokerRunBindingPath, 'binding.json');
   assert.throws(() => parseArgs([...argsFor(), '--execute', '--dry-run']), /mutually exclusive/);
 });
 
@@ -3092,6 +3095,9 @@ test('v1.0.9 evidence verifies its exact annotated tag, source commit, and publi
 const v1011SourceSha = 'e2929bca622b5397804cdb05abed49befc86aa3d';
 const v1014SourceSha = '4105e2f2520659e7c9c636cf34972661fa26342f';
 const v1014PublicationSha256 = '21dc5b63e3bab229e8e8df07cc083ce94d48c031c045af3f7ba438a93fbe5538';
+const v1014Manifest = JSON.parse(execFileSync('git', [
+  'show', `${v1014SourceSha}:releases/foundation.json`,
+], { cwd: root, encoding: 'utf8' }));
 
 test('v1.0.11 is pinned for P1 evidence but refused by the pre-acceptance bootstrap deployment', async () => {
   assert.throws(() => parseArgs(normalBootstrapArgsFor({}, 'v1.0.11')), (error) =>
@@ -3163,9 +3169,13 @@ test('v1.0.14 evidence verifies its exact lightweight tag, publication digest, a
   const resultObjectSha = '6'.repeat(40);
   const resultRefName = `agentweaver-publication/${v1014SourceSha}/result`;
   let tagRef = { object: { type: 'commit', sha: v1014SourceSha } };
+  let mergeBase = v1014SourceSha;
+  let changedPaths = '';
   const run = (file, args) => {
     if (file === 'git' && args[0] === 'rev-parse') return 'e'.repeat(40);
     if (file === 'git' && args[0] === 'status') return '';
+    if (file === 'git' && args[0] === 'merge-base') return mergeBase;
+    if (file === 'git' && args[0] === 'diff') return changedPaths;
     if (file === 'gh' && args[0] === 'api') {
       const endpoint = args[1];
       if (endpoint.endsWith('/releases/tags/v1.0.14')) {
@@ -3190,6 +3200,22 @@ test('v1.0.14 evidence verifies its exact lightweight tag, publication digest, a
   assert.equal(await verifyBootstrapRelease('v1.0.14', fixture.publication, {
     root, run, publicationSha256: v1014PublicationSha256,
   }), v1014SourceSha);
+  assert.equal(await verifyRunBindingRelease('v1.0.14', fixture.publication, {
+    root, run, publicationSha256: v1014PublicationSha256,
+  }), v1014SourceSha);
+  await assert.rejects(verifyRunBindingRelease('v1.0.13', fixture.publication, {
+    root, run, publicationSha256: v1014PublicationSha256,
+  }), /limited to v1\.0\.14/);
+  changedPaths = 'deploy/k8s/identity-broker.yaml';
+  await assert.rejects(verifyRunBindingRelease('v1.0.14', fixture.publication, {
+    root, run, publicationSha256: v1014PublicationSha256,
+  }), /deployment inputs differ from the published source/);
+  changedPaths = '';
+  mergeBase = 'f'.repeat(40);
+  await assert.rejects(verifyRunBindingRelease('v1.0.14', fixture.publication, {
+    root, run, publicationSha256: v1014PublicationSha256,
+  }), /must descend from the exact published source commit/);
+  mergeBase = v1014SourceSha;
   await assert.rejects(verifyBootstrapRelease('v1.0.14', fixture.publication, {
     root, run, publicationSha256: 'f'.repeat(64),
   }), /publication\.json does not match its pinned SHA-256/);
@@ -4309,6 +4335,163 @@ test('default dry-run validates and renders without issuing any external write',
   assert.equal(targetVerified, 1);
   assert.equal(prerequisitesVerified, 1);
   assert.equal(commands.length, 2);
+});
+
+test('release dry-run renders validated run-binding settings, policies, and workload fingerprints', async () => {
+  const manifest = releaseManifest();
+  const publication = publicationReceipt(manifest);
+  const binding = {
+    projectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
+    projectsAudience: 'https://projects.agentweaver.io/run-binding',
+    projectsServerCertificateSha256: 'a'.repeat(64),
+    projectsTrustBundleSha256: 'b'.repeat(64),
+  };
+  const rendered = [];
+  const commands = [];
+  const result = await deployRelease({
+    releaseTag: 'v1.0.0',
+    target,
+    manifest,
+    publication,
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: sourceSha,
+    brokerRunBinding: binding,
+    dryRun: true,
+  }, {
+    ...agentSandboxTestDependencies(),
+    root: p0Root,
+    verifyRelease: async () => sourceSha,
+    verifyImages: async () => verifiedImageDigests(manifest),
+    verifyTarget: async () => ({ exact: true }),
+    verifyPrerequisites: (_runtime, _target, options) => {
+      assert.deepEqual(options.brokerRunBinding, binding);
+    },
+    verifyBrokerRunBindingConfiguration: (descriptor, _target, options) => {
+      assert.deepEqual(descriptor, binding);
+      assert.equal(options.allowMissingSettings, true);
+      return { runBindingSettingsConfigured: false };
+    },
+    run: (file, args) => {
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        const output = execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+        rendered.push(...parseKustomizeResources(output).items);
+        return output;
+      }
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') return '';
+      commands.push(args);
+      assert.equal(file, 'kubectl');
+      assert.equal(args[0], 'apply');
+      assert.ok(args.includes('--dry-run=client'));
+      return '';
+    },
+  });
+
+  const configMaps = new Map(rendered.filter(resource => resource.kind === 'ConfigMap')
+    .map(resource => [resource.metadata.name, resource]));
+  const broker = rendered.find(resource => resource.kind === 'Deployment' &&
+    resource.metadata.name === 'identity-broker');
+  const projects = rendered.find(resource => resource.kind === 'Deployment' &&
+    resource.metadata.name === 'projects-config');
+  const expectedPolicies = createBrokerRunBindingPolicies(target.namespace);
+  assert.equal(result.dryRun, true);
+  assert.deepEqual(result.brokerRunBinding, { settingsConfigured: false, policiesRendered: 2 });
+  assert.equal(result.immutableRuntimeConfigMapReplacements.length, 0);
+  assert.equal(configMaps.get('identity-broker-runtime-config-v2').data
+    .IdentityBroker__RunBinding__ProjectsAudience, binding.projectsAudience);
+  assert.equal(configMaps.get('projects-config-runtime-config').data
+    .ProjectsConfig__Authentication__BrokerRunBindingAudience, binding.projectsAudience);
+  assert.equal(broker.spec.template.metadata.annotations['agentweaver.io/broker-run-binding-sha256'],
+    brokerRunBindingFingerprint(binding));
+  assert.equal(projects.spec.template.metadata.annotations['agentweaver.io/broker-run-binding-sha256'],
+    brokerRunBindingFingerprint(binding));
+  assert.ok(broker.spec.template.spec.containers[0].ports.some(port =>
+    port.name === 'hosted-catalog' && port.containerPort === 8444));
+  assert.deepEqual(rendered.filter(resource => resource.kind === 'CiliumNetworkPolicy' &&
+    resource.metadata.labels?.['agentweaver.io/run-binding'] === 'projects'), expectedPolicies);
+  assert.ok(commands.every(args => args.includes('--dry-run=client')));
+  assert.equal(commands.length, 2);
+});
+
+test('v1.0.14 run-binding helper dry-run validates pinned projects and does not write', async (t) => {
+  const deploymentRoot = sourceFixtureRoot(
+    v1014SourceSha, v1014Manifest, 'agentweaver-v1-0-14-run-binding-tests-');
+  t.after(() => rmSync(deploymentRoot, { recursive: true, force: true }));
+  const manifest = structuredClone(v1014Manifest);
+  manifest.stage = 'release';
+  for (const component of manifest.components) {
+    if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
+      component.imageDigest = v107ImageDigests[component.id];
+    }
+  }
+  manifest.evidence = releaseManifest().evidence;
+  manifest.evidence.sourceSha = v1014SourceSha;
+  manifest.evidence.deploymentSha = v1014SourceSha;
+  for (const run of manifest.evidence.personaRuns) run.sourceSha = v1014SourceSha;
+  const publication = publicationReceipt(manifest, v1014SourceSha, {
+    agentHostImageDigest: v107ImageDigests['Agentweaver.AgentHost'],
+    agentHostImageConfigDigest: v107AgentHostImageConfigDigest,
+    agentHostCompressedPullBytes: v107AgentHostCompressedPullBytes,
+    agentHostSourceTree: v107SourceTreeSha,
+  });
+  const binding = {
+    projectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
+    projectsAudience: 'https://projects.agentweaver.io/run-binding',
+    projectsServerCertificateSha256: 'a'.repeat(64),
+    projectsTrustBundleSha256: 'b'.repeat(64),
+  };
+  const writes = [];
+  let projectReads = 0;
+  const result = await deployRelease({
+    releaseTag: 'v1.0.14',
+    target,
+    manifest,
+    publication,
+    publicationSha256: v1014PublicationSha256,
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: providerCatalogSourceSha,
+    brokerRunBinding: binding,
+    dryRun: true,
+  }, {
+    ...agentSandboxTestDependencies(),
+    root: deploymentRoot,
+    verifyRunBindingRelease: async (tag, published, options) => {
+      assert.equal(tag, 'v1.0.14');
+      assert.equal(published, publication);
+      assert.equal(options.publicationSha256, v1014PublicationSha256);
+      return v1014SourceSha;
+    },
+    readSourceProjectAtCommit: (file, options) => {
+      assert.equal(options.sourceSha, v1014SourceSha);
+      projectReads++;
+      const sourcePath = path.relative(deploymentRoot, file).split(path.sep).join('/');
+      return execFileSync('git', ['show', `${v1014SourceSha}:${sourcePath}`], {
+        cwd: root, encoding: 'utf8',
+      });
+    },
+    verifyImages: async () => verifiedImageDigests(manifest),
+    verifyTarget: async () => ({ exact: true }),
+    verifyPrerequisites: () => {},
+    verifyBrokerRunBindingConfiguration: (_descriptor, _target, options) => {
+      assert.equal(options.allowMissingSettings, true);
+      return { runBindingSettingsConfigured: false };
+    },
+    run: (file, args) => {
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        return execFileSync(file, args, { cwd: deploymentRoot, encoding: 'utf8' });
+      }
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') return '';
+      writes.push(args);
+      assert.equal(file, 'kubectl');
+      assert.equal(args[0], 'apply');
+      assert.ok(args.includes('--dry-run=client'));
+      return '';
+    },
+  });
+  assert.equal(result.dryRun, true);
+  assert.deepEqual(result.brokerRunBinding, { settingsConfigured: false, policiesRendered: 2 });
+  assert.ok(projectReads > 0);
+  assert.ok(writes.every(args => args.includes('--dry-run=client')));
+  assert.equal(writes.length, 2);
 });
 
 test('dry-run refuses a GHCR receipt that omits the measured AgentHost platform manifest', async () => {

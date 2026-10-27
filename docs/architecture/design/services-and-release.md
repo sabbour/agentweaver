@@ -598,9 +598,22 @@ Pod templates so a binding change rolls both workloads. Before apply, it checks
 the existing configuration and TLS inputs. After apply, it checks those inputs
 again, then verifies both template fingerprints, exactly those two live
 policies, and a Projects-owned EndpointSlice with one ready endpoint whose IP
-matches the ready Projects Config pod. This opt-in is supported only by the
-local integration command; it is not enabled by the image workflow or the
-final-release deploy command.
+matches the ready Projects Config pod.
+
+The final-release `release:deploy` command accepts the same descriptor. The
+repository-owned `release:prepare-broker-run-binding` command can create it
+from the current P0 context by reading only the public CA ConfigMap and
+Projects Config `tls.crt`; it never reads `tls.key`. With the descriptor,
+`release:deploy` adds the same four Broker settings, four Projects Config
+settings, two narrow Cilium policies, and Pod-template fingerprints to a
+temporary Kustomize copy. It verifies the current certificates and settings,
+plans guarded replacement only for the two immutable Broker and Projects
+Config runtime ConfigMaps, and verifies the applied configuration and live
+readbacks. Both deploy commands remain opt-in; `release:deploy` is read-only
+without `--execute`. The image workflow does not enable run binding.
+During recovery, preflight accepts either runtime ConfigMap as absent or fully
+matching; a map with incomplete or conflicting binding values fails.
+Post-apply verification requires both maps to be fully configured.
 
 ### Local published-image deployment
 
@@ -608,7 +621,11 @@ The operator-hosted `release:deploy` command is a separate consumer of the
 existing source-bound publication receipt and release manifest. It accepts only
 an annotated v1 GitHub Release at the exact clean source commit, verifies all
 ten product image digests against the immutable publication result and GHCR,
-and never builds, pushes, or imports an image. Nine services run as shared
+and never builds, pushes, or imports an image. For v1.0.14 run-binding
+redeployment only, a newer clean helper checkout is allowed when it descends
+from the pinned release source and its source-owned Kustomize and release
+inputs are unchanged; project files are validated at the pinned source.
+Nine services run as shared
 Deployments and private ClusterIP Services. AgentHost remains per-Sandbox:
 read-only GHCR verification resolves its exact published `linux/amd64` child
 digest, validates the config against prepared source labels, and measures the
@@ -625,9 +642,13 @@ in the supplied runtime List. It does not create a shared AgentHost Deployment
 or Service; the Sandbox controller owns each per-run Host Service.
 Existing identities, TLS Secrets, runtime ConfigMaps, storage claims, SQL
 mappings/grants, Cilium policies, and routing are prerequisites owned elsewhere,
-not resources the release tool creates. Resume state is keyed to the exact tag,
-source, publication and runtime manifests, and target; live image, target, and
-health verification always runs again.
+not resources the release tool creates, except that an explicit
+`--broker-run-binding` descriptor adds its exact settings to the two existing
+Broker and Projects Config runtime ConfigMaps in the temporary render. If
+either immutable map must change, execution preflights and replaces only those
+two maps. Resume state is keyed to the exact tag, source, publication and
+runtime manifests, and target; live image, target, and health verification
+always runs again.
 
 No v1 release-stage manifest or successful product publication exists in the
 current source. The checked-in `scripts/release/runtime-list.mjs` source creates

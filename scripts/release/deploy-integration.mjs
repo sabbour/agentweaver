@@ -392,7 +392,7 @@ function readRunBindingPodReplicaSet(pod, deployment, target, root, run, add) {
   return replicaSet;
 }
 
-function readbackResources(runtimeManifest, images, acceptedDigests, target, root, run, brokerRunBinding) {
+export function readbackResources(runtimeManifest, images, acceptedDigests, target, root, run, brokerRunBinding) {
   const imageByName = new Map(images.map(image => [image.name, image]));
   const readbacks = [];
   const services = new Map();

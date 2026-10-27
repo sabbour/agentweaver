@@ -149,3 +149,47 @@ test('kubectl reports a failed guarded delete when the live ConfigMap changed', 
     await api.close();
   }
 });
+
+test('run-binding replacement scope allows only its two runtime ConfigMaps', () => {
+  const replaceableNames = new Set([
+    'identity-broker-runtime-config-v2',
+    'projects-config-runtime-config',
+  ]);
+  const desired = [
+    ...[...replaceableNames].map(name => desiredMap(name, 'new')),
+    desiredMap('agenthost-runtime-v1', 'same'),
+  ];
+  const run = (_command, args, settings = {}) => {
+    const name = args[2];
+    if (args[0] !== 'get') throw new Error(`unexpected kubectl ${args.join(' ')}`);
+    if (args.includes('--output=name')) return `configmap/${name}`;
+    const live = desiredMap(name, replaceableNames.has(name) ? 'old' : 'same');
+    live.metadata.uid = `uid-${name}`;
+    live.metadata.resourceVersion = '42';
+    return JSON.stringify(settings.projectJson(live));
+  };
+  const replacements = findImmutableRuntimeConfigMapReplacements(
+    { items: desired }, namespace, { root: '.', run, replaceableNames },
+  );
+  assert.deepEqual(replacements.map(resource => resource.metadata.name), [...replaceableNames]);
+
+  const driftOutsideScope = [
+    ...desired,
+    desiredMap('gateway-runtime-config', 'new'),
+  ];
+  assert.throws(() => findImmutableRuntimeConfigMapReplacements(
+    { items: driftOutsideScope }, namespace, {
+      root: '.',
+      run: (_command, args, settings = {}) => {
+        const name = args[2];
+        if (args.includes('--output=name')) return `configmap/${name}`;
+        const live = desiredMap(name, name === 'gateway-runtime-config' ? 'old' :
+          replaceableNames.has(name) ? 'old' : 'same');
+        live.metadata.uid = `uid-${name}`;
+        live.metadata.resourceVersion = '42';
+        return JSON.stringify(settings.projectJson(live));
+      },
+      replaceableNames,
+    }),
+  /Not eligible for guarded replacement: gateway-runtime-config/);
+});

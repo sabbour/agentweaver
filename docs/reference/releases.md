@@ -346,6 +346,29 @@ read-only dry run:
 npm run release:deploy -- <release-tag> --manifest <release-manifest.json> --publication <publication.json> --subscription-id <subscription-id> --tenant-id <tenant-id> --resource-group <resource-group> --cluster <cluster-name> --namespace <namespace> --node-min <minimum-nodes> --node-max <maximum-nodes> --provider-catalog-configmap <config-map-name> --provider-catalog-source-commit <40-character-sha>
 ```
 
+For the optional P0 Broker run-binding path, first create a local descriptor
+from the current `agentweaver-aks` context:
+
+```powershell
+npm run release:prepare-broker-run-binding -- --output artifacts/release/broker-run-binding.json
+```
+
+Add `--broker-run-binding artifacts/release/broker-run-binding.json` to the
+`release:deploy` command to include the binding settings and network policies
+in its rendered bundle. The command remains read-only without `--execute`;
+execution may replace only changed immutable Broker and Projects Config
+runtime ConfigMaps after the guarded preflight.
+For recovery, preflight accepts one absent map when the other already matches,
+but rejects incomplete values in either map; after apply both maps must match.
+
+The only historical-release exception is a v1.0.14 redeployment with this
+descriptor. It verifies the pinned lightweight tag and publication asset,
+requires a clean helper checkout descended from the pinned source, rejects
+changes to source-owned Kustomize and release inputs, and reads manifest
+project files from that pinned source. The v1.0.14 image digests must match the
+checked-in P0 image pins. See the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
+for the command shape; do not use this exception for other historical releases.
+
 Review the verified source, image digests, target, runtime prerequisites, and
 rendered Kustomize installation. To apply the installation and run live rollout
 and image checks, repeat the command with `--execute` after the target and

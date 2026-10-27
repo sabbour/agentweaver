@@ -18,6 +18,7 @@
     "release:rebind-receipt": "node scripts/release/rebind-receipt.mjs",
     "release:deploy-bootstrap": "node scripts/release/deploy.mjs --pre-acceptance",
     "release:deploy-integration": "node scripts/release/deploy-integration.mjs",
+    "release:prepare-broker-run-binding": "node scripts/release/prepare-broker-run-binding.mjs",
     "release:prepare-build-inputs": "node scripts/release/prepare-build-inputs.mjs",
     "release:plan-image-reuse": "node scripts/release/image-reuse.mjs releases/foundation.json",
     "harness:p1": "node scripts/harness-shared/run-p1.mjs",

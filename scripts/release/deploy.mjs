@@ -18,7 +18,7 @@ import {
   BACKEND_CA_WORKLOADS,
   BROKER_RUN_BINDING_ANNOTATION,
   PROJECTS_CONFIG_TLS_CERTIFICATE_PATH,
-  PROJECTS_CONFIG_TLS_KEY_PATH, brokerRunBindingFingerprint,
+  PROJECTS_CONFIG_TLS_KEY_PATH, brokerRunBindingFingerprint, createRuntimeList,
   createBrokerRunBindingPolicies,
   PROVIDER_ADAPTER_VERSION_RUNTIME_INPUTS, PROVIDER_OPTIONS_REVISION_RUNTIME_INPUTS,
   validateBrokerRunBinding,
@@ -219,6 +219,13 @@ const PROJECTS_CONFIG_HOSTNAME = 'projects-config.agentweaver.svc.cluster.local'
 const SERVER_AUTH_EKU = '1.3.6.1.5.5.7.3.1';
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
 const BOOTSTRAP_RELEASE_TAG = 'v1.0.0';
+const RUN_BINDING_RELEASE_SOURCE_PATHS = Object.freeze([
+  KUSTOMIZE_INSTALL_PATH,
+  path.join('scripts', 'release', 'runtime-list.mjs'),
+  path.join('scripts', 'release', 'kustomize-runtime.mjs'),
+  path.join('scripts', 'release', 'pack.mjs'),
+  path.join('scripts', 'release', 'validate.mjs'),
+]);
 const BOOTSTRAP_RELEASES = Object.freeze({
   [BOOTSTRAP_RELEASE_TAG]: Object.freeze({
     sourceSha: PARTIAL_PUBLICATION.sourceSha,
@@ -468,6 +475,7 @@ export function parseArgs(argv = []) {
     ['--manifest', 'manifestPath'],
     ['--publication', 'publicationPath'],
     ['--completion', 'completionPath'],
+    ['--broker-run-binding', 'brokerRunBindingPath'],
     ['--provider-catalog-configmap', 'providerCatalogConfigMapName'],
     ['--provider-catalog-source-commit', 'providerCatalogSourceCommit'],
     ['--subscription-id', 'subscriptionId'],
@@ -587,9 +595,9 @@ export function validateTarget(target) {
 }
 
 /** Validates that the release manifest is published, source-bound, and consistent with repository files. */
-export function validatePublishedManifest(manifest, { root, sourceSha }) {
+export function validatePublishedManifest(manifest, { root, sourceSha, readProject }) {
   if (!SHA.test(sourceSha ?? '')) fail('release source SHA must be a lowercase full Git commit SHA');
-  validateManifest(manifest, { root });
+  validateManifest(manifest, { root, ...(readProject ? { readProject } : {}) });
   if (manifest.stage !== 'release') {
     fail('the supplied manifest is still draft; an already-published release composition is required');
   }
@@ -617,6 +625,44 @@ export function validatePublishedManifest(manifest, { root, sourceSha }) {
   const probe = manifest.components.find((component) => component.id === 'Agentweaver.FoundationProbe');
   if (probe && (probe.kind !== 'service' || probe.version !== '0.0.1')) {
     fail('FoundationProbe is acceptance-only at 0.0.1 and must remain outside product deployment');
+  }
+  return manifest;
+}
+
+/** Validates the source-versioned manifest used only for the v1.0.14 run-binding redeployment. */
+export function validateRunBindingPublishedManifest(manifest, {
+  root, sourceSha, releaseTag, readProject,
+}) {
+  const bootstrapRelease = BOOTSTRAP_RELEASES[releaseTag];
+  if (releaseTag !== 'v1.0.14' || sourceSha !== bootstrapRelease?.sourceSha) {
+    fail('run-binding redeployment requires the exact published v1.0.14 source');
+  }
+  const projectReader = readProject ? { readProject } : {};
+  // Validate the historical Probe against its source version, then apply release evidence rules to product components.
+  const sourceShapeManifest = structuredClone(manifest);
+  sourceShapeManifest.stage = 'draft';
+  delete sourceShapeManifest.evidence;
+  validateManifest(sourceShapeManifest, { root, ...projectReader });
+  const releaseValidationManifest = structuredClone(manifest);
+  releaseValidationManifest.components = releaseValidationManifest.components.filter(
+    (component) => component.id !== 'Agentweaver.FoundationProbe');
+  releaseValidationManifest.compatibility = releaseValidationManifest.compatibility.filter(
+    (entry) => entry.consumer !== 'Agentweaver.FoundationProbe' &&
+      entry.dependency !== 'Agentweaver.FoundationProbe');
+  validateManifest(releaseValidationManifest, { root, ...projectReader });
+  if (manifest.stage !== 'release' || manifest.evidence?.sourceSha !== sourceSha ||
+      manifest.evidence?.deploymentSha !== sourceSha) {
+    fail('v1.0.14 release manifest evidence must match the exact published source commit');
+  }
+  const product = manifest.components.filter((component) =>
+    component.id !== 'Agentweaver.FoundationProbe');
+  const ids = product.map((component) => component.id).sort();
+  const expected = [
+    ...PRODUCT_COMPONENTS,
+    ...(bootstrapRelease.additionalProductComponents ?? []),
+  ].sort();
+  if (ids.length !== expected.length || ids.some((id, index) => id !== expected[index])) {
+    fail(`v1.0.14 release manifest must contain exactly the ${expected.length} product components`);
   }
   return manifest;
 }
@@ -1228,7 +1274,7 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
 }
 
 /** Validates the complete P0 Kustomize bundle and its rendered shared-service workload contract. */
-export function validateKustomizeInstall(document, images, namespace, providerCatalog) {
+export function validateKustomizeInstall(document, images, namespace, providerCatalog, brokerRunBinding) {
   const items = document?.kind === 'List' ? document.items
     : Array.isArray(document) ? document : null;
   if (!Array.isArray(items) || items.length === 0) fail('Kustomize install must render Kubernetes resources');
@@ -1240,6 +1286,11 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
   const namesByKind = new Map();
   const configMaps = new Map(items.filter(({ kind }) => kind === 'ConfigMap')
     .map((resource) => [resource.metadata.name, resource]));
+  const binding = brokerRunBinding === undefined
+    ? undefined
+    : validateBrokerRunBinding(brokerRunBinding);
+  const expectedBindingPolicies = new Map((binding ? createBrokerRunBindingPolicies(namespace) : [])
+    .map((policy) => [policy.metadata.name, policy]));
   const incompleteRuntimeConfigMaps = new Set([...configMaps]
     .filter(([, resource]) =>
       resource.metadata.annotations?.['agentweaver.io/runtime-config-status'] === 'incomplete')
@@ -1348,8 +1399,11 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
   expectNames('HTTPRoute', new Set(['web-application']), 'managed-domain Web HTTPRoute');
   expectNames('NetworkPolicy', new Set(['allow-dns-egress', 'default-deny-all']),
     'default-deny and DNS NetworkPolicies');
-  const requiredCiliumPolicies = new Set(Object.values(SERVICE_NETWORK_POLICY_NAMES)
-    .flatMap((names) => Array.isArray(names) ? names : [names]));
+  const requiredCiliumPolicies = new Set([
+    ...Object.values(SERVICE_NETWORK_POLICY_NAMES)
+      .flatMap((names) => Array.isArray(names) ? names : [names]),
+    ...expectedBindingPolicies.keys(),
+  ]);
   expectNames('CiliumNetworkPolicy', requiredCiliumPolicies, 'service Cilium policies');
 
   // Keep the installed Portal route bound to the same origin configured for Gateway.
@@ -1380,6 +1434,35 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
   }
   for (const name of SERVICE_RUNTIME_CONFIG_MAP_NAMES) {
     if (!configMaps.has(name)) fail(`Kustomize install is missing ${name}`);
+  }
+  if (binding) {
+    const brokerConfig = configMaps.get('identity-broker-runtime-config-v2')?.data;
+    const projectsConfig = configMaps.get('projects-config-runtime-config')?.data;
+    const brokerSettings = {
+      IdentityBroker__RunBinding__ProjectsOwnerAddress: binding.projectsOwnerAddress,
+      IdentityBroker__RunBinding__ProjectsAudience: binding.projectsAudience,
+      IdentityBroker__RunBinding__ProjectsServerCertificateSha256: binding.projectsServerCertificateSha256,
+      IdentityBroker__RunBinding__ProjectsTrustBundleSha256: binding.projectsTrustBundleSha256,
+    };
+    const projectsSettings = {
+      ProjectsConfig__Tls__CertificatePath: PROJECTS_CONFIG_TLS_CERTIFICATE_PATH,
+      ProjectsConfig__Tls__KeyPath: PROJECTS_CONFIG_TLS_KEY_PATH,
+      ProjectsConfig__Tls__ServerCertificateSha256: binding.projectsServerCertificateSha256,
+      ProjectsConfig__Authentication__BrokerRunBindingAudience: binding.projectsAudience,
+    };
+    assertNoUnexpectedRunBindingSettings(brokerConfig ?? {}, 'identitybroker:runbinding:',
+      Object.keys(brokerSettings), 'identity-broker-runtime-config-v2');
+    assertNoUnexpectedRunBindingSettings(projectsConfig ?? {}, 'projectsconfig:tls:',
+      Object.keys(projectsSettings).slice(0, 3), 'projects-config-runtime-config');
+    assertNoUnexpectedRunBindingSettings(projectsConfig ?? {},
+      'projectsconfig:authentication:brokerrunbinding', [Object.keys(projectsSettings)[3]],
+      'projects-config-runtime-config');
+    for (const [key, value] of Object.entries(brokerSettings)) {
+      requireRuntimeConfigValue(brokerConfig ?? {}, key, value, 'identity-broker-runtime-config-v2');
+    }
+    for (const [key, value] of Object.entries(projectsSettings)) {
+      requireRuntimeConfigValue(projectsConfig ?? {}, key, value, 'projects-config-runtime-config');
+    }
   }
   const agentHostConfig = configMaps.get('agenthost-runtime-v1');
   if (!agentHostConfig?.immutable) {
@@ -1444,8 +1527,9 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
   const runtimeManifest = validateRuntimeManifest({
     apiVersion: 'v1',
     kind: 'List',
-    items: items.filter(({ kind }) => kind === 'Deployment' || kind === 'Service'),
-  }, images, namespace, undefined, providerCatalog);
+    items: items.filter((resource) => resource.kind === 'Deployment' || resource.kind === 'Service' ||
+      binding && expectedBindingPolicies.has(resource.metadata?.name)),
+  }, images, namespace, binding, providerCatalog);
   return {
     installationManifest: { apiVersion: 'v1', kind: 'List', items },
     runtimeManifest,
@@ -1873,6 +1957,40 @@ export async function verifyBootstrapRelease(tag, publication, { root, run, publ
   });
 }
 
+/**
+ * Allows the pinned v1.0.14 workloads to be redeployed with run binding from a newer helper checkout.
+ */
+export async function verifyRunBindingRelease(tag, publication, { root, run, publicationSha256 }) {
+  if (tag !== 'v1.0.14') {
+    fail('run-binding redeployment from a newer helper checkout is limited to v1.0.14');
+  }
+  const sourceSha = await verifyBootstrapRelease(tag, publication, { root, run, publicationSha256 });
+  const helperSha = run('git', ['rev-parse', 'HEAD'], { cwd: root }).trim();
+  if (!SHA.test(helperSha)) fail('deployment helper HEAD must be a full Git commit SHA');
+  const mergeBase = run('git', ['merge-base', sourceSha, helperSha], { cwd: root }).trim();
+  if (mergeBase !== sourceSha) {
+    fail('the v1.0.14 deployment helper must descend from the exact published source commit');
+  }
+  // Keep the newer helper limited to code changes; workload-generating inputs must remain source-identical.
+  const changedPaths = run('git', [
+    'diff', '--name-only', sourceSha, helperSha, '--', ...RUN_BINDING_RELEASE_SOURCE_PATHS,
+  ], { cwd: root }).trim();
+  if (changedPaths) {
+    fail(`v1.0.14 run-binding deployment inputs differ from the published source: ${changedPaths}`);
+  }
+  return sourceSha;
+}
+
+function readSourceProjectAtCommit(file, { root, sourceSha, run }) {
+  const relativePath = path.relative(root, file);
+  if (!relativePath || relativePath === '..' ||
+      relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+    fail('release manifest project files must remain within the deployment helper repository');
+  }
+  const sourcePath = relativePath.split(path.sep).join('/');
+  return run('git', ['show', `${sourceSha}:${sourcePath}`], { cwd: root });
+}
+
 function projectAksTargetReadback(value) {
   return {
     id: value?.id,
@@ -2201,7 +2319,9 @@ function readBrokerClientSecretKeys(target, { root, run }) {
 }
 
 /** Verifies the broker run-binding configuration and its paired Kubernetes ingress/egress controls. */
-export function verifyBrokerRunBindingConfiguration(binding, target, { root, run, runRaw = run }) {
+export function verifyBrokerRunBindingConfiguration(binding, target, {
+  root, run, runRaw = run, allowMissingSettings = false,
+}) {
   const descriptor = validateBrokerRunBinding(binding);
   const brokerConfig = readRuntimeConfigMap('identity-broker-runtime-config-v2', target, { root, run });
   const projectsConfig = readRuntimeConfigMap('projects-config-runtime-config', target, { root, run });
@@ -2251,11 +2371,21 @@ export function verifyBrokerRunBindingConfiguration(binding, target, { root, run
       audienceUrisMatch(ordinaryAudience[0][1], descriptor.projectsAudience)) {
     fail('Projects Config run-binding audience must be distinct from its existing authentication audience');
   }
-  for (const [key, value] of Object.entries(brokerSettings)) {
-    requireRuntimeConfigValue(brokerConfig, key, value, 'identity-broker-runtime-config-v2');
-  }
-  for (const [key, value] of Object.entries(projectsSettings)) {
-    requireRuntimeConfigValue(projectsConfig, key, value, 'projects-config-runtime-config');
+  const verifySettings = (data, settings, resourceName) => {
+    const present = Object.keys(data).some((key) =>
+      Object.keys(settings).some(expected => canonicalConfigKey(key) === canonicalConfigKey(expected)));
+    if (!present && allowMissingSettings) return false;
+    for (const [key, value] of Object.entries(settings)) {
+      requireRuntimeConfigValue(data, key, value, resourceName);
+    }
+    return true;
+  };
+  const brokerSettingsConfigured = verifySettings(
+    brokerConfig, brokerSettings, 'identity-broker-runtime-config-v2');
+  const projectsSettingsConfigured = verifySettings(
+    projectsConfig, projectsSettings, 'projects-config-runtime-config');
+  if ((!brokerSettingsConfigured || !projectsSettingsConfigured) && !allowMissingSettings) {
+    fail('Broker run-binding settings must be present in both runtime ConfigMaps');
   }
 
   const bindingKeys = new Set(Object.keys(brokerSettings).map(canonicalConfigKey));
@@ -2298,21 +2428,25 @@ export function verifyBrokerRunBindingConfiguration(binding, target, { root, run
     fail(`projects-config-tls leaf fingerprint does not match the explicit run-binding descriptor`);
   }
 
+  const configMaps = [
+    ...(brokerSettingsConfigured ? [{
+      name: 'identity-broker-runtime-config-v2',
+      sha256: hashRuntimeSettings(brokerConfig, Object.keys(brokerSettings)),
+    }] : []),
+    ...(projectsSettingsConfigured ? [{
+      name: 'projects-config-runtime-config',
+      sha256: hashRuntimeSettings(projectsConfig, Object.keys(projectsSettings)),
+    }] : []),
+  ];
   return {
-    configMaps: [
-      {
-        name: 'identity-broker-runtime-config-v2',
-        sha256: hashRuntimeSettings(brokerConfig, Object.keys(brokerSettings)),
-      },
-      {
-        name: 'projects-config-runtime-config',
-        sha256: hashRuntimeSettings(projectsConfig, Object.keys(projectsSettings)),
-      },
-    ],
+    configMaps,
     brokerClientSecretKeysSha256: createHash('sha256')
       .update(JSON.stringify(clientSecretKeys.sort())).digest('hex'),
     trustBundleSha256: caSha256,
     projectsServerCertificateSha256: leafSha256,
+    ...(!brokerSettingsConfigured || !projectsSettingsConfigured
+      ? { runBindingSettingsConfigured: false }
+      : {}),
   };
 }
 
@@ -2432,8 +2566,94 @@ function matchesKustomizeRuntimeInputs(directory, images, providerCatalog) {
   return true;
 }
 
+function addBrokerRunBindingKustomizeResources(directory, images, providerCatalog, binding, namespace) {
+  const brokerSettings = {
+    IdentityBroker__RunBinding__ProjectsOwnerAddress: binding.projectsOwnerAddress,
+    IdentityBroker__RunBinding__ProjectsAudience: binding.projectsAudience,
+    IdentityBroker__RunBinding__ProjectsServerCertificateSha256: binding.projectsServerCertificateSha256,
+    IdentityBroker__RunBinding__ProjectsTrustBundleSha256: binding.projectsTrustBundleSha256,
+  };
+  const projectsSettings = {
+    ProjectsConfig__Tls__CertificatePath: PROJECTS_CONFIG_TLS_CERTIFICATE_PATH,
+    ProjectsConfig__Tls__KeyPath: PROJECTS_CONFIG_TLS_KEY_PATH,
+    ProjectsConfig__Tls__ServerCertificateSha256: binding.projectsServerCertificateSha256,
+    ProjectsConfig__Authentication__BrokerRunBindingAudience: binding.projectsAudience,
+  };
+  for (const [fileName, resourceName, prefix, settings] of [
+    ['identity-broker-runtime-config.json', 'identity-broker-runtime-config-v2',
+      'identitybroker:runbinding:', brokerSettings],
+    ['projects-config-runtime-config.json', 'projects-config-runtime-config',
+      'projectsconfig:tls:', projectsSettings],
+  ]) {
+    const file = path.join(directory, 'runtime-configs', fileName);
+    const configMap = readKustomizeJson(file, resourceName);
+    if (configMap?.kind !== 'ConfigMap' || configMap.metadata?.name !== resourceName ||
+        configMap.metadata?.namespace !== namespace || configMap.immutable !== true ||
+        !configMap.data || typeof configMap.data !== 'object' || Array.isArray(configMap.data)) {
+      fail(`${resourceName} must be the exact immutable runtime ConfigMap before run-binding settings are added`);
+    }
+    assertNoUnexpectedRunBindingSettings(configMap.data, prefix, Object.keys(settings), resourceName);
+    if (resourceName === 'projects-config-runtime-config') {
+      assertNoUnexpectedRunBindingSettings(configMap.data,
+        'projectsconfig:authentication:brokerrunbinding',
+        [Object.keys(projectsSettings)[3]], resourceName);
+    }
+    configMap.data = { ...configMap.data, ...settings };
+    writeFileSync(file, `${JSON.stringify(configMap, null, 2)}\n`, 'utf8');
+  }
+
+  const generated = createRuntimeList(images, namespace, providerCatalog, binding);
+  for (const name of ['identity-broker', 'projects-config']) {
+    const generatedDeployment = generated.items.find(resource =>
+      resource.kind === 'Deployment' && resource.metadata?.name === name);
+    if (!generatedDeployment) fail(`generated run-binding runtime List is missing Deployment/${name}`);
+    const file = name === 'identity-broker'
+      ? path.join(directory, 'base', 'identity-broker', 'deployment.yaml')
+      : path.join(directory, 'base', 'workloads', 'projects-config-deployment.json');
+    let deployment;
+    try {
+      const source = readFileSync(file, 'utf8');
+      // Kubernetes YAML uses YAML 1.1 octal semantics for modes such as 0440.
+      deployment = parseYaml(source, file.endsWith('.yaml') ? { version: '1.1' } : undefined);
+    } catch (error) {
+      fail(`cannot read the source-owned ${name} Deployment: ${error.message}`);
+    }
+    if (deployment?.kind !== 'Deployment' || deployment.metadata?.name !== name ||
+        !deployment.spec?.template?.metadata) {
+      fail(`source-owned Deployment/${name} must have a Pod template`);
+    }
+    const annotations = deployment.spec.template.metadata.annotations ?? {};
+    if (!annotations || typeof annotations !== 'object' || Array.isArray(annotations) ||
+        typeof generatedDeployment.spec?.template?.metadata?.annotations?.[BROKER_RUN_BINDING_ANNOTATION] !== 'string') {
+      fail(`source-owned Deployment/${name} must preserve its Pod annotations`);
+    }
+    // Keep source-owned workload details such as the Broker hosted-catalog endpoint intact.
+    annotations[BROKER_RUN_BINDING_ANNOTATION] =
+      generatedDeployment.spec.template.metadata.annotations[BROKER_RUN_BINDING_ANNOTATION];
+    deployment.spec.template.metadata.annotations = annotations;
+    writeFileSync(file, file.endsWith('.json')
+      ? `${JSON.stringify(deployment, null, 2)}\n`
+      : stringifyYaml(deployment), 'utf8');
+  }
+
+  const kustomizationPath = path.join(directory, 'kustomization.yaml');
+  const kustomization = parseYaml(readFileSync(kustomizationPath, 'utf8'));
+  if (!Array.isArray(kustomization.resources)) fail('the P0 Kustomization resources must be an array');
+  for (const policy of createBrokerRunBindingPolicies(namespace)) {
+    const fileName = `${policy.metadata.name}.json`;
+    const resourcePath = `runtime-configs/${fileName}`;
+    if (kustomization.resources.includes(resourcePath)) {
+      fail(`the P0 Kustomization already contains generated run-binding resource ${resourcePath}`);
+    }
+    writeFileSync(path.join(directory, 'runtime-configs', fileName),
+      `${JSON.stringify(policy, null, 2)}\n`, 'utf8');
+    kustomization.resources.push(resourcePath);
+  }
+  writeFileSync(kustomizationPath, stringifyYaml(kustomization), 'utf8');
+}
+
 /** Selects the checked-in release bundle or a temporary v1.0.0 compatibility render. */
-function prepareKustomizeSource(root, releaseTag, images, providerCatalog) {
+function prepareKustomizeSource(root, releaseTag, images, providerCatalog, brokerRunBinding) {
   if (providerCatalog.configMapName !== P0_PROVIDER_CATALOG_CONFIG_MAP) {
     fail(`the checked-in P0 installation uses ${P0_PROVIDER_CATALOG_CONFIG_MAP} as its provider catalog`);
   }
@@ -2457,10 +2677,13 @@ function prepareKustomizeSource(root, releaseTag, images, providerCatalog) {
   }
   const sourceRuntimeMatches = matchesKustomizeRuntimeInputs(
     sourceDirectory, images, providerCatalog);
-  if (sourcePinsMatch && sourceRuntimeMatches) {
+  const binding = brokerRunBinding === undefined
+    ? undefined
+    : validateBrokerRunBinding(brokerRunBinding);
+  if (sourcePinsMatch && sourceRuntimeMatches && !binding) {
     return { path: KUSTOMIZE_INSTALL_PATH, cleanup: () => undefined };
   }
-  if (releaseTag !== BOOTSTRAP_RELEASE_TAG) {
+  if ((!sourcePinsMatch || !sourceRuntimeMatches) && releaseTag !== BOOTSTRAP_RELEASE_TAG) {
     fail('checked-in P0 Kustomize images and runtime pins must match the exact publication receipt');
   }
 
@@ -2507,6 +2730,10 @@ function prepareKustomizeSource(root, releaseTag, images, providerCatalog) {
       }
       annotations['agentweaver.io/provider-catalog-source'] = providerCatalog.sourceCommit;
       writeFileSync(file, `${JSON.stringify(workload, null, 2)}\n`, 'utf8');
+    }
+    if (binding) {
+      addBrokerRunBindingKustomizeResources(
+        temporaryDirectory, images, providerCatalog, binding, TARGET.namespace);
     }
     if (!matchesKustomizeRuntimeInputs(temporaryDirectory, images, providerCatalog)) {
       fail('temporary v1.0.0 Kustomize source does not match its publication receipt');
@@ -2601,7 +2828,7 @@ function helpText() {
   return `release:deploy -- verify and deploy an already-published v1 product release
 
 Usage:
-  npm run release:deploy -- v1.0.0 --manifest <release-manifest.json> --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group <name> --cluster <name> --namespace <name> --node-min 2 --node-max 3 --provider-catalog-configmap projects-config-provider-catalog --provider-catalog-source-commit <sha> [--execute] [--resume]
+  npm run release:deploy -- v1.0.0 --manifest <release-manifest.json> --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group <name> --cluster <name> --namespace <name> --node-min 2 --node-max 3 --provider-catalog-configmap projects-config-provider-catalog --provider-catalog-source-commit <sha> [--broker-run-binding <descriptor.json>] [--execute] [--resume]
 
 The default is read-only dry-run. The exact P0 target is mandatory. A write requires
 --execute. Deployment uses only digest-pinned GHCR images, never Docker or Podman.
@@ -2609,6 +2836,8 @@ The checked-in deploy/k8s Kustomize source supplies the complete P0 installation
 Its image pins must match the verified publication receipt exactly. Kustomize
 renders the workloads, ServiceAccounts, runtime ConfigMaps, and network policies;
 operator-owned credentials, certificates, and Gateway placement remain external.
+The optional --broker-run-binding mode derives its runtime settings and policies
+from the validated descriptor; its default preflight remains read-only.
 The Projects provider catalog name and reviewed source commit are required.
 Partial-publication receipts also require --completion, which verifies the
 original partial receipt, immutable continuation records, the successful run,
@@ -2669,6 +2898,9 @@ export async function deployRelease(options = {}, dependencies = {}) {
 
   const root = path.resolve(dependencies.root ?? process.cwd());
   const run = dependencies.run ?? runCommand;
+  const runRaw = dependencies.runRaw ?? (dependencies.run
+    ? run
+    : ((file, args, opts) => runProcess(file, args, opts).stdout));
   const readFile = dependencies.readFile ?? readFileSync;
   const fetchImpl = dependencies.fetch ?? globalThis.fetch;
   const checkpointIo = {
@@ -2679,21 +2911,39 @@ export async function deployRelease(options = {}, dependencies = {}) {
     rm: dependencies.checkpointRm ?? rmSync,
   };
   const manifest = options.manifest ?? parseJson(readFile(path.resolve(root, parsed.manifestPath), 'utf8'), 'release manifest');
-  const publication = options.publication ?? parseJson(readFile(path.resolve(root, parsed.publicationPath), 'utf8'), 'publication receipt');
+  const publicationText = options.publication === undefined
+    ? readFile(path.resolve(root, parsed.publicationPath), 'utf8')
+    : undefined;
+  const publication = options.publication ?? parseJson(publicationText, 'publication receipt');
+  const publicationSha256 = options.publicationSha256 ??
+    (publicationText === undefined
+      ? undefined
+      : createHash('sha256').update(publicationText).digest('hex'));
   const completion = parsed.completionPath
     ? options.completion ?? parseJson(readFile(path.resolve(root, parsed.completionPath), 'utf8'), 'completion receipt')
     : undefined;
+  const brokerRunBinding = options.brokerRunBinding ??
+    (parsed.brokerRunBindingPath
+      ? parseJson(readFile(path.resolve(root, parsed.brokerRunBindingPath), 'utf8'),
+        'Broker run-binding descriptor')
+      : undefined);
+  if (brokerRunBinding !== undefined) validateBrokerRunBinding(brokerRunBinding);
   if (parsed.preAcceptance) validateBootstrapPublication(parsed.releaseTag, publication);
 
   const verifyCompletion = dependencies.verifyCompletion ??
     ((receipt, published, source) => verifyPartialPublicationCompletion(receipt, published, source,
       (file, args, input) => run(file, args, input === undefined ? {} : { input })));
   const verifySource = async () => {
+    const historicalRunBindingDeployment = brokerRunBinding !== undefined &&
+      parsed.releaseTag === 'v1.0.14' && !parsed.preAcceptance;
     const source = parsed.preAcceptance
       ? await (dependencies.verifyBootstrapRelease ?? verifyBootstrapRelease)(
         parsed.releaseTag, publication, { root, run })
-      : await (dependencies.verifyRelease ?? verifyRelease)(
-        parsed.releaseTag, publication, { root, run });
+      : historicalRunBindingDeployment
+        ? await (dependencies.verifyRunBindingRelease ?? verifyRunBindingRelease)(
+          parsed.releaseTag, publication, { root, run, publicationSha256 })
+        : await (dependencies.verifyRelease ?? verifyRelease)(
+          parsed.releaseTag, publication, { root, run });
     if (bootstrapRelease?.continuation) {
       if (!completion) fail('pre-acceptance bootstrap requires its exact continuation completion proof');
       await verifyCompletion(completion, publication, source);
@@ -2704,11 +2954,19 @@ export async function deployRelease(options = {}, dependencies = {}) {
     return source;
   };
   const sourceSha = await verifySource();
+  const readPublishedProject = dependencies.readSourceProjectAtCommit ?? readSourceProjectAtCommit;
+  const readSourceProject = brokerRunBinding !== undefined && parsed.releaseTag === 'v1.0.14'
+    ? file => readPublishedProject(file, { root, sourceSha, run })
+    : undefined;
   const deploymentManifest = parsed.preAcceptance
     ? validateBootstrapManifest(manifest, publication, {
       root, sourceSha, releaseTag: parsed.releaseTag, manifestPath: parsed.manifestPath, run,
     })
-    : validatePublishedManifest(manifest, { root, sourceSha });
+    : readSourceProject
+      ? validateRunBindingPublishedManifest(manifest, {
+        root, sourceSha, releaseTag: parsed.releaseTag, readProject: readSourceProject,
+      })
+      : validatePublishedManifest(manifest, { root, sourceSha });
   const images = validatePublicationReceipt(publication, deploymentManifest, sourceSha);
   // Reuse the injected fetch and delay seams for every pre- and post-apply registry read.
   const verifyImages = dependencies.verifyImages ?? (async (refs) => {
@@ -2735,11 +2993,13 @@ export async function deployRelease(options = {}, dependencies = {}) {
     configMapName: parsed.providerCatalogConfigMapName,
     sourceCommit: parsed.providerCatalogSourceCommit,
   };
-  const kustomizeSource = prepareKustomizeSource(root, parsed.releaseTag, images, providerCatalog);
+  const kustomizeSource = prepareKustomizeSource(
+    root, parsed.releaseTag, images, providerCatalog, brokerRunBinding);
   try {
     const renderedText = run('kubectl', ['kustomize', kustomizeSource.path], { cwd: root });
     const installation = validateKustomizeInstall(
-      parseKustomizeResources(renderedText), images, parsed.target.namespace, providerCatalog);
+      parseKustomizeResources(renderedText), images, parsed.target.namespace, providerCatalog,
+      brokerRunBinding);
     const { installationManifest, runtimeManifest, incompleteRuntimeConfigMaps } = installation;
     verifyImageIds(runtimeManifest, images);
     // Keep pre-provisioning source review possible, but never apply workloads with unsourced identities or hosts.
@@ -2747,13 +3007,31 @@ export async function deployRelease(options = {}, dependencies = {}) {
       fail(`workload deployment is blocked until the incomplete runtime ConfigMaps are sourced: ${incompleteRuntimeConfigMaps.join(', ')}`);
     }
     const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
-    const immutableRuntimeConfigMapReplacements = parsed.preAcceptance
-      ? findImmutableRuntimeConfigMapReplacements(installationManifest, parsed.target.namespace, { root, run, fail })
+    (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(
+      runtimeManifest, parsed.target, {
+        root, run, brokerRunBinding, managedResources: installationManifest,
+      });
+    const verifyRunBinding = dependencies.verifyBrokerRunBindingConfiguration ??
+      verifyBrokerRunBindingConfiguration;
+    const bindingPreflight = brokerRunBinding
+      ? verifyRunBinding(brokerRunBinding, parsed.target, {
+        root, run, runRaw, allowMissingSettings: true,
+      })
+      : undefined;
+    const replacementNamesAllowed = new Set([
+      ...(parsed.preAcceptance ? REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS : []),
+      ...(brokerRunBinding
+        ? ['identity-broker-runtime-config-v2', 'projects-config-runtime-config']
+        : []),
+    ]);
+    const immutableRuntimeConfigMapReplacements = replacementNamesAllowed.size > 0
+      ? findImmutableRuntimeConfigMapReplacements(
+        installationManifest, parsed.target.namespace, {
+          root, run, fail, replaceableNames: replacementNamesAllowed,
+        })
       : [];
     const immutableRuntimeConfigMapReplacementNames = immutableRuntimeConfigMapReplacements
       .map((resource) => resource.metadata.name);
-    (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(
-      runtimeManifest, parsed.target, { root, run, managedResources: installationManifest });
     if (parsed.execute) {
       verifyImmutableRuntimeConfigMapReplacementPermissions(
         immutableRuntimeConfigMapReplacements, parsed.target.namespace, { root, run, fail });
@@ -2812,7 +3090,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
         ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
         sourceSha,
         target: parsed.target,
-        ...(parsed.preAcceptance
+        ...(parsed.preAcceptance || brokerRunBinding
           ? { immutableRuntimeConfigMapReplacements: immutableRuntimeConfigMapReplacementNames }
           : {}),
         services: images.filter((image) => image.id !== 'Agentweaver.AgentHost')
@@ -2825,6 +3103,12 @@ export async function deployRelease(options = {}, dependencies = {}) {
           controllerImage: agentSandboxRelease.controllerImage,
         },
         renderedResources: installationManifest.items.length,
+        ...(brokerRunBinding ? {
+          brokerRunBinding: {
+            settingsConfigured: bindingPreflight?.runBindingSettingsConfigured ?? true,
+            policiesRendered: createBrokerRunBindingPolicies(parsed.target.namespace).length,
+          },
+        } : {}),
         targetInfo,
       };
     }
@@ -2929,6 +3213,23 @@ export async function deployRelease(options = {}, dependencies = {}) {
       verifyLiveDeployment(refs, target, digests, { root, run }));
     const deployedImages = images.filter((image) => image.id !== 'Agentweaver.AgentHost');
     await verifyLive(images, parsed.target, acceptedDigests);
+    let brokerRunBindingReadback;
+    if (brokerRunBinding) {
+      const appliedConfiguration = verifyRunBinding(
+        brokerRunBinding, parsed.target, { root, run, runRaw });
+      const readback = dependencies.verifyBrokerRunBindingReadback ??
+        (async (...args) => {
+          const integration = await import('./deploy-integration.mjs');
+          return integration.readbackResources(...args);
+        });
+      brokerRunBindingReadback = await readback(
+        runtimeManifest, images, acceptedDigests, parsed.target, root, run, brokerRunBinding);
+      const finalConfiguration = verifyRunBinding(
+        brokerRunBinding, parsed.target, { root, run, runRaw });
+      if (!isDeepStrictEqual(appliedConfiguration, finalConfiguration)) {
+        fail('Broker run-binding ConfigMaps, TLS certificates, or shadow keys changed during deployment');
+      }
+    }
     clearCheckpoint(key, checkpointIo);
     return {
       ok: true,
@@ -2936,11 +3237,14 @@ export async function deployRelease(options = {}, dependencies = {}) {
       resumed: parsed.resume && applied,
       ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
       sourceSha,
-      ...(parsed.preAcceptance
+      ...(parsed.preAcceptance || brokerRunBinding
         ? { immutableRuntimeConfigMapReplacements: immutableRuntimeConfigMapReplacementNames }
         : {}),
       services: deployedImages.map(({ id }) => id),
       perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
+      ...(brokerRunBinding ? {
+        brokerRunBinding: { readbackSha256: brokerRunBindingReadback.sha256 },
+      } : {}),
       agentSandbox: {
         version: agentSandboxRelease.version,
         sourceCommit: agentSandboxRelease.sourceCommit,
@@ -2970,10 +3274,16 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
           `Would replace immutable runtime ConfigMaps: ${result.immutableRuntimeConfigMapReplacements.join(', ')}.`,
         );
       }
+      if (result.brokerRunBinding) {
+        console.log(`Broker run-binding is enabled; required settings configured: ${result.brokerRunBinding.settingsConfigured}.`);
+      }
     } else if (result.resultType === 'pre-acceptance') {
       console.log(`Pre-acceptance bootstrap deployment and live verification completed for ${result.services.length} product services at ${result.sourceSha}. This is not a release acceptance result.`);
     } else {
       console.log(`Deployment and live verification completed for ${result.services.length} product services at ${result.sourceSha}.`);
+      if (result.brokerRunBinding) {
+        console.log(`Broker run-binding readback: ${result.brokerRunBinding.readbackSha256}.`);
+      }
     }
   } catch (error) {
     console.error(`Release deployment failed: ${error.message}`);
