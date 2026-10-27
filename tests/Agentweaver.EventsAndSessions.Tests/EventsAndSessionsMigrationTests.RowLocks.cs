@@ -80,7 +80,8 @@ public sealed partial class EventsAndSessionsMigrationTests
             INSERT INTO "{_schema}".session_provider_bindings
                 (project_id, run_id, provider_id, adapter_version, options_schema_version,
                  options_revision, resource_id, resource_generation, negotiated_capabilities)
-            VALUES ('p', 'r', 'native', '1', 1, '1', 'resource', 1, '[]');
+            VALUES ('p', 'r', 'native', '1', 1, '1', 'resource', 1, '[]'),
+                   ('p', 'runtime', 'native', '1', 1, '1', 'runtime-resource', 1, '[]');
             INSERT INTO "{_schema}".session_run_streams (project_id, run_id)
             VALUES ('p', 'r'), ('p', 'runtime');
             INSERT INTO "{_schema}".messaging_provider_bindings

@@ -88,15 +88,15 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
-    public void MutationDenialPlanRequiresAllElevenOneColumnGrantsToNameNonExecutableGuards()
+    public void MutationDenialPlanRequiresAllTwelveOneColumnGrantsToNameNonExecutableGuards()
     {
         var services = MutationServices();
         InitializerChecks.AssertMutationDenialPlan(services);
 
         // Dropping any one protected table changes the reviewed count, so the plan is rejected.
-        var tenTables = MutationServices();
-        tenTables[4] = tenTables[4] with { Tables = tenTables[4].Tables[..^1] };
-        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(tenTables));
+        var elevenTables = MutationServices();
+        elevenTables[4] = elevenTables[4] with { Tables = elevenTables[4].Tables[..^1] };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(elevenTables));
 
         var missingGuard = MutationServices();
         missingGuard[3] = missingGuard[3] with
@@ -738,6 +738,9 @@ public sealed class P1PostgresInitializerTests
             [
                 LockTable("sessions", "session_id", "sessions_no_update", "reject_row_lock_record_update()",
                     19, "Session identity, provider binding, and fork lineage records cannot be updated.", "55000"),
+                LockTable("messaging_provider_bindings", "run_id", "messaging_provider_bindings_no_update",
+                    "reject_row_lock_record_update()", 19,
+                    "Session identity, provider binding, and fork lineage records cannot be updated.", "55000"),
                 LockTable("session_provider_bindings", "run_id", "session_provider_bindings_no_update",
                     "reject_row_lock_record_update()", 19,
                     "Session identity, provider binding, and fork lineage records cannot be updated.", "55000"),
